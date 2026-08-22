@@ -1,0 +1,80 @@
+/**
+ * Base layer. Import AFTER tokens.css.
+ * Minimal reset plus the typographic defaults every surface inherits.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--avp-surface-ground);
+  color: var(--avp-text-body);
+  font-family: var(--avp-font-ui);
+  font-size: var(--avp-text-ui-base);
+  line-height: var(--avp-leading-ui);
+  /* Tabular figures everywhere by default: this product is comparison tables,
+     and proportional digits make a column of numbers unreadable. Opt out
+     explicitly on prose, not the other way round. */
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+h4,
+p,
+figure,
+blockquote {
+  margin: 0;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+/* Emphasis is light, not lift — one global rule so no component reimplements it. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: none;
+  box-shadow: var(--avp-focus-ring);
+  border-radius: var(--avp-radius-sm);
+}
+
+::selection {
+  background: var(--avp-beacon-100);
+  color: var(--avp-ink-900);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Export path: the report is a document first. */
+@media print {
+  body {
+    background: #fff;
+  }
+  .avp-no-print {
+    display: none !important;
+  }
+}

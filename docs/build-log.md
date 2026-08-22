@@ -1,0 +1,3337 @@
+# Build Log
+
+Chronological record of what was built, why, key decisions, and trade-offs.
+One entry per completed checklist item.
+
+---
+
+## 2026-08-20 — Epic 0.1 · IP-safety doc created
+
+**Built:** `/docs/ip-safety.md`, containing the standing constraints verbatim as a
+standalone normative reference, plus an operational section translating three of
+them into enforceable repo rules.
+
+**Why:** Constraint 9 requires a self-check before any UI epic is marked complete.
+That check needs a fixed, quotable artifact rather than a chat scrollback.
+
+**Key decisions:**
+- The doc declares itself normative and says it wins over conflicting instructions
+  until the owner overrides in writing. Without a precedence rule, a future "just
+  make it look like X" instruction has no written thing to lose against.
+- Added an explicit allow-list of licences for constraint 6 (MIT, Apache-2.0, BSD-*,
+  ISC, 0BSD, Unlicense, CC0; OFL-1.1 for fonts) and a stop-list (GPL/AGPL/LGPL/SSPL/
+  BUSL/Elastic/commons-clause/undeclared). The original constraint named the
+  allowed three and the blocked two; the gap in between (ISC, OFL, unlicensed
+  packages) is where an ambiguous call would actually happen.
+- Made constraint 7 concrete: enumerated exactly which shapes may be persisted
+  (booleans, counts, ordinal positions, URLs/domains, entity names, structural
+  signals) and stated that raw text may exist only transiently inside a worker
+  process. "Facts only" is not self-executing at the schema level; this is.
+
+**Trade-offs:** The operational section is my interpretation layered on the owner's
+verbatim constraints. It is kept in a clearly separate section below a horizontal
+rule so the verbatim block stays unpolluted and auditable. If any operational rule
+is wrong it can be changed without touching the constraints themselves.
+
+---
+
+## 2026-08-20 — Epic 0.2 · Repo scaffold
+
+**Built:** pnpm workspace monorepo.
+
+```
+/apps/web /apps/api /apps/workers
+/packages/design-system /packages/shared-types
+/infra/db /infra/deploy
+/docs
+README.md package.json pnpm-workspace.yaml tsconfig.base.json .gitignore
+```
+
+Each workspace has a README stating what it is for and which epic fills it in.
+`docs/api-contracts.md` and `docs/scoring-spec.md` exist as stubs from day one so
+there is never a moment where "I'll add the doc later" is an option.
+
+**Why:** the structure was specified in the brief. pnpm workspaces over npm/yarn
+workspaces because the design system is consumed by `apps/web` as source (not a
+built artifact) during development, and pnpm's strict node_modules layout prevents
+`apps/web` from accidentally importing a transitive dependency it never declared —
+which is how ad hoc styling libraries sneak onto customer-facing screens.
+
+**Key decisions:**
+- `git init` run — the brief calls this "the repo" and `.gitignore` is meaningless
+  without it. No commit made.
+- `tsconfig.base.json` is strict-plus: `noUncheckedIndexedAccess`,
+  `exactOptionalPropertyTypes`, `verbatimModuleSyntax`. Deterministic scoring
+  (Epic 5) is a hard acceptance criterion, and the cheapest place to buy
+  determinism is refusing to let `undefined` move around silently.
+- API conventions were fixed now, in `api-contracts.md`, before any endpoint
+  exists: `/api/v1`, camelCase bodies, prefixed ULIDs, RFC 9457 problem+json
+  errors, cursor pagination. Retrofitting an error format across a built API is
+  expensive; picking one costs nothing today.
+- No dependencies installed yet, so the constraint-6 licence ledger is empty.
+  It starts on the next entry.
+
+**Trade-offs:**
+- Went with a working assumption of Next.js/React for `apps/web` and a
+  React component library for the design system, because the brief asks for a
+  style guide *page* rendering the components. Not yet committed in code — no
+  framework dependency is installed. If the intended stack is different, say so
+  before the component library is built and only the token layer survives (which
+  is framework-agnostic CSS custom properties by design).
+
+**⚠️ Blocker raised:** `/docs/product-spec.md` was created but is **empty** — the
+kickoff brief pasted the *instruction* to paste sections 3, 5, 6 and 7, not the
+sections. Epic 0 does not depend on them and proceeds. Epic 1 (needs §5 architecture),
+Epic 4 (needs §3 core loop), Epic 5 (needs §6 formula), and every acceptance gate
+(needs §7) do depend on them. The working assumptions Epic 0 was designed against
+are written down at the bottom of that file for reconciliation.
+
+---
+
+## 2026-08-20 — Epic 0.3 · Spec landed; stack assumptions reconciled
+
+**Built:** nothing new — this entry records a correction.
+
+`docs/product-spec.md` now carries the real §3, §5, §6, §7. Two Epic 0
+assumptions were wrong and are fixed:
+
+- **Backend is Python (FastAPI) with Celery or Temporal (§5.1), not Node.**
+  `apps/api` and `apps/workers` were removed from `pnpm-workspace.yaml`, which
+  now globs `apps/web` + `packages/*` only. Their READMEs were rewritten to state
+  the Python stack and that they are deliberately outside the Node workspace.
+  Had this been left, Epic 1 would have run `pnpm install` across two Python
+  services and produced a confusing half-broken workspace.
+- **`packages/shared-types` is a TS↔Python contract (§5.2), not TS-only.** Noted
+  the approach for Epic 1: FastAPI emits OpenAPI, TS types are generated from it.
+  Hand-writing parallel type definitions in two languages is a correctness
+  hazard and will not be used.
+
+Frontend assumption held: Next.js + React + Tailwind + Recharts (§5.1).
+
+**Also updated `docs/scoring-spec.md`** with the real §6 formula — Mention Rate
+30 / Share of Voice 25 / Citation Strength 20 / Sentiment 15 / Technical
+Foundation 10 — plus determinism rules and the defined edge cases that Epic 5's
+acceptance criterion names. Two decisions recorded there that Epic 5 must honour:
+zero-mention scans **exclude** Sentiment and redistribute its weight rather than
+scoring it 0 (a brand with no mentions has no sentiment; scoring it zero
+double-punishes the same absence), and a zero-prompt scan returns `null` with
+`INSUFFICIENT_DATA` rather than 0 (an unrunnable scan must never be shown to a
+client as a bad score).
+
+**Trade-off:** `pnpm -r test` at the root now covers only the Node workspaces.
+Epic 1 adds a root task runner spanning both languages.
+
+---
+
+## 2026-08-20 — Epic 0.4 · Design tokens
+
+**Built:** `packages/design-system/src/tokens/{color,typography,spacing,elevation,motion}.ts`
+and the mirrored `src/styles/tokens.css`, plus `src/styles/base.css`.
+
+**Why the palette is shaped the way it is.** Every decision falls out of one
+observation: this product's output is not a dashboard, it is an argument someone
+makes to another person. It is read twice — by an operator running scans, and by
+the prospect's decision-maker on a printed PDF. The presenting context closes
+deals, so it wins ties. That produces light-first paper neutrals, an editorial
+serif, a ramp that survives photocopying, and elevation from borders not blur.
+It also lands where ip-safety.md #3 points, so the two constraints agree.
+
+**Key decisions:**
+- **Visibility = luminance.** The ramp runs dark/desaturated (absent) to
+  light/saturated (cited), so the colour scale carries meaning instead of needing
+  a legend. Three properties are asserted in tests, not assumed: monotonic
+  lightness (survives greyscale print, where red/green resolves to one grey),
+  warm→cool traverse (CVD-safe; ~8% of men misread red/green), and chroma rising
+  with lightness (double-encoded).
+- **Ramp is fill-only.** The light end cannot reach 4.5:1 on paper.
+  `onVisibility()` picks the label colour by luminance so callers cannot get it
+  wrong.
+- **Competitors are never ramp-coloured.** Green implies endorsement, red makes
+  the report a hatchet job — either way it loses the room. Neutral slate,
+  separated by lightness + fill pattern, which also survives B&W and supports
+  unlimited series. Enforced in one function, `seriesStyle()`.
+- **Warm/cool hue hand-off in the neutrals** at `ink-400`: warm dark greys print
+  muddy, cool ones read like ink.
+- **Two type scales** (UI 1.125, editorial 1.25). One ratio cannot make 13 and 14
+  meaningfully different *and* give headlines that carry a conference table.
+- **Non-linear spacing tail**, plus `rhythm` (8) and `beat` (72) — `beat` exceeds
+  any intra-beat spacing so a report's five-part structure is visible in thumbnail.
+- **Elevation from borders and hard offsets.** Blurred shadows disappear in print
+  and this product's artifact is a PDF. Levels 0–2 print; 3–4 are transient UI.
+- **Emphasis is light, not lift** — focus rings and selected states illuminate
+  rather than raise. This is the rule that makes the system feel authored, so it
+  is a token, not a per-component choice.
+
+**Trade-offs:**
+- OKLCH has no fallback. All current browser targets support it; a `color-mix`
+  or hex fallback would double the token surface for users we do not have. If a
+  legacy target appears, the CSS layer is the single place to fix.
+- Tokens exist twice, in TS and in CSS. TS is needed for computed colours
+  (`visibilityAt`) and CSS for the export path where no JS runtime exists.
+  `tokens.test.ts` parses the CSS and fails on drift, so the duplication cannot
+  rot silently.
+
+---
+
+## 2026-08-20 — Epic 0.5 · Luminance Ledger (signature visualisation)
+
+**Built:** `src/components/chart/ledgerLayout.ts` (pure geometry),
+`LuminanceLedger.tsx`, `ChartFrame.tsx`, `ChartPatterns.tsx`, and 19 unit tests.
+
+**Why it works.** Segment height tracks *weight* (points available) and the lit
+fraction tracks *value* (points earned), which yields:
+
+```
+Σ lit heights = H × score/100
+```
+
+The total lit height of the column is exactly the composite score. The chart is
+the number, not a picture of it. That identity is the component's correctness
+condition, so geometry lives in a pure function and the identity is asserted
+across five score profiles rather than trusted.
+
+The same maths gives the "biggest gap" for free: the largest *unlit* area is the
+largest recoverable point total, `weight × (100 − subscore)/100`. That ranks by
+leverage — a weak-but-light dimension never outranks a mediocre heavy one — and
+the chart's annotation **is** the report headline rather than something authored
+separately alongside it.
+
+**Key decisions:**
+- Geometry split from rendering so the identity is testable without a DOM.
+- Heaviest dimension at the bottom: light accumulates from the ground, and the
+  most consequential dimension takes the most stable position.
+- Deterministic tie-break on lowest index — equal gaps must always resolve the
+  same way or a re-run reshuffles the client's headline.
+- Empty input renders INSUFFICIENT_DATA, never zero.
+- Accessibility: `role="img"` with a spoken per-dimension summary plus a
+  visually-hidden data table. This survives into exported PDFs, which some
+  enterprise clients audit.
+- Geometry rounded to 3dp so output is byte-stable across platforms — asserted
+  over 20 repeat runs, because these numbers reach PDFs clients compare monthly.
+
+**Trade-offs:**
+- The design constrains the scoring model to roughly ≤7 dimensions before
+  segments get too thin to label. §6 defines exactly 5. Treating this as a
+  feature: a score with 12 sub-dimensions is not explainable to a client anyway.
+- Ghost columns show only each competitor's composite, not their per-dimension
+  breakdown. Showing full competitor segments made the chart unreadable at 3+
+  competitors and, more importantly, shifted the argument from "here is your gap"
+  to "here is a league table." The report's job is the former.
+- **Recharts is not yet installed.** §5.1 names it, but the Ledger is bespoke SVG
+  (Recharts has no primitive for this) and nothing else in Epic 0 needs a
+  conventional chart. It gets added in Epic 7 with a real chart, mounted inside
+  `ChartFrame` so it inherits the accessibility contract. Adding an unused
+  dependency now would put a package in the tree with no code exercising it.
+
+---
+
+## 2026-08-20 — Epic 0.6 · Component library + style guide
+
+**Built:** `Button`, `Card` (+ Header/Title/Body/Footer), `Badge`,
+`VisibilityBadge`, `DataTable`, `ScoreDisplay`; chart primitives; report
+primitives `ReportPage`/`ReportHeader`/`Beat`/`Prose`/`Evidence`/`FixList`;
+`src/styles/components.css`; `src/tailwind-preset.ts`; and the style guide at
+`src/styleguide/` (Vite app, 9 sections, renders every component).
+
+**Key decisions:**
+- **The Tailwind preset replaces rather than extends** `colors`, `spacing`,
+  `fontFamily`, `fontSize`, `boxShadow`, `borderRadius`. Tailwind's stock palette
+  is gone, so `bg-slate-500` does not compile. ip-safety.md #2 becomes a build
+  error instead of a review comment — the only version of that rule that holds up
+  over a year.
+- **The system's own components use plain CSS over token custom properties, not
+  Tailwind.** The package must render in Next.js, in the Vite style guide, and in
+  the React-PDF/WeasyPrint export path; requiring a Tailwind build in each is a
+  worse trade than writing the CSS once.
+- **`<Evidence>` takes `engine`, `prompt`, and `{label, value}` facts — and has no
+  free-text body prop or children.** A paragraph of scraped answer text has
+  nowhere to go, so ip-safety.md #7 is enforced by the prop types rather than by
+  a reviewer noticing. This is the single most useful thing in the component API.
+- **`BeatId` is a closed union of the five narrative beats,** and `<Beat>` numbers
+  itself from `BEAT_SEQUENCE`. Inventing a sixth beat is a type error.
+- **Beat headings are claims, not categories** — the eyebrow carries the
+  structural label so the heading is free to argue.
+- **The style guide lives inside the design-system package as its own Vite app,**
+  not as a route in `apps/web`. Epic 0's acceptance needs a rendered guide before
+  Epic 1 scaffolds Next.js, and this keeps the system reviewable without booting
+  the product.
+- **`cn()` written inline (9 lines) instead of adding `clsx`.** Every dependency
+  has to clear the licence gate and earn a build-log line; not worth it here.
+- **Fixtures use an invented company and invented competitors** ("Northaven
+  Dental", "Competitor A/B/C") with original prompt strings. No real brand and no
+  captured text appears anywhere.
+
+**Dependency licence ledger (first entry — ip-safety.md #6).** 102 third-party
+packages installed, audited programmatically:
+
+| Licence | Count | Status |
+|---|---|---|
+| MIT | 88 | ✅ allowed |
+| ISC | 7 | ✅ allowed |
+| Apache-2.0 | 3 | ✅ allowed |
+| BSD-3-Clause | 1 (`source-map-js`) | ✅ allowed |
+| CC-BY-4.0 | 1 (`caniuse-lite`) | ✅ allowed — browser-support *data*, attribution-only, no copyleft |
+
+**Zero GPL / AGPL / LGPL / SSPL / BUSL / Elastic / undeclared.** Direct
+additions: react, react-dom, vite, vitest, @vitejs/plugin-react (MIT);
+typescript (Apache-2.0); lucide-react (ISC).
+
+⚠️ **One correction to the brief:** it lists "Lucide icons (MIT)". Lucide is
+actually **ISC**, not MIT. Both are permissive and functionally equivalent, and
+ISC is on the allow-list in `ip-safety.md`, so no action is needed — but the
+record should be accurate.
+
+**Trade-offs:**
+- `components.css` is a single 522-line file rather than co-located per-component
+  CSS. At this size one file is easier to audit for token compliance; if it grows
+  past ~1000 lines it should split by component.
+- No visual-regression testing yet. The 14 render tests assert structure and
+  accessibility attributes, not appearance. Worth adding before Epic 7, when the
+  report becomes a client-facing artifact.
+
+---
+
+## 2026-08-20 — Epic 1.1 · Python tooling: uv over Poetry
+
+**Decision:** `uv` manages both Python services.
+
+**Why.** Poetry is not installed on this machine and uv is, which settles a
+close call — but three properties made it the right answer regardless:
+
+1. **It manages Python versions too.** The system interpreter here is 3.14,
+   which is too new for reliable Celery and asyncpg wheels. uv downloads and
+   pins 3.12 per project via `.python-version`, so nobody has to install
+   pyenv separately or discover the incompatibility through a build failure.
+2. **Standard PEP 621 metadata.** Dependencies live under `[project]`, not a
+   proprietary `[tool.poetry]` block, so migrating away later is deleting a
+   lockfile rather than rewriting the manifest. This is the property that makes
+   the choice low-stakes.
+3. Resolution is fast enough that a full `uv sync` is not a coffee break.
+
+**Trade-off:** uv is younger than Poetry and its lockfile format is still
+moving. Mitigated by point 2 — the manifest is standard, so only `uv.lock` is
+tool-specific.
+
+**Also decided:** `apps/workers` takes a path dependency on `apps/api`
+(`[tool.uv.sources]`) so both share one set of SQLAlchemy models. Two
+declarations of the same schema in one repo is how they drift.
+
+---
+
+## 2026-08-20 — Epic 1.2 · Orchestrator: Celery, behind an abstraction
+
+**Decision:** Celery for Phase 1. The pipeline depends on an `Orchestrator`
+protocol, not on Celery directly, so Temporal remains a real option.
+
+**Why not Temporal, given the workload fits it well.** The Phase 1 pipeline
+(§5.4) is eight sequential stages with a large fan-out in the middle, where
+every stage calls a slow, flaky, rate-limited, and *expensive* third-party API.
+That is close to Temporal's ideal use case: durable execution means a workflow
+that dies at step 7 resumes at step 7 rather than re-running the 60+ LLM and
+engine calls from step 5. That is real money.
+
+It still loses on cost of ownership right now:
+
+- **§5.1 already mandates Redis** for queue and caching. Celery therefore adds
+  *zero* new infrastructure; Temporal adds a server cluster to operate before
+  the product has a single user.
+- **Temporal cannot run in this environment at all** — there is no Docker on
+  this machine, and Temporal's dev server is distributed as a container.
+  Choosing it would have meant shipping Epic 1 unverified.
+- **Most of the durability benefit is recoverable at the data layer.** §5.3
+  already requires each stage's output to be persisted — `CompetitorSet`,
+  `PromptSet`, `EngineResult` are durable entities, not in-flight state. Each
+  stage is written to check for its own output and return it if present. A
+  retried scan then skips the expensive work it already paid for. That is most
+  of what durable execution buys, for the price of some idempotency discipline.
+
+**Revisit at Epic 10** (bulk overnight batch). That is the workload where
+per-workflow durability starts to earn a cluster.
+
+**Celery configuration that is not the default,** because the defaults suit a
+fast-task web workload and this is the opposite:
+
+| Setting | Value | Why |
+|---|---|---|
+| `accept_content` | `["json"]` | Celery's pickle support is remote code execution for anyone who can write to the broker |
+| `task_acks_late` | `True` | A worker killed mid-scan requeues rather than silently dropping the job |
+| `worker_prefetch_multiplier` | `1` | The default of 4 lets one worker hoard long scans while its peers idle |
+| `task_retry_jitter` | `True` | Without jitter, a 429 hits every in-flight task at once and they retry in lockstep, reproducing the burst |
+| `task_soft_time_limit` | `600` | Epic 9 targets a full scan under 5 minutes; a stage past 10 is stuck, not slow |
+| queue split | `scans` / `engines` / `audits` | IO-bound engine calls must not starve CPU-bound audits |
+
+**Trade-off:** Celery Canvas chords over Redis have known sharp edges at high
+concurrency. Not a factor at Phase 1 volumes, and the persistence-per-stage
+design means a lost chord costs a retry, not a corrupt scan.
+
+---
+
+## 2026-08-20 — Epic 1.3 · Auth: httpOnly session cookies, Argon2id
+
+**Decision:** opaque session tokens in Redis, delivered as an httpOnly cookie.
+Passwords hashed with Argon2id.
+
+**Why sessions rather than JWTs.** This is *seat-based* software. When an agency
+removes a seat, that person's access has to end now — not whenever their access
+token expires. A JWT cannot be revoked without a server-side blocklist consulted
+on every request, and a blocklist consulted on every request is a session store
+with extra steps. So: a session store, chosen deliberately rather than
+defaulted into.
+
+Everything else follows from that and is upside: `httpOnly` means XSS cannot
+read the cookie (a token in `localStorage` can be exfiltrated by any script that
+gets in), revocation is a `DEL`, "sign out everywhere" is a set scan that seat
+management needs anyway, and there is no refresh-token dance or clock-skew class
+of bug.
+
+Only the **SHA-256 digest** of a token is stored, so a Redis dump does not hand
+an attacker working cookies. SHA-256 without a work factor is correct here: the
+token already carries 256 bits of entropy, so there is nothing to brute-force
+and a slow KDF would only add latency to every authenticated request.
+
+Every authenticated request **re-reads the user and agency from Postgres**.
+That is the point of a server-side session — a suspended user or soft-deleted
+agency loses access on their next request. Tested in `test_tenant_isolation.py`.
+
+**Why Argon2id rather than bcrypt.** Argon2id won the Password Hashing
+Competition and is memory-hard, which is what actually resists the GPU and ASIC
+rigs that make bcrypt's pure-CPU cost function look cheap. bcrypt additionally
+truncates input at 72 bytes, a silent correctness trap for passphrase users.
+Parameters follow OWASP's recommended second option (19 MiB, t=2, p=1), and
+`needs_rehash` on the login path migrates the user base transparently when the
+cost is raised.
+
+**Login is not a user-enumeration oracle.** Unknown email, wrong password, and
+suspended account return an identical response, and the unknown-email path
+performs a dummy Argon2 verification so response latency does not leak account
+existence. The dummy hash is *generated* at the configured cost rather than
+hard-coded — a literal that failed to parse would return in microseconds and
+reintroduce exactly the timing signal it exists to suppress.
+
+**Seat enforcement uses a row lock, not a count.** `SELECT ... FOR UPDATE` on
+the agency row before the seat check, in the same transaction as the insert. The
+naive `count then insert` is a TOCTOU race: two concurrent invitations both read
+2 against a limit of 3 and both pass. `test_seats.py` runs four concurrent
+transactions against a 3-seat agency and asserts exactly two succeed —
+**verified to fail (4 of 4 granted) when the lock is removed**, so the test
+proves the mechanism rather than merely passing.
+
+Enforced in the service layer rather than a database trigger because seat limits
+are commercial policy, not a data invariant: the rules will grow (grace seats,
+trials, per-role limits) and policy that lives in a trigger is invisible to the
+people who change it.
+
+**Trade-off:** email is globally unique, so one person cannot hold seats at two
+agencies with the same address. Multi-agency membership needs a join table and a
+tenant picker at login — a deliberate future change rather than something to
+half-build now.
+
+---
+
+## 2026-08-20 — Epic 1.4 · Data model and migrations
+
+**Built:** 16 tables covering every §5.3 entity, one Alembic revision, and
+`infra/db` wired to models in `apps/api` as §5.2 requires.
+
+**A licence constraint changed the architecture.** Alembic's default template
+runs migrations through a synchronous driver, which in practice means psycopg2
+or psycopg3 — and **both are LGPL-3.0**, which `ip-safety.md` #6 puts on the
+stop-and-ask list. Rather than request an exception for a dependency used only
+by migrations, `env.py` drives Alembic through **asyncpg (Apache-2.0)**, which
+the service already depends on. One driver, one licence, no exception needed.
+
+The knock-on effect is worth recording: **there is no synchronous Postgres
+driver anywhere in this project.** Celery tasks are synchronous, so any worker
+touching Postgres bridges through `asyncio.run` — see
+`tasks/health.py:check_datastores` for the pattern Epic 2+ follows.
+
+**Schema decisions:**
+
+- **Prefixed ULID text primary keys** (`scan_01J...`). Self-describing in logs,
+  time-sortable so `ORDER BY id` is a valid cursor without a second index, and
+  `parse(value, expected_prefix)` turns "client id passed where a scan id
+  belongs" into a 400 at the edge instead of an empty result set three layers
+  down. Costs ~14 bytes per row over a native uuid; worth it.
+- **VARCHAR + CHECK for enums, not native Postgres ENUM.** Native enums validate
+  equally well, but adding a value means `ALTER TYPE`, which interacts badly
+  with migration tooling and long transactions. A CHECK constraint is ordinary
+  transactional DDL.
+  *This bit back:* Alembic autogenerate cannot see SQLAlchemy-generated enum
+  CHECK constraints, so it proposed **dropping all 17 of them on every run**.
+  Caught by the drift test, not by review. `env.py:include_object` now filters
+  exactly those names, so drift detection stays trustworthy for everything else.
+- **Soft delete via `deleted_at`.** An agency removing a client must not
+  cascade-destroy the scan history its historical reports reference.
+- **`agency_id` denormalised onto `scans`.** Every tenant-scoped query filters
+  on it; carrying it avoids a join on the hottest read path.
+
+**Scoring-spec guarantees are schema-level, enforced now** even though the
+engine is Epic 5, because retrofitting them onto written rows is far harder:
+
+| Rule | Enforcement |
+|---|---|
+| Decimal, not float | Every score column is `NUMERIC(5,2)`; asserted round-tripping as `Decimal` |
+| Version the formula | `formula_version` NOT NULL; uniqueness is `(scan_id, formula_version)` so re-scoring INSERTS rather than overwriting — Epic 11's before/after reporting depends on this |
+| No hidden inputs | `inputs_digest` fingerprints the EngineResult set, distinguishing "inputs changed" from "scoring is non-deterministic" when a client disputes a number |
+| INSUFFICIENT_DATA ≠ 0 | `composite` nullable, `status` enum, and a CHECK that the two agree |
+| Clamp AND raise | Range CHECKs reject an out-of-range score instead of silently storing it |
+
+**ip-safety #7 is enforced by the schema, not by review.** `EngineResult` and
+its children have no column capable of holding an engine's answer text — no
+`raw_response`, `snippet`, `excerpt`, `context`, or generic JSONB payload.
+`test_ip_safety.py` asserts this structurally: it fails on any forbidden column
+name, any `TEXT` column, and any `VARCHAR` over 2048 in the facts-only tables.
+Someone adding `raw_response` in eighteen months gets a red CI run.
+
+Two columns were **considered and rejected** on those grounds:
+
+- **`Citation.title`** — a page title is the publisher's words. #7 permits "URLs
+  and domains that were cited", not their copy. The UI renders the domain and
+  links out.
+- **`Competitor.description`** — competitor marketing copy is theirs. Name,
+  domain, and detection provenance are facts and are all that is stored.
+
+`EngineResult.response_digest` (SHA-256) is the compensating design: Epic 12 can
+detect that an answer *changed* without retaining what it said.
+
+The one deliberate exception is **`Prompt.text`**, which stores full text
+because we generate it. `test_ip_safety.py` asserts that exception explicitly so
+it stays deliberate.
+
+**A test caught a real schema bug:** `formula_version` was `String(16)`, but §6
+anticipates per-industry tuning and `"v1-industry-dental"` is 18 characters.
+Widened to 40 before the migration was finalised.
+
+---
+
+## 2026-08-20 — Epic 1.5 · shared-types: generated, never hand-written
+
+**Built:** `apps/api/scripts/export_openapi.py` → `openapi.json` →
+`openapi-typescript` → `src/api.gen.ts`, implementing the approach recorded in
+Epic 0.3.
+
+FastAPI is the source of truth. Hand-writing parallel type definitions in
+Python and TypeScript was rejected because they drift silently and the drift
+surfaces as a runtime bug in the browser; generating from one source makes a
+backend field rename a **compile error in `apps/web`**.
+
+The export runs schema generation without starting a server or touching a
+database, so it works in CI and in a pre-commit hook. Output is `sort_keys`'d so
+regenerating without an API change produces a zero diff — otherwise the
+generated file becomes review noise and people stop reading it.
+
+`src/index.ts` is hand-maintained but contains **only aliases and things
+OpenAPI cannot express**: the RFC 9457 `ProblemDetail` shape (FastAPI does not
+describe error responses), the `Page<T>` envelope, and the id-prefix table. It
+never restates a generated shape.
+
+Eight contract tests assert the conventions actually hold in the emitted schema
+— `/api/v1` base path, kebab-case paths, camelCase bodies, no credential field
+in any `*Out` schema, and `compositeScore` nullable so INSUFFICIENT_DATA is
+representable.
+
+**Documented and verified:** `compositeScore` crosses the wire as a
+**string-encoded decimal** (`"38.35"`), not a JSON number. A JSON number is an
+IEEE double, which would turn 38.35 into 38.349999999999994 — reintroducing at
+the transport layer exactly the error scoring-spec rule 3 exists to prevent.
+Confirmed against the running app before documenting it, and pinned by a test.
+
+---
+
+## 2026-08-20 — Epic 1.6 · Dependency licence ledger
+
+Audited with `apps/api/scripts/license_audit.py`, which resolves licences from
+PEP 639 `License-Expression` first, then classifiers, then the legacy field, and
+exits non-zero on anything copyleft or undeclared.
+
+**Python — 49 distributions:**
+
+| Licence | Count |
+|---|---|
+| MIT / MIT License | 25 |
+| BSD-3-Clause / BSD-2-Clause / BSD License | 11 |
+| Apache-2.0 / Apache Software License | 3 |
+| PSF-2.0, `MIT AND PSF-2.0` | 2 |
+| ISC | 1 |
+| MIT-0 | 1 |
+| The Unlicense | 1 |
+| `Apache-2.0 OR BSD-2-Clause`, `MIT OR Apache-2.0` | 2 |
+| MPL-2.0 | 2 |
+
+**Node — 24 new packages** for `openapi-typescript`: all MIT.
+
+**Zero GPL, AGPL, LGPL, SSPL, BUSL, Elastic, or undeclared.**
+
+⚠️ **Two flags for sign-off:**
+
+1. **`psycopg2` / `psycopg3` are LGPL-3.0 and were NOT added.** Both are on the
+   ip-safety.md stop list. Alembic was reconfigured to run on asyncpg instead —
+   see Epic 1.4. No exception requested, no LGPL code in the tree.
+2. **`certifi` and `pathspec` are MPL-2.0**, which is neither on the allow list
+   ("MIT/Apache-2.0/BSD") nor the stop list ("GPL/AGPL/LGPL/SSPL/BUSL"). Both are
+   transitive (certifi via httpx, pathspec via mypy), both used entirely
+   unmodified. MPL-2.0 is *file-level* copyleft: obligations attach only to
+   modified MPL files, so it does not affect proprietary distribution. Assessed
+   as safe, but flagged because the constraint as written does not cover it.
+   The audit script classifies MPL as REVIEW rather than auto-allowing it, so a
+   human decides.
+
+---
+
+## 2026-08-20 — Epic 2.0 · Secret handling incident (resolved, no exposure)
+
+The `ANTHROPIC_API_KEY` was pasted into `apps/api/.env.example` — the
+**committed template** — rather than `apps/api/.env`, which is the gitignored
+one. Caught on the pre-flight key check.
+
+**No exposure.** The repository has zero commits, `.env.example` was untracked
+and unstaged, and the key never entered git history. Verified before acting, so
+no rotation was required.
+
+**Resolved:** the value was moved to `apps/api/.env` (mode 600, gitignore
+verified), and `.env.example` was restored to an empty placeholder.
+
+Worth recording because the failure mode is generic: the two filenames differ
+by one suffix, and the committed one is the one an editor opens by default when
+the other does not exist yet. A pre-commit secret scan would catch the class —
+noted as a hardening item, not built here.
+
+---
+
+## 2026-08-20 — Epic 2.1 · A dotenv bug Epic 1's tests could not see
+
+Creating `apps/api/.env` for the first time broke the entire API test suite:
+
+```
+SettingsError: error parsing value for field "cors_allow_origins"
+                from source "DotEnvSettingsSource"
+```
+
+pydantic-settings **JSON-decodes complex types (`list`, `dict`) read from a
+dotenv file before field validators run**, so `CORS_ALLOW_ORIGINS=http://localhost:3000`
+fails to parse and never reaches the `_split_origins` validator written for it.
+Fixed with `Annotated[list[str], NoDecode]`.
+
+The reason Epic 1 shipped this: every test constructs `Settings(...)` with
+keyword arguments, so no test ever loaded a dotenv file. The configuration path
+that production actually uses had zero coverage. A latent bug that would have
+surfaced on first deploy.
+
+---
+
+## 2026-08-20 — Epic 2.2 · Crawl: facts out, content discarded
+
+**Built:** `services/crawl.py` — Playwright/Chromium fetch of the homepage plus
+up to three key pages (`/about`, `/services`, `/products`…), extracting text for
+classification and structural signals for storage.
+
+**The ip-safety boundary is this module** (constraint 7), so the rule is stated
+in the file: raw page text lives only in `CrawlResult`, an in-memory dataclass
+that is deliberately **not** a SQLAlchemy model and has no persistence path. It
+is handed to the classifier and discarded when the request ends. Only
+`CrawlSignals` — counts, booleans, URLs, schema.org type names — reaches the
+database.
+
+The distinction that makes this legitimate: page text is sent to a classifier
+the way a person would read a page to work out what a business does. What is
+kept is the conclusion, not the copy. Four tests enforce it structurally, plus
+one asserting the log-safe `redacted()` view cannot leak text into structured
+logs — logs are a durable store too.
+
+**Two decisions worth recording:**
+
+- **Images, fonts and video are blocked at the router.** They contribute
+  nothing to classification and are most of the bytes; blocking roughly halves
+  crawl time, which matters against a 30-second end-to-end budget.
+- **Schema.org extraction takes TYPE NAMES only.** The values inside JSON-LD —
+  descriptions, addresses, review text — are content and are discarded rather
+  than parsed. `LocalBusiness` is a signal; the `description` field next to it
+  is the publisher's copy.
+
+**Two bugs found by running it against real sites:**
+
+1. **`tldextract` fetches the Public Suffix List over the network on first use**
+   and caches it to disk — a network call on the request path that fails closed
+   in a sandbox and makes domain parsing differ between environments. Pinned to
+   the bundled snapshot with `suffix_list_urls=()`.
+2. **PSL *private* domains were excluded** (tldextract's default), so
+   `practice.github.io` resolved to `github.io` and `myshop.myshopify.com` to
+   `myshopify.com`. Every GitHub Pages or Shopify prospect would have collapsed
+   to one domain and collided on the `(agency_id, domain)` unique key — the
+   second would be rejected as a duplicate of the first. Agencies prospect small
+   businesses, so hosted-platform domains are common, not edge cases. Fixed with
+   `include_psl_private_domains=True`.
+
+**A third finding from the live run:** `patagonia.com` answers our crawler with
+a genuine HTTP 404 (bot or geo blocking). The crawl correctly refused, but
+reported `FETCH_FAILED`, which conflates "answered with an error" and "did not
+resolve at all" — different operational problems. Now reports `HTTP_404` and
+records the status.
+
+---
+
+## 2026-08-20 — Epic 2.3 · Classification: prompt, threshold, and the refusal to guess
+
+**Built:** `services/classify.py` — `claude-opus-5` via the Anthropic SDK's
+structured-output helper (`messages.parse` with a Pydantic schema).
+
+### Prompt design
+
+The system prompt is short and states the **cost asymmetry** first: *"Your
+output is the input to a competitive-analysis pipeline, so a confident wrong
+answer is far more costly than an admitted uncertainty."* Everything else
+follows from that framing rather than from a list of rules.
+
+Specific constraints, each present because of a failure it prevents:
+
+- **"a short, lower-case noun phrase a practitioner would recognise"** — without
+  it, models return marketing categories ("innovative wellness solutions") or
+  full sentences, neither of which clusters for the per-industry weight tuning
+  §6 defers.
+- **"Never infer the industry from the domain name alone"** — `smiledental.com`
+  behind a login wall should be low confidence, not a confident "dental".
+- **"A holding page for a conglomerate is a low-confidence input, not a
+  high-confidence 'conglomerate'"** — a concrete anchor for the calibration
+  instruction, which on its own is too abstract to change behaviour.
+- **"Do not quote the page in `rationale`"** — keeps model output on the right
+  side of the facts-only rule by construction.
+
+Schema field descriptions carry the rest, since with structured outputs they are
+part of the prompt.
+
+**Effort `low`, model `claude-opus-5`.** Classification from page text is a
+simple extraction task; low effort keeps the call inside the budget the crawl
+has already spent 2–5 seconds of. The model tier is *not* economised on:
+classification quality determines the input quality of three downstream epics.
+
+### Confidence: label plus number, threshold in one place
+
+Per the approved decision, `industry_confidence` stays a coarse label
+(`String(16)`) and a nullable `industry_confidence_score` (`NUMERIC(4,3)`) sits
+alongside it. The label leads because an LLM's self-reported confidence is not
+calibrated, and a label is honest about that where a bare number implies
+precision it does not have. The numeric column exists so a future calibrated
+threshold needs no migration; nothing reads it yet.
+
+**The model reports; this module decides.** Asking an LLM "are you sure enough?"
+makes the threshold invisible and unauditable. `CONFIDENCE_THRESHOLD = 0.70`
+lives in one constant, is unit-tested at its exact boundary (0.699 → ambiguous,
+0.700 → classified), and is trivially tunable once there is data to calibrate
+against. 0.70 is a starting point, not a measured value — it should be revisited
+after the first few hundred real classifications.
+
+### Ambiguity stores NULL, never a guess
+
+Confirmed decision, implemented at three layers so it cannot be bypassed:
+
+1. `decide()` withholds `industry` below the threshold
+2. `apply_outcome()` clears `industry` for any non-`classified` status
+3. `ck_clients_industry_matches_classification_status` rejects the row
+
+The reasoning is the same as Score's `INSUFFICIENT_DATA`: a wrong industry
+silently poisons Epic 3's competitor detection and Epic 4's prompt generation,
+and **neither has any way to detect that its input was wrong.** A visible "we
+could not tell" is recoverable; a plausible wrong label is not.
+
+Brand name and confidence are still kept on an ambiguous result — they are
+useful, and they were not what we were unsure about. Only `industry` is withheld.
+
+### Fallback ladder
+
+Every failure path returns a reason code rather than raising, because a site
+that cannot be classified is a normal outcome for a tool pointed at an arbitrary
+URL. Guards run before the model call (`FETCH_FAILED`, `HTTP_*`,
+`INSUFFICIENT_CONTENT` for pages under 40 words — a parked domain must not yield
+a confident hallucination), then provider errors map to distinct codes.
+
+`PROVIDER_QUOTA_EXHAUSTED` is split out from `PROVIDER_BAD_REQUEST`: the API
+returns **400** for an exhausted credit balance, and an operator reading "bad
+request" would go hunting for a malformed payload when the fix is billing.
+Matching on the message is the only available signal — type and status are
+identical.
+
+**The model's `rationale` is never persisted and never returned.** It exists for
+debug logging while tuning the prompt. Asserted by tests against the ORM model
+and every `*Out` schema, in Python and again in the OpenAPI contract tests.
+
+---
+
+## 2026-08-20 — Epic 2.4 · Intake screen, the first customer-facing surface
+
+**Built:** `apps/web` (Next.js 15 + React 19), the intake form, a minimal
+in-progress state, and a result panel. Plus `TextField` in the design system.
+
+**`TextField` went into `@avp/design-system`, not `apps/web`.** ip-safety.md #2
+prohibits ad hoc styling on customer-facing screens, and a form input styled
+locally would be exactly that. It wires up its own accessibility — real
+`<label>`, `aria-describedby` for hint and error, `aria-invalid`, and
+`role="alert"` on the error so a screen reader hears a validation failure it did
+not cause.
+
+**The Tailwind preset makes the constraint a build error.** It *replaces*
+Tailwind's colour, spacing, font and shadow scales rather than extending them,
+so `bg-slate-500` does not compile in `apps/web`. The only local styling is
+layout utilities that are themselves generated from the design tokens.
+
+**Client-side validation is deliberately thin** — it catches "you typed
+nothing" and nothing else. The server owns the real rule (`parse_domain`,
+resolving against the Public Suffix List); duplicating it in the browser creates
+two definitions of "valid" that drift, and the browser's copy is the one that
+gets stale.
+
+**Three outcomes, three treatments.** The result panel renders `classified`,
+`ambiguous`, and `unclassifiable` differently, and never shows a null industry
+as an empty field or a dash that reads like data. The ambiguous copy explains
+*why* nothing was stored — "rather than guess, we have left it unset" — because
+an unexplained blank looks like a bug rather than a decision.
+
+**The in-progress state names the actual steps** rather than showing an
+indeterminate spinner, and has no progress bar: we cannot measure real progress,
+and a fake one is a lie the user eventually notices.
+
+**Two build-integration decisions:**
+
+- `next.config.mjs` sets `resolve.extensionAlias` so webpack maps the design
+  system's ESM-correct `./Card.js` specifiers to `.tsx`. The alternative —
+  dropping extensions from the design system's imports — would break it under
+  plain Node ESM, so the fix belongs in the consumer.
+- `'use client'` was added to the three hook-using components
+  (`LuminanceLedger`, `ScoreDisplay`, `TextField`) rather than to the package.
+  Card, Badge, Table and the report primitives stay server-renderable, which
+  Epic 7's server-side PDF render depends on.
+
+---
+
+## 2026-08-20 — Epic 2.5 · Dependency licence ledger
+
+Added: `anthropic` (MIT), `playwright` (Apache-2.0), `tldextract` (BSD-3-Clause),
+plus transitive dependencies. Node: `next`, `tailwindcss`, `autoprefixer`,
+`postcss` and their trees — all MIT.
+
+Python distributions: **49 → 62**. Audit result unchanged: **PASS**, no
+copyleft, source-available, or undeclared licences, and no new REVIEW items
+beyond the two MPL-2.0 transitives (`certifi`, `pathspec`) already flagged in
+Epic 1.6 and still awaiting a call.
+
+---
+
+## 2026-08-20 — Epic 2.6 · Live verification, and two prompt-tuning findings
+
+**Ran `scripts/verify_intake.py` for real** — real Playwright crawls, real
+`claude-opus-5` calls, five genuinely different businesses. Nothing mocked.
+
+**Mechanical result: 5/5 classified, 5/5 within the 30-second budget**
+(slowest 17.7s, allbirds.com). §7's acceptance criterion is met.
+
+| Site | Label returned | Verdict |
+|---|---|---|
+| anthropic.com | `artificial intelligence research and products` | ✅ correct |
+| basecamp.com | `b2b saas` | ⚠️ **too generic** |
+| allbirds.com | `footwear brand (dtc e-commerce)` | ✅ correct, format drift |
+| stripe.com | `payments technology` | ✅ correct |
+| ycombinator.com | `venture capital` | ⚠️ **loses the distinguishing feature** |
+
+### Finding 1 — the model generalises when writing the label
+
+Basecamp and YC are wrong in the *same* way, and the rationale field proves it
+is not a knowledge gap. The model wrote:
+
+- Basecamp: *"a subscription web-based **project management and team
+  communication tool**"* → label `b2b saas`
+- YC: *"a three-month batch program investing seed capital in startups … **which
+  is a startup accelerator/seed fund**"* → label `venture capital`
+
+It identified the specific business correctly, then wrote a broader category
+into the label. This matters downstream rather than cosmetically: `b2b saas`
+would seed Epic 3 with keywords matching Salesforce, Datadog and Gusto equally,
+and `venture capital` would surface a16z and Sequoia as YC's competitors instead
+of Techstars and 500 Global. A bad competitor set then feeds Epic 4's prompts and
+Epic 5's Share of Voice, and nothing downstream can detect the original error.
+
+**Probable cause is in our prompt, not the model.** The instruction says "a
+short, lower-case noun phrase a practitioner would recognise" and offers
+`"b2b logistics software"` as an example — which *is itself* a
+business-model-plus-vertical construction, modelling the exact generalisation we
+do not want. Candidate fixes, untested:
+
+1. Replace the exemplar with a specific one (`"project management software"`,
+   not `"b2b logistics software"`).
+2. Add an explicit negative: *"Name what the business sells, not its business
+   model. 'b2b saas', 'e-commerce', 'marketplace' and 'technology company' are
+   never acceptable answers."*
+3. Ask for the rationale **before** the label in field order — the rationale is
+   consistently more specific than the label, so having the model commit to it
+   first may anchor the label to it.
+
+### Finding 2 — confidence is not calibrated (the more serious one)
+
+Scores across five sites: **0.97, 0.97, 0.97, 0.97, 0.96.** Effectively one
+value, despite the prompt explicitly asking for calibration and saying "use the
+full range".
+
+This undermines the `CONFIDENCE_THRESHOLD = 0.70` design. The whole
+ambiguity-detection mechanism assumes the score is informative; if a genuinely
+vague site also scores ~0.95, the threshold never fires and every site is
+recorded as `classified` — including the ones we specifically built the
+AMBIGUOUS path to catch.
+
+**The AMBIGUOUS path is currently unverified against real data.** It is well
+unit-tested at the boundary, but no real site has come near the threshold, so
+there is no evidence it fires when it should. Until that is fixed, the guarantee
+"we do not store guesses" holds in code but is unproven in practice.
+
+Candidate approaches, untested: score a deliberately ambiguous corpus (holding
+pages, multi-line-of-business conglomerates, parked domains) to see whether the
+distribution separates at all; or drop self-reported confidence in favour of a
+measurable signal — agreement across two independent calls, or presence of
+corroborating `LocalBusiness`/`Organization` schema.
+
+**Neither finding is fixed here.** Both are prompt/scoring-design work, and
+tuning against five data points would be overfitting. Recorded as the first item
+to address before Epic 3 depends on these labels.
+
+### Also observed
+
+- **allbirds.com took 13.8s to crawl** (3 pages) versus 2–3s for the others —
+  heavy JS. Still well inside budget, but it is the current worst case and the
+  budget is 30s.
+- **Format drift:** `footwear brand (dtc e-commerce)` crams two facets into one
+  field using a parenthetical. That is what `niche` is for. Worth tightening
+  when the label prompt is revised.
+
+---
+
+## 2026-08-20 — Epic 2.7 · Guard against secrets in the committed template
+
+The API key was pasted into `apps/api/.env.example` — the **committed**
+template — rather than `apps/api/.env`, **twice**, in consecutive sessions.
+Neither reached git (the repo has no commits and the file was untracked), but
+catching it by inspection both times is luck, not process.
+
+**Added `tests/test_env_template.py`** (8 tests): every secret-bearing key must
+be empty in the template, no credential-shaped string may appear anywhere in it
+(`sk-ant-…`, `sk-…`, `AIza…`, `pplx-…`) regardless of which key it sits under,
+and `APP_SECRET` must remain the recognisable `dev-only…` placeholder that
+`config.py` refuses to boot with in a deployed environment.
+
+The failure mode is generic and worth naming: the two filenames differ by one
+suffix, and an editor opens the committed one by default when the gitignored one
+does not exist yet. A pre-commit hook running this test would close it fully —
+noted as a hardening item.
+
+---
+
+## 2026-08-20 — Epic 2.8 · Prompt tuning for Finding 1 (label over-generalisation)
+
+**Scope:** Finding 1 only. Finding 2 (confidence calibration) deliberately
+untouched — it needs an adversarial corpus, not more happy-path sites, and is
+recorded as open.
+
+### Method
+
+`scripts/tune_prompt.py`. Two design choices that make the result mean something:
+
+- **The crawl is held constant.** Each site is fetched once and the same
+  in-memory `CrawlResult` feeds every variant. Re-crawling between variants
+  would let page changes and different secondary-page selection move the label,
+  and a difference could not be attributed to the prompt.
+- **Crawls are never written to disk** — in-memory for the process lifetime
+  only. A "just for testing" cache of page text is still a durable store, and
+  ip-safety.md #7 does not carve out an exception for test fixtures.
+
+`classify()` gained an optional `system_prompt` override for the harness.
+Production always passes `None`; an override on a request path would mean a
+scan was classified under a prompt that `classifier_model` does not record.
+
+**Corpus: 9 sites.** The original five, plus four chosen because the
+generalise-to-business-model failure would be unmistakable: two niche SaaS
+tools (SavvyCal, Help Scout), one service business (Roto-Rooter), one
+single-product retailer (Ooni).
+
+### Variant B — replace the misleading exemplar (one variable)
+
+The prompt offered `"b2b logistics software"` as an example — itself a
+business-model-plus-vertical construction, modelling the exact generalisation
+the label should avoid. Replaced with `"warehouse management software"`.
+
+**Result: 1 of 9 labels changed, 0 failures fixed.** The one change
+(`footwear brand / dtc ecommerce` → `footwear brand`) was a format tidy.
+Basecamp, SavvyCal and Help Scout all still returned `b2b saas`; YC still
+returned `venture capital`.
+
+Worth recording as a negative result: the misleading exemplar was a real flaw,
+but fixing it changed nothing measurable. Had this been the only change, it
+would have been easy to declare victory on the format tidy and miss that the
+failure mode was untouched.
+
+### Variant C — B plus an explicit negative (second variable)
+
+Added:
+
+> Name what the business SELLS or DOES, never its business model or delivery
+> channel. "b2b saas", "saas", "e-commerce", "marketplace", "technology
+> company", "home services" and "consumer goods" are never acceptable answers —
+> if one is your first instinct, go one level more specific and name the actual
+> product or service.
+
+**Result: all four failure-mode cases fixed, stable across two runs.**
+
+| Site | Before (A) | After (C) | Verdict |
+|---|---|---|---|
+| basecamp.com | `b2b saas` | `project management software` | ✅ fixed |
+| savvycal.com | `b2b saas` | `meeting scheduling software` | ✅ fixed |
+| helpscout.com | `b2b saas` | `customer support software` | ✅ fixed |
+| ycombinator.com | `venture capital` | `startup accelerator and venture capital` | ✅ fixed |
+| ooni.com | `consumer cooking appliance brand` | `pizza oven and kitchen appliance manufacturer` / `cooking appliance manufacturer` | ⚠️ variable |
+| roto-rooter.com | `plumbing services` | `plumbing services` | ✅ already correct |
+| anthropic.com | `…research and products` | `…research and development` | ✅ both correct |
+| stripe.com | `payments technology` | `payment processing software` | ✅ both correct |
+| allbirds.com | `footwear brand (dtc e-commerce)` | `footwear brand` | ✅ format tidied |
+
+Adopted C. The comment above `SYSTEM_PROMPT` records why the negative is
+load-bearing, so it does not get "simplified" back out.
+
+### Run-to-run variance is real, and worth knowing
+
+Variant A produced different labels for allbirds and Ooni across two runs
+(`footwear brand / dtc ecommerce` vs `footwear brand (dtc e-commerce)`;
+`consumer cooking appliance brand` vs `consumer kitchen appliance brand`).
+Single-run A/B comparisons therefore carry noise, which is why every conclusion
+above rests on a repeat run.
+
+The four `b2b saas` / `venture capital` failures were stable across both runs,
+and their fixes were stable across both runs. That is what makes the result
+trustworthy rather than a lucky draw.
+
+### Still imperfect
+
+- **Ooni is variable under C** — sometimes `pizza oven and kitchen appliance
+  manufacturer`, sometimes `cooking appliance manufacturer`. Not the business-
+  model failure (it names a product category either way), but one level broader
+  than ideal on some runs.
+- **Some labels drifted sideways.** Stripe moved from `payments technology` to
+  `payment processing software`; arguably slightly narrow for a company that
+  also does issuing, billing and treasury. Anthropic moved from `research and
+  products` to `research and development`. Both remain correct; neither is
+  clearly better than before.
+- **Finding 2 remains open and untouched.** Confidence scores in the post-fix
+  production run: 0.95, 0.97, 0.97, 0.96, 0.96 — still clustered, still
+  uninformative, so the AMBIGUOUS threshold still never fires on real sites.
+
+---
+
+## 2026-08-21 — Epic 3.0 · Local dev services, and a test-design flaw
+
+Two things broke before Epic 3 could start, both worth recording because both
+were self-inflicted.
+
+**The throwaway Postgres cluster was gone.** Epic 1 put it in the session
+scratchpad, which OS cleanup deletes. The README said the suite "needs a
+Postgres and a Redis" but never said how to create either, so a fresh clone
+could not run the tests at all. Added `infra/db/scripts/dev_cluster.sh`
+(`up|down|destroy|status`) which keeps its data in gitignored `.devdata/`,
+starts Postgres on 55433 so it cannot collide with a system install, and starts
+Redis only if nothing already answers on 6379 — a developer's own Redis is never
+displaced, and `down` leaves it alone.
+
+Finding a usable Postgres turned out to be the fiddly part: `command -v initdb`
+resolves to Homebrew's **libpq**, which ships client tools and no server, so
+initdb failed with *"program 'postgres' is needed by initdb but was not found"*.
+The script now looks for a directory containing every required binary including
+`postgres`, rather than resolving each one independently.
+
+**A secret-scanning test failed because a database was down.** `_clean_state` in
+`tests/conftest.py` was `autouse=True` and declared `engine` as a parameter, so
+every test in the suite connected to Postgres and Redis — including
+`test_env_template.py`, which only reads a file. With the cluster down, a test
+that checks for committed API keys reported `ConnectionRefusedError`.
+
+Fixed by resolving the datastore fixtures **lazily**, and only when the test
+actually requested one. `test_env_template.py` now passes in 0.01s with the
+database pointed at a dead port. A test that fails for a reason unrelated to
+what it asserts is worse than no test: it trains you to ignore the failure.
+
+---
+
+## 2026-08-21 — Epic 3.1 · SerpApi integration
+
+**Built:** `services/serp.py`.
+
+**No SerpApi SDK.** Their API is one authenticated GET returning JSON, and
+`httpx` was already vetted (BSD-3-Clause). The official `google-search-results`
+package would have added a dependency, a licence to audit, and a sync-only call
+style inside an async service — for a single HTTP request. `httpx` was promoted
+from a dev dependency to a runtime one; no new packages, so the licence audit is
+unchanged at 62 distributions, PASS.
+
+**Two things the module must never do**, both enforced by a test:
+
+1. **Never log `response.text` or `response.url`.** The SerpApi request URL
+   carries the API key as a query parameter, and their error bodies sometimes
+   echo the request. `test_serp_error_paths_never_log_the_request_url` asserts
+   this by source inspection, because the alternative is discovering it in a
+   production log.
+2. **Never persist titles or snippets.** Result titles are publisher copy. They
+   live in `SerpResult.titles` in memory, and `redacted()` — the log-safe view —
+   omits them.
+
+**The publisher exclusion list is a heuristic, and knowingly incomplete.** It
+holds ~70 registrable domains across encyclopaedias, forums, review aggregators,
+directories, marketplaces, publishers and job boards. It is biased toward false
+negatives on purpose: wrongly excluding a real rival costs one slot in a set an
+operator can edit, while wrongly including Wikipedia as a competitor makes the
+whole report look unserious to the client it is shown to.
+
+---
+
+## 2026-08-21 — Epic 3.2 · Co-citation discovery, facts only
+
+**Built:** `services/cocitation.py`.
+
+The signal: when a buyer asks an AI assistant a purchase question, which brands
+does it name? Anything named alongside — or instead of — the subject is a
+competitor by the definition that matters to this product.
+
+**How it stays facts-only.** The structured-output schema is the enforcement
+point, not a review convention:
+
+```
+CoCitedBrand    = {name, domain}
+CoCitationAnswer = {brands[], subject_named}
+```
+
+There is **no field capable of holding answer text**. The engine's prose is
+never stored, never returned, never rendered — because the contract gives it
+nowhere to go. `test_cocitation_schema_cannot_carry_answer_text` asserts the
+field sets exactly, so adding a `snippet` field later fails the suite.
+
+Model-returned domains are normalised through the Public Suffix List before use,
+since a model may return `www.Stripe.com/` where SERP returns `stripe.com` — and
+the two must compare equal or corroboration silently never fires.
+
+**Scope boundary.** This is deliberately *not* Epic 4's engine runner. Epic 4
+executes a generated prompt set across multiple real engines and parses
+mentions, positions and citations from raw responses. Here one model answers one
+structured question per seed prompt, purely to discover who the rivals are.
+Keeping them separate meant Epic 3 did not have to wait on the engine
+abstraction, and Epic 4 can replace this signal without touching ranking.
+
+---
+
+## 2026-08-21 — Epic 3.3 · Ranking: corroboration, not industry match
+
+**Built:** `services/competitors.py`.
+
+### How unreliable industry classification is handled
+
+This is the part the brief specifically asked about, and it shaped three
+decisions.
+
+**1. No industry-keyed query template dictionary.** Query and prompt shapes are
+generic and parameterised by whatever string `Client.industry` holds. A dict
+keyed on industry would launder a bad classification into a confident-looking
+competitor set: every returned rival would "fit" the wrong industry, and nothing
+downstream could tell. A test (`test_no_industry_keyed_template_dictionary_exists`)
+guards against reintroduction.
+
+**2. Brand-anchored queries always run, and never depend on the
+classification.** `"<brand> alternatives"`, `"<brand> competitors"`,
+`"<brand> vs"`, and the equivalent seed prompts, work with no industry at all.
+Industry-seeded queries are added on top when a label exists. The asymmetry is
+the point: **a misclassification degrades recall rather than corrupting the
+result.** Brand queries are also listed first, so they survive any truncation.
+
+**3. Ranking is by cross-signal corroboration, not industry fit.** Nothing in
+the ranking asks "does this look like a $INDUSTRY company?". A mis-classified
+client therefore produces a **visibly incoherent** set an operator notices and
+corrects, rather than a plausible wrong one they accept.
+
+`CompetitorSet.used_industry_seed` records whether a label was involved, so when
+an operator reports a bad set, "was this seeded from a bad industry?" is
+answerable without re-running.
+
+### Dedup
+
+Domain-first, name-second. A co-citation hit carrying a domain merges with a
+SERP hit on the same domain; one without merges on a slugified name compared
+against the SERP domain's label (`Front` ↔ `front.com`). Legal suffixes are
+stripped so `Zendesk Inc.` and `Zendesk` are one rival — with a guard so `Coco`
+does not become `Co`.
+
+### Scoring
+
+Each signal is normalised against **its own maximum** before the two combine.
+Six SERP queries return up to sixty hits and four seed prompts up to forty; that
+difference is a configuration artefact, and without normalisation it would decide
+the ranking. Position weight is `1/sqrt(rank)`. A candidate both signals surfaced
+gets a 1.6x multiplier — the single largest term, because agreement between two
+methods that fail differently is far stronger evidence than volume within either.
+
+Ordering is fully deterministic (score, then corroborated, then mentions, then
+name), so two reports of the same client never show competitors in swapped
+order.
+
+### detection_confidence
+
+The share of the returned set that both signals surfaced independently.
+
+**Null when only one signal ran** — not zero. Zero asserts "two signals looked
+and agreed on nothing"; null says agreement was never measurable. Epic 5 needs
+that distinction before presenting a Share of Voice comparison as authoritative.
+Same discipline as Score's `INSUFFICIENT_DATA`.
+
+Deliberately **not** a measure of whether the competitors are correct — nothing
+here can know that. It measures agreement, which is the only thing observed.
+
+### Two SQLAlchemy bugs worth remembering
+
+Both produced *silently empty* competitor sets rather than errors:
+
+1. **Lazy load on a new `CompetitorSet`.** After `flush()`, accessing
+   `.competitors` triggered a lazy load and raised `MissingGreenlet` under the
+   async session. Fixed by passing `competitors=[]` at construction, which marks
+   the collection loaded.
+2. **`delete-orphan` ate the new rows.** The relationship cascades
+   `delete-orphan`; assigning `competitor_set.competitors = manual` and then
+   attaching new `Competitor` rows via `session.add()` with only a foreign key
+   made them orphans of the reassigned collection, and flush deleted them.
+   Fixed by appending through the relationship. The same bug existed in the PUT
+   handler.
+
+---
+
+## 2026-08-21 — Epic 3.4 · Live verification: 88% precision, and one clear finding
+
+Ran `scripts/verify_competitors.py` against **10 real businesses across
+different industries** — real SerpApi searches, real model calls, nothing mocked.
+
+**Automated score: 76% (38/50), 8/10 URLs at ≥80%.** Below the bar.
+
+**Audited score: 88% (44/50), 9/10 URLs at ≥80%.** Above it.
+
+The gap is entirely my reference lists being incomplete, which the script warns
+about in its own output. Six flagged candidates were real competitors I had not
+listed: ConnectPay (payments), Pala Pizza and Forno Bravo (pizza ovens), Zencal
+(scheduling), Airwallex (cross-border payments), Shorthand (publishing). Six were
+genuine false positives: The Digital Project Manager and Serious Eats
+(publications), Famous Footwear and Buckman's (multi-brand retailers, channels
+rather than rivals), Reedsy and MindStir Media (book publishing — a different
+market from Ghost's).
+
+Per-row reasoning is in the session transcript so the calls can be disputed;
+the automated number is left deliberately un-tuned as a conservative lower bound,
+because editing the reference lists after seeing results would make the
+instrument useless.
+
+### The finding: SERP-only candidates are the entire error budget
+
+| Detection source | Correct | Precision |
+|---|---|---|
+| `both` | 22/22 | **100%** |
+| `co_citation` | 16/16 | **100%** |
+| `serp` only | 5/11 | **45%** |
+
+**Every single false positive was SERP-only.** Not one corroborated or
+co-citation-sourced candidate was wrong across fifty rows.
+
+The mechanism is explicable rather than coincidental: SERP returns whatever
+*ranks* for a query, which includes listicles, review blogs and adjacent-market
+pages. A model naming a brand is a stronger assertion — it is claiming the brand
+is an option a buyer would consider, not merely a page that mentions the topic.
+
+This suggests a targeted fix — require a SERP-only candidate to appear in **two
+or more distinct queries** before it can take a top-5 slot, or down-weight
+single-query SERP hits sharply. **Not implemented.** With one 10-URL run behind
+it, tuning the ranking now risks fitting the constant to the sample, and the same
+discipline was applied to Epic 2's Finding 1. Recorded for a decision.
+
+### ghost.org is a Finding 2 consequence, visible in the wild
+
+Ghost scored worst (3/5) and the reason is instructive: its industry label,
+`publishing platform`, is genuinely ambiguous — it pulled in Reedsy and MindStir
+Media, which serve *book* publishing rather than newsletters and blogs.
+
+This is precisely the failure mode the "no industry-keyed templates" decision
+anticipated, and the design behaved as intended: the bad seed produced a
+**visibly odd set** rather than a plausible wrong one. The two wrong rivals are
+obviously off to anyone who knows the market, and both are one `PUT` away from
+being corrected. Had ranking been keyed on industry match, they would have looked
+like a coherent answer.
+
+Finding 2 (confidence calibration) remains open and untouched.
+
+---
+
+## 2026-08-21 — Epic 3.5 · SERP-only gating: implemented, and it largely did not work
+
+**The fix:** an uncorroborated candidate must appear in at least
+`MIN_SERP_QUERIES_FOR_UNCORROBORATED = 2` **distinct SERP queries** before it
+may occupy a returned rank. Corroborated and co-citation-sourced candidates are
+exempt — both measured 100% precision in Epic 3.4.
+
+Threshold chosen as **two** because it is the smallest value that expresses
+"more than one query agreed", i.e. the weakest possible form of the rule. Per
+the brief, the constant was not iterated against the result.
+
+Applied in `decide_detection`, **before** truncation to the top five, so a
+filtered candidate frees its slot for the next eligible one rather than
+shortening the set. Filtering is a pure predicate over already-scored
+candidates, so ordering among survivors — and determinism — is unchanged
+(asserted over eight repeat runs).
+
+### Result: the gap did not close
+
+| Detection source | Before | After |
+|---|---|---|
+| `both` | 22/22 = **100%** | 22/22 = **100%** |
+| `co_citation` | 16/16 = **100%** | 16/16 = **100%** |
+| `serp` only | 5/11 = **45%** | 7/12 = **58%** |
+
+| | Before | After |
+|---|---|---|
+| Automated precision | 76% (38/50) | **76% (38/50)** |
+| Audited precision | 88% (44/50) | **90% (45/50)** |
+| URLs at ≥80% (audited) | 9/10 | **9/10** |
+
+Per-URL audited, before → after: helpscout 5→5, basecamp 4→4, stripe 5→5,
+allbirds 4→4, **ooni 4→5**, savvycal 5→5, roto-rooter 5→5, patagonia 4→4,
+wise 5→5, ghost 3→3.
+
+**One site improved by one row. Nine were unchanged.** SERP-only precision moved
+45% → 58%, still nowhere near the 100% of the other two sources. A +2pp overall
+move across two separate live runs is inside run-to-run variance, so the honest
+reading is that **this fix did not deliver the improvement its hypothesis
+predicted.**
+
+### Why it failed — the useful part
+
+Every false positive from Epic 3.4 survived the gate: The Digital Project
+Manager, Famous Footwear, Buckman's, Reedsy, MindStir Media. They were not
+single-query artefacts. Instrumenting helpscout.com made the mechanism obvious:
+
+```
+PASS  thecxlead.com    src=serp  distinct_queries=3
+PASS  zapier.com       src=serp  distinct_queries=3
+```
+
+`thecxlead.com` is a **publication**, and it appeared in three of six queries.
+
+**The gate's premise is false for the query set we generate.** Three of the six
+shapes — `best {seed}`, `top {seed} companies`, `{seed} providers` — are near
+paraphrases and return substantially the same listicles. Appearing in two of
+them is therefore *not* independent corroboration; it is the same query asked
+three ways. Counting distinct query strings measured query-set redundancy, not
+evidence.
+
+That reframes the problem usefully: the weakness is not "SERP-only candidates
+need more hits", it is **"a listicle ranks like a competitor, and query
+repetition cannot tell them apart."** Separating them needs a different signal —
+whether the domain is a vendor or a publisher — not more of the same one. Two
+directions worth considering, neither attempted here: classify the candidate
+domain itself (one cheap model call over ~10 domains), or require SERP-only
+candidates to appear in queries of *different shapes* (brand-anchored **and**
+industry-seeded), which are genuinely uncorrelated.
+
+### Recall impact: none observed, but the risk is real
+
+**All 10 sites returned a full set of 5. No set was shortened.** In production
+`build_queries` issues 3–6 queries, so a genuine competitor generally appears in
+at least two.
+
+The risk is nonetheless real and is now pinned by a test
+(`TestSerpGateRecallImpact`): with only one query's worth of SERP data and no
+co-citation, every candidate is gated and the set is emptied — `NO_SIGNAL` where
+it previously returned a 3-competitor `WEAK_SIGNAL` set. `candidates_considered`
+still records the evidence, so the loss is visible rather than silent. A thin
+market or a partial SerpApi outage could hit this.
+
+**Three existing tests encoded the pre-gate behaviour** and were updated rather
+than weakened: two in `TestDetectionConfidence` and one endpoint stub had used a
+single query for brevity, which production never does. Their fixtures now issue
+two queries so they keep testing confidence and limit semantics; the single-query
+case they used to cover incidentally is now covered deliberately, and
+adversarially, in `TestSerpGateRecallImpact`.
+
+### Keep or revert?
+
+Kept. It is a small, honest improvement (SERP-only 45% → 58%, ooni +1) with no
+observed recall cost, and it makes the *next* attempt cheaper by having ruled
+out the "more query hits" hypothesis with evidence. But it should not be
+described as having fixed the problem, and the ~58% figure should be treated as
+the current state of SERP-only precision rather than a solved issue.
+
+### Caveat on the comparison
+
+Before and after are two separate live runs, so some delta is noise, not the
+gate. Observed variance between runs, independent of the change: allbirds' Atoms
+moved `both` → `serp` (and allbirds dropped to `weak_signal` with 0.000
+confidence for lack of any corroborated candidate); ooni gained Bertello;
+helpscout's top five gained Kustomer and Crisp while Kayako and Intercom fell
+out. Single-run A/B on this corpus cannot resolve differences smaller than a few
+rows — which is itself a reason not to keep tuning against it.
+
+### Addendum — a floor, closing the gap this entry identified
+
+The empty-set regression above never fired in the live run, but
+`TestSerpGateRecallImpact` proved it reachable, and "reachable but not yet
+observed" is not a safe thing to ship in a path that degrades under a partial
+SerpApi outage. A floor was added.
+
+**Rule:** if gating would leave fewer than `MIN_COMPETITORS_FOR_OK` (3)
+candidates, backfill from the gated-out ones, highest score first, until the
+floor is met or they are exhausted. No new constant — the floor reuses the
+existing minimum. No new status — a backfilled set is `WEAK_SIGNAL`, which is
+precisely what that flag already means.
+
+**Two ordering decisions:**
+
+- Backfilled candidates are appended **after** the eligible ones rather than
+  merged by score. A rank is a claim about evidence, and a candidate that failed
+  the gate has weaker evidence than one that passed it, whatever its raw score.
+  `test_single_signal_with_realistic_query_count_keeps_the_real_one_first` pins
+  this.
+- A backfilled set is **never** reported as `OK`, even when it contains
+  corroborated rows and would otherwise qualify. It contains rows that failed the
+  evidence bar, and an operator should look.
+
+**Epic 3.5's numbers above are unchanged, and that is proved rather than
+asserted.** All ten sites returned a full set of five, so at least five
+candidates cleared the gate in every case — far above the floor.
+`TestFloorIsANoOpAboveTheFloor` demonstrates the property directly: with enough
+eligible candidates the floor is inert, ordering is untouched, and a fully
+corroborated set still reports `OK` with confidence 1.000. The paid 10-URL
+script was deliberately not re-run.
+
+**One property worth knowing: the floor masks the gate below three eligible
+candidates.** That is intended, but it surfaced as five failing tests whose
+fixtures had fewer than three eligible rows — including the end-to-end test —
+where the backfill silently readmitted the very candidate the test was asserting
+was excluded. Those fixtures now carry three eligible candidates so the gate is
+observable, and the floor has its own boundary tests
+(`TestSerpGateFloor`: exactly 3 eligible stays inert; 2 eligible promotes exactly
+one, not all). Worth recording because the failure mode is subtle — a test can
+keep passing while measuring something other than what it names.
+
+Finding 2 (confidence calibration) remains open and untouched.
+
+---
+
+## 2026-08-21 — Epic 4.0 · A silent migration gap, and the Epic 3 bug it caught
+
+Two findings that predate this epic's feature work and matter more than it.
+
+### Alembic cannot see enum members being added
+
+Enums are mapped as `VARCHAR + CHECK` (`native_enum=False`). Alembic's
+autogenerate does not diff the *contents* of a CHECK constraint — it sees an
+unchanged VARCHAR column. **Adding a member to a Python enum therefore produces
+an empty migration**, and `alembic check` reports no drift. Everything looks
+correct until the first insert of the new value fails at runtime.
+
+Adding `Engine.CLAUDE_SEARCH` hit exactly this: autogenerate emitted
+`pass`. The migration had to be hand-written, and needed `op.f()` on the
+constraint name — the metadata naming convention prefixes `ck_%(table_name)s_`,
+so passing an already-qualified name produced
+`ck_engine_results_ck_engine_results_engine` and the DROP failed. The whole
+upgrade then rolled back silently, leaving four "Running upgrade" log lines and
+a database still at the old revision.
+
+### The guard was tautological at first, which is worth recording
+
+`tests/test_enum_constraints.py` was written to close the gap by asserting every
+Python enum member is accepted by the database. It passed. A deliberately
+unmigrated member was then injected as a negative control — **and it still
+passed.**
+
+The reason: `conftest.py` builds the test schema with
+`Base.metadata.create_all()`, which regenerates every CHECK constraint from the
+*current* Python enum. Checking the Python enum against that database compares a
+thing to itself. The guard could never fail.
+
+Repointed at a database built by running the real migrations from base to head
+(its own session-scoped fixture, own throwaway database, dropped afterwards).
+The negative control now fails as it should. This also gives the suite its first
+genuine execution coverage of the migration files — a broken revision now fails
+in CI rather than on a deploy.
+
+**The general lesson: a guard that has never been observed to fail is not
+evidence.** Both the original guard and the tests it was meant to protect were
+passing for the same reason — they were all measuring the model against itself.
+
+### What it immediately caught: DetectionSource.BOTH
+
+Epic 3 added `DetectionSource.BOTH` — the value marking a competitor that SERP
+and co-citation surfaced independently, the strongest signal in the entire
+ranking — and never widened its CHECK constraint. Every Epic 3 test passed,
+because they all ran against the create_all schema.
+
+**Against a migrated database, the first corroborated competitor would have
+failed to insert.** Fixed in its own revision. Epic 3's live verification never
+hit it because that script exercises the ranking functions directly and does not
+persist.
+
+---
+
+## 2026-08-21 — Epic 4.1 · Prompt generation
+
+**Built:** `services/prompts.py`.
+
+The prompt set is the measuring instrument. Every number this product reports —
+mention rate, share of voice, sentiment — is a statement about *these* prompts,
+so how they are built determines what the score means.
+
+### Handling an uncalibrated industry label
+
+Same discipline as Epics 2 and 3, for the same reason: `Client.industry`
+confidence is uncalibrated (Finding 2, still open).
+
+- **No industry-keyed template dictionary.** Generation is one generic
+  instruction parameterised by whatever the label says. The Epic 3 guard test
+  was extended to this module
+  (`test_no_industry_keyed_template_dictionary_exists`).
+- **The label is passed to the model marked as unreliable** — literally
+  "(classified automatically, may be imprecise)" — rather than as ground truth.
+- **A deterministic, brand-anchored fallback** covers provider failure and does
+  not depend on the classification at all. `generated_by` records which path
+  produced the set, so a scan can always be explained.
+
+### Intent quotas are enforced in code, not requested in the prompt
+
+A model asked for "a mix" returns whatever mix it likes, and the mix decides
+what the score measures — a set skewed to bottom-funnel prompts flatters a brand
+with strong branded search and says nothing about discovery. Quotas
+(45% awareness / 35% comparison / 20% bottom-funnel) are applied after
+generation. Awareness is weighted highest because that is where invisibility
+actually costs a business.
+
+`enforce_intent_mix` **never pads**. If the model under-produced an intent the
+set is smaller and honest about it, rather than topped up with near-duplicates
+that would inflate the denominator of every rate scoring computes.
+
+### The instruction that matters most
+
+*"Most questions must NOT contain the subject brand's name. A question that
+names the brand can only confirm the brand exists; it cannot reveal whether the
+brand gets discovered."* Without it, generators produce sets dominated by
+"is X any good?", which measure nothing this product exists to measure. The live
+run bore this out: 0 of 12 awareness prompts named the subject.
+
+---
+
+## 2026-08-21 — Epic 4.2 · Two engines, one vendor
+
+**Built:** `services/engines.py`.
+
+Only `ANTHROPIC_API_KEY` is provisioned; OpenAI, Perplexity and Google are
+empty. Checking the key's scope showed the server-side `web_search` tool is
+available, which makes a genuinely different second engine reachable without a
+new provider. **Approved before building.**
+
+| Engine | Behaviour | Analogue |
+|---|---|---|
+| `claude` | Parametric recall. Names what it learned in training, cites nothing. | A non-browsing assistant |
+| `claude_search` | Retrieves live, answers with real cited URLs. | Perplexity, AI Overviews |
+
+They are modelled as **separate engines rather than a flag** because they answer
+differently in the way this product measures. A report must be able to say "you
+are absent from grounded answers but present in parametric ones", which needs
+two rows. The live run produced exactly that disagreement on one prompt.
+
+`claude_search` is also the only source of genuine Citation rows available
+today — 63 real cited URLs across six prompts.
+
+**Limitation, stated plainly: this is one vendor and one model, so it does not
+test cross-vendor variance**, which is part of the product's eventual value. That
+is credential-bound, not design-bound. Adding ChatGPT or Perplexity is a new
+class implementing `EngineAdapter` plus a key — nothing in the runner,
+extraction or persistence layer knows which engines exist.
+
+---
+
+## 2026-08-21 — Epic 4.3 · Facts-only extraction
+
+**Built:** `services/extraction.py`, `services/scan_runner.py`.
+
+`EngineAnswer.text` holds a live engine response. It is a plain dataclass with
+no SQLAlchemy mapping and no persistence path — the same contract as
+`CrawlResult` (Epic 2) and `SerpResult` (Epic 3). What survives is booleans,
+ordinals, a sentiment label, counts, cited domains and URLs.
+
+**`response_digest` is how change-detection works without retention.** A
+SHA-256 of the whitespace-normalised answer lets two scans be compared for "did
+the answer change?" without keeping either answer. Normalising first means
+trivial reformatting does not read as a substantive change.
+
+**Web-search blocks carry titles and page snippets — publisher copy — and are
+deliberately not read.** Only the URL and its registrable domain are taken, and
+a test asserts this by source inspection, because the alternative is noticing it
+in a database months later.
+
+**Sentiment is the one non-deterministic step**, and it is confined. Per
+scoring-spec.md rule 4 it is classified once, upstream, and persisted; scoring
+reads the stored label and never re-invokes a model. It is only requested when
+the subject was actually mentioned — sentiment toward a brand that does not
+appear is meaningless, and scoring-spec excludes it from the composite rather
+than scoring it zero.
+
+Everything else — mention detection, position, prominence, citation typing — is
+pure string and set operations, so the same answer always yields the same facts.
+
+### The brand-matching bug
+
+Mention detection matched the subject by name and domain with word boundaries.
+For a client whose classification had not run, `brand_name` is NULL and the
+subject falls back to the bare **domain** — `helpscout.com` — which never appears
+in prose that says "Help Scout".
+
+**Every scan of an unclassified client would have reported a 0% mention rate**,
+and it would have looked like a finding rather than a bug. Caught by an endpoint
+test whose fixture created a client with `classify: false` — the realistic case.
+
+Fixed with a third matching pass: a separator-insensitive slug comparison, so
+`helpscout.com` and `HelpScout` both find "Help Scout". Restricted to slugs of
+six characters or more, because stripping separators makes short names match
+inside unrelated words. The existing false-positive guards still hold — "On" does
+not match "on the shelf", "Front" does not match "Frontier".
+
+**Brand detection is scoped to the subject plus KNOWN competitors**, never
+open-ended entity extraction. A scan run before Epic 3 detection therefore
+reports position 1 of 1 for every mention. Epic 5 needs to know this: share of
+voice against an empty competitor set is not a meaningful number, and
+`CompetitorSet.detection_confidence` is the signal for how solid the comparison
+base is.
+
+---
+
+## 2026-08-21 — Epic 4.4 · Live verification, and the bug it exposed
+
+Two live runs, both real: real prompt generation, real Claude parametric and
+Claude web-search calls, real extraction. Nothing mocked.
+
+### Run 1 — recovered from a backgrounded task
+
+The first run was backgrounded after a transient `ENOTFOUND` and a 600s timeout.
+It **completed successfully** and its output was recovered rather than
+re-spending on a fresh run. The DNS failure did not recur; a follow-up auth probe
+confirmed the credential was never the problem.
+
+```
+engine result rows : 12/12 prompt x engine pairs
+  claude         results=6  mentioned=6 (100%)  citations= 0  failed=0
+  claude_search  results=6  mentioned=5 (83%)   citations=63  failed=0
+RESULT: PASS
+```
+
+The two engines **disagreed on one prompt** — "cheapest customer support platform
+for a 5 person startup": parametric named the subject first, grounded did not
+name it at all. That disagreement is the entire argument for running two
+engines, and it appeared in the first six prompts.
+
+### What run 1 exposed: every executed prompt was `awareness`
+
+`enforce_intent_mix` returned prompts **grouped by intent**, so `generated[:6]`
+was six awareness prompts. `position` follows that order, which means anything
+taking a prefix of the set — the API's `promptLimit`, a run cut short by a rate
+limit, a partial re-run — measured **one third of the buyer journey while
+reporting a mention rate that looks whole**.
+
+The unit test checked the ratio of the whole set, which was correct, and said
+nothing about its order. A live run was the only thing that would have shown it.
+
+Fixed with deterministic round-robin interleaving. Totals are unchanged
+(12/8/4); any prefix is now representative — one of each intent in the first
+three, all three present by six.
+
+### Run 2 — after the fix
+
+```
+[awareness]     what's a good shared inbox tool for a small support team
+[comparison]    help scout vs zendesk for a growing support team
+[bottom_funnel] how much does help scout cost per user and what's included
+[awareness]     we're outgrowing gmail for support emails, what should we move to
+[comparison]    front vs help scout, which is better for shared inboxes
+[bottom_funnel] is help scout worth it, what do current users complain about
+
+engine result rows : 12/12 prompt x engine pairs
+  claude         results=6  mentioned=6 (100%)  citations= 0  failed=0
+  claude_search  results=6  mentioned=6 (100%)  citations=64  failed=0
+RESULT: PASS
+```
+
+This run carries information the first could not, because comparison and
+bottom-funnel prompts had never been executed live:
+
+- **Sentiment discriminates.** Positive, neutral **and negative** all appeared.
+  The negative came from "is help scout worth it, what do current users complain
+  about" on the grounded engine — a prompt built to surface complaints, correctly
+  classified. A classifier that only ever returns positive would have looked
+  fine in run 1.
+- **The engines disagree on position, not just presence.** Same prompt, subject
+  first parametrically and second when grounded.
+- **Bottom-funnel prompts name one brand** (`brands=1`) — a pricing question is
+  about one company — while awareness prompts name four to six. The intent
+  tagging is measuring something real.
+- **Latency is wide and worth planning around:** 20.7s to 128.7s per call, with
+  216.6s observed in run 1. A full 24-prompt two-engine scan is ~48 calls; at
+  concurrency 3 that is roughly 15–25 minutes of wall clock. Synchronous
+  execution is fine for verification and will not survive contact with a real
+  user — Epic 9's end-to-end target is 5 minutes, which will need the Celery
+  path Epic 1 scaffolded.
+
+### Acceptance
+
+§7: *"a scan produces structured EngineResult records for every prompt x engine
+pair, with mentions and citations correctly parsed."* **Met.** 12/12 pairs in
+both runs, 0 failures, 63 and 64 real cited URLs parsed from the grounded engine,
+mentions and positions parsed on every row.
+
+**Caveat stated plainly:** both runs used 6 of the 24 generated prompts, capped
+for cost. Generation itself produced the full 24 with the correct intent mix in
+both runs; the cap applies only to execution. The prompt × engine matrix is
+complete for what was run.
+
+---
+
+## 2026-08-21 — Epic 5.1 · The negative control that failed to fail
+
+Epic 4.0 established the rule: *a test that has never been observed to fail is
+not evidence.* Forty-two scoring tests passed on first run, so before trusting
+any of them, two determinism breakages were injected deliberately.
+
+### Breakage A — float in the weighted-sum path: **NOT CAUGHT**
+
+A float cast was injected into the composite calculation. **All 42 tests
+passed.**
+
+The reason is worth stating, because it generalises: **float does not break
+determinism on one machine.** It breaks *precision*, and *cross-platform*
+reproducibility. Running the same float arithmetic twice on the same host gives
+the same wrong answer, so every same-in-same-out assertion held. And
+`test_every_stored_value_is_a_decimal` passed because the injected code cast
+back to `Decimal` at the end — the type was right, the arithmetic was not.
+
+scoring-spec.md rule 3 ("Decimal, not float — binary floats make `0.30 × 33.33`
+platform-fragile at the rounding boundary") was therefore **completely
+unguarded**, in the exact module it exists to protect.
+
+**Fixed in two ways.** The weighted sum was extracted into
+`weighted_composite()`, previously inline in `compute_score` and reachable only
+by crafting ResultFacts that happen to produce boundary-value sub-scores — which
+is why the injection went unnoticed. A grid search then found real inputs where
+the two disagree:
+
+| effective weights 33.33 / 27.78 / 22.22 / 16.67 | Decimal | float |
+|---|---|---|
+| values 67.13 / 77.75 / 77.55 / 50.33 | **69.60** | 69.59 |
+| values 76.72 / 52.87 / 67.21 / 86.28 | **69.58** | 69.57 |
+| values 79.46 / 6.22 / 5.17 / 28.76 | **34.16** | 34.15 |
+
+A one-point swing in a client-facing score, from arithmetic alone. Those three
+are now parametrised tests, backed by a source-level guard that rejects any
+float entering the module — the boundary cases only catch a float that lands on
+a rounding edge, whereas the rule is categorical.
+
+Re-injecting the float now fails 4 tests, including the source guard on its own.
+
+### Breakage B — unsorted iteration: **caught correctly**
+
+Removing the explicit sort from `compute_inputs_digest` failed
+`test_digest_ignores_input_ordering` immediately. Removing it from
+`compare_competitors` failed `test_ordering_is_deterministic`. Both behaved as
+intended without modification.
+
+### The pattern, twice now
+
+Epic 4.0's enum guard passed against a `create_all()` schema because it compared
+the model to itself. This one passed against float arithmetic because it
+compared a machine to itself. **Both were self-consistent and both proved
+nothing.** The cost of checking is one deliberate breakage; the cost of not
+checking is a guard that reads as protection and provides none.
+
+---
+
+## 2026-08-21 — Epic 5.2 · Sub-scores, and two deliberate spec deviations
+
+**Built:** `services/scoring.py` (pure), `services/scoring_runner.py`
+(persistence), `routers/scores.py`, `schemas/score.py`.
+
+### How each sub-score is computed from real tables
+
+| Sub-score | Source | Notes |
+|---|---|---|
+| **Mention Rate** 30% | `engine_results.mentioned` | Denominator is **answered** results only. A timeout or rate limit is *missing data*, not evidence of absence — counting it would turn an outage into a low score, which is what the PARTIAL scan status exists to prevent. |
+| **Share of Voice** 25% | `engine_result_brand_mentions` | Counts every appearance, not merely presence, so a rival named in eight answers outweighs one named twice. Yields exactly `100/(1+n)` when all are tied. |
+| **Citation Strength** 20% | `engine_result_citations.cites_subject` | Distinct domains, normalised against the best-cited brand in the same scan. |
+| **Sentiment** 15% | `engine_results.sentiment` | Read from storage, never re-classified. positive=100, **neutral=50**, negative=0. |
+| **Technical Foundation** 10% | — | No input exists until Epic 6. |
+
+**Neutral sits at the midpoint, not zero.** Being listed without evaluation is
+materially better than being warned against, and collapsing the two would make
+Sentiment a near-duplicate of Mention Rate.
+
+**§6 asks Citation Strength for "number AND authority of domains". There is no
+authority data in this system** — no Domain Authority feed, no backlink source,
+nothing upstream that produces one. scoring-spec.md anticipated this: fall back
+to raw domain count normalised against the competitor maximum, and record the
+degradation. Every score therefore carries `NO_AUTHORITY_DATA`. Normalising
+against the best-cited brand in the same scan keeps the number answerable —
+"how close is the subject to the most-cited player here" is knowable from what
+we have; "is 7 citing domains good" is not.
+
+### Deviation 1 — no-competitor Share of Voice (scoring-spec v1.1)
+
+v1 said *"No competitors detected → Share of Voice = 100. Flag the scan."*
+
+That awards **a quarter of the composite for a detection failure.** A brand
+whose competitor detection returned nothing would score full marks on 25% of the
+formula, which is a technically-computable but meaningless number — the exact
+thing this project refuses everywhere else (null classification rather than a
+guess, null score rather than a zero, `INSUFFICIENT_DATA` rather than a
+plausible number).
+
+Share of Voice is now **excluded and its weight redistributed** when the
+competitor set is absent, empty, or `NO_SIGNAL`, with `NO_COMPETITOR_SET` on
+`degradation_flags`. This is not an invented rule: it is the treatment v1 already
+prescribed for sentiment with no population. Recorded in scoring-spec.md's
+changelog; `FORMULA_VERSION` bumped to `v1.1`, since the §6 weights are unchanged
+but the composite a given EngineResult set produces is not — and rule 5 exists so
+that difference is attributable rather than silent.
+
+A `WEAK_SIGNAL` competitor set still scores, but flags `WEAK_COMPETITOR_SET` —
+Epic 3.5 measured SERP-only competitor precision at ~58%, and a weakly
+corroborated set is a weaker denominator.
+
+### Deviation 2 — Technical Foundation excluded, with a distinct reason
+
+Excluded pending Epic 6 and its weight redistributed, rather than scored zero.
+Scoring it zero would depress every score by up to 10 points for a reason that
+has nothing to do with the client.
+
+Its reason code is **`NOT_YET_MEASURED`, deliberately distinct from
+`NO_POPULATION`.** "We have not checked this yet" and "there was nothing to
+measure" must be worded differently to a client, and Epic 7's report cannot tell
+them apart from a shared flag. This forced a schema change: `excluded_dimensions`
+was `ARRAY(String)` — a list of dimension names with nowhere to put a reason —
+and is now `JSONB` holding `{dimension: reason}`. The migration discards old
+values rather than mapping them, which is correct: the reasons never existed, and
+an invented one would be worse than an empty map.
+
+### Re-scoring semantics — a correction
+
+The brief said "INSERT, never overwrite". Implementing that hit a unique
+constraint Epic 1 had put on `(scan_id, formula_version)`, and the constraint is
+right. scoring-spec.md rule 5 versions **the formula**, not the invocation:
+because scoring is deterministic, re-running under the same formula against the
+same inputs yields an identical row, and storing N copies would be noise rather
+than history. Re-scoring now refreshes the row for the current formula version
+and leaves other versions untouched — which is what Epic 11's before/after
+reporting actually reads.
+
+### Competitor comparison — no composite
+
+Per the confirmed decision: competitors carry Mention Rate, Share of Voice and
+Citation Strength only. Sentiment is classified toward the subject alone
+(Epic 4.3) and Technical Foundation is Epic 6, so 25% of the weight has no
+per-competitor input. A composite computed over a different weight basis would
+not be comparable to the subject's — which is the entire purpose of a
+comparison. The comparison is **derived on read** rather than stored: it is a
+pure function of persisted rows, and a second copy could fall out of step.
+
+---
+
+## 2026-08-21 — Epic 5.3 · Live verification on real data
+
+`scripts/verify_scoring.py` runs the whole pipeline against the dev database:
+real SerpApi competitor detection, a real 3-prompt × 2-engine Claude scan, then
+scoring. **Scoring itself makes no provider calls** — the cost is entirely in
+producing genuine rows to score.
+
+```
+AI VISIBILITY SCORE : 54.99   (status=scored)
+formula_version     : v1.1
+inputs_digest       : a6b8ebef36f71dc4679bef86c2ec04ed6802126626c2c7bbb0edb4f1ee68d0b5
+------------------------------------------------------------------------------
+  mention_rate            100.00  x 33.33%  =  33.33
+  share_of_voice           30.00  x 27.78%  =   8.33
+  citation_strength         3.70  x 22.22%  =   0.82
+  sentiment                75.00  x 16.67%  =  12.50
+  technical_foundation        --    EXCLUDED  NOT_YET_MEASURED
+------------------------------------------------------------------------------
+  degradation_flags   : ['NO_AUTHORITY_DATA', 'TECHNICAL_FOUNDATION_NOT_MEASURED']
+
+  competitor                mention      SoV  citations
+  Zendesk                     83.33    25.00       3.70
+  Freshdesk                   66.67    20.00       0.00
+  Front                       83.33    25.00       3.70
+  Kustomer                     0.00     0.00       0.00
+  Thecxlead                    0.00     0.00       0.00
+
+re-scoring the same persisted rows 5 times:
+  distinct composites : {'54.99'}     distinct digests : 1
+  distinct score rows : 1 (idempotent per formula version)
+RESULT: PASS
+```
+
+The numbers behave the way the design intends: Help Scout is named in every
+answer (100% mention rate) but holds only 30% of the voice against four rivals,
+and is barely cited (3.70) — a profile that would read as "you are present but
+not the answer", which is exactly the finding this product exists to surface.
+
+### What the live run caught that unit tests did not
+
+**The stored effective weights were full-precision Decimals** —
+`33.33333333333333333333333333%` in the raw output. The composite was computed
+from those, while the report would display 2dp. A client re-adding the numbers
+in their own report would not get the total back, which quietly violates
+scoring-spec.md rule 2 ("a displayed breakdown always re-sums to the displayed
+total").
+
+Fixed by rounding the effective weights **once**, and using the rounded values
+for both the composite and storage. Verified against the same persisted scan:
+weights now sum to exactly `100.00`, the breakdown re-sums to `54.99`, and the
+composite is unchanged by the fix. A new test asserts the re-sum property
+directly rather than within a tolerance.
+
+Two runs in a row now (Epic 4.4's intent-ordering bug, this one) where the
+defect was invisible to assertions and obvious in raw output.
+
+### Two known-open issues, visible in real data
+
+- **`Thecxlead` is in the competitor set.** It is a *publication*, not a rival —
+  the SERP-only precision gap measured at ~58% in Epic 3.5. It scores 0.00
+  across every dimension because no engine ever names it, so its effect on this
+  composite is nil, but it would look wrong in a client-facing report. Still
+  open, still out of scope.
+- **`NO_AUTHORITY_DATA` on every score.** There is no Domain Authority source in
+  the system, so Citation Strength is a normalised domain count. §6 asks for
+  "number *and* authority"; only the first half exists.
+
+### Also confirmed
+
+The Epic 2 constraint `ck_clients_industry_matches_classification_status` fired
+during this work — the verification script set `industry` while leaving
+`classification_status` at `pending`, and the database refused the row. That
+constraint exists to stop a guess being stored as a result, and it caught a real
+violation written months later by its own author.
+
+---
+
+## 2026-08-22 — Epic 6.0 · Reconciling §6 and §7, and what got built
+
+### The specs named different checks
+
+| §6 (Technical Foundation inputs) | §7 (Epic 6 checklist) |
+|---|---|
+| Schema presence | Schema/structured data ✓ |
+| Structured data | (same) |
+| Content freshness | **absent** |
+| **absent** | Core Web Vitals |
+| **absent** | Indexation/crawlability |
+
+Also worth noting: §7's acceptance criterion is *"audit returns pass/fail +
+detail for each check on a known test site"* — **per-check verdicts, not a
+score**. The 0–100 Decimal is a §6 requirement, not §7's. Both are delivered.
+
+**Resolved (approved):** build all of §7's checks, and let indexation feed the
+score alongside §6's three named inputs. A site blocked by `robots.txt` or
+marked `noindex` has a catastrophic technical foundation, and scoring it as
+though only markup mattered would be misleading. Recorded as a
+scoring-spec change of *inputs*, not of the 10% weight.
+
+**Core Web Vitals are measured and reported but carry no weight.** `lcpMs` and
+`cls` here are single-cold-load lab numbers; letting a measurement that varies
+run to run move a client-facing score would make the score vary too. Every CWV
+check carries `LAB_MEASUREMENT_NOT_FIELD_DATA` so a report cannot present them
+as field data.
+
+**INP is not measurable and is not faked.** It measures real user interaction
+latency — a crawler that never clicks anything cannot produce one. Recorded as
+`not_applicable` with `FIELD_METRIC_REQUIRES_REAL_USER_DATA`, and `inpMs` stays
+null. Real INP needs CrUX or real-user monitoring; a lab proxy would be a
+fabricated number wearing a real metric's name.
+
+### Epic 2's crawler: examined, partially reused
+
+`services/crawl.py`'s URL normalisation and Public Suffix List parsing **are**
+reused. Its page fetch is not, for two reasons that are not stylistic:
+
+1. **It blocks images, fonts and video at the router** to halve classification
+   crawl time. Largest Contentful Paint is usually an image. Measuring LCP
+   through a crawler that refuses to load images would produce a confidently
+   wrong number.
+2. It fetches several pages and extracts text for a classifier. An audit needs
+   one page loaded completely, two side fetches, and no text at all.
+
+### Signals crawled, and why those
+
+| Signal | Why |
+|---|---|
+| JSON-LD + microdata **type names** | §6's "schema presence" and "structured data". Type names are explicitly permitted structural signals. |
+| `Organization`/`LocalBusiness`/`FAQPage`/`Product` flags | "Has markup" and "has the RIGHT markup for this business" are different findings with different fixes. |
+| title / meta description / canonical / OG **presence** | Markup completeness. Presence only — the values are page copy. |
+| `robots.txt`, `sitemap.xml`, `meta robots` | §7's indexation and crawlability. |
+| `Last-Modified` header, JSON-LD `datePublished`/`dateModified` | §6's "content freshness". Only the DATE is read from JSON-LD — the headline, author and article body sitting beside it are content and are not touched. |
+| LCP, CLS via `PerformanceObserver` | §7's Core Web Vitals, lab-grade. |
+
+### Normalisation, and why it is deterministic
+
+Four scored components, each 0–100, weighted: **indexation 30, structured data
+25, content freshness 25, schema presence 20.** Indexation is heaviest because
+it is a precondition rather than a nicety.
+
+Schema presence is **graduated** (0 / 60 / 100 by distinct type count) rather
+than a boolean: one stray `WebSite` type is not a marked-up site, and a flag
+would call them equal. Freshness uses bands (≤90d, ≤180d, ≤365d, ≤730d) because
+the difference between yesterday and last week is immaterial while the
+difference between last year and three years ago is not.
+
+**A component with no signal is excluded and its weight redistributed**, never
+scored zero — a site that does not advertise `Last-Modified` has a publishing
+convention, not a visibility problem. Same discipline as scoring-spec.md's
+treatment of sentiment with no population.
+
+Determinism: the scored signals are presence booleans, type names and counts,
+read identically every time. `Decimal` throughout, weights rounded once so the
+breakdown re-sums. The genuinely non-deterministic parts — CWV timings, and
+`content_age_days` which depends on wall-clock — are handled the same way
+sentiment was in Epic 4: measured once, upstream, persisted, and read
+deterministically thereafter. CWV additionally carries no weight at all.
+
+### Model changes
+
+Epic 1's `TechnicalAudit` already had `lcp_ms`/`inp_ms`/`cls`, the schema
+booleans, the indexation flags and `content_age_days` — a good shape that
+anticipated this epic. Four columns were added: `status`, `error_code`,
+`technical_foundation`, `excluded_components`, `audited_at`.
+
+`status` was the necessary one. Without it a failed crawl and a genuinely bare
+site are indistinguishable — both a row of nulls — and Technical Foundation must
+never treat "we could not read the site" as "the site has no markup".
+
+`technical_foundation` is **stored** rather than recomputed on read, unlike Epic
+5's competitor comparison. The full `AuditSignals` object is transient by design
+(ip-safety.md #7), so there is nothing to recompute from.
+
+### scoring.py's contract was not touched
+
+`compute_score()` has always taken `technical_foundation: Decimal | None`.
+Epic 6 produces the Decimal; scoring consumes it exactly as before. The only
+change in `scoring_runner.py` is loading the audit's value instead of passing
+`None`. **No stop-and-flag was needed.**
+
+A *failed* audit still passes `None`, keeping the dimension excluded — an
+unreadable site must not be scored as a measured zero.
+
+---
+
+## 2026-08-22 — Epic 6.1 · Live verification and the integration proof
+
+### Three real sites
+
+```
+helpscout.com   TECHNICAL FOUNDATION = 87.50
+  indexation=100  schema_presence=100  structured_data=50  content_freshness=100
+  14 pass, 2 warn, 1 not_applicable
+anthropic.com   TECHNICAL FOUNDATION = 55.00
+  indexation=100  schema_presence=0    structured_data=0    content_freshness=100
+  12 pass, 2 warn, 2 fail, 1 not_applicable
+basecamp.com    TECHNICAL FOUNDATION = 75.00
+  indexation=100  schema_presence=100  structured_data=0    content_freshness=100
+```
+
+A genuine spread with legible causes: anthropic.com publishes no structured data
+at all (two hard fails), basecamp.com has schema but no business-entity type,
+helpscout.com has both and loses points only on FAQ/Product markup. Every site
+passed indexation, which is what one would expect of established sites and is a
+useful sanity check on the check itself.
+
+### The integration proof (§7's real point)
+
+Same persisted scan, scored before and after the audit existed:
+
+```
+BEFORE audit:
+  composite            : 54.99
+  technical_foundation : None
+  excluded             : {'technical_foundation': 'NOT_YET_MEASURED'}
+  flags                : ['NO_AUTHORITY_DATA', 'TECHNICAL_FOUNDATION_NOT_MEASURED']
+
+audit run: status=ok technical_foundation=87.50 checks=17
+
+AFTER audit:
+  composite            : 58.24
+  technical_foundation : 87.50
+  excluded             : {}
+  weights              : mention_rate=30.00, share_of_voice=25.00,
+                         citation_strength=20.00, sentiment=15.00,
+                         technical_foundation=10.00
+```
+
+**The effective weights return to §6's table exactly** — 30/25/20/15/10 — once
+all five dimensions are included. That is the identity case for the
+redistribution logic written in Epic 5, and it holding on real data is a
+stronger check on that logic than any of its unit tests.
+
+### Negative controls — four, one per new invariant class
+
+Per the Epic 4.0 / 5.1 discipline. **All four failed as intended**, unlike
+Epic 5.1's float control which initially failed to fail:
+
+| Injected breakage | Caught by |
+|---|---|
+| `float()` in the normalisation arithmetic | `test_module_uses_no_float_arithmetic_in_normalisation` |
+| `AuditSignals.meta_description` (a page-copy field) | `test_signals_carry_no_page_content` |
+| Core Web Vitals moving a scored component | `test_vitals_do_not_change_the_score` |
+| `TechnicalAuditOut.meta_description` on the API surface | `test_audit_response_schemas_expose_no_page_content` |
+
+The float guard worked first time here specifically because Epic 5.1's failure
+taught the lesson: a source-level guard was written up front rather than relying
+on same-in-same-out assertions, which cannot detect float — those compare a
+machine to itself.
+
+### Also confirmed
+
+The Epic 4.0 enum guard picked up the new `audit_status` enum **automatically**
+(21 enum columns checked, was 20) and verified its CHECK constraint. A guard
+built two epics ago covering a table that did not exist then is the outcome that
+justifies having built it.
+
+### No new dependencies
+
+`playwright` (Apache-2.0) and `httpx` (BSD-3-Clause) were already vetted.
+Licence audit unchanged: **62 distributions, PASS**.
+
+---
+
+## 2026-08-22 — Epic 7.0 · The narrative report
+
+The first customer-facing surface. Everything Epics 1–6 built exists to produce
+this screen, and the design constraints in `ip-safety.md` that were dormant
+until now (1–5, 8) are live for the first time.
+
+### Scope: §7's checklist vs what shipped
+
+§7 Epic 7 lists three items. **One shipped in full, one partially, one deferred:**
+
+| §7 item | Status |
+|---|---|
+| Report layout: narrative structure (score → gap → proof → fix → pitch) | ✅ shipped |
+| White-label branding injection (agency logo/domain/colours) | ◐ name + slug only |
+| PDF export + shareable web link | ⬚ deferred to Epic 7.1 |
+
+This was a product-owner call, made before any code was written, because the
+task brief and §7 disagreed — the brief listed all three as out of scope and §7
+puts all three in. Flagged rather than resolved unilaterally.
+
+**Why white-labelling stopped at name and slug.** `Agency` has `name` and `slug`
+(the latter commented "used for white-label report URLs from Epic 7" since Epic
+1) and nothing else. Logo, custom domain and brand colours need new columns —
+and, more importantly, a **written policy on which tokens an agency may
+override**. The visibility ramp is load-bearing: it is the only thing that makes
+a score legible as a score, it is monotonic in lightness so it survives greyscale
+print, and it is warm-to-cool for CVD safety. An agency free to recolour it
+changes what the score *means*. That policy is a design decision, not an
+implementation detail, and inventing one silently in order to tick a checkbox
+would be the wrong trade. Recorded in `api-contracts.md` under Epic 7.1.
+
+### Where the biggest-gap computation lives, and why not in `scoring.py`
+
+The brief asked for the gap to be computed rather than authored. It already was:
+`gap_i = weight_i × (100 − subscore_i) / 100` is implemented and unit-tested
+inside the design system's `layoutLedger`, because it is what draws the unlit
+portion of each ledger segment.
+
+**So the report calls that same function rather than reimplementing it in
+Python.** Two implementations of one number would eventually disagree, and the
+failure mode is the worst available: the chart annotating one dimension while
+the headline above it names another. Calling the function that draws the chart
+makes that disagreement impossible by construction.
+
+The derivation lives in `apps/web/src/lib/report/derive.ts`. It takes the
+report payload and returns the whole narrative — headline claims, the ranked
+gap, the fix list, the pitch arithmetic. `scoring.py` was not touched.
+
+On the real Help Scout scan the gap ranking is usefully non-obvious:
+
+```
+mention_rate       30 ×   0.00 / 100 =  0.00
+share_of_voice     25 ×  70.00 / 100 = 17.50
+citation_strength  20 ×  96.30 / 100 = 19.26   <- biggest
+sentiment          15 ×  25.00 / 100 =  3.75
+technical          10 ×  12.50 / 100 =  1.25
+```
+
+Citation Strength wins on recoverable points, not on being the lowest number —
+and `derive.test.ts` carries a second case where a heavier dimension with a
+milder deficit (mention_rate 50/100, weight 30 → 15.0 points) outranks a lighter
+disaster (sentiment 10/100, weight 15 → 13.5 points), which is the case the
+formula exists to get right.
+
+### Design system: reused vs added
+
+**Reused, unchanged —** `ReportPage`, `ReportHeader`, `Beat`, `Prose`,
+`Evidence`, `FixList`, `BEAT_SEQUENCE`, `LuminanceLedger`, `layoutLedger`,
+`ScoreDisplay`, `Card`, `CardBody`, `Badge`, `VisibilityBadge`, `DataTable`,
+`Button`, and the token set via the Tailwind preset. Epic 0 anticipated this
+epic well: `Beat`'s `BeatId` union made skipping a beat a compile error, and
+`Evidence`'s prop shape (`engine`, `prompt`, `findings: {label, value}[]`, no
+children) meant there was nowhere to put a paragraph of scraped answer text even
+if someone wanted to.
+
+**Added to the design system —** exactly one thing: `lineHeight` in the Tailwind
+preset. The `--avp-leading-*` tokens have existed in `tokens.css` since Epic 0
+but were never listed in the preset, so `leading-prose` compiled to **nothing**.
+Epic 2's intake screen had been using it silently since it shipped. A class that
+looks applied, reads as applied in review, and does nothing is the worst failure
+mode a design system has, so the fix came with a test that checks every `var()`
+the preset references against the stylesheet — the preset and the tokens can no
+longer drift apart in either direction.
+
+**Deliberately NOT used: competitor ghost columns.** `LuminanceLedger` supports
+them and the Epic 0 style guide demos them. They are wrong here. A ghost column
+is a competitor *composite*, and competitor sub-scores cover three of five
+dimensions — sentiment is classified toward the subject only, and the technical
+audit is of the subject's own site. A composite over 75% of the weight would
+render every rival shorter than they actually are, which is the exact
+weight-basis error `api-contracts.md` warns about under Epic 5. The comparison
+is made per-dimension in the proof beat instead, where both sides have a real
+figure, and the gap beat says so in a sentence rather than leaving the absence
+unexplained.
+
+### One endpoint, not four
+
+`GET /api/v1/scans/{scanId}/report` — the shape was already agreed in
+`api-contracts.md` ("planned, not yet built", Epic 7). It aggregates; it
+computes nothing. The proof beat needs figures the raw endpoints do not expose
+(citations grouped by domain, mention shares, per-engine coverage), and deriving
+those client-side means paging `/scans/{id}/results` — 48 rows and ~400
+citations on a full scan — and re-aggregating on every render. It also keeps the
+facts-only projection in **one** place for `test_ip_safety.py` to assert over;
+four client-side derivations would be four places for a snippet to slip in.
+
+### How each degraded state is handled in the UI
+
+The brief's standard: "a report screen that only handles the happy path is not
+done." Each state below renders differently, and each is covered by a test.
+
+| State | What the screen does |
+|---|---|
+| `score: null` (never scored) | Score beat says "has not been scored"; the proof beat still shows its real evidence, because the scan *did* run. Distinct from the row below. |
+| `status: insufficient_data` | `ScoreDisplay` renders `—`, never `0`. The ledger is not mounted at all — its empty state would only repeat the sentence above it, so the gap beat explains the absence in words. Pitch declines to project. |
+| `NOT_YET_MEASURED` | "Not yet checked." Worded as **our** missing capability. It also **suppresses the matching fix** — telling a client to fix a dimension we never measured blames them for our gap. |
+| `NO_POPULATION` | "Nothing to measure." An absence, not a bad result. |
+| `NO_COMPETITOR_SET` | "No comparison was made", plus "rather than awarding points for a detection that did not happen" — the v1.1 reasoning, in client-facing words. |
+| `WEAK_SIGNAL` competitor set | A `warn` badge beside the comparison table: "treat this rival set as a starting point and correct it before sending the report on." Actionable, since the operator can override the set. |
+| `audit: null` | "The site has not been audited… a check that has not happened, not a check that failed." |
+| `audit.status: failed` | "The site could not be read", with the error code. Explicitly: "a site we could not reach is not a site with a bad technical foundation." |
+| `audit.status: partial` | A `warn` badge, and a note that the sub-score used what could be measured. |
+| Degradation flags | Resolved to sentences from our own string table. `NO_AUTHORITY_DATA` never appears as a code on screen. |
+
+**An excluded dimension is never passed to the ledger as `subscore: 0`.** That
+would draw a full-height unlit segment reading as total failure on a dimension
+the scoring engine deliberately refused to score. Excluded dimensions are
+dropped from the chart and surfaced separately with their reason and their
+**nominal** weight, so the report can say what the dimension would have been
+worth. The **included** weights are the post-redistribution ones and always sum
+to 100 — which is what preserves the ledger identity through an exclusion, and
+is asserted both server-side and in `derive.test.ts`.
+
+One refinement found by looking at the rendered degraded screen rather than the
+markup: when every dimension shares one exclusion reason, the identical
+paragraph printed five times, which reads as a page fault rather than a fact.
+It now states the reason once and lists what it applied to.
+
+### Two defects the real data caught that the tests had not
+
+**1. Concrete audit fixes were being crowded out.** Five dimensions all carry
+some gap, and every one of them outranks an audit finding on points — because
+an audit finding carries *no* point value, deliberately. With a flat top-N the
+fix list came out entirely abstract ("improve citation strength"), and the two
+concrete, checkable changes the crawl actually returned — `NO_FAQ_SCHEMA`,
+`NO_PRODUCT_OR_SERVICE_SCHEMA` — were pushed off the end. The brief specifically
+asked for `"no FAQ schema" → a specific fix`, and the first implementation
+silently dropped exactly that. Dimension fixes are now capped at 3, audit fixes
+get the remaining slots, and a dimension gap below 2 points is not printed at
+all (technical_foundation's 1.25 was noise beside citation_strength's 19.26).
+
+**2. Competitor citations were being ranked out of existence.** `zendesk.com`
+and `front.com` were each cited once; ranking cited domains purely by count
+pushed both out of a twelve-row list otherwise full of review blogs — dropping
+precisely the evidence the proof beat exists to show, which is *who is cited
+instead of the subject*. Competitor-attributed domains now sort above
+unattributed ones, then by count.
+
+Both were invisible in unit tests and obvious in the rendered page. Same pattern
+as Epic 5.1's injected float: the test suite was asserting the mechanism worked,
+not that the output was any good.
+
+### The pitch beat: arithmetic, not adjectives
+
+Product-owner call. Everything the pitch asserts is arithmetic over figures
+already on the page — the points the listed fixes recover, the composite that
+would result, and the per-dimension distance to named rivals. On the real scan
+it reads "58 today. 99 with the fixes above."
+
+No revenue estimate, no traffic projection, no urgency language, because nothing
+in this system measures any of those, and a number a client can dispute costs
+more than it wins. `ReportView.test.tsx` asserts the rendered page contains none
+of `revenue`, `roi`, `traffic`, `leads`, `conversion`, `guarantee`, `dominate`,
+`act now` and similar. The projection is also clamped at 100 and declines
+entirely when there is no score to project from.
+
+Note the pitch compares **per-dimension**, never composite-to-composite — see
+the ghost-column reasoning above.
+
+### apps/web had no test runner
+
+Its `test` script was an `echo` placeholder from Epic 2. The report is the first
+screen with logic worth testing rather than markup worth looking at: the
+narrative is *derived*, so the derivation can be wrong, and a wrong derivation is
+a report that argues the opposite of what the data says. Added vitest (MIT,
+already in the tree for the design system — no new package was downloaded) and
+`@vitejs/plugin-react` (MIT, likewise). `vitest.config.ts` is excluded from
+`tsc` because it pulls Vite's own types, which resolve to a different Vite major
+than the design system's; that is a config-file-only conflict and says nothing
+about the app's types.
+
+### Test fixtures are real data
+
+`apps/web/src/lib/report/__fixtures__/reports.ts` holds the actual report
+payload for `scan_01M0HDRGJNWNZDSJPP0NC3SV8W` — the Help Scout scan from the
+Epic 5/6 verification runs. Checked in verbatim so the derivation is tested
+against shapes the pipeline really produces, including the awkward ones: a
+citation strength of `3.70`, a `NO_AUTHORITY_DATA` flag, and an audit whose only
+findings are two warnings. The degraded variants are derived from it by removing
+data, which is how they arise in production.
+
+The fixture caught one of my own errors: I hand-wrote the redistributed
+composite for the no-competitor variant as `64.99`; the correct figure is
+`67.65`. Worth stating why it goes *up*: excluding a weak dimension moves its
+weight onto dimensions that score better. That is correct — the score is only
+ever a claim about what was measured.
+
+### Live verification
+
+`scripts/verify_report.py`, run against `avp_dev`. Costs nothing.
+
+```
+PART 1 — a full report from a REAL scan
+  scan     : scan_01M0HDRGJNWNZDSJPP0NC3SV8W
+  subject  : Help Scout (helpscout.com)
+  included weights sum : 100.00
+  breakdown re-sums to : 58.24
+  stored composite     : 58.24
+  -> the ledger's lit height IS the stored composite. OK
+  biggest gap: citation_strength = 19.26 points
+
+PART 2 — ip-safety.md #7: the wire payload carries facts only
+  payload size : 7323 bytes
+  no prose-bearing key present. OK
+
+PART 3 — a REAL degraded scan: INSUFFICIENT_DATA
+  status  : insufficient_data   composite: None   reason: INSUFFICIENT_DATA
+  every dimension excluded, each carrying its reason
+  -> null composite, no dimension scored zero. OK
+```
+
+PART 3 builds the degraded scan through the real models and scores it with the
+real scoring runner, so the INSUFFICIENT_DATA screen is a genuine database row.
+
+Both screens were then rendered by the running app (API on 8000 against
+`avp_dev`, Next on 3100) and captured with Playwright:
+`docs/screenshots/epic7-report-helpscout.png` and
+`epic7-report-insufficient-data.png`.
+
+### IP-safety self-check (constraint 9)
+
+Covering 1–5, 7 and 8, per the brief. Detail:
+
+**1 — designed from the data model, not a competitor screenshot.** Each beat
+exists because a table exists: score → `scores`, gap → the weight/sub-score
+arithmetic, proof → `engine_results` + `citations` + `brand_mentions` +
+`technical_audit_checks`, fix → audit `detail_code`s + the gap ranking, pitch →
+the same numbers added up. No competitor product was opened, referenced or
+described during this epic.
+
+**2 — every screen imports from `@avp/design-system`.** No ad hoc Tailwind: the
+preset uses `theme` (replace), so `bg-slate-500` does not compile. Verified at
+render level too — `ReportView.test.tsx` scans the emitted HTML's inline styles
+for raw hex and `rgb()` values, since inline styles bypass Tailwind entirely.
+The only colours the page emits are `oklch()` from the token ramp.
+
+**3 — narrative, not a dashboard.** All five beats render in `BEAT_SEQUENCE`
+order, asserted by DOM position. Headings are claims ("Citation Strength is
+costing the most — 19.3 points"), not category labels, and which claim is made
+is chosen by the number, so the heading cannot contradict the chart under it.
+
+**4 — assets.** Icons: `lucide-react` (MIT), one glyph (`ArrowRight`). Fonts:
+Fraunces + IBM Plex Sans/Mono via `GOOGLE_FONTS_HREF`, all OFL-1.1, declared once
+in the design system. No icon pack or illustration kit from any competitor
+product. No new dependency was added by this epic; the licence audit passes.
+
+**5 — no competitor source inspected.** No competitor page was fetched, viewed
+or read during this epic. The only third-party URLs that appear anywhere are
+citation `sample_url`s, which are rendered as outbound links and never fetched
+by us.
+
+**7 — the render gate.** This is the first epic that *renders* collected facts,
+so the rule was checked at the surface rather than only at the schema:
+- A citation appears as **a domain and a link out** — `<a href>` with the domain
+  as its own link text, `rel="noreferrer nofollow"`. Never the cited page's
+  title, and never a quotation. Asserted against the emitted HTML.
+- A competitor appears as **name + domain** and per-dimension numbers. There is
+  no description field to render — `Competitor` has never had one, and
+  `ReportCompetitorOut` is asserted to have none.
+- Audit findings render through **our own string table** keyed by
+  `detail_code`. `NO_FAQ_SCHEMA` never reaches the screen as a code, and no
+  crawler- or model-authored sentence is stored anywhere to render.
+- **Verified explicitly, as the brief asked**, that there is no engine answer
+  text to leak: `test_engine_result_has_no_text_column_for_a_report_to_render`
+  walks `EngineResult`'s actual column *types* — no `Text` column, and the only
+  `String` columns are `response_digest` (64) and `engine_version` (120).
+  Neither can hold prose. The absence is now UI-visible rather than a database
+  fact, and it holds.
+- `test_report_projection_exposes_no_third_party_prose` sweeps **every** schema
+  in `schemas/report.py` rather than a hand-picked list, so a field added later
+  is caught rather than missed.
+
+**8 — no verbatim competitor marketing copy.** Every string in
+`lib/report/strings.ts` — dimension labels, exclusion reasons, degradation-flag
+explanations, all sixteen audit fix descriptions, every beat's prose — was
+written from the data model for this epic. Nothing is adapted from another
+product's UI, including microcopy.
+
+**IP-safety check passed** — see the completion summary for the one-line form.
+
+### Tests
+
+635 total, up from 548. api 429 → 451 (+22: report endpoint 16, ip-safety 6),
+workers 13 (unchanged), shared-types 36 → 45 (+9), design-system 70 → 72 (+2:
+preset/token parity), web 0 → 54 (new runner: derivation 28, render 26).
+
+---
+
+## 2026-08-22 — Epic 8.0 · The generated fix list
+
+The first place a model writes something a client reads. Every earlier model
+call in this system produces a *fact* — an industry label, a set of prompts, a
+sentiment verdict, a list of brand names — which is then rendered by our own
+code. This one produces prose that goes on the page as-is, which changes what
+the guards have to protect and where they have to sit.
+
+### What Epic 7 already did, and what was actually missing
+
+§7 Epic 8 asks for two things: *"LLM cross-references audit + scan gaps into
+named, specific recommendations"* and *"priority + effort estimation per fix"*.
+Epic 7 already shipped a fix list that met the first one's acceptance criterion
+on a technicality — `strings.ts` says so itself: *"this table is the
+deterministic floor that already meets it, before Epic 8's LLM pass enriches
+it."* So the honest first question was what remained.
+
+Reading `deriveFixes` settled it. Three things were real work and one was not:
+
+| Concern | Epic 7 | Epic 8 |
+|---|---|---|
+| Which dimensions get a fix | `gap >= 2`, top 3 by gap | **unchanged** |
+| Which findings get a fix | every `detail_code` with a table entry | **unchanged** |
+| Order, cap, blocking promotion | points desc, cap 5, `indexable`/`robots_txt_present` first | **unchanged** |
+| `pointsUpside` | `round1(segment.gap)` | **unchanged** |
+| Title + detail | fixed lookup: `FIX_FOR_DIMENSION` / `FIX_FOR_DETAIL_CODE` | model-authored per scan |
+| Priority | `isBiggestGap ? high : gap >= 8 ? medium : low` | model-reasoned |
+| Effort | fixed `S`/`M`/`L` per code, hardcoded in the table | model-reasoned |
+
+The arithmetic column is the whole left half of that table and none of it moved.
+What a lookup table structurally cannot do is the right half: `FixCopy.effort`
+is a constant per detail code, so "add FAQ schema" is `M` for every site that
+has ever been scanned, whatever else is true of it. And Epic 7's priority
+heuristic sees exactly one number — this dimension's own gap — so it cannot
+know that a 17.5-point share-of-voice gap sits behind a 19.3-point citation gap
+that would move both.
+
+That is the epic: **the model may not decide what is wrong, only how to say it
+and how much it matters.**
+
+### The candidate boundary, and why it is enforced rather than requested
+
+`build_candidates` in `services/fix_runner.py` produces a closed list before any
+call is made, and the prompt names it explicitly (*"Write one fix for each of
+these 5 candidates, and no others"*). Asking is not enough, so `accept()` in
+`services/fix_generator.py` discards any returned fix whose `candidate_id` does
+not match one, and takes `rank` and `points_upside` from the **candidate**, never
+from the response. A model that invents `gap:backlink_authority` gets nothing
+persisted; a model that reorders the list is ignored.
+
+**On duplicating the candidate rules in Python.** Epic 7 refused to reimplement
+the gap formula server-side, and gave a good reason: two sources for one number
+eventually disagree, and the failure mode was the chart annotating one dimension
+while the headline named another. Epic 8 does now compute candidates in Python,
+so that reasoning needs answering rather than ignoring.
+
+It does not bite here, because **nothing this module computes is ever rendered.**
+The client keeps deriving the fix list, its order and its point figures exactly
+as before, and merges generated copy onto it *by key* in `enrich()`. If the two
+candidate sets ever diverge, the unmatched generated row fails to match and
+Epic 7's deterministic copy renders in its place. The degradation is weaker
+wording, never a wrong claim — which is the opposite of the failure Epic 7 was
+protecting against, where divergence produced a confident contradiction. Both
+sides are pinned: `test_reproduces_the_client_s_list_for_the_real_scan` asserts
+the five literal keys, and `derive.test.ts`'s existing block asserts the same
+list from the other language.
+
+### Facts-only prompt construction
+
+`FixFacts` is a transient dataclass with no field capable of holding page copy,
+an engine answer, a citation title or a competitor description — the same
+`redacted()`-bearing, never-persisted shape as `CrawlResult` and `AuditSignals`.
+`build_fix_prompt` interpolates only names, domains, labels, codes and numbers.
+The real prompt for the Help Scout scan, in full, is printed by PART 2 of
+`scripts/verify_fixes.py`; it is 27 lines and every one of them is a measured
+figure, an entity name, a cited domain, or a check code.
+
+This is the **first prompt-INPUT guard in the repo**, and that is worth stating
+plainly. Epics 2 and 4 deliberately hand third-party text to a model — page copy
+to the classifier, engine answers to the sentiment judge — and guard the
+*output* schema so nothing comes back that could be stored. That is the right
+shape for those. It is the wrong shape here: this module's output is prose by
+design, so the boundary has to sit on what goes in. A survey of
+`test_ip_safety.py` before this epic found no test anywhere that asserts a
+prompt string *excludes* anything; every existing prompt assertion is a positive
+inclusion check.
+
+Three guards, deliberately different in kind:
+
+1. `test_the_fix_prompt_is_built_from_facts_only` — `inspect.getsource` on the
+   function, negative substrings. Same technique as Epic 4's
+   `_extract_citations` guard.
+2. `test_the_fix_prompt_names_the_facts_it_is_allowed_to_use` — a **positive**
+   source assertion, per Epic 6's `audit_site` guard. Absence-only assertions
+   pass vacuously against a gutted function.
+3. `test_the_fix_prompt_carries_no_line_that_is_not_a_whitelisted_fact` — every
+   line of the built prompt must match a whitelisted label. This is the
+   categorical form Epic 5.1 argued for: a canary test catches the canary, this
+   catches the class.
+
+### Negative controls — 11 injected breakages, and the near-miss that mattered
+
+Per the Epic 4.0 / 5.1 / 6 discipline. All 52 new generator tests and all 11 new
+ip-safety tests passed on first run, which by that rule is not evidence of
+anything.
+
+| # | Injected breakage | Caught by |
+|---|---|---|
+| 1 | A citation title interpolated into the prompt | whitelisted-line sweep |
+| 2 | `competitor_description` field added to `FixFacts` and interpolated | source inspection + 2 more |
+| 3 | Engine answer text read into the prompt | source inspection + 2 more |
+| 4 | Prompt construction gutted to a stub | whitelisted-line sweep + 8 more |
+| 5 | Model reasoning persisted onto `PersistableFix` | `test_model_reasoning_is_never_persisted_or_returned` |
+| 6 | Free-text `evidence` field added to the output schema | exact-field lock |
+| 7 | Competitor names leaked into the `redacted()` log view | `test_the_facts_redacted_log_view_collapses_entities_to_counts` |
+| 8 | `float()` introduced into the gap arithmetic | `test_no_float_enters_the_gap_arithmetic` |
+| 9 | Unsupportable-claim guard disabled | 8 parametrised claim tests |
+| 10 | Generator allowed to invent an unmeasured candidate | `test_a_fix_for_something_nobody_measured_is_discarded` + 1 |
+| 11 | Model allowed to override Epic 7's rank | `test_rank_and_upside_come_from_the_candidate_not_the_model` + 1 |
+
+**Control 2 reported NOT CAUGHT on the first pass, and the diagnosis is the
+useful part.** The first version of the harness ran each control against only
+the test it was *expected* to trip. Control 2 was scored against the `FixFacts`
+field sweep and the prompt-line sweep; both passed, so it was recorded as a
+failure to fail.
+
+Running the full suite showed a third guard — the `getsource` check — caught it
+immediately. So the guard set was fine and **the control harness was the thing
+that was broken**, which is the same self-consistent-measurement error Epic 4.0
+recorded: a harness that only asks the question it already expects the answer to
+cannot report a surprise. Fixed to run every guard for every control and report
+every test that failed.
+
+But the near-miss was still worth having, because the two guards that *didn't*
+catch it should have, and both were weaker than they looked:
+
+- **The `FixFacts` field sweep used exact-name-set intersection.** Its forbidden
+  set contained `description`; the injected field was `competitor_description`.
+  A leak field will essentially always be named for what it holds *plus a
+  qualifier*, so exact matching was close to useless. Hardened to substring
+  matching, with the exemption keyed on the field's **type** rather than a name
+  allowlist — `answers_analysed` may contain "answer" because it is an `int`
+  and cannot hold one, whereas `answer_excerpt: str` could not be waved through
+  the same way.
+- **The prompt-line sweep only saw lines the prompt actually emitted.** The
+  injected line was conditional (`if facts.competitor_description:`) on a field
+  defaulting to `None`, so the branch never ran and the sweep inspected a prompt
+  the injection had never touched. Hardened to assert over
+  `dataclasses.fields()` that every field is set before the prompt is built, so
+  a newly added field fails the test *unset* rather than passing unexamined.
+
+Second pass: **11/11 caught**, control 2 now tripping three guards independently.
+Every source file was diffed byte-for-byte against its pre-injection backup after
+each control, and the full API suite re-run clean afterwards.
+
+### The defect the rendered page caught that the tests had not
+
+Same pattern as Epic 7.0's two, and found the same way — by looking at real
+output rather than at whether the mechanism worked.
+
+The first live generation produced genuinely good copy, and
+`ReportView.test.tsx`'s new rendered-page assertion failed on it anyway. The
+detail for the FAQ fix read, verbatim:
+
+> The schema_faq check returned NO_FAQ_SCHEMA; the site currently declares only
+> Corporation, VideoObject and WebSite.
+
+That is a straightforward breach of an Epic 7 guarantee. `ReportView.test.tsx`
+has asserted since Epic 7 that the page contains `FAQPage schema` and **never**
+`NO_FAQ_SCHEMA`, because a finding is resolved through our own words rather than
+the stored code. Epic 8 is the first thing in the system that hands those codes
+to something which then writes client-facing prose, so it is the first thing
+that could put one back on the page — and it did, immediately, on the first try.
+
+No unit test could have caught it: every generator test used stub copy, and the
+stub did not quote a code because the author did not think to make it. It failed
+only against real generated text rendered through the real component.
+
+Fixed in two places, per Epic 5.1's "a prompt rule is a request, a guard is a
+rule": a system-prompt line (*"Never quote an internal identifier back… Write
+'the site declares no FAQ markup', not 'the schema_faq check returned
+NO_FAQ_SCHEMA'"*), **and** `machine_code_in()`, which rejects any fix whose copy
+contains its candidate's `detail_code` or `source_key`. A rejected fix is simply
+not persisted, so the client falls back to Epic 7's wording for that item —
+degraded, not broken. Re-verified live afterwards: zero identifiers quoted,
+nothing rejected.
+
+The stub fixture had to change too, because it had been embedding the candidate
+key in the title — copy the real guard now refuses. A stub that produces output
+production would reject is a stub testing the wrong thing.
+
+### Priority and effort, actually reasoned
+
+`GeneratedFix` carries `priority_reason` and `effort_reason` alongside the
+letters. They exist for the same reason `IndustryClassification.rationale` does
+in Epic 2 — a model made to justify a judgement before stating it picks less
+arbitrarily than one that only emits the letter — and, like `rationale`, they
+are **debug-only**: absent from `PersistableFix`, from `ActionItemOut`, from the
+`action_items` table, and from every response.
+`test_model_reasoning_is_never_persisted_or_returned` walks that whole chain.
+
+What the model actually returned for the real scan, at `logger.debug`:
+
+> `gap:share_of_voice` → **high** · *"Second-largest gap at 17.50 points and
+> mention rate is already at 100, so depth of mention is the remaining lever."*
+>
+> `gap:citation_strength` → **effort L** · *"Requires new long-form comparison
+> content plus ongoing outreach to sites Help Scout does not control."*
+
+Epic 7 made that first one `medium` — its gap is 17.5, under the 8-point line
+for `high` is false, so `medium`; correct by its own rule and blind to the fact
+that mention rate is already maxed. And Epic 7's effort for the citation fix was
+`M`, a constant, against a change that depends on third parties. Both shifts are
+visible in the screenshots below.
+
+### Persistence: refresh in place, keyed on `(scan_id, source, source_key)`
+
+Three precedents existed and none fits unmodified, so the reasoning is recorded
+in `services/fix_runner.py`'s docstring as well as here.
+
+**Not Score's versioning.** `scoring_runner` keeps one row per
+`(scan, formula_version)` because scoring is *deterministic*: a re-run under the
+same formula is identical, so extra rows are "noise rather than history", and
+only a formula change produces something new. Neither half transfers. There is
+no formula_version analogue for a fix list, and generation is **not**
+deterministic — the same scan yields differently-worded fixes every run. Keeping
+every invocation would accumulate near-identical rows differing only in phrasing,
+and the report would have to pick one arbitrarily. That is Score's own argument
+against versioning, in a stronger form.
+
+**Audit's framing, but not its mechanism.** `audit_runner`'s *"a second audit of
+the same scan is a correction rather than a new observation"* is exactly right
+for a regenerated fix list. But it implements that by deleting its children and
+rebuilding them, and **`ActionItem` is the first re-runnable entity in this
+codebase carrying operator state**: `status` moves `open → in_progress → done →
+dismissed` as an agency works the list. A blind rebuild would silently destroy
+every `done` an agency had recorded.
+
+**So: the audit's semantics with the competitor precedent's care.**
+`competitors.persist_detection` exists to stop exactly this — *"an operator who
+has corrected a bad set must not have their correction silently undone by the
+next run."* Each candidate upserts onto its own row, carrying `status` and the
+row id across; `_apply` is shared between insert and refresh so the two paths
+cannot drift. A candidate that has disappeared — the client fixed it and
+re-audited — is deleted **only while nobody has touched it**; once it carries
+operator state it is kept as the record of that work, and since it no longer
+matches any candidate the client derives, it simply does not merge and does not
+render.
+
+This needed a migration (`f89ef9eb38c5`). `action_items` shipped in the initial
+revision with **no unique constraint of any kind**, so nothing keyed a row for
+upsert and nothing prevented two rank-1 rows on one scan. Added `source` (enum),
+`source_key`, `generated_by`, and `uq_action_items_scan_source_key`. Both key
+columns are `NOT NULL` rather than one nullable `check_key`, because Postgres
+treats NULLs as distinct inside a unique constraint — a key with a nullable
+member enforces nothing on exactly the rows it exists to protect. `generated_by`
+follows `prompt_sets.generated_by`; the sentiment path, which records no model
+at all and leaves a changed judge unattributable, is the precedent *not* followed.
+
+**Epic 4.0's enum guard picked up `action_item_source` automatically** — 22 enum
+columns checked, was 21 — and verified its CHECK constraint against a migrated
+database without anyone touching that file. Same outcome Epic 6 recorded.
+
+### Live verification
+
+`scripts/verify_fixes.py`, one live `claude-opus-5` call against
+`scan_01M0HDRGJNWNZDSJPP0NC3SV8W` in `avp_dev`. §7's criterion is *"for a test
+scan with known gaps, the generated fix list correctly names those gaps with
+actionable language"*; the known gaps are citation_strength (3.70 against a
+weight of 20 — a 19.26-point gap, the largest on the scan) and two audit
+warnings, `NO_FAQ_SCHEMA` and `NO_PRODUCT_OR_SERVICE_SCHEMA`.
+
+- **PART 3** — all five candidates named, zero rejected, zero internal
+  identifiers quoted, zero banned-claim hits. "Actionable" is not directly
+  assertable, so its absence is asserted instead: a list that never names the
+  subject domain or a concrete artefact is the abstract list Epic 7 already
+  refused to ship, and that fails the script.
+- **PART 4** — marked `gap:citation_strength` as `done`, regenerated: **5 rows
+  after two generations, not 10**, and the done item's status untouched. The
+  persistence policy verified against a real re-run rather than only a unit test.
+- **PART 5** — the report projection drops the completed item: 4 of 5 on the
+  live payload.
+
+### Screenshots
+
+Both captured from the running app (API on 8000 against `avp_dev`, Next on 3100)
+with Playwright, clipped to the fix beat's own section because the fix beat *is*
+the comparison: `docs/screenshots/epic8-fixes-before.png` and
+`epic8-fixes-after.png`.
+
+The "before" state was produced by setting every action item to `dismissed` —
+which `services/report.py` filters out — rather than by deleting the rows, so the
+shot exercises the real fallback path rather than an artificial one.
+
+What the pair shows: identical heading (*"5 changes, worth 40.6 points."*),
+identical order, identical point chips (`+19.3`, `+17.5`, `+3.8`) — Epic 7's
+arithmetic, untouched. And underneath that, five completely rewritten
+recommendations, plus the priority and effort shifts:
+
+| # | Epic 7 | Epic 8 |
+|---|---|---|
+| 1 citation_strength | high · M | high · **L** |
+| 2 share_of_voice | **medium** · L | **high** · L |
+| 3 sentiment | **low** · M | **medium** · M |
+| 4 schema_faq | medium · **M** | medium · **S** |
+| 5 schema_product_or_service | medium · **M** | medium · **S** |
+
+Epic 7: *"Make the site the source an answer cites, not just a name it
+mentions."* Epic 8: *"Publish and maintain comparison and 'best help desk
+software' pages on helpscout.com that AI answers can cite in place of
+third-party roundups"* — with a detail naming the 3-of-45 citation split and
+`eesel.ai`, `featurebase.app` and `hiverhq.com` as the pages currently supplying
+the evidence.
+
+### Dependencies
+
+**None added.** `anthropic` has been a dependency since Epic 2 and is already
+recorded. No licence audit change.
+
+### IP-safety self-check (constraint 9)
+
+**1–5** — no new screen. The fix beat is Epic 7's, designed from the data model;
+Epic 8 changed the text inside `FixList` and added one explanatory paragraph, on
+design-system tokens only, asserted by a rendered-markup check for raw hex/rgb.
+
+**6 — dependencies.** Nothing added.
+
+**7 — facts only.** The load-bearing one this epic, verified four ways:
+- **The prompt carries facts only.** Every interpolated value is a name, domain,
+  label, code or number. `FixFacts` has no field capable of holding page copy, an
+  engine answer, a citation title or a competitor description, and it is not an
+  ORM model. Enforced by three guards of different kinds and by 11 negative
+  controls, two of which hardened the guards that let a near-miss through.
+- **`ActionItem` holds free text, and that is the documented exception.** It is
+  deliberately *not* in `FACTS_ONLY_MODELS`, and `test_action_item_is_the_
+  documented_free_text_exception` records that as a decision rather than an
+  omission. These are our own recommendations about our own client's site,
+  generated from our own measurements — not scraped material.
+- **No third-party prose can reach the page through the new path.** The output
+  schema is exact-field-locked; `ActionItemOut` is swept; `machine_code_in()`
+  stops even our *own* internal codes reaching a client, and
+  `banned_claim_in()` stops claims this product cannot support — the same
+  vocabulary the rendered-page sweep uses, asserted equal so the two cannot
+  disagree.
+- **The generator cannot read what does not exist.** Source inspection over both
+  new modules for `response_text`, `answer_text`, `.snippet`, `text_extract` and
+  friends. Epic 4 stored a digest instead of the answer and `Citation` has no
+  title column, so there is nothing to read; the guard makes that intent explicit
+  rather than incidental.
+
+**8 — no verbatim competitor marketing copy.** The generator is never shown any.
+Competitors reach the prompt as **name and domain only**, which ip-safety.md #7
+permits as "names of entities mentioned". Cited sources reach it as **domain and
+count**. Every string in the new system prompt, schema descriptions and UI
+paragraph was written for this epic from the data model.
+
+**IP-safety check passed:** the prompt input carries only facts (names, domains,
+labels, check codes, counts and scores), verified by source inspection, a
+categorical whitelisted-line sweep, a typed field sweep and 11 negative controls;
+`ActionItem`'s free text is our own generated recommendation and is the
+documented, tested exception rather than a gap; no competitor prose, engine
+answer, citation title or page copy can reach the prompt, the database, the API
+or the page; and generated copy is blocked from carrying either an unsupportable
+claim or one of our own internal identifiers.
+
+### Tests
+
+**723 total, up from 635.**
+
+| suite | before | after | delta |
+|---|---|---|---|
+| api | 451 | 515 | +64 |
+| workers | 13 | 13 | — |
+| shared-types | 45 | 53 | +8 |
+| design-system | 72 | 72 | — |
+| web | 54 | 70 | +16 |
+
+The api +64 breaks down as `test_fix_generator.py` 52 (new), `test_ip_safety.py`
++11 (56 → 67), and `test_enum_constraints.py` +1 (21 → 22) — that last one
+picked up by a guard written two epics ago, covering a column that did not exist
+then. web +16 is `derive.test.ts` +9 and `ReportView.test.tsx` +7, both built
+against `generatedFixesReport`: real generated copy from a live call, checked in
+under the same discipline as `helpscoutReport`.
+
+---
+
+## 2026-08-23 — Epic 3.6 · Competitor manual override, and the half of it that never worked
+
+The oldest open item in the product, and the only write in an otherwise
+read-only surface. §7's Epic 3 checklist lists **"Manual override/edit UI for
+competitor list"** — a UI item, which is the part that was missing.
+
+### What Epic 3 already had
+
+More than expected, and worth stating precisely because the brief for this epic
+assumed greenfield:
+
+| Piece | State before this epic |
+|---|---|
+| `Competitor.is_manual_override` column | ✅ shipped Epic 1 |
+| `persist_detection` preserve-on-re-detection | ✅ shipped Epic 3 |
+| `PUT /clients/{clientId}/competitors` | ✅ **shipped and documented** Epic 3 |
+| `ReplaceCompetitorsRequest` / `CompetitorInput` | ✅ shipped Epic 3 |
+| Tests for the override | ✅ four, incl. survives-re-detection |
+| `isManualOverride` on the report payload | ✅ inherited via `CompetitorOut` |
+| **Any way for a human to reach it** | ⬚ **nothing** |
+
+`api-contracts.md` also carried `PATCH /api/v1/scans/{scanId}/competitors` in
+its "Planned, not yet built" table. That was **a stale duplicate**, not an open
+gap — different verb, different resource, and the PUT that actually does the job
+had shipped and been documented forty lines above it. Building the PATCH would
+have added a second write path to one resource, which is precisely the
+half-applied state `ReplaceCompetitorsRequest`'s own docstring rejects. Row
+deleted rather than implemented.
+
+So the epic reduced to: build the UI, and prove the mechanism works. Proving it
+is where the epic actually went.
+
+### Three defects, none of which the test suite could have found
+
+**1. Removals silently reverted.** `persist_detection` preserved operator
+*additions* correctly — it keeps rows flagged `is_manual_override` and skips
+re-offering any candidate matching a manual name or domain. But a rival the
+operator *struck* left no row and therefore **no record**. On the next run it
+matched no override and came straight back.
+
+Epic 3's docstring promises *"an operator who has corrected a bad set must not
+have their correction silently undone by the next run."* It held for exactly
+half of what correcting a set means:
+
+| Operator action | Survived re-detection, before this epic |
+|---|---|
+| Add a rival detection missed | ✅ |
+| Keep a rival detection found | ✅ |
+| **Remove a rival that is wrong** | ❌ **it came back** |
+
+`test_manual_entries_survive_redetection` had passed since Epic 3 because it
+only ever asserts an *addition* survives. No test at any level had struck a
+competitor and re-detected. This epic's own negative controls did not find it
+either — controls 7 and 8 broke *preservation*, which is the half that worked.
+
+It was found by `scripts/verify_competitor_override.py`, on its first run
+against real data, and the failure line was unambiguous:
+
+```
+FAIL  re-detection reinstated Thecxlead, which the operator had struck
+FAIL  scoring still compares against Thecxlead
+```
+
+**Fixed** with `Competitor.is_suppressed` (migration `bc32281a20c5`). A struck
+rival is kept as a **tombstone**: `is_manual_override=True, is_suppressed=True`,
+which puts it in `persist_detection`'s `manual` partition so its key blocks the
+candidate from being re-offered. Tombstones are excluded from every read path
+via a new `CompetitorSet.active_competitors`, and take tail ranks so they never
+push a real rival down the list.
+
+`active_competitors` exists because **seven** call sites iterate the collection
+— scoring, the report (×2), prompt seeding, engine extraction, fix generation
+and the API. A filter copied seven times is a filter that eventually disagrees
+with itself, and the failure mode is silent: a missed filter means a struck
+rival reappears in exactly one surface, which is worse than all of them because
+nobody would believe the bug report. `test_the_set_has_one_definition_of_which_
+competitors_are_real` asserts by source inspection that no module reads the raw
+collection.
+
+**2. The verification script tested its own copy of the code.** The first
+version of `verify_competitor_override.py` reimplemented the endpoint's logic
+inline rather than calling it. It passed its own PART 2 while the real endpoint
+was still deleting struck rivals without recording them — the script and the
+code under test were two copies of the same mistake, which is Epic 4.0's
+compare-a-thing-to-itself trap in a new costume.
+
+Fixed by extracting the write logic out of the router into
+`services.competitors.apply_override`, so there is **one** implementation for
+the endpoint, the script and any future worker to share. That is where it
+belonged anyway: it is the write half of the contract `persist_detection` reads,
+and a rule enforced in a request handler is a rule no script can reach.
+
+**3. `PUT` was blocked by CORS, so the endpoint had never been reachable from a
+browser.** Found by driving the real UI with Playwright: the save did nothing,
+and the API log showed
+
+```
+"OPTIONS /api/v1/clients/{id}/competitors HTTP/1.1" 400 Bad Request
+```
+
+`main.py` listed `allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"]`.
+The list was written when the API had no PUT, the competitor override is the
+only PUT in it, and nothing in a browser called it until this epic — so the
+preflight had never been issued in five epics.
+
+The suite could not have caught it: tests drive the app through httpx's
+`ASGITransport`, which calls the application directly and **never runs a
+preflight**. Every CORS failure is invisible to it by construction. So the guard
+in the new `tests/test_cors.py` is on the configuration, not on a response, and
+it is derived from the registered routes rather than hand-listed — hand-listing
+is how PUT went missing in the first place.
+
+Same shape as the three defects above, and worth naming: **each was invisible to
+the layer that was being tested, and visible immediately at the layer that was
+not.** Epic 5.1's float, Epic 7.0's crowded-out fixes, Epic 8's leaked detail
+codes, and now these. The pattern is not that the tests were bad; it is that a
+test exercises the seam it was written for and nothing else.
+
+### Persistence: `apply_override` and `persist_detection` are one contract
+
+Epic 3's docstring is quoted rather than restated because it already says the
+thing that matters, and this epic did not change it — it made it true for
+removals as well as additions. What changed is that a correction now has two
+halves that must agree about what an override *is*, so they live in one module:
+
+- `apply_override` (write) turns an operator's list into live rows plus
+  tombstones for anything struck, and clears `detection_confidence`.
+- `persist_detection` (read/merge) treats every `is_manual_override` row —
+  tombstones included — as untouchable, and appends detected candidates below
+  them.
+
+The wholesale-replacement semantics are unchanged, and the UI states them
+plainly rather than hiding them: *"Saving replaces the whole list and marks
+every entry on it as set by hand, including ones you did not change."* An
+operator should not discover that from a badge appearing on rows they never
+touched.
+
+### Known and open: corroboration over a mixed set
+
+`apply_override` clears `detectionConfidence`, but a later re-detection sets it
+again from its own outcome — and that outcome measured agreement across only the
+rows detection found, not the operator's. The report then presents one
+corroboration figure for a set that is part-detected and part-hand-set.
+
+Deliberately **not** fixed here. Changing it means redefining what the field
+measures, which is an Epic 3 scoring-semantics decision rather than a UI one.
+Epic 3.6's badge is what made it visible; `verify_competitor_override.py` prints
+it as a `NOTE` rather than failing on it, so it stays on the record.
+
+### Negative controls — 12 injected breakages, 12 caught
+
+Eight before the suppression fix, four after it, plus one on the CORS guard.
+Every control ran the **full** suite rather than a hand-picked expected test —
+Epic 8's harness reported a false NOT CAUGHT by doing the latter.
+
+| # | Injected breakage | Caught by |
+|---|---|---|
+| 1 | free-text `note` field added to `CompetitorInput` | exact-field lock + 2 |
+| 2 | `note` added AND copied onto the row by the writer | exact-field lock + 3 |
+| 3 | `max_length` dropped from `CompetitorInput.name` | the bounds guard |
+| 4 | `description` column added to `Competitor` | Epic 3's table sweep + 3 |
+| 5 | prose-bearing schema added to the competitor module | the module sweep |
+| 6 | writer stops reading the operator's domain | positive source assertion |
+| 7 | `persist_detection` stops preserving overrides | Epic 3's own test |
+| 8 | re-detection preserves rows but clears the flag | Epic 3's own test |
+| 9 | `suppression_reason` free-text column added | the boolean guard + 3 |
+| 10 | `is_suppressed` widened from boolean to `String` | the boolean guard + 3 |
+| 11 | report reverts to the raw competitor collection | the one-definition guard + 1 |
+| 12 | `persist_detection` stops honouring tombstones | two suppression tests |
+| — | `PUT` removed from `allow_methods` again | both CORS guards |
+
+Two are worth calling out. **7 and 8 were caught by Epic 3's own
+`test_manual_entries_survive_redetection`** — the preservation guarantee this
+epic depends on was already genuinely guarded, which is what made the *absence*
+of a removal guarantee the only real gap. And the six new suppression tests were
+run against Epic 3's delete-and-forget persistence before being trusted: two
+fail against it, and eight fail once tombstones stop being filtered.
+
+Every source file was diffed against its pre-injection backup after each
+control. That check earned its keep: the harness initially restored two files
+from *pre-refactor* snapshots, leaving the tree in a state where two tests
+failed for reasons unrelated to any control. Caught by the diff, not by the
+test output.
+
+### Live verification
+
+`scripts/verify_competitor_override.py`, against the real Help Scout set in
+`avp_dev`. Costs nothing — detection is not re-run; a `DetectionOutcome` is
+constructed and handed to the real `persist_detection`, so no SerpApi search and
+no model call. Everything else is the real service path.
+
+Strikes `Thecxlead` (SERP-only, uncorroborated, a listicle publisher rather than
+a help-desk vendor — the case an operator would actually correct), adds
+`Intercom`, then re-detects with an outcome that deliberately re-offers the
+struck rival plus a new one. PART 4 asserts the comparison count **before**
+checking membership, because `all()` over an empty list is true and an empty
+comparison list is exactly the failure that part exists to detect.
+
+The database is restored and the restore is **verified**, not assumed — Epic 7's
+and Epic 8's screenshots and the checked-in report fixtures are taken from this
+scan, and a set left corrected would silently invalidate them. PART 6 compares a
+full snapshot including row ids.
+
+### Screenshots
+
+Captured from the running app with Playwright, driving the interface end to end
+— open the editor, strike a rival, add another, click save — rather than writing
+rows and re-rendering. A screenshot of a state the UI never produced would prove
+only that the renderer works. It is also how defect 3 surfaced.
+
+`docs/screenshots/epic36-competitors-detected.png`,
+`epic36-competitor-editor.png`, `epic36-competitors-corrected.png`. The database
+is snapshotted and restored around the capture, verified identical.
+
+### Dependencies
+
+**None added.**
+
+### IP-safety self-check (constraint 9)
+
+**1–5** — no new screen. The editor is operator chrome inside Epic 7's proof
+beat, built entirely from design-system primitives (`Button`, `TextField`,
+`Badge`) and role tokens; no raw hex or `rgb()` reaches the markup, asserted by
+the existing sweep. `Badge` is used for system state (provenance), never for a
+score value, per its own docstring.
+
+It is passed to `ReportView` as a **slot** rather than built into it, for two
+reasons: `ReportView` is rendered with `renderToStaticMarkup` and stays
+server-renderable for the PDF path, which a hook would break; and a report
+rendered for a client carries no editor because no slot is passed. The report
+stays a document.
+
+**6 — dependencies.** None added.
+
+**7 — facts only.** This epic opens the first **user-facing write path** into a
+competitor row, which is a new kind of exposure: an operator typing into a form
+is the one input to this system that no upstream extractor has already reduced
+to facts. Epic 3's guards covered the tables and the read schemas — everything
+that existed when detection was the only writer. Five new guards cover the
+request side:
+
+- `CompetitorInput` is **exact-field locked** to `{name, domain}`, and
+  `ReplaceCompetitorsRequest` to `{competitors}`. Locked by equality rather than
+  a forbidden list, because the risk runs in the direction of *adding* a field
+  and nobody names it `tagline` — they name it `note` and mean the same thing.
+- Both fields are length-bounded to their column widths. An unbounded "brand
+  name" box is a free-text field with extra steps.
+- A module-wide sweep of `schemas/competitor.py`, with a coverage floor.
+- Source inspection of the writer, with **positive** assertions that `item.name`
+  and `item.domain` are what reach the row.
+- `is_suppressed` must stay a `Boolean`. The obvious next field is *why* the
+  operator removed a rival, and the honest answer is usually a sentence about a
+  competitor — the exact third-party characterisation this rule keeps out.
+
+**8 — no verbatim competitor marketing copy.** A manually added competitor is a
+name and a domain, identical to a detected one; the model has no column that
+only an override could populate, and that is asserted. All new UI copy was
+written for this epic.
+
+**IP-safety check passed:** the new write path can carry only an entity name and
+a domain, enforced by exact-field locks, length bounds, a module sweep and
+source inspection of the writer, with five negative controls run against them;
+a suppression records the fact and never the reason; the report's new provenance
+badge reads a boolean column, not prose; and the editor is built from
+design-system primitives with no off-system colour value.
+
+### Tests
+
+**748 total, up from 723.**
+
+| suite | before | after | delta |
+|---|---|---|---|
+| api | 515 | 533 | +18 |
+| workers | 13 | 13 | — |
+| shared-types | 53 | 53 | — |
+| design-system | 72 | 72 | — |
+| web | 70 | 77 | +7 |
+
+api +18: `test_competitor_endpoints.py` +8 (2 downstream-contract, 6
+suppression), `test_ip_safety.py` +7, `test_cors.py` 3 (new). web +7, all in
+`ReportView.test.tsx` against a new `manualOverrideReport` fixture.
+
+**One test was removed rather than fixed.** A downstream assertion that
+re-scoring compares against the corrected set passed, and passed for a bad
+reason: detection and the scan pipeline create separate scans, so the set under
+test had no answered engine results, `compare_competitors` short-circuits to
+`[]` in that case, and the assertion was `all(... for c in comparisons)` —
+vacuously true over an empty list. Tightening it to assert the count first is
+what exposed that. Making it real in the unit suite would have meant rebuilding
+`test_report_endpoint.py`'s whole engine-stub pipeline to produce one scan
+carrying both, so it lives in the live verification instead, against a scan with
+six real answered results. The removal and its reason are recorded in the test
+file itself, where the next reader will look.
+
+---
+
+## 2026-08-23 — Epic 3.7 · Closing what 3.6 left open
+
+Three loose ends, deliberately not folded into Epic 3.6. Two are closed here;
+one is a recommendation rather than an implementation, and the reason is the
+finding.
+
+### 1. `detectionConfidence` now has a home — and so does the register it needed
+
+**Verified against source before doing anything**, rather than trusting Epic
+3.6's summary. `decide_detection` computes `confidence = corroborated /
+len(top)` over `top`, the detected candidates; manual rows are never in `top`.
+`apply_override` clears it to null — correct. `persist_detection` sets it again
+**unconditionally** from the outcome, and `services/report.py` passes it
+straight through. The description was accurate.
+
+**The interesting part was step 1's other question: where do known-open items
+live in this repo? The answer is nowhere structural.** The convention is to
+name a finding inside a `build-log.md` entry and re-cite the name in later
+ones. That has worked for Epic 2's Finding 2 — it appears in five build-log
+entries and in `api-contracts.md` — but it works because it got quoted often
+enough to stay visible, not because anything holds it. It does not generalise,
+and `detectionConfidence` is the proof: it had a paragraph and a script `NOTE`,
+and no name at all.
+
+Added an **Open findings** register to `api-contracts.md`, deliberately
+separate from "Planned, not yet built" — that table is work not started, this
+is shipped behaviour that is wrong. Seeded with all three findings so it is a
+register rather than a one-item note, and **Finding 3** is now cited from the
+three places that carry it, per the register's own rule:
+`services/competitors.py` at the write, `schemas/report.py` at the field, and
+`verify_competitor_override.py`'s `NOTE`.
+
+Two things were recorded more honestly than expected while writing it:
+
+- **Finding 1 is marked improved, not fixed.** Epic 2.8's own "Still imperfect"
+  section records that Ooni stayed variable between runs and some labels stayed
+  a level broader than ideal. The four stable `b2b saas` / `venture capital`
+  failures were genuinely fixed. A finding marked ✅ stops being looked at, so
+  it is ◐.
+- **The SERP-only gating idea at build-log Epic 3.0 is not in the register.**
+  It was recorded there as "not implemented, recorded for a decision", and
+  Epic 3.5 subsequently implemented it — with the honest conclusion that it
+  "largely did not work". That is a closed experiment, not an open defect, and
+  putting it in would make the register a list of everything ever considered.
+
+**Not fixed, deliberately.** What `detectionConfidence` should mean once a set
+is part-detected and part-hand-set is a product decision about the field's
+semantics, with at least three defensible answers (clear it on any override;
+report it alongside the row count it covers; make it per-row). Each changes
+what Epic 5 may infer. Out of scope for a cleanup epic, and the register says
+so with the options written down.
+
+### 2. Live-verification scripts in CI — recommended, not built, and here is why
+
+**There is no CI.** No `.github/`, no Makefile, no workflow file anywhere; the
+only YAML in the repo is `infra/deploy/docker-compose.yml` and the pnpm
+lockfiles. The three references to "CI" in this log describe intent, not a
+running system. Per the brief, that means recommend and stop — building one is
+a larger decision than a cleanup epic should carry.
+
+Costs, taken from each script's own docstring:
+
+| script | epic | cost |
+|---|---|---|
+| `verify_competitor_override.py` | 3.6 | free |
+| `verify_report.py` | 7 | free |
+| `verify_audit.py` | 6 | unpaid, but hits three live third-party sites |
+| `verify_fixes.py` | 8 | one `claude-opus-5` call |
+| `verify_intake.py` | 2 | crawl + Anthropic (`--crawl-only` skips the model) |
+| `verify_scan.py` | 4 | ~48 model calls at 24 prompts |
+| `verify_scoring.py` | 5 | real SerpApi + Claude to produce data to score |
+| `verify_competitors.py` | 3 | ~6 SerpApi + ~4 model calls **per URL**, ×10 URLs |
+
+**The substantive finding: none of the free scripts is CI-runnable as written**,
+which is why "just wire in the free ones" is not the small task it looks like.
+
+- `verify_competitor_override.py` is hard-coupled to one hand-built row. Its
+  module constant is `REMOVE = "Thecxlead"`, and it bails at line 126 —
+  *"Thecxlead is not in this set; nothing to correct"* — against any database
+  that does not contain that exact competitor, plus line 129 if the set already
+  carries overrides.
+- `verify_report.py` needs a succeeded, scored scan and returns 1 without one.
+- `verify_audit.py` audits `helpscout.com`, `anthropic.com` and `basecamp.com`
+  over the network, so it fails on a third party's downtime or markup change.
+
+All three assume the hand-built `avp_dev`. **The blocker is not CI; it is the
+absence of a seed fixture**, and building one is real work with a real design
+question behind it — a fixture faithful enough to be worth running against is
+close to a second implementation of the pipeline's output.
+
+**Recommendation, concrete enough to act on:**
+
+1. **First, and independently of CI:** a `scripts/seed_dev.py` that builds the
+   `avp_dev` state these scripts assume — one scored scan with competitors,
+   engine results and an audit — from committed fixtures, with no provider
+   calls. This is the prerequisite for everything below, and it is worth having
+   on its own: today that state exists only because it was built by hand across
+   Epics 3–8 and has been carefully restored by every script that touches it.
+2. **Then**, on every push: the existing `pytest` / `pnpm test` suites plus
+   `ruff`, `tsc`, and `alembic upgrade head && alembic check` against a service
+   container. Roughly 2–3 minutes, no API cost. This is the bulk of the value
+   and needs no seed data.
+3. **Then**, nightly against a seeded database: `verify_report.py` and
+   `verify_competitor_override.py`. Free, and this is where the regression
+   coverage Epic 3.6 deferred to a script actually lands.
+4. **Weekly or on demand:** `verify_audit.py`, isolated so a third party's
+   downtime does not redden the main pipeline.
+5. **Never automatic:** `verify_fixes`, `verify_intake`, `verify_scan`,
+   `verify_scoring`, `verify_competitors` — each spends real money, and
+   `verify_competitors` at ~100 API calls per run is the outlier. This matches
+   the existing convention that costed operations are explicitly
+   operator-triggered: detection, scanning and fix generation are all
+   POST-triggered rather than implicit, for the same reason.
+
+Nothing above is implemented. Recorded so the decision is a decision rather
+than a silence.
+
+### 3. Configuration audit — one finding, five clean
+
+Prompted by the CORS bug taking five epics to notice. Every check below was
+derived from source rather than read, because reading is what missed it.
+
+**FOUND — `allow_methods` was over-permissive.** Registered methods across
+every route are `GET, HEAD, POST, PUT`. The list allowed `PATCH` and `DELETE`
+as well, left over from a hand-written value. Epic 3.6's guard could not see it:
+it asserted registered ⊆ allowed, which only catches a route a browser cannot
+reach, and this is the same drift pointing the other way.
+
+**Fixed by deleting the list, not correcting it.** `main.py` now derives
+`allow_methods` from `app.routes` (`_registered_methods`), so it cannot drift
+in either direction. Routers are registered before the middleware is added,
+which the docstring says plainly because the ordering is now load-bearing.
+
+Tightening the value by hand was the alternative and was rejected: `PATCH` and
+`DELETE` are both on the roadmap (Epic 1.5's `DELETE /users`, Epic 7.1's
+`PATCH /branding`), so a hand-tightened list would re-create the exact trap
+that hid the missing PUT — a correct list that nobody revisits when a route is
+added. The test moved from subset to **exact equality**, with `OPTIONS`
+whitelisted as the one member that is legitimately allowed without being
+registered, since the middleware answers preflight before routing.
+
+**Clean — reported because a negative result is a result:**
+
+| Surface | Checked by | Result |
+|---|---|---|
+| `ProblemError` subclasses → `_STATUS_SLUGS` | introspection | 9 subclasses, 0 missing |
+| `ids` prefix constants → `ALL_PREFIXES` | introspection | 16 constants, 0 missing |
+| Mapped models → `models.__all__` | mapper registry | 16 mapped, 0 missing |
+| Error handlers vs raised exceptions | source | base-class handler covers all 9 — no drift possible |
+| Cookie hardening vs its comment | source | `_harden_deployed_environments` genuinely forces `session_cookie_secure=True` and rejects the placeholder secret |
+
+Two things were found that are **not** drift and were left alone. `RateLimited`
+is defined in `errors.py` and raised nowhere — dead code for an unimplemented
+feature, not a list that has drifted. And there is no security-headers
+middleware (CSP, HSTS, `X-Frame-Options`); that is an absence rather than a
+mismatch, and adding one is new work this brief excludes. Both are recorded
+here rather than fixed, so the next person does not have to rediscover them.
+
+`allow_headers` (`Content-Type, Accept, X-Requested-With`) against a client
+that sends only `Content-Type` is technically broad by two, but `Accept` is
+CORS-safelisted regardless and header breadth carries none of the consequence
+method breadth does. Not changed.
+
+### Negative controls — 5/5 caught, after one control was rewritten
+
+| # | Injected breakage | Caught by |
+|---|---|---|
+| 1 | hand-written list reinstated, missing PUT (the Epic 3.6 bug) | exact-equality + named PUT test |
+| 2 | hand-written list reinstated, over-permissive by PATCH/DELETE | exact-equality |
+| 3 | `OPTIONS` dropped from the derived list | the preflight test |
+| 4 | `HEAD` stops being filtered out | exact-equality |
+| 5 | CORS middleware moved above the router registration | exact-equality + named PUT test |
+
+**Control 5 reported NOT CAUGHT on the first attempt, and the control was
+wrong, not the guard.** It injected a *second* `CORSMiddleware` before the
+routers while leaving the original in place. Starlette's `add_middleware`
+inserts at position 0, so the helper that reads the middleware kwargs found the
+later-added correct one and the test passed. A duplicate middleware is not a
+mistake anyone makes. Rewritten to *move* the single existing block — which is
+the realistic careless refactor — the derived list collapses to
+`['GET', 'OPTIONS']` and two guards fire immediately.
+
+Worth recording because it is the third time in four epics that a control has
+mis-reported: Epic 8's harness scored against a hand-picked expected test, Epic
+3.6's restored two files from stale backups, and this one modelled an
+unrealistic failure. **The guards have been right every time; the harness has
+been wrong three times.** A negative control is itself code, and nothing checks
+it.
+
+`main.py` was diffed against its pre-injection backup after the run and is
+byte-identical.
+
+### Dependencies
+
+**None added.** No new packages, no CI system, no security middleware.
+
+### IP-safety self-check (constraint 9)
+
+Config-facing changes only; no UI changed and no screen was touched. Relevant
+constraints:
+
+**6 — dependencies.** None added.
+
+**7 — facts only.** Nothing in this epic touches what is stored, returned or
+rendered. The three code changes are a comment citing Finding 3 at the
+`detection_confidence` write, the same on the report schema field, and the
+derived CORS method list. `detectionConfidence` remains a `Decimal | None`
+carrying a ratio; no field gained the ability to hold prose, and the register
+entry deliberately records the *shape* of the problem without adding any
+explanatory field to the API to compensate for it.
+
+The CORS change **narrows** what a browser may do — `PATCH` and `DELETE` are no
+longer advertised — so it cannot widen any surface through which third-party
+content could reach the product.
+
+**IP-safety check passed:** no dependency added; no stored, returned or
+rendered field changed shape or gained prose capacity; the only behavioural
+change narrows the CORS method surface rather than widening it; and the new
+open-findings register records a known imprecision in a number rather than
+introducing a free-text field to explain it.
+
+### Tests
+
+**749 total, up from 748.**
+
+| suite | before | after | delta |
+|---|---|---|---|
+| api | 533 | 534 | +1 |
+| workers | 13 | 13 | — |
+| shared-types | 53 | 53 | — |
+| design-system | 72 | 72 | — |
+| web | 77 | 77 | — |
+
+`test_cors.py` 3 → 4: the subset assertion became exact equality inside the
+existing test, and `test_preflight_is_advertised_even_though_no_route_declares_it`
+is new — `OPTIONS` is the single hand-added member of an otherwise derived
+list, and therefore the one a tidy-up could remove without noticing.
+
+A one-test epic is the honest outcome. Two of the three loose ends were closed
+with documentation and a deletion; the third was closed by removing a
+hand-maintained list, and a list that no longer exists needs less testing than
+one that does, not more.
