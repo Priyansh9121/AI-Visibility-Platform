@@ -1,0 +1,55 @@
+# deps
+node_modules/
+.pnpm-store/
+
+# build output
+dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+
+# env / secrets
+.env
+.env.*
+!.env.example
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# test / coverage
+coverage/
+.vitest/
+
+# os / editor
+.DS_Store
+.idea/
+*.swp
+
+# local infra volumes
+infra/db/data/
+
+# --- python (apps/api, apps/workers — uv-managed) ---
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# uv writes a lockfile per Python project; those ARE committed (see below).
+# Nothing to ignore here — listed for the next reader's benefit.
+
+# Local throwaway Postgres cluster (infra/db/scripts/dev_cluster.sh)
+.devdata/
+
+# Redis snapshot. Written into whatever directory redis-server was started
+# from, which is the repo root often enough to matter. It is a binary dump of
+# session state, so it is both noise and a (mild) credential leak.
+dump.rdb
+*.rdb

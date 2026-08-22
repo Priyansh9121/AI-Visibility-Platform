@@ -1,0 +1,6 @@
+# apps/api (FastAPI) and apps/workers (Celery/Temporal) are Python — see
+# product-spec.md §5.1. They are deliberately NOT pnpm workspaces; they are
+# managed by their own Python tooling from Epic 1.
+packages:
+  - "apps/web"
+  - "packages/*"

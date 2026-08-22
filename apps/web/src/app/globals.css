@@ -1,0 +1,8 @@
+/* Design-system tokens first, then Tailwind's layers.
+   Order matters: the preset's utilities reference the custom properties that
+   tokens.css defines. */
+@import '@avp/design-system/styles.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

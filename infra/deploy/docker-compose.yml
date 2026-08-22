@@ -1,0 +1,58 @@
+# Local development datastores.
+#
+# This file provides Postgres and Redis ONLY. The application services run on
+# the host via `uv run` / `pnpm dev`, because a code-reload loop through a
+# container mount is slower and flakier than running them natively, and Epic 1
+# has no deployment target yet that would justify building images.
+#
+# Container images for the services themselves land when there is somewhere to
+# deploy them (see README in this directory).
+#
+#   docker compose -f infra/deploy/docker-compose.yml up -d
+#
+# If you already run Postgres and Redis on the host, skip this entirely and
+# point DATABASE_URL / REDIS_URL at your own instances.
+
+name: avp
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: avp
+      POSTGRES_PASSWORD: avp
+      POSTGRES_DB: avp
+      # Deterministic collation. Left to the host locale, index ordering can
+      # differ between a developer's machine and CI, which produces test
+      # failures that reproduce nowhere.
+      POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U avp -d avp"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # appendonly so a restart does not silently sign every developer out
+    # mid-session; the queue survives too.
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres-data:
+  redis-data:

@@ -1,0 +1,143 @@
+import { describe, it, expect } from 'vitest';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { Button } from './Button.js';
+import { Card, CardBody } from './Card.js';
+import { Badge, VisibilityBadge } from './Badge.js';
+import { DataTable } from './Table.js';
+import { ScoreDisplay } from './ScoreDisplay.js';
+import { LuminanceLedger } from './chart/LuminanceLedger.js';
+import { Beat, Evidence, ReportPage, BEAT_SEQUENCE } from './report/ReportLayout.js';
+import { visibility, oklch } from '../tokens/color.js';
+import { DIMENSIONS, COMPETITORS, SUBJECT } from '../styleguide/fixtures.js';
+
+const html = (node: Parameters<typeof renderToStaticMarkup>[0]) => renderToStaticMarkup(node);
+
+describe('components render', () => {
+  it('Button renders every variant without crashing', () => {
+    for (const variant of ['primary', 'secondary', 'ghost', 'danger'] as const) {
+      expect(html(<Button variant={variant}>Go</Button>)).toContain(`avp-btn--${variant}`);
+    }
+  });
+
+  it('Card exposes only print-safe elevations', () => {
+    for (const e of ['flat', 'seated', 'raised'] as const) {
+      expect(html(<Card elevation={e}><CardBody>x</CardBody></Card>)).toContain(`avp-card--${e}`);
+    }
+  });
+
+  it('Badge and VisibilityBadge render distinct palettes', () => {
+    expect(html(<Badge tone="danger">Engine down</Badge>)).toContain('avp-badge--danger');
+    const vb = html(<VisibilityBadge score={12} />);
+    expect(vb).toContain('Absent');
+    expect(vb).toContain('avp-badge--visibility');
+  });
+
+  it('DataTable marks the subject row with aria-current', () => {
+    const out = html(
+      <DataTable
+        rows={[{ n: 'Ours' }, { n: 'Other' }]}
+        rowKey={(r) => r.n}
+        isSubject={(r) => r.n === 'Ours'}
+        columns={[{ key: 'n', header: 'Name', render: (r) => r.n }]}
+      />,
+    );
+    expect(out).toContain('aria-current="true"');
+    expect(out.match(/aria-current/g)).toHaveLength(1);
+  });
+
+  it('DataTable renders its empty state rather than an empty tbody', () => {
+    const out = html(
+      <DataTable
+        rows={[]}
+        rowKey={(r: { n: string }) => r.n}
+        emptyMessage="Nothing yet"
+        columns={[{ key: 'n', header: 'Name', render: (r) => r.n }]}
+      />,
+    );
+    expect(out).toContain('Nothing yet');
+  });
+
+  it('ScoreDisplay shows an em dash, not a zero, for a null score', () => {
+    const out = html(<ScoreDisplay score={null} />);
+    expect(out).toContain('—');
+    expect(out).toContain('Not enough data to score this scan');
+  });
+});
+
+describe('LuminanceLedger renders', () => {
+  const out = html(
+    <LuminanceLedger subjectName={SUBJECT} dimensions={DIMENSIONS} competitors={COMPETITORS} />,
+  );
+
+  it('carries an accessible description of every dimension', () => {
+    expect(out).toContain('role="img"');
+    for (const d of DIMENSIONS) expect(out).toContain(d.label);
+    expect(out).toContain('out of 100');
+  });
+
+  it('ships a screen-reader data table alongside the SVG', () => {
+    expect(out).toContain('avp-visually-hidden');
+    expect(out).toContain('<caption>');
+    expect(out).toContain('Points available');
+  });
+
+  it('names the largest recoverable gap in the accessible label', () => {
+    // Share of Voice: 25 x (100-22)/100 = 19.5 pts — the largest here.
+    expect(out).toContain('Largest recoverable gap: Share of Voice');
+    expect(out).toContain('19.5 points');
+  });
+
+  it('draws one ghost column per competitor', () => {
+    expect(out.match(/avp-ledger__ghost-cap/g)).toHaveLength(COMPETITORS.length);
+  });
+
+  it('never paints a competitor with a visibility-ramp colour', () => {
+    // The credibility rule: competitors are neutral, never coloured by quality.
+    const ghostBlock = out.slice(out.indexOf('avp-ledger__ghost'));
+    for (const stop of Object.values(visibility)) {
+      expect(ghostBlock).not.toContain(oklch(stop));
+    }
+  });
+
+  it('renders INSUFFICIENT_DATA copy for an empty scan', () => {
+    const empty = html(<LuminanceLedger subjectName={SUBJECT} dimensions={[]} />);
+    expect(empty).toContain('Not enough data to score');
+    expect(empty).not.toContain('avp-ledger__svg');
+  });
+});
+
+describe('report primitives enforce the narrative', () => {
+  it('numbers each beat by its position in the score-gap-proof-fix-pitch sequence', () => {
+    expect(BEAT_SEQUENCE).toEqual(['score', 'gap', 'proof', 'fix', 'pitch']);
+    const out = html(
+      <ReportPage>
+        {BEAT_SEQUENCE.map((id) => (
+          <Beat key={id} id={id} heading={`Heading for ${id}`}>
+            body
+          </Beat>
+        ))}
+      </ReportPage>,
+    );
+    for (const [i, id] of BEAT_SEQUENCE.entries()) {
+      expect(out).toContain(`avp-beat--${id}`);
+      expect(out).toContain(String(i + 1).padStart(2, '0'));
+    }
+  });
+
+  it('Evidence renders prompts and facts, and has no slot for scraped prose', () => {
+    const out = html(
+      <Evidence
+        engine="Engine 1"
+        prompt="best family dentist in the northaven area"
+        findings={[{ label: 'Brand mentioned', value: 'No' }]}
+      />,
+    );
+    expect(out).toContain('best family dentist in the northaven area');
+    expect(out).toContain('Brand mentioned');
+    // The prop surface is prompt + engine + label/value facts. There is no
+    // free-text body prop and no children, so a paragraph of scraped answer
+    // text has nowhere to go — the constraint is enforced by the type, not by
+    // a reviewer noticing.
+    expect(out).not.toContain('undefined');
+  });
+});

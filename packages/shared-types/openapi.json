@@ -1,0 +1,4432 @@
+{
+  "components": {
+    "schemas": {
+      "ActionItemListOut": {
+        "description": "The scan's fix list, plus what happened the last time it was generated.",
+        "properties": {
+          "generatedBy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generatedby"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ActionItemOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "reasonCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoncode"
+          },
+          "scanId": {
+            "title": "Scanid",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scanId",
+          "status"
+        ],
+        "title": "ActionItemListOut",
+        "type": "object"
+      },
+      "ActionItemOut": {
+        "description": "One generated fix \u2014 \u00a75.3's prioritised action list.",
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "dimensionKey": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dimensionkey"
+          },
+          "effort": {
+            "$ref": "#/components/schemas/Effort"
+          },
+          "generatedBy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generatedby"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "pointsUpside": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pointsupside"
+          },
+          "priority": {
+            "$ref": "#/components/schemas/Priority"
+          },
+          "rank": {
+            "title": "Rank",
+            "type": "integer"
+          },
+          "scanId": {
+            "title": "Scanid",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ActionItemSource"
+          },
+          "sourceKey": {
+            "title": "Sourcekey",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ActionItemStatus"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "scanId",
+          "source",
+          "sourceKey",
+          "title",
+          "priority",
+          "effort",
+          "status",
+          "rank",
+          "createdAt",
+          "updatedAt"
+        ],
+        "title": "ActionItemOut",
+        "type": "object"
+      },
+      "ActionItemSource": {
+        "description": "Which Epic 7 candidate produced this fix.\n\nDeliberately only two members. An LLM-authored fix is not a third source \u2014\nit is the same measured gap or audit finding, worded better, and modelling\nit as its own source would let a generated recommendation exist without a\nmeasurement behind it.",
+        "enum": [
+          "gap",
+          "audit"
+        ],
+        "title": "ActionItemSource",
+        "type": "string"
+      },
+      "ActionItemStatus": {
+        "enum": [
+          "open",
+          "in_progress",
+          "done",
+          "dismissed"
+        ],
+        "title": "ActionItemStatus",
+        "type": "string"
+      },
+      "AgencyOut": {
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "seatLimit": {
+            "title": "Seatlimit",
+            "type": "integer"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "seatLimit",
+          "createdAt"
+        ],
+        "title": "AgencyOut",
+        "type": "object"
+      },
+      "AuditCheckOut": {
+        "description": "One check's verdict \u2014 \u00a77's \"pass/fail + detail for each check\".",
+        "properties": {
+          "checkKey": {
+            "title": "Checkkey",
+            "type": "string"
+          },
+          "detailCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detailcode"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CheckStatus"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "id",
+          "checkKey",
+          "status"
+        ],
+        "title": "AuditCheckOut",
+        "type": "object"
+      },
+      "AuditStatus": {
+        "description": "Outcome of an audit run.\n\nAdded in Epic 6. Without it a failed crawl and a genuinely bare site are\nindistinguishable \u2014 both would be a row of nulls \u2014 and the Technical\nFoundation sub-score must never treat \"we could not read the site\" as\n\"the site has no markup\". Same discipline as ClassificationStatus,\nDetectionStatus and ScoreStatus.",
+        "enum": [
+          "ok",
+          "partial",
+          "failed"
+        ],
+        "title": "AuditStatus",
+        "type": "string"
+      },
+      "BrandMentionOut": {
+        "properties": {
+          "competitorId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Competitorid"
+          },
+          "entityDomain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entitydomain"
+          },
+          "entityName": {
+            "title": "Entityname",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "isSubject": {
+            "title": "Issubject",
+            "type": "boolean"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position"
+          }
+        },
+        "required": [
+          "id",
+          "entityName",
+          "isSubject"
+        ],
+        "title": "BrandMentionOut",
+        "type": "object"
+      },
+      "CheckStatus": {
+        "enum": [
+          "pass",
+          "warn",
+          "fail",
+          "not_applicable",
+          "error"
+        ],
+        "title": "CheckStatus",
+        "type": "string"
+      },
+      "CitationOut": {
+        "properties": {
+          "citesSubject": {
+            "title": "Citessubject",
+            "type": "boolean"
+          },
+          "competitorId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Competitorid"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position"
+          },
+          "sourceDomain": {
+            "title": "Sourcedomain",
+            "type": "string"
+          },
+          "sourceType": {
+            "$ref": "#/components/schemas/CitationType"
+          },
+          "sourceUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sourceurl"
+          }
+        },
+        "required": [
+          "id",
+          "sourceDomain",
+          "sourceType",
+          "citesSubject"
+        ],
+        "title": "CitationOut",
+        "type": "object"
+      },
+      "CitationType": {
+        "enum": [
+          "owned",
+          "competitor",
+          "directory",
+          "review",
+          "editorial",
+          "social",
+          "other"
+        ],
+        "title": "CitationType",
+        "type": "string"
+      },
+      "CitedDomainOut": {
+        "description": "A domain an engine cited, and how often.\n\nDomain + URL + count. api-contracts.md and ip-safety.md #7 both permit\ncited domains and URLs explicitly; the cited PAGE's text is never read,\nstored, or shown. `sample_url` is a link out to the source \u2014 the sanctioned\nalternative to quoting it.",
+        "properties": {
+          "citations": {
+            "title": "Citations",
+            "type": "integer"
+          },
+          "citesSubject": {
+            "title": "Citessubject",
+            "type": "boolean"
+          },
+          "competitorName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Competitorname"
+          },
+          "domain": {
+            "title": "Domain",
+            "type": "string"
+          },
+          "sampleUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sampleurl"
+          }
+        },
+        "required": [
+          "domain",
+          "citations",
+          "citesSubject"
+        ],
+        "title": "CitedDomainOut",
+        "type": "object"
+      },
+      "ClassificationStatus": {
+        "description": "Outcome of Epic 2's industry classification.\n\nDeliberately mirrors Score.status (scoring-spec.md): a result we could not\ndetermine is recorded as such, never as a confident-looking guess.",
+        "enum": [
+          "pending",
+          "classified",
+          "ambiguous",
+          "unclassifiable"
+        ],
+        "title": "ClassificationStatus",
+        "type": "string"
+      },
+      "ClientDetailOut": {
+        "description": "A client plus the crawl facts from its most recent classification.",
+        "properties": {
+          "agencyId": {
+            "title": "Agencyid",
+            "type": "string"
+          },
+          "brandName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Brandname"
+          },
+          "classificationReasonCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Classificationreasoncode"
+          },
+          "classificationStatus": {
+            "$ref": "#/components/schemas/ClassificationStatus"
+          },
+          "classifiedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Classifiedat"
+          },
+          "classifierModel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Classifiermodel"
+          },
+          "crawl": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CrawlSummaryOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "domain": {
+            "title": "Domain",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "industry": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Industry"
+          },
+          "industryConfidence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Industryconfidence"
+          },
+          "industryConfidenceScore": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Industryconfidencescore"
+          },
+          "industryNiche": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Industryniche"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ClientKind"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "agencyId",
+          "name",
+          "domain",
+          "kind",
+          "classificationStatus",
+          "createdAt",
+          "updatedAt"
+        ],
+        "title": "ClientDetailOut",
+        "type": "object"
+      },
+      "ClientKind": {
+        "description": "A prospect becomes a client when the deal closes.\n\nThe same row transitions rather than being recreated, so the scan history\ngathered while prospecting becomes the \"before\" half of the before/after\nROI report in Epic 11.",
+        "enum": [
+          "prospect",
+          "client",
+          "churned"
+        ],
+        "title": "ClientKind",
+        "type": "string"
+      },
+      "ClientOut": {
+        "properties": {
+          "agencyId": {
+            "title": "Agencyid",
+            "type": "string"
+          },
+          "brandName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Brandname"
+          },
+          "classificationReasonCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Classificationreasoncode"
+          },
+          "classificationStatus": {
+            "$ref": "#/components/schemas/ClassificationStatus"
+          },
+          "classifiedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Classifiedat"
+          },
+          "classifierModel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Classifiermodel"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "domain": {
+            "title": "Domain",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "industry": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Industry"
+          },
+          "industryConfidence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Industryconfidence"
+          },
+          "industryConfidenceScore": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Industryconfidencescore"
+          },
+          "industryNiche": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Industryniche"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ClientKind"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "agencyId",
+          "name",
+          "domain",
+          "kind",
+          "classificationStatus",
+          "createdAt",
+          "updatedAt"
+        ],
+        "title": "ClientOut",
+        "type": "object"
+      },
+      "CompetitorInput": {
+        "description": "One competitor in an operator's replacement set.",
+        "properties": {
+          "domain": {
+            "anyOf": [
+              {
+                "maxLength": 253,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Domain"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "CompetitorInput",
+        "type": "object"
+      },
+      "CompetitorOut": {
+        "properties": {
+          "coCitationMentions": {
+            "title": "Cocitationmentions",
+            "type": "integer"
+          },
+          "corroborated": {
+            "title": "Corroborated",
+            "type": "boolean"
+          },
+          "detectionSource": {
+            "$ref": "#/components/schemas/DetectionSource"
+          },
+          "domain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Domain"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "isManualOverride": {
+            "title": "Ismanualoverride",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "rank": {
+            "title": "Rank",
+            "type": "integer"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          },
+          "serpMentions": {
+            "title": "Serpmentions",
+            "type": "integer"
+          },
+          "signalCount": {
+            "title": "Signalcount",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "rank",
+          "detectionSource",
+          "serpMentions",
+          "coCitationMentions",
+          "corroborated",
+          "signalCount",
+          "isManualOverride"
+        ],
+        "title": "CompetitorOut",
+        "type": "object"
+      },
+      "CompetitorScoreOut": {
+        "description": "Per-competitor figures for the three measurable dimensions.\n\n**There is deliberately no `composite`.** Sentiment is classified toward the\nsubject only (Epic 4.3) and Technical Foundation arrives in Epic 6, so 25%\nof the weight has no per-competitor input. A composite computed over a\ndifferent weight basis would not be comparable to the subject's, which is\nthe entire purpose of a comparison.",
+        "properties": {
+          "citationStrength": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Citationstrength",
+            "type": "string"
+          },
+          "competitorId": {
+            "title": "Competitorid",
+            "type": "string"
+          },
+          "mentionRate": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Mentionrate",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "shareOfVoice": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Shareofvoice",
+            "type": "string"
+          }
+        },
+        "required": [
+          "competitorId",
+          "name",
+          "mentionRate",
+          "shareOfVoice",
+          "citationStrength"
+        ],
+        "title": "CompetitorScoreOut",
+        "type": "object"
+      },
+      "CompetitorSetOut": {
+        "properties": {
+          "candidatesConsidered": {
+            "title": "Candidatesconsidered",
+            "type": "integer"
+          },
+          "coCitationPromptsRun": {
+            "title": "Cocitationpromptsrun",
+            "type": "integer"
+          },
+          "competitors": {
+            "items": {
+              "$ref": "#/components/schemas/CompetitorOut"
+            },
+            "title": "Competitors",
+            "type": "array"
+          },
+          "detectedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detectedat"
+          },
+          "detectionConfidence": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detectionconfidence"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "scanId": {
+            "title": "Scanid",
+            "type": "string"
+          },
+          "serpQueriesRun": {
+            "title": "Serpqueriesrun",
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DetectionStatus"
+          },
+          "usedIndustrySeed": {
+            "title": "Usedindustryseed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "scanId",
+          "status",
+          "serpQueriesRun",
+          "coCitationPromptsRun",
+          "candidatesConsidered",
+          "usedIndustrySeed"
+        ],
+        "title": "CompetitorSetOut",
+        "type": "object"
+      },
+      "CrawlSummaryOut": {
+        "description": "FACTS from the crawl. Never page content \u2014 see services/crawl.py.",
+        "properties": {
+          "detectedLanguage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detectedlanguage"
+          },
+          "h1Count": {
+            "title": "H1Count",
+            "type": "integer"
+          },
+          "hasMetaDescription": {
+            "title": "Hasmetadescription",
+            "type": "boolean"
+          },
+          "hasTitle": {
+            "title": "Hastitle",
+            "type": "boolean"
+          },
+          "pagesFetched": {
+            "title": "Pagesfetched",
+            "type": "integer"
+          },
+          "schemaTypes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Schematypes",
+            "type": "array"
+          },
+          "urlsFetched": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Urlsfetched",
+            "type": "array"
+          },
+          "wordCount": {
+            "title": "Wordcount",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pagesFetched",
+          "urlsFetched",
+          "schemaTypes",
+          "wordCount",
+          "h1Count",
+          "hasTitle",
+          "hasMetaDescription"
+        ],
+        "title": "CrawlSummaryOut",
+        "type": "object"
+      },
+      "CreateClientRequest": {
+        "description": "Intake payload.\n\n`url` is intentionally permissive \u2014 an operator pastes whatever they have,\nincluding a bare domain. Normalisation and validation happen server-side in\nservices/intake.py:parse_domain so the browser and the API cannot disagree\nabout what counts as a valid address.",
+        "properties": {
+          "classify": {
+            "default": true,
+            "title": "Classify",
+            "type": "boolean"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "url": {
+            "maxLength": 2048,
+            "minLength": 3,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "CreateClientRequest",
+        "type": "object"
+      },
+      "DashboardOut": {
+        "properties": {
+          "agency": {
+            "$ref": "#/components/schemas/AgencyOut"
+          },
+          "clientCount": {
+            "title": "Clientcount",
+            "type": "integer"
+          },
+          "isEmpty": {
+            "title": "Isempty",
+            "type": "boolean"
+          },
+          "recentScans": {
+            "items": {
+              "$ref": "#/components/schemas/ScanSummaryOut"
+            },
+            "title": "Recentscans",
+            "type": "array"
+          },
+          "scanCount": {
+            "title": "Scancount",
+            "type": "integer"
+          },
+          "seats": {
+            "$ref": "#/components/schemas/SeatUsageOut"
+          }
+        },
+        "required": [
+          "agency",
+          "seats",
+          "clientCount",
+          "scanCount",
+          "recentScans",
+          "isEmpty"
+        ],
+        "title": "DashboardOut",
+        "type": "object"
+      },
+      "DetectionSource": {
+        "enum": [
+          "serp",
+          "co_citation",
+          "both",
+          "manual"
+        ],
+        "title": "DetectionSource",
+        "type": "string"
+      },
+      "DetectionStatus": {
+        "description": "Outcome of a competitor-detection run.\n\nMirrors ClassificationStatus and Score's INSUFFICIENT_DATA: a detection we\ncould not make confidently must be representable as such, rather than\nsurfacing a thin or contradictory set as though it were a finding.",
+        "enum": [
+          "ok",
+          "weak_signal",
+          "no_signal"
+        ],
+        "title": "DetectionStatus",
+        "type": "string"
+      },
+      "Effort": {
+        "enum": [
+          "S",
+          "M",
+          "L"
+        ],
+        "title": "Effort",
+        "type": "string"
+      },
+      "Engine": {
+        "description": "AI answer engines. \u00a77 Epic 4 starts with two, behind a common interface.",
+        "enum": [
+          "chatgpt",
+          "perplexity",
+          "google_ai_overview",
+          "gemini",
+          "claude",
+          "claude_search",
+          "copilot"
+        ],
+        "title": "Engine",
+        "type": "string"
+      },
+      "EngineCoverageOut": {
+        "description": "How one engine covered the prompt set. Counts only.",
+        "properties": {
+          "answered": {
+            "title": "Answered",
+            "type": "integer"
+          },
+          "engine": {
+            "$ref": "#/components/schemas/Engine"
+          },
+          "mentioned": {
+            "title": "Mentioned",
+            "type": "integer"
+          },
+          "promptsRun": {
+            "title": "Promptsrun",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "engine",
+          "promptsRun",
+          "answered",
+          "mentioned"
+        ],
+        "title": "EngineCoverageOut",
+        "type": "object"
+      },
+      "EngineResultOut": {
+        "properties": {
+          "brandMentions": {
+            "items": {
+              "$ref": "#/components/schemas/BrandMentionOut"
+            },
+            "title": "Brandmentions",
+            "type": "array"
+          },
+          "brandsMentioned": {
+            "title": "Brandsmentioned",
+            "type": "integer"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/CitationOut"
+            },
+            "title": "Citations",
+            "type": "array"
+          },
+          "engine": {
+            "$ref": "#/components/schemas/Engine"
+          },
+          "engineVersion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Engineversion"
+          },
+          "errorCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Errorcode"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "latencyMs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latencyms"
+          },
+          "mentioned": {
+            "title": "Mentioned",
+            "type": "boolean"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position"
+          },
+          "prominence": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prominence"
+          },
+          "promptId": {
+            "title": "Promptid",
+            "type": "string"
+          },
+          "responseDigest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Responsedigest"
+          },
+          "sentiment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Sentiment"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sentimentConfidence": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sentimentconfidence"
+          },
+          "status": {
+            "$ref": "#/components/schemas/EngineResultStatus"
+          }
+        },
+        "required": [
+          "id",
+          "promptId",
+          "engine",
+          "status",
+          "mentioned",
+          "brandsMentioned"
+        ],
+        "title": "EngineResultOut",
+        "type": "object"
+      },
+      "EngineResultStatus": {
+        "enum": [
+          "ok",
+          "answered_no_mention",
+          "rate_limited",
+          "error",
+          "timeout"
+        ],
+        "title": "EngineResultStatus",
+        "type": "string"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HealthOut": {
+        "properties": {
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "version"
+        ],
+        "title": "HealthOut",
+        "type": "object"
+      },
+      "LoginRequest": {
+        "properties": {
+          "email": {
+            "format": "email",
+            "title": "Email",
+            "type": "string"
+          },
+          "password": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ],
+        "title": "LoginRequest",
+        "type": "object"
+      },
+      "MeOut": {
+        "description": "The whole authenticated context in one call.\n\nThe web app needs user, agency, and seat usage to render its shell. Serving\nthem together avoids three round trips on every page load.",
+        "properties": {
+          "agency": {
+            "$ref": "#/components/schemas/AgencyOut"
+          },
+          "seats": {
+            "$ref": "#/components/schemas/SeatUsageOut"
+          },
+          "user": {
+            "$ref": "#/components/schemas/UserOut"
+          }
+        },
+        "required": [
+          "user",
+          "agency",
+          "seats"
+        ],
+        "title": "MeOut",
+        "type": "object"
+      },
+      "MentionShareOut": {
+        "description": "One brand's share of the mentions in this scan.\n\nEntity NAMES are facts and are explicitly permitted. `outranks_subject` is\narithmetic over stored ordinals, not a judgement.",
+        "properties": {
+          "appearances": {
+            "title": "Appearances",
+            "type": "integer"
+          },
+          "bestPosition": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bestposition"
+          },
+          "entityDomain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entitydomain"
+          },
+          "entityName": {
+            "title": "Entityname",
+            "type": "string"
+          },
+          "isSubject": {
+            "title": "Issubject",
+            "type": "boolean"
+          },
+          "outranksSubject": {
+            "title": "Outrankssubject",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "entityName",
+          "isSubject",
+          "appearances",
+          "outranksSubject"
+        ],
+        "title": "MentionShareOut",
+        "type": "object"
+      },
+      "Page_ClientOut_": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/ClientOut"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextcursor"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "Page[ClientOut]",
+        "type": "object"
+      },
+      "Page_EngineResultOut_": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/EngineResultOut"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextcursor"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "Page[EngineResultOut]",
+        "type": "object"
+      },
+      "Page_ScanOut_": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/ScanOut"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextcursor"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "Page[ScanOut]",
+        "type": "object"
+      },
+      "Priority": {
+        "enum": [
+          "high",
+          "medium",
+          "low"
+        ],
+        "title": "Priority",
+        "type": "string"
+      },
+      "PromptIntent": {
+        "description": "Buyer-journey stage. \u00a77 Epic 4 requires intent tagging.",
+        "enum": [
+          "awareness",
+          "comparison",
+          "bottom_funnel"
+        ],
+        "title": "PromptIntent",
+        "type": "string"
+      },
+      "PromptOut": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "intent": {
+            "$ref": "#/components/schemas/PromptIntent"
+          },
+          "position": {
+            "title": "Position",
+            "type": "integer"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text",
+          "intent",
+          "position"
+        ],
+        "title": "PromptOut",
+        "type": "object"
+      },
+      "PromptSetOut": {
+        "properties": {
+          "generatedBy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generatedby"
+          },
+          "generationParams": {
+            "additionalProperties": true,
+            "title": "Generationparams",
+            "type": "object"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "prompts": {
+            "items": {
+              "$ref": "#/components/schemas/PromptOut"
+            },
+            "title": "Prompts",
+            "type": "array"
+          },
+          "scanId": {
+            "title": "Scanid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "scanId"
+        ],
+        "title": "PromptSetOut",
+        "type": "object"
+      },
+      "ReadyOut": {
+        "properties": {
+          "checks": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Checks",
+            "type": "object"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "checks"
+        ],
+        "title": "ReadyOut",
+        "type": "object"
+      },
+      "ReplaceCompetitorsRequest": {
+        "description": "Operator override for a detected competitor set.\n\nReplaces the set wholesale rather than patching individual rows: an operator\ncorrecting a bad detection is expressing \"these are the rivals\", and\nreconciling that against auto-detected rows one at a time invites a\nhalf-applied state where the correction is neither in force nor discarded.\n\nEvery competitor supplied here is marked `isManualOverride`, which protects\nit from being removed by a later re-detection.",
+        "properties": {
+          "competitors": {
+            "items": {
+              "$ref": "#/components/schemas/CompetitorInput"
+            },
+            "maxItems": 10,
+            "title": "Competitors",
+            "type": "array"
+          }
+        },
+        "title": "ReplaceCompetitorsRequest",
+        "type": "object"
+      },
+      "ReportAgencyOut": {
+        "description": "The white-label surface.\n\nName and slug only. Logo, custom domain and brand colours are \u00a77 line 2 and\nare deferred to Epic 7.1 \u2014 they need new columns AND a written policy on\nwhich tokens an agency may override, because the visibility ramp is\nload-bearing: an agency free to recolour it changes what the score means.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "slug"
+        ],
+        "title": "ReportAgencyOut",
+        "type": "object"
+      },
+      "ReportAuditFindingOut": {
+        "description": "An audit check the report can act on.\n\nSame shape as `AuditCheckOut` \u2014 a machine `detail_code`, never prose. The\nfix beat maps the code to concrete copy from our own string table.",
+        "properties": {
+          "checkKey": {
+            "title": "Checkkey",
+            "type": "string"
+          },
+          "detailCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detailcode"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CheckStatus"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "id",
+          "checkKey",
+          "status"
+        ],
+        "title": "ReportAuditFindingOut",
+        "type": "object"
+      },
+      "ReportAuditOut": {
+        "properties": {
+          "auditedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auditedat"
+          },
+          "errorCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Errorcode"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/ReportAuditFindingOut"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "notApplicable": {
+            "title": "Notapplicable",
+            "type": "integer"
+          },
+          "passed": {
+            "title": "Passed",
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AuditStatus"
+          },
+          "technicalFoundation": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Technicalfoundation"
+          },
+          "urlAudited": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Urlaudited"
+          },
+          "warned": {
+            "title": "Warned",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "status",
+          "passed",
+          "warned",
+          "failed",
+          "notApplicable",
+          "findings"
+        ],
+        "title": "ReportAuditOut",
+        "type": "object"
+      },
+      "ReportCompetitorOut": {
+        "description": "A detected competitor plus its comparable sub-scores.\n\n**No composite, deliberately.** Sentiment is classified toward the subject\nonly and Technical Foundation is the subject's own site, so 25% of the\nweight has no per-competitor input. A \"competitor composite\" over the\nremaining 75% would not be comparable to the subject's \u2014 it would read as a\ncompetitor scoring lower than they do. The report compares per-dimension\ninstead, on the three dimensions that genuinely have both sides.\n\nNull sub-scores mean the scan produced no comparison for this competitor.",
+        "properties": {
+          "citationStrength": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Citationstrength"
+          },
+          "coCitationMentions": {
+            "title": "Cocitationmentions",
+            "type": "integer"
+          },
+          "corroborated": {
+            "title": "Corroborated",
+            "type": "boolean"
+          },
+          "detectionSource": {
+            "$ref": "#/components/schemas/DetectionSource"
+          },
+          "domain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Domain"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "isManualOverride": {
+            "title": "Ismanualoverride",
+            "type": "boolean"
+          },
+          "mentionRate": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mentionrate"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "rank": {
+            "title": "Rank",
+            "type": "integer"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          },
+          "serpMentions": {
+            "title": "Serpmentions",
+            "type": "integer"
+          },
+          "shareOfVoice": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shareofvoice"
+          },
+          "signalCount": {
+            "title": "Signalcount",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "rank",
+          "detectionSource",
+          "serpMentions",
+          "coCitationMentions",
+          "corroborated",
+          "signalCount",
+          "isManualOverride"
+        ],
+        "title": "ReportCompetitorOut",
+        "type": "object"
+      },
+      "ReportCompetitorSetOut": {
+        "properties": {
+          "competitors": {
+            "items": {
+              "$ref": "#/components/schemas/ReportCompetitorOut"
+            },
+            "title": "Competitors",
+            "type": "array"
+          },
+          "detectionConfidence": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detectionconfidence"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "competitors"
+        ],
+        "title": "ReportCompetitorSetOut",
+        "type": "object"
+      },
+      "ReportDimensionOut": {
+        "description": "One \u00a76 dimension as the report needs it.\n\n`key` is a stable machine key; the human label lives in the frontend string\ntable, matching how `detail_code` is handled (api-contracts.md, Epic 6).\n\nAn EXCLUDED dimension carries `included: false`, a null `subscore`, and the\nreason. It is never emitted as `subscore: 0` \u2014 the whole point of\n`excluded_dimensions` is that \"nothing to measure\" and \"measured, scored\nzero\" are different claims about a client.",
+        "properties": {
+          "exclusionReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exclusionreason"
+          },
+          "included": {
+            "title": "Included",
+            "type": "boolean"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "subscore": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subscore"
+          },
+          "weight": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Weight",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "weight",
+          "included"
+        ],
+        "title": "ReportDimensionOut",
+        "type": "object"
+      },
+      "ReportOut": {
+        "description": "Everything the five narrative beats need, in one response.",
+        "properties": {
+          "actionItems": {
+            "items": {
+              "$ref": "#/components/schemas/ActionItemOut"
+            },
+            "title": "Actionitems",
+            "type": "array"
+          },
+          "agency": {
+            "$ref": "#/components/schemas/ReportAgencyOut"
+          },
+          "audit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReportAuditOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "competitorSet": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReportCompetitorSetOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dimensions": {
+            "items": {
+              "$ref": "#/components/schemas/ReportDimensionOut"
+            },
+            "title": "Dimensions",
+            "type": "array"
+          },
+          "generatedAt": {
+            "format": "date-time",
+            "title": "Generatedat",
+            "type": "string"
+          },
+          "proof": {
+            "$ref": "#/components/schemas/ReportProofOut"
+          },
+          "scanId": {
+            "title": "Scanid",
+            "type": "string"
+          },
+          "scanStatus": {
+            "title": "Scanstatus",
+            "type": "string"
+          },
+          "scannedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scannedat"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScoreDetailOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "subject": {
+            "$ref": "#/components/schemas/ReportSubjectOut"
+          }
+        },
+        "required": [
+          "scanId",
+          "scanStatus",
+          "generatedAt",
+          "agency",
+          "subject",
+          "score",
+          "dimensions",
+          "competitorSet",
+          "proof",
+          "audit"
+        ],
+        "title": "ReportOut",
+        "type": "object"
+      },
+      "ReportProofOut": {
+        "description": "The evidence beat's raw material \u2014 all of it aggregated counts.\n\nThis is the surface ip-safety.md #7 is most exposed on, because it is the\nfirst time collected facts are RENDERED rather than stored. There is no\nfield here that could hold an engine's prose, and there is nothing upstream\nto fill one with: `engine_results` has no text-bearing column at all.",
+        "properties": {
+          "answeredResults": {
+            "title": "Answeredresults",
+            "type": "integer"
+          },
+          "competitorCitedDomains": {
+            "items": {
+              "$ref": "#/components/schemas/CitedDomainOut"
+            },
+            "title": "Competitorciteddomains",
+            "type": "array"
+          },
+          "engineCoverage": {
+            "items": {
+              "$ref": "#/components/schemas/EngineCoverageOut"
+            },
+            "title": "Enginecoverage",
+            "type": "array"
+          },
+          "engineResults": {
+            "title": "Engineresults",
+            "type": "integer"
+          },
+          "mentionShares": {
+            "items": {
+              "$ref": "#/components/schemas/MentionShareOut"
+            },
+            "title": "Mentionshares",
+            "type": "array"
+          },
+          "promptsRun": {
+            "title": "Promptsrun",
+            "type": "integer"
+          },
+          "resultsMentioningSubject": {
+            "title": "Resultsmentioningsubject",
+            "type": "integer"
+          },
+          "subjectCitations": {
+            "title": "Subjectcitations",
+            "type": "integer"
+          },
+          "subjectCitedDomains": {
+            "items": {
+              "$ref": "#/components/schemas/CitedDomainOut"
+            },
+            "title": "Subjectciteddomains",
+            "type": "array"
+          },
+          "totalCitations": {
+            "title": "Totalcitations",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "promptsRun",
+          "engineResults",
+          "answeredResults",
+          "resultsMentioningSubject",
+          "engineCoverage",
+          "totalCitations",
+          "subjectCitations",
+          "subjectCitedDomains",
+          "competitorCitedDomains",
+          "mentionShares"
+        ],
+        "title": "ReportProofOut",
+        "type": "object"
+      },
+      "ReportSubjectOut": {
+        "description": "Who the report is about. Facts from Client (Epic 2).",
+        "properties": {
+          "brandName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Brandname"
+          },
+          "clientId": {
+            "title": "Clientid",
+            "type": "string"
+          },
+          "domain": {
+            "title": "Domain",
+            "type": "string"
+          },
+          "industry": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Industry"
+          },
+          "industryNiche": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Industryniche"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "clientId",
+          "name",
+          "domain"
+        ],
+        "title": "ReportSubjectOut",
+        "type": "object"
+      },
+      "RunScanRequest": {
+        "description": "Start a scan.\n\n`promptLimit` caps the generated set. It exists for cost control during\nverification \u2014 a full run is 20-30 prompts across every engine, and the\ngrounded engine can take 100s per prompt. Omit it for a real scan.",
+        "properties": {
+          "engines": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Engine"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Engines"
+          },
+          "promptLimit": {
+            "anyOf": [
+              {
+                "maximum": 30.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Promptlimit"
+          }
+        },
+        "title": "RunScanRequest",
+        "type": "object"
+      },
+      "ScanDetailOut": {
+        "properties": {
+          "agencyId": {
+            "title": "Agencyid",
+            "type": "string"
+          },
+          "clientId": {
+            "title": "Clientid",
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "engineResultCount": {
+            "title": "Engineresultcount",
+            "type": "integer"
+          },
+          "engineVersions": {
+            "additionalProperties": true,
+            "title": "Engineversions",
+            "type": "object"
+          },
+          "errorCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Errorcode"
+          },
+          "finishedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finishedat"
+          },
+          "formulaVersion": {
+            "title": "Formulaversion",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "promptCount": {
+            "title": "Promptcount",
+            "type": "integer"
+          },
+          "promptSet": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PromptSetOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/EngineResultOut"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "startedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Startedat"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ScanStatus"
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/ScanTrigger"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "clientId",
+          "agencyId",
+          "status",
+          "trigger",
+          "formulaVersion",
+          "promptCount",
+          "engineResultCount",
+          "createdAt",
+          "updatedAt"
+        ],
+        "title": "ScanDetailOut",
+        "type": "object"
+      },
+      "ScanOut": {
+        "properties": {
+          "agencyId": {
+            "title": "Agencyid",
+            "type": "string"
+          },
+          "clientId": {
+            "title": "Clientid",
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "engineResultCount": {
+            "title": "Engineresultcount",
+            "type": "integer"
+          },
+          "engineVersions": {
+            "additionalProperties": true,
+            "title": "Engineversions",
+            "type": "object"
+          },
+          "errorCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Errorcode"
+          },
+          "finishedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finishedat"
+          },
+          "formulaVersion": {
+            "title": "Formulaversion",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "promptCount": {
+            "title": "Promptcount",
+            "type": "integer"
+          },
+          "startedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Startedat"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ScanStatus"
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/ScanTrigger"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "clientId",
+          "agencyId",
+          "status",
+          "trigger",
+          "formulaVersion",
+          "promptCount",
+          "engineResultCount",
+          "createdAt",
+          "updatedAt"
+        ],
+        "title": "ScanOut",
+        "type": "object"
+      },
+      "ScanStatus": {
+        "enum": [
+          "queued",
+          "running",
+          "succeeded",
+          "partial",
+          "failed",
+          "cancelled"
+        ],
+        "title": "ScanStatus",
+        "type": "string"
+      },
+      "ScanSummaryOut": {
+        "properties": {
+          "clientDomain": {
+            "title": "Clientdomain",
+            "type": "string"
+          },
+          "clientId": {
+            "title": "Clientid",
+            "type": "string"
+          },
+          "clientName": {
+            "title": "Clientname",
+            "type": "string"
+          },
+          "compositeScore": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compositescore"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "finishedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finishedat"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ScanStatus"
+          }
+        },
+        "required": [
+          "id",
+          "clientId",
+          "clientName",
+          "clientDomain",
+          "status",
+          "createdAt"
+        ],
+        "title": "ScanSummaryOut",
+        "type": "object"
+      },
+      "ScanTrigger": {
+        "enum": [
+          "manual",
+          "scheduled",
+          "bulk"
+        ],
+        "title": "ScanTrigger",
+        "type": "string"
+      },
+      "ScoreDetailOut": {
+        "properties": {
+          "citationStrength": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Citationstrength"
+          },
+          "competitors": {
+            "items": {
+              "$ref": "#/components/schemas/CompetitorScoreOut"
+            },
+            "title": "Competitors",
+            "type": "array"
+          },
+          "composite": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Composite"
+          },
+          "computedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Computedat"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "degradationFlags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Degradationflags",
+            "type": "array"
+          },
+          "excludedDimensions": {
+            "additionalProperties": true,
+            "title": "Excludeddimensions",
+            "type": "object"
+          },
+          "formulaVersion": {
+            "title": "Formulaversion",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "inputsDigest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inputsdigest"
+          },
+          "mentionRate": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mentionrate"
+          },
+          "reasonCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoncode"
+          },
+          "scanId": {
+            "title": "Scanid",
+            "type": "string"
+          },
+          "sentiment": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sentiment"
+          },
+          "shareOfVoice": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shareofvoice"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ScoreStatus"
+          },
+          "technicalFoundation": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Technicalfoundation"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          },
+          "weights": {
+            "additionalProperties": true,
+            "title": "Weights",
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "scanId",
+          "status",
+          "formulaVersion",
+          "createdAt",
+          "updatedAt"
+        ],
+        "title": "ScoreDetailOut",
+        "type": "object"
+      },
+      "ScoreOut": {
+        "properties": {
+          "citationStrength": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Citationstrength"
+          },
+          "composite": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Composite"
+          },
+          "computedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Computedat"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "degradationFlags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Degradationflags",
+            "type": "array"
+          },
+          "excludedDimensions": {
+            "additionalProperties": true,
+            "title": "Excludeddimensions",
+            "type": "object"
+          },
+          "formulaVersion": {
+            "title": "Formulaversion",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "inputsDigest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inputsdigest"
+          },
+          "mentionRate": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mentionrate"
+          },
+          "reasonCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoncode"
+          },
+          "scanId": {
+            "title": "Scanid",
+            "type": "string"
+          },
+          "sentiment": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sentiment"
+          },
+          "shareOfVoice": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shareofvoice"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ScoreStatus"
+          },
+          "technicalFoundation": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Technicalfoundation"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          },
+          "weights": {
+            "additionalProperties": true,
+            "title": "Weights",
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "scanId",
+          "status",
+          "formulaVersion",
+          "createdAt",
+          "updatedAt"
+        ],
+        "title": "ScoreOut",
+        "type": "object"
+      },
+      "ScoreStatus": {
+        "enum": [
+          "scored",
+          "insufficient_data"
+        ],
+        "title": "ScoreStatus",
+        "type": "string"
+      },
+      "SeatUsageOut": {
+        "properties": {
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "used": {
+            "title": "Used",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "used",
+          "limit"
+        ],
+        "title": "SeatUsageOut",
+        "type": "object"
+      },
+      "Sentiment": {
+        "enum": [
+          "positive",
+          "neutral",
+          "negative"
+        ],
+        "title": "Sentiment",
+        "type": "string"
+      },
+      "SignUpRequest": {
+        "properties": {
+          "agencyName": {
+            "maxLength": 200,
+            "minLength": 2,
+            "title": "Agencyname",
+            "type": "string"
+          },
+          "email": {
+            "format": "email",
+            "title": "Email",
+            "type": "string"
+          },
+          "fullName": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Fullname",
+            "type": "string"
+          },
+          "password": {
+            "maxLength": 256,
+            "minLength": 12,
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agencyName",
+          "fullName",
+          "email",
+          "password"
+        ],
+        "title": "SignUpRequest",
+        "type": "object"
+      },
+      "TechnicalAuditOut": {
+        "properties": {
+          "auditedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auditedat"
+          },
+          "canonicalPresent": {
+            "title": "Canonicalpresent",
+            "type": "boolean"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/AuditCheckOut"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "cls": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cls"
+          },
+          "contentAgeDays": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contentagedays"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "errorCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Errorcode"
+          },
+          "excludedComponents": {
+            "additionalProperties": true,
+            "title": "Excludedcomponents",
+            "type": "object"
+          },
+          "h1Count": {
+            "title": "H1Count",
+            "type": "integer"
+          },
+          "hasFaqSchema": {
+            "title": "Hasfaqschema",
+            "type": "boolean"
+          },
+          "hasLocalbusinessSchema": {
+            "title": "Haslocalbusinessschema",
+            "type": "boolean"
+          },
+          "hasOrganizationSchema": {
+            "title": "Hasorganizationschema",
+            "type": "boolean"
+          },
+          "hasProductSchema": {
+            "title": "Hasproductschema",
+            "type": "boolean"
+          },
+          "hasSitemap": {
+            "title": "Hassitemap",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "inpMs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inpms"
+          },
+          "isIndexable": {
+            "title": "Isindexable",
+            "type": "boolean"
+          },
+          "lcpMs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lcpms"
+          },
+          "pagesCrawled": {
+            "title": "Pagescrawled",
+            "type": "integer"
+          },
+          "robotsAllowsCrawl": {
+            "title": "Robotsallowscrawl",
+            "type": "boolean"
+          },
+          "scanId": {
+            "title": "Scanid",
+            "type": "string"
+          },
+          "schemaTypes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Schematypes",
+            "type": "array"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AuditStatus"
+          },
+          "technicalFoundation": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Technicalfoundation"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          },
+          "urlAudited": {
+            "title": "Urlaudited",
+            "type": "string"
+          },
+          "wordCount": {
+            "title": "Wordcount",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "scanId",
+          "urlAudited",
+          "status",
+          "pagesCrawled",
+          "hasOrganizationSchema",
+          "hasLocalbusinessSchema",
+          "hasFaqSchema",
+          "hasProductSchema",
+          "isIndexable",
+          "robotsAllowsCrawl",
+          "hasSitemap",
+          "canonicalPresent",
+          "h1Count",
+          "wordCount",
+          "createdAt",
+          "updatedAt"
+        ],
+        "title": "TechnicalAuditOut",
+        "type": "object"
+      },
+      "UserOut": {
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "fullName": {
+            "title": "Fullname",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "lastLoginAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lastloginat"
+          },
+          "role": {
+            "$ref": "#/components/schemas/UserRole"
+          },
+          "status": {
+            "$ref": "#/components/schemas/UserStatus"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "fullName",
+          "role",
+          "status",
+          "createdAt"
+        ],
+        "title": "UserOut",
+        "type": "object"
+      },
+      "UserRole": {
+        "description": "Seat roles.\n\nOWNER is the billing contact and cannot be removed while it is the last\nowner \u2014 an agency with no owner has nobody who can manage seats.",
+        "enum": [
+          "owner",
+          "admin",
+          "member"
+        ],
+        "title": "UserRole",
+        "type": "string"
+      },
+      "UserStatus": {
+        "enum": [
+          "active",
+          "invited",
+          "suspended"
+        ],
+        "title": "UserStatus",
+        "type": "string"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "AI Visibility & Competitive Intelligence Platform API",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/auth/login": {
+      "post": {
+        "operationId": "login_api_v1_auth_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Login",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "operationId": "logout_api_v1_auth_logout_post",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Logout",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/logout-all": {
+      "post": {
+        "description": "Revoke every session for the caller, on every device.",
+        "operationId": "logout_everywhere_api_v1_auth_logout_all_post",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Logout Everywhere",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "operationId": "me_api_v1_auth_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Me",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/sign-up": {
+      "post": {
+        "description": "Create an agency and its owner, then sign them straight in.\n\nSigning in as part of signup is deliberate: requiring a fresh login\nimmediately after choosing a password is friction with no security value.",
+        "operationId": "sign_up_api_v1_auth_sign_up_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignUpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sign Up",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/clients": {
+      "get": {
+        "description": "Cursor-paginated client list, newest first.\n\nIDs are ULIDs, so `id < cursor ORDER BY id DESC` is a stable, index-backed\nwindow that does not skip or repeat rows when something is inserted\nmid-scroll \u2014 which for an active prospecting list is the common case.",
+        "operationId": "list_clients_api_v1_clients_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_ClientOut_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Clients",
+        "tags": [
+          "clients"
+        ]
+      },
+      "post": {
+        "description": "Submit a URL: creates the client, crawls it, and classifies its industry.\n\nRuns synchronously. \u00a77's acceptance criterion is a classified industry\nwithin 30 seconds of submitting a URL, and the measured path is a few\nseconds, so one round trip is both sufficient and simpler than polling.\n\nSet `classify: false` to create the record without spending an LLM call.",
+        "operationId": "create_client_api_v1_clients_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateClientRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientDetailOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Client",
+        "tags": [
+          "clients"
+        ]
+      }
+    },
+    "/api/v1/clients/{clientId}": {
+      "get": {
+        "operationId": "get_client_api_v1_clients__clientId__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clientId",
+            "required": true,
+            "schema": {
+              "title": "Clientid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Client",
+        "tags": [
+          "clients"
+        ]
+      }
+    },
+    "/api/v1/clients/{clientId}/competitors": {
+      "get": {
+        "description": "The client's most recent competitor set.",
+        "operationId": "get_competitors_api_v1_clients__clientId__competitors_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clientId",
+            "required": true,
+            "schema": {
+              "title": "Clientid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompetitorSetOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Competitors",
+        "tags": [
+          "competitors"
+        ]
+      },
+      "put": {
+        "description": "Replace the competitor set by hand.\n\nThis matters more than a normal CRUD override. `Client.industry` confidence\nis uncalibrated (build-log Epic 2.6/2.8, Finding 2 \u2014 open), so a wrong\nclassification can seed a poor competitor set, and an operator who knows the\nmarket is the only reliable corrective available today. Everything supplied\nhere is marked `isManualOverride` and survives later re-detection.\n\nAnything currently in the set and not sent back has been STRUCK, and is\nrecorded as such \u2014 Epic 3 deleted it, which recorded nothing, so the next\ndetection run reinstated it. See `services.competitors.apply_override`.\n\n`detectionConfidence` is cleared: it measures agreement between two\nautomated signals, and neither one produced this set. Leaving the previous\nvalue would attach a corroboration claim to rows that were never corroborated.",
+        "operationId": "replace_competitors_api_v1_clients__clientId__competitors_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clientId",
+            "required": true,
+            "schema": {
+              "title": "Clientid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplaceCompetitorsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompetitorSetOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Replace Competitors",
+        "tags": [
+          "competitors"
+        ]
+      }
+    },
+    "/api/v1/clients/{clientId}/competitors/detect": {
+      "post": {
+        "description": "Run SERP + AI co-citation discovery and rank the top competitors.\n\nRuns synchronously. A run makes several paid SerpApi searches and several\nmodel calls, so it is explicitly operator-triggered rather than implicit in\nintake \u2014 an accidental re-detection costs money.\n\nCompetitors an operator marked as overrides are preserved across runs.",
+        "operationId": "detect_competitors_api_v1_clients__clientId__competitors_detect_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clientId",
+            "required": true,
+            "schema": {
+              "title": "Clientid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompetitorSetOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Detect Competitors",
+        "tags": [
+          "competitors"
+        ]
+      }
+    },
+    "/api/v1/clients/{clientId}/reclassify": {
+      "post": {
+        "description": "Re-run crawl and classification for an existing client.\n\nNeeded because a site changes, and because an AMBIGUOUS result is often\nworth retrying after the operator has looked at the site themselves.",
+        "operationId": "reclassify_client_api_v1_clients__clientId__reclassify_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clientId",
+            "required": true,
+            "schema": {
+              "title": "Clientid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientDetailOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reclassify Client",
+        "tags": [
+          "clients"
+        ]
+      }
+    },
+    "/api/v1/clients/{clientId}/scans": {
+      "get": {
+        "description": "A client's scans, newest first.",
+        "operationId": "list_scans_api_v1_clients__clientId__scans_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clientId",
+            "required": true,
+            "schema": {
+              "title": "Clientid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_ScanOut_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Scans",
+        "tags": [
+          "scans"
+        ]
+      },
+      "post": {
+        "description": "Generate a prompt set and run it against every engine.\n\nRuns **synchronously** and costs real money \u2014 a full scan is 20-30 prompts\nacross every engine, plus a sentiment call per mention. The grounded engine\ncan take 100s per prompt, so a full run takes minutes. `promptLimit` caps\nthe set for verification runs.\n\nReuses the scan Epic 3's competitor detection created, if one is open, so a\ndetect-then-scan flow does not strand an empty scan.",
+        "operationId": "run_scan_api_v1_clients__clientId__scans_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clientId",
+            "required": true,
+            "schema": {
+              "title": "Clientid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunScanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanDetailOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Scan",
+        "tags": [
+          "scans"
+        ]
+      }
+    },
+    "/api/v1/dashboard": {
+      "get": {
+        "operationId": "dashboard_api_v1_dashboard_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 10,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Dashboard",
+        "tags": [
+          "dashboard"
+        ]
+      }
+    },
+    "/api/v1/health": {
+      "get": {
+        "description": "Liveness. Deliberately touches no dependency.\n\nA liveness probe that checks the database causes an orchestrator to kill\nand restart healthy API pods during a database blip, turning a partial\noutage into a total one. Readiness is what should fail then.",
+        "operationId": "health_api_v1_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/api/v1/ready": {
+      "get": {
+        "description": "Readiness. Verifies the datastores this service cannot serve without.",
+        "operationId": "ready_api_v1_ready_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadyOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Ready",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/api/v1/scans/{scanId}": {
+      "get": {
+        "description": "A scan with its prompt set and every engine result.",
+        "operationId": "get_scan_api_v1_scans__scanId__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scanId",
+            "required": true,
+            "schema": {
+              "title": "Scanid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanDetailOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Scan",
+        "tags": [
+          "scans"
+        ]
+      }
+    },
+    "/api/v1/scans/{scanId}/audit": {
+      "get": {
+        "description": "The scan's technical audit, with every check in display order.",
+        "operationId": "get_audit_api_v1_scans__scanId__audit_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scanId",
+            "required": true,
+            "schema": {
+              "title": "Scanid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TechnicalAuditOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Audit",
+        "tags": [
+          "audits"
+        ]
+      },
+      "post": {
+        "description": "Crawl the client's site and record structural signals plus per-check verdicts.\n\nMakes **no model or search calls** \u2014 this is a page load plus two side\nfetches (robots.txt, sitemap.xml). Cost is bandwidth and a few seconds.\n\nOnce an audit exists, re-scoring the scan includes Technical Foundation\ninstead of excluding it as `NOT_YET_MEASURED`.\n\nOne audit per scan, refreshed on re-run: a scan is a point-in-time claim\nabout a site, so a second audit of the same scan is a correction rather than\na new observation.",
+        "operationId": "run_audit_api_v1_scans__scanId__audit_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scanId",
+            "required": true,
+            "schema": {
+              "title": "Scanid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TechnicalAuditOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Audit",
+        "tags": [
+          "audits"
+        ]
+      }
+    },
+    "/api/v1/scans/{scanId}/fixes": {
+      "get": {
+        "description": "The scan's fix list as last generated, in rank order.\n\nReturns an empty list with `status: \"empty\"` rather than 404 when nothing\nhas been generated yet: \"no fixes yet\" is a state of a scan that exists,\nand the report renders its deterministic list in that case.",
+        "operationId": "get_fixes_api_v1_scans__scanId__fixes_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scanId",
+            "required": true,
+            "schema": {
+              "title": "Scanid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionItemListOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Fixes",
+        "tags": [
+          "actions"
+        ]
+      },
+      "post": {
+        "description": "Generate the scan's prioritised fix list.\n\nMakes **one model call**. The candidates \u2014 which dimension gaps are worth a\nline, which audit findings warrant a fix, and in what order \u2014 are decided\nbefore the call by the same rules Epic 7 already applies on the client. The\nmodel words them and judges priority and effort; it cannot add a\nrecommendation the measurement did not produce.\n\nOne row per candidate per scan, refreshed on re-run. A regenerated list is a\nbetter statement of the same measurement, not a second measurement \u2014 but\n`status` is the operator's, so it survives regeneration, and a candidate\nthat has been worked is kept even once it stops being measured.\n\nA provider failure writes nothing and returns `status: \"failed\"` with a\nreason code. The report still renders its deterministic fix list.",
+        "operationId": "generate_fixes_api_v1_scans__scanId__fixes_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scanId",
+            "required": true,
+            "schema": {
+              "title": "Scanid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionItemListOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Generate Fixes",
+        "tags": [
+          "actions"
+        ]
+      }
+    },
+    "/api/v1/scans/{scanId}/prompts": {
+      "get": {
+        "description": "The scan's generated prompt set.",
+        "operationId": "get_prompt_set_api_v1_scans__scanId__prompts_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scanId",
+            "required": true,
+            "schema": {
+              "title": "Scanid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptSetOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Prompt Set",
+        "tags": [
+          "scans"
+        ]
+      }
+    },
+    "/api/v1/scans/{scanId}/report": {
+      "get": {
+        "description": "Everything the narrative report needs, in one response.\n\n**Presents; does not compute.** Score, competitors and audit are read from\nthe rows Epics 3-6 wrote. The only new numbers are aggregates \u2014 citation\ncounts per domain, mention shares, per-engine coverage \u2014 and each is a\ncount over stored facts.\n\nDegraded data is reported, never smoothed over. `score` is null when the\nscan was never scored, and a score with `status: \"insufficient_data\"` is a\ndifferent thing again: an unrunnable scan is never rendered as a low score.\n`competitorSet` is null when detection never ran, and `audit` is null when\nthe site was never audited \u2014 in each case the report says so rather than\nquietly omitting a beat.\n\n**Errors:** `401`, `404` (unknown scan, or another agency's).",
+        "operationId": "get_report_api_v1_scans__scanId__report_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scanId",
+            "required": true,
+            "schema": {
+              "title": "Scanid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Report",
+        "tags": [
+          "reports"
+        ]
+      }
+    },
+    "/api/v1/scans/{scanId}/results": {
+      "get": {
+        "description": "Cursor-paginated engine results.\n\nSeparate from the scan detail because a full scan is 20-30 prompts times\nevery engine \u2014 60+ rows with nested mentions and citations, which is a lot\nto return in one body once a third engine is added.",
+        "operationId": "list_results_api_v1_scans__scanId__results_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scanId",
+            "required": true,
+            "schema": {
+              "title": "Scanid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_EngineResultOut_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Results",
+        "tags": [
+          "scans"
+        ]
+      }
+    },
+    "/api/v1/scans/{scanId}/score": {
+      "get": {
+        "description": "The most recent stored Score for a scan, with the competitor comparison.\n\nThe comparison is recomputed from persisted rows on read rather than stored\n\u2014 it is a pure function of data already in the database, and a second copy\ncould fall out of step with the first.",
+        "operationId": "get_scan_score_api_v1_scans__scanId__score_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scanId",
+            "required": true,
+            "schema": {
+              "title": "Scanid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScoreDetailOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Scan Score",
+        "tags": [
+          "scores"
+        ]
+      },
+      "post": {
+        "description": "Compute and store the AI Visibility Score for a scan.\n\n**Makes no provider calls and costs nothing** \u2014 scoring is pure arithmetic\nover rows Epic 4 already persisted. Sentiment is read from storage, never\nre-classified (scoring-spec.md rule 4), which is what makes re-scoring\nreproducible.\n\n**Re-scoring INSERTS a new row** rather than overwriting. A Score is a dated\nclaim under a named `formulaVersion`; overwriting would erase the history\nbefore/after reporting depends on.",
+        "operationId": "compute_scan_score_api_v1_scans__scanId__score_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scanId",
+            "required": true,
+            "schema": {
+              "title": "Scanid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScoreDetailOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Compute Scan Score",
+        "tags": [
+          "scores"
+        ]
+      }
+    },
+    "/api/v1/scans/{scanId}/scores": {
+      "get": {
+        "description": "Every Score computed for a scan, newest first.\n\nThe audit trail: which `formulaVersion` produced which composite, from which\n`inputsDigest`. Two rows sharing a digest but differing in composite mean the\nformula changed; differing digests mean the inputs did.",
+        "operationId": "list_scan_scores_api_v1_scans__scanId__scores_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scanId",
+            "required": true,
+            "schema": {
+              "title": "Scanid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ScoreOut"
+                  },
+                  "title": "Response List Scan Scores Api V1 Scans  Scanid  Scores Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Scan Scores",
+        "tags": [
+          "scores"
+        ]
+      }
+    }
+  }
+}

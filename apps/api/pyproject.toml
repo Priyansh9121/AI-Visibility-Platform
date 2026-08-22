@@ -1,0 +1,85 @@
+[project]
+name = "avp-api"
+version = "0.1.0"
+description = "AI Visibility & Competitive Intelligence Platform — FastAPI service"
+requires-python = ">=3.12,<3.14"
+license = { text = "UNLICENSED" }
+
+# Every dependency below is MIT / Apache-2.0 / BSD / PSF per ip-safety.md #6.
+# The audit that verifies this is `uv run python -m scripts.license_audit`
+# (see apps/api/scripts/license_audit.py); its output is recorded in
+# docs/build-log.md for each epic that adds packages.
+dependencies = [
+    "fastapi>=0.115,<0.117",        # MIT
+    "uvicorn[standard]>=0.32,<0.35", # BSD-3-Clause
+    "pydantic>=2.9,<3",             # MIT
+    "pydantic-settings>=2.6,<3",    # MIT
+    "email-validator>=2.2,<3",      # CC0-1.0 (public domain)
+    "sqlalchemy[asyncio]>=2.0.36,<2.1", # MIT
+    "alembic>=1.14,<2",             # MIT
+    "asyncpg>=0.30,<0.31",          # Apache-2.0
+    "argon2-cffi>=23.1,<26",        # MIT
+    "redis>=5.2,<7",                # MIT
+    "python-ulid>=3.0,<4",          # MIT
+    "structlog>=24.4,<26",          # MIT OR Apache-2.0
+    "anthropic>=0.40,<1",           # MIT — industry classification (Epic 2)
+    "playwright>=1.49,<2",          # Apache-2.0 — page crawl (Epic 2)
+    "tldextract>=5.1,<6",           # BSD-3-Clause — registrable-domain parsing
+    "httpx>=0.28,<0.29",            # BSD-3-Clause — SerpApi calls (Epic 3)
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3,<9",           # MIT
+    "pytest-asyncio>=0.24,<2",  # Apache-2.0
+    "httpx>=0.28,<0.29",        # BSD-3-Clause
+    "ruff>=0.8,<0.15",          # MIT
+    "mypy>=1.13,<2",            # MIT
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/avp_api"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+# asyncpg connections are bound to the event loop that created them. Without a
+# shared loop scope, a session-scoped engine and a per-test loop produce
+# "another operation is in progress" / "attached to a different loop" errors.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+filterwarnings = [
+    # Our own deprecation warnings are errors — they are ours to fix.
+    "error::DeprecationWarning:avp_api.*",
+    # FastAPI builds a TypeAdapter for each request body; combined with our
+    # `alias_generator=to_camel` it re-attaches Field(alias=...) to an
+    # Annotated alias and Pydantic warns. Internal to those two libraries, not
+    # a defect here — the camelCase contract is asserted in test_auth_flow.py.
+    "ignore:The .(alias|validation_alias|serialization_alias). attribute:UserWarning",
+]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "N"]
+
+[tool.ruff.lint.per-file-ignores]
+# N818 wants an `Error` suffix on exception classes. These are HTTP problem
+# types raised as `raise NotFound(...)` / `raise PermissionDenied(...)`, which
+# reads better and matches the established convention in Django
+# (`django.core.exceptions.PermissionDenied`) and DRF (`NotFound`). The base
+# class `ProblemError` does carry the suffix.
+"src/avp_api/errors.py" = ["N818"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+packages = ["avp_api"]
