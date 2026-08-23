@@ -386,7 +386,17 @@ class TestDeterminism:
         assert a.composite == b.composite
 
     def test_digest_changes_when_any_scored_input_changes(self) -> None:
-        """A changed score must be attributable to changed inputs or formula."""
+        """A changed score must be attributable to changed inputs or formula.
+
+        "Any scored input" is three families, not two. This test covered
+        `results` and `competitors` from Epic 5; Epic 6 made
+        `technical_foundation` the fifth dimension and nobody widened it, so
+        for four epics a re-audit could move the composite under an unchanged
+        digest AND an unchanged formula_version — precisely the ambiguity the
+        docstring promises cannot happen. Measured before the fix: identical
+        results and competitors scored 79.50 with technical_foundation=20 and
+        87.00 with 95, both under one digest. Found in Epic 3.10.
+        """
         results, competitors = self._fixture()
         base = compute_inputs_digest(results, competitors)
 
@@ -396,6 +406,40 @@ class TestDeterminism:
 
         fewer = compute_inputs_digest(results, competitors[:1])
         assert fewer != base
+
+        audited = compute_inputs_digest(results, competitors, Decimal("87.50"))
+        assert audited != base, (
+            "technical_foundation is a scored input and must move the digest"
+        )
+        rescored = compute_inputs_digest(results, competitors, Decimal("20.00"))
+        assert rescored != audited, (
+            "a re-audit that changes technical_foundation must move the digest"
+        )
+
+    def test_a_changed_audit_cannot_move_the_score_under_one_digest(self) -> None:
+        """The end-to-end form of the guard above, asserted on the score itself.
+
+        The digest test can be satisfied by a digest that changes for the wrong
+        reason. This one takes the path an operator actually travels — re-audit
+        a site, re-score the scan — and asserts the two numbers move together.
+        """
+        results, competitors = self._fixture()
+        low = compute_score(
+            results, competitors,
+            competitor_set_status=DetectionStatus.OK,
+            technical_foundation=Decimal("20.00"),
+        )
+        high = compute_score(
+            results, competitors,
+            competitor_set_status=DetectionStatus.OK,
+            technical_foundation=Decimal("95.00"),
+        )
+        assert low.composite != high.composite, "the fixture must actually be sensitive"
+        assert low.formula_version == high.formula_version
+        assert low.inputs_digest != high.inputs_digest, (
+            "the composite moved while the digest and formula_version did not — "
+            "the change is unattributable, which scoring-spec.md forbids"
+        )
 
     def test_every_stored_value_is_a_decimal(self) -> None:
         """Rule 3 — binary floats are platform-fragile at rounding boundaries."""

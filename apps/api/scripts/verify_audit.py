@@ -30,6 +30,10 @@ from avp_api.services.technical_audit import audit_site, score_audit  # noqa: E4
 
 SITES = ["helpscout.com", "anthropic.com", "basecamp.com"]
 
+# Epic 7's unscoreable fixture. Its domain does not resolve, so it must
+# never be chosen as the audit target.
+DEGRADED_DOMAIN = "epic7-degraded.example"
+
 
 async def main() -> int:
     print("=" * 84)
@@ -55,32 +59,67 @@ async def main() -> int:
 
     url = os.environ.get("DATABASE_URL")
     if not url:
-        print("  DATABASE_URL not set — skipping the integration proof")
-        return 0
+        # `return 1`, not 0. A script that verifies nothing must not exit green:
+        # that is how verify_report.py's failure hid for four epics.
+        print("  DATABASE_URL not set — the integration proof did NOT run")
+        return 1
 
     engine = create_async_engine(url)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
+        # Newest scan whose client is NOT the degraded fixture, and not soft
+        # deleted — the same selection verify_report.py and verify_fixes.py use.
+        #
+        # This used to be a bare `order_by(Scan.id.desc())`. Scan ids are
+        # time-ordered ULIDs, so when Epic 7's verify_report.py PART 3 created
+        # the degraded scan for `epic7-degraded.example`, that scan became the
+        # newest and this script silently began auditing it. The domain does
+        # not resolve, so from Epic 7 until Epic 3.10 this script crawled
+        # nothing, produced a failed audit, and committed it over a fixture
+        # scan — while still reporting PASS. Nobody noticed because nobody ran
+        # it. Same failure shape as verify_report.py's stale sweep in Epic 3.8.
         scan = (
-            await session.execute(select(Scan).order_by(Scan.id.desc()).limit(1))
-        ).scalar_one_or_none()
+            await session.execute(
+                select(Scan)
+                .join(Client, Client.id == Scan.client_id)
+                .where(Client.domain != DEGRADED_DOMAIN)
+                .where(Client.deleted_at.is_(None))
+                .order_by(Scan.created_at.desc())
+            )
+        ).scalars().first()
         if scan is None:
-            print("  no scan in the database — run scripts/verify_scoring.py first")
+            print("  no auditable scan in the database — run scripts/seed_dev.py first")
             await engine.dispose()
-            return 0
+            return 1
         client = (
             await session.execute(select(Client).where(Client.id == scan.client_id))
         ).scalar_one()
 
+        # The previous version deleted the scan's audit and its checks and
+        # COMMITTED that eleven lines before it attempted the replacement
+        # crawl, with no restore anywhere in the file. A network failure, a
+        # missing Chromium or a Ctrl-C in between left the scan with no audit
+        # at all, permanently.
+        #
+        # The delete was also unnecessary: `audit_runner.run_audit` is
+        # documented as "one audit per scan, refreshed on re-run" and already
+        # deletes and rebuilds the checks itself. Removing it costs nothing and
+        # removes the only irreversible step in the script.
         existing = await audit_runner.latest_audit(session, scan.id)
-        if existing is not None:
-            for check in list(existing.checks):
-                await session.delete(check)
-            await session.delete(existing)
-            await session.commit()
+        had_audit = existing is not None
 
+        # BEFORE is now an honest read of the current state rather than a
+        # manufactured one. When the scan already carries an audit this is a
+        # before/after over a RE-audit, not over first-audit; the printout says
+        # which, so the reader is not misled about what was demonstrated.
         _, before, _ = await scoring_runner.score_scan(session, scan, persist=False)
         print(f"\n  scan {scan.id}  ({client.domain})")
+        shape = (
+            "ALREADY had an audit — measuring a RE-audit"
+            if had_audit
+            else "had no audit — measuring first-audit"
+        )
+        print(f"  this scan {shape}")
         print("\n  BEFORE audit:")
         print(f"    composite            : {before.composite}")
         print(f"    technical_foundation : "

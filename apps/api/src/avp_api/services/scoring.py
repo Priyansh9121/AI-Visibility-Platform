@@ -225,7 +225,11 @@ def _guard(dimension: Dimension, raw: Decimal) -> Decimal:
     return clamped
 
 
-def compute_inputs_digest(results: list[ResultFacts], competitors: list[CompetitorFacts]) -> str:
+def compute_inputs_digest(
+    results: list[ResultFacts],
+    competitors: list[CompetitorFacts],
+    technical_foundation: Decimal | None = None,
+) -> str:
     """Fingerprint the exact inputs a score was computed from.
 
     Two scores with the same digest were computed from identical data, so a
@@ -235,6 +239,18 @@ def compute_inputs_digest(results: list[ResultFacts], competitors: list[Competit
     Everything is sorted before serialising; a set or dict iteration order
     leaking in here would make the digest unstable across runs and destroy its
     only purpose.
+
+    `technical_foundation` is here because Epic 6 made it a scored input and
+    this function was not widened to match. Until Epic 3.10 the digest covered
+    `results` and `competitors` only, so re-auditing a site moved the composite
+    while the digest and formula_version both stayed identical — the exact
+    ambiguity the paragraph above promises is impossible. Demonstrated at the
+    time: the same results and competitors with technical_foundation 20 vs 95
+    scored 79.50 vs 87.00 under one unchanged digest.
+
+    It is serialised as a string rather than a float for the reason
+    scoring-spec.md rule 3 gives everywhere else: `str(Decimal)` is exact, and
+    a binary float would make the fingerprint itself platform-fragile.
     """
     payload = {
         "formula_version": FORMULA_VERSION,
@@ -254,6 +270,9 @@ def compute_inputs_digest(results: list[ResultFacts], competitors: list[Competit
             {"id": c.competitor_id, "name": c.name, "domain": c.domain}
             for c in sorted(competitors, key=lambda c: c.competitor_id)
         ],
+        "technical_foundation": (
+            str(technical_foundation) if technical_foundation is not None else None
+        ),
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -423,7 +442,7 @@ def compute_score(
     TechnicalAudit is Epic 6. Passing None excludes the dimension and
     redistributes its weight — see the exclusion logic below.
     """
-    digest = compute_inputs_digest(results, competitors)
+    digest = compute_inputs_digest(results, competitors, technical_foundation)
     weights_recorded = {
         d.value: str(w) for d, w in sorted(WEIGHTS.items(), key=lambda kv: kv[0].value)
     }
