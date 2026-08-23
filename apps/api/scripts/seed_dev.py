@@ -115,6 +115,14 @@ SUBJECT_DOMAIN = "seed-fixture.example"
 # an operator to remove — the same shape as the rival that script strikes on
 # the real Help Scout set.
 STRIKE_ME = "Kestrel Trade"
+# The rival the override script should ADD. Synthetic, for the same reason
+# everything else here is.
+ADD_NAME = "Halloway Bros"
+ADD_DOMAIN = "halloway.example"
+
+# RFC 2606 reserved TLDs. Nothing under these can resolve, which is what
+# makes a seeded row unmistakable.
+SYNTHETIC_TLDS = (".example", ".invalid", ".test", ".localhost")
 
 # (name, domain, source, serp, cocit, corroborated, score)
 COMPETITORS = [
@@ -489,6 +497,41 @@ async def _build(session, scan: Scan) -> None:  # noqa: ANN001
     await session.flush()
 
 
+async def _seeded_domains(session, scan: Scan, client: Client) -> list[str]:  # noqa: ANN001
+    """Every domain the seed put in the database, for the invariant check."""
+    found = [client.domain]
+    found += [
+        c.domain
+        for c in (
+            await session.execute(
+                select(Competitor)
+                .join(CompetitorSet, CompetitorSet.id == Competitor.competitor_set_id)
+                .where(CompetitorSet.scan_id == scan.id)
+            )
+        ).scalars().all()
+        if c.domain
+    ]
+    found += (
+        await session.execute(
+            select(Citation.source_domain)
+            .join(EngineResult, EngineResult.id == Citation.engine_result_id)
+            .where(EngineResult.scan_id == scan.id)
+        )
+    ).scalars().all()
+    found += [
+        d
+        for d in (
+            await session.execute(
+                select(BrandMention.entity_domain)
+                .join(EngineResult, EngineResult.id == BrandMention.engine_result_id)
+                .where(EngineResult.scan_id == scan.id)
+            )
+        ).scalars().all()
+        if d
+    ]
+    return found
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser(description="Seed a database for the free verify scripts.")
     parser.add_argument(
@@ -576,6 +619,15 @@ async def main() -> int:
              not any(c.is_manual_override for c in refreshed.competitors)),
             ("verify_override: scoring yields a non-empty comparison",
              len(comparisons) > 0),
+            # The .example invariant was documented in this docstring and
+            # asserted nowhere, which is how the override script's default
+            # ADD_NAME ("Intercom") got into a synthetic set without anyone
+            # noticing. Asserted now, over what is actually in the database.
+            ("ip-safety: every seeded domain is a reserved TLD",
+             all(
+                 d.endswith(SYNTHETIC_TLDS)
+                 for d in await _seeded_domains(session, scan, client)
+             )),
         ]
         for label, ok in checks:
             print(f"  {'OK  ' if ok else 'FAIL'} {label}")
@@ -587,7 +639,14 @@ async def main() -> int:
         print("  FAIL — the seed did not satisfy every precondition.")
         return 1
     print("  PASS — seeded. Both free verification scripts can now run:")
+    # All three, not just the strike target. Printing only the strike var left
+    # the other two on their defaults — "Intercom"/intercom.com — so following
+    # this script's own instruction injected a real company into a set that is
+    # otherwise entirely .example. Caught by an audit of Epic 3.8, after the
+    # epic had already argued at length against exactly that.
     print(f"    AVP_OVERRIDE_STRIKE={STRIKE_ME!r} \\")
+    print(f"    AVP_OVERRIDE_ADD={ADD_NAME!r} \\")
+    print(f"    AVP_OVERRIDE_ADD_DOMAIN={ADD_DOMAIN!r} \\")
     print("        uv run python scripts/verify_competitor_override.py")
     print("    uv run python scripts/verify_report.py")
     return 0

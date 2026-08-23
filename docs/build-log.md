@@ -3572,6 +3572,38 @@ The pattern worth naming: **every verification in this epic compared counts, and
 the defect was in a column.** Counts are what is easy to compare, which is
 exactly why they are where blind spots live.
 
+### What the adversarial audit added, after the epic was already "done"
+
+The two defects above were both found by a 28-agent adversarial audit of this
+epic's own changes, run after the live proofs had passed and the build-log entry
+had been drafted. It is worth recording what that bought, because the honest
+answer is "the two most serious findings in the epic".
+
+It also found three smaller things that were fixed the same way:
+
+- **The seed's own instructions injected a real company.** `seed_dev.py` printed
+  `AVP_OVERRIDE_STRIKE=…` and nothing else, so following its instruction left
+  `AVP_OVERRIDE_ADD` on its default — `Intercom` / `intercom.com` — writing a
+  real brand into a set that is otherwise entirely `.example`. This epic argued
+  at length against exactly that and then did it by a route it had not checked.
+  It now prints all three variables with synthetic values, and
+  `verify_competitor_override.py`'s fabricated re-detection candidates follow
+  the kind of data they are running against rather than being hardcoded
+  (`Gorgias`/`gorgias.com` against real data, `Redmoor Supply`/`redmoor.example`
+  against seeded).
+- **`verify_report.py` called seeded data "real".** The same lie the override
+  script's PASS line told, in the other script; nobody had looked. Both now
+  print a `data :` line naming the source, and the PASS line follows it.
+- **The `.example` invariant was documented and asserted nowhere.** It is now
+  the eighth precondition the seed checks, evaluated over the domains actually
+  in the database rather than over the constants — which is the form that would
+  have caught the `Intercom` case.
+
+Fixing the candidate names broke an assertion that still looked for the literal
+`"Gorgias"`; caught immediately by the script failing, and both now read one
+variable. Two literals that must agree is the same defect class as everything
+else in this epic.
+
 ### Idempotency, proven by running it
 
 Keys: Agency by `slug` (unique), Client by `(agency_id, domain)` (unique), Scan
