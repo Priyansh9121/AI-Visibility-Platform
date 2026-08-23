@@ -56,6 +56,7 @@ async def main() -> int:
     engine = create_async_engine(os.environ["DATABASE_URL"])
     Session = async_sessionmaker(engine, expire_on_commit=False)
     failures: list[str] = []
+    ran_against_synthetic = False
 
     async with Session() as session:
         # ------------------------------------------------------------------
@@ -76,7 +77,18 @@ async def main() -> int:
             return 1
 
         report = await report_service.build_report(session, scan)
+        # Same honesty rule verify_competitor_override.py carries: a reserved
+        # TLD (RFC 2606) cannot be a measured business, so a run against seeded
+        # data must not describe itself as running against real data.
+        ran_against_synthetic = report.subject.domain.endswith(
+            (".example", ".invalid", ".test", ".localhost")
+        )
+        synthetic = report.subject.domain.endswith(
+            (".example", ".invalid", ".test", ".localhost")
+        )
         print(f"\n  scan     : {report.scan_id}")
+        print("  data     : " + ("SEEDED, synthetic (scripts/seed_dev.py)"
+                                 if synthetic else "real, produced by the live pipeline"))
         print(f"  subject  : {report.subject.name} ({report.subject.domain})")
         print(f"  agency   : {report.agency.name} [{report.agency.slug}]")
         print(f"  score    : {report.score.status if report.score else 'NEVER SCORED'}"
@@ -340,7 +352,8 @@ async def main() -> int:
         for failure in failures:
             print(f"  FAIL  {failure}")
         return 1
-    print("  PASS — a full report renders from real persisted data, the breakdown")
+    source = "SEEDED" if ran_against_synthetic else "real"
+    print(f"  PASS — a full report renders from {source} persisted data, the breakdown")
     print("         re-sums to the stored composite, the payload carries facts only,")
     print("         and a genuinely unscoreable scan reports as null rather than zero.")
     return 0

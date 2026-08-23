@@ -197,6 +197,17 @@ async def main() -> int:  # noqa: C901
             print("\n  This set already carries overrides. Aborting to avoid confusing state.")
             return 1
 
+        # One variable, used by both the fabricated candidate below and the
+        # assertion that looks for it. They were two literals and drifted the
+        # moment the candidate learned to be synthetic.
+        fresh_name = "Redmoor Supply" if ran_against_synthetic else "Gorgias"
+        fresh_domain = "redmoor.example" if ran_against_synthetic else "gorgias.com"
+
+        struck_domain = next(
+            (str(c["domain"]) for c in original if c["name"] == REMOVE and c["domain"]),
+            None,
+        )
+
         rule("PART 2 — an operator corrects it")
         print(f"  Removing {REMOVE} (serp-only, uncorroborated) and adding {ADD_NAME}.\n")
 
@@ -239,14 +250,20 @@ async def main() -> int:  # noqa: C901
             candidates=[
                 Candidate(
                     name=REMOVE,
-                    domain="thecxlead.com",
+                    # Derived, not hardcoded: the name is configurable, so a
+                    # fixed domain here paired a synthetic rival with a real
+                    # company's domain on every seeded run.
+                    domain=struck_domain,
                     serp_positions=[1, 2, 3],
                     serp_queries=["q1", "q2", "q3"],
                     score=0.889,
                 ),
                 Candidate(
-                    name="Gorgias",
-                    domain="gorgias.com",
+                    # A real company against real data; a synthetic one against
+                    # synthetic data. Hardcoding "Gorgias" put a real brand into
+                    # an otherwise entirely .example set on every seeded run.
+                    name=fresh_name,
+                    domain=fresh_domain,
                     serp_positions=[4],
                     serp_queries=["q1"],
                     co_citation_positions=[2],
@@ -260,7 +277,8 @@ async def main() -> int:  # noqa: C901
             candidates_considered=30,
             used_industry_seed=True,
         )
-        print(f"  Re-detection re-offers {REMOVE} (struck by the operator) and Gorgias (new).\n")
+        print(f"  Re-detection re-offers {REMOVE} (struck by the operator)"
+              f" and {fresh_name} (new).\n")
 
         await persist_detection(session, scan, rerun)
         await session.commit()
@@ -280,13 +298,13 @@ async def main() -> int:  # noqa: C901
             failures.append(
                 f"re-detection reinstated {REMOVE}, which the operator had struck"
             )
-        if "Gorgias" not in after:
+        if fresh_name not in after:
             failures.append("re-detection failed to add a genuinely new candidate")
         else:
             manual_ranks = [
                 c.rank for c in competitor_set.active_competitors if c.is_manual_override
             ]
-            if manual_ranks and after["Gorgias"].rank <= max(manual_ranks):
+            if manual_ranks and after[fresh_name].rank <= max(manual_ranks):
                 failures.append("a newly detected row outranked the operator's picks")
         if not failures:
             print("\n  -> every operator row survived with its flag intact, the struck rival")
