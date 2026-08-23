@@ -3725,3 +3725,199 @@ rebuilt after an adversarial audit showed the first version could not fail, and
 is now depth-agnostic and non-vacuous with four passing negative controls; and
 no third-party content can reach the database, the API or the page by any path
 this epic added.
+
+---
+
+## 2026-08-23 — Epic 3.9 · Finding 4, and the 500 it was hiding
+
+Finding 4 said an override destroys citation attribution. It does, it did it in
+two places rather than one, and while fixing it a second defect turned up that
+was arguably worse: **re-running detection has returned a 500 since Epic 3**
+whenever it re-found a rival it already had.
+
+### The question the register asked, answered: mechanical, not semantic
+
+The register recorded three candidate fixes and flagged option 2 — reuse the row
+when identity is unchanged — as *probably right but possibly a semantics change*,
+because it "changes what replace-the-set-wholesale means". This brief's first job
+was to settle that. It does not change it, for four reasons, each checkable:
+
+**The identity key already existed in the function.** `apply_override` already
+computed `kept_keys = {slugify(name) for name, _ in items}` to work out which
+rows had been struck. Option 2 uses that same key to decide which rows to keep.
+No new notion of "the same competitor" enters the codebase — `_identity()` is a
+one-line wrapper over the call that was already there.
+
+**Every mutable field is overwritten identically either way.** On reuse the row
+gets name, domain, rank, `detection_source=MANUAL`, zeroed signals,
+`is_manual_override=True` — the exact set the insert path wrote. `_apply_manual`
+is shared between both paths, the same discipline `scoring_runner._apply` and
+`audit_runner._apply` use. **The only difference is whether the row keeps its id.**
+
+**Nothing observable changes.** `CompetitorOut` exposes id, name, domain, rank,
+detection_source, the three signal counts, corroborated, score and
+is_manual_override — no `created_at`. The resulting set is identical in every
+field an operator or an API consumer can see. The only difference is that an
+opaque surrogate key stays stable, and nothing anywhere relies on competitor ids
+*changing*.
+
+**The precedent is in the sibling function.** `persist_detection` already
+preserved manual rows with their ids intact across a re-detection
+(`competitor_set.competitors = manual`). "Reuse the row rather than recreate it"
+was already the established pattern for this exact entity.
+
+Where the register's worry actually pointed: the docstring's "wholesale" language
+is about *reconciliation* — "reconciling that against auto-detected rows one at a
+time invites a half-applied state". That is a claim about the resulting **state**:
+no partial merge, every submitted row ends up MANUAL with signals zeroed. Option 2
+preserves that exactly. It changes the mechanism, not the state. The concern was
+about merging; this is about key stability. **Implemented without asking, and this
+paragraph is the justification for not asking.**
+
+### The finding was bigger than recorded: both write paths had it
+
+Finding 4 named `apply_override`. `persist_detection` does the same thing at
+`competitors.py:663`:
+
+```python
+for competitor in list(competitor_set.competitors):
+    if not competitor.is_manual_override:
+        await session.delete(competitor)
+```
+
+Every auto-detected competitor, hard-deleted on every run. In `avp_dev` all five
+competitors are non-manual and Front and Zendesk are the two carrying attributed
+citations — so re-running detection nulled attribution exactly as an override
+did. Both paths are fixed; the register entry is updated to say so.
+
+### Why no test caught it, stated precisely
+
+Not one of the twenty-three tests in `test_competitor_endpoints.py` builds a
+`Citation` or a `BrandMention`. Grepping for either name returns only
+`SerpHit`/`CoCitationHit` — detection *stub inputs*, never persisted rows. None
+of the tests runs a scan, so there are no `engine_results`, so there is nothing
+pointing at the competitor set to lose. **The set was always exercised in
+isolation.** That is the whole reason a defect this severe lived in a file with
+twenty-three passing tests from Epic 3.6 to Epic 3.8.
+
+### The second defect: re-detection has returned 500 since Epic 3
+
+Writing the re-detection test produced an `IntegrityError`, not an assertion
+failure. A bare two-call probe — detect, then detect again with the same stub —
+reproduced it with nothing else involved:
+
+```
+UniqueViolationError: duplicate key value violates unique constraint
+  "uq_competitors_set_name"
+DETAIL:  Key (competitor_set_id, name)=(cset_…, Keep) already exists.
+```
+
+Deleting `Keep` and inserting `Keep` in one flush is a same-table
+delete-then-insert on a unique key, and SQLAlchemy's unit of work orders INSERTs
+before DELETEs. So **re-running detection and finding the same rivals — the
+ordinary case — 500s.**
+
+No test caught it because every existing re-detection test uses a **disjoint**
+result set: `test_manual_entries_survive_redetection` goes a.com → b.com/c.com,
+`test_tombstones_do_not_consume_ranks` goes keep.com → fresh.com. No name was
+ever deleted and re-inserted in the same flush.
+
+This is the strongest argument for option 2 over option 1. Re-linking on write
+would have fixed the attribution and left the 500 in place; reuse removes the
+delete/insert pair, so the collision cannot arise. The register's instinct that
+option 2 was the right one was correct, for a reason it had not identified.
+
+### What shipped
+
+| | Before | After |
+|---|---|---|
+| `apply_override` | delete every row, insert all | reuse by `_identity`, insert only genuinely new rows — **delete-free** |
+| struck rival | deleted, new tombstone inserted | tombstone **in place**, id and attribution preserved |
+| struck rival's domain | nulled on the tombstone | kept — `persist_detection` blocks by name *or* domain, so the strike is harder to defeat |
+| `persist_detection` | delete every non-manual row, insert candidates | reuse a re-found rival, delete only rivals this run did not find |
+| re-detecting the same rival | **500** | 201 |
+
+`persist_detection` still deletes an auto-detected row the current run did not
+re-find, nulling its attribution — correct, since the rival has left the set, and
+now the only case where attribution is lost at all.
+
+### Negative controls — both fixes independently guarded
+
+| Reverted | Failed |
+|---|---|
+| `apply_override` → delete-and-recreate | `…keeps_attribution_for_rivals_it_keeps`, `…keeps_the_row_id_for_an_unchanged_rival` |
+| `persist_detection` → delete-all-non-manual | `…redetection_keeps_attribution…`, `…redetecting_the_same_rival_does_not_500` |
+
+Each revert fails exactly the tests for its own path and leaves the other four
+passing, so neither fix is carrying the other. The source file was diffed against
+its pre-injection backup after each control and restored identical.
+
+### Live verification
+
+A real override, through the real `apply_override`, on the real Help Scout scan
+in `avp_dev` — the only data in the repo with genuine attributed citations:
+
+```
+BEFORE  competitors=5  attributed links=5
+        ['cite:front.com', 'cite:zendesk.com', 'men:Freshdesk', 'men:Front', 'men:Zendesk']
+AFTER   competitors=5  attributed links=5
+  -> attribution SURVIVED unchanged (same ids)
+RESTORE identical  links=5
+```
+
+**No post-hoc repair, which is the point** — Epic 3.8 had to re-derive these
+links by hand after every run. `avp_dev` was snapshotted across all eleven
+mutable competitor fields plus `detection_confidence` and `status`, restored, and
+the restore verified identical. Final state: 2/45 citations and 14/14 non-subject
+mentions linked, five competitors `src=both`/`serp`, `manual=false`,
+`confidence=0.800` — byte-identical to where Epic 3.8 left it.
+
+Both verification scripts still pass against `avp_dev`, and
+`verify_competitor_override.py` now reports `links : 16 restored (was 16)` —
+its Epic 3.8 restore machinery is still correct but no longer load-bearing.
+
+**`seed_dev.py` checked rather than assumed**: seeded a fresh database from
+nothing, seeded it again for idempotency, and ran the override script against it.
+All three exit 0.
+
+### Dependencies
+
+**None added.**
+
+### IP-safety self-check (constraint 9)
+
+No UI-facing behaviour changed — `CompetitorEditor.tsx` is untouched and needed
+no change, as the brief anticipated. Confirmed rather than skipped: the API
+surface is byte-identical (`CompetitorOut`'s field list is unchanged, and the
+OpenAPI schema regenerates identically), so nothing rendered changes shape.
+
+The fix strictly **preserves** facts that were previously destroyed — citation
+and mention attribution are `competitor_id` foreign keys, i.e. "which named
+entity this cited domain belongs to", which ip-safety.md #7 explicitly permits
+as an entity name and a cited domain. No new field, column or value is
+introduced, nothing is stored that was not stored before, and the struck-rival
+tombstone carries a domain where it previously carried null — a fact, not prose.
+
+**IP-safety check passed:** no UI changed and none needed to; no new column,
+field or stored value was introduced; the only data-shape change is that a
+tombstone now retains the rival's domain, which is a registrable domain and an
+explicitly permitted fact; and the epic's net effect is to stop destroying
+attribution the system had legitimately recorded.
+
+### Tests
+
+**754 total, up from 749.**
+
+| suite | before | after | delta |
+|---|---|---|---|
+| api | 534 | 539 | +5 |
+| workers | 13 | 13 | — |
+| shared-types | 53 | 53 | — |
+| design-system | 72 | 72 | — |
+| web | 77 | 77 | — |
+
+All five are in `TestAttributionSurvivesAnOverride`: attribution survives an
+override, the row id is reused, attribution survives a re-detection, re-detecting
+the same rival does not 500, and an overridden set can be overridden again. The
+last two cover the collision defect; the class docstring records why the existing
+twenty-three tests could not have caught any of it.

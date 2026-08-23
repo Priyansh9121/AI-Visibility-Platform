@@ -529,6 +529,52 @@ async def get_or_create_scan(
     return scan
 
 
+def _identity(name: str) -> str:
+    """The key that decides whether two submissions mean the same rival.
+
+    `slugify(name)`, which is not a new concept: `apply_override` already used
+    exactly this to work out which rows had been STRUCK, and `persist_detection`
+    already used it to decide which candidates a manual override blocks. Epic
+    3.9 reuses it to decide which row to KEEP, so no new notion of competitor
+    identity enters the codebase.
+    """
+    return slugify(name)
+
+
+def _apply_manual(row: Competitor, name: str, domain: str | None, rank: int) -> None:
+    """Write an operator-supplied competitor onto a row.
+
+    Shared between the reuse and the insert path so the two cannot drift — the
+    same discipline `scoring_runner._apply` and `audit_runner._apply` use. Every
+    field an operator's submission determines is written here, which is what
+    makes reusing a row indistinguishable from recreating it except for the id.
+    """
+    row.name = name.strip()[:200]
+    row.domain = (domain or "").strip().lower() or None
+    row.rank = rank
+    row.detection_source = DetectionSource.MANUAL
+    row.signal_count = 0
+    row.serp_mentions = 0
+    row.co_citation_mentions = 0
+    row.corroborated = False
+    row.score = None
+    row.is_manual_override = True
+    row.is_suppressed = False
+
+
+def _apply_detected(row: Competitor, candidate: Candidate, name: str, rank: int) -> None:
+    """Write a detection candidate onto a row. Same discipline as above."""
+    row.name = name[:200]
+    row.domain = candidate.domain
+    row.rank = rank
+    row.detection_source = candidate.source
+    row.signal_count = candidate.serp_mentions + candidate.co_citation_mentions
+    row.serp_mentions = candidate.serp_mentions
+    row.co_citation_mentions = candidate.co_citation_mentions
+    row.corroborated = candidate.corroborated
+    row.score = Decimal(str(candidate.score))
+
+
 async def apply_override(
     session: AsyncSession,
     competitor_set: CompetitorSet,
@@ -560,58 +606,66 @@ async def apply_override(
     automated signals and neither produced this set, so keeping the value would
     attach a corroboration claim to rows nothing corroborated.
     """
-    kept_keys = {slugify(name) for name, _ in items}
-    struck = sorted(
-        {c.name for c in competitor_set.competitors if slugify(c.name) not in kept_keys}
-    )
+    # Rows are REUSED, not recreated. Citation.competitor_id and
+    # BrandMention.competitor_id are ON DELETE SET NULL, so deleting a row and
+    # inserting an identical one silently nulled every attribution pointing at
+    # it — Finding 4, live in avp_dev for two epics. Keeping the id keeps the
+    # foreign keys, and since `_apply_manual` overwrites every field an
+    # operator's submission determines, the resulting row is indistinguishable
+    # from a freshly-inserted one in everything except that id.
+    #
+    # This does not weaken "replace wholesale". That phrase is about the
+    # resulting STATE — no partial merge, every submitted row ends up MANUAL
+    # with its signals zeroed — and that is unchanged. Only the mechanism used
+    # to reach it changed.
+    #
+    # It also removes a same-flush delete-then-insert of the same
+    # (competitor_set_id, name), which SQLAlchemy orders INSERT-first and which
+    # therefore raised UniqueViolationError. See persist_detection.
+    by_identity: dict[str, Competitor] = {}
+    for row in competitor_set.competitors:
+        by_identity.setdefault(_identity(row.name), row)
 
-    for existing in list(competitor_set.competitors):
-        await session.delete(existing)
-    competitor_set.competitors = []
-    await session.flush()
-
+    claimed: set[str] = set()
     for rank, (name, domain) in enumerate(items, start=1):
-        # Appended through the relationship rather than session.add(): the
-        # collection was reassigned above and cascades delete-orphan, so a row
-        # attached only by foreign key is deleted as an orphan on flush.
-        competitor_set.competitors.append(
-            Competitor(
-                id=ids.new_id(ids.COMPETITOR),
-                competitor_set_id=competitor_set.id,
-                name=name.strip()[:200],
-                domain=(domain or "").strip().lower() or None,
-                rank=rank,
-                detection_source=DetectionSource.MANUAL,
-                signal_count=0,
-                serp_mentions=0,
-                co_citation_mentions=0,
-                corroborated=False,
-                score=None,
-                is_manual_override=True,
+        key = _identity(name)
+        row = by_identity.get(key) if key not in claimed else None
+        if row is None:
+            row = Competitor(
+                id=ids.new_id(ids.COMPETITOR), competitor_set_id=competitor_set.id
             )
-        )
+            # Appended through the relationship rather than session.add(): the
+            # collection cascades delete-orphan, so a row attached only by
+            # foreign key would be deleted as an orphan on flush.
+            competitor_set.competitors.append(row)
+        _apply_manual(row, name, domain, rank)
+        claimed.add(key)
 
-    # Tombstones take the tail ranks. `active_competitors` filters them out
-    # before anything reads the set, but `rank` is NOT NULL with a `rank >= 1`
-    # check, so it still has to be a real number that no live row is using.
-    for offset, name in enumerate(struck, start=len(items) + 1):
-        competitor_set.competitors.append(
-            Competitor(
-                id=ids.new_id(ids.COMPETITOR),
-                competitor_set_id=competitor_set.id,
-                name=name,
-                domain=None,
-                rank=offset,
-                detection_source=DetectionSource.MANUAL,
-                signal_count=0,
-                serp_mentions=0,
-                co_citation_mentions=0,
-                corroborated=False,
-                score=None,
-                is_manual_override=True,
-                is_suppressed=True,
-            )
-        )
+    # Anything left is STRUCK. It becomes a tombstone IN PLACE rather than
+    # being deleted and replaced by a new one, for the same reason: the row's
+    # id is what its citations and mentions point at. `active_competitors`
+    # filters tombstones out before anything reads the set, so a citation
+    # attributed to a struck rival resolves to no name and presents as third
+    # party — the operator's correction is respected without the underlying
+    # fact being destroyed.
+    #
+    # The domain is kept rather than nulled, which the previous tombstone did
+    # not do. `persist_detection` blocks a re-offered candidate by name OR
+    # domain, so keeping it makes the strike harder to defeat, not easier.
+    tail = len(items) + 1
+    for row in competitor_set.competitors:
+        if _identity(row.name) in claimed:
+            continue
+        row.rank = tail
+        row.detection_source = DetectionSource.MANUAL
+        row.signal_count = 0
+        row.serp_mentions = 0
+        row.co_citation_mentions = 0
+        row.corroborated = False
+        row.score = None
+        row.is_manual_override = True
+        row.is_suppressed = True
+        tail += 1
 
     competitor_set.detection_confidence = None
     competitor_set.status = DetectionStatus.OK if items else DetectionStatus.NO_SIGNAL
@@ -658,10 +712,29 @@ async def persist_detection(
     manual = [c for c in competitor_set.competitors if c.is_manual_override]
     manual_keys = {slugify(c.name) for c in manual} | {c.domain for c in manual if c.domain}
 
-    for competitor in list(competitor_set.competitors):
-        if not competitor.is_manual_override:
-            await session.delete(competitor)
-    competitor_set.competitors = manual
+    # Auto-detected rows are REUSED where detection finds the same rival again,
+    # for two reasons that Epic 3.9 found together.
+    #
+    # Attribution: Citation.competitor_id and BrandMention.competitor_id are
+    # ON DELETE SET NULL, so deleting every non-manual row on each run nulled
+    # the attribution for competitors the very same run went on to re-find.
+    # Finding 4 named apply_override; this path had it too.
+    #
+    # Correctness: deleting `Keep` and inserting `Keep` in one flush is a
+    # same-table delete-then-insert on a unique key, and SQLAlchemy's unit of
+    # work orders INSERTs before DELETEs — so re-detecting a scan that re-found
+    # any rival raised UniqueViolationError on uq_competitors_set_name and the
+    # endpoint returned 500. That has been true since Epic 3; no test caught it
+    # because none re-detected with an overlapping result set. Reuse removes
+    # the delete/insert pair entirely, so the collision cannot arise.
+    auto_by_identity: dict[str, Competitor] = {}
+    auto_by_domain: dict[str, Competitor] = {}
+    for competitor in competitor_set.competitors:
+        if competitor.is_manual_override:
+            continue
+        auto_by_identity.setdefault(slugify(competitor.name), competitor)
+        if competitor.domain:
+            auto_by_domain.setdefault(competitor.domain, competitor)
 
     competitor_set.status = outcome.status
     # FINDING 3 (api-contracts.md, Open findings) — this figure measures
@@ -680,31 +753,40 @@ async def persist_detection(
     # Suppressed rows are tombstones, not competitors: they must not consume a
     # rank or push detected rivals down the list.
     rank = sum(1 for c in manual if not c.is_suppressed) + 1
+    reused: set[str] = set()
     for candidate in outcome.candidates:
         name = candidate.resolved_name()
         if slugify(name) in manual_keys or (candidate.domain and candidate.domain in manual_keys):
             continue
-        # Appended through the relationship, NOT session.add(). The collection
-        # was just reassigned above, and the relationship cascades
-        # delete-orphan: a Competitor attached only by foreign key would be
-        # seen as an orphan of that reassigned collection and deleted on flush,
-        # silently producing an empty competitor set.
-        competitor_set.competitors.append(
-            Competitor(
-                id=ids.new_id(ids.COMPETITOR),
-                competitor_set_id=competitor_set.id,
-                name=name[:200],
-                domain=candidate.domain,
-                rank=rank,
-                detection_source=candidate.source,
-                signal_count=candidate.serp_mentions + candidate.co_citation_mentions,
-                serp_mentions=candidate.serp_mentions,
-                co_citation_mentions=candidate.co_citation_mentions,
-                corroborated=candidate.corroborated,
-                score=Decimal(str(candidate.score)),
-            )
+        key = slugify(name)
+        row = auto_by_identity.get(key) or (
+            auto_by_domain.get(candidate.domain) if candidate.domain else None
         )
+        if row is not None and row.id in reused:
+            row = None
+        if row is None:
+            row = Competitor(
+                id=ids.new_id(ids.COMPETITOR), competitor_set_id=competitor_set.id
+            )
+            # Appended through the relationship, NOT session.add(): the
+            # relationship cascades delete-orphan, so a Competitor attached
+            # only by foreign key would be seen as an orphan and deleted on
+            # flush, silently producing an empty competitor set.
+            competitor_set.competitors.append(row)
+        _apply_detected(row, candidate, name, rank)
+        reused.add(row.id)
         rank += 1
+
+    # An auto-detected row this run did NOT re-find is genuinely gone from the
+    # set, so it is deleted and its attribution nulled with it. That is the
+    # correct outcome — the rival is no longer a rival — and it is the only
+    # case in which attribution is now lost, where previously every run lost
+    # all of it.
+    for competitor in list(competitor_set.competitors):
+        if competitor.is_manual_override or competitor.id in reused:
+            continue
+        await session.delete(competitor)
+        competitor_set.competitors.remove(competitor)
 
     await session.flush()
     return competitor_set
