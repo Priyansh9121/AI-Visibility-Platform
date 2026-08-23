@@ -967,7 +967,7 @@ it, the way Finding 2 is.
 | 1 | Industry label over-generalisation | Epic 2.6 | ◐ improved in Epic 2.8, residual variance |
 | 2 | Industry classification confidence is uncalibrated | Epic 2.6 | ⬚ **open** |
 | 3 | `detectionConfidence` describes a mixed competitor set | Epic 3.6 | ⬚ **open** |
-| 4 | A competitor override destroys citation and mention attribution | Epic 3.6 | ⬚ **open** |
+| 4 | A competitor override destroys citation and mention attribution | Epic 3.6 | ✅ **fixed in Epic 3.9** |
 
 Finding 1 is listed as improved rather than closed on the strength of Epic 2.8's
 own "Still imperfect" section: the four `b2b saas` / `venture capital` failures
@@ -992,47 +992,49 @@ Open because calibrating it needs labelled outcome data this system does not
 yet collect. Recorded across `build-log.md` Epics 2.6, 2.8, 3.0, 3.5 and in the
 Epic 2 section above.
 
-### Finding 4 — a competitor override destroys citation and mention attribution
+### Finding 4 — a competitor override destroyed citation and mention attribution
 
-`PUT /clients/{clientId}/competitors` replaces the set wholesale, and
-`apply_override` does that by **hard-deleting** every `Competitor` row before
-re-inserting. `Citation.competitor_id` and `BrandMention.competitor_id` are both
-`ON DELETE SET NULL`.
+**Fixed in Epic 3.9.** Recorded in full because the register flagged the fix as
+possibly needing a product decision, and it turned out not to.
 
-So every override silently nulls the attribution on every citation and brand
-mention for that scan, and **nothing puts it back**. The rows survive; the link
-does not. Re-running detection does not repair it either — those children belong
-to `engine_results`, which an override never touches.
+`Citation.competitor_id` and `BrandMention.competitor_id` are the only two FKs
+pointing at `competitors.id`, and both are `ON DELETE SET NULL`. Both competitor
+write paths used to hard-delete rows — `apply_override` deleted every row before
+re-inserting, and `persist_detection` deleted every non-manual row on each run —
+so an override *or a re-detection* silently nulled the attribution for the whole
+scan. The finding as originally written named only `apply_override`; Epic 3.9
+confirmed `persist_detection` had it too and fixed both.
 
-The user-visible effect is in the proof beat: `competitorCitedDomains` loses its
-`competitorName`, so a page that said *"front.com — attributed to Front"* says
-*"Third party"* instead, and the domain drops out of the competitor-attributed
-grouping entirely.
+**Both now reuse the row when the rival is unchanged**, keyed on
+`slugify(name)` — the key both functions already used for other purposes — with
+an `_apply_*` helper shared between the reuse and insert paths, matching the
+discipline `scoring_runner` and `audit_runner` use. Keeping the id keeps the
+foreign keys.
 
-Found in Epic 3.8, in `avp_dev`, where it had already happened: 45 citations and
-14 non-subject brand mentions with zero attribution, while the checked-in
-fixture `apps/web/src/lib/report/__fixtures__/reports.ts` still asserted
-`front.com → "Front"` and `zendesk.com → "Zendesk"`. The database and the
-committed fixture had diverged and nothing noticed, because every check anyone
-had written compared **row counts**, and `SET NULL` does not change a row count.
+A struck rival becomes a tombstone **in place** rather than being deleted and
+replaced, so its attribution survives too; `active_competitors` still filters it
+out, so a citation attributed to a struck rival resolves to no name and presents
+as third party. The operator's correction is respected without the underlying
+fact being destroyed. `apply_override` is now delete-free entirely.
 
-`verify_competitor_override.py` was fixed in Epic 3.8 to snapshot and restore
-those links, so the verification script no longer causes it, and `avp_dev` was
-repaired by re-deriving the links from domain and name equality (unambiguous on
-that scan, and it reproduces the committed fixture exactly).
+`persist_detection` still deletes an auto-detected row that the current run did
+**not** re-find, and its attribution is nulled with it. That is correct — the
+rival has left the set — and it is now the only case where attribution is lost,
+where previously every run lost all of it.
 
-**The product path is still open**, which is why this is a finding rather than a
-fixed bug. An agency correcting a competitor set through the UI still destroys
-the attribution for that scan. Closing it is a design decision with at least
-three answers, each with different semantics:
+**The semantic concern this register raised did not apply.** "Replace the set
+wholesale" is a statement about the resulting state — no partial merge, every
+submitted row ends up `MANUAL` with signals zeroed — and that is unchanged. Only
+the mechanism used to reach it changed. Nothing observable differs: `CompetitorOut`
+exposes no `created_at`, and no consumer relies on competitor ids *changing*.
 
-- re-link on write, matching by domain and name, inside `apply_override`;
-- stop hard-deleting — reuse rows whose name is unchanged, so the id survives;
-- change the FKs to `ON DELETE RESTRICT` and force the caller to deal with it.
-
-The second is probably right — it also fixes Finding 3's cousin, since a
-preserved row keeps its provenance — but it changes what "replace the set
-wholesale" means, so it belongs with Epic 3's semantics rather than a cleanup.
+**A second, unrelated defect surfaced while fixing this one**, and is fixed with
+it: deleting `Keep` and inserting `Keep` in one flush is a same-table
+delete-then-insert on `uq_competitors_set_name`, and SQLAlchemy orders INSERTs
+before DELETEs — so **re-running detection on a scan that re-found any rival
+returned a 500**, and had since Epic 3. Reuse removes the delete/insert pair, so
+the collision cannot arise. Covered by
+`test_redetecting_the_same_rival_does_not_500`.
 
 ### Finding 3 — `detectionConfidence` describes a mixed competitor set
 

@@ -557,3 +557,291 @@ class TestStruckCompetitorsStayStruck:
         stub_discovery(serp_domains=["strike.com"], cocit_brands=[("Strike", "strike.com")])
         body = (await client.post(f"{BASE}/clients/{cid}/competitors/detect")).json()
         assert [c["name"] for c in body["competitors"]] == []
+
+
+class TestAttributionSurvivesAnOverride:
+    """Epic 3.9 / Finding 4: citations and mentions keep their competitor.
+
+    `Citation.competitor_id` and `BrandMention.competitor_id` are both
+    ON DELETE SET NULL, and both competitor write paths used to hard-delete
+    rows — `apply_override` deleted every row before re-inserting, and
+    `persist_detection` deleted every non-manual row on each run. So an
+    override or a re-detection silently nulled the attribution for the whole
+    scan, and nothing put it back.
+
+    None of the override tests above could have caught it: not one of them
+    builds a Citation or a BrandMention, because none of them runs a scan. The
+    set was always exercised with nothing pointing at it. That is the coverage
+    gap this class closes, and it is the reason the defect lived from Epic 3.6
+    to Epic 3.8 in a file with twenty-six passing tests.
+    """
+
+    @staticmethod
+    async def _attribute(session, scan_id: str) -> dict[str, str]:
+        """Hang a citation and a brand mention off each detected competitor.
+
+        Mirrors what `scan_runner` does at scan time: a citation whose
+        `source_domain` is the rival's domain, and a mention of the rival by
+        name, both carrying `competitor_id`.
+        """
+        from sqlalchemy import select
+
+        from avp_api import ids
+        from avp_api.models import (
+            BrandMention,
+            Citation,
+            Competitor,
+            CompetitorSet,
+            EngineResult,
+            Prompt,
+            PromptSet,
+        )
+        from avp_api.models.engine_result import (
+            CitationType,
+            Engine,
+            EngineResultStatus,
+        )
+        from avp_api.models.prompt import PromptIntent
+
+        competitors = (
+            await session.execute(
+                select(Competitor)
+                .join(CompetitorSet, CompetitorSet.id == Competitor.competitor_set_id)
+                .where(CompetitorSet.scan_id == scan_id)
+            )
+        ).scalars().all()
+        assert competitors, "nothing to attribute to — detection produced no rivals"
+
+        prompt_set = PromptSet(id=ids.new_id(ids.PROMPT_SET), scan_id=scan_id)
+        session.add(prompt_set)
+        await session.flush()
+        prompt = Prompt(
+            id=ids.new_id(ids.PROMPT),
+            prompt_set_id=prompt_set.id,
+            text="who are the alternatives",
+            intent=PromptIntent.COMPARISON,
+            position=1,
+        )
+        session.add(prompt)
+        await session.flush()
+
+        result = EngineResult(
+            id=ids.new_id(ids.ENGINE_RESULT),
+            scan_id=scan_id,
+            prompt_id=prompt.id,
+            engine=Engine.CLAUDE,
+            status=EngineResultStatus.OK,
+            mentioned=True,
+            position=1,
+        )
+        session.add(result)
+        await session.flush()
+
+        expected: dict[str, str] = {}
+        for position, competitor in enumerate(competitors, start=1):
+            session.add(
+                Citation(
+                    id=ids.new_id(ids.CITATION),
+                    engine_result_id=result.id,
+                    source_domain=competitor.domain or f"{competitor.name}.example",
+                    source_url=f"https://{competitor.domain or 'x.example'}/p",
+                    source_type=CitationType.COMPETITOR,
+                    position=position,
+                    cites_subject=False,
+                    competitor_id=competitor.id,
+                )
+            )
+            session.add(
+                BrandMention(
+                    id=ids.new_id(ids.BRAND_MENTION),
+                    engine_result_id=result.id,
+                    entity_name=competitor.name,
+                    entity_domain=competitor.domain,
+                    is_subject=False,
+                    position=position,
+                    competitor_id=competitor.id,
+                )
+            )
+            expected[competitor.name] = competitor.id
+        await session.commit()
+        return expected
+
+    @staticmethod
+    async def _attribution(session, scan_id: str) -> dict[str, str | None]:
+        """Current name -> competitor name, read back through the FKs."""
+        from sqlalchemy import select
+
+        from avp_api.models import BrandMention, Citation, Competitor, EngineResult
+
+        out: dict[str, str | None] = {}
+        cites = (
+            await session.execute(
+                select(Citation)
+                .join(EngineResult, EngineResult.id == Citation.engine_result_id)
+                .where(EngineResult.scan_id == scan_id)
+            )
+        ).scalars().all()
+        mentions = (
+            await session.execute(
+                select(BrandMention)
+                .join(EngineResult, EngineResult.id == BrandMention.engine_result_id)
+                .where(EngineResult.scan_id == scan_id)
+            )
+        ).scalars().all()
+        for row in [*cites, *mentions]:
+            key = f"{type(row).__name__}:{getattr(row, 'source_domain', None) or row.entity_name}"
+            if row.competitor_id is None:
+                out[key] = None
+                continue
+            competitor = (
+                await session.execute(
+                    select(Competitor).where(Competitor.id == row.competitor_id)
+                )
+            ).scalar_one_or_none()
+            out[key] = competitor.name if competitor else "<dangling>"
+        return out
+
+    async def test_an_override_keeps_attribution_for_rivals_it_keeps(
+        self, client: AsyncClient, session, stub_discovery
+    ) -> None:  # noqa: ANN001
+        """The defect, stated as a test: keep a rival, keep its attribution."""
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_discovery(
+            serp_domains=["keep.com", "strike.com"],
+            cocit_brands=[("Keep", "keep.com"), ("Strike", "strike.com")],
+        )
+        await client.post(f"{BASE}/clients/{cid}/competitors/detect")
+        scan_id = (await client.get(f"{BASE}/clients/{cid}/competitors")).json()["scanId"]
+
+        before = await self._attribute(session, scan_id)
+        assert set(before) >= {"Keep", "Strike"}, before
+
+        # The operator keeps Keep and strikes Strike.
+        resp = await client.put(
+            f"{BASE}/clients/{cid}/competitors",
+            json={"competitors": [{"name": "Keep", "domain": "keep.com"}]},
+        )
+        assert resp.status_code == 200, resp.text
+
+        after = await self._attribution(session, scan_id)
+        kept = {k: v for k, v in after.items() if "keep" in k.lower()}
+        assert kept, after
+        assert all(v == "Keep" for v in kept.values()), (
+            f"an override nulled the attribution for a rival it kept: {kept}"
+        )
+
+    async def test_an_override_keeps_the_row_id_for_an_unchanged_rival(
+        self, client: AsyncClient, session, stub_discovery
+    ) -> None:  # noqa: ANN001
+        """The mechanism, asserted directly.
+
+        Reusing the row is the whole fix — the FKs survive because the id does.
+        Asserted separately from the behaviour above so a future change that
+        preserves attribution some other way is not silently constrained, but a
+        regression in the mechanism is still legible.
+        """
+        from sqlalchemy import select
+
+        from avp_api.models import Competitor, CompetitorSet
+
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_discovery(serp_domains=["keep.com"], cocit_brands=[("Keep", "keep.com")])
+        await client.post(f"{BASE}/clients/{cid}/competitors/detect")
+        scan_id = (await client.get(f"{BASE}/clients/{cid}/competitors")).json()["scanId"]
+
+        async def ids_by_name() -> dict[str, str]:
+            rows = (
+                await session.execute(
+                    select(Competitor)
+                    .join(CompetitorSet, CompetitorSet.id == Competitor.competitor_set_id)
+                    .where(CompetitorSet.scan_id == scan_id)
+                )
+            ).scalars().all()
+            return {r.name: r.id for r in rows}
+
+        before = await ids_by_name()
+        await client.put(
+            f"{BASE}/clients/{cid}/competitors",
+            json={"competitors": [{"name": "Keep", "domain": "keep.com"}]},
+        )
+        session.expire_all()
+        after = await ids_by_name()
+        assert after.get("Keep") == before.get("Keep"), (
+            f"the row was recreated rather than reused: {before} -> {after}"
+        )
+
+    async def test_redetection_keeps_attribution_for_rivals_it_finds_again(
+        self, client: AsyncClient, session, stub_discovery
+    ) -> None:  # noqa: ANN001
+        """Finding 4 named `apply_override`; `persist_detection` had it too.
+
+        It hard-deleted every non-manual row on each run, so re-detecting a
+        scan nulled the attribution for competitors it went on to re-find
+        immediately afterwards.
+        """
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_discovery(
+            serp_domains=["keep.com", "gone.com"],
+            cocit_brands=[("Keep", "keep.com"), ("Gone", "gone.com")],
+        )
+        await client.post(f"{BASE}/clients/{cid}/competitors/detect")
+        scan_id = (await client.get(f"{BASE}/clients/{cid}/competitors")).json()["scanId"]
+        await self._attribute(session, scan_id)
+
+        # Detection runs again and still finds Keep.
+        stub_discovery(serp_domains=["keep.com"], cocit_brands=[("Keep", "keep.com")])
+        await client.post(f"{BASE}/clients/{cid}/competitors/detect")
+
+        after = await self._attribution(session, scan_id)
+        kept = {k: v for k, v in after.items() if "keep" in k.lower()}
+        assert kept, after
+        assert all(v == "Keep" for v in kept.values()), (
+            f"re-detection nulled the attribution for a rival it re-found: {kept}"
+        )
+
+    async def test_redetecting_the_same_rival_does_not_500(
+        self, client: AsyncClient, stub_discovery
+    ) -> None:  # noqa: ANN001
+        """A second, separate defect Epic 3.9 found while fixing Finding 4.
+
+        `persist_detection` deleted every non-manual row and inserted the new
+        candidates in the same flush. SQLAlchemy's unit of work orders INSERTs
+        before DELETEs for a table, so deleting `Keep` and inserting `Keep`
+        collided on uq_competitors_set_name and the endpoint returned 500.
+
+        Re-running detection and finding the same rivals is the ordinary case,
+        and it had been broken since Epic 3. No test caught it because every
+        existing re-detection test used a DISJOINT result set — a.com then
+        b.com/c.com, or keep.com then fresh.com — so no name was ever deleted
+        and re-inserted in one flush.
+        """
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_discovery(serp_domains=["keep.com"], cocit_brands=[("Keep", "keep.com")])
+        assert (
+            await client.post(f"{BASE}/clients/{cid}/competitors/detect")
+        ).status_code == 201
+
+        stub_discovery(serp_domains=["keep.com"], cocit_brands=[("Keep", "keep.com")])
+        again = await client.post(f"{BASE}/clients/{cid}/competitors/detect")
+        assert again.status_code == 201, f"re-detection failed: {again.text[:300]}"
+        assert [c["name"] for c in again.json()["competitors"]] == ["Keep"]
+
+    async def test_an_overridden_set_can_be_overridden_again(
+        self, client: AsyncClient, stub_discovery
+    ) -> None:  # noqa: ANN001
+        """The same collision on the override path, which reuse also removes."""
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_discovery(serp_domains=["keep.com"], cocit_brands=[("Keep", "keep.com")])
+        await client.post(f"{BASE}/clients/{cid}/competitors/detect")
+
+        payload = {"competitors": [{"name": "Keep", "domain": "keep.com"}]}
+        first = await client.put(f"{BASE}/clients/{cid}/competitors", json=payload)
+        assert first.status_code == 200, first.text
+        second = await client.put(f"{BASE}/clients/{cid}/competitors", json=payload)
+        assert second.status_code == 200, f"re-submitting the same set failed: {second.text[:300]}"
+        assert [c["name"] for c in second.json()["competitors"]] == ["Keep"]
