@@ -36,9 +36,13 @@ from sqlalchemy import select  # noqa: E402
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
 
 from avp_api.models import (  # noqa: E402
+    BrandMention,
+    Citation,
+    Client,
     Competitor,
     CompetitorSet,
     DetectionStatus,
+    EngineResult,
     Scan,
 )
 from avp_api.services import report as report_service  # noqa: E402
@@ -52,10 +56,19 @@ from avp_api.services.competitors import (  # noqa: E402
 
 # The rival an operator would plausibly strike: SERP-only, uncorroborated, and
 # a listicle publisher rather than a help-desk vendor.
-REMOVE = "Thecxlead"
+#
+# Overridable because Epic 3.8 made this script runnable against a seeded
+# database as well as the hand-built one. The default is still the real Help
+# Scout set's rival, so an unqualified run means what it has always meant;
+# `scripts/seed_dev.py` prints the export line for its own dataset.
+REMOVE = os.environ.get("AVP_OVERRIDE_STRIKE", "Thecxlead")
 # A rival detection never surfaced, added by hand.
-ADD_NAME = "Intercom"
-ADD_DOMAIN = "intercom.com"
+ADD_NAME = os.environ.get("AVP_OVERRIDE_ADD", "Intercom")
+ADD_DOMAIN = os.environ.get("AVP_OVERRIDE_ADD_DOMAIN", "intercom.com")
+
+# Domains under a reserved TLD (RFC 2606) cannot be anything but synthetic.
+# Used to label the run rather than to change its behaviour — see PART 1.
+SYNTHETIC_TLDS = (".example", ".invalid", ".test", ".localhost")
 
 
 def rule(title: str) -> None:
@@ -97,6 +110,7 @@ async def main() -> int:  # noqa: C901
     engine = create_async_engine(os.environ["DATABASE_URL"])
     Session = async_sessionmaker(engine, expire_on_commit=False)
     failures: list[str] = []
+    ran_against_synthetic = False
 
     async with Session() as session:
         rule("PART 1 — the detected set, as it stands")
@@ -117,8 +131,63 @@ async def main() -> int:  # noqa: C901
         original = snapshot(competitor_set.competitors)
         original_confidence = competitor_set.detection_confidence
         original_status = competitor_set.status
+
+        # Citation.competitor_id and BrandMention.competitor_id are
+        # ON DELETE SET NULL, and `apply_override` HARD-DELETES every
+        # competitor row. So the correction below silently nulls every
+        # attribution on this scan, and restoring the competitor rows with
+        # their original ids does not bring the links back — nothing points at
+        # them any more.
+        #
+        # PART 6 claimed "byte-identical to the starting snapshot, ids
+        # included" while only ever comparing the competitors table, so this
+        # went unnoticed from Epic 3.6 until Epic 3.8 audited it. By then the
+        # Help Scout scan had 45 citations and 14 non-subject brand mentions
+        # with zero attribution, and the report no longer matched the
+        # checked-in fixture. See build-log Epic 3.8 and Finding 4.
+        original_links = {
+            "citations": {
+                c.id: c.competitor_id
+                for c in (
+                    await session.execute(
+                        select(Citation)
+                        .join(EngineResult, EngineResult.id == Citation.engine_result_id)
+                        .where(EngineResult.scan_id == scan.id)
+                    )
+                ).scalars().all()
+            },
+            "mentions": {
+                m.id: m.competitor_id
+                for m in (
+                    await session.execute(
+                        select(BrandMention)
+                        .join(EngineResult, EngineResult.id == BrandMention.engine_result_id)
+                        .where(EngineResult.scan_id == scan.id)
+                    )
+                ).scalars().all()
+            },
+        }
+        linked_before = sum(1 for v in original_links["citations"].values() if v) + sum(
+            1 for v in original_links["mentions"].values() if v
+        )
+        print(f"  links : {linked_before} citation/mention rows attributed to a competitor")
+        client = (
+            await session.execute(select(Client).where(Client.id == scan.client_id))
+        ).scalar_one()
+        synthetic = client.domain.endswith(SYNTHETIC_TLDS)
+        ran_against_synthetic = synthetic
         print(f"  scan  : {scan.id}")
         print(f"  set   : {competitor_set.id}  confidence={original_confidence}")
+        print(f"  data  : {client.name} ({client.domain}) — "
+              + ("SEEDED, synthetic (scripts/seed_dev.py)" if synthetic
+                 else "real, produced by the live pipeline"))
+        if synthetic:
+            # The module docstring says the mechanism "is only worth as much as
+            # its last real execution". Against seeded data this run proves the
+            # persistence contract but not that contract against real pipeline
+            # output, and saying so is the difference between a verification
+            # and a claim.
+            print("        the persistence guarantee is exercised; the data behind it is not real")
         show(competitor_set.active_competitors)
 
         if not any(c["name"] == REMOVE for c in original):
@@ -294,8 +363,51 @@ async def main() -> int:  # noqa: C901
             )
         competitor_set.detection_confidence = original_confidence
         competitor_set.status = original_status
+        await session.flush()
+
+        # Re-point the children. The competitors above were recreated with
+        # their ORIGINAL ids, so the snapshotted values are still valid.
+        for row in (
+            await session.execute(
+                select(Citation)
+                .join(EngineResult, EngineResult.id == Citation.engine_result_id)
+                .where(EngineResult.scan_id == scan.id)
+            )
+        ).scalars().all():
+            row.competitor_id = original_links["citations"].get(row.id)
+        for row in (
+            await session.execute(
+                select(BrandMention)
+                .join(EngineResult, EngineResult.id == BrandMention.engine_result_id)
+                .where(EngineResult.scan_id == scan.id)
+            )
+        ).scalars().all():
+            row.competitor_id = original_links["mentions"].get(row.id)
+
         await session.commit()
         await session.refresh(competitor_set, ["competitors"])
+
+        linked_after = (
+            await session.execute(
+                select(Citation)
+                .join(EngineResult, EngineResult.id == Citation.engine_result_id)
+                .where(EngineResult.scan_id == scan.id, Citation.competitor_id.is_not(None))
+            )
+        ).scalars().all()
+        mentions_after = (
+            await session.execute(
+                select(BrandMention)
+                .join(EngineResult, EngineResult.id == BrandMention.engine_result_id)
+                .where(EngineResult.scan_id == scan.id, BrandMention.competitor_id.is_not(None))
+            )
+        ).scalars().all()
+        print(f"  links : {len(linked_after) + len(mentions_after)} restored"
+              f" (was {linked_before})")
+        if len(linked_after) + len(mentions_after) != linked_before:
+            failures.append(
+                f"competitor attribution not restored: {linked_before} links before, "
+                f"{len(linked_after) + len(mentions_after)} after"
+            )
 
         restored = snapshot(competitor_set.competitors)  # includes any tombstone
         show(competitor_set.active_competitors)
@@ -314,9 +426,14 @@ async def main() -> int:  # noqa: C901
         for failure in failures:
             print(f"  FAIL  {failure}")
         return 1
-    print("  PASS — an operator's correction to a real competitor set survived a real")
+    subject = "a SEEDED competitor set" if ran_against_synthetic else "a real competitor set"
+    print(f"  PASS — an operator's correction to {subject} survived a real")
     print("         re-detection with its provenance intact, reached both scoring and the")
     print("         report with no Epic 5-7 code involved, and the database was restored.")
+    if ran_against_synthetic:
+        print("\n         Synthetic data: this run proves the persistence contract, not that")
+        print("         the contract holds against real pipeline output. Run it without")
+        print("         AVP_OVERRIDE_STRIKE against avp_dev for that.")
     return 0
 
 

@@ -3335,3 +3335,361 @@ A one-test epic is the honest outcome. Two of the three loose ends were closed
 with documentation and a deletion; the third was closed by removing a
 hand-maintained list, and a list that no longer exists needs less testing than
 one that does, not more.
+
+---
+
+## 2026-08-23 — Epic 3.8 · A seed fixture, the regression it exposed, and the guard that did not guard
+
+Epic 3.7 recommended a seed script as the prerequisite for ever running the free
+verification scripts automatically. This builds it. It also found that one of
+those two scripts had been failing against the real dev database since Epic 8,
+fixed that, and then found that the first fix did not work — by adversarially
+auditing it rather than by trusting the negative control that had already passed.
+
+### What the investigation found before any code
+
+Epic 3.7 read the scripts' docstrings, because it was costing them. This epic
+read the scripts, because it had to run them, and the bail-out conditions turned
+out to matter more than the costs:
+
+| Script | Will not proceed without |
+|---|---|
+| `verify_report.py` | a `SUCCEEDED` scan on a client whose domain is not the degraded one; an `Agency` for PART 3; and, if scored, weights summing to 100 with the breakdown re-summing to the composite within 0.01 |
+| `verify_competitor_override.py` | any `CompetitorSet` — **selected by `order_by(CompetitorSet.id.desc())`**; a competitor in it named exactly `REMOVE`; no row already carrying `is_manual_override`; and a **non-empty** comparison list from `score_scan` for PART 4 |
+
+Two details shaped everything after. The override script picks the **newest**
+competitor set by ULID, so a freshly-seeded set becomes its target with no code
+change — the seed does not have to be told about the script, or the script about
+the seed. And PART 4 needs a non-empty comparison list, so the seed cannot be a
+competitor set alone: `compare_competitors` short-circuits to `[]` without
+answered engine results, which is the same vacuity trap Epic 3.6 fell into.
+
+Also recorded: `verify_report.py` is **not read-only**. PART 3 self-seeds a
+degraded client and scan and commits them.
+
+**`tests/conftest.py` cannot be reused, and nothing is duplicated by not reusing
+it.** Its session-scoped `engine` runs `drop_all` + `create_all` and its autouse
+`_clean_state` runs `TRUNCATE … CASCADE` over every table — pointed at `avp_dev`
+it would erase it. It is pytest-only, and its data seam is `monkeypatch` on
+service functions. The one piece of logic worth not reimplementing is the
+scoring computation, and the seed avoids that by calling the real
+`scoring_runner.score_scan`, exactly as `verify_report.py`'s own PART 3 does.
+
+**One dataset serves both.** Their needs nest rather than diverge.
+
+### What `scripts/seed_dev.py` produces
+
+An Agency, Client, one Scan, a PromptSet with 2 prompts, 4 EngineResults with
+BrandMentions and Citations, a CompetitorSet with 3 competitors, a
+TechnicalAudit with 12 checks, and 2 ActionItems. Then it calls the real scorer.
+
+**The Score is computed, never written.** `verify_report.py` asserts the
+breakdown re-sums to the stored composite. Hand-authoring a Score would turn
+that assertion into a test of my arithmetic instead of the scorer's — green, and
+measuring nothing.
+
+**Everything is obviously synthetic.** `Seedwell Supply` at
+`seed-fixture.example`; every competitor and cited domain also `.example`, a
+reserved TLD (RFC 2606) that can never resolve. It keeps a real company out of
+committed fixture data, and a reader who sees `seed-fixture.example` knows
+immediately they are not looking at a measurement.
+
+**Minimum viable, not a replica** — 2 prompts against the real scan's 3, 3
+competitors against 5, 12 audit checks against 17. That is a real limitation,
+and it bit immediately; see below.
+
+### `REMOVE` became configurable rather than seeded
+
+Two ways to make `verify_competitor_override.py` work against seeded data: name
+a seeded competitor "Thecxlead", or make the constant configurable. Seeding the
+name was rejected — it would put a real third-party brand into synthetic data to
+satisfy a constant, and would quietly make the script's own claim that it runs
+against real output "not a fixture" false without changing a word of its
+docstring. `REMOVE` / `ADD_NAME` / `ADD_DOMAIN` now read from
+`AVP_OVERRIDE_STRIKE` / `AVP_OVERRIDE_ADD` / `AVP_OVERRIDE_ADD_DOMAIN`,
+defaulting to the originals.
+
+### The RESULT line was lying, and reading the output is what caught it
+
+After the first green seeded run the script printed *"PASS — an operator's
+correction to a **real** competitor set survived a real re-detection…"*. It was
+three invented companies at `.example` domains written thirty seconds earlier.
+The wording was inherited from Epic 3.6, when only one kind of data existed, and
+became false the moment a second kind did.
+
+It now detects a synthetic subject by its reserved TLD, says so in PART 1
+(*"SEEDED, synthetic — the persistence guarantee is exercised; the data behind
+it is not real"*), and the PASS line reads "a SEEDED competitor set" with a note
+on what a seeded run does and does not prove.
+
+### The regression: `verify_report.py` had been failing since Epic 8
+
+Proving Help Scout unaffected meant running both scripts against `avp_dev`.
+`verify_competitor_override.py` passed. `verify_report.py` did not:
+
+```
+FAIL  report payload contains prose-bearing keys: ['"title"']
+```
+
+**Not caused by this epic** — `git` confirms `verify_report.py`,
+`schemas/report.py` and `services/report.py` untouched since the Task 1 commit.
+All five `"title"` keys were in `actionItems[*].title`.
+
+Epic 8 added `actionItems` to `ReportOut`. `verify_report.py`'s
+`FORBIDDEN_SUBSTRINGS` was written in Epic 7, when every string in a report was
+somebody else's, and forbids `"title"`. An ActionItem is the one thing in that
+payload that is **ours**, and it is the documented exception —
+`models/action_item.py` says so, `schemas/action_item.py` lives in its own module
+precisely so `schemas/report.py`'s sweep does not see it, and
+`test_ip_safety.py::test_action_item_is_the_documented_free_text_exception`
+asserts it stays out of `FACTS_ONLY_MODELS`.
+
+The payload was right; the check was stale — **a hand-written list that drifted
+from what the code requires, the third instance of that defect class in four
+epics** (CORS missing PUT, CORS carrying unused PATCH/DELETE, now this).
+
+It survived Epic 8 because nothing runs these scripts. It survived Epic 3.7's
+config audit because that audit swept application configuration, not script
+constants. And **it passed against the seeded database while failing against the
+real one**, because the seed produced no action items.
+
+### The first fix did not work, and the negative control that "proved" it was wrong
+
+The fix lifted `actionItems` out of the sweep and asserted the exemption's edges
+by comparing each item's keys against `{to_camel(f) for f in
+ActionItemOut.model_fields}`, looking for a surplus. Two negative controls were
+run and both caught their injection, so it was called done.
+
+An adversarial audit of the change disagreed, and it was right.
+
+**The surplus check was a tautology.** The items are serialised *by*
+`ActionItemOut` and compared *against* `ActionItemOut`, and `ApiModel` inherits
+pydantic's `extra='ignore'`, so an undeclared key can never appear in the
+payload. A prose field *added to the schema* lands on both sides and cancels.
+The comment above it claimed "a field added there shows up here rather than
+slipping through the gap this pop() opens" — provably false.
+
+**And the negative control had tested the wrong thing.** It injected
+`competitorBlurb` into the parsed dict *after* serialisation, which the check
+does catch. The realistic failure mode is a field added to the schema. Verified
+directly: adding `summary: str | None` and `competitor_snippet: str | None` to
+`ActionItemOut` and re-running produced **PASS**.
+
+That is the fourth harness failure in five epics — Epic 8's selector scored
+against a hand-picked test, Epic 3.6's restored from stale backups, Epic 3.7's
+modelled a mistake nobody would make, and this one injected at the wrong layer.
+**The guards have been right nearly every time; the harness has been wrong four
+times.** A negative control is code, and nothing checks it.
+
+Three further defects the audit surfaced in the same change:
+
+- Five forbidden names lost coverage inside the exemption, and `summary` and
+  `raw_response` were backstopped by nothing else in the repo.
+- Both replacement checks read **top-level keys only**, while the sweep they
+  replaced searched raw JSON at any depth — turning a one-field exemption into
+  an arbitrarily deep one. `evidence: [{"snippet": …}]` would have passed.
+- When a scan has no action items the whole block was skipped silently, with no
+  output and no failure, and the script still printed "the payload carries facts
+  only". In this epic's own seed-then-verify workflow that was the **guaranteed**
+  case.
+
+**Rebuilt.** The check is now a **recursive substring sweep** over every key at
+every depth under each action item, against the forbidden vocabulary the repo
+settled on in Epic 8 — substring, because nobody names a leak field `snippet`,
+they name it `competitor_snippet`. `title` and `detail` are exempted by name.
+It counts what it inspected and fails if that is zero, so a vacuous pass is
+impossible. The misleading byte count and the overclaiming provenance line are
+gone.
+
+Four negative controls, all caught, and this time at the layer that matters:
+
+| Injected | Caught |
+|---|---|
+| `description` on a competitor row (outside the exemption) | `LEAKED: ['"description"']` |
+| **`summary` + `competitor_snippet` added to `ActionItemOut` — the mode that defeated the first fix** | `actionItems.summary looks like prose (summary)…` |
+| `competitorBlurb` after serialisation | `actionItems.competitorBlurb looks like prose (blurb)` |
+| **`evidence: [{"snippet": …}]` nested two levels deep** | `actionItems[0].evidence[0].snippet looks like prose (snippet)` |
+
+**And the seed was changed too**, because the deeper problem was that a fixture
+omitting a branch cannot verify it. `seed_dev.py` now writes 2 ActionItems, so
+the exemption boundary is exercised against seeded data — 30 keys inspected —
+rather than silently skipped. `_clear_children` deletes them on re-run;
+`ActionItem` carries `UniqueConstraint(scan_id, source, source_key)`, so without
+that a second seed would have failed.
+
+### The bigger finding: the override script was destroying the data it promised to restore
+
+The adversarial audit that caught the tautology also checked blast radius, and
+found something that was **already true in `avp_dev`**, not hypothetical.
+
+`apply_override` replaces a competitor set by **hard-deleting** every
+`Competitor` row. `Citation.competitor_id` and `BrandMention.competitor_id` are
+both `ON DELETE SET NULL` (`confdeltype=n`, confirmed against the live schema).
+So every run of `verify_competitor_override.py` — and every real operator
+override — nulls the attribution on every citation and brand mention for that
+scan. PART 6 restores the competitor rows with their original ids, but nothing
+points at them any more, and PART 6 never looked.
+
+Measured in `avp_dev`: **45 citations and 14 non-subject brand mentions, zero
+attributed.** The live report attributed no cited domain to any competitor,
+while the checked-in fixture still asserted `front.com → "Front"` and
+`zendesk.com → "Zendesk"`. The database and the committed fixture had diverged.
+
+**My own "Help Scout unaffected" proof could not have seen it.** It compared
+thirteen row counts and a fingerprint of composite, competitor names, override
+count and action-item count. `SET NULL` changes none of those — it nulls a
+column on rows that all still exist. The check was structurally blind to the
+one kind of damage the script actually does. PART 6's own claim, *"byte-identical
+to the starting snapshot, ids included"*, was true only of the competitors table
+and had been reassuring everyone since Epic 3.6.
+
+I cannot prove whether this session caused it or merely inherited it. Epic 3.6
+ran that script against `avp_dev` several times and drove a real override through
+the UI for its screenshots; this session ran it several more. There was no
+"before" measurement of link integrity to compare against, because nobody had
+thought to take one.
+
+**Three things were done about it.**
+
+`avp_dev` was repaired — links re-derived from domain and name equality, which
+is unambiguous on that scan (no domain or name matches two competitors) and
+reproduces the committed fixture exactly: `front.com → Front`, `zendesk.com →
+Zendesk`, mentions Front 5 / Zendesk 5 / Freshdesk 4.
+
+`verify_competitor_override.py` was fixed to snapshot both child link maps in
+PART 1 and restore them in PART 6, and to **fail** if the count does not come
+back. Proven both ways: a normal run now reports `links : 16 restored (was 16)`
+and leaves the database intact; reverting the re-link to Epic 3.6's behaviour
+reports `links : 0 restored (was 16)` and fails.
+
+The **product** path was recorded as Finding 4 rather than fixed. An agency
+correcting a competitor set through the UI still destroys that scan's
+attribution, and closing it means choosing between re-linking on write, not
+hard-deleting rows whose name is unchanged, or changing the FKs — which changes
+what "replace the set wholesale" means and belongs with Epic 3's semantics.
+
+The pattern worth naming: **every verification in this epic compared counts, and
+the defect was in a column.** Counts are what is easy to compare, which is
+exactly why they are where blind spots live.
+
+### Idempotency, proven by running it
+
+Keys: Agency by `slug` (unique), Client by `(agency_id, domain)` (unique), Scan
+by the oldest for that client via `.first()`. Children are then deleted scoped to
+that scan id and rebuilt.
+
+Run against a database created from nothing — `createdb` plus `alembic upgrade
+head` to `bc32281a20c5` — then seeded **five times**. Every table count identical
+across all runs, and the agency, client and scan ULIDs unchanged: the same rows
+were reused, not recreated.
+
+```
+agencies 1 · clients 2 · scans 2 · prompt_sets 1 · prompts 2
+engine_results 4 · brand_mentions 10 · citations 16
+competitor_sets 1 · competitors 3 · audits 1 · audit_checks 12
+scores 2 · action_items 2
+```
+
+(`clients` and `scans` are 2 because `verify_report.py`'s PART 3 self-seeds its
+own degraded client, which the seed leaves alone.) Both target scripts were
+re-run against the re-seeded database and still passed — a re-run leaves a state
+that is not merely the same size but still valid.
+
+**Coverage checked by derivation, not by reading.** The schema has 6 tables with
+a direct FK to `scans.id` and 5 more reachable through them; `_clear_children`
+deletes all 11. Every delete is scoped — 6 by `scan_id ==` directly, 5 by an
+id-list that is itself `scan_id`-scoped — so the blast radius is provably one
+scan. One latent sharp edge was hardened: an informational lookup used
+`scalar_one_or_none()` on `Client.domain` without `agency_id`, which would raise
+on a database carrying two agencies with a same-named client.
+
+### The Help Scout scan is unaffected — checked, not assumed
+
+`seed_dev.py` was never run against `avp_dev`; confirmed by querying for its
+agency slug and client domain, both absent. Both scripts were then run against
+`avp_dev` with default environment and all thirteen counts compared to the
+pre-epic baseline — identical. The scan's fingerprint, byte-identical:
+
+**This check was not sufficient, and the section above says why** — it compares
+counts, and the damage `verify_competitor_override.py` was doing lived in a
+nulled column. Link integrity is now part of what that script asserts, so a
+future run of it does check.
+
+
+```
+scan_01M0HDRGJNWNZDSJPP0NC3SV8W | composite=58.24
+  | competitors=Zendesk,Freshdesk,Front,Kustomer,Thecxlead
+  | manual=0 | action_items=5
+```
+
+Epic 7's and Epic 8's screenshots and
+`apps/web/src/lib/report/__fixtures__/reports.ts` all derive from that scan.
+
+### The throwaway database was dropped
+
+`avp_seedtest` is gone. Keeping it as a standing fixture database was considered
+and rejected: a preserved database that becomes load-bearing is exactly the
+problem this epic exists to remove, and the next person cannot tell whether such
+a thing is authoritative or stale. It is three commands to recreate, and they are
+in the script's docstring.
+
+### Tests: none added, deliberately
+
+**749 total, unchanged** (api 534, workers 13, shared-types 53, design-system 72,
+web 77). This epic touched only `apps/api/scripts/`, which no suite covers.
+
+No pytest coverage was added for `seed_dev.py`, and that is a decision. A unit
+test would have to build a database, run the script and assert on rows — which
+the five-run live proof already does, against real Postgres, through the real
+scorer. The pytest version would be strictly weaker: `conftest.py` truncates
+every table between tests, so it would assert idempotency against a database
+wiped before each run, which is the opposite of the property under test.
+
+There is a stronger argument for adding one thing, and it is recorded rather
+than acted on: the `summary` gap the audit found in
+`test_ip_safety.py::test_action_item_response_schemas_expose_no_third_party_prose`
+is real — that guard uses exact-name intersection where the repo's own
+`FixFacts` sweep documents at length why substring matching is correct. It
+predates this epic and belongs with a change to that test, not to a seed script.
+
+### Dependencies
+
+**None added.**
+
+### IP-safety self-check (constraint 9)
+
+Checked explicitly, because this is the first synthetic data in the repo
+standing in for real pipeline output. Every string the seed writes, enumerated
+out of the database:
+
+| Field | Values | Verdict |
+|---|---|---|
+| `clients.name` / `domain` | `Seedwell Supply` / `seed-fixture.example` | invented name, reserved TLD |
+| `clients.industry` | `wholesale supply` | generic category label, not scraped copy |
+| `competitors.name` / `domain` | `Northaven Group`, `Marlowe Direct`, `Kestrel Trade`, all `*.example` | names + domains — explicitly permitted (#7) |
+| `brand_mentions.entity_name` / `entity_domain` | those three plus the subject | "names of entities mentioned" |
+| `citations.source_domain` / `source_url` | four `.example` domains and paths | "URLs and domains that were cited" |
+| `prompts.text` | two generic buyer questions | the documented exception: the text is ours |
+| `technical_audits.schema_types` | `Organization`, `WebSite` | schema.org **type names** — structural signals |
+| `action_items.title` / `detail` | two invented recommendations naming only `.example` domains | our own recommendations, the documented exception (`models/action_item.py`) |
+
+Everything else is a count, boolean, ordinal, enum member or Decimal. **No
+seeded field carries prose, page text, answer text or marketing copy**, and no
+seeded row populates a column `FACTS_ONLY_MODELS` forbids. Because every domain
+is under a reserved TLD, no seeded value can be mistaken for real scraped
+content.
+
+The `verify_report.py` change exempts `actionItems` from one substring sweep and
+replaces it with a recursive substring sweep over the same subtree — bounded,
+depth-agnostic, non-vacuous, and proven in four directions by negative control
+including the two the first attempt missed. The guard is stronger than before
+this epic for everything except the two documented fields.
+
+**IP-safety check passed:** every value the seed writes is a name, a
+reserved-TLD domain, a URL, a generic label, a schema.org type name, our own
+prompt text, our own recommendation text, or a number — no prose, no page text,
+no answer text, no real company's data; the one guard this epic altered was
+rebuilt after an adversarial audit showed the first version could not fail, and
+is now depth-agnostic and non-vacuous with four passing negative controls; and
+no third-party content can reach the database, the API or the page by any path
+this epic added.
