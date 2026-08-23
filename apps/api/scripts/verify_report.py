@@ -18,6 +18,7 @@ real database row, not a fixture.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 from decimal import Decimal
@@ -25,6 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from pydantic.alias_generators import to_snake  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
 
@@ -141,12 +143,104 @@ async def main() -> int:
         # ------------------------------------------------------------------
         payload = report.model_dump_json(by_alias=True)
         print(f"\n  payload size : {len(payload)} bytes")
-        leaked = [s for s in FORBIDDEN_SUBSTRINGS if s in payload]
+
+        # `actionItems` is lifted out before the sweep, and that exemption is
+        # bounded immediately below rather than taken on trust.
+        #
+        # Epic 8 added the generated fix list to this payload, and every item
+        # carries a `title` — which this list forbids. The forbidden list was
+        # written in Epic 7, when every string in a report was somebody else's,
+        # and an ActionItem is the one thing here that is OURS: our own
+        # recommendation about our own client's site, generated from our own
+        # measurements. models/action_item.py documents that exception and
+        # test_ip_safety.py's `test_action_item_is_the_documented_free_text_
+        # exception` asserts it deliberately stays out of FACTS_ONLY_MODELS.
+        #
+        # So the payload was right and this check was stale — a hand-written
+        # list that drifted from what the code requires, which is the third
+        # time that exact defect class has surfaced (CORS allow_methods was the
+        # other two). Found in Epic 3.8 by running this script against avp_dev
+        # for the first time since Epic 8 shipped; see build-log Epic 3.8.
+        as_dict = json.loads(payload)
+        generated = as_dict.pop("actionItems", [])
+        swept = json.dumps(as_dict)
+
+        leaked = [s for s in FORBIDDEN_SUBSTRINGS if s in swept]
         if leaked:
             failures.append(f"report payload contains prose-bearing keys: {leaked}")
             print(f"  LEAKED       : {leaked}")
         else:
-            print("  no prose-bearing key present. OK")
+            print("  no prose-bearing key present outside actionItems. OK")
+
+        # The exemption is a hole in the guard, so its edges are asserted.
+        #
+        # The FIRST version of this check compared each item's keys against
+        # `{to_camel(f) for f in ActionItemOut.model_fields}` and looked for a
+        # surplus. That was a tautology: the items are serialised BY
+        # ActionItemOut, so an undeclared key can never appear, and a prose
+        # field ADDED to the schema lands on both sides and cancels out. It
+        # could only ever have fired on post-serialisation tampering — which is
+        # exactly what the negative control injected, so the control passed and
+        # proved nothing. Adding `summary: str` to ActionItemOut sailed through
+        # it. See build-log Epic 3.8.
+        #
+        # Replaced with a SUBSTRING sweep over each item's own keys, which is
+        # the discipline the repo settled on in Epic 8 for the same reason:
+        # nobody names a leak field `snippet`, they name it
+        # `competitor_snippet`, and an exact-name set never sees it.
+        DOCUMENTED_PROSE = {"title", "detail"}
+        PROSE_WORDS = (
+            "text", "answer", "response", "snippet", "excerpt", "quote", "body",
+            "content", "html", "raw", "description", "tagline", "summary",
+            "positioning", "about", "headline", "note", "context", "commentary",
+            "rationale", "copy", "blurb", "verbatim", "prose",
+        )
+        def walk(node: object, path: str) -> list[tuple[str, str]]:
+            """Every key under `node`, at any depth, with its dotted path.
+
+            Recursive rather than depth-1 on purpose. The sweep it replaces
+            searched raw serialised JSON, so nesting could not hide a key from
+            it; a depth-1 replacement would have turned a one-field exemption
+            into an arbitrarily deep one, and `evidence: [{"snippet": ...}]` is
+            exactly the shape a future epic would reach for.
+            """
+            found: list[tuple[str, str]] = []
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    found.append((key, f"{path}.{key}"))
+                    found.extend(walk(value, f"{path}.{key}"))
+            elif isinstance(node, list):
+                for index, value in enumerate(node):
+                    found.extend(walk(value, f"{path}[{index}]"))
+            return found
+
+        if generated:
+            inspected = 0
+            for position, item in enumerate(generated):
+                for key, where in walk(item, f"actionItems[{position}]"):
+                    inspected += 1
+                    if key in DOCUMENTED_PROSE:
+                        continue
+                    snake = to_snake(key)
+                    hits = [w for w in PROSE_WORDS if w in snake]
+                    if hits:
+                        failures.append(
+                            f"{where} looks like prose ({', '.join(hits)}) and is not "
+                            "one of the two documented fields"
+                        )
+            # A sweep that covered nothing must not read as a sweep that passed.
+            if inspected == 0:
+                failures.append("action items carried no fields — the sweep was vacuous")
+            fields = sorted({k for item in generated for k in item} & DOCUMENTED_PROSE)
+            print(f"  actionItems  : {len(generated)} items, {inspected} keys inspected,"
+                  f" prose fields = {fields} (ours by design — models/action_item.py)")
+            if not failures:
+                print("    -> and no other field on them looks like prose. OK")
+        else:
+            # Not a failure — a scan with no generated fixes is a real state —
+            # but PASS must not be read as "the exemption was checked".
+            print("  actionItems  : none on this scan — THE EXEMPTION BOUNDARY WAS NOT"
+                  " EXERCISED by this run")
 
         cited = report.proof.subject_cited_domains + report.proof.competitor_cited_domains
         print(f"  cited domains: {len(cited)} shown, each as domain + link-out")
@@ -235,7 +329,7 @@ async def main() -> int:
         if not failures:
             print("\n  -> null composite, no dimension scored zero. OK")
 
-        print(f"\n  REPORT URLS")
+        print("\n  REPORT URLS")
         print(f"    real      : /scans/{report.scan_id}/report")
         print(f"    degraded  : /scans/{degraded_report.scan_id}/report")
 
