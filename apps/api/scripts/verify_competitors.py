@@ -197,7 +197,19 @@ async def main() -> int:
     print("not exhaustive. Judge them by eye before calling them failures.")
 
     if serp_only:
-        print("\nSERP ONLY — acceptance criterion NOT verified.")
+        # "Criterion not verified" is honest and stays. Returning 0 regardless
+        # of what happened was not: this mode spends all sixty SerpApi searches
+        # and then exits green even if every one of them surfaced nothing, so a
+        # dead SerpApi key or a broken query builder read as success. Same
+        # defect as verify_intake.py's --crawl-only, found in the same epic.
+        #
+        # The criterion still is not verified here — only the SERP half ran —
+        # but "the SERP half produced no candidates at all" is a failure this
+        # mode can and should report.
+        print("\nSERP ONLY — acceptance criterion NOT verified (co-citation did not run).")
+        if total_rows == 0:
+            print("  FAIL  SERP discovery surfaced no candidates for any URL")
+            return 1
         return 0
     print("\nRESULT:", "PASS" if overall >= 0.8 else "BELOW BAR — needs review")
     return 0 if overall >= 0.8 else 1
