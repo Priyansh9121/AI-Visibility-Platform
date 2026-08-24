@@ -11,6 +11,7 @@ from decimal import Decimal
 import pytest
 
 from avp_api.models import DetectionSource, DetectionStatus
+from avp_api.services import competitors as detection
 from avp_api.services.cocitation import CoCitationHit, CoCitationResult, build_seed_prompts
 from avp_api.services.competitors import (
     MIN_COMPETITORS_FOR_OK,
@@ -715,3 +716,131 @@ class TestFloorIsANoOpAboveTheFloor:
         )
         assert len([c for c in ranked if c.passes_serp_gate()]) == 3
         assert {c.domain for c in outcome.candidates} == set(domains)
+
+
+class TestDetectionHasOneImplementation:
+    """Epic 3.11 / Finding 5: the script and the API must run the same code.
+
+    `scripts/verify_competitors.py` is the live check for §7 Epic 3's
+    acceptance criterion and holds no database connection by design, so it
+    could not call `detect_for_client` and had reassembled the pipeline from
+    its parts instead. The two were equivalent when measured, so the precision
+    figure it reported was sound — but nothing would have caught them drifting,
+    and a verification script that measures a copy is the trap Epic 4.0 named
+    and this codebase has now hit three times.
+
+    `detect_from_facts` is that code, taking the six scalars detection actually
+    needs. These assert the wrapper adds nothing, so the script calling one and
+    the API calling the other cannot diverge.
+    """
+
+    @staticmethod
+    def _stub(monkeypatch, domains, brands):  # noqa: ANN001, ANN205
+        async def fake_search_many(queries, **kwargs):  # noqa: ANN001, ANN003, ARG001
+            return [
+                SerpResult(
+                    query=q,
+                    hits=[SerpHit(domain=d, position=i, query=q)
+                          for i, d in enumerate(domains, 1)],
+                )
+                for q in queries[:2]
+            ]
+
+        async def fake_run_prompts(prompts, **kwargs):  # noqa: ANN001, ANN003, ARG001
+            return [
+                CoCitationResult(
+                    prompt=prompts[0],
+                    hits=[CoCitationHit(name=n, domain=d, position=i, prompt=prompts[0])
+                          for i, (n, d) in enumerate(brands, 1)],
+                )
+            ]
+
+        monkeypatch.setattr(detection.serp_service, "search_many", fake_search_many)
+        monkeypatch.setattr(detection.cocitation_service, "run_seed_prompts", fake_run_prompts)
+
+    async def test_the_wrapper_returns_exactly_what_the_core_returns(
+        self, monkeypatch
+    ) -> None:  # noqa: ANN001
+        """A Client and its six scalars must produce the identical outcome.
+
+        If `detect_for_client` ever grows logic of its own, the script stops
+        verifying what the API runs and Finding 5 is reopened silently. This is
+        what makes that impossible to do by accident.
+        """
+        from avp_api.models import Client
+        from avp_api.models.client import ClassificationStatus, ClientKind
+
+        self._stub(
+            monkeypatch,
+            ["rival-one.example", "rival-two.example"],
+            [("Rival One", "rival-one.example"), ("Rival Two", "rival-two.example")],
+        )
+
+        client = Client(
+            id="clnt_test", agency_id="agcy_test",
+            name="Subject Co", brand_name="Subject", domain="subject.example",
+            kind=ClientKind.PROSPECT,
+            classification_status=ClassificationStatus.CLASSIFIED,
+            industry="widget supply", industry_niche="regional widgets",
+        )
+
+        via_client = await detection.detect_for_client(client)
+        via_facts = await detection.detect_from_facts(
+            brand_name="Subject", domain="subject.example",
+            industry="widget supply", niche="regional widgets", name="Subject Co",
+        )
+
+        assert via_client.status is via_facts.status
+        assert via_client.detection_confidence == via_facts.detection_confidence
+        assert via_client.candidates_considered == via_facts.candidates_considered
+        assert via_client.used_industry_seed == via_facts.used_industry_seed
+        assert [
+            (c.resolved_name(), c.domain, c.source, c.corroborated)
+            for c in via_client.candidates
+        ] == [
+            (c.resolved_name(), c.domain, c.source, c.corroborated)
+            for c in via_facts.candidates
+        ]
+        assert via_client.candidates, "the fixture must actually detect something"
+
+    async def test_the_core_needs_no_client_and_no_database(
+        self, monkeypatch
+    ) -> None:  # noqa: ANN001
+        """The property that lets the verification script call it at all.
+
+        `verify_competitors.py` is one of three scripts that cannot touch a
+        database by construction, and that is worth keeping. If detection ever
+        acquires a session or a query, this fails before the script does.
+        """
+        import inspect
+
+        self._stub(monkeypatch, ["a.example"], [("A", "a.example")])
+        outcome = await detection.detect_from_facts(
+            brand_name="Subject", domain="subject.example"
+        )
+        assert outcome.candidates_considered >= 0
+
+        source = inspect.getsource(detection.detect_from_facts)
+        for forbidden in ("session", "select(", "commit", "execute("):
+            assert forbidden not in source, (
+                f"detect_from_facts touches {forbidden!r} — the verification "
+                "script holds no database connection and could no longer call it"
+            )
+
+    def test_the_wrapper_holds_no_logic(self) -> None:
+        """`detect_for_client` must stay a pure unpack.
+
+        Asserted at source level because the failure is silent: logic added
+        here runs in production and not in the script, which is exactly the
+        divergence Finding 5 was about.
+        """
+        import inspect
+
+        source = inspect.getsource(detection.detect_for_client)
+        body = source.split('"""')[-1]
+        assert "detect_from_facts(" in body
+        for forbidden in ("build_queries", "merge_candidates", "decide_detection",
+                          "score_candidates", "search_many"):
+            assert forbidden not in body, (
+                f"detect_for_client calls {forbidden} directly — it must delegate"
+            )

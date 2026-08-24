@@ -26,7 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from avp_api.config import Settings  # noqa: E402
-from avp_api.services import cocitation as cocitation_service  # noqa: E402
+from avp_api.services import competitors as detection  # noqa: E402
 from avp_api.services import serp as serp_service  # noqa: E402
 from avp_api.services.cocitation import CoCitationResult  # noqa: E402
 from avp_api.services.competitors import (  # noqa: E402
@@ -100,35 +100,47 @@ def matches_known(name: str, domain: str | None, known: list[str]) -> bool:
 
 
 async def run_case(case: Case, settings: Settings, serp_only: bool) -> dict:
-    queries = serp_service.build_queries(
-        brand_name=case.brand, domain=case.domain,
-        industry=case.industry, niche=case.niche,
-    )
-    prompts = cocitation_service.build_seed_prompts(
-        brand_name=case.brand, domain=case.domain,
-        industry=case.industry, niche=case.niche,
-    )
-
-    serp_results = await serp_service.search_many(queries, settings=settings)
     if serp_only:
+        # The diagnostic half. detect_from_facts always runs BOTH signals, so
+        # the SERP-only path still has to assemble its own outcome — and says
+        # so, rather than letting a reader think this measured what the API
+        # does. The full run below is the one that verifies the criterion.
+        queries = serp_service.build_queries(
+            brand_name=case.brand, domain=case.domain,
+            industry=case.industry, niche=case.niche,
+        )
+        serp_results = await serp_service.search_many(queries, settings=settings)
         co_results: list[CoCitationResult] = []
+        candidates = score_candidates(
+            merge_candidates(
+                serp_results, co_results,
+                subject_domain=case.domain, subject_name=case.brand,
+            )
+        )
+        outcome = decide_detection(
+            candidates,
+            serp_ok=sum(1 for r in serp_results if r.ok),
+            co_citation_ok=0,
+            used_industry_seed=bool(case.industry or case.niche),
+        )
     else:
-        co_results = await cocitation_service.run_seed_prompts(
-            prompts, subject_brand=case.brand, settings=settings
+        # THE REAL FUNCTION. This script used to reassemble the pipeline from
+        # build_queries / build_seed_prompts / merge_candidates /
+        # score_candidates / decide_detection and measure that — so the
+        # precision it reported described its own reconstruction, not the API.
+        # The two were equivalent when measured in Epic 3.10, but nothing would
+        # have caught them drifting. Epic 3.11 extracted `detect_from_facts`
+        # (Finding 5), which needs no Client and no database, so this script
+        # can call exactly what `POST /clients/{id}/competitors/detect` calls
+        # while keeping the property that it touches no database.
+        outcome = await detection.detect_from_facts(
+            brand_name=case.brand,
+            domain=case.domain,
+            industry=case.industry,
+            niche=case.niche,
+            name=case.brand,
+            settings=settings,
         )
-
-    candidates = score_candidates(
-        merge_candidates(
-            serp_results, co_results,
-            subject_domain=case.domain, subject_name=case.brand,
-        )
-    )
-    outcome = decide_detection(
-        candidates,
-        serp_ok=sum(1 for r in serp_results if r.ok),
-        co_citation_ok=sum(1 for r in co_results if r.ok),
-        used_industry_seed=bool(case.industry or case.niche),
-    )
 
     rows = []
     for rank, c in enumerate(outcome.candidates, 1):

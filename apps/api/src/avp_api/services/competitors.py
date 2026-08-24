@@ -433,25 +433,48 @@ def decide_detection(
     )
 
 
-async def detect_for_client(
-    client: Client, *, settings: Settings | None = None
+async def detect_from_facts(
+    *,
+    brand_name: str | None,
+    domain: str,
+    industry: str | None = None,
+    niche: str | None = None,
+    name: str | None = None,
+    client_id: str | None = None,
+    settings: Settings | None = None,
 ) -> DetectionOutcome:
-    """Run both discovery signals for a client and rank the results."""
+    """Run both discovery signals over a subject's facts and rank the results.
+
+    The whole of detection, taking the six scalars it actually needs rather
+    than a `Client` row. It makes no database call — it never did; the ORM
+    object was only ever an awkward way to pass six strings.
+
+    Extracted in Epic 3.11 to close Finding 5. `scripts/verify_competitors.py`
+    is the live check for §7 Epic 3's acceptance criterion and had no database
+    connection by design, so it could not call `detect_for_client` and had
+    reassembled the pipeline itself instead — measuring a copy. The two were
+    verified equivalent at the time, so the 80% figure it reported was sound,
+    but nothing would have caught them drifting apart. Now there is one
+    implementation and the script calls it.
+
+    `client_id` is for the log line only and is optional for exactly that
+    reason: a caller with no Client row still gets a real detection.
+    """
     settings = settings or get_settings()
 
     queries = serp_service.build_queries(
-        brand_name=client.brand_name,
-        domain=client.domain,
-        industry=client.industry,
-        niche=client.industry_niche,
+        brand_name=brand_name,
+        domain=domain,
+        industry=industry,
+        niche=niche,
     )
     prompts = cocitation_service.build_seed_prompts(
-        brand_name=client.brand_name,
-        domain=client.domain,
-        industry=client.industry,
-        niche=client.industry_niche,
+        brand_name=brand_name,
+        domain=domain,
+        industry=industry,
+        niche=niche,
     )
-    subject_brand = client.brand_name or client.name or client.domain
+    subject_brand = brand_name or name or domain
 
     serp_results = await serp_service.search_many(queries, settings=settings)
     co_citation_results = await cocitation_service.run_seed_prompts(
@@ -468,8 +491,8 @@ async def detect_for_client(
     candidates = merge_candidates(
         serp_results,
         co_citation_results,
-        subject_domain=client.domain,
-        subject_name=client.brand_name or client.name,
+        subject_domain=domain,
+        subject_name=brand_name or name,
     )
     score_candidates(candidates)
 
@@ -477,18 +500,39 @@ async def detect_for_client(
         candidates,
         serp_ok=sum(1 for r in serp_results if r.ok),
         co_citation_ok=sum(1 for r in co_citation_results if r.ok),
-        used_industry_seed=bool(client.industry or client.industry_niche),
+        used_industry_seed=bool(industry or niche),
     )
     logger.info(
         "competitors.detected",
-        client_id=client.id,
-        domain=client.domain,
+        client_id=client_id,
+        domain=domain,
         status=outcome.status.value,
         confidence=str(outcome.detection_confidence),
         returned=len(outcome.candidates),
         considered=outcome.candidates_considered,
     )
     return outcome
+
+
+async def detect_for_client(
+    client: Client, *, settings: Settings | None = None
+) -> DetectionOutcome:
+    """Run detection for a client. A thin unpack over `detect_from_facts`.
+
+    Kept as the service's entry point so every existing caller is unchanged,
+    and deliberately holding no logic of its own — the moment it does, the
+    script that calls `detect_from_facts` stops verifying what the API runs,
+    which is the whole defect Finding 5 recorded.
+    """
+    return await detect_from_facts(
+        brand_name=client.brand_name,
+        domain=client.domain,
+        industry=client.industry,
+        niche=client.industry_niche,
+        name=client.name,
+        client_id=client.id,
+        settings=settings,
+    )
 
 
 async def get_or_create_scan(
