@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # no
 
 from avp_api import ids  # noqa: E402
 from avp_api.config import Settings  # noqa: E402
-from avp_api.models import Agency, Client  # noqa: E402
+from avp_api.models import Agency, Client, Scan  # noqa: E402
 from avp_api.models.client import ClassificationStatus, ClientKind  # noqa: E402
 from avp_api.services import competitors as detection  # noqa: E402
 from avp_api.services import scan_runner, scoring_runner  # noqa: E402
@@ -122,8 +122,27 @@ async def main() -> int:
 
         # Reproducibility on REAL data.
         print("\nre-scoring the same persisted rows 5 times:")
+        scan_id = scan.id  # a plain str, immune to expiry
         composites, digests, row_ids = set(), set(), set()
         for _ in range(5):
+            # Expire the cached rows before each pass, so every iteration
+            # genuinely re-reads from Postgres.
+            #
+            # The sessionmaker sets expire_on_commit=False, so without this the
+            # identity map hands back the SAME Python objects loaded on the
+            # first pass. The loop still re-queried, but compared values it had
+            # already cached — so it could catch nondeterminism in the scoring
+            # arithmetic while being blind to nondeterminism in the READ path,
+            # which is exactly what compute_inputs_digest's explicit sorting
+            # exists to defend against (scoring-spec rule 1).
+            #
+            # The Scan is re-fetched with an awaited get() rather than left
+            # expired: a bare expire_all() expires `scan` too, and the next
+            # `scan.id` access is then a lazy load outside a greenlet, which
+            # raises MissingGreenlet. Found by running this change before
+            # committing it — the first version of this fix broke the script.
+            session.expire_all()
+            scan = await session.get(Scan, scan_id)
             r2, c2, _ = await scoring_runner.score_scan(session, scan)
             await session.commit()
             composites.add(str(c2.composite))
@@ -134,6 +153,17 @@ async def main() -> int:
         print(f"  distinct score rows : {len(row_ids)} (idempotent per formula version)")
 
         deterministic = len(composites) == 1 and len(digests) == 1 and len(row_ids) == 1
+
+        # This script never runs a technical audit, so technical_foundation is
+        # always NOT_YET_MEASURED and the run only ever exercises the degraded
+        # four-of-five-dimension path. It has therefore never verified the
+        # fifth dimension since Epic 6 added it — which matters more than it
+        # looks, because Epic 3.10 found that compute_inputs_digest had been
+        # omitting exactly that input for the same four epics. Say so rather
+        # than let a PASS imply the whole formula was covered.
+        print("\nNOTE: no technical audit is run here, so technical_foundation is")
+        print("      excluded and the FIVE-dimension path is NOT covered by this run.")
+        print("      Run scripts/verify_audit.py against the same scan for that half.")
         print(f"\ndeterministic across re-scores : {deterministic}")
         print("RESULT:", "PASS" if deterministic and computed.composite is not None
               else "NEEDS REVIEW")
