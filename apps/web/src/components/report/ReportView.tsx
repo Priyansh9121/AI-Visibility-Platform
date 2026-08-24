@@ -40,7 +40,7 @@ import {
   VisibilityBadge,
 } from '@avp/design-system';
 import type { ReactNode } from 'react';
-import type { Report } from '@avp/shared-types';
+import type { Report, ReportCompetitorSet } from '@avp/shared-types';
 import { ArrowRight } from 'lucide-react';
 import { deriveNarrative, gapHeading, scoreHeading } from '@/lib/report/derive';
 import {
@@ -409,6 +409,7 @@ function ProofBeat({
                 <span className="ml-2">{detection.detail}</span>
               </p>
             )}
+            <CorroborationNote competitorSet={report.competitorSet} />
             <DataTable
               className="mt-3"
               caption={`How ${subjectName} compares on the dimensions measured for both sides`}
@@ -463,8 +464,7 @@ function ProofBeat({
             {(report.competitorSet?.competitors ?? []).some((c) => c.isManualOverride) && (
               <p className="mt-3 text-ui-sm leading-prose text-text-tertiary">
                 Rivals marked <em>set by hand</em> were named by the agency rather than found by
-                the two automated signals. They are measured exactly like any other, but the
-                corroboration figure above does not describe them.
+                the two automated signals. They are measured exactly like any other.
               </p>
             )}
             {competitorEditor}
@@ -904,6 +904,48 @@ function competitorRows(report: Report, subjectName: string) {
     })),
   ];
   return rows;
+}
+
+/**
+ * The corroboration figure, and — the part that matters — how much of the list
+ * it actually describes.
+ *
+ * `detectionConfidence` is the share of the rivals DETECTION ranked that both
+ * signals surfaced independently. Rows an operator set by hand were surfaced by
+ * neither, so on a corrected set the figure covers only part of the table. It
+ * was previously not rendered at all, while the note under the table referred
+ * the reader to a "corroboration figure above" that was never on the page —
+ * Finding 3 in api-contracts.md.
+ *
+ * Rendering it without the count would be worse than not rendering it: "80%"
+ * over a six-row table two of whose rows nothing corroborated reads as a claim
+ * about all six. `confidenceCovers` comes from the API rather than being
+ * counted here, so the number the report prints is the number the projection
+ * scoped it to.
+ */
+function CorroborationNote({ competitorSet }: { competitorSet: ReportCompetitorSet }) {
+  const { detectionConfidence, confidenceCovers } = competitorSet;
+  // `== null` deliberately: the generated type is `string | null | undefined`,
+  // since the field is optional in the schema. A `=== null` check narrows only
+  // half of that and renders "NaN%" on the other half.
+  if (detectionConfidence == null || confidenceCovers === 0) return null;
+
+  const share = Number.parseFloat(detectionConfidence);
+  if (!Number.isFinite(share)) return null;
+
+  const shown = competitorSet.competitors.length;
+  const rival = confidenceCovers === 1 ? 'rival' : 'rivals';
+
+  return (
+    <p className="mt-2 text-ui-sm leading-prose text-text-tertiary">
+      Search results and AI answers independently surfaced{' '}
+      <strong className="font-medium text-text-secondary">{Math.round(share * 100)}%</strong> of the{' '}
+      {confidenceCovers} {rival} detection found
+      {confidenceCovers < shown
+        ? `. The remaining ${shown - confidenceCovers} of the ${shown} below were set by hand and are not in that figure.`
+        : '.'}
+    </p>
+  );
 }
 
 /** A null sub-score renders as an em dash, never as a zero. */

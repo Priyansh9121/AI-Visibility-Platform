@@ -343,23 +343,36 @@ async def main() -> int:  # noqa: C901
         if not marked:
             failures.append("the report projection lost the provenance flag")
 
-        # FINDING 3 (api-contracts.md, Open findings) — known, deliberately open.
+        # FINDING 3 — scoped in Epic 3.11. This used to print a NOTE and pass
+        # regardless; it is now an assertion.
         #
         # `apply_override` clears detection_confidence, but the re-detection in
         # PART 3 sets it again from its own outcome — and that outcome measured
         # agreement across only the rows detection found, not the operator's.
-        # The report therefore presents one corroboration figure for a set that
-        # is now part-detected and part-hand-set.
-        #
-        # Left alone because changing it means redefining what the field
-        # measures, which is an Epic 3 scoring-semantics decision rather than a
-        # UI one. Epic 3.6's badge is what made it visible; recorded in
-        # build-log Epic 3.6 as open.
-        if report.competitor_set.detection_confidence is not None and marked:
-            print(
-                f"\n  NOTE  detectionConfidence={report.competitor_set.detection_confidence} "
-                f"describes only the {len(report.competitor_set.competitors) - len(marked)} "
-                "detected rows, but is presented for the whole set. Finding 3, open."
+        # The report therefore carries one corroboration figure over a set that
+        # is part-detected and part-hand-set. `confidenceCovers` is what says
+        # how much of the set the figure describes, and this is the one live
+        # path that actually produces a mixed set, so it is the right place to
+        # check the count is real rather than trivially equal to the row count.
+        expected_covers = len(report.competitor_set.competitors) - len(marked)
+        print(f"  confidenceCovers   : {report.competitor_set.confidence_covers} "
+              f"of {len(report.competitor_set.competitors)} rows")
+        if report.competitor_set.confidence_covers != expected_covers:
+            failures.append(
+                f"confidenceCovers={report.competitor_set.confidence_covers} but "
+                f"{expected_covers} of {len(report.competitor_set.competitors)} rows "
+                "came from detection"
+            )
+        elif (
+            # Non-vacuous only when the set really is mixed. If PART 3 ever
+            # stops producing one, the check above still runs but proves
+            # nothing, and that must be visible rather than silent.
+            marked
+            and report.competitor_set.detection_confidence is not None
+            and expected_covers == len(report.competitor_set.competitors)
+        ):
+            failures.append(
+                "the set is not mixed, so the confidenceCovers check is vacuous"
             )
 
         payload = report.model_dump_json(by_alias=True)

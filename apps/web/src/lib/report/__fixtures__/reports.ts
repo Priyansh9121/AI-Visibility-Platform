@@ -138,6 +138,7 @@ export const helpscoutReport = {
   "competitorSet": {
     "status": "ok",
     "detectionConfidence": "0.800",
+    "confidenceCovers": 5,
     "competitors": [
       {
         "id": "comp_01M0HDSXA4KYP8YKWY2HBEDZFX",
@@ -517,6 +518,10 @@ export const manualOverrideReport: Report = {
   competitorSet: {
     ...helpscoutReport.competitorSet!,
     detectionConfidence: null,
+    // Four of the five rows are still detection's. The figure is null here, so
+    // nothing is scoped by it — but the count stays truthful about the rows
+    // rather than being zeroed alongside the confidence.
+    confidenceCovers: 4,
     competitors: helpscoutReport.competitorSet!.competitors.map((competitor, index) =>
       index === 0
         ? { ...competitor, isManualOverride: true, detectionSource: 'manual' }
@@ -637,6 +642,29 @@ export const failedAuditReport: Report = {
     failed: 1,
     notApplicable: 0,
     findings: [],
+  },
+};
+
+/**
+ * A set that has been corrected AND re-detected — Finding 3's actual case.
+ *
+ * `apply_override` clears the confidence, so an overridden set alone never
+ * shows one. Re-detection then writes a fresh confidence (computed over the
+ * candidates IT ranked) while the operator's rows survive, and the set carries
+ * a real corroboration figure over a list that is only partly detection's.
+ * That is the state in which publishing the figure unscoped overstates it.
+ */
+export const mixedCompetitorSetReport: Report = {
+  ...helpscoutReport,
+  competitorSet: {
+    ...helpscoutReport.competitorSet!,
+    detectionConfidence: '0.750',
+    confidenceCovers: 4,
+    competitors: helpscoutReport.competitorSet!.competitors.map((competitor, index) =>
+      index === 0
+        ? { ...competitor, isManualOverride: true, detectionSource: 'manual' }
+        : competitor,
+    ),
   },
 };
 

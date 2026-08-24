@@ -18,6 +18,7 @@ import {
   generatedFixesReport,
   helpscoutReport,
   manualOverrideReport,
+  mixedCompetitorSetReport,
   insufficientDataReport,
   noCompetitorSetReport,
   notYetMeasuredReport,
@@ -358,5 +359,47 @@ describe('competitor provenance and the override affordance — Epic 3.6', () =>
     ]) {
       expect(lowered).not.toContain(unsupported);
     }
+  });
+});
+
+describe('the corroboration figure says what it covers — Finding 3, Epic 3.11', () => {
+  it('renders the figure at all', () => {
+    // It was computed, persisted, and projected since Epic 3, and never put on
+    // the page. The note under the table meanwhile pointed the reader at "the
+    // corroboration figure above", which was not there to look at.
+    const html = render(helpscoutReport);
+    expect(html).toContain('80%');
+    expect(html).toContain('Search results and AI answers independently surfaced');
+  });
+
+  it('states the scope when part of the list was set by hand', () => {
+    // The whole of Finding 3. 0.750 over a five-row table whose first row
+    // nothing corroborated is a claim about four rows, and the page has to say
+    // so — otherwise the reader carries it across all five.
+    const html = render(mixedCompetitorSetReport);
+    expect(html).toContain('75%');
+    expect(html).toContain('4 rivals detection found');
+    expect(html).toContain('The remaining 1 of the 5 below were set by hand');
+  });
+
+  it('adds no scope caveat when detection produced the whole list', () => {
+    // The caveat has to be absent when it does not apply, or it reads as
+    // boilerplate and stops being information.
+    const html = render(helpscoutReport);
+    expect(html).toContain('5 rivals detection found');
+    expect(html).not.toContain('The remaining');
+  });
+
+  it('renders no figure when there is none to render', () => {
+    // A null confidence means the two signals could not be compared — one of
+    // them did not run, or an operator replaced the set. Rendering 0% there
+    // would assert that they looked and disagreed.
+    const html = render(manualOverrideReport);
+    expect(html).not.toContain('Search results and AI answers independently surfaced');
+  });
+
+  it('does not fabricate a percentage from a set nothing was detected in', () => {
+    const html = render(noCompetitorSetReport);
+    expect(html).not.toContain('Search results and AI answers independently surfaced');
   });
 });

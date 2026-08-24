@@ -916,6 +916,11 @@
             "title": "Competitors",
             "type": "array"
           },
+          "confidenceCovers": {
+            "default": 0,
+            "title": "Confidencecovers",
+            "type": "integer"
+          },
           "detectedAt": {
             "anyOf": [
               {
@@ -1930,6 +1935,11 @@
             },
             "title": "Competitors",
             "type": "array"
+          },
+          "confidenceCovers": {
+            "default": 0,
+            "title": "Confidencecovers",
+            "type": "integer"
           },
           "detectionConfidence": {
             "anyOf": [

@@ -6,7 +6,6 @@ and the API contract without paid SerpApi searches or model calls.
 
 from __future__ import annotations
 
-import pytest
 from httpx import AsyncClient
 
 from avp_api.services import competitors as detection
@@ -33,53 +32,9 @@ async def _make_client(client: AsyncClient, domain: str = "helpscout.com") -> st
     return resp.json()["id"]
 
 
-@pytest.fixture
-def stub_discovery(monkeypatch):  # noqa: ANN001, ANN201
-    """Replace both discovery signals with deterministic stubs."""
-
-    def _install(
-        serp_domains: list[str] | None = None,
-        cocit_brands: list[tuple[str, str | None]] | None = None,
-        serp_ok: bool = True,
-        cocit_ok: bool = True,
-    ):
-        async def fake_search_many(queries, **kwargs):  # noqa: ANN001, ANN003, ARG001
-            if not serp_ok:
-                return [SerpResult(query=q, ok=False, error_code="SERP_TIMEOUT") for q in queries]
-            # Two distinct queries, mirroring a real run. A single-query stub
-            # would be gated out by MIN_SERP_QUERIES_FOR_UNCORROBORATED and
-            # these tests would assert against an always-empty set.
-            return [
-                SerpResult(
-                    query=q,
-                    hits=[
-                        SerpHit(domain=d, position=i, query=q)
-                        for i, d in enumerate(serp_domains or [], 1)
-                    ],
-                )
-                for q in queries[:2]
-            ]
-
-        async def fake_run_prompts(prompts, **kwargs):  # noqa: ANN001, ANN003, ARG001
-            if not cocit_ok:
-                return [
-                    CoCitationResult(prompt=p, ok=False, error_code="PROVIDER_ERROR")
-                    for p in prompts
-                ]
-            return [
-                CoCitationResult(
-                    prompt=prompts[0],
-                    hits=[
-                        CoCitationHit(name=n, domain=d, position=i, prompt=prompts[0])
-                        for i, (n, d) in enumerate(cocit_brands or [], 1)
-                    ],
-                )
-            ]
-
-        monkeypatch.setattr(detection.serp_service, "search_many", fake_search_many)
-        monkeypatch.setattr(detection.cocitation_service, "run_seed_prompts", fake_run_prompts)
-
-    return _install
+# `stub_discovery` now lives in conftest.py — test_report_endpoint.py needs the
+# same stub to build a mixed competitor set, and a second copy of a fixture this
+# fiddly is a drift hazard for both.
 
 
 class TestDetectEndpoint:
@@ -845,3 +800,109 @@ class TestAttributionSurvivesAnOverride:
         second = await client.put(f"{BASE}/clients/{cid}/competitors", json=payload)
         assert second.status_code == 200, f"re-submitting the same set failed: {second.text[:300]}"
         assert [c["name"] for c in second.json()["competitors"]] == ["Keep"]
+
+
+class TestConfidenceSaysWhatItCovers:
+    """Finding 3, closed in Epic 3.11.
+
+    `detectionConfidence` measures agreement between two automated signals over
+    the rows DETECTION ranked. Manual rows were corroborated by neither, so on a
+    mixed set the figure alone is published for more rows than it describes.
+    `confidenceCovers` states the scope so a reader is not left inferring it.
+    """
+
+    async def test_covers_every_row_when_nothing_was_overridden(
+        self, client: AsyncClient, stub_discovery
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_discovery(
+            serp_domains=["a.com", "b.com"],
+            cocit_brands=[("A", "a.com"), ("B", "b.com")],
+        )
+        body = (await client.post(f"{BASE}/clients/{cid}/competitors/detect")).json()
+
+        assert body["detectionConfidence"] is not None
+        assert body["confidenceCovers"] == len(body["competitors"]), (
+            "on a purely detected set the figure covers the whole list"
+        )
+
+    async def test_covers_only_the_detected_rows_on_a_mixed_set(
+        self, client: AsyncClient, stub_discovery
+    ) -> None:  # noqa: ANN001
+        """The case Finding 3 was actually about.
+
+        An override alone clears the confidence, so it is re-detection that
+        creates the misleading state: a fresh figure computed over detection's
+        own candidates, published beside a list the operator has part-authored.
+        """
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_discovery(serp_domains=["a.com"], cocit_brands=[("A", "a.com")])
+        await client.post(f"{BASE}/clients/{cid}/competitors/detect")
+        await client.put(
+            f"{BASE}/clients/{cid}/competitors",
+            json={"competitors": [{"name": "Operator Pick", "domain": "operatorpick.com"}]},
+        )
+
+        stub_discovery(
+            serp_domains=["b.com", "c.com"],
+            cocit_brands=[("B", "b.com"), ("C", "c.com")],
+        )
+        body = (await client.post(f"{BASE}/clients/{cid}/competitors/detect")).json()
+
+        manual = [c for c in body["competitors"] if c["isManualOverride"]]
+        assert manual, "the operator's row must have survived for this to test anything"
+        assert body["detectionConfidence"] is not None, "re-detection writes a fresh figure"
+        assert body["confidenceCovers"] == len(body["competitors"]) - len(manual)
+        assert body["confidenceCovers"] < len(body["competitors"]), (
+            "the whole point: the figure covers strictly fewer rows than are shown"
+        )
+
+    async def test_covers_nothing_once_the_set_is_entirely_hand_set(
+        self, client: AsyncClient, stub_discovery
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_discovery(serp_domains=["a.com"], cocit_brands=[("A", "a.com")])
+        await client.post(f"{BASE}/clients/{cid}/competitors/detect")
+        body = (await client.put(
+            f"{BASE}/clients/{cid}/competitors",
+            json={"competitors": [{"name": "Zendesk", "domain": "zendesk.com"}]},
+        )).json()
+
+        assert body["detectionConfidence"] is None
+        assert body["confidenceCovers"] == 0
+
+    async def test_a_struck_rival_stops_being_covered(
+        self, client: AsyncClient, stub_discovery
+    ) -> None:  # noqa: ANN001
+        """A tombstone is not a row the figure describes, and not a row at all.
+
+        Struck rivals are held as suppressed manual rows so re-detection cannot
+        reinstate them. Counting them would inflate the scope with rows the
+        reader cannot see.
+        """
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_discovery(
+            serp_domains=["a.com", "b.com"],
+            cocit_brands=[("A", "a.com"), ("B", "b.com")],
+        )
+        detected = (await client.post(f"{BASE}/clients/{cid}/competitors/detect")).json()
+        keep = detected["competitors"][0]
+
+        # Strike everything but the first, then re-detect so a figure exists.
+        await client.put(
+            f"{BASE}/clients/{cid}/competitors",
+            json={"competitors": [{"name": keep["name"], "domain": keep["domain"]}]},
+        )
+        stub_discovery(serp_domains=["c.com"], cocit_brands=[("C", "c.com")])
+        body = (await client.post(f"{BASE}/clients/{cid}/competitors/detect")).json()
+
+        assert body["confidenceCovers"] == sum(
+            1 for c in body["competitors"] if not c["isManualOverride"]
+        )
+        assert body["confidenceCovers"] <= len(body["competitors"]), (
+            "the scope can never exceed the rows on the wire"
+        )

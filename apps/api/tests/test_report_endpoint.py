@@ -310,3 +310,48 @@ class TestAccessControl:
         await _sign_up(client)
         resp = await client.get(f"{BASE}/scans/scan_01DOESNOTEXIST000000000000/report")
         assert resp.status_code == 404
+
+
+class TestCompetitorSetScope:
+    """Finding 3 in the REPORT projection — Epic 3.11.
+
+    `ReportCompetitorSetOut` is a separate schema from `CompetitorSetOut` and
+    is built by a different function. Fixing the scope in one and not the other
+    would leave the misleading figure exactly where a client actually reads it,
+    so the property is asserted on both sides.
+    """
+
+    async def test_the_report_scopes_the_confidence_to_the_detected_rows(
+        self, client: AsyncClient, stub_engines, stub_discovery
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        resp = await client.post(
+            f"{BASE}/clients", json={"url": "helpscout.com", "classify": False}
+        )
+        cid = resp.json()["id"]
+
+        stub_discovery(serp_domains=["a.com"], cocit_brands=[("A", "a.com")])
+        await client.post(f"{BASE}/clients/{cid}/competitors/detect")
+        await client.put(
+            f"{BASE}/clients/{cid}/competitors",
+            json={"competitors": [{"name": "Operator Pick", "domain": "operatorpick.com"}]},
+        )
+        # Re-detect so a fresh confidence is written over a part-hand-set list.
+        stub_discovery(
+            serp_domains=["b.com", "c.com"],
+            cocit_brands=[("B", "b.com"), ("C", "c.com")],
+        )
+        await client.post(f"{BASE}/clients/{cid}/competitors/detect")
+
+        stub_engines(n_prompts=4)
+        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+        assert (await client.post(f"{BASE}/scans/{sid}/score")).status_code == 201
+
+        cset = (await client.get(f"{BASE}/scans/{sid}/report")).json()["competitorSet"]
+        assert cset is not None, "the scan must carry a set for this to test anything"
+
+        manual = [c for c in cset["competitors"] if c["isManualOverride"]]
+        assert manual, "the operator's row must have survived re-detection"
+        assert cset["detectionConfidence"] is not None
+        assert cset["confidenceCovers"] == len(cset["competitors"]) - len(manual)
+        assert cset["confidenceCovers"] < len(cset["competitors"])
