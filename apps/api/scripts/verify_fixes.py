@@ -134,9 +134,27 @@ async def main() -> int:  # noqa: C901
         # "actionable language" is not directly assertable, but its absence is:
         # a list that never names the subject, a competitor, or a concrete
         # artefact is the abstract list Epic 7 already refused to ship.
-        for required in ("faqpage", "schema", client.domain.lower()):
-            if required not in blob:
-                failures.append(f"no fix names {required!r} — the list reads as generic advice")
+        # Each entry is a set of EQUIVALENT spellings; the fix list must name
+        # the artefact, not one particular word for it.
+        #
+        # This used to demand the bare token "schema". Against the Help Scout
+        # scan the model happened to write "FAQPage schema" and it passed;
+        # against a seeded scan it wrote "FAQPage markup" — plainer English,
+        # naming the same artefact just as concretely, and arguably better copy
+        # — and the script reported FAIL on a generation that was correct in
+        # every respect. A check that fails good output on word choice teaches
+        # its reader to ignore it, which is worse than not having it. Found in
+        # Epic 3.10 by reading the output rather than the exit code.
+        required_concepts = (
+            ("faqpage",),
+            ("schema", "markup", "structured data"),
+            (client.domain.lower(),),
+        )
+        for spellings in required_concepts:
+            if not any(term in blob for term in spellings):
+                failures.append(
+                    f"no fix names any of {list(spellings)} — the list reads as generic advice"
+                )
 
         for phrase in BANNED_CLAIMS:
             if phrase in blob:
