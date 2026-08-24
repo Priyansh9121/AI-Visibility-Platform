@@ -67,6 +67,10 @@ def _sorted(competitor_set: CompetitorSet) -> CompetitorSetOut:
     out.competitors = [
         CompetitorOut.model_validate(c) for c in competitor_set.active_competitors
     ]
+    # Set explicitly: `detected_competitors` is a property with a different
+    # name, so model_validate cannot find it, and a silent 0 would understate
+    # the confidence's scope on every response.
+    out.confidence_covers = len(competitor_set.detected_competitors)
     return out
 
 

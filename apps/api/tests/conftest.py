@@ -27,6 +27,9 @@ from avp_api.config import Settings, get_settings
 from avp_api.deps import db_session
 from avp_api.main import create_app
 from avp_api.models import Base
+from avp_api.services import competitors as detection
+from avp_api.services.cocitation import CoCitationHit, CoCitationResult
+from avp_api.services.serp import SerpHit, SerpResult
 
 TEST_DATABASE_URL = os.environ.get(
     "AVP_TEST_DATABASE_URL", "postgresql+asyncpg://avp@127.0.0.1:55433/avp_test"
@@ -144,6 +147,55 @@ async def client(engine, settings: Settings) -> AsyncIterator[AsyncClient]:  # n
 
     app.dependency_overrides.clear()
     get_settings.cache_clear()
+
+
+@pytest.fixture
+def stub_discovery(monkeypatch):  # noqa: ANN001, ANN201
+    """Replace both discovery signals with deterministic stubs."""
+
+    def _install(
+        serp_domains: list[str] | None = None,
+        cocit_brands: list[tuple[str, str | None]] | None = None,
+        serp_ok: bool = True,
+        cocit_ok: bool = True,
+    ):
+        async def fake_search_many(queries, **kwargs):  # noqa: ANN001, ANN003, ARG001
+            if not serp_ok:
+                return [SerpResult(query=q, ok=False, error_code="SERP_TIMEOUT") for q in queries]
+            # Two distinct queries, mirroring a real run. A single-query stub
+            # would be gated out by MIN_SERP_QUERIES_FOR_UNCORROBORATED and
+            # these tests would assert against an always-empty set.
+            return [
+                SerpResult(
+                    query=q,
+                    hits=[
+                        SerpHit(domain=d, position=i, query=q)
+                        for i, d in enumerate(serp_domains or [], 1)
+                    ],
+                )
+                for q in queries[:2]
+            ]
+
+        async def fake_run_prompts(prompts, **kwargs):  # noqa: ANN001, ANN003, ARG001
+            if not cocit_ok:
+                return [
+                    CoCitationResult(prompt=p, ok=False, error_code="PROVIDER_ERROR")
+                    for p in prompts
+                ]
+            return [
+                CoCitationResult(
+                    prompt=prompts[0],
+                    hits=[
+                        CoCitationHit(name=n, domain=d, position=i, prompt=prompts[0])
+                        for i, (n, d) in enumerate(cocit_brands or [], 1)
+                    ],
+                )
+            ]
+
+        monkeypatch.setattr(detection.serp_service, "search_many", fake_search_many)
+        monkeypatch.setattr(detection.cocitation_service, "run_seed_prompts", fake_run_prompts)
+
+    return _install
 
 
 @pytest.fixture

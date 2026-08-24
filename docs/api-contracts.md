@@ -966,9 +966,9 @@ it, the way Finding 2 is.
 |---|---|---|---|
 | 1 | Industry label over-generalisation | Epic 2.6 | ◐ improved in Epic 2.8, residual variance |
 | 2 | Industry classification confidence is uncalibrated | Epic 2.6 | ⬚ **open** |
-| 3 | `detectionConfidence` describes a mixed competitor set | Epic 3.6 | ⬚ **open** |
+| 3 | `detectionConfidence` describes a mixed competitor set | Epic 3.6 | ◐ **scoped in Epic 3.11**, meaning still undefined |
 | 4 | A competitor override destroys citation and mention attribution | Epic 3.6 | ✅ **fixed in Epic 3.9** |
-| 5 | `verify_competitors.py` verifies a copy of the detection pipeline | Epic 3 | ⬚ **open** |
+| 5 | `verify_competitors.py` verifies a copy of the detection pipeline | Epic 3 | ✅ **fixed in Epic 3.11** |
 | 6 | No verification script covers the five-dimension scoring path | Epic 6 | ⬚ **open** |
 
 Finding 1 is listed as improved rather than closed on the strength of Epic 2.8's
@@ -1057,13 +1057,44 @@ This is the third instance of the same trap in this codebase. Epic 4.0 named it
 and passed against its own copy while the endpoint was still wrong; Epic 3.8's
 first fix shipped a negative control that could not fail.
 
-**Not fixed in Epic 3.10** because it is not a small change. `detect_for_client`
-takes a `Client` row, and this script deliberately holds no database connection
-at all — it is one of the three verify scripts that cannot touch `avp_dev` by
-construction, which is a property worth keeping. Closing it means either giving
-the script a throwaway database and a seeded client per case, or extracting a
-database-free core from `detect_for_client` that both it and the service call.
-The second is better and is roughly what `apply_override` got in Epic 3.8.
+**Fixed in Epic 3.11** by the second option — extracting a database-free core.
+
+**This register was wrong about the cost.** It said the change "is not a small
+change" because `detect_for_client` takes a `Client` row. Re-reading the
+function for Epic 3.11: it makes **zero** database calls and reads the `Client`
+in exactly six places, every one of them a plain scalar (`brand_name`,
+`domain`, `industry`, `industry_niche`, `name`, and `id` for a log line). The
+ORM object was only ever an awkward way to pass six strings, so the "core" the
+register imagined extracting was essentially the whole function.
+
+`detect_from_facts` now holds the body and takes those six scalars;
+`detect_for_client` is a thin unpack over it, so no existing caller changed.
+The script calls `detect_from_facts` and holds no database connection, keeping
+the property the register wanted to protect.
+
+**A correction to the description above, and to Epic 3.10's write-up.** Both
+said the script "reassembles the pipeline" and stopped there. It also called
+`decide_detection`, with arguments structurally identical to the service's — so
+the two were genuinely equivalent, and the 80% precision reported in Epic 3.10
+was a sound number. Finding 5 was a **drift risk, not a live incorrectness**,
+and saying so plainly matters: the entry as written implied the measurement had
+been wrong all along, which would have been a much more serious thing.
+
+`--serp-only` still assembles its own outcome, because `detect_from_facts`
+always runs both signals. It now says so in the code rather than leaving a
+reader to assume the diagnostic half measured what the API does.
+
+Guarded by `TestDetectionHasOneImplementation`: the wrapper and the core must
+return identical outcomes for identical facts; the core must stay free of
+`session`/`select`/`commit`/`execute`, which is the property that lets a
+database-free script call it; and the wrapper must hold no logic of its own,
+since logic there would run in production but not in the script — reopening
+this finding silently. Negative-controlled in both directions.
+
+Not re-run live. The full script costs 60 SerpApi searches and 40 model calls,
+the change is structurally verified with comments stripped (a naive grep
+matches the explanatory comment's own prose, which named the old functions),
+and re-spending to watch it print the same 80% was not worth it.
 
 ### Finding 6 — no verification script covers the five-dimension scoring path
 
@@ -1102,15 +1133,45 @@ single corroboration figure for a set that is part-detected, part-hand-set, and
 The defect is that the field's meaning is undefined once a set is mixed, and
 the API presents it as though it describes the whole thing.
 
-Open because closing it is a product decision about what the field should mean,
-not implementation work. The options are roughly:
+**Partly closed in Epic 3.11** by the second option: scope it explicitly.
 
-- clear it whenever any manual row survives (simple, loses information);
-- scope it explicitly — report it alongside the count of rows it covers;
-- split it into a per-row property rather than a set-level one.
+`CompetitorSetOut` and `ReportCompetitorSetOut` now both carry
+`confidenceCovers` — the number of rows in the set that detection produced,
+which is what the figure is a statement about. Derived from the rows at
+projection time via `CompetitorSet.detected_competitors` rather than stored, so
+it cannot go stale against the list it counts. The stored value's arithmetic is
+untouched; only what the API says about its scope changed.
 
-Each changes what Epic 5 may infer from it, so it belongs with the scoring
-semantics rather than in a UI or cleanup epic.
+The report now renders the figure at all, which it never did. That is worth
+recording on its own: the note under the competitor table referred the reader
+to "the corroboration figure above", and no such figure was ever on the page —
+so the copy pointed at nothing for five epics. It now reads "Search results and
+AI answers independently surfaced 75% of the 4 rivals detection found. The
+remaining 1 of the 5 below were set by hand and are not in that figure."
+
+`confidenceCovers` is deliberately **not** the figure's own denominator, and is
+documented as not being it. Detection computes the ratio over every candidate
+it ranked, including ones the operator had already named or struck, which are
+then held back from the set. The published count is the number of rows a reader
+can actually see it apply to, which is the number the report needs.
+
+It is also not a proxy for the confidence being present: a set where only one
+signal ran carries a null confidence and a full complement of detected rows,
+and a set where re-detection re-found nothing but rivals the operator had
+already named carries a real confidence and zero of them.
+
+**Still open: what the field should MEAN on a mixed set.** Scoping it stops the
+API overstating what it measured, which was the misleading part. It does not
+decide whether Epic 5 should treat a 0.80-over-4-of-6 set as more or less solid
+a comparison base than a 0.80-over-6-of-6 one. That is still a scoring-semantics
+decision, and the third option — a per-row property — is still the more
+principled long-term answer.
+
+Guarded on both projections independently (`TestConfidenceSaysWhatItCovers` and
+`TestCompetitorSetScope`), because they are separate schemas built by separate
+functions and fixing one would have left the figure misleading in the place a
+client actually reads it. Negative-controlled: making either projection count
+all active rows fails that projection's tests and only that projection's.
 
 Surfaced by Epic 3.6's competitor-provenance badge, which is what made a mixed
 set visible in the first place. `scripts/verify_competitor_override.py` prints

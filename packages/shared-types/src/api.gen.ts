@@ -908,6 +908,11 @@ export interface components {
             coCitationPromptsRun: number;
             /** Competitors */
             competitors?: components["schemas"]["CompetitorOut"][];
+            /**
+             * Confidencecovers
+             * @default 0
+             */
+            confidenceCovers: number;
             /** Detectedat */
             detectedAt?: string | null;
             /** Detectionconfidence */
@@ -1293,6 +1298,11 @@ export interface components {
         ReportCompetitorSetOut: {
             /** Competitors */
             competitors: components["schemas"]["ReportCompetitorOut"][];
+            /**
+             * Confidencecovers
+             * @default 0
+             */
+            confidenceCovers: number;
             /** Detectionconfidence */
             detectionConfidence?: string | null;
             /** Status */

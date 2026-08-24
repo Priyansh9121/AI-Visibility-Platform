@@ -39,6 +39,29 @@ class CompetitorSetOut(ApiModel):
     # Cross-signal agreement, 0-1, or null when it could not be measured
     # because only one signal ran. Null is NOT zero — see the model docstring.
     detection_confidence: Decimal | None = None
+    # How many of the rows below came from DETECTION rather than an operator —
+    # i.e. how many of them `detectionConfidence` is a statement about.
+    #
+    # The figure measures agreement between two automated signals. Rows an
+    # operator set by hand were corroborated by neither, so on a mixed set a
+    # lone confidence number is presented for more rows than it describes.
+    # That was Finding 3. Publishing the scope alongside it lets a reader see
+    # the gap instead of guessing at it: "0.80 across 4 of these 6" is honest
+    # where a bare "0.80" is not. Equals the row count when nothing was
+    # overridden.
+    #
+    # It is NOT a proxy for `detectionConfidence` being present. A set where
+    # only one signal ran carries a null confidence and a full complement of
+    # detected rows, and a set where re-detection re-found nothing but rivals
+    # the operator had already named carries a real confidence and zero of
+    # them. Read the two fields together; neither implies the other.
+    #
+    # Not quite the figure's own denominator, and deliberately not claimed to
+    # be: detection computes it over every candidate it ranked, including any
+    # the operator had already named or struck by hand, which are then held
+    # back from the set. So this is the count of rows the reader can actually
+    # see it apply to, which is the number the report needs.
+    confidence_covers: int = 0
 
     serp_queries_run: int
     co_citation_prompts_run: int

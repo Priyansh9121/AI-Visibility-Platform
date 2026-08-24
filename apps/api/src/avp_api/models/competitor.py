@@ -100,6 +100,21 @@ class CompetitorSet(Base, TimestampMixin):
     )
 
     @property
+    def detected_competitors(self) -> list[Competitor]:
+        """The active rows `detection_confidence` is a statement about.
+
+        The figure is the share of the returned set that SERP and co-citation
+        surfaced INDEPENDENTLY of each other, so it is computed over the rows
+        detection produced — never over rows an operator set by hand, which no
+        automated signal corroborated.
+
+        Once a set is mixed, presenting the figure without saying how much of
+        the set it describes is the defect Finding 3 recorded. Derived here
+        rather than stored so it cannot go stale against the rows it counts.
+        """
+        return [c for c in self.active_competitors if not c.is_manual_override]
+
+    @property
     def active_competitors(self) -> list[Competitor]:
         """The set as everything downstream should see it.
 

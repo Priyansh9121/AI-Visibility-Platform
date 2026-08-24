@@ -249,6 +249,7 @@ def _competitor_set_out(
     return ReportCompetitorSetOut(
         status=competitor_set.status.value,
         detection_confidence=competitor_set.detection_confidence,
+        confidence_covers=len(competitor_set.detected_competitors),
         competitors=competitors,
     )
 

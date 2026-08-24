@@ -781,12 +781,17 @@ async def persist_detection(
             auto_by_domain.setdefault(competitor.domain, competitor)
 
     competitor_set.status = outcome.status
-    # FINDING 3 (api-contracts.md, Open findings) — this figure measures
-    # agreement between two automated signals across the rows DETECTION found.
-    # Any manual overrides preserved above are not in that calculation, so on a
-    # mixed set it is presented for more rows than it describes. Left as-is
-    # deliberately: what the field should mean once a set is part-hand-set is a
-    # scoring-semantics decision, not a persistence one.
+    # Finding 3, closed in Epic 3.11. This figure measures agreement between
+    # two automated signals across the rows DETECTION found; manual overrides
+    # preserved above are not in that calculation, so on a mixed set it used to
+    # be published for more rows than it described.
+    #
+    # The fix is scope, not arithmetic: the value stored here still means what
+    # it always meant, and both projections now publish `confidenceCovers`
+    # beside it — the number of rows in the set that detection produced. What
+    # the figure should MEAN on a part-hand-set list is still a scoring
+    # question and still open; what it covers is now stated rather than
+    # implied, which is the part that was misleading.
     competitor_set.detection_confidence = outcome.detection_confidence
     competitor_set.serp_queries_run = outcome.serp_queries_run
     competitor_set.co_citation_prompts_run = outcome.co_citation_prompts_run
