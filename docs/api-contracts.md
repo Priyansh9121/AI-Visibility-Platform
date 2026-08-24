@@ -969,7 +969,7 @@ it, the way Finding 2 is.
 | 3 | `detectionConfidence` describes a mixed competitor set | Epic 3.6 | ◐ **scoped in Epic 3.11**, meaning still undefined |
 | 4 | A competitor override destroys citation and mention attribution | Epic 3.6 | ✅ **fixed in Epic 3.9** |
 | 5 | `verify_competitors.py` verifies a copy of the detection pipeline | Epic 3 | ✅ **fixed in Epic 3.11** |
-| 6 | No verification script covers the five-dimension scoring path | Epic 6 | ◐ **script fixed in Epic 3.11**, awaiting a live run |
+| 6 | No verification script covers the five-dimension scoring path | Epic 6 | ✅ **fixed and verified live in Epic 3.11** |
 
 Finding 1 is listed as improved rather than closed on the strength of Epic 2.8's
 own "Still imperfect" section: the four `b2b saas` / `venture capital` failures
@@ -1133,15 +1133,26 @@ formula that excluded one of its inputs.
 used to print unconditionally, so the four-dimension mode stays available and
 stays honest about what it covers.
 
-**Still ◐ rather than ✅ because the script has not been run live yet.** The
-change is lint-clean and compiles, and the transition itself is covered by
-stubbed tests (`TestScoringIntegration` in `test_audit_endpoints.py`) and by
-`test_a_changed_audit_cannot_move_the_score_under_one_digest` at unit level.
-But stubbed coverage is precisely what Finding 6 says is not enough: the
-finding is that no *live* script exercises the path. Marking it fixed on the
-strength of a suite that was already green while the gap existed would be the
-self-consistent-measurement trap again. A full run costs roughly 6 SerpApi
-searches and a dozen model calls, which is not spent without asking.
+**Verified live**, against a throwaway database, on 2026-08-24. Real SerpApi
+detection, real model calls, real Playwright crawl. `avp_dev` untouched — the
+run's scan is absent from it, and the only `Scoring Verification` agency there
+dates from 2026-08-21.
+
+    composite     : 59.22  ->  62.05
+    inputs_digest : 7604bc4c41fb26af  ->  75429cf57317e2ec
+    included      : 5/5
+    flags         : [NOT_MEASURED, NO_AUTHORITY_DATA] -> [NO_AUTHORITY_DATA]
+    RESULT: PASS   deterministic across 5 re-scores, one score row
+
+Three of the four assertions are self-evidently non-vacuous: the run printed
+the failing state and then the passing state within a single execution, which
+is better evidence than a synthetic control could give.
+
+The digest assertion was negative-controlled separately, against the rows that
+run persisted. Reverting `compute_inputs_digest` to its Epic 3.10 defect
+collapses both digests to one value (`7785e2c34b073f0a`) and the assertion
+returns False — so the script would have failed. Restored, it returns True and
+reproduces the two digests the live run printed exactly.
 
 ### Finding 3 — `detectionConfidence` describes a mixed competitor set
 
