@@ -4236,7 +4236,7 @@ sequence keeps hitting.
 the same stub to build a mixed set and a second copy of a fixture that fiddly
 would drift.
 
-### Finding 6 — script fixed, not yet verified
+### Finding 6 — the five-dimension path, now exercised live
 
 `verify_scoring.py` now scores **before** the audit, runs the audit, and scores
 again, asserting four things about the transition instead of printing a caveat:
@@ -4253,14 +4253,47 @@ half of the gap: reproducibility had only ever been demonstrated for a formula
 that excluded one of its inputs. `--skip-audit` restores the old behaviour and
 keeps the old caveat.
 
-**Left at ◐, not ✅.** The script is lint-clean and compiles, and the transition
-is covered by stubbed tests. But that is exactly what Finding 6 says is not
-enough — the finding *is* that no live script exercises the path, and the
-stubbed suite was already green the whole time the gap existed. Marking it fixed
-on that evidence would be the self-consistent-measurement trap for the fourth
-time in this sequence. **The live run has not been made and has not been paid
-for**; it needs roughly 6 SerpApi searches and a dozen model calls, and the
-standing rule in this project is that API budget is not spent without asking.
+The cost was put up before it was spent — 17 model calls, 6 SerpApi searches,
+one free crawl — and approved. **Run live against a throwaway database, and it
+passes:**
+
+    [3/4] scoring, BEFORE any audit
+          composite 59.22   excluded=['technical_foundation']
+          flags=['NO_AUTHORITY_DATA', 'TECHNICAL_FOUNDATION_NOT_MEASURED']
+
+    [4/4] technical audit of helpscout.com   status=ok  score=87.50  checks=17
+          composite     : 59.22  ->  62.05
+          inputs_digest : 7604bc4c41fb26af  ->  75429cf57317e2ec
+          included      : 5/5
+          flags         : ['NO_AUTHORITY_DATA']
+          OK  technical_foundation is now included
+          OK  every dimension is included
+          OK  the NOT_YET_MEASURED flag is gone
+          OK  the digest moved when the fifth input appeared
+
+    deterministic across re-scores : True   (1 composite, 1 digest, 1 score row)
+    RESULT: PASS
+
+Detection returned five rivals at confidence 1.000, all corroborated by both
+signals — Zendesk, Front, Kayako, Freshdesk, Kustomer — so the run exercised
+the competitor-dependent dimensions properly rather than degrading past them.
+
+**Three of the four assertions are self-evidently non-vacuous**: the run printed
+the failing state and then the passing state inside a single execution. That is
+better evidence than a synthetic control, because nothing had to be injected to
+produce the negative case — the scan genuinely was four-of-five before the audit.
+
+**The digest assertion was negative-controlled separately**, against the rows
+that run had just persisted, so it is a statement about real data. Reverting
+`compute_inputs_digest` to its Epic 3.10 defect collapses both digests to one
+value — `7785e2c34b073f0a` — and the assertion returns False, meaning the script
+would have failed. Restored, it returns True and reproduces `7604bc4c41fb26af`
+and `75429cf57317e2ec`, the exact pair the live run printed. So the check is
+driven by `technical_foundation` and by nothing else.
+
+**`avp_dev` untouched.** The run's scan is absent from it; the one
+`Scoring Verification` agency there dates from 2026-08-21, an earlier epic. The
+throwaway database was created, migrated, used and dropped.
 
 ### A test count I got wrong twice
 
@@ -4281,6 +4314,14 @@ percentage, two integers and the word "rival"/"rivals" — counts and ordinals,
 which #7 permits explicitly. No entity name, engine text or competitor prose
 reaches it. `confidenceCovers` is an `int` on both schemas.
 `test_ip_safety.py` passes at 74. No new dependencies, so #6 does not apply.
+
+### API spend
+
+17 `claude-opus-5` calls and 6 SerpApi searches, in one approved run of
+`verify_scoring.py --prompts 3`. Nothing else in this epic spent anything:
+Finding 5 was closed on structural and unit evidence rather than by re-running
+`verify_competitors.py`, which would have cost 60 SerpApi searches and 40 model
+calls to watch it print the same 80% it printed in Epic 3.10.
 
 ### Dependencies
 
