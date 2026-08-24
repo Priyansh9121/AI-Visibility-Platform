@@ -3921,3 +3921,186 @@ override, the row id is reused, attribution survives a re-detection, re-detectin
 the same rival does not 500, and an overridden set can be overridden again. The
 last two cover the collision defect; the class docstring records why the existing
 twenty-three tests could not have caught any of it.
+
+---
+
+## 2026-08-24 — Epic 3.10 · Auditing the six remaining verification scripts
+
+Three consecutive epics found a real production defect by scrutinising a
+`verify_*.py` script. Six had never been looked at. This epic read all six, ran
+all six, and fixed what that turned up.
+
+**Headline: one genuine production defect in the scoring engine, five defective
+verification checks, and three pipelines confirmed healthy.** The scripts were
+in worse shape than the product.
+
+### Real API spend
+
+Stated plainly, per the transparency Epic 3.7's cost table established.
+
+| script | spend | outcome |
+|---|---|---|
+| `verify_audit` (×3 runs) | £0 — 4 Chromium crawls each, no paid API | 2 defects fixed |
+| `verify_intake --crawl-only` (×3) | £0 | 1 defect fixed |
+| `verify_fixes` (×2) | **4 claude-opus-5 calls** (first run wasted, see below) | 1 defect fixed |
+| `verify_scan` (×1) | **~25 claude-opus-5 calls** | 1 defect fixed, pipeline healthy |
+| `verify_scoring` (×1) | **~17 claude-opus-5 + 6 SerpApi** | 2 defects fixed, engine healthy |
+| `verify_competitors` (×1 full) | **40 claude-opus-5 + 60 SerpApi** | 1 defect fixed, 1 logged, detection healthy |
+| **total** | **~86 claude-opus-5 calls + 66 SerpApi searches** | |
+
+Two of those calls were wasted. The first `verify_fixes` run went against a
+seeded database whose audit an earlier `verify_audit` run had already replaced,
+so it failed on missing schema warnings rather than on anything about
+`verify_fixes`. That is itself a finding — **the scripts are not composable**:
+running one against a database changes what the next one sees. Nothing warns you.
+
+`verify_competitors` was approved in both `--serp-only` and full variants. Only
+the full run was made, because it subsumes `--serp-only` — saving 60 redundant
+SerpApi searches.
+
+### The production defect: `inputs_digest` has been lying since Epic 6
+
+`compute_inputs_digest` fingerprints `results` and `competitors`. Epic 6 made
+`technical_foundation` the fifth scored dimension and the digest was never
+widened. So re-auditing a site moves the composite while `inputs_digest` **and**
+`formula_version` both stay identical — exactly the ambiguity the function's own
+docstring promises cannot happen, and which scoring-spec.md rule 5 forbids.
+
+Proven before fixing: identical results and competitors scored **79.50** with
+`technical_foundation=20` and **87.00** with 95, under one unchanged digest.
+
+`test_digest_changes_when_any_scored_input_changes` is named for "any scored
+input" and covered two of the three families. Widened, plus a second test
+asserting the end-to-end form on the score rather than the digest. Negative
+control: dropping the field from the payload fails both.
+
+**Confirmed live on `avp_dev`.** Re-scoring Help Scout moved its stored digest
+`a6b8ebef36f71dc4 → 3b9ef35cfa9c261c` — the fix visibly taking effect on real
+data — with the composite unchanged at 58.24.
+
+### Per script
+
+**`verify_audit.py` — two defects, both serious.**
+It selected `ORDER BY Scan.id DESC`. Scan ids are time-ordered ULIDs, so when
+Epic 7's `verify_report.py` PART 3 created the degraded fixture scan, that became
+the newest and this script silently began auditing `epic7-degraded.example` —
+a domain that does not resolve. It had been crawling nothing since Epic 7.
+It also hard-deleted the scan's audit and all its checks and **committed that
+eleven lines before attempting the replacement crawl**, with no restore anywhere
+in the file, so any failure in between destroyed the audit permanently. The
+delete was redundant: `run_audit` is documented as refreshing in place.
+Both fixed; two silent `return 0` paths that exited green having verified
+nothing now return 1.
+
+Then, running it against `avp_dev`, a third: its only real assertion required
+`before.composite != after.composite` unconditionally. Right for a first audit,
+impossible for a re-audit — so a live re-crawl of helpscout.com that reproduced
+`technical_foundation=87.50` and `composite=58.24` exactly, the best possible
+outcome, was reported as NEEDS REVIEW. Now conditioned on which case occurred.
+
+**`verify_intake.py` — one defect. `--crawl-only` could not fail.** It appended
+every attempt to `rows` before looking at `crawl_ok`, printed
+`f"{len(rows)}/{len(TEST_SITES)} sites crawled"`, and returned 0 unconditionally.
+A run in which every crawl failed printed "5/5 sites crawled" and exited green.
+Negative-controlled: a non-resolving site now yields "5/6", a named FAIL line and
+exit 1. **The crawler itself is healthy** — 5/5 real sites, 423–2008 words each.
+
+**`verify_fixes.py` — one defect, and it was failing good output.** The
+"actionable language" check demanded the literal token `schema`. Against a
+seeded scan the model wrote "FAQPage **markup**" — plainer English, naming the
+same artefact just as concretely — and the script called a correct generation a
+failure. It had passed against Help Scout only because that run happened to use
+the word "schema". Now matches groups of equivalent spellings. Validated offline
+against the captured output of the paid run that surfaced it, so no re-spend;
+negative-controlled in the direction that matters — the widened check still
+rejects generic advice, still fails a list naming the artefact but not the
+domain, and still fails one naming the domain but no artefact.
+
+**`verify_scan.py` — one defect. The headline check was `n == n`.**
+"every prompt × engine pair produced a row" is `pairs == len(selected) ×
+len(ENGINES)`, and `pairs` increments once per row from `ask_all`, which gathers
+exactly one coroutine per engine, filters nothing, and whose per-engine `ask`
+returns an `EngineAnswer` with `ok=False` rather than raising. The row count is
+the pair count by construction. Worse, engine failures were counted, printed,
+then left out of the exit code — a run where every call failed could still print
+PASS. The verdict now requires zero failures. Also now states plainly that the
+script writes nothing (0 `scan_runner` imports, 0 commits) so it verifies
+extraction, not the persisted `EngineResult` records §7 actually asks for.
+**The pipeline is healthy** — 12/12 pairs, zero failures, 43 citations.
+
+**`verify_scoring.py` — two defects.** The determinism loop compared cached
+objects: `expire_on_commit=False` means the identity map returned the same
+instances, so it could catch nondeterministic arithmetic while being blind to
+the read path — which is what the digest's sorting defends against. And it never
+runs an audit, so it has only ever exercised the degraded four-of-five-dimension
+path; it has never verified the fifth dimension since Epic 6 added it, which is
+precisely why the digest gap survived. **The engine is healthy** — composite
+58.62, deterministic across five re-scores, one score row.
+
+**`verify_competitors.py` — one defect fixed, one logged.** `--serp-only`
+returned 0 unconditionally after spending all sixty SerpApi searches, so a dead
+key read as success; fixed. The larger problem is logged as **Finding 5**: it
+calls `detect_for_client` zero times and rebuilds the pipeline itself, so it
+verifies a copy. Not fixed here because it holds no database connection by
+design and closing it is a design decision. **Detection is healthy** — 80%
+precision, exactly the §7 bar, 8/10 URLs at ≥80%.
+
+### Two things I got wrong, and one the audit did
+
+**My own fix broke the script.** The first version of the `verify_scoring`
+determinism fix used a bare `session.expire_all()`, which expires the `Scan`
+too — so the next `scan.id` access became a lazy load outside a greenlet and
+raised `MissingGreenlet`, the exact async trap this codebase warns about
+elsewhere. Caught by *running* the change before committing it. The Scan is now
+re-fetched with an awaited `get()`.
+
+**My first negative control proved nothing.** Testing the `verify_intake` fix, I
+injected a failing site using an anchor that did not match, so the injection
+silently did not apply and the control "passed" against unmodified code. Caught
+because the output still said 5/5. Redone with a verified anchor. That is the
+fifth harness failure in six epics — Epic 8's selector, Epic 3.6's stale
+backups, Epic 3.7's unrealistic control, Epic 3.8's post-serialisation
+injection, and now this. **The guards keep being right; the harnesses keep being
+wrong.**
+
+**The adversarial audit overstated twice.** It called `verify_scoring`'s
+determinism check "unfalsifiable, True on every run that does not raise" — but
+`score_scan` does re-query, and the check would catch genuinely nondeterministic
+arithmetic; the real weakness was narrower. And it claimed
+`verify_competitors`'s "exit code has never once agreed with its printed
+verdict" — but both derive from `overall >= 0.8` and agree by construction; the
+real defect was the `--serp-only` path only. Recorded because this project's
+audit agents have a track record of overstating, and a finding taken on trust is
+how Epic 3.8 shipped a tautological control.
+
+### Coverage cross-check: not done
+
+Six agents were tasked with checking whether each script's pytest suite builds
+genuinely related rows (the Epic 3.9 lens — the competitor tests never built a
+`Citation`). All six **failed on a subagent session limit**. That analysis does
+not exist and is not claimed. It remains the most likely place a seventh defect
+is hiding.
+
+### `avp_dev` is unaffected
+
+Diffed field by field against a pre-run snapshot after the only script that
+writes to it. The audit row keeps its id and its `technical_foundation`; all 17
+check statuses identical. Four values changed and every one is correct:
+`audited_at` and `computed_at` timestamps, `content_freshness` 0 → 1 day (the
+site is a day older), `cwv_lcp` 572 → 976ms (lab noise, which Epic 6 excludes
+from the score by design), and the corrected `inputs_digest`. Composite 58.24,
+`technical_foundation` 87.50 and every check verdict unchanged. Two throwaway
+databases were created and dropped.
+
+### Dependencies
+
+**None added.**
+
+### Tests
+
+**755 total, up from 754** (api 539 → 540). One new test —
+`test_a_changed_audit_cannot_move_the_score_under_one_digest` — plus the
+widening of the existing digest test. Five of the six defects live in
+`scripts/`, which no suite covers; that is a real limitation of this epic's
+coverage and the reason each fix was negative-controlled by hand against
+captured output instead.
