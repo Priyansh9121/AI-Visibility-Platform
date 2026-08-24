@@ -969,7 +969,7 @@ it, the way Finding 2 is.
 | 3 | `detectionConfidence` describes a mixed competitor set | Epic 3.6 | ◐ **scoped in Epic 3.11**, meaning still undefined |
 | 4 | A competitor override destroys citation and mention attribution | Epic 3.6 | ✅ **fixed in Epic 3.9** |
 | 5 | `verify_competitors.py` verifies a copy of the detection pipeline | Epic 3 | ✅ **fixed in Epic 3.11** |
-| 6 | No verification script covers the five-dimension scoring path | Epic 6 | ⬚ **open** |
+| 6 | No verification script covers the five-dimension scoring path | Epic 6 | ◐ **script fixed in Epic 3.11**, awaiting a live run |
 
 Finding 1 is listed as improved rather than closed on the strength of Epic 2.8's
 own "Still imperfect" section: the four `b2b saas` / `venture capital` failures
@@ -1109,11 +1109,39 @@ complete formula end to end. That is not hypothetical: Epic 3.10 found that
 `compute_inputs_digest` had been omitting `technical_foundation` for the same
 four epics, and the reason nothing caught it is exactly this gap.
 
-**Not fixed in Epic 3.10** because it needs a scan that is audited *during* the
-run rather than before it, which means either `verify_scoring.py` gaining an
-audit step (adding a live crawl to a script that is otherwise provider-and-crawl
-separable) or a new combined script. Both are design decisions about what each
-script is *for*, which is the kind of thing this register exists to hold.
+**Addressed in Epic 3.11** by the first option: `verify_scoring.py` gained an
+audit step. The crawl is one page of Playwright and costs nothing, so the
+argument against adding it was about what the script is *for*, not about money
+— and a scoring verification that cannot exercise one of the five scored
+inputs is not verifying the formula.
+
+The script now scores **before** the audit, runs the audit, and scores again,
+asserting four things about the transition rather than printing a caveat:
+`technical_foundation` becomes included, every dimension in the `Dimension`
+enum is included (derived from the enum, not a hardcoded 5 — the hardcoded-list
+defect class this codebase keeps hitting), the `TECHNICAL_FOUNDATION_NOT_MEASURED`
+flag is gone, and **the `inputs_digest` moves**. That last one is the live
+regression test for the Epic 3.10 defect: everything else about the scan is
+byte-identical across the two scores, so a digest that does not move means
+`technical_foundation` is not in it.
+
+The determinism loop now runs over the five-dimension path too, which was the
+other half of the gap — reproducibility had only ever been demonstrated for a
+formula that excluded one of its inputs.
+
+`--skip-audit` restores the old behaviour and prints the same caveat the script
+used to print unconditionally, so the four-dimension mode stays available and
+stays honest about what it covers.
+
+**Still ◐ rather than ✅ because the script has not been run live yet.** The
+change is lint-clean and compiles, and the transition itself is covered by
+stubbed tests (`TestScoringIntegration` in `test_audit_endpoints.py`) and by
+`test_a_changed_audit_cannot_move_the_score_under_one_digest` at unit level.
+But stubbed coverage is precisely what Finding 6 says is not enough: the
+finding is that no *live* script exercises the path. Marking it fixed on the
+strength of a suite that was already green while the gap existed would be the
+self-consistent-measurement trap again. A full run costs roughly 6 SerpApi
+searches and a dozen model calls, which is not spent without asking.
 
 ### Finding 3 — `detectionConfidence` describes a mixed competitor set
 
