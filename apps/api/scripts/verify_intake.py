@@ -110,10 +110,21 @@ async def main() -> int:
 
     print("-" * 100)
     if crawl_only:
+        # `len(rows)` counted every ATTEMPT, because rows is appended before
+        # crawl_ok is looked at — so a run in which every crawl failed printed
+        # "5/5 sites crawled" and returned 0. Counting the successes and
+        # failing on any failure is the difference between a check and a
+        # printout. Found in Epic 3.10.
+        crawled = [r for r in rows if r.get("crawl_ok")]
+        failed = [r for r in rows if not r.get("crawl_ok")]
         print(
-            f"{len(rows)}/{len(TEST_SITES)} sites crawled. "
+            f"{len(crawled)}/{len(TEST_SITES)} sites crawled. "
             "CRAWL ONLY — the acceptance criterion is NOT verified by this mode."
         )
+        if failed:
+            for row in failed:
+                print(f"  FAIL  {row['url']} did not crawl")
+            return 1
         return 0
 
     classified = [r for r in rows if r.get("status") == "classified"]
