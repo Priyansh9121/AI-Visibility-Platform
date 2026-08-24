@@ -968,6 +968,8 @@ it, the way Finding 2 is.
 | 2 | Industry classification confidence is uncalibrated | Epic 2.6 | ⬚ **open** |
 | 3 | `detectionConfidence` describes a mixed competitor set | Epic 3.6 | ⬚ **open** |
 | 4 | A competitor override destroys citation and mention attribution | Epic 3.6 | ✅ **fixed in Epic 3.9** |
+| 5 | `verify_competitors.py` verifies a copy of the detection pipeline | Epic 3 | ⬚ **open** |
+| 6 | No verification script covers the five-dimension scoring path | Epic 6 | ⬚ **open** |
 
 Finding 1 is listed as improved rather than closed on the strength of Epic 2.8's
 own "Still imperfect" section: the four `b2b saas` / `venture capital` failures
@@ -1035,6 +1037,52 @@ before DELETEs — so **re-running detection on a scan that re-found any rival
 returned a 500**, and had since Epic 3. Reuse removes the delete/insert pair, so
 the collision cannot arise. Covered by
 `test_redetecting_the_same_rival_does_not_500`.
+
+### Finding 5 — `verify_competitors.py` verifies a copy of the detection pipeline
+
+`scripts/verify_competitors.py` is the live check for §7 Epic 3's acceptance
+criterion. It calls `detect_for_client` **zero** times. Instead it reassembles
+the pipeline itself from `build_queries`, `build_seed_prompts`,
+`merge_candidates` and `score_candidates`, and measures that.
+
+So it verifies a copy. If `detect_for_client` drifted from this reassembly — a
+new gate, a changed ordering, a different cap — the script would keep reporting
+the old behaviour's precision and keep printing PASS. The number it prints is
+real (80% at last run, Epic 3.10) but it is a statement about the script's
+reconstruction, not about what the API does.
+
+This is the third instance of the same trap in this codebase. Epic 4.0 named it
+("a guard that has never been observed to fail is not evidence"); Epic 3.6's
+`verify_competitor_override.py` was written against a copy of `apply_override`
+and passed against its own copy while the endpoint was still wrong; Epic 3.8's
+first fix shipped a negative control that could not fail.
+
+**Not fixed in Epic 3.10** because it is not a small change. `detect_for_client`
+takes a `Client` row, and this script deliberately holds no database connection
+at all — it is one of the three verify scripts that cannot touch `avp_dev` by
+construction, which is a property worth keeping. Closing it means either giving
+the script a throwaway database and a seeded client per case, or extracting a
+database-free core from `detect_for_client` that both it and the service call.
+The second is better and is roughly what `apply_override` got in Epic 3.8.
+
+### Finding 6 — no verification script covers the five-dimension scoring path
+
+`scripts/verify_scoring.py` never runs a technical audit, so
+`technical_foundation` is always `NOT_YET_MEASURED` and only the degraded
+four-of-five-dimension path is exercised. `scripts/verify_audit.py` covers the
+audit and the dimension, but on a scan that already has one it measures a
+re-audit, not the transition that closes the exclusion.
+
+So since Epic 6 added the fifth dimension, no live script has verified the
+complete formula end to end. That is not hypothetical: Epic 3.10 found that
+`compute_inputs_digest` had been omitting `technical_foundation` for the same
+four epics, and the reason nothing caught it is exactly this gap.
+
+**Not fixed in Epic 3.10** because it needs a scan that is audited *during* the
+run rather than before it, which means either `verify_scoring.py` gaining an
+audit step (adding a live crawl to a script that is otherwise provider-and-crawl
+separable) or a new combined script. Both are design decisions about what each
+script is *for*, which is the kind of thing this register exists to hold.
 
 ### Finding 3 — `detectionConfidence` describes a mixed competitor set
 
