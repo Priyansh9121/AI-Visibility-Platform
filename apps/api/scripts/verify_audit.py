@@ -144,18 +144,45 @@ async def main() -> int:
             f"{d.value}={s.weight}" for d, s in sorted(
                 after.sub_scores.items(), key=lambda kv: kv[0].value) if s.included))
 
-        closed = (
+        # The assertion depends on which of the two things just happened.
+        #
+        # It used to require `before.composite != after.composite`
+        # unconditionally. That is right for a FIRST audit — the dimension goes
+        # from excluded to included, so the composite must move — but on a
+        # RE-audit the dimension was already included and a stable site
+        # correctly produces an unchanged composite. So the script reported
+        # NEEDS REVIEW and exited 1 on a perfectly healthy integration. Seen
+        # live in Epic 3.10 against avp_dev: a re-crawl of helpscout.com
+        # reproduced technical_foundation=87.50 and composite=58.24 exactly —
+        # the best possible outcome — and the script called it a failure.
+        measured = (
             after.value(Dimension.TECHNICAL_FOUNDATION) is not None
             and "technical_foundation" not in after.excluded_dimensions
-            and before.composite != after.composite
         )
-        print(f"\n  NOT_YET_MEASURED exclusion closed : {closed}")
-        print(f"  composite moved                   : "
-              f"{before.composite} -> {after.composite}")
-        print("\nRESULT:", "PASS" if closed else "NEEDS REVIEW")
+        if had_audit:
+            # Re-audit: the dimension must still be measured and included, and
+            # the composite must be consistent with it. Movement is neither
+            # required nor forbidden — it tracks whether the SITE changed.
+            ok = measured
+            print(f"\n  technical_foundation measured     : {measured}")
+            drift = (
+                "  (unchanged — the site is stable)"
+                if before.composite == after.composite
+                else "  (moved — the site changed)"
+            )
+            print(f"  composite                         : "
+                  f"{before.composite} -> {after.composite}{drift}")
+        else:
+            # First audit: the exclusion must close AND the composite must move,
+            # because a newly included dimension necessarily changes the sum.
+            ok = measured and before.composite != after.composite
+            print(f"\n  NOT_YET_MEASURED exclusion closed : {ok}")
+            print(f"  composite moved                   : "
+                  f"{before.composite} -> {after.composite}")
+        print("\nRESULT:", "PASS" if ok else "NEEDS REVIEW")
 
     await engine.dispose()
-    return 0 if closed else 1
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
