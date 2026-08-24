@@ -120,12 +120,42 @@ async def main() -> int:
     print(f"total citations    : {total_citations}")
     print("=" * 92)
 
+    # `pairs == expected` is `n == n`. `ask_all` gathers one coroutine per
+    # engine and filters nothing, and each engine's `ask` catches its own
+    # errors and returns an EngineAnswer with ok=False rather than raising —
+    # so the row count is the pair count by construction and this could never
+    # be false. It reported True on every run since Epic 4 while proving
+    # nothing. Kept as a structural sanity line, demoted out of the verdict.
     complete = pairs == expected
     cited = total_citations > 0
-    print(f"\nevery prompt x engine pair produced a row : {complete}")
+
+    # The verdict a reader actually wants: did the engines ANSWER? Failures
+    # were counted and printed and then left out of the exit code, so a run in
+    # which every provider call failed still printed PASS — it produced twelve
+    # rows, all of them errors. Found in Epic 3.10.
+    failed = sum(stats["failed"] for stats in per_engine.values())
+    answered = pairs - failed
+
+    print(f"\nevery prompt x engine pair produced a row : {complete}"
+          "   (structural: ask_all always returns one row per engine)")
+    print(f"engine calls that actually answered       : {answered}/{pairs}")
     print(f"citations parsed from the grounded engine : {cited}")
-    print("\nRESULT:", "PASS" if complete and cited else "NEEDS REVIEW")
-    return 0 if complete and cited else 1
+
+    ok = complete and cited and failed == 0
+    if failed:
+        print(f"\n  FAIL  {failed} of {pairs} engine calls failed")
+    print("\nRESULT:", "PASS" if ok else "NEEDS REVIEW")
+
+    # §7 Epic 4 asks for "structured EngineResult RECORDS". This script makes
+    # no database call — it imports neither scan_runner nor EngineResult, and
+    # commits nothing — so it verifies extraction from live answers, not
+    # persistence. The persisted path is covered by tests/test_scan_endpoints.py.
+    # Said plainly because the docstring quotes the criterion verbatim and a
+    # reader would otherwise reasonably assume this run had checked it.
+    print("\nNOTE: this script verifies EXTRACTION from live engine answers.")
+    print("      It writes nothing, so persistence of EngineResult rows is NOT")
+    print("      covered here — see tests/test_scan_endpoints.py for that half.")
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
