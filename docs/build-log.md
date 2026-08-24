@@ -4104,3 +4104,192 @@ widening of the existing digest test. Five of the six defects live in
 `scripts/`, which no suite covers; that is a real limitation of this epic's
 coverage and the reason each fix was negative-controlled by hand against
 captured output instead.
+
+---
+
+## Epic 3.11 — resolving Findings 3, 5 and 6
+
+Three entries in the `api-contracts.md` register had been open long enough to
+be furniture. This epic was scoped to close them, and — the part that shaped
+everything below — to **present the tradeoffs and implement whichever option
+was chosen**, rather than to pick unilaterally. That distinction mattered more
+than expected: on two of the three, reading the code to write the options
+changed what the options were.
+
+### The decision conversation
+
+Each finding was presented with its real alternatives before any code moved.
+
+**Finding 3 — what should `detectionConfidence` mean on a mixed set?**
+Options: clear it whenever any manual row survives (simple, destroys a real
+measurement); scope it explicitly by publishing the count of rows it covers;
+or split it into a per-row property. **Chosen: scope it.** The reasoning that
+made this the right first move is that the three options are not alternatives
+at the same level — clearing it loses information permanently, the per-row
+split is the principled long-term answer but changes what Epic 5 may infer from
+the field, and scoping it fixes the part that is actually *misleading* without
+foreclosing either. It is the only one of the three that is purely additive.
+
+**Finding 5 — how should `verify_competitors.py` stop verifying a copy?**
+Options: give the script a throwaway database and a seeded client per case, or
+extract a database-free core both it and the service call. **Chosen: extract
+the core.** The register had already argued for this and then declined to do it
+on cost grounds. Those cost grounds turned out to be wrong (below).
+
+**Finding 6 — where should the five-dimension path be covered?**
+Options: add an audit step to `verify_scoring.py`, or write a new combined
+script. **Chosen: add the step.** A new script would have been a third thing to
+keep in sync with two others; the objection to adding a crawl to `verify_scoring`
+was about the script's conceptual purity, and a scoring verification that cannot
+exercise one of its five scored inputs has a purity problem already.
+
+"Defer this, still not urgent" was an explicitly available answer for any of the
+three. None were deferred.
+
+### Finding 5 — the register was wrong about the cost
+
+The entry said closing this "is not a small change" because `detect_for_client`
+takes a `Client` row while the script deliberately holds no database connection.
+
+Reading the function to write that tradeoff: **it makes zero database calls**
+and reads the `Client` in exactly six places, every one a plain scalar —
+`brand_name`, `domain`, `industry`, `industry_niche`, `name`, and `id` for a log
+line. The ORM object was only ever an awkward way to pass six strings. The
+"database-free core" the register imagined extracting was essentially the whole
+function.
+
+`detect_from_facts` now holds the body and takes those six scalars.
+`detect_for_client` is a thin unpack over it, so no existing caller changed. The
+script calls `detect_from_facts` directly and still touches no database, keeping
+the property the register wanted to protect.
+
+**A correction to Epic 3.10's write-up, and to the register entry itself.** Both
+said the script "reassembles the pipeline" and stopped there. It also called
+`decide_detection`, with arguments structurally identical to the service's — the
+two were genuinely equivalent, and the 80% precision Epic 3.10 reported was a
+sound number. Finding 5 was a **drift risk, not a live incorrectness**. The
+entry as written implied the measurement had been wrong all along, which would
+have been a much more serious thing to have shipped.
+
+`--serp-only` still assembles its own outcome, because `detect_from_facts`
+always runs both signals. It now says so in the code rather than leaving a
+reader to assume the diagnostic half measured what the API does.
+
+Three guards, negative-controlled in both directions: the wrapper and the core
+must return identical outcomes for identical facts; the core must stay free of
+`session`/`select`/`commit`/`execute`; and the wrapper must hold no logic of its
+own, since logic there would run in production but not in the script — which
+would reopen the finding silently.
+
+**One methodology note.** Checking "does the script still reassemble the
+pipeline?" by grepping for `merge_candidates`/`decide_detection`/`build_queries`
+returned True — because the explanatory comment I had just written names all
+three. Re-checked with comments stripped: `reassembles pipeline in code: False`.
+A guard that matches its own documentation is the same trap in miniature.
+
+### Finding 3 — the figure had no home to be misleading in
+
+`detectionConfidence` is the share of the rivals detection ranked that both
+signals surfaced independently. `apply_override` clears it, correctly. But a
+subsequent re-detection writes a fresh figure while the operator's rows survive,
+so the API published one corroboration number over a part-hand-set list.
+
+`CompetitorSetOut` and `ReportCompetitorSetOut` now both carry
+**`confidenceCovers`** — the number of rows in the set that detection produced.
+Derived at projection time from a new `CompetitorSet.detected_competitors`
+rather than stored, so it cannot go stale against the rows it counts. The stored
+arithmetic is untouched; only what the API says about its scope changed.
+
+**The field is deliberately not the figure's own denominator**, and is
+documented as not being it. Detection computes the ratio over every candidate it
+ranked, including ones the operator had already named or struck, which are then
+held back from the set. The published count is the number of rows a reader can
+actually see it apply to.
+
+**A claim I wrote and then had to retract before committing.** The first version
+of the field comment said `confidenceCovers` is 0 exactly when
+`detectionConfidence` is null. It is false in both directions: a set where only
+one signal ran carries a null confidence and a full complement of detected rows,
+and a re-detection that re-found nothing but rivals the operator had already
+named carries a real confidence and zero of them. Written from intuition about
+how the two fields relate, caught by tracing `decide_detection`'s branches.
+
+**And the finding was worse than recorded.** The report never rendered the
+figure at all. Meanwhile the note under the competitor table told the reader
+that hand-set rivals were not described by "the corroboration figure above" —
+and there was no such figure on the page. That copy had pointed at nothing since
+Epic 3.6 wrote it. There is now a `CorroborationNote` rendering the percentage
+with its scope, and the dangling reference is gone.
+
+Guarded on both projections **separately**, because they are separate schemas
+built by separate functions. Negative control confirmed the separation is real:
+making either projection count all active rows fails that projection's tests and
+**only** that projection's — so fixing one and not the other would have left the
+figure misleading in the place a client actually reads it, with a green suite.
+
+`verify_competitor_override.py` printed Finding 3 as a `NOTE` and passed
+regardless. It now asserts the count, **and fails if the set it built is not
+actually mixed** — a check that passes vacuously is the failure mode this
+sequence keeps hitting.
+
+`stub_discovery` moved to `conftest.py`, since `test_report_endpoint.py` needs
+the same stub to build a mixed set and a second copy of a fixture that fiddly
+would drift.
+
+### Finding 6 — script fixed, not yet verified
+
+`verify_scoring.py` now scores **before** the audit, runs the audit, and scores
+again, asserting four things about the transition instead of printing a caveat:
+`technical_foundation` becomes included; every dimension in the `Dimension` enum
+is included (derived from the enum rather than a hardcoded 5 — the
+hardcoded-list defect class this codebase keeps hitting); the
+`TECHNICAL_FOUNDATION_NOT_MEASURED` flag clears; and **the `inputs_digest`
+moves**. The last is the live regression test for Epic 3.10's defect —
+everything else about the scan is byte-identical across the two scores, so a
+digest that does not move means the fifth input is not in it.
+
+The determinism loop now runs over the five-dimension path, which was the other
+half of the gap: reproducibility had only ever been demonstrated for a formula
+that excluded one of its inputs. `--skip-audit` restores the old behaviour and
+keeps the old caveat.
+
+**Left at ◐, not ✅.** The script is lint-clean and compiles, and the transition
+is covered by stubbed tests. But that is exactly what Finding 6 says is not
+enough — the finding *is* that no live script exercises the path, and the
+stubbed suite was already green the whole time the gap existed. Marking it fixed
+on that evidence would be the self-consistent-measurement trap for the fourth
+time in this sequence. **The live run has not been made and has not been paid
+for**; it needs roughly 6 SerpApi searches and a dozen model calls, and the
+standing rule in this project is that API budget is not spent without asking.
+
+### A test count I got wrong twice
+
+The Epic 3.10 entry recorded 755 total. Recounting for this epic I got 742,
+concluded 755 was a stale figure carried forward, and amended a commit message
+to say so. That was the error: I had counted `apps/api`, `apps/web`,
+`shared-types` and `design-system` and **forgotten `apps/workers`**, which has
+13. The original 755 was correct, and one commit message now understates by 13
+with the correction recorded in the next one rather than by rewriting history.
+
+Verified suite by suite this time: api 548, workers 13, web 82, shared-types 53,
+design-system 72.
+
+### IP-safety self-check
+
+UI-facing behaviour changed, so #7 applies. `CorroborationNote` interpolates a
+percentage, two integers and the word "rival"/"rivals" — counts and ordinals,
+which #7 permits explicitly. No entity name, engine text or competitor prose
+reaches it. `confidenceCovers` is an `int` on both schemas.
+`test_ip_safety.py` passes at 74. No new dependencies, so #6 does not apply.
+
+### Dependencies
+
+**None added.**
+
+### Tests
+
+**768 total, up from 755** (api 540 → 548, web 77 → 82). Eight new API tests —
+three for detection having one implementation, four for the confidence scope on
+`CompetitorSetOut`, one for it on `ReportCompetitorSetOut` — and five new web
+tests for the rendered figure and its caveat. Six negative controls run across
+the two findings, each failing only the guard it targeted.
