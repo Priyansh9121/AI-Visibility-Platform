@@ -5101,3 +5101,219 @@ domains, ordinals and counts only, nothing persisted, nothing rendered.
 
 **834, unchanged** (api 571, workers 13, shared-types 53, design-system 99,
 web 98). Run, not assumed. Nothing was implemented, so nothing was added.
+
+---
+
+## 2026-08-25 — Epic 9.0 · Reading Epic 9 for the first time, and what it actually needs
+
+Numbered, unlike the two SerpApi investigations, because Epic 9 genuinely is on
+the roadmap. This entry is the **scoping and verification pass only** — nothing
+was implemented, no code, schema or test changed. Suite unchanged at 834.
+
+Epic 9 had only ever been referenced in recent sessions as a one-line paraphrase
+lifted from an earlier context: *"MVP Launch Readiness (Phase 1 complete)"*. No
+session had read its acceptance criteria. This reads them.
+
+### What Epic 9 actually says, verbatim
+
+`product-spec.md` §7, lines 155-159:
+
+```
+### Epic 9 — MVP Launch Readiness (Phase 1 complete)
+- [ ] End-to-end test: URL in → report out, under 5 minutes
+- [ ] Basic agency dashboard: list of past scans, re-run scan
+- [ ] Pilot with 3-5 real agencies, collect feedback
+- **Acceptance:** pilot agencies successfully generate and send at least one real prospect report
+```
+
+The five-minute budget is real spec text, not a build-log aside — worth
+confirming, because the brief that commissioned this was right to doubt it.
+
+### Item by item, against evidence
+
+**1. End-to-end test, under 5 minutes — NOT STARTED, and the budget is at risk.**
+
+No end-to-end script exists. `apps/api/scripts/` holds eight per-epic verifiers
+(`verify_intake`, `verify_competitors`, `verify_competitor_override`,
+`verify_scan`, `verify_scoring`, `verify_audit`, `verify_report`,
+`verify_fixes`) and not one of them chains URL → report, or times anything.
+
+The only timed scan that has ever run is in `avp_dev`:
+
+```
+scan_01M0HDRGJNWNZDSJPP0NC3SV8W  (Help Scout)
+  started  2026-08-21 05:47:35Z
+  finished 2026-08-21 05:49:24Z
+  WALL CLOCK 109.3s   for 3 prompts / 6 engine results
+  engine latency: sum 162.6s, max 42.8s
+```
+
+`PROMPT_CONCURRENCY = 4` (`scan_runner.py:43`), so those 3 prompts ran as a
+**single batch**. 109.3s is therefore roughly one batch plus the one-off LLM
+prompt-generation call — not three prompts in sequence. At `TARGET_PROMPTS =
+24` that is six batches, extrapolating to roughly **9-11 minutes for the scan
+phase alone**.
+
+And "URL in → report out" is wider than the scan: it also covers crawl and
+classification (Epic 2), competitor detection (6 SerpApi searches plus
+co-citation model calls, Epic 3), the technical audit (Epic 6), scoring
+(Epic 5), and Epic 8's fix-generation model call.
+
+**Stated precisely: this is an extrapolation from one 3-prompt sample, not a
+measurement.** Wall clock (109.3s) already exceeds max engine latency (42.8s)
+by a wide margin, so something other than the engine calls dominates, and a
+naive multiply may be wrong in either direction. That is exactly why item 1
+exists, and it is why it should go first.
+
+**2. Basic agency dashboard — PARTIALLY SATISFIED. The API is done; the UI does
+not exist.**
+
+`GET /api/v1/dashboard` is built and registered (`main.py:102`). It returns
+agency identity, seat usage, client and scan counts, `is_empty`, and
+`recent_scans[]` carrying id, client name, client domain, status, composite
+score, created and finished timestamps. The score is **left-joined** so an
+unscored or insufficient-data scan still appears with a null rather than being
+filtered out. `limit` is bounded 1-50, default 10. Six tests pass, covering the
+empty state, decimal-as-string encoding, null-not-zero, unscored scans,
+newest-first ordering, and the limit bound.
+
+"Re-run scan" also already has its endpoint: `POST /clients/{clientId}/scans`
+(`scans.py:82`) — re-running is creating a new scan for an existing client.
+
+What is missing is the screen. `apps/web` has exactly two routes:
+
+```
+apps/web/src/app/page.tsx                      -> sign-in / intake / classification
+apps/web/src/app/scans/[scanId]/report/page.tsx -> the report
+```
+
+`grep -rn dashboard apps/web/src/` returns exactly one hit, and it is a comment
+in `ReportView.tsx` saying the report is *not* a dashboard. So the frontend has
+never called this endpoint.
+
+**3. Pilot with 3-5 real agencies — NOT ENGINEERING WORK**, but it has a hard
+engineering dependency, below.
+
+**Acceptance: "generate and SEND at least one real prospect report" — BLOCKED.**
+
+"Send" is the load-bearing word. Today a report exists only at an authenticated
+`/scans/{id}/report` route inside the agency's own session. A prospect cannot
+open it. There is no PDF export and no shareable link.
+
+### The stale cross-reference this turned up
+
+`product-spec.md` Epic 7 still reads:
+
+```
+- [ ] PDF export + shareable web link — **deferred to Epic 7.1**
+```
+
+and `api-contracts.md`'s deferred register lists `GET /reports/{token}` and
+`GET /scans/{scanId}/report.pdf` under Epic **7.1**.
+
+**Epic 7.1 has since shipped — commits `9542963`..`6f953f3` — and it delivered
+the Answer Shelf and the unclaimed-domain fix. It did not deliver PDF export or
+shareable links.** Both documents now point the reader at an epic that came and
+went without doing the thing they promise. Same failure class as
+`design-direction.md`'s "AWAITING APPROVAL" heading: a forward reference that
+outlived the thing it referred to.
+
+Not corrected here — this is a scoping pass, and the correction belongs with
+whichever slice actually builds the send path, so the label lands on real work.
+
+### The checkbox audit, and why §7 cannot be trusted as a status board
+
+The brief asked whether an unchecked box means unstarted, citing Epic 3's
+manual-override checkbox as one known case. It is not one case. It is the whole
+document.
+
+| Epic | §7 checkbox state | Reality (live rows in `avp_dev`) |
+|---|---|---|
+| 0 Design system | all `[ ]` | shipped; 99 tests in the package |
+| 1 Infra & auth | all `[ ]` | `agencies` 1, `users` 1, `invitations` table present |
+| 2 Intake & classification | all `[ ]` | `clients` classified: 1 |
+| 3 Competitor detection | all `[ ]` | `competitor_sets` 1, `competitors` 5 |
+| 4 Prompts & engines | all `[ ]` | `prompt_sets` 1, `engine_results` 6 |
+| 5 Scoring | all `[ ]` | `scores` with composite: 1 |
+| 6 Technical audit | all `[ ]` | `technical_audits` 1 |
+| 7 Report | `[x] [~] [ ]` | the only epic with any marks |
+| 8 Fix generator | all `[ ]` | `action_items` 5 |
+
+Eight epics shipped, live-verified, each with a build-log entry recording its
+acceptance criterion met — and all eight still read as untouched. **§7's
+checkbox state carries no signal in either direction and must not be used to
+decide what is done.** Every "is this built?" question has to be answered
+against code or data, which is what this pass did.
+
+### Two spec items that are stale rather than pending
+
+- **Epic 4, "start with 2 engines (e.g., ChatGPT API + Perplexity API)"** —
+  shipped as Claude parametric + Claude web search, one vendor, deliberately
+  (build-log Epic 4.2, "Two engines, one vendor"). §5.1's "direct API calls to
+  ChatGPT/Perplexity/Gemini" is stale the same way. The abstraction the item
+  actually asks for (`EngineAdapter`) exists.
+- **Epic 4, "Playwright-based runner for engines without clean APIs (AI
+  Overviews)"** — the two investigations committed earlier today (`d39f70b`,
+  `d2d5f40`) concluded AI Overview capture is a NO-GO on the current plan. This
+  box is not pending work; it is work that has been measured and declined, and
+  should read that way.
+
+### Slice order, and the reasoning
+
+Epic 9 is three unrelated kinds of work — a measurement, a screen, and a GTM
+activity — plus one blocking dependency the epic does not mention. Ordering is
+**highest-risk-first**, because exactly one of these items can invalidate the
+others.
+
+**Slice 1 — the end-to-end timing harness.** `scripts/verify_e2e.py`: URL in →
+report out, timed per phase, run once at a real prompt count. This goes first
+because it is the only item whose outcome can reshape the rest. If a full scan
+takes eleven minutes rather than five, that is an architecture question —
+concurrency limits, queueing, whether the UI needs progress and polling rather
+than a request that waits — and it changes what the dashboard has to display.
+Building the screen first and *then* learning scans take eleven minutes means
+building it twice.
+
+Concretely, the next brief should: chain client creation → crawl/classify →
+competitor detection → scan → audit → score → fix generation → report
+projection; emit a per-phase timing table plus a total; run at `--prompts 24`
+once; and record the result against the five-minute line.
+
+It **spends real money** — roughly 48 engine calls plus sentiment calls, ~6
+SerpApi searches, a classification call, a prompt-generation call and a
+fix-generation call. That brief must state the spend and get approval before
+running, per this project's convention, and should note that SerpApi sits at 95
+of 250 for the month.
+
+**Slice 2 — the dashboard screen.** Thin, because the API is finished and
+tested: a `/dashboard` route listing recent scans with client, domain, status,
+score and date, linking each to its report, plus a re-run button on the existing
+POST. Deliberately second: its empty/loading/progress states depend on what
+slice 1 measures.
+
+**Slice 3 — the send path.** A shareable token link or PDF export, whichever is
+chosen. Epic 9's acceptance cannot be met without one, and this is where the
+stale "Epic 7.1" references in `product-spec.md` and `api-contracts.md` get
+corrected onto real work. A signed token link is materially cheaper than
+server-side PDF rendering and should be costed first.
+
+**Slice 4 — the pilot.** Not engineering, and genuinely blocked until slice 3.
+
+**Riding along, free:** reconcile §7's checkboxes to reality and re-label the
+two stale Epic 4 items. Zero risk, and it stops the next reader inheriting the
+same false picture this pass had to dig through. Best attached to slice 1 so it
+is not left as its own never-scheduled chore.
+
+### IP-safety self-check
+
+No code changed and no customer-facing screen changed, so constraint 9 does not
+strictly bite — recorded because the pass read live client data. `avp_dev` was
+read only: row counts, timestamps and table names. No engine text, no competitor
+prose, no third-party content was read, printed or committed. No SerpApi calls
+were made and no dependency added. **IP-safety check passed:** counts,
+timestamps and schema names only.
+
+### Tests
+
+**834, unchanged** (api 571, workers 13, shared-types 53, design-system 99,
+web 98). Run live at the start of the pass, not assumed. Nothing implemented.
