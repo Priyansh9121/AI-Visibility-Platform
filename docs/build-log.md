@@ -6286,3 +6286,184 @@ scope; `scripts/` carries 8 pre-existing errors, unchanged and verified against
 HEAD). `mypy` unchanged at its pre-existing 38. `openapi.json` and
 `api.gen.ts` regenerated — the response model change is a contract change, and
 FastAPI is the source of truth for it.
+
+---
+
+## 2026-08-25 — Epic 9.6 · One open scan per client, and a placeholder that stops blocking
+
+Epic 9.5 left two things open and said so. Both are closed here: the double-spend
+race, and detection's placeholder disabling re-run indefinitely.
+
+### The reaper's read-path cost — measured, and left alone
+
+Epic 9.5 put `reap_stale_scans` on every `GET /api/v1/dashboard`. Checked before
+touching anything else, since a write on a read path deserves a number rather
+than a shrug:
+
+```
+Update on scans  (cost=0.14..8.17 rows=0) (actual time=0.017..0.017 rows=0.00)
+  ->  Index Scan using ix_scans_status on scans
+        Index Cond: ((status)::text = 'running'::text)
+        Filter: ((started_at IS NOT NULL) AND (started_at < now() - '00:15:00'))
+  Buffers: shared hit=3 dirtied=1
+Execution Time: 0.664 ms
+```
+
+**0.664 ms**, three buffers, an index scan that matches nothing in the common
+case. Epic 9's acceptance names 3–5 pilot agencies, and no poller exists yet, so
+real dashboard traffic is a handful of manual loads per day. Even inventing an
+aggressive future poller — 5 agencies at one load every 5 seconds — that is 1
+request/second, or **0.066% of one core**. **No change made.**
+
+Worth recording the shape of the cost rather than only the number: the index
+scan matches on `status='running'` and *then* filters by `started_at`, so it
+grows with the number of **concurrently running** scans, not with total scans.
+At pilot scale that is a handful. If concurrent scans ever reached the
+thousands, a composite `(status, started_at)` index is the fix — noted as a
+trigger condition, not built, because building it now would be optimising a
+measurement that says there is nothing to optimise.
+
+### Part A — the double-spend race, closed by the database
+
+9.5 narrowed the window from ~303s to milliseconds by committing early, and was
+explicit that **narrowing a race is not closing one**. Two concurrent requests
+could still both look, both find nothing, and both insert.
+
+```sql
+CREATE UNIQUE INDEX uq_scans_one_open_per_client
+    ON scans (client_id) WHERE status IN ('queued', 'running');
+```
+
+**Partial**, because the invariant is about *open* scans only. A client
+accumulates any number of finished ones, and a constraint covering terminal
+scans would let each client be scanned exactly once, ever. `status` is
+VARCHAR-backed with a CHECK constraint (`native_enum=False`), so the predicate
+is a plain string comparison needing no enum cast. Declared on the **model** as
+well as in the migration — `test_migrations.py` runs `alembic check`, and a
+migration-only index is drift.
+
+**The migration cannot fail against real data.** It resolves violations before
+creating the index. `avp_dev` was checked at authoring time and had none — zero
+clients with more than one open scan — but it runs anyway, because a migration
+has to be safe against every database it will meet, not the one in front of its
+author, and every request that raced before this index existed could have made a
+pair. The newest open scan per client survives (`id` is a ULID, so that is
+creation order); older ones are FAILED with **`EXECUTOR_SUPERSEDED`** — distinct
+from `EXECUTOR_LOST` (9.5's reaper: the process went away) and
+`ALL_ENGINE_CALLS_FAILED` (the pipeline ran and failed). Failed rather than
+deleted: a scan that consumed paid model calls is a record, and its
+`engine_results` still reference it. The downgrade drops only the index and says
+plainly why it does not restore those rows — re-opening them would recreate the
+duplicates the index forbids, so downgrade-then-upgrade would fail.
+
+**The loser is handled, not crashed into.** `get_or_create_scan` runs its INSERT
+inside a **SAVEPOINT**, so a lost race rolls back only that statement — a plain
+rollback would discard whatever else the caller had pending in the surrounding
+transaction. It then re-reads and adopts the winner's row. This is sound because
+of how Postgres sequences it: a losing INSERT **blocks** until the winner
+commits and only then raises, so by the time the exception arrives the winner is
+guaranteed findable. An `IntegrityError` with no open scan to adopt is not the
+race, and still raises.
+
+Tested at all three layers, because each can be right while another is wrong:
+the **invariant** (all four open/open combinations rejected; terminal scans
+unconstrained); the **recovery branch**, driven deterministically by forcing the
+first lookup to miss — a real race needs a microsecond window a test cannot
+reliably hit, so pretending otherwise would be a flaky test dressed as a
+thorough one; and the **end-to-end path**, two and then five genuinely
+concurrent HTTP requests resolving to one scan.
+
+**Before → after, for concurrent scan requests.** Before: two requests, two
+scans, two full runs of paid model calls, both returning `202` and each naming
+a different scan. After: two requests, **one** scan; both return `202` and both
+name the same scan; the second costs nothing. Neither request errors — the
+loser is answered with the winner's scan in its current state, which is the
+response contract for this case.
+
+### Part B — the placeholder that looked correct and was not
+
+`POST /clients/{clientId}/competitors/detect` opens a scan for the
+CompetitorSet to hang off. If no scan is run afterwards, that row stays open
+indefinitely — by design, since it exists for a later scan to reuse. The
+dashboard treated QUEUED as work in progress and **disabled re-run for that
+client permanently**, for a scan nobody had started.
+
+**Epic 9.5 made this worse by making it more honest**, which is worth stating
+because it is the kind of regression that does not look like one. Before 9.5 the
+row read "Running…" forever — obviously wrong, and it invites investigation.
+After, it reads "Queued" — which looks correct and does not. No test guarded the
+behaviour in either direction.
+
+**Fixed in UI logic, not schema**, and the measurement is what decided it. The
+question was whether QUEUED-from-detection needs to be distinguishable from
+QUEUED-from-a-real-scan. Timed against `avp_test`, 20 samples of exactly what
+the executor does before `run_scan` commits RUNNING:
+
+| | |
+|---|---|
+| QUEUED → RUNNING, median | **1.1 ms** |
+| worst of 20 | 4.0 ms |
+| RUNNING phase, for comparison (Epic 9.2) | **~303 s** |
+| ratio | about **1 : 275,000** |
+
+**QUEUED is not a state a real scan meaningfully occupies.** The only QUEUED
+scan that lasts is the placeholder — precisely the one that must not block. So
+`busyClients` keys off `RUNNING` alone. A nullable `queued_by` column would add
+schema to encode a distinction the UI stops needing, and this project's
+discipline (Epic 3.6, Epic 7's white-label deferral) has consistently preferred
+deferring a schema change until its shape is genuinely understood.
+
+Offering re-run on a placeholder is not merely harmless — **it is the point**:
+the row exists so a later scan reuses it, and re-run is the action that runs it.
+Part A's tests prove that reuse end to end.
+
+**And it is safe, because the double-spend defence is no longer that list.** The
+partial unique index makes a second open scan impossible, and a losing request
+adopts the winner, so a click inside the 1.1 ms window returns the same scan
+rather than buying another. The flag now decides only whether offering the
+action would confuse, not whether it costs. Part A had to land first for Part B
+to be defensible. A running scan still blocks re-run, still per **client**
+rather than per row — both asserted, so the guard cannot quietly go away.
+
+**Before → after, in the terms a pilot agency would hear it.** Before: "You ran
+competitor detection on a client but did not run a scan. The dashboard shows a
+scan sitting at Queued, and the Re-run button for that client is greyed out —
+permanently. Nothing is running; there is no way to start one from this screen."
+After: "Detection leaves a scan ready to run. It shows as Queued, Re-run is
+available, and pressing it runs that scan rather than starting a second one."
+
+### IP-safety self-check
+
+Constraint 9 applies — a customer-facing screen changed.
+
+* **#1** — the change is one predicate in the dashboard's busy logic, decided
+  from a measured state transition and the data model. No competitor product
+  was consulted.
+* **#2** — no component, style or token changed; no new primitive. The only
+  `apps/web` edits are a constant, a comment, a fixture and tests.
+* **#7/#8** — the migration and the new failure code persist a status, an error
+  code and our own sentence (`Superseded by a newer open scan for the same
+  client.`). No engine text, no competitor prose, no vendor response body. Test
+  fixtures use invented names on `.example` domains.
+* **#6** — no dependency added.
+
+**IP-safety check passed:** statuses, error codes, an index predicate and our
+own microcopy only; no third-party content persisted or rendered; no dependency
+added; no new design-system primitive.
+
+### Still open
+
+Epic 9's budget is unchanged at **361.3s against 300s** — nothing in this slice
+touched timing. `PROMPT_CONCURRENCY` (Epic 9.1's candidate fix 2) and fixes 3
+and 4 remain unbuilt. There is still **no poller** in `apps/web` and no
+phase-level progress; 9.5 made a status pollable and 9.6 made it trustworthy,
+but neither built the poller. Slice 3 (the send path) is untouched.
+
+### Tests
+
+**896, up from 881** (api **593 → 605**, workers 13, shared-types 53,
+design-system 99, web **123 → 126**). Run live at the start of the pass at 881
+and again after. `ruff check` clean across `src/` and `tests/`; `mypy` unchanged
+at its pre-existing 38. `alembic check` clean, and the migration runs clean from
+zero and downgrades to base (`test_migrations.py`). `openapi.json` regenerated
+and unchanged, as expected — an index is not part of the API contract.
