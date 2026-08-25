@@ -5697,3 +5697,152 @@ attempt counts, statuses, error codes and domains only.
 design-system 99, web 98). Run live at the start of the pass at 834, and again
 after the fix. `ruff check` clean across `src/` and `tests/`; `mypy` unchanged at
 its pre-existing 38 errors, none of them new and none in the changed lines.
+
+---
+
+## 2026-08-25 — Epic 9.3 · The agency dashboard, and the progress it cannot honestly show
+
+Slice 2 of Epic 9's ordering, built after slice 1 (Epic 9.1's measurement) and
+slice 1.5 (Epic 9.2's timeout fix) precisely so the screen's loading design
+would be decided by real numbers. It was — and the numbers pointed somewhere
+neither slice predicted.
+
+Epic 9.0 found the API finished: registered, tested, left-joining the score so
+an unscored scan still appears. The gap was the screen. This is the screen.
+
+### The design decision, and the finding that made it
+
+Epic 9.1 concluded slice 2 "must show progress, not wait", and proposed "a
+queued scan, a status the client polls". At Epic 9.2's measured **361.3s** that
+instinct is still right: six minutes fails a request-and-wait design on ordinary
+proxy and browser timeouts well before it fails the user's patience.
+
+**But polling is not buildable against today's API, and the reason is
+structural.** Re-reading `POST /clients/{clientId}/scans` for this brief turned
+up something Epic 9.1's harness never had to notice, because it called the
+service layer directly rather than the endpoint:
+
+* The endpoint runs the **entire pipeline inline** and calls `db.commit()`
+  **once, after the scan finishes** (`routers/scans.py`). `session_scope` is
+  explicit about this — "Commit is explicit in the service layer."
+* `get_or_create_scan` creates the scan row inside that uncommitted
+  transaction (`competitors.py:562`).
+
+So for the whole 361 seconds, **the running scan is invisible to every other
+request.** `GET /api/v1/dashboard` opens its own session and cannot see it. A
+polling UI would poll for a status that structurally cannot appear, then watch
+the scan materialise already-finished.
+
+**This screen therefore does not poll.** Not because 361.3s is fast — it is 20%
+over budget — but because there is nothing to poll. It states the wait honestly
+instead, following the precedent the intake screen set: no progress bar, because
+we cannot measure real progress and a fake one is a lie the user will notice.
+
+Step 7 answers itself. The dashboard API needs no new field and no phase-level
+progress endpoint. Adding either would be dressing a window onto a wall. The
+real blocker is that **scans are synchronous**, and making progress real means
+making a scan a queued job that commits `QUEUED` before it starts working.
+That is a backend change well outside a frontend brief, so it is recorded here
+rather than smuggled in. **Epic 9's remaining timing work and this are now the
+same piece of work.**
+
+### What re-run does, given that
+
+The same finding decides the button. `get_or_create_scan` reuses the most recent
+`QUEUED`/`RUNNING` scan rather than creating a second one — but only among
+**committed** rows. A second click arrives on a second session that cannot see
+the first's uncommitted scan, so the reuse never fires and the second request
+creates a **second scan and spends a second scan's worth of model calls.**
+
+The server cannot defend itself here. So the screen does:
+
+* re-run is disabled on **every row of a client** that has a `QUEUED` or
+  `RUNNING` scan, not just the row that is running — an older finished row must
+  not be a side door to the same double-spend
+* re-run is disabled while this browser's own request is in flight, which is the
+  only double-submit guard available from the client
+* a failed re-run is surfaced above the table rather than swallowed
+
+This is a guard, not a fix. The fix is the queued job above.
+
+### The screen
+
+`apps/web/src/app/dashboard/page.tsx` owns fetching and re-run state;
+`components/dashboard/DashboardView.tsx` is pure, so it renders to static markup
+and can be asserted over the way `ReportView` is. Agency identity and seat usage
+in the header, then recent scans: client name and domain, status, score, started
+and finished, a link to `/scans/{scanId}/report`, and the re-run action. The
+home screen gained a Dashboard link, since a route nothing reaches is half a
+feature.
+
+Three states the endpoint distinguishes, which the screen now distinguishes too:
+
+* **`isEmpty`** — no clients and no scans. Written empty state with a way
+  forward, not a table with headers and no rows.
+* **clients but no scans** — `isEmpty` is *false* here, because the endpoint
+  sets it only when both counts are zero. Reachable, and previously would have
+  rendered as a blank table with no explanation. It now says so in words.
+* **`partial`** — its own badge tone, keeping its score. A partial scan
+  measured something on fewer answers. Epic 9.1 called `partial` the routine
+  case; Epic 9.2 showed it was routine *because of the timeout bug* and its own
+  run finished `succeeded`. It is now rendered as a genuine degradation rather
+  than either a success or a failure.
+
+`compositeScore` arrives as a **string** and is null for both "not scored yet"
+and `INSUFFICIENT_DATA`. Neither is a zero, and the endpoint left-joins the score
+precisely so those rows survive — so the cell is an em dash. An endpoint careful
+about a degraded scan is worth nothing if the screen renders it as 0.
+
+### No new design-system primitive was needed
+
+Every element is an existing export: `Button`, `Card`/`CardBody`, `Badge`,
+`VisibilityBadge`, `DataTable`. `Badge`'s documented purpose is *system state*
+("scan failed, quota low, engine unavailable") and its tones are kept disjoint
+from the visibility ramp, which is exactly the scan-status/score split this
+screen needs — the status chip cannot be misread as a score. Epic 0's
+build-before-screens discipline paid here: nothing had to be invented, and
+nothing had to be reached for outside the system.
+
+### Tests
+
+**865, up from 840** (api 577, workers 13, shared-types 53, design-system 99,
+web **98 → 123**). Run live at the start of the pass at 840 and again after.
+
+The 25 new cases are deliberately the states `test_dashboard.py` already proves
+the endpoint produces — empty, unscored-still-appears, null-not-zero,
+newest-first, a bounded page — re-asserted at the point they reach a human,
+plus each scan status, the re-run states above, and UTC-stable timestamps
+(`toLocaleDateString` would render differently in CI than in a browser and make
+every assertion untrustworthy). `pnpm --filter @avp/web typecheck` is clean and
+`next build` emits `/dashboard` as a static route.
+
+### IP-safety self-check
+
+* **#1** — designed from the data model and the user goal. The columns are the
+  fields `ScanSummaryOut` actually carries; no competitor product was opened,
+  referenced or described.
+* **#2** — every element imports from `@avp/design-system`. No new primitive was
+  added and none was needed. The only utility classes used are the design
+  system's own token utilities from its Tailwind preset — which *replaces*
+  Tailwind's palette, spacing, font and radius scales rather than extending
+  them, so an off-system class like `bg-slate-500` does not compile. **No ad hoc
+  Tailwind on this screen.**
+* **#3** — the narrative-report structure is the report screen's obligation. This
+  is a list of scans and is honest about being one; it does not present a grid
+  of metric tiles as analysis.
+* **#4** — no icons, illustrations or fonts added.
+* **#7/#8** — the screen renders identity, statuses, a score, timestamps and
+  domains. No engine answer text, no competitor prose, no marketing copy; a test
+  asserts the rendered markup carries none. All microcopy is newly written.
+
+**IP-safety check passed:** designed from `ScanSummaryOut` and the user goal;
+design-system components and token utilities only, no ad hoc Tailwind, no new
+primitive; no third-party prose rendered, asserted in test.
+
+### Still open, and not touched here
+
+The budget is **not** met — Epic 9.2 left it at 361.3s against 300s. Candidate
+fix 2 (`PROMPT_CONCURRENCY`) and fixes 3 and 4 remain unbuilt, and the
+synchronous-scan finding above is now the largest single item in Epic 9's
+remaining scope: it blocks real progress UI and it is what makes a double click
+cost money. Slice 3 (the send path) is untouched.
