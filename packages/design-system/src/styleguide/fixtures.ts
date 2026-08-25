@@ -7,6 +7,7 @@
  */
 
 import type { LedgerDimension, LedgerCompetitor } from '../components/chart/ledgerLayout.js';
+import type { ShelfRowInput } from '../components/chart/answerShelfLayout.js';
 
 export const SUBJECT = 'Northaven Dental';
 
@@ -115,5 +116,59 @@ export const FIXES = [
     priority: 'medium' as const,
     effort: 'S' as const,
     pointsUpside: 3.6,
+  },
+];
+
+/**
+ * Answer Shelf rows — Epic 7.1.
+ *
+ * Same rule as everything else in this file: invented practice, invented
+ * rivals, prompts written for this guide. The shape is deliberately the one
+ * the real data produces — the subject absent from most answers, present low
+ * down in a couple, and one answer that never came back.
+ */
+export const SHELF_ROWS: ShelfRowInput[] = [
+  {
+    promptId: 'q1', promptText: 'best family dentist in Northaven', promptPosition: 1,
+    engine: 'claude', answered: true, subjectPresent: true, subjectPosition: 3, subjectCited: true,
+    slots: [
+      { position: 1, entityName: 'Brightwater Dental', isSubject: false, cited: true },
+      { position: 2, entityName: 'Cedar Lane Orthodontics', isSubject: false, cited: false },
+      { position: 3, entityName: SUBJECT, isSubject: true, cited: true },
+    ],
+  },
+  {
+    promptId: 'q2', promptText: 'who does same-day crowns near me', promptPosition: 2,
+    engine: 'claude', answered: true, subjectPresent: false, subjectPosition: null,
+    slots: [
+      { position: 1, entityName: 'Brightwater Dental', isSubject: false, cited: true },
+      { position: 2, entityName: 'Harbourview Smile Co', isSubject: false, cited: false },
+    ],
+  },
+  {
+    promptId: 'q3', promptText: 'affordable dental implants comparison', promptPosition: 3,
+    engine: 'claude', answered: true, subjectPresent: false, subjectPosition: null,
+    slots: [
+      { position: 1, entityName: 'Cedar Lane Orthodontics', isSubject: false, cited: false },
+      { position: 2, entityName: 'Brightwater Dental', isSubject: false, cited: true },
+      { position: 3, entityName: 'Harbourview Smile Co', isSubject: false, cited: false },
+    ],
+  },
+  {
+    promptId: 'q4', promptText: 'dentists open on Saturday', promptPosition: 4,
+    engine: 'claude', answered: true, subjectPresent: false, subjectPosition: null,
+    slots: [{ position: 1, entityName: 'Harbourview Smile Co', isSubject: false, cited: false }],
+  },
+  {
+    promptId: 'q5', promptText: 'invisalign providers with payment plans', promptPosition: 5,
+    engine: 'claude', answered: true, subjectPresent: true, subjectPosition: 2, subjectCited: false,
+    slots: [
+      { position: 1, entityName: 'Cedar Lane Orthodontics', isSubject: false, cited: true },
+      { position: 2, entityName: SUBJECT, isSubject: true, cited: false },
+    ],
+  },
+  {
+    promptId: 'q6', promptText: 'emergency dental care after hours', promptPosition: 6,
+    engine: 'claude', answered: false, subjectPresent: false, subjectPosition: null, slots: [],
   },
 ];

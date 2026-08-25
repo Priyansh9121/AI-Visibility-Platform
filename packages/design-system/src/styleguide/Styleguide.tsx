@@ -12,6 +12,7 @@ import {
   DataTable,
   ScoreDisplay,
   LuminanceLedger,
+  AnswerShelf,
   ChartPatterns,
   ReportPage,
   ReportHeader,
@@ -41,8 +42,13 @@ import {
   COMPARISON_ROWS,
   EVIDENCE,
   FIXES,
+  SHELF_ROWS,
   type CompetitorRow,
 } from './fixtures.js';
+import type {
+  ShelfRowInput,
+  ShelfSlotInput,
+} from '../components/chart/answerShelfLayout.js';
 
 export function Styleguide(): JSX.Element {
   const [dark, setDark] = useState(false);
@@ -390,6 +396,60 @@ export function Styleguide(): JSX.Element {
       {/* ============================================================ */}
       <Section
         num="09"
+        title="The Answer Shelf — the proof beat"
+        note="An AI answer has a limited number of slots. Who is standing in them? One row per answer, brands in the order the engine named them. The subject is the beacon marker; rivals are neutral slate with a print pattern; a citation in that same answer hangs as a tick beneath."
+      >
+        <div className="sg-panel">
+          <AnswerShelf
+            subjectName={SUBJECT}
+            rows={SHELF_ROWS}
+            title="Where this practice stands in the answers buyers see"
+            caption="Each row is one answer. A dashed ring is an answer that named other practices and not this one."
+          />
+        </div>
+
+        <p className="sg-section__note">
+          The load-bearing rule: <strong>every answered row carries exactly one subject mark</strong> —
+          a filled marker at the ordinal the answer gave it, or an explicit empty notch. Never nothing.
+          Stack the rows and the notches line up into a vertical band, so you see <em>the shape of
+          absence</em> before reading a word. A row that silently rendered nothing when the subject was
+          missing would not look like a bug; it would look like a clean report. That identity is
+          asserted in <code>answerShelfLayout.test.ts</code> rather than trusted.
+        </p>
+        <p className="sg-section__note">
+          The notch sits in a fixed column rather than at a guessed ordinal, for two reasons: a brand
+          that was not named <em>has</em> no ordinal, and inventing one would state a fact the answer
+          never gave; and a fixed column is what makes the absences align. The last row shows an
+          engine that never answered — drawn as a dash, not a hole, because we have no answer to be
+          absent from and a hole there would blame the client for our own failed request.
+        </p>
+        <p className="sg-section__note">
+          Rivals are never painted from the visibility ramp. A rival in &ldquo;good green&rdquo; reads
+          as an endorsement; one in &ldquo;bad red&rdquo; makes the report look like a hatchet job and
+          costs it credibility with the client&rsquo;s CMO — the one thing the report cannot afford.
+          Each rival keeps the same slate shade in every row, so a brand never changes colour down
+          the page.
+        </p>
+
+        <p className="sg-sub">A scan where the subject is never named</p>
+        <div className="sg-panel">
+          <AnswerShelf
+            subjectName={SUBJECT}
+            rows={SHELF_ROWS.filter((row) => row.answered).map((row): ShelfRowInput => ({
+              ...row,
+              subjectPresent: false,
+              subjectPosition: null,
+              subjectCited: false,
+              slots: row.slots.filter((slot: ShelfSlotInput) => !slot.isSubject),
+            }))}
+            caption="The band of holes is the finding."
+          />
+        </div>
+      </Section>
+
+      {/* ============================================================ */}
+      <Section
+        num="10"
         title="Report primitives — narrative, not dashboard"
         note="Primary screens are structured as an argument: score, biggest gap, proof, fix, pitch. These primitives make that structure the path of least resistance, and the spacing between beats exceeds any spacing inside them so the shape is visible at a glance."
       >

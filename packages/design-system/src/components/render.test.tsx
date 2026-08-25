@@ -6,8 +6,10 @@ import { Badge, VisibilityBadge } from './Badge.js';
 import { DataTable } from './Table.js';
 import { ScoreDisplay } from './ScoreDisplay.js';
 import { LuminanceLedger } from './chart/LuminanceLedger.js';
+import { AnswerShelf } from './chart/AnswerShelf.js';
+import type { ShelfRowInput } from './chart/answerShelfLayout.js';
 import { Beat, Evidence, ReportPage, BEAT_SEQUENCE } from './report/ReportLayout.js';
-import { visibility, oklch } from '../tokens/color.js';
+import { visibility, beacon, oklch } from '../tokens/color.js';
 import { DIMENSIONS, COMPETITORS, SUBJECT } from '../styleguide/fixtures.js';
 
 const html = (node: Parameters<typeof renderToStaticMarkup>[0]) => renderToStaticMarkup(node);
@@ -139,5 +141,81 @@ describe('report primitives enforce the narrative', () => {
     // text has nowhere to go — the constraint is enforced by the type, not by
     // a reviewer noticing.
     expect(out).not.toContain('undefined');
+  });
+});
+
+describe('AnswerShelf renders', () => {
+  const shelfRows: ShelfRowInput[] = [
+    {
+      promptId: 'p1', promptText: 'best help desk software', promptPosition: 1,
+      engine: 'claude', answered: true, subjectPresent: true, subjectPosition: 2,
+      subjectCited: true,
+      slots: [
+        { position: 1, entityName: 'Zendesk', isSubject: false, cited: true },
+        { position: 2, entityName: 'Help Scout', isSubject: true, cited: true },
+      ],
+    },
+    {
+      promptId: 'p2', promptText: 'zendesk alternatives for small teams', promptPosition: 2,
+      engine: 'claude', answered: true, subjectPresent: false, subjectPosition: null,
+      subjectCited: false,
+      slots: [{ position: 1, entityName: 'Front', isSubject: false, cited: false }],
+    },
+    {
+      promptId: 'p3', promptText: 'shared inbox tools', promptPosition: 3,
+      engine: 'claude', answered: false, subjectPresent: false, subjectPosition: null,
+      slots: [],
+    },
+  ];
+
+  it('mounts inside ChartFrame and inherits the accessibility contract', () => {
+    const out = html(<AnswerShelf subjectName="Help Scout" rows={shelfRows} />);
+    expect(out).toContain('avp-chart-frame');
+    expect(out).toContain('role="img"');
+    expect(out).toMatch(/aria-label="[^"]+"/);
+    // The spoken label is the finding, not "a chart".
+    expect(out).toContain('named in 1 and absent from 1');
+  });
+
+  it('carries a visually-hidden table equivalent, for PDF accessibility audits', () => {
+    const out = html(<AnswerShelf subjectName="Help Scout" rows={shelfRows} />);
+    expect(out).toContain('avp-visually-hidden');
+    expect(out).toContain('<table>');
+    expect(out).toContain('Not named');
+    expect(out).toContain('Named 2nd');
+    expect(out).toContain('No answer returned');
+  });
+
+  it('draws an explicit notch for an absence rather than nothing', () => {
+    const out = html(<AnswerShelf subjectName="Help Scout" rows={shelfRows} />);
+    expect(out).toContain('avp-shelf__notch');
+    // And distinguishes "no answer" from "answered without naming you".
+    expect(out).toContain('avp-shelf__unanswered');
+  });
+
+  it('paints the subject beacon and rivals neutral, never a ramp colour', () => {
+    const out = html(<AnswerShelf subjectName="Help Scout" rows={shelfRows} />);
+    expect(out).toContain(oklch(beacon['600']));
+    for (const stop of Object.values(visibility)) {
+      expect(out).not.toContain(oklch(stop));
+    }
+  });
+
+  it('emits no raw hex or rgb() — every colour comes from the token ramp', () => {
+    const out = html(<AnswerShelf subjectName="Help Scout" rows={shelfRows} />);
+    expect(out).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
+    expect(out).not.toMatch(/\brgba?\(/);
+  });
+
+  it('renders our own question as the row label and no answer text', () => {
+    const out = html(<AnswerShelf subjectName="Help Scout" rows={shelfRows} />);
+    expect(out).toContain('best help desk software');
+    expect(out).toContain('zendesk alternatives for small teams');
+  });
+
+  it('degrades to a sentence rather than an empty frame', () => {
+    const out = html(<AnswerShelf subjectName="Help Scout" rows={[]} />);
+    expect(out).toContain('No answers were recorded');
+    expect(out).not.toContain('role="img"');
   });
 });

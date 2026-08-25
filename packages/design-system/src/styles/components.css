@@ -583,3 +583,56 @@
 
 .avp-field__hint { font-size: var(--avp-text-ui-sm); color: var(--avp-text-secondary); }
 .avp-field__error { font-size: var(--avp-text-ui-sm); color: var(--avp-danger); font-weight: 500; }
+
+/* ========================= Answer Shelf ========================== */
+/*
+ * Direction A. Every value below is a token — the marks themselves are painted
+ * from tokens/color.ts in the component, because the subject-is-beacon /
+ * rivals-are-neutral rule is enforced by `seriesStyle`, not by CSS.
+ */
+
+.avp-shelf__svg { display: block; width: 100%; height: auto; overflow: visible; }
+
+.avp-shelf__label {
+  font-family: var(--avp-font-ui);
+  font-size: var(--avp-text-ui-2xs);
+  fill: var(--avp-text-secondary);
+}
+
+.avp-shelf__ordinal {
+  font-family: var(--avp-font-mono);
+  font-size: var(--avp-text-ui-2xs);
+  fill: var(--avp-text-tertiary);
+}
+
+.avp-shelf__more {
+  font-family: var(--avp-font-mono);
+  font-size: var(--avp-text-ui-2xs);
+  fill: var(--avp-text-tertiary);
+}
+
+.avp-shelf__rule { stroke: var(--avp-line-hairline); stroke-width: 1; }
+
+/*
+ * The empty notch. Hollow and dashed so it reads as a place nobody is standing
+ * in rather than as a faint mark — the absence has to be as legible as a
+ * presence, because on most scans the absences ARE the finding.
+ */
+.avp-shelf__notch {
+  fill: none;
+  stroke: var(--avp-text-tertiary);
+  stroke-width: 1.25;
+  stroke-dasharray: 2.5 2.5;
+}
+
+/* No answer came back. A dash, not a hole — we have nothing to be absent from. */
+.avp-shelf__unanswered { stroke: var(--avp-line-hairline); stroke-width: 1.5; }
+
+.avp-shelf__empty {
+  font-size: var(--avp-text-ui-sm);
+  color: var(--avp-text-secondary);
+}
+
+/* The engine, beside the question. Dimmer than the prompt: it identifies the
+   row, it is not the row's subject. */
+.avp-shelf__engine { fill: var(--avp-text-tertiary); }
