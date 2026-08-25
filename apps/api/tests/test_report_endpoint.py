@@ -355,3 +355,119 @@ class TestCompetitorSetScope:
         assert cset["detectionConfidence"] is not None
         assert cset["confidenceCovers"] == len(cset["competitors"]) - len(manual)
         assert cset["confidenceCovers"] < len(cset["competitors"])
+
+
+class TestAnsweredStatusUnit:
+    """`_proof`'s definition of "answered" — the Epic 7.0 correction.
+
+    These build rows directly rather than going through the stubbed scan
+    runner, because the stub only ever produces OK results: it has no way to
+    emit an `ANSWERED_NO_MENTION`, so no endpoint test can tell the two
+    readings apart. Constructed here, which is the only way to negative-control
+    it.
+    """
+
+    @staticmethod
+    def _result(  # noqa: ANN205, PLR0913
+        rid: str = "er1", pid: str = "p1", engine=Engine.CLAUDE,  # noqa: ANN001
+        mentioned: bool = True, position: int | None = 1,
+        mentions=(), citations=(), ok: bool = True,  # noqa: ANN001
+    ):
+        from avp_api.models import EngineResult
+        from avp_api.models.engine_result import EngineResultStatus
+
+        r = EngineResult(
+            id=rid, scan_id="s1", prompt_id=pid, engine=engine,
+            status=EngineResultStatus.OK if ok else EngineResultStatus.ERROR,
+            mentioned=mentioned, position=position,
+        )
+        r.brand_mentions = list(mentions)
+        r.citations = list(citations)
+        return r
+
+    @staticmethod
+    def _mention(name: str, position: int | None, is_subject: bool = False, domain=None):  # noqa: ANN001, ANN205
+        from avp_api.models import BrandMention
+
+        return BrandMention(
+            id=f"bm_{name}_{position}", engine_result_id="er1", entity_name=name,
+            entity_domain=domain, is_subject=is_subject, position=position,
+        )
+
+    @staticmethod
+    def _absent(rid: str = "er1", status=None):  # noqa: ANN001, ANN205
+        """An answer that named a rival and cited a source, but not the subject."""
+        from avp_api.models import BrandMention, Citation
+        from avp_api.models.engine_result import CitationType, EngineResultStatus
+
+        r = TestAnsweredStatusUnit._result(rid=rid, mentioned=False, position=None)
+        r.status = status or EngineResultStatus.ANSWERED_NO_MENTION
+        r.brand_mentions = [
+            BrandMention(id=f"bm{rid}", engine_result_id=rid, entity_name="Zendesk",
+                         entity_domain="zendesk.com", is_subject=False, position=1)
+        ]
+        r.citations = [
+            Citation(id=f"c{rid}", engine_result_id=rid, source_domain="g2.com",
+                     source_url="https://g2.com/x", source_type=CitationType.REVIEW,
+                     position=1, cites_subject=False)
+        ]
+        return r
+
+    def test_a_confirmed_absence_is_an_answer_not_a_failure(self) -> None:
+        """The Epic 7.0 defect this corrects.
+
+        `ANSWERED_NO_MENTION` means the engine answered and the subject was
+        not in it. Folding it in with timeouts made the proof beat report a
+        100% mention rate on a subject named in half the answers, and threw
+        away the citations and rival mentions those answers carried — the most
+        damning evidence the beat has. Invisible on the Help Scout fixture,
+        which names the subject in all six of its answers.
+        """
+        from avp_api.models import Citation
+        from avp_api.models.engine_result import CitationType, EngineResultStatus
+        from avp_api.services.report import _proof
+
+        rows = [
+            self._result(
+                rid=f"ok{i}", mentioned=True, position=1,
+                mentions=[self._mention("Help Scout", 1, is_subject=True)],
+                citations=[Citation(
+                    id=f"cok{i}", engine_result_id=f"ok{i}", source_domain="g2.com",
+                    source_url="https://g2.com/x", source_type=CitationType.REVIEW,
+                    position=1, cites_subject=False,
+                )],
+            )
+            for i in range(3)
+        ]
+        rows += [
+            self._absent(rid=f"no{i}", status=EngineResultStatus.ANSWERED_NO_MENTION)
+            for i in range(3)
+        ]
+        proof = _proof(rows, None)
+
+        assert proof.answered_results == 6, "six engines answered"
+        assert proof.results_mentioning_subject == 3, "three of them named the subject"
+        coverage = proof.engine_coverage[0]
+        assert (coverage.mentioned, coverage.answered) == (3, 6), (
+            "'named 3 of 3' would claim a perfect mention rate on a subject named half the time"
+        )
+        # Three of these six citations come from answers the subject was absent
+        # from. Under the old rule those three were discarded outright.
+        assert proof.total_citations == 6, "an absent answer's citations are still evidence"
+        zendesk = next(m for m in proof.mention_shares if m.entity_name == "Zendesk")
+        assert zendesk.appearances == 3, (
+            "the rival's mentions live ONLY in the answers the subject is missing from;"
+            " under the old rule the rival did not appear in the report at all"
+        )
+
+    def test_a_real_failure_is_still_excluded(self) -> None:
+        """The other half of the same rule — an error is not an answer, and
+        widening the definition must not have swept timeouts in too."""
+        from avp_api.models.engine_result import EngineResultStatus
+        from avp_api.services.report import _proof
+
+        for status in (EngineResultStatus.ERROR, EngineResultStatus.TIMEOUT,
+                       EngineResultStatus.RATE_LIMITED):
+            proof = _proof([self._absent(rid="e1", status=status)], None)
+            assert proof.answered_results == 0, f"{status.value} is not an answer"
+            assert proof.total_citations == 0, f"{status.value} carries no usable evidence"
