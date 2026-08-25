@@ -283,8 +283,15 @@ describe('determinism', () => {
 
 describe('a failed audit is not a bad audit', () => {
   it('carries no findings to turn into fixes', () => {
+    // Restated in Epic 7.1. The assertion was `every(source === 'gap')`, which
+    // was the same claim while `gap` and `audit` were the only two sources.
+    // The claim being made is about the AUDIT: a crawl that failed produced no
+    // findings, so it contributes no fixes. It says nothing about whether the
+    // citations that same scan collected can still produce one — they can, and
+    // the audit failing does not make them less true.
     const narrative = deriveNarrative(failedAuditReport);
-    expect(narrative.fixes.every((f) => f.source === 'gap')).toBe(true);
+    expect(narrative.fixes.every((f) => f.source !== 'audit')).toBe(true);
+    expect(narrative.fixes.some((f) => f.source === 'gap')).toBe(true);
   });
 });
 
@@ -352,12 +359,44 @@ describe('Epic 8 enriches the fix list without re-deciding it', () => {
     }
   });
 
-  it('marks generated items without inventing a third source', () => {
-    // `source` still answers "what measurement produced this", and widening it
-    // would silently switch off the audit disclaimer in the fix beat.
+  it('marks generated items as a flag, never as a source of their own', () => {
+    // Restated in Epic 7.1, preserving the guard's actual target.
+    //
+    // The claim is that model-authored WORDING is not a measurement: a
+    // generated item has no independent existence, it is the same measured
+    // candidate worded better, so `generated` must stay a flag. The original
+    // assertion expressed that as "source is gap or audit", which was exact
+    // while those were the only measurements. Epic 7.1 adds a third real one —
+    // a count of citations to a domain nobody owns — so the enumeration is now
+    // stated as the closed set of MEASUREMENTS, and the thing being excluded
+    // is named directly rather than implied by its absence.
     const fixes = deriveNarrative(generatedFixesReport).fixes;
-    expect(fixes.every((f) => f.source === 'gap' || f.source === 'audit')).toBe(true);
-    expect(fixes.every((f) => f.generated)).toBe(true);
+    const MEASUREMENTS = ['gap', 'audit', 'citation'];
+    expect(fixes.every((f) => MEASUREMENTS.includes(f.source))).toBe(true);
+    expect(fixes.some((f) => (f.source as string) === 'generated')).toBe(false);
+
+    // Every fix Epic 8 built a candidate for is marked. The citation fix is
+    // not one of them: Epic 8's `build_candidates` covers gaps and audit
+    // findings, and extending it to a third source needs a migration, a change
+    // at the model boundary, and paid calls to verify. Epic 7.1 stopped short
+    // of that deliberately and left this fix on the deterministic string-table
+    // floor — which is exactly where Epic 7 left the whole list before Epic 8
+    // enriched it, and `enrich`'s documented behaviour for an unmatched item.
+    const enriched = fixes.filter((f) => f.source !== 'citation');
+    expect(enriched.length).toBeGreaterThan(0);
+    expect(enriched.every((f) => f.generated)).toBe(true);
+    expect(fixes.find((f) => f.source === 'citation')?.generated).toBeUndefined();
+  });
+
+  it('keeps the two point-less sources distinct from each other', () => {
+    // The other half of what the original guard was protecting: the fix beat
+    // shows its audit disclaimer when an AUDIT fix is present, and that
+    // condition must not drift into "any fix without points" — the citation
+    // fix has no points either, and it is not an audit finding.
+    const narrative = deriveNarrative(helpscoutReport);
+    const pointless = narrative.fixes.filter((f) => f.pointsUpside === undefined);
+    expect(pointless.some((f) => f.source === 'audit')).toBe(true);
+    expect(pointless.some((f) => f.source === 'citation')).toBe(true);
   });
 
   it('falls back to the string table for a candidate with no generated item', () => {

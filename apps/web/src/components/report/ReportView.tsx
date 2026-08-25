@@ -23,6 +23,7 @@
  */
 
 import {
+  AnswerShelf,
   Badge,
   Beat,
   BEAT_SEQUENCE,
@@ -399,6 +400,39 @@ function ProofBeat({
       </Prose>
 
       <div className="mt-6 flex flex-col gap-6">
+        {/* --- the answer shelf (Epic 7.1, Direction A) --------------------- */}
+        {/*
+          Additive. The tables below are unchanged and still carry the
+          aggregates — how often overall, best placement, who is cited. This
+          answers what they structurally cannot: in THIS question, who stood
+          where, and was the subject there at all.
+        */}
+        {proof.promptShelf && proof.promptShelf.length > 0 && (
+          <AnswerShelf
+            subjectName={subjectName}
+            rows={proof.promptShelf.map((row) => ({
+              promptId: row.promptId,
+              promptText: row.promptText,
+              promptPosition: row.promptPosition,
+              engine: engineLabel(row.engine),
+              answered: row.answered,
+              subjectPresent: row.subjectPresent,
+              subjectPosition: row.subjectPosition ?? null,
+              subjectCited: row.subjectCited,
+              slots: row.slots.map((slot) => ({
+                position: slot.position,
+                entityName: slot.entityName,
+                entityDomain: slot.entityDomain ?? null,
+                isSubject: slot.isSubject,
+                competitorName: slot.competitorName ?? null,
+                cited: slot.cited,
+              })),
+            }))}
+            title={shelfTitle(report, subjectName)}
+            caption={`One row per answer, with the brands it named in the order it named them. A dashed ring is an answer that named other brands and not ${subjectName}; a tick beneath a marker means that same answer cited it.`}
+          />
+        )}
+
         {/* --- who is ahead, per dimension --------------------------------- */}
         {report.competitorSet && report.competitorSet.competitors.length > 0 ? (
           <div>
@@ -570,6 +604,24 @@ function ProofBeat({
       </div>
     </Beat>
   );
+}
+
+/**
+ * The shelf's title. A finding, not a chart label — ChartFrame's `title` is
+ * documented as "short, declarative, reads as a finding".
+ */
+function shelfTitle(report: Report, subjectName: string): string {
+  const shelf = report.proof.promptShelf ?? [];
+  const answered = shelf.filter((r) => r.answered);
+  const absent = answered.filter((r) => !r.subjectPresent).length;
+  if (answered.length === 0) return 'No engine returned an answer to place anyone in.';
+  if (absent === 0) {
+    return `${subjectName} appears in every answer this scan measured.`;
+  }
+  if (absent === answered.length) {
+    return `${subjectName} appears in none of the ${answered.length} answers this scan measured.`;
+  }
+  return `${subjectName} is missing from ${absent} of the ${answered.length} answers this scan measured.`;
 }
 
 function proofHeading(report: Report, subjectName: string): string {
@@ -764,7 +816,9 @@ function FixBeat({ report, narrative }: { report: Report; narrative: Narrative }
       )}
       {narrative.fixes.some((f) => f.generated) && (
         <p className="mt-3 text-ui-sm leading-prose text-text-tertiary">
-          The wording, priority and effort above were written for this scan from its own figures.
+          {narrative.fixes.every((f) => f.generated)
+            ? 'The wording, priority and effort above were written for this scan from its own figures.'
+            : 'Where a change was drawn from a measured gap or an audit finding, its wording, priority and effort were written for this scan from its own figures.'}{' '}
           Which changes appear, their order, and the points beside them are unchanged arithmetic
           &mdash; the same gap calculation that drew the chart.
         </p>

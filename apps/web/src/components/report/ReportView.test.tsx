@@ -13,6 +13,7 @@ import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { BEAT_SEQUENCE } from '@avp/design-system';
 import { ReportView } from './ReportView';
+import { deriveNarrative } from '@/lib/report/derive';
 import {
   failedAuditReport,
   generatedFixesReport,
@@ -401,5 +402,135 @@ describe('the corroboration figure says what it covers — Finding 3, Epic 3.11'
   it('does not fabricate a percentage from a set nothing was detected in', () => {
     const html = render(noCompetitorSetReport);
     expect(html).not.toContain('Search results and AI answers independently surfaced');
+  });
+});
+
+describe('the answer shelf — Epic 7.1, Direction A', () => {
+  const html = render(helpscoutReport);
+
+  it('renders one row per answer, additively — the tables are untouched', () => {
+    // The decision was additive: the shelf answers what the aggregate tables
+    // structurally cannot, and the tables keep answering what they always did.
+    expect(html).toContain('avp-shelf');
+    expect(html).toContain('Who got named');       // mention-share table
+    expect(html).toContain('Sources these answers cited'); // citation tables
+  });
+
+  it('labels rows with our own generated questions', () => {
+    // ip-safety.md #7 permits our own content. These are the prompts this
+    // system wrote and sent — the same strings /scans/{id}/prompts returns.
+    expect(html).toContain('help scout vs zendesk for a small team');
+    expect(html).toContain('shared inbox tool for a small support team');
+  });
+
+  it('states the finding in the chart title rather than labelling the chart', () => {
+    // Help Scout is named in all six answers on this real scan.
+    expect(html).toContain('Help Scout appears in every answer this scan measured');
+  });
+
+  it('carries the accessibility contract ChartFrame requires', () => {
+    expect(html).toMatch(/role="img" aria-label="[^"]+"/);
+    expect(html).toContain('Across 6 answers, Help Scout was named in 6');
+    // And the hidden table equivalent, which exported PDFs carry into the
+    // accessibility tree.
+    expect(html).toContain('avp-visually-hidden');
+    expect(html).toContain('Brands named, in order');
+  });
+
+  it('reproduces the real ordinals rather than a ranking of its own', () => {
+    // On this scan Help Scout is named FIRST in every answer and cited in only
+    // two of them — the shelf shows both facts, which is the argument.
+    expect(html).toContain('Named 1st');
+  });
+
+  it('names rivals but reproduces no engine or competitor prose', () => {
+    // Entity names are facts (ip-safety.md #7). Anything describing them is not.
+    expect(html).toContain('Zendesk');
+    for (const word of ['snippet', 'excerpt', 'according to', 'the answer said']) {
+      expect(html.toLowerCase()).not.toContain(word);
+    }
+  });
+
+  it('emits no off-system colour from the new chart', () => {
+    const inlineStyles = [...html.matchAll(/style="([^"]*)"/g)].map((m) => m[1]!).join(';');
+    expect(inlineStyles).not.toMatch(/#[0-9a-f]{3,8}\b/i);
+    expect(inlineStyles).not.toMatch(/\brgba?\(/i);
+    // Chart marks are painted with SVG attributes, not style="", so those are
+    // swept too — the ramp must not reach a competitor.
+    const paints = [...html.matchAll(/(?:fill|stroke)="([^"]*)"/g)].map((m) => m[1]!);
+    for (const paint of paints) {
+      expect(paint).not.toMatch(/#[0-9a-f]{3,8}\b/i);
+      expect(paint).not.toMatch(/\brgba?\(/i);
+    }
+  });
+
+  it('is absent, not broken, when a scan has no shelf to draw', () => {
+    const degraded = render(insufficientDataReport);
+    expect(degraded).not.toContain('avp-shelf');
+    // and the beat still renders its other evidence
+    expect(degraded).toContain('proof');
+  });
+});
+
+describe('the unclaimed-domain fix — Epic 7.1, Direction C', () => {
+  const html = render(helpscoutReport);
+
+  it('names the heaviest domain nobody owns as a concrete change', () => {
+    // The real scan: eesel.ai cited 6 times, helpscout.com 3. Before this the
+    // fix beat could only ever say "improve citation strength".
+    expect(html).toContain('Get onto eesel.ai');
+    expect(html).toContain('cited 6 times');
+  });
+
+  it('says the domain belongs to neither the subject nor a rival', () => {
+    expect(html).toContain('belongs to neither you nor any rival in this scan');
+  });
+
+  it('lists the runners-up so the fix is a plan, not a single bet', () => {
+    expect(html).toContain('featurebase.app');
+    expect(html).toContain('hiverhq.com');
+  });
+
+  it('does not crowd out the concrete audit fixes Epic 7 protected', () => {
+    expect(html).toContain('FAQPage schema');
+    expect(html).toContain('Audit fixes carry no point figure');
+  });
+
+  it('describes the domain by name and count only, never by its content', () => {
+    // ip-safety.md #7: we have never read the cited page, and nothing here
+    // claims to know what is on it. Asserted over the fix's OWN strings rather
+    // than the whole document, so the page's `<article>` tag cannot mask it.
+    const fix = deriveNarrative(helpscoutReport).fixes.find((f) => f.source === 'citation')!;
+    const text = `${fix.title} ${fix.detail}`.toLowerCase();
+    for (const word of [
+      'article', 'blog post', 'review of', 'they say', 'writes', 'claims that',
+      'according to', 'guide to', 'page about',
+    ]) {
+      expect(text).not.toContain(word);
+    }
+    // What it DOES contain is a domain and two counts.
+    expect(text).toContain('eesel.ai');
+    expect(text).toMatch(/\b6 times\b/);
+  });
+
+  it('does not borrow the audit disclaimer to explain its own missing points', () => {
+    // The discriminating case, and the reason the disclaimer stays keyed to
+    // `source === 'audit'` rather than to "has no points". A failed audit
+    // yields no audit fixes, but the citations that same scan collected still
+    // yield the domain fix — which also carries no point figure. Keying the
+    // note on the absence of points would print "Audit fixes carry no point
+    // figure" on a report with no audit fix in the list at all.
+    const narrative = deriveNarrative(failedAuditReport);
+    expect(narrative.fixes.some((f) => f.source === 'citation')).toBe(true);
+    expect(narrative.fixes.some((f) => f.source === 'audit')).toBe(false);
+
+    const out = render(failedAuditReport);
+    expect(out).toContain('Get onto eesel.ai');
+    expect(out).not.toContain('Audit fixes carry no point figure');
+  });
+
+  it('offers no domain fix when nothing unclaimed cleared the floor', () => {
+    const degraded = render(insufficientDataReport);
+    expect(degraded).not.toContain('Get onto');
   });
 });

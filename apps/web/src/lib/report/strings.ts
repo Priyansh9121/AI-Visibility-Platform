@@ -279,6 +279,56 @@ export const FIX_FOR_DIMENSION: Record<string, FixCopy> = {
   },
 };
 
+/**
+ * The unclaimed-domain fix — Epic 7.1, Direction C.
+ *
+ * A function rather than a table entry, because the whole value of this
+ * recommendation is that it NAMES the domain. "Get cited by more third-party
+ * sources" is the abstract version and it is worth nothing; "answers about you
+ * cite eesel.ai six times and you nowhere — that is the page to go get onto"
+ * is the version an agency can sell and a client can act on.
+ *
+ * Everything interpolated is a fact: a domain, a count, and the subject's own
+ * citation count. Nothing describes what is ON the domain, which would be
+ * republishing someone else's content (ip-safety.md #7) — and we have never
+ * read it in any case.
+ */
+export function fixForUnclaimedDomains(
+  domains: readonly { domain: string; citations: number }[],
+  subjectCitations: number,
+): FixCopy | null {
+  const [heaviest, ...rest] = domains;
+  if (!heaviest) return null;
+
+  const others = rest.length > 0 ? ` The same is true of ${listDomains(rest)}.` : '';
+  const standing =
+    subjectCitations === 0
+      ? 'Nothing on your own site was cited at all.'
+      : subjectCitations < heaviest.citations
+        ? `Your own pages were cited ${subjectCitations} ${plural(subjectCitations, 'time')} across the same answers.`
+        : '';
+
+  return {
+    title: `Get onto ${heaviest.domain} — the source these answers keep citing`,
+    detail:
+      `${heaviest.domain} was cited ${heaviest.citations} ${plural(heaviest.citations, 'time')} ` +
+      `and belongs to neither you nor any rival in this scan.${others} ` +
+      `${standing} A page on a source an engine already trusts is the shortest route into the ` +
+      `answer, because the engine does not have to start trusting a new domain to use it.`.trim(),
+    effort: 'M',
+  };
+}
+
+function listDomains(rows: readonly { domain: string }[]): string {
+  const names = rows.map((r) => r.domain);
+  if (names.length === 1) return names[0]!;
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+function plural(n: number, word: string): string {
+  return n === 1 ? word : `${word}s`;
+}
+
 /** Audit-check labels, for the evidence rows in the proof beat. */
 export const CHECK_LABEL: Record<string, string> = {
   site_reachable: 'Site reachable',

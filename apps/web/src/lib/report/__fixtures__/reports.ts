@@ -338,6 +338,263 @@ export const helpscoutReport = {
         "sampleUrl": "https://www.desk365.io/blog/zendesk-pricing/"
       }
     ],
+    "unclaimedCitedDomains": [
+      {
+        "domain": "eesel.ai",
+        "citations": 6,
+        "citesSubject": false,
+        "competitorName": null,
+        "sampleUrl": "https://www.eesel.ai/blog/helpscout-pricing"
+      },
+      {
+        "domain": "featurebase.app",
+        "citations": 4,
+        "citesSubject": false,
+        "competitorName": null,
+        "sampleUrl": "https://www.featurebase.app/blog/shared-inbox-software"
+      },
+      {
+        "domain": "hiverhq.com",
+        "citations": 4,
+        "citesSubject": false,
+        "competitorName": null,
+        "sampleUrl": "https://hiverhq.com/blog/help-scout-pricing"
+      }
+    ],
+    "promptShelf": [
+      {
+        "promptId": "prmt_01M0HDTA48RNY8GXD1HWJJVKN6",
+        "promptText": "what's a good shared inbox tool for a small support team",
+        "promptPosition": 1,
+        "engine": "claude",
+        "answered": true,
+        "subjectPresent": true,
+        "subjectPosition": 1,
+        "subjectCited": false,
+        "slots": [
+          {
+            "position": 1,
+            "entityName": "Help Scout",
+            "entityDomain": "helpscout.com",
+            "isSubject": true,
+            "competitorName": null,
+            "cited": false
+          },
+          {
+            "position": 2,
+            "entityName": "Front",
+            "entityDomain": "front.com",
+            "isSubject": false,
+            "competitorName": "Front",
+            "cited": false
+          },
+          {
+            "position": 3,
+            "entityName": "Freshdesk",
+            "entityDomain": "freshworks.com",
+            "isSubject": false,
+            "competitorName": "Freshdesk",
+            "cited": false
+          },
+          {
+            "position": 4,
+            "entityName": "Zendesk",
+            "entityDomain": "zendesk.com",
+            "isSubject": false,
+            "competitorName": "Zendesk",
+            "cited": false
+          }
+        ]
+      },
+      {
+        "promptId": "prmt_01M0HDTA48RNY8GXD1HWJJVKN6",
+        "promptText": "what's a good shared inbox tool for a small support team",
+        "promptPosition": 1,
+        "engine": "claude_search",
+        "answered": true,
+        "subjectPresent": true,
+        "subjectPosition": 1,
+        "subjectCited": false,
+        "slots": [
+          {
+            "position": 1,
+            "entityName": "Help Scout",
+            "entityDomain": "helpscout.com",
+            "isSubject": true,
+            "competitorName": null,
+            "cited": false
+          },
+          {
+            "position": 2,
+            "entityName": "Front",
+            "entityDomain": "front.com",
+            "isSubject": false,
+            "competitorName": "Front",
+            "cited": false
+          }
+        ]
+      },
+      {
+        "promptId": "prmt_01M0HDTA48RNY8GXD1HWJJVKN7",
+        "promptText": "help scout vs zendesk for a small team, which is better",
+        "promptPosition": 2,
+        "engine": "claude",
+        "answered": true,
+        "subjectPresent": true,
+        "subjectPosition": 1,
+        "subjectCited": false,
+        "slots": [
+          {
+            "position": 1,
+            "entityName": "Help Scout",
+            "entityDomain": "helpscout.com",
+            "isSubject": true,
+            "competitorName": null,
+            "cited": false
+          },
+          {
+            "position": 2,
+            "entityName": "Zendesk",
+            "entityDomain": "zendesk.com",
+            "isSubject": false,
+            "competitorName": "Zendesk",
+            "cited": false
+          },
+          {
+            "position": 3,
+            "entityName": "Front",
+            "entityDomain": "front.com",
+            "isSubject": false,
+            "competitorName": "Front",
+            "cited": false
+          },
+          {
+            "position": 4,
+            "entityName": "Freshdesk",
+            "entityDomain": "freshworks.com",
+            "isSubject": false,
+            "competitorName": "Freshdesk",
+            "cited": false
+          }
+        ]
+      },
+      {
+        "promptId": "prmt_01M0HDTA48RNY8GXD1HWJJVKN7",
+        "promptText": "help scout vs zendesk for a small team, which is better",
+        "promptPosition": 2,
+        "engine": "claude_search",
+        "answered": true,
+        "subjectPresent": true,
+        "subjectPosition": 1,
+        "subjectCited": true,
+        "slots": [
+          {
+            "position": 1,
+            "entityName": "Help Scout",
+            "entityDomain": "helpscout.com",
+            "isSubject": true,
+            "competitorName": null,
+            "cited": true
+          },
+          {
+            "position": 2,
+            "entityName": "Zendesk",
+            "entityDomain": "zendesk.com",
+            "isSubject": false,
+            "competitorName": "Zendesk",
+            "cited": false
+          },
+          {
+            "position": 3,
+            "entityName": "Freshdesk",
+            "entityDomain": "freshworks.com",
+            "isSubject": false,
+            "competitorName": "Freshdesk",
+            "cited": false
+          }
+        ]
+      },
+      {
+        "promptId": "prmt_01M0HDTA48RNY8GXD1HWJJVKN8",
+        "promptText": "is help scout worth it in 2025 or should i pick something else",
+        "promptPosition": 3,
+        "engine": "claude",
+        "answered": true,
+        "subjectPresent": true,
+        "subjectPosition": 1,
+        "subjectCited": false,
+        "slots": [
+          {
+            "position": 1,
+            "entityName": "Help Scout",
+            "entityDomain": "helpscout.com",
+            "isSubject": true,
+            "competitorName": null,
+            "cited": false
+          },
+          {
+            "position": 2,
+            "entityName": "Zendesk",
+            "entityDomain": "zendesk.com",
+            "isSubject": false,
+            "competitorName": "Zendesk",
+            "cited": false
+          },
+          {
+            "position": 3,
+            "entityName": "Freshdesk",
+            "entityDomain": "freshworks.com",
+            "isSubject": false,
+            "competitorName": "Freshdesk",
+            "cited": false
+          },
+          {
+            "position": 4,
+            "entityName": "Front",
+            "entityDomain": "front.com",
+            "isSubject": false,
+            "competitorName": "Front",
+            "cited": false
+          }
+        ]
+      },
+      {
+        "promptId": "prmt_01M0HDTA48RNY8GXD1HWJJVKN8",
+        "promptText": "is help scout worth it in 2025 or should i pick something else",
+        "promptPosition": 3,
+        "engine": "claude_search",
+        "answered": true,
+        "subjectPresent": true,
+        "subjectPosition": 1,
+        "subjectCited": true,
+        "slots": [
+          {
+            "position": 1,
+            "entityName": "Help Scout",
+            "entityDomain": "helpscout.com",
+            "isSubject": true,
+            "competitorName": null,
+            "cited": true
+          },
+          {
+            "position": 2,
+            "entityName": "Zendesk",
+            "entityDomain": "zendesk.com",
+            "isSubject": false,
+            "competitorName": "Zendesk",
+            "cited": true
+          },
+          {
+            "position": 3,
+            "entityName": "Front",
+            "entityDomain": "front.com",
+            "isSubject": false,
+            "competitorName": "Front",
+            "cited": true
+          }
+        ]
+      }
+    ],
     "mentionShares": [
       {
         "entityName": "Help Scout",
@@ -572,6 +829,12 @@ export const insufficientDataReport: Report = {
     subjectCitedDomains: [],
     competitorCitedDomains: [],
     mentionShares: [],
+    // A scan with no answered results cited nothing and has no shelf to draw.
+    // Zeroed explicitly for the same reason every field above is: the variants
+    // are derived by REMOVING data, and a field left behind by the spread is a
+    // degraded fixture quietly carrying healthy data.
+    unclaimedCitedDomains: [],
+    promptShelf: [],
   },
 };
 

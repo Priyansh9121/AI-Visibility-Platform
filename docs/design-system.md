@@ -272,9 +272,85 @@ per-dimension structure that makes a score actionable. A radar implies the axes
 are commensurable and equally weighted, which under §6 they are not — the whole
 point is that the weights differ.
 
-Directions **A (Answer Shelf)** and **C (Source Map)** are approved and land in
-Epic 7 as the *proof* and *fix* beats. The three are consecutive beats of one
-argument, not competing hero charts.
+---
+
+## 5a. The Answer Shelf — the proof beat's visualisation
+
+`<AnswerShelf subjectName rows title caption layoutOptions />`
+
+**An AI answer has a limited number of slots. Who is standing in them?**
+Direction A of `design-direction.md` §5, built in Epic 7.1. One row per answer;
+ordinal slots hold the brands the engine named, in the order it named them. The
+subject is a filled `beacon` marker at its ordinal, rivals are neutral slate with
+a print pattern, and a citation in that same answer hangs as a tick beneath.
+
+### The identity that makes it work
+
+```
+every answered row carries exactly one subject mark
+```
+
+Present, and it is a marker at the ordinal the answer gave it. Absent, and it is
+an **explicit empty notch**. Never nothing. Stack the rows and the notches line
+up into a vertical band, so the reader sees *the shape of absence* before reading
+a word — and a row that silently rendered nothing when the subject was missing
+would not look like a bug, it would look like a clean report. Asserted in
+`answerShelfLayout.test.ts` rather than trusted, the same way the Ledger's
+lit-height identity is.
+
+### Design choices
+
+- **The notch sits in a fixed column**, not at a guessed ordinal. A brand that
+  was not named *has* no ordinal, and inventing one would state a fact the answer
+  never gave; a fixed column is also what makes the absences align into a band.
+- **Presence reads the authoritative `mentioned` flag**, never the length of the
+  slot list. `BrandMention.position` is nullable, and deriving presence from the
+  slots would render a false absence — telling a client they were not named in an
+  answer that named them.
+- **Stored ordinals, never re-indexed.** A brand named 5th renders 5th even when
+  the brands at 2–4 are not in the competitor set.
+- **An unanswered row is a dash, not a hole.** We have no answer to be absent
+  from, and a hole there blames the client for our own failed request.
+- **The cap never drops the subject.** Past the visible track it falls back to
+  the notch column, so a layout constant can never fabricate an absence.
+- **Rivals keep one slate shade across the whole shelf**, assigned by first
+  appearance, so a brand does not change colour down the page.
+- **Rows are labelled with the prompt AND the engine.** Each prompt is asked of
+  every engine, so a label carrying only the question renders two rows that read
+  as one row printed twice.
+- **Accessibility** — mounts inside `ChartFrame`, so `ariaLabel` is required and
+  a visually-hidden table gives every row's brands, the subject's place, and
+  whether that answer cited it.
+
+---
+
+## 5b. Scope of Directions A and C
+
+Direction **A (Answer Shelf)** is built — §5a above, Epic 7.1.
+
+Direction **C (Source Map)** is **partly built, and partly descoped.** Its stated
+deliverable — *"here are the six pages we need to get you onto"* — ships as a
+named fix in the fix beat, driven by `proof.unclaimedCitedDomains`: the domains a
+scan cited that belong to neither the subject nor any detected competitor. The
+**bipartite prompt-to-domain map itself was not built.** It is a visual
+re-presentation of data the "Cited instead" table already shows, it is the one
+`design-direction.md` flagged as *"the heaviest engineering lift of the three"*
+and *"hairballs fast"*, and it is the least likely of the three to survive the
+greyscale-print ruling in §0 that decides ties on this product. Deferred with
+that reason rather than dropped silently.
+
+**A correction to what this section used to say.** Until Epic 7.1 it read
+*"Directions A and C are **approved** and land in Epic 7."* That was wrong twice
+over, and the error is worth recording because it is why nothing was built for
+five epics. `design-direction.md` §6 — the list of things it actually asked to
+have signed off — names **B only**: *"Motif — build B (Luminance Ledger) as the
+signature component."* A and C appear in §5's recommendation prose and nowhere in
+the sign-off list. This document upgraded a recommendation into an approval, in
+Epic 0.6, and then no downstream planning surface ever read it again:
+`product-spec.md` §7's Epic 7 checklist lists layout, white-labelling and
+PDF/share; `api-contracts.md`'s deferred register lists the same three. Epic 7
+built its checklist faithfully. The only place the commitment existed was one
+sentence here.
 
 ---
 
@@ -291,6 +367,7 @@ argument, not competing hero charts.
 | `ChartFrame` | Shared shell: title, caption, **required** `ariaLabel`, hidden data table. Recharts charts mount inside it too, inheriting the same a11y contract. |
 | `ChartPatterns` | SVG pattern defs for competitor series — the B&W fallback. |
 | `LuminanceLedger` | The hero. See §5. |
+| `AnswerShelf` | The proof beat's shelf of ordinal slots. See §5a. |
 | `ReportPage` / `ReportHeader` / `Beat` / `Prose` / `Evidence` / `FixList` | Narrative report primitives. See §7. |
 
 ---
