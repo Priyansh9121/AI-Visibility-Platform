@@ -135,6 +135,7 @@ COMPETITORS = [
 PROMPTS = [
     ("who are the best suppliers for this category", PromptIntent.AWARENESS),
     ("how do the main suppliers compare on price", PromptIntent.COMPARISON),
+    ("which supplier ships fastest to regional depots", PromptIntent.COMPARISON),
 ]
 
 # Which brands each (prompt, engine) answer named, subject first where present.
@@ -147,6 +148,18 @@ ANSWERS = [
     (0, Engine.CLAUDE_SEARCH, True, 2, Sentiment.POSITIVE, ["Northaven Group"]),
     (1, Engine.CLAUDE, True, 1, Sentiment.NEUTRAL, ["Marlowe Direct"]),
     (1, Engine.CLAUDE_SEARCH, True, 3, Sentiment.POSITIVE, ["Northaven Group", "Marlowe Direct"]),
+    # Epic 7.1 — TWO CONFIRMED ABSENCES. The engine answered, named rivals, and
+    # did not name the subject.
+    #
+    # Added because neither this seed nor the real `avp_dev` scan contained a
+    # single one, and that gap is not cosmetic: the report projection folded
+    # `ANSWERED_NO_MENTION` in with timeouts from Epic 7 until Epic 7.1, which
+    # made the proof beat claim a 100% mention rate on a subject named half the
+    # time. No fixture could show it, so nothing did. The most important case
+    # this product measures is the one where the client is missing, and the
+    # fixtures covered every case except that one.
+    (2, Engine.CLAUDE, False, None, None, ["Northaven Group", "Marlowe Direct"]),
+    (2, Engine.CLAUDE_SEARCH, False, None, None, ["Marlowe Direct"]),
 ]
 
 # (domain, cites_subject, type). One owned citation against several third-party
@@ -388,7 +401,14 @@ async def _build(session, scan: Scan) -> None:  # noqa: ANN001
             prompt_id=prompts[prompt_index].id,
             engine=engine,
             engine_version="seed_dev/synthetic",
-            status=EngineResultStatus.OK,
+            # What the real extractor writes: an answer that came back but
+            # did not name the subject is ANSWERED_NO_MENTION, not OK and not
+            # an error. Seeding it as OK would make the fixture disagree with
+            # `extract_facts`, and a fixture that cannot reproduce a real
+            # status cannot catch a bug in how that status is read.
+            status=(
+                EngineResultStatus.OK if mentioned else EngineResultStatus.ANSWERED_NO_MENTION
+            ),
             mentioned=mentioned,
             position=position,
             brands_mentioned=len(rivals) + (1 if mentioned else 0),
@@ -399,7 +419,14 @@ async def _build(session, scan: Scan) -> None:  # noqa: ANN001
         session.add(result)
         await session.flush()
 
-        ordinal = 1
+        # Ordinals must agree with `EngineResult.position`.
+        #
+        # This block used to put the subject's mention at ordinal 1 always,
+        # while the row above recorded the declared position — so a seeded
+        # answer could say "named 3rd" and store the mention 1st. Nothing read
+        # both numbers, so nothing noticed. Epic 7.1's Answer Shelf draws both,
+        # and the fixture contradicted itself on screen. The subject now takes
+        # its declared place and rivals fill the ordinals around it.
         if mentioned:
             session.add(
                 BrandMention(
@@ -408,10 +435,11 @@ async def _build(session, scan: Scan) -> None:  # noqa: ANN001
                     entity_name=SUBJECT_NAME,
                     entity_domain=SUBJECT_DOMAIN,
                     is_subject=True,
-                    position=ordinal,
+                    position=position,
                 )
             )
-            ordinal += 1
+        taken = {position} if mentioned else set()
+        free = (n for n in range(1, len(rivals) + 2) if n not in taken)
         for rival in rivals:
             session.add(
                 BrandMention(
@@ -421,10 +449,9 @@ async def _build(session, scan: Scan) -> None:  # noqa: ANN001
                     entity_domain=by_name[rival].domain,
                     is_subject=False,
                     competitor_id=by_name[rival].id,
-                    position=ordinal,
+                    position=next(free),
                 )
             )
-            ordinal += 1
 
         for cite_position, (domain, cites_subject, source_type) in enumerate(CITED, start=1):
             session.add(

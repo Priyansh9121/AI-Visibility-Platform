@@ -31,6 +31,7 @@ from ..models import (
     CompetitorSet,
     EngineResult,
     EngineResultStatus,
+    Prompt,
     Scan,
     Score,
     TechnicalAudit,
@@ -43,6 +44,7 @@ from ..schemas.report import (
     CitedDomainOut,
     EngineCoverageOut,
     MentionShareOut,
+    PromptShelfOut,
     ReportAgencyOut,
     ReportAuditFindingOut,
     ReportAuditOut,
@@ -52,6 +54,7 @@ from ..schemas.report import (
     ReportOut,
     ReportProofOut,
     ReportSubjectOut,
+    ShelfSlotOut,
 )
 from ..schemas.score import CompetitorScoreOut, ScoreDetailOut
 from . import scoring_runner
@@ -69,6 +72,22 @@ DIMENSION_ORDER: tuple[str, ...] = tuple(
 # cap is applied AFTER ranking (see rank_domains), so it keeps the strongest
 # evidence rather than an arbitrary slice.
 MAX_CITED_DOMAINS = 12
+
+# Cap on Answer Shelf rows (Epic 7.1, Direction A). design-direction.md §5
+# flags the risk itself: "needs a sensible cap and grouping past ~40 prompts."
+# A full scan is 24 prompts x 2 engines = 48 rows, so the cap bites on the
+# largest scans only, and it keeps whole prompts rather than half a prompt's
+# engines — a row missing one engine reads as that engine not answering.
+MAX_SHELF_PROMPTS = 20
+
+# A domain cited once by one answer is a coincidence, not a content gap worth
+# putting in front of a client as a recommendation. Two is the smallest number
+# that can show a pattern.
+MIN_UNCLAIMED_CITATIONS = 2
+
+# How many unclaimed domains the fix beat is given to name. The fix names the
+# heaviest and lists the runners-up; past three it stops being a plan.
+MAX_UNCLAIMED_DOMAINS = 3
 
 # What counts as the engine having ANSWERED.
 #
@@ -97,6 +116,7 @@ async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:
     competitor_set = await _load_competitor_set(session, scan.id)
     audit = await _load_audit(session, scan.id)
     results = await _load_results(session, scan.id)
+    prompts = await _load_prompts(session, results)
     action_items = await _load_action_items(session, scan.id)
 
     # The competitor comparison is recomputed from persisted rows on read, the
@@ -123,7 +143,7 @@ async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:
         score=_score_out(score_row, comparisons),
         dimensions=_dimensions(score_row),
         competitor_set=_competitor_set_out(competitor_set, comparisons),
-        proof=_proof(results, competitor_set),
+        proof=_proof(results, competitor_set, prompts),
         audit=_audit_out(audit),
         action_items=_action_items_out(action_items),
     )
@@ -170,6 +190,22 @@ async def _load_results(session: AsyncSession, scan_id: str) -> list[EngineResul
         .all()
     )
     return sorted(rows, key=lambda r: r.id)
+
+
+async def _load_prompts(session: AsyncSession, results: list[EngineResult]) -> dict[str, Prompt]:
+    """The generated questions behind the results, for the Answer Shelf's rows.
+
+    `EngineResult` carries `prompt_id` but no relationship, so this is one
+    extra SELECT keyed by the ids already in hand rather than a model change —
+    and one query, not one per row.
+    """
+    prompt_ids = {r.prompt_id for r in results}
+    if not prompt_ids:
+        return {}
+    rows = (
+        (await session.execute(select(Prompt).where(Prompt.id.in_(prompt_ids)))).scalars().all()
+    )
+    return {row.id: row for row in rows}
 
 
 async def _load_action_items(session: AsyncSession, scan_id: str) -> list[ActionItem]:
@@ -293,7 +329,11 @@ def _competitor_facts(c: Competitor) -> dict[str, Any]:
     }
 
 
-def _proof(results: list[EngineResult], competitor_set: CompetitorSet | None) -> ReportProofOut:
+def _proof(
+    results: list[EngineResult],
+    competitor_set: CompetitorSet | None,
+    prompts: dict[str, Prompt] | None = None,
+) -> ReportProofOut:
     """Aggregate the engine results into the evidence beat's raw material.
 
     Counts, domains, ordinals. Nothing else is available to aggregate —
@@ -405,6 +445,94 @@ def _proof(results: list[EngineResult], competitor_set: CompetitorSet | None) ->
     # Most-mentioned first; name as the tie-break so the order is total.
     shares.sort(key=lambda m: (-m.appearances, m.entity_name))
 
+    # --- unclaimed cited domains (Epic 7.1, Direction C) -------------------
+    # Cited, and attributable to NEITHER the subject NOR a detected competitor.
+    # Computed from the full `domains` dict, BEFORE rank_domains' evidence
+    # ordering and its cap: the proof table deliberately promotes
+    # competitor-attributed domains above unattributed ones, which is right for
+    # evidence and exactly wrong for this — the whole point is the domain
+    # nobody owns that is out-citing everyone.
+    unclaimed = [
+        e
+        for e in domains.values()
+        if not e["cites_subject"]
+        and e["competitor_name"] is None
+        and e["citations"] >= MIN_UNCLAIMED_CITATIONS
+    ]
+    unclaimed.sort(key=lambda e: (-e["citations"], e["domain"]))
+    unclaimed_domains = [CitedDomainOut(**e) for e in unclaimed[:MAX_UNCLAIMED_DOMAINS]]
+
+    # --- the Answer Shelf (Epic 7.1, Direction A) --------------------------
+    prompt_rows = prompts or {}
+    # Which prompts make the cut, in the order the operator sees them. Whole
+    # prompts, so a row is never missing one of its engines.
+    ordered_prompt_ids = sorted(
+        {r.prompt_id for r in results if r.prompt_id in prompt_rows},
+        key=lambda pid: (prompt_rows[pid].position, pid),
+    )[:MAX_SHELF_PROMPTS]
+    kept = set(ordered_prompt_ids)
+    rank = {pid: i for i, pid in enumerate(ordered_prompt_ids)}
+
+    shelf: list[PromptShelfOut] = []
+    for r in sorted(
+        (r for r in results if r.prompt_id in kept),
+        key=lambda r: (rank[r.prompt_id], r.engine.value),
+    ):
+        prompt = prompt_rows[r.prompt_id]
+        answered_row = r.status in ANSWERED_STATUSES
+
+        # Which entities this ANSWER cited, by each route attribution offers.
+        subject_cited = any(c.cites_subject for c in r.citations)
+        cited_competitor_ids = {c.competitor_id for c in r.citations if c.competitor_id}
+        cited_domains = {c.source_domain for c in r.citations}
+
+        slots: list[ShelfSlotOut] = []
+        if answered_row:
+            # Stored ordinals only. A mention with no recorded position cannot
+            # be placed on a shelf whose entire meaning is the order, and
+            # inventing one would put a fabricated ordinal on a client's page.
+            # The subject is unaffected: `subject_present` below reads the
+            # authoritative `mentioned` flag, never the length of this list, so
+            # a positionless mention can never render as an absence.
+            for m in sorted(
+                (m for m in r.brand_mentions if m.position is not None),
+                key=lambda m: (m.position, m.entity_name),
+            ):
+                if m.is_subject:
+                    cited = subject_cited
+                elif m.competitor_id:
+                    cited = m.competitor_id in cited_competitor_ids
+                elif m.entity_domain:
+                    cited = m.entity_domain in cited_domains
+                else:
+                    cited = False
+                slots.append(
+                    ShelfSlotOut(
+                        position=m.position,
+                        entity_name=m.entity_name,
+                        entity_domain=m.entity_domain,
+                        is_subject=m.is_subject,
+                        competitor_name=competitor_names.get(m.competitor_id or ""),
+                        cited=cited,
+                    )
+                )
+
+        shelf.append(
+            PromptShelfOut(
+                prompt_id=r.prompt_id,
+                prompt_text=prompt.text,
+                prompt_position=prompt.position,
+                engine=r.engine,
+                answered=answered_row,
+                # The authoritative flag, not len(slots). An answer we could
+                # not parse fully must not read as "you were not named".
+                subject_present=answered_row and r.mentioned,
+                subject_position=r.position if answered_row and r.mentioned else None,
+                subject_cited=answered_row and subject_cited,
+                slots=slots,
+            )
+        )
+
     return ReportProofOut(
         prompts_run=len({r.prompt_id for r in results}),
         engine_results=len(results),
@@ -416,6 +544,8 @@ def _proof(results: list[EngineResult], competitor_set: CompetitorSet | None) ->
         subject_cited_domains=subject_domains,
         competitor_cited_domains=competitor_domains,
         mention_shares=shares,
+        unclaimed_cited_domains=unclaimed_domains,
+        prompt_shelf=shelf,
     )
 
 

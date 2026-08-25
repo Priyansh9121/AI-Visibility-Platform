@@ -1170,6 +1170,45 @@ export interface components {
             /** Scanid */
             scanId: string;
         };
+        /**
+         * PromptShelfOut
+         * @description One answer, as the ordered shelf of brands it named — Epic 7.1.
+         *
+         *     Direction A of `design-direction.md` §5. The report's aggregate tables
+         *     answer "how often overall"; this answers "in THIS question, who stood
+         *     where, and were you there at all". The subject's absence is a fact this
+         *     row carries explicitly (`subject_present: false`) rather than an entry
+         *     that is merely missing, because the visualisation draws absence as an
+         *     empty notch and a silently absent row would draw nothing.
+         *
+         *     On `prompt_text` — ip-safety.md #7 governs scraped and model-returned
+         *     content ABOUT third parties. This is OUR OWN generated question, the same
+         *     field `PromptOut.text` has returned on `/scans/{id}/prompts` since Epic 4,
+         *     and the exception is registered by name in `test_ip_safety.py` rather than
+         *     left to dodge the forbidden-field sweep by luck.
+         */
+        PromptShelfOut: {
+            /** Answered */
+            answered: boolean;
+            engine: components["schemas"]["Engine"];
+            /** Promptid */
+            promptId: string;
+            /** Promptposition */
+            promptPosition: number;
+            /** Prompttext */
+            promptText: string;
+            /** Slots */
+            slots: components["schemas"]["ShelfSlotOut"][];
+            /**
+             * Subjectcited
+             * @default false
+             */
+            subjectCited: boolean;
+            /** Subjectposition */
+            subjectPosition?: number | null;
+            /** Subjectpresent */
+            subjectPresent: boolean;
+        };
         /** ReadyOut */
         ReadyOut: {
             /** Checks */
@@ -1379,6 +1418,8 @@ export interface components {
             engineResults: number;
             /** Mentionshares */
             mentionShares: components["schemas"]["MentionShareOut"][];
+            /** Promptshelf */
+            promptShelf?: components["schemas"]["PromptShelfOut"][];
             /** Promptsrun */
             promptsRun: number;
             /** Resultsmentioningsubject */
@@ -1389,6 +1430,8 @@ export interface components {
             subjectCitedDomains: components["schemas"]["CitedDomainOut"][];
             /** Totalcitations */
             totalCitations: number;
+            /** Unclaimedciteddomains */
+            unclaimedCitedDomains?: components["schemas"]["CitedDomainOut"][];
         };
         /**
          * ReportSubjectOut
@@ -1645,6 +1688,32 @@ export interface components {
          * @enum {string}
          */
         Sentiment: "positive" | "neutral" | "negative";
+        /**
+         * ShelfSlotOut
+         * @description One brand standing in one ordinal slot of one answer.
+         *
+         *     ip-safety.md #7 names exactly this shape as permitted: "counts and ordinal
+         *     positions (e.g. 'mentioned 3rd')" plus "names of entities mentioned". There
+         *     is no field here that could carry what the answer SAID about the brand —
+         *     only that it named it, and where in the order.
+         */
+        ShelfSlotOut: {
+            /**
+             * Cited
+             * @default false
+             */
+            cited: boolean;
+            /** Competitorname */
+            competitorName?: string | null;
+            /** Entitydomain */
+            entityDomain?: string | null;
+            /** Entityname */
+            entityName: string;
+            /** Issubject */
+            isSubject: boolean;
+            /** Position */
+            position: number;
+        };
         /** SignUpRequest */
         SignUpRequest: {
             /** Agencyname */

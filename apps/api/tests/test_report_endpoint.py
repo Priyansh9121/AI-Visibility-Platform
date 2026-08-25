@@ -471,3 +471,423 @@ class TestAnsweredStatusUnit:
             proof = _proof([self._absent(rid="e1", status=status)], None)
             assert proof.answered_results == 0, f"{status.value} is not an answer"
             assert proof.total_citations == 0, f"{status.value} carries no usable evidence"
+
+
+class TestAnswerShelf:
+    """Direction A of design-direction.md §5 — Epic 7.1.
+
+    The aggregate tables answer "how often overall". These assert the thing
+    they structurally cannot: in THIS question, who stood where, and was the
+    subject there at all.
+    """
+
+    async def test_one_row_per_answer_in_prompt_then_engine_order(
+        self, client: AsyncClient, stub_engines
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        sid = await _scored_scan(client, stub_engines, n=4)
+        proof = (await client.get(f"{BASE}/scans/{sid}/report")).json()["proof"]
+
+        shelf = proof["promptShelf"]
+        assert len(shelf) == proof["engineResults"], "every answer gets a row"
+        keys = [(r["promptPosition"], r["engine"]) for r in shelf]
+        assert keys == sorted(keys), "a report that reorders its own evidence is not a document"
+        assert len(set(keys)) == len(keys), "one row per (prompt, engine), never two"
+
+    async def test_the_row_label_is_our_own_generated_question(
+        self, client: AsyncClient, stub_engines
+    ) -> None:  # noqa: ANN001
+        """ip-safety.md #7 permits our own content. The prompt is ours — the
+        same field `PromptOut.text` has returned since Epic 4."""
+        await _sign_up(client)
+        sid = await _scored_scan(client, stub_engines, n=4)
+        proof = (await client.get(f"{BASE}/scans/{sid}/report")).json()["proof"]
+
+        texts = {r["promptText"] for r in proof["promptShelf"]}
+        assert texts == {f"question {i}" for i in range(4)}, "our generated prompts, verbatim"
+
+    async def test_slots_carry_ordinals_and_names_and_nothing_else(
+        self, client: AsyncClient, stub_engines
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        sid = await _scored_scan(client, stub_engines, n=4)
+        proof = (await client.get(f"{BASE}/scans/{sid}/report")).json()["proof"]
+
+        slots = [s for row in proof["promptShelf"] for s in row["slots"]]
+        assert slots, "the stub answer names the subject"
+        for slot in slots:
+            assert set(slot) == {
+                "position", "entityName", "entityDomain", "isSubject",
+                "competitorName", "cited",
+            }
+            assert slot["position"] >= 1
+
+    async def test_slot_order_is_the_order_the_answer_named_them(
+        self, client: AsyncClient, stub_engines, stub_discovery
+    ) -> None:  # noqa: ANN001
+        """The whole point of Direction A: an answer has slots, and who stands
+        in front of whom is the argument.
+
+        The stub answer names Zendesk before Help Scout, so with Zendesk in the
+        competitor set the shelf must show the rival in slot 1 and the subject
+        behind it.
+        """
+        await _sign_up(client)
+        cid = (await client.post(
+            f"{BASE}/clients", json={"url": "helpscout.com", "classify": False}
+        )).json()["id"]
+        stub_discovery(serp_domains=["zendesk.com"], cocit_brands=[("Zendesk", "zendesk.com")])
+        await client.post(f"{BASE}/clients/{cid}/competitors/detect")
+
+        stub_engines(n_prompts=3)
+        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+        assert (await client.post(f"{BASE}/scans/{sid}/score")).status_code == 201
+        proof = (await client.get(f"{BASE}/scans/{sid}/report")).json()["proof"]
+
+        multi = [r for r in proof["promptShelf"] if len(r["slots"]) > 1]
+        assert multi, "Zendesk must be detected in the answer for this to test anything"
+        for row in multi:
+            positions = [s["position"] for s in row["slots"]]
+            assert positions == sorted(positions), "slots must render in answer order"
+            assert row["slots"][0]["competitorName"] == "Zendesk"
+            assert row["slots"][0]["isSubject"] is False
+            subject_slot = next(s for s in row["slots"] if s["isSubject"])
+            assert subject_slot["position"] > row["slots"][0]["position"]
+            assert row["subjectPosition"] == subject_slot["position"]
+
+    async def test_absence_is_an_answered_row_that_says_so_not_a_missing_row(
+        self, client: AsyncClient, stub_engines, stub_discovery
+    ) -> None:  # noqa: ANN001
+        """Direction A draws absence as an explicit empty notch.
+
+        The answer must still read as ANSWERED. A confirmed absence stored as
+        `ANSWERED_NO_MENTION` that renders as "no answer" draws nothing at all,
+        which is the one thing this visualisation must never do — the band of
+        holes IS the finding.
+        """
+        await _sign_up(client)
+        cid = (await client.post(
+            f"{BASE}/clients", json={"url": "helpscout.com", "classify": False}
+        )).json()["id"]
+        stub_discovery(serp_domains=["zendesk.com"], cocit_brands=[("Zendesk", "zendesk.com")])
+        await client.post(f"{BASE}/clients/{cid}/competitors/detect")
+
+        # A real answer that names a rival and never names the subject.
+        stub_engines(n_prompts=3, text="Zendesk is popular and widely recommended.")
+        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+        assert (await client.post(f"{BASE}/scans/{sid}/score")).status_code == 201
+        proof = (await client.get(f"{BASE}/scans/{sid}/report")).json()["proof"]
+
+        shelf = proof["promptShelf"]
+        assert len(shelf) == proof["engineResults"], "absent rows are still rows"
+        assert all(r["answered"] is True for r in shelf), (
+            "the engine answered; it just did not name the subject"
+        )
+        assert all(r["subjectPresent"] is False for r in shelf)
+        assert all(r["subjectPosition"] is None for r in shelf)
+        # The rival is still on the shelf — that is what makes the hole legible.
+        assert all(r["slots"] for r in shelf), "an absence row still shows who WAS named"
+        assert all(r["slots"][0]["competitorName"] == "Zendesk" for r in shelf)
+        assert all(not any(s["isSubject"] for s in r["slots"]) for r in shelf)
+
+    async def test_presence_reads_the_authoritative_flag_not_the_slot_list(
+        self, client: AsyncClient, stub_engines
+    ) -> None:  # noqa: ANN001
+        """`subject_present` must never be derived from len(slots).
+
+        A mention stored without an ordinal cannot take a slot, and deriving
+        presence from the slot list would then render a false absence — telling
+        a client they were not named in an answer that named them.
+        """
+        await _sign_up(client)
+        sid = await _scored_scan(client, stub_engines, n=4)
+        proof = (await client.get(f"{BASE}/scans/{sid}/report")).json()["proof"]
+
+        for row in proof["promptShelf"]:
+            if row["subjectPresent"]:
+                assert row["subjectPosition"] is not None
+        named = sum(1 for r in proof["promptShelf"] if r["subjectPresent"])
+        assert named == proof["resultsMentioningSubject"], (
+            "the shelf's presence count must equal the aggregate the tables report"
+        )
+
+    async def test_citation_presence_is_recorded_per_answer_not_per_scan(
+        self, client: AsyncClient, stub_engines
+    ) -> None:  # noqa: ANN001
+        """Direction A's anchor tick. Being named and being cited are two
+        different facts, and the stub gives one engine citations and not the
+        other — so a scan-wide flag would be wrong on half the rows."""
+        await _sign_up(client)
+        sid = await _scored_scan(client, stub_engines, n=4)
+        proof = (await client.get(f"{BASE}/scans/{sid}/report")).json()["proof"]
+
+        by_engine = {r["engine"]: r for r in proof["promptShelf"]}
+        assert by_engine["claude_search"]["subjectCited"] is True, "this engine cites helpscout.com"
+        assert by_engine["claude"]["subjectCited"] is False, "this one returns no citations"
+        # And named-without-cited is representable, which is the interesting case.
+        assert by_engine["claude"]["subjectPresent"] is True
+
+    async def test_an_unanswered_result_is_not_an_absence(
+        self, client: AsyncClient, stub_engines
+    ) -> None:  # noqa: ANN001
+        """We did not get an answer to be absent from. `answered: false` lets
+        the UI draw that differently from a notch."""
+        await _sign_up(client)
+        sid = await _scored_scan(client, stub_engines, n=4)
+        proof = (await client.get(f"{BASE}/scans/{sid}/report")).json()["proof"]
+
+        for row in proof["promptShelf"]:
+            if not row["answered"]:
+                assert row["slots"] == []
+                assert row["subjectPresent"] is False
+
+    async def test_the_shelf_is_capped_in_whole_prompts(
+        self, client: AsyncClient, stub_engines
+    ) -> None:  # noqa: ANN001
+        """design-direction.md §5 flags the cap itself. It keeps whole prompts:
+        a row missing one of its engines reads as that engine not answering."""
+        from avp_api.services.report import MAX_SHELF_PROMPTS
+
+        await _sign_up(client)
+        sid = await _scored_scan(client, stub_engines, n=MAX_SHELF_PROMPTS + 4)
+        proof = (await client.get(f"{BASE}/scans/{sid}/report")).json()["proof"]
+
+        shelf = proof["promptShelf"]
+        prompt_ids = {r["promptId"] for r in shelf}
+        assert len(prompt_ids) == MAX_SHELF_PROMPTS
+        per_prompt = {pid: sum(1 for r in shelf if r["promptId"] == pid) for pid in prompt_ids}
+        assert len(set(per_prompt.values())) == 1, "every kept prompt keeps all its engines"
+        # And it keeps the FIRST prompts, in the operator's order.
+        assert sorted(r["promptPosition"] for r in shelf)[-1] == MAX_SHELF_PROMPTS
+
+
+class TestUnclaimedCitedDomains:
+    """Direction C's deliverable — Epic 7.1.
+
+    The heaviest domain that is cited and belongs to nobody in the scan. It is
+    its own field because the evidence table's ranking and cap are tuned for a
+    different job and would hide exactly this.
+    """
+
+    async def test_it_excludes_the_subject_and_every_detected_competitor(
+        self, client: AsyncClient, stub_engines
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        sid = await _scored_scan(client, stub_engines, n=4)
+        proof = (await client.get(f"{BASE}/scans/{sid}/report")).json()["proof"]
+
+        rows = proof["unclaimedCitedDomains"]
+        assert rows, "the stub cites g2.com, which nobody in the scan owns"
+        for row in rows:
+            assert row["citesSubject"] is False
+            assert row["competitorName"] is None
+        assert "helpscout.com" not in {r["domain"] for r in rows}
+
+    async def test_it_survives_the_evidence_table_s_cap(
+        self, client: AsyncClient, stub_engines
+    ) -> None:  # noqa: ANN001
+        """The regression this field exists to prevent: the fix beat must not
+        inherit a display cap's decision about what evidence fits."""
+        from avp_api.services.report import MAX_CITED_DOMAINS
+
+        await _sign_up(client)
+        sid = await _scored_scan(client, stub_engines, n=4)
+        proof = (await client.get(f"{BASE}/scans/{sid}/report")).json()["proof"]
+
+        assert len(proof["competitorCitedDomains"]) <= MAX_CITED_DOMAINS
+        for row in proof["unclaimedCitedDomains"]:
+            # Present regardless of whether the capped table happened to keep it.
+            assert row["citations"] >= 1
+        assert proof["unclaimedCitedDomains"], "the heaviest unclaimed domain is always carried"
+
+
+class TestProofProjectionUnit:
+    """`_proof` as a pure function over rows — Epic 7.1.
+
+    The endpoint tests above run through the stubbed scan runner, which always
+    writes a positioned mention whenever it writes a named subject. So they
+    cannot exercise the case where those two facts disagree, and a presence
+    rule derived from the slot list passes all of them. Constructed directly
+    here, which is the only way to negative-control it.
+    """
+
+    @staticmethod
+    def _prompt(pid: str = "p1", position: int = 1):  # noqa: ANN205
+        from avp_api.models import Prompt
+
+        return Prompt(
+            id=pid, prompt_set_id="ps1", text=f"generated question {position}",
+            intent=PromptIntent.COMPARISON, position=position,
+        )
+
+    @staticmethod
+    def _result(  # noqa: ANN205, PLR0913
+        rid: str = "er1", pid: str = "p1", engine=Engine.CLAUDE,  # noqa: ANN001
+        mentioned: bool = True, position: int | None = 1,
+        mentions=(), citations=(), ok: bool = True,  # noqa: ANN001
+    ):
+        from avp_api.models import EngineResult
+        from avp_api.models.engine_result import EngineResultStatus
+
+        r = EngineResult(
+            id=rid, scan_id="s1", prompt_id=pid, engine=engine,
+            status=EngineResultStatus.OK if ok else EngineResultStatus.ERROR,
+            mentioned=mentioned, position=position,
+        )
+        r.brand_mentions = list(mentions)
+        r.citations = list(citations)
+        return r
+
+    @staticmethod
+    def _absent(rid: str = "er1", status=None):  # noqa: ANN001, ANN205
+        """An answer that named a rival and cited a source, but not the subject."""
+        from avp_api.models import BrandMention, Citation
+        from avp_api.models.engine_result import CitationType, EngineResultStatus
+
+        r = TestProofProjectionUnit._result(rid=rid, mentioned=False, position=None)
+        r.status = status or EngineResultStatus.ANSWERED_NO_MENTION
+        r.brand_mentions = [
+            BrandMention(id=f"bm{rid}", engine_result_id=rid, entity_name="Zendesk",
+                         entity_domain="zendesk.com", is_subject=False, position=1)
+        ]
+        r.citations = [
+            Citation(id=f"c{rid}", engine_result_id=rid, source_domain="g2.com",
+                     source_url="https://g2.com/x", source_type=CitationType.REVIEW,
+                     position=1, cites_subject=False)
+        ]
+        return r
+
+    @staticmethod
+    def _mention(name: str, position: int | None, is_subject: bool = False, domain=None):  # noqa: ANN001, ANN205
+        from avp_api.models import BrandMention
+
+        return BrandMention(
+            id=f"bm_{name}_{position}", engine_result_id="er1", entity_name=name,
+            entity_domain=domain, is_subject=is_subject, position=position,
+        )
+
+    def test_a_positionless_mention_never_renders_as_an_absence(self) -> None:
+        """The defect this rule exists to prevent.
+
+        `BrandMention.position` is nullable. A subject named in an answer but
+        stored without an ordinal cannot take a slot on a shelf whose entire
+        meaning is the order — and deriving presence from the slot list would
+        then tell a client they were not named in an answer that named them.
+        `mentioned` is the authoritative flag and the only correct source.
+        """
+        from avp_api.services.report import _proof
+
+        result = self._result(mentions=[self._mention("Help Scout", None, is_subject=True)])
+        proof = _proof([result], None, {"p1": self._prompt()})
+
+        row = proof.prompt_shelf[0]
+        assert row.slots == [], "no ordinal, no slot — an invented one would be a fabrication"
+        assert row.subject_present is True, "but the absence is FALSE and must not be drawn"
+        assert proof.results_mentioning_subject == 1
+
+    def test_slots_keep_the_stored_ordinal_rather_than_re_indexing(self) -> None:
+        """If a positionless mention were dropped and the rest renumbered, a
+        brand named 4th would render as 3rd — a fact the answer did not state."""
+        from avp_api.services.report import _proof
+
+        result = self._result(
+            mentions=[
+                self._mention("Zendesk", 1),
+                self._mention("Ghost", None),
+                self._mention("Help Scout", 4, is_subject=True),
+            ],
+        )
+        proof = _proof([result], None, {"p1": self._prompt()})
+
+        row = proof.prompt_shelf[0]
+        assert [s.position for s in row.slots] == [1, 4], "stored ordinals, not 1..n"
+        assert [s.entity_name for s in row.slots] == ["Zendesk", "Help Scout"]
+
+    def test_an_errored_answer_carries_no_slots_and_no_absence(self) -> None:
+        from avp_api.services.report import _proof
+
+        result = self._result(ok=False, mentioned=False, position=None)
+        proof = _proof([result], None, {"p1": self._prompt()})
+
+        row = proof.prompt_shelf[0]
+        assert row.answered is False
+        assert row.slots == []
+        assert row.subject_present is False
+        assert row.subject_cited is False
+
+    def test_rows_survive_a_prompt_the_loader_could_not_resolve(self) -> None:
+        """A result whose prompt row is missing is dropped from the shelf
+        rather than crashing the whole report — the other beats still have
+        evidence to show."""
+        from avp_api.services.report import _proof
+
+        proof = _proof([self._result(pid="gone")], None, {})
+        assert proof.prompt_shelf == []
+        assert proof.engine_results == 1, "the aggregate still counts it"
+
+class TestUnclaimedRankingUnit:
+    """The unclaimed list's ordering and floor, on data that can tell them apart.
+
+    The stubbed scan cites exactly one unclaimed domain, so at the endpoint
+    level every ordering and every threshold passes. Constructed here instead.
+    """
+
+    @staticmethod
+    def _cited(domain: str, n: int, competitor_id: str | None = None, subject: bool = False):  # noqa: ANN205
+        from avp_api.models import Citation
+        from avp_api.models.engine_result import CitationType
+
+        return [
+            Citation(
+                id=f"c_{domain}_{i}", engine_result_id="er1", source_domain=domain,
+                source_url=f"https://{domain}/p{i}", source_type=CitationType.REVIEW,
+                position=i, cites_subject=subject, competitor_id=competitor_id,
+            )
+            for i in range(1, n + 1)
+        ]
+
+    def _proof_for(self, citations):  # noqa: ANN001, ANN202
+        from avp_api.services.report import _proof
+
+        result = TestProofProjectionUnit._result(citations=citations)
+        return _proof([result], None, {"p1": TestProofProjectionUnit._prompt()})
+
+    def test_the_heaviest_unclaimed_domain_leads_regardless_of_attribution(self) -> None:
+        """The evidence table ranks competitor-attributed domains first on
+        purpose. That is right for proof and exactly wrong here: the whole
+        finding is the domain nobody owns that is out-citing everyone."""
+        proof = self._proof_for(
+            self._cited("reddit.com", 6)
+            + self._cited("blog.example", 4)
+            + self._cited("helpscout.com", 5, subject=True)
+        )
+
+        rows = proof.unclaimed_cited_domains
+        assert [r.domain for r in rows] == ["reddit.com", "blog.example"]
+        assert [r.citations for r in rows] == [6, 4]
+        # And the evidence table still orders itself the other way — unchanged.
+        assert proof.competitor_cited_domains[0].domain == "reddit.com"
+
+    def test_a_single_citation_is_not_a_recommendation(self) -> None:
+        """One citation is a coincidence. Put to a client as a content gap it
+        spends their trust on noise."""
+        proof = self._proof_for(self._cited("reddit.com", 3) + self._cited("oneoff.example", 1))
+
+        assert [r.domain for r in proof.unclaimed_cited_domains] == ["reddit.com"]
+        # The one-off is still in the evidence table — it is real, just not a plan.
+        assert "oneoff.example" in {r.domain for r in proof.competitor_cited_domains}
+
+    def test_the_list_is_capped_so_the_fix_stays_a_plan(self) -> None:
+        from avp_api.services.report import MAX_UNCLAIMED_DOMAINS
+
+        citations = []
+        for i in range(MAX_UNCLAIMED_DOMAINS + 3):
+            citations += self._cited(f"site{i}.example", 10 - i)
+        proof = self._proof_for(citations)
+
+        assert len(proof.unclaimed_cited_domains) == MAX_UNCLAIMED_DOMAINS
+        assert [r.citations for r in proof.unclaimed_cited_domains] == [10, 9, 8]
+
+    def test_ties_break_on_the_domain_so_two_reads_never_reorder(self) -> None:
+        proof = self._proof_for(self._cited("b.example", 4) + self._cited("a.example", 4))
+        assert [r.domain for r in proof.unclaimed_cited_domains] == ["a.example", "b.example"]
