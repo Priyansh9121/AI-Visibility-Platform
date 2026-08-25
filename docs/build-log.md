@@ -5846,3 +5846,246 @@ fix 2 (`PROMPT_CONCURRENCY`) and fixes 3 and 4 remain unbuilt, and the
 synchronous-scan finding above is now the largest single item in Epic 9's
 remaining scope: it blocks real progress UI and it is what makes a double click
 cost money. Slice 3 (the send path) is untouched.
+
+---
+
+## 2026-08-25 — Epic 9.4 · Scoping the async scan: what apps/workers actually is, and what it would take
+
+Investigation only. Nothing implemented. Epic 9.3 found that
+`POST /clients/{clientId}/scans` runs inline and commits once at the end, so a
+running scan is invisible for its full duration — which blocks both real
+progress UI and a genuine fix for the re-run double-spend. This pass traces what
+changing that actually costs, before a build brief commits to it.
+
+### apps/workers is scaffolding. It has never been connected to anything
+
+The Epic 1 checkbox "Redis + job queue setup" is `[x]`, Celery is a real
+dependency, and `apps/workers` contains a carefully configured Celery app. None
+of that is wired to the scan pipeline. Traced rather than assumed:
+
+| Question | Answer, from code |
+|---|---|
+| What tasks exist? | `avp.health.ping`, `avp.health.echo`, `avp.health.check_datastores`. That is **all** of `tasks/`. |
+| Does `apps/api` import `avp_workers`? | **No.** Two grep hits are prose in docstrings — `redis_client.py` says "see apps/workers", and `health.py` says "an orchestrator" meaning a *container* orchestrator. Zero code references. |
+| Could it? | Not without a new dependency. `apps/api/pyproject.toml` does not depend on `avp-workers`; the path dependency runs the other way (`avp-workers` → `avp-api`). `orchestrator.py` states the API "must not import worker code" — the direction is deliberate. |
+| Who uses `CeleryOrchestrator`? | Its own test, and a README snippet. **No production caller.** |
+| Is a worker process deployed? | **No.** `infra/deploy/docker-compose.yml` defines `postgres` and `redis` only. No worker service exists anywhere. |
+| Do the configured queues exist? | `task_routes` routes `avp.engine.*` and `avp.audit.*` to `engines` and `audits`. No task matches either pattern. |
+
+So the checkbox is *literally* true — a queue is configured and a health task
+round-trips through it — and materially false for the scan pipeline. It was
+reconciled to `[x]` this session on the strength of the package existing. It is
+worth being precise now: **the queue works and does nothing.**
+
+### Two promises from Epic 1.2 that were never kept
+
+Epic 1.2 chose Celery behind an abstraction, and stated the design that would
+make that choice safe. Neither half survived contact with Epic 2 onward:
+
+1. **"Pipeline code from Epic 2 onward depends on the `Orchestrator` protocol,
+   not on Celery directly."** It does not. Every stage from Epic 2 on was built
+   inline in `apps/api/services/`, and the protocol has no callers. The seam
+   that was supposed to keep Temporal a live option is intact and unused —
+   which, to be fair, is also why swapping executors now is cheap.
+2. **"Each stage is written to (a) check whether its output already exists and
+   return it if so, and (b) write its output before returning."** Only (b)
+   happened. `build_prompt_set` (`scan_runner.py:69`) calls the paid
+   `generate_prompts` unconditionally — there is no existence check anywhere in
+   the scan pipeline. Epic 1.2 traded Temporal's durable execution *for* this
+   discipline, and the discipline was not implemented, so the trade did not pay.
+
+`product-spec.md` §5.2 scopes `/apps/workers` as "Celery/Temporal scan workers",
+and §5.3's data model defaults `Scan.status` to **QUEUED**. A queued-scan design
+was the original intent. `get_or_create_scan` overrides that default to RUNNING
+at creation, and `api-contracts.md` documents the endpoint as running
+"synchronously" — describing what was built, not what was designed.
+
+### What the change concretely requires
+
+**(a) The endpoint becomes two-step.** Create the scan `QUEUED`, **commit**,
+return immediately with the scan id; something else executes it. The executor
+choice is discussed below, but note what it is *not*: the thing that unblocks
+polling is the **commit boundary**, not the executor. Any executor works once
+the row commits early.
+
+**(b) `run_scan` needs less change than expected.** It already sets the terminal
+status itself — `SUCCEEDED` / `PARTIAL` / `FAILED` with `finished_at` and
+`error_code` (`scan_runner.py:287-295`) — and flushes. What is missing is only
+`commit()` at the boundaries, plus an exception path: today a crash propagates
+and `session_scope` rolls back, which is harmless while nothing is committed. On
+early commit, a crash would leave the row stuck at `RUNNING` forever, so the
+executor must commit a `FAILED` terminal state in an `except`.
+
+**And the read side is already finished.** `GET /api/v1/dashboard` has no status
+filter and LEFT-joins the score, so a `QUEUED`/`RUNNING` scan already appears
+with a null score — `test_unscored_scan_still_appears` proves exactly that
+against a QUEUED row. Epic 9.3's `DashboardView` already renders both statuses,
+already disables re-run on them, and already treats a null score as an em dash.
+**No frontend change and no dashboard-API change is needed.** Commit timing is
+the entire blocker.
+
+**(c) `get_or_create_scan` needs no logic change — and early commit does not fix
+the double-spend.** Traced, not assumed:
+
+* *Today:* request B's `SELECT` cannot see request A's uncommitted scan for
+  ~303s, so B creates a second scan. Both run fully. Nothing catches it.
+* *After early commit:* the window shrinks from ~303 seconds to the few
+  milliseconds between B's `SELECT` and A's `COMMIT`. Two requests that
+  interleave inside that window still both find nothing, both `INSERT`, both
+  commit. **Still two scans, still double spend.** This is an ordinary
+  check-then-act race; committing earlier narrows it and cannot close it.
+* *The one existing safety net* is `UniqueConstraint("scan_id")` on
+  `prompt_sets`, which stops a second run against the **same** scan row. It does
+  not help here, because the race produces two *different* scan rows — and even
+  where it fires, it fires *after* `generate_prompts` has already been paid for,
+  as a 500 rather than a clean conflict.
+
+So step 10's answer is **no**: a second slice is required. The right mechanism
+is a **partial unique index** — one unfinished scan per client:
+
+```sql
+CREATE UNIQUE INDEX uq_scans_one_open_per_client
+    ON scans (client_id) WHERE status IN ('queued', 'running');
+```
+
+`status` is VARCHAR-backed with a CHECK constraint (`native_enum=False`), so a
+partial index over it is straightforward. It encodes the invariant
+`get_or_create_scan` already intends, and enforces it against every code path
+rather than the one that remembered to check.
+
+**Two things block that index, and both are real:**
+
+* **Detection creates placeholder RUNNING scans.**
+  `POST /clients/{clientId}/competitors` also calls `get_or_create_scan` and
+  **commits** (`routers/competitors.py:97-101`). A detect-only run therefore
+  leaves a committed scan at `RUNNING` that nothing is running. `RUNNING`
+  currently means "open", not "executing". (No such rows exist in `avp_dev`
+  today — both detections there were followed by a scan in the same session —
+  but the path is reachable.) That conflation has to be resolved first, and it
+  has a **live consequence in Epic 9.3's screen**: a placeholder row renders as
+  "Running…" and disables re-run for that client indefinitely.
+* **A dead executor strands a row at RUNNING forever**, which under the index
+  becomes a permanent block on that client's scans. A stale-scan reaper or
+  heartbeat is therefore not optional.
+
+### What does NOT need to change
+
+Epic 9.2's phase table settles this — the scan loop is 79.9% of the total and
+everything else is seconds. Mapped onto the endpoints that actually exist
+(the pipeline is driven by ~6 separate requests, not one):
+
+| Endpoint | Measured | Verdict |
+|---|---|---|
+| `POST /clients` (crawl + classify) | 8.3s | fine synchronous |
+| `POST /clients/{id}/competitors` | 20.9s | fine synchronous |
+| **`POST /clients/{id}/scans`** | **~303s** (prompt gen 14.6 + loop 288.5) | **the only one that needs this** |
+| `POST /scans/{id}/audit` | 8.4s | fine synchronous |
+| `POST /scans/{id}/score` | 0.0s | fine synchronous |
+| `POST /scans/{id}/fixes` | 20.3s | fine synchronous |
+| `GET /scans/{id}/report` | 0.0s | fine synchronous |
+
+**This is not a pipeline re-architecture.** One endpoint is long; the rest are
+under 21 seconds and should stay exactly as they are. Any brief that proposes
+making the whole pipeline async is proposing more than the measurements support.
+
+### BackgroundTasks or Celery, for a first slice
+
+**Recommendation: FastAPI `BackgroundTasks` for the first slice, behind the
+existing `Orchestrator` seam, with Celery as a later migration if scaling ever
+demands it.** Not a default reach for the lighter option — the reasoning:
+
+*What Celery costs, given what step 4 found.* Celery is "already a dependency"
+only of `apps/workers`, which the API cannot import. Using it means: a first
+real task module; an enqueue path from the API that does not import worker code
+(`send_task` by name, which adds a broker client to the API process); a worker
+process to run, supervise and add to `docker-compose`; an `asyncio.run` bridge
+inside each sync task (the project has no synchronous Postgres driver, because
+psycopg2/3 are LGPL and `ip-safety.md` #6 puts LGPL on the stop-and-ask list —
+`health.check_datastores` already demonstrates the pattern); and eager-mode test
+wiring. That is a deployment-surface change, not a code change.
+
+*What BackgroundTasks costs.* `background.add_task(...)`, and a fresh session
+from `get_sessionmaker()` inside the task, because the request-scoped session is
+closed by the time it runs. Nothing else. No new process, no new infra.
+
+*What BackgroundTasks genuinely gives up.* It runs in the API process: it does
+not survive a restart or deploy, and it does not scale past one instance. Both
+are real — and neither is a constraint today. Epic 9 is pre-pilot, single
+instance. **The honest consequence is the stale-scan reaper above: choosing the
+cheap executor makes the reaper mandatory rather than merely prudent**, because
+every deploy will strand any in-flight scan. That is the price, and it is worth
+paying to avoid operating a worker fleet for a product with no users.
+
+**"First slice" and "final answer" are not the same thing here, and should not
+pretend to be.** The migration path is genuinely cheap precisely because
+`orchestrator.py` exists and is unused: if the executor is injected as a
+dependency, moving from BackgroundTasks to Celery later is one new
+implementation of a protocol that is already written, not a rewrite. Epic 1.2
+built that seam for this exact moment; it just never got used for the reason it
+was built.
+
+### Proposed slice order
+
+**Slice 9.5 — make the scan pollable.** The minimum that turns "there is nothing
+to poll" into "there is a status to poll", with no phase-level progress UI:
+
+1. `get_or_create_scan` creates at `QUEUED`, not `RUNNING` (the model's own
+   default), and stops setting `started_at` at creation.
+2. `POST /clients/{clientId}/scans` commits the queued scan and returns **`202`
+   with `ScanOut`** — id and status, no results.
+3. Execution moves behind an injected executor. Production schedules a
+   background task that opens its own session, sets `RUNNING` + commit, runs
+   `run_scan`, commits the terminal status, and on exception commits `FAILED`
+   with an error code rather than leaving the row at `RUNNING`.
+4. `api-contracts.md` updated — it currently documents the synchronous
+   behaviour and the `201` shape.
+
+**Slice 9.6 — close the double-spend, and stop stranding rows.** The partial
+unique index; resolving detection's placeholder-`RUNNING` conflation; converting
+the resulting `IntegrityError` into "return the open scan" or a clean `409`; and
+the stale-scan reaper that 9.5's executor choice makes mandatory.
+
+Richer phase-level progress (Epic 9.1's nine-stage table as a progress
+vocabulary) is a later slice again, and should not be attempted until 9.5 proves
+a status is actually observable.
+
+### Sizing, honestly
+
+**Slice 9.5 is a single-session brief, but not a small one, and it needs an
+internal commit split.** The production change is modest — the endpoint, the
+executor, and the commit boundaries are perhaps a hundred lines. **The bulk of
+the work is test churn**, and it should be sized as such up front:
+`test_scan_endpoints.py` has 14 tests with ~15 POST calls and 18 assertions that
+read `results` / `promptSet` straight out of the POST body, and
+`test_score_endpoints.py` (2 call sites) and `test_fix_generator.py` (1) all
+assume the scan is *complete* when the POST returns.
+
+The mitigation is the injected executor itself: tests override it with an inline
+runner, so "the scan is finished when the POST returns" stays true in the suite
+while production returns immediately. That keeps the *setup* call sites working
+unchanged; the ~18 assertions still have to move from the POST body to a
+follow-up `GET /scans/{id}`. Mechanical, contained to one file, but real.
+
+Verification scripts are unaffected — `verify_scan.py` and `verify_e2e.py` call
+the services directly, not the endpoint.
+
+**Slice 9.6 is its own session.** A migration, a semantic change to how detection
+opens a scan, an error path, and a reaper is not a rider on 9.5.
+
+So: **the async scan is at least two sessions, not one.** Presenting it as a
+single brief would understate it.
+
+### IP-safety self-check
+
+No code changed and no screen changed, so constraint 9 does not strictly bite;
+recorded because the pass read live data. `avp_dev` was read only — scan ids,
+statuses, timestamps and domains, to check for stranded `RUNNING` rows. No
+engine text, no competitor prose, no third-party content was read, printed or
+committed. No provider calls were made, no SerpApi quota was spent, and no
+dependency was added. **IP-safety check passed:** statuses, timestamps and
+domains only.
+
+### Tests
+
+**865, unchanged** (api 577, workers 13, shared-types 53, design-system 99,
+web 123). Run live at the start of the pass, not assumed. Nothing implemented.
