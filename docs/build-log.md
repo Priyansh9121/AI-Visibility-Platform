@@ -4675,3 +4675,241 @@ on the ip-safety allowlist, one on the stylesheet token guard, and four on the
 web layer (ramp colour, the fix dropped, the shelf unmounted, the audit
 disclaimer widened). Three further controls **failed to fail** on first run and
 the tests behind them were rewritten before being counted.
+
+---
+
+## 2026-08-25 — Investigation · Can SerpApi give us AI Overviews? Measured; building nothing
+
+**Not an epic.** Deliberately unnumbered: `product-spec.md` already defines
+Epic 9 as MVP Launch Readiness, and this is speculative pre-work for two
+product directions that are not on the roadmap yet. Numbering it would claim
+roadmap position it does not have.
+
+An investigation brief, not a development one. Two product directions — AI
+Overview capture as a third engine, and organic-rank-weighted fix
+prioritisation — both rest on assumptions about a SerpApi response nobody in
+this project had ever looked at. "Measure before you diagnose." This measures.
+
+**Outcome: NO-GO on `google_ai_overview` as a fourth engine. Conditional GO on
+persisting organic rank.** Nothing was implemented. No schema, no migration,
+no change to `serp.py`, `competitors.py` or `engines.py`.
+
+### SerpApi spend
+
+Stated before the calls were made, per Epic 3.10's convention.
+
+| | |
+|---|---|
+| Plan (read from `account.json`, not inferred) | **Free Plan**, $0.00/month |
+| Quota | 250/month, **116 left** at start, resets 2026-09-20 |
+| Consumed by this investigation | **15 searches** (116 → 101) |
+| Currency cost | **$0.00** — the cost is quota, ~13% of what remained |
+
+`account.json` calls are free and do not count. So are cache hits, which
+matters below.
+
+### What the code does today
+
+`services/serp.py` issues one authenticated GET to `search.json` with
+`engine=google, num=10, hl=en, gl=us`, and parses **`organic_results` only**.
+No other key of the response is read. `SerpResult` is documented "**Transient
+— never persist**" and has no SQLAlchemy mapping. The only consumers are
+`competitors.py` (detection) and `extraction.py` (which imports the
+non-competitor domain list, nothing else).
+
+### 1. Can SerpApi return AI Overview content on this plan?
+
+**Partially — and not for the queries this product actually asks.**
+
+Eight queries, production parameters. Seven returned an `ai_overview` block,
+but in two incompatible shapes:
+
+| Query group | n | `ai_overview` shape |
+|---|---|---|
+| Broad informational ("what is customer service software") | 3 | **inline** — `references` + `text_blocks`, content present |
+| **This product's own generated prompt shapes** | 4 | **`page_token` + `serpapi_link` only** — no content |
+| Branded/navigational control ("help scout") | 1 | **absent** |
+
+The control behaved as assumed, which was worth checking rather than trusting.
+
+The free plan is **not** tier-gated out of the second path: `engine=
+google_ai_overview` accepted the token, authenticated fine, and responded in
+0.7–1.3s. It just returned nothing:
+
+```
+error: "Google hasn't returned any results for this query."
+text_blocks=0  references=0
+```
+
+**Three of three** redemptions came back empty — tried both hand-built and via
+SerpApi's own `serpapi_link`, redeemed within ~1s of the search that minted the
+token, well inside the documented 4-minute expiry. This is adjacent to SerpApi
+public-roadmap issue #2577 (opened 2025-03-31), closed **wontfix** — though
+that issue reports the token path still working, so what was observed here is
+the worse case.
+
+### 2. The exact JSON shape, when content is present
+
+```
+ai_overview
+├── text_blocks[]        type: heading | paragraph | list | expandable | comparison
+│   ├── snippet          <- third-party prose
+│   ├── snippet_links[]  {text, link}
+│   └── reference_indexes[]  -> indices into references[]
+└── references[]
+    ├── index, link, source        <- FACTS
+    └── title, snippet, thumbnail, source_icon   <- third-party prose
+```
+
+Cited source URLs **are** present, in `references[].link`, with an ordinal in
+`references[].index` and the publisher in `references[].source`. On the
+11-reference sample the domains were salesforce.com (×3), ximasoftware.com,
+servicenow.com, gladly.ai, superoffice.com, kustomer.com, zapier.com,
+thecxlead.com, appvizer.com.
+
+**ip-safety.md #7 note for whoever builds this.** `references[].title` and
+`.snippet`, and `text_blocks[].snippet`, are publisher copy. Only `link` →
+domain, `index` → ordinal, and entity names are persistable. That is the same
+boundary `serp.py` already holds for `organic_results`, so the rule is
+established — but this payload carries far more prose than an organic result
+does, and the temptation to store a "summary" is correspondingly larger.
+
+### 3. The rate on this product's real query shapes
+
+**0 of 4.**
+
+Not 4 of 4, despite all four returning an `ai_overview` key. A block that
+carries only a token, and a token that redeems to nothing, is not content.
+Three of the four were the verbatim prompts from the real Help Scout scan used
+throughout Epics 5–7; the fourth was a bottom-funnel shape from
+`prompts.fallback_prompts`.
+
+n=4 is small and is stated as an observed fraction, not an estimate. But the
+split is clean: 3/3 short broad informational queries gave content, 4/4
+conversational buyer questions gave a dead token.
+
+**The obvious "fix" is the one thing that must not be done.** Rewriting the
+prompt set toward short informational queries would raise the AI Overview hit
+rate and corrupt the instrument. `prompts.py` says it in its own docstring:
+"The prompt set is the measuring instrument. Every number this product reports
+— mention rate, share of voice, sentiment — is a statement about *these*
+prompts." Changing prompts to suit a data source inverts that.
+
+### 4. Stability — and a measurement error worth recording
+
+The first stability pass looked perfect: three queries re-run ~12 minutes
+later, identical reference lists. It was wrong. The responses carried the
+**same `search_metadata.id` and the same `created_at`** as the first round —
+SerpApi served its cache, and cache hits are free, so the quota had not moved
+either. A cache replay compared against its own original is not a stability
+measurement.
+
+Re-run with `no_cache=true`, ~4 minutes after the originals, distinct search
+ids:
+
+| Query | refs before → after | Stable? |
+|---|---|---|
+| what is customer service software | 11 → 11 | identical |
+| how does a shared inbox work | 8 → 8 | identical |
+| **best help desk software for small business** | **4 → 2** | **changed** — reddit.com appeared, 3× google.com dropped |
+
+**Two of three stable, one of three changed inside four minutes** — and the
+one that moved is the commercial-intent query, the shape closest to what this
+product asks. Also visible: three of that query's four original "references"
+were `www.google.com` self-links, not publisher citations, so the usable
+citation count was 1, not 4.
+
+Implication for a tracked engine: a single poll is a sample, not a fact, on
+exactly the query class we care about. Anything built here needs either repeat
+sampling (multiplying an already-infeasible quota cost) or an explicit
+"observed once, at this timestamp" caveat on screen.
+
+### 5. Is organic rank persisted? No — and here is where it dies
+
+Traced through the code rather than from the build log's prose.
+
+`SerpHit.position` (`serp.py:88`) is real and populated. It flows to
+`Candidate.serp_positions` (`competitors.py:123`, appended at `:252`). Its
+**only** consumer is `_position_weight` at `:286`, which reduces the whole list
+to one ranking scalar via `1/sqrt(position)`.
+
+Then `_apply_detected` writes the row, and writes exactly: `name`, `domain`,
+`rank`, `detection_source`, `signal_count`, `serp_mentions`,
+`co_citation_mentions`, `corroborated`, `score`. **`serp_mentions` is
+`len(serp_positions)` — a count.** The positions themselves reach no column;
+the `Competitor` and `CompetitorSet` models have no position field at all.
+
+So per-query organic rank is **transient and lost**, discarded when the request
+ends. It is fetched, used to rank, and thrown away.
+
+### 6. Would this fit `EngineAdapter`?
+
+The interface fits better than expected. `EngineAdapter` is
+`ask(prompt, *, settings) -> EngineAnswer`, and `EngineAnswer` is
+`{text, citations: list[CitedSource], status, error_code, latency_ms}` with a
+`digest()` for change detection. An AI Overview genuinely is "ask a question,
+get an answer with citations": `text_blocks` → `text` (transient, same as a
+completion), `references[].link` → `CitedSource`, and `extract_facts` would
+work on it unchanged.
+
+What does **not** fit is the cost model and the failure taxonomy:
+
+- **Two HTTP calls per prompt**, not one, whenever a token is returned — with
+  a ≤4-minute expiry to honour inside a single `ask()`. A 24-prompt scan
+  becomes ~48 searches against a 250/month quota, before any repeat sampling.
+- **There is no correct status for "AI Overview promised, then redeemed
+  empty."** `ERROR` overstates it, and `ANSWERED_NO_MENTION` would be actively
+  wrong — that status means *the engine answered and the brand was absent*,
+  which is a scoreable fact about the client. Reusing it here would feed a
+  "you are invisible" signal from what is really our own retrieval failure.
+  That is precisely the confusion Epic 7.1 (`9542963`) just spent a commit
+  correcting in the other direction, and it would be careless to reintroduce
+  it from the opposite side.
+- `engine_version` has no meaningful value for a SERP feature.
+
+### Recommendations
+
+**`google_ai_overview` as a fourth engine — NO-GO.** Not because of a tier
+gate (there isn't one) and not because the API is broken (it works fine on
+broad queries). Because on this product's own query shapes the observed yield
+of usable content is **0 of 4**, the retrieval costs two searches per prompt
+where it works at all, the quota is 250/month against ~48 searches per scan,
+and the one commercial-intent query that did return content changed its
+citations within four minutes. No smaller version of this feature is proposed,
+because none of the measurements support one.
+
+Revisit if any of these change: a larger sample contradicts 0/4; SerpApi's
+token path starts returning content; or a paid plan is taken for unrelated
+reasons, at which point re-measure rather than assume.
+
+**Persisting organic rank — GO, with the scope stated honestly.** The data is
+already fetched and already thrown away, so capturing it costs no API calls —
+only a column and a migration. But it is narrower than "organic rank for
+tracked prompts": SERP data is collected during *competitor detection*, over
+the ≤6 queries `build_queries` produces (3 brand-anchored, 3 industry-seeded),
+**not** over the 20–30 tracked prompts the report is about. Whether rank on six
+discovery queries can prioritise fixes for a report built on thirty different
+prompts is a product question this investigation did not answer and should not
+pretend to. Recommend a follow-up brief that settles that first, before any
+migration.
+
+### IP-safety self-check
+
+No customer-facing screen changed and no code changed, so constraint 9 does not
+strictly bite — recorded anyway because this handled third-party content.
+
+Raw SerpApi responses, including AI Overview prose and publisher snippets, were
+written to a scratchpad **outside the repository** purely to inspect the
+payload's shape, and nothing derived from them was committed. The probe printed
+structure, domains and ordinals only — no titles, no snippets, no AI Overview
+text — and this entry reproduces domains and counts, never publisher copy. That
+is the same transient-in-process boundary `serp.py` and `crawl.py` already hold.
+No dependency was added. **IP-safety check passed:** third-party prose was read
+transiently to determine a JSON shape, never persisted, never rendered, and
+never committed.
+
+### Tests
+
+**834, unchanged** (api 571, workers 13, shared-types 53, design-system 99,
+web 98). Nothing was implemented, so nothing was added. Confirmed by running
+the suite rather than carried forward from the prior session.
