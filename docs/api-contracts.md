@@ -988,9 +988,9 @@ Recorded so the shape is agreed before it is implemented.
 | `POST /api/v1/agencies/{agencyId}/invitations` — invite a seat | 1.5 |
 | `DELETE /api/v1/users/{userId}` — release a seat | 1.5 |
 
-| `GET /api/v1/reports/{token}` — public shareable report link | 7.1 |
-| `GET /api/v1/scans/{scanId}/report.pdf` — PDF export | 7.1 |
-| `PATCH /api/v1/agencies/{agencyId}/branding` — logo, domain, colours | 7.1 |
+| `GET /api/v1/reports/{token}` — public shareable report link | 9 (send path, slice 3) |
+| `GET /api/v1/scans/{scanId}/report.pdf` — PDF export | 9 (send path, slice 3) |
+| `PATCH /api/v1/agencies/{agencyId}/branding` — logo, domain, colours | 9 (send path, slice 3) |
 
 §7's Epic 7 checklist also lists white-label branding injection, PDF export and
 shareable links. Epic 7 shipped the narrative report and white-labelling limited
@@ -999,6 +999,15 @@ Logo/domain/colour injection needs new columns *and* a written policy on which
 tokens an agency may override — the visibility ramp is load-bearing, and an
 agency free to recolour it changes what the score means. Recorded in
 `build-log.md` Epic 7.
+
+**These three were labelled Epic 7.1 until 2026-08-25.** Epic 7.1 has since
+shipped (`9542963`..`6f953f3`) and delivered the Answer Shelf and the
+unclaimed-domain fix — not export, sharing or branding. The label was pointing
+readers at an epic that came and went without doing what the row promised, so it
+now names the slice that will actually build it. Epic 9's acceptance is that a
+pilot agency can "generate and **send**" a report, which no current endpoint
+allows. See `build-log.md` Epic 9.0 for the slice order and Epic 9.1 for why the
+send path is now the last thing standing between the API and that acceptance.
 
 Seat invitation and removal endpoints are **not** in Epic 1. The `invitations`
 table, the seat-limit service, and `SessionStore.revoke_all_for_user` — the

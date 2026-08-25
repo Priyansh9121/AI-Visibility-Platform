@@ -89,71 +89,93 @@ Each sub-score normalized 0-100, weighted sum = final score. Tune weights per-in
 
 > Instructions for the agent: work epic by epic, in order. Do not start UI/screen work (Epic 4+) until Epic 0 (design system) and Epic 1 (infra) are complete. Re-read Section 2 (IP Safety) before any design or frontend task.
 
+> **Checkbox status, corrected 2026-08-25 (build-log Epic 9.0 / 9.1).** Until now
+> every box in this section read `[ ]` regardless of what had shipped, so the
+> state carried no signal in either direction. The boxes below have been
+> reconciled against live rows in `avp_dev` and the build-log entry recording
+> each epic's acceptance. `[x]` shipped and verified, `[~]` partially shipped,
+> `[ ]` genuinely not started, `[—]` measured and **declined** — work that was
+> investigated and deliberately not built, which an empty box would misreport as
+> pending forever. Keep them current, or delete them — a checkbox that is never
+> updated is worse than none.
+
 ### Epic 0 — Design System Foundation (before any screens)
-- [ ] Define color palette, type scale, spacing scale, elevation rules — original, not copied from any reference tool
-- [ ] Design signature score/comparison visualization component (not a generic gauge/radar chart)
-- [ ] Build component library in `/packages/design-system`: buttons, cards, tables, charts, report layout primitives
-- [ ] Document design tokens in `/docs/design-system.md`
+- [x] Define color palette, type scale, spacing scale, elevation rules — original, not copied from any reference tool
+- [x] Design signature score/comparison visualization component (not a generic gauge/radar chart)
+- [x] Build component library in `/packages/design-system`: buttons, cards, tables, charts, report layout primitives
+- [x] Document design tokens in `/docs/design-system.md`
 - **Acceptance:** a style guide page rendering all components exists and is reviewed against Section 2 checklist
 
 ### Epic 1 — Infra & Auth Foundation
-- [ ] Scaffold repo structure (Section 5.2)
-- [ ] Postgres schema + migrations for core entities (Section 5.3)
-- [ ] Redis + job queue setup
-- [ ] Agency account + user auth (seat-based)
-- [ ] Environment/secrets management for API keys (SerpApi, LLM providers, engine APIs)
+- [x] Scaffold repo structure (Section 5.2)
+- [x] Postgres schema + migrations for core entities (Section 5.3)
+- [x] Redis + job queue setup
+- [x] Agency account + user auth (seat-based)
+- [x] Environment/secrets management for API keys (SerpApi, LLM providers, engine APIs)
 - **Acceptance:** an agency can sign up, log in, and see an empty dashboard
 
 ### Epic 2 — Intake & Industry Classification
-- [ ] URL intake form + validation
-- [ ] Crawl homepage/key pages (Playwright)
-- [ ] LLM call to classify industry/niche + extract brand name/entity
+- [x] URL intake form + validation
+- [x] Crawl homepage/key pages (Playwright)
+- [x] LLM call to classify industry/niche + extract brand name/entity
 - **Acceptance:** submitting a URL returns a correctly classified industry within 30 seconds
 
 ### Epic 3 — Competitor Detection Engine
-- [ ] SERP-based competitor discovery (SerpApi)
-- [ ] AI co-citation based competitor discovery (run seed prompts, extract co-mentioned brands)
-- [ ] Dedupe + rank top 3-5 competitors
-- [ ] Manual override/edit UI for competitor list
+- [x] SERP-based competitor discovery (SerpApi)
+- [x] AI co-citation based competitor discovery (run seed prompts, extract co-mentioned brands)
+- [x] Dedupe + rank top 3-5 competitors
+- [x] Manual override/edit UI for competitor list
 - **Acceptance:** for 10 test URLs across different industries, detected competitors are manually verified as accurate ≥80% of the time
 
 ### Epic 4 — Prompt Generation & Engine Runner
-- [ ] LLM-based prompt generation (20-30 prompts per scan, industry + intent aware)
-- [ ] Prompt intent tagging (awareness/comparison/bottom-funnel)
-- [ ] Engine integration: start with 2 engines (e.g., ChatGPT API + Perplexity API), abstracted behind a common interface so more engines can be added later
-- [ ] Playwright-based runner for engines without clean APIs (AI Overviews)
-- [ ] Citation/mention extraction from each engine response
+- [x] LLM-based prompt generation (20-30 prompts per scan, industry + intent aware)
+- [x] Prompt intent tagging (awareness/comparison/bottom-funnel)
+- [x] Engine integration: two engines behind a common interface (`EngineAdapter`) so more can be added later.
+      **Shipped as Claude parametric + Claude web search — one vendor, deliberately** (build-log Epic 4.2,
+      "Two engines, one vendor"). The original "ChatGPT API + Perplexity API" wording was an example, not a
+      requirement; §5.1's mention of direct ChatGPT/Perplexity/Gemini calls is stale in the same way.
+- [—] ~~Playwright-based runner for engines without clean APIs (AI Overviews)~~ — **measured and declined,
+      not pending.** Two investigations on 2026-08-25 (`d39f70b`, `d2d5f40`) found AI Overview capture a
+      NO-GO on the current plan: usable content was 0 of 4 on this product's own prompt shapes, retrieval
+      costs two SerpApi searches per prompt, and the quota is 250/month against ~48 searches per scan.
+- [x] Citation/mention extraction from each engine response
 - **Acceptance:** a scan produces structured EngineResult records for every prompt x engine pair, with mentions and citations correctly parsed
 
 ### Epic 5 — Scoring Engine
-- [ ] Implement composite scoring formula (Section 6)
-- [ ] Sub-score breakdowns stored and retrievable
-- [ ] Score comparison across brand + competitors
+- [x] Implement composite scoring formula (Section 6)
+- [x] Sub-score breakdowns stored and retrievable
+- [x] Score comparison across brand + competitors
 - **Acceptance:** score recalculates correctly and deterministically from a given EngineResult set; unit tests cover edge cases (zero mentions, all competitors tied, etc.)
 
 ### Epic 6 — Technical SEO Audit Module
-- [ ] Core Web Vitals check
-- [ ] Schema/structured data presence check
-- [ ] Indexation/crawlability check
+- [x] Core Web Vitals check
+- [x] Schema/structured data presence check
+- [x] Indexation/crawlability check
 - **Acceptance:** audit returns pass/fail + detail for each check on a known test site
 
 ### Epic 7 — Report Generation (built on Epic 0 design system)
 - [x] Report layout: narrative structure (score → biggest gap → proof → fix → pitch)
 - [~] White-label branding injection — agency **name + slug** only. Logo/domain/colours
-      deferred to Epic 7.1: they need new columns *and* a written policy on which tokens
+      deferred to the Epic 9 send path (slice 3): they need new columns *and* a written policy on which tokens
       an agency may override, because the visibility ramp is load-bearing. See `build-log.md` Epic 7.0.
-- [ ] PDF export + shareable web link — **deferred to Epic 7.1**
+- [ ] PDF export + shareable web link — **deferred to the Epic 9 send path (slice 3)**.
+      Was labelled "deferred to Epic 7.1"; Epic 7.1 has since shipped (`9542963`..`6f953f3`) and delivered
+      the Answer Shelf and the unclaimed-domain fix, **not** export or sharing. Re-pointed at the slice that
+      will actually build it — Epic 9's acceptance ("generate and **send**") cannot be met without one.
 - **Acceptance:** ✅ a full report renders correctly for a real test scan
   (`scan_01M0HDRGJNWNZDSJPP0NC3SV8W`, Help Scout, composite 58.24) and passes the
   Section 2 visual review. Screenshots in `docs/screenshots/`.
 
 ### Epic 8 — Action List / Fix Generator
-- [ ] LLM cross-references audit + scan gaps into named, specific recommendations
-- [ ] Priority/effort estimation per fix
+- [x] LLM cross-references audit + scan gaps into named, specific recommendations
+- [x] Priority/effort estimation per fix
 - **Acceptance:** for a test scan with known gaps, the generated fix list correctly names those gaps with actionable language
 
 ### Epic 9 — MVP Launch Readiness (Phase 1 complete)
-- [ ] End-to-end test: URL in → report out, under 5 minutes
+- [~] End-to-end test: URL in → report out — **built and run; the budget is MISSED.**
+      `apps/api/scripts/verify_e2e.py` times all nine phases. One live run at 24 prompts measured
+      **498.2s against the 300s budget** (build-log Epic 9.1). The scan loop is 84.2% of it and is
+      genuinely engine-latency-bound. The test exists; the five-minute target does not yet hold.
 - [ ] Basic agency dashboard: list of past scans, re-run scan
 - [ ] Pilot with 3-5 real agencies, collect feedback
 - **Acceptance:** pilot agencies successfully generate and send at least one real prospect report
