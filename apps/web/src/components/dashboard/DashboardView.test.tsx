@@ -220,6 +220,35 @@ describe('re-run reflects work already under way', () => {
   });
 });
 
+describe('the page says when it is watching, and when it has stopped', () => {
+  it('tells the user the page updates itself while a scan runs', () => {
+    // A page that silently rearranges itself is unsettling. Epic 9.7 polls, so
+    // it says so.
+    const html = render(runningDashboard, { live: true });
+    expect(html).toContain('this page updates itself');
+  });
+
+  it('says nothing when nothing is running', () => {
+    expect(render(scoredDashboard, { live: false })).not.toContain('this page updates itself');
+    expect(render(scoredDashboard)).not.toContain('this page updates itself');
+  });
+
+  it('surfaces a stalled poller rather than showing a stale page as if it were live', () => {
+    const html = render(runningDashboard, {
+      live: true,
+      pollProblem: 'Live updates have stopped — the server could not be reached.',
+    });
+    expect(html).toContain('This page has stopped updating');
+    expect(html).toContain('the server could not be reached');
+  });
+
+  it('shows no such notice when polling is healthy', () => {
+    expect(render(runningDashboard, { live: true })).not.toContain(
+      'This page has stopped updating',
+    );
+  });
+});
+
 describe('timestamps are stable regardless of where they render', () => {
   it('formats in UTC, so CI and a browser agree', () => {
     expect(formatStamp('2026-08-24T10:15:00Z')).toBe('24 Aug 2026, 10:15 UTC');
