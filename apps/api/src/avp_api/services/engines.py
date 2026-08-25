@@ -60,7 +60,42 @@ ANSWER_MODEL = "claude-opus-5"
 ANSWER_EFFORT = "low"
 ANSWER_MAX_TOKENS = 4_000
 SEARCH_MAX_USES = 4
-DEFAULT_TIMEOUT = 90.0
+
+# --- The engine-call time bound (Epic 9.2) -----------------------------------
+# `timeout` on the Anthropic client bounds ONE HTTP attempt, not the call. The
+# SDK retries `APIConnectionError`, and `APITimeoutError` subclasses it, so with
+# the pinned anthropic 0.125.0's `DEFAULT_MAX_RETRIES = 2` a "90 second timeout"
+# was really 3 x 90s plus backoff. Epic 9.1 measured exactly that: one call
+# burned 271.6s and returned nothing — 16.5% of all engine time in that run.
+#
+# Both numbers below are explicit and never inherited: pyproject.toml allows
+# anywhere in `anthropic>=0.40,<1`, and the SDK default is not ours to assume.
+#
+# The trade-off, chosen deliberately rather than silently:
+#   * `max_retries = 1`, not 0. Epic 9.1's latency distribution has two calls at
+#     117s and 118s. No single attempt could exceed the 90s per-attempt bound,
+#     so each was a timed-out attempt plus a retry that SUCCEEDED at ~27s.
+#     Dropping to zero retries would have turned 2 of 48 calls (4.2%) from
+#     answers into PROVIDER_UNREACHABLE. One retry is worth keeping.
+#   * 60s per attempt, not 90s. The slowest call that actually succeeded in that
+#     run was 46s, and 21 of 24 grounded calls landed between 11s and 44s. 60s
+#     keeps ~30% headroom over the slowest observed success while letting two
+#     attempts sum to something bounded.
+#
+# The cost is real and accepted: a genuinely slow-but-alive call between 60s and
+# 90s that would previously have completed now fails as a timeout. Fewer retries
+# also means more transient failures surface as a status instead of silently
+# recovering. That is the price of a ceiling that is actually a ceiling.
+DEFAULT_TIMEOUT = 60.0
+MAX_RETRIES = 1
+# Backoff between attempts is the SDK's, not ours: INITIAL_RETRY_DELAY 0.5s
+# doubling toward MAX_RETRY_DELAY 8.0s, times jitter in (0.75, 1.0]. At one
+# retry that is at most 0.5s; 2.0s is a deliberately generous allowance.
+RETRY_BACKOFF_ALLOWANCE = 2.0
+# The stated ceiling, enforced directly by an outer deadline in `ask()` so the
+# bound holds by construction even if the SDK's retry or backoff internals move
+# under the version range above.
+ENGINE_CALL_CEILING = DEFAULT_TIMEOUT * (MAX_RETRIES + 1) + RETRY_BACKOFF_ALLOWANCE
 
 
 @dataclass(slots=True)
@@ -131,6 +166,12 @@ def _map_error(exc: Exception) -> tuple[EngineResultStatus, str]:
         if "credit balance" in str(exc).lower():
             return EngineResultStatus.ERROR, "PROVIDER_QUOTA_EXHAUSTED"
         return EngineResultStatus.ERROR, "PROVIDER_BAD_REQUEST"
+    # Order matters: `APITimeoutError` SUBCLASSES `APIConnectionError`, so the
+    # connection branch below otherwise swallows every timeout and reports it as
+    # PROVIDER_UNREACHABLE. That is what Epic 9.1 saw on the 271.6s call, and it
+    # is why EngineResultStatus.TIMEOUT was unreachable on this path.
+    if isinstance(exc, anthropic.APITimeoutError):
+        return EngineResultStatus.TIMEOUT, "TIMEOUT"
     if isinstance(exc, anthropic.APIConnectionError):
         return EngineResultStatus.ERROR, "PROVIDER_UNREACHABLE"
     if isinstance(exc, TimeoutError | asyncio.TimeoutError):
@@ -147,7 +188,9 @@ class _ClaudeBase:
 
     async def ask(self, prompt: str, *, settings: Settings) -> EngineAnswer:
         client = anthropic.AsyncAnthropic(
-            api_key=settings.provider_key("anthropic_api_key"), timeout=DEFAULT_TIMEOUT
+            api_key=settings.provider_key("anthropic_api_key"),
+            timeout=DEFAULT_TIMEOUT,
+            max_retries=MAX_RETRIES,
         )
         answer = EngineAnswer(
             engine=self.engine, engine_version=self.version, prompt_text=prompt
@@ -170,7 +213,10 @@ class _ClaudeBase:
             ]
 
         try:
-            response = await client.messages.create(**kwargs)
+            # The outer deadline is what makes ENGINE_CALL_CEILING a guarantee
+            # rather than an arithmetic claim about someone else's internals.
+            async with asyncio.timeout(ENGINE_CALL_CEILING):
+                response = await client.messages.create(**kwargs)
         except Exception as exc:  # noqa: BLE001 - mapped to a status, never raised
             answer.status, answer.error_code = _map_error(exc)
             answer.latency_ms = int((time.perf_counter() - started) * 1000)
