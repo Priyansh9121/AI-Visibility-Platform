@@ -5317,3 +5317,158 @@ timestamps and schema names only.
 
 **834, unchanged** (api 571, workers 13, shared-types 53, design-system 99,
 web 98). Run live at the start of the pass, not assumed. Nothing implemented.
+
+---
+
+## 2026-08-25 — Epic 9.1 · The end-to-end timing harness, and where the eight minutes actually go
+
+Slice 1 of the order set out in Epic 9.0. `scripts/verify_e2e.py` chains URL →
+report against a **fresh** client and times each phase separately. Epic 9.0 had
+one data point — a 109.3s wall clock over 3 prompts against a 42.8s worst
+engine call — and no way to tell whether the unexplained remainder was engine
+latency, queueing, sequential steps that could overlap, or database round
+trips. Guessing wrong in either direction would have mis-shaped the dashboard,
+so this was built before slice 2 rather than after.
+
+### Spend, stated before it was spent
+
+| | |
+|---|---|
+| SerpApi quota, re-verified live immediately before the run | **155 used, 95 left** of 250 |
+| Approved and spent | **6 searches** — exactly what `build_queries()` emits |
+| SerpApi quota after the run | **161 used, 89 left** — the 6 predicted, no more |
+| Anthropic | **48 engine calls + 41 sentiment + 1 classify + 4 co-citation + 1 prompt-generation + 1 fix-generation = 96 `claude-opus-5` calls** |
+
+Epic 9.0 recorded SerpApi as "95 of 250 **used**". The live figure was 95
+**remaining**. The direction was recorded backwards; corrected here.
+
+Before spending anything the harness was validated end to end against `avp_test`
+with every paid boundary faked using the shapes `tests/` already uses — a full
+24-prompt run through the real orchestration, real DB writes and the real table,
+for zero calls. That caught four defects (a crash on an empty agency table, a
+freshness check comparing the raw argument against the normalised domain, an
+`InvalidUrl` escaping uncaught, and two ORM fields that only exist on the report
+projection) which would otherwise have surfaced *after* 48 engine calls were
+already spent.
+
+### The measurement
+
+`basecamp.com`, 24 prompts, one run. `scan_01M0VPVXWM94S9534SDD12YYE0`.
+
+```
+  phase                      epic          secs      %    db  external calls
+  client creation            —              0.0   0.0%     3  -
+  crawl + classify           2             10.2   2.0%     1  anthropic x1, playwright x1
+  competitor detection       3             21.2   4.3%     6  anthropic x4, serpapi x6
+  prompt generation          4             15.4   3.1%     2  anthropic x1
+  scan loop                  4            419.7  84.2%    10  anthropic x65
+  technical audit            6              8.6   1.7%     3  http x1
+  scoring                    5              0.0   0.0%     8  -
+  fix generation             8             23.0   4.6%    12  anthropic x1
+  report projection          7/7.1          0.0   0.0%    18  -
+  TOTAL                                   498.2 100.0%    63
+```
+
+**498.2s — eight minutes and eighteen seconds. The 5-minute budget is MISSED by
+198.2s, a factor of 1.66.**
+
+### Engine latency, or something else? Engine latency — with one large caveat
+
+This is the question the brief existed to answer, and the breakdown answers it
+rather than leaving it inferred.
+
+**It is engine latency.** The scan loop is 84.2% of the total. Summed engine
+latency was 1648.0s across 48 calls at a 24.9s median. Perfectly packed at
+`PROMPT_CONCURRENCY = 4` that is 412.0s; the loop actually took 419.7s. **The
+loop is running at 98% of the best it could do at its configured concurrency.**
+
+That result rules out the three alternatives explicitly, which is the part Epic
+9.0 could not do:
+
+* **Not database round trips.** The entire pipeline — nine phases, 48 engine
+  results, 5 fixes, a full report projection — issued **63 SQL statements**.
+  The report projection issues 18 of them and takes 0.0s.
+* **Not queueing.** There is no queue; every phase runs inline in one process.
+* **Not blocking CPU work on the event loop.** `extract_facts` was the obvious
+  suspect, running synchronously between every engine call. Measured directly
+  on a realistic 5,940-character grounded answer with 5 competitors and 8
+  citations: **0.47 ms**, or 0.02s across all 48 calls. Hypothesis tested and
+  rejected rather than assumed.
+
+**The caveat, and it is a big one.** One call consumed **271.6s and returned
+nothing** — `claude_search`, status `error`, `PROVIDER_UNREACHABLE`. That single
+dead call is **16.5% of all engine time in the run**, and it is why the scan
+finished `partial` rather than `succeeded`.
+
+It is not inherent model latency. `engines.py:63` sets `DEFAULT_TIMEOUT = 90.0`
+and passes it to `AsyncAnthropic(timeout=...)`, but that bounds **each
+attempt**, not the call. With the SDK's default `max_retries=2` the real ceiling
+is 90s × 3 attempts ≈ 270s — which is 271.6s to within rounding. The timeout
+that looks like a 90-second guarantee is a 270-second one.
+
+The grounded engine's distribution shows how isolated this is:
+
+```
+claude_search : 11 14 15 16 16 17 19 20 21 21 24 25 26 26 31 33 35 38 39 42 44 | 117 118 | 272
+claude        : 13 15 16 17 17 18 19 20 20 21 22 22 23 26 27 27 29 32 32 33 34 36 46 46
+```
+
+21 of 24 grounded calls land between 11s and 44s. The tail is three calls, and
+the worst of them is a failure.
+
+### Candidate fixes — named, not built
+
+Out of scope for this slice by the brief. Recorded in cost order:
+
+1. **Bound the whole engine call, not each attempt** (`engines.py:63,149`).
+   Pass `max_retries` explicitly or wrap the request in a single deadline. A
+   call that has already spent 90s twice is not going to succeed on the third.
+   Recovers up to ~210s of slot time in the pathological case.
+2. **Raise `PROMPT_CONCURRENCY` from 4** (`scan_runner.py:42`). This is the
+   binding constraint: the loop tracks `sum ÷ concurrency` to within 2%, so in
+   this region the lever is close to linear. 24 prompts × 2 engines = 48 calls
+   are available and 4 prompts are permitted. **The single biggest lever, and a
+   one-line change** — but its ceiling is the slowest single prompt, so it must
+   be taken together with fix 1, not instead of it.
+3. **Overlap the technical audit with the scan loop** (8.6s). It needs only the
+   client's domain; it does not read a single scan result.
+4. **Overlap the two detection signals** (`competitors.py:479-483`). SerpApi
+   `search_many` and co-citation `run_seed_prompts` are independent and are
+   awaited one after the other. Perhaps 8-10s of the 21.2s.
+
+Fixes 1 and 2 together plausibly land the total near 250-300s — at or just
+under the line, not comfortably inside it. Worth saying plainly rather than
+presenting the budget as recoverable by a one-line change.
+
+### What this means for slice 2 — it must show progress, not wait
+
+**The dashboard cannot be a synchronous request that waits.** At 498.2s
+measured, and 250-300s even on the optimistic side of the fixes above, a
+request-and-wait design fails on the numbers, and would fail against ordinary
+proxy and browser timeouts well before the user's patience.
+
+So slice 2 needs incremental progress: a queued scan, a status the client polls,
+and something truthful on screen while it runs. Two findings from this run feed
+that design directly. The phase table is the natural progress vocabulary — nine
+named stages with real relative weights, of which one is 84% and needs its own
+sub-progress rather than a single spinner. And the run finished `partial`, not
+`succeeded`, on an ordinary healthy site — so `partial` is a normal state the
+dashboard must render honestly, not an edge case to design around later.
+
+### IP-safety self-check
+
+No UI changed, so constraint 9 does not strictly bite; recorded because the run
+touched live third-party data. The harness prints counts, durations, statuses,
+domains and call tallies. No engine answer text, no competitor prose and no
+crawled copy is printed, stored or committed — the raw answers stayed transient
+inside the worker exactly as ip-safety.md #7 requires, and what persisted is the
+usual facts plus a SHA-256 digest. The latency figures above are timings, not
+content. No dependency was added. **IP-safety check passed:** durations, call
+counts, statuses and domains only.
+
+### Tests
+
+**834, unchanged** (api 571, workers 13, shared-types 53, design-system 99,
+web 98). Run live at the start of the pass and again after the script landed,
+not assumed. `verify_e2e.py` is a script, not a test, and adds no test cases;
+`ruff check` is clean on it.
