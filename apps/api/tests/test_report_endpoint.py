@@ -739,25 +739,6 @@ class TestProofProjectionUnit:
         return r
 
     @staticmethod
-    def _absent(rid: str = "er1", status=None):  # noqa: ANN001, ANN205
-        """An answer that named a rival and cited a source, but not the subject."""
-        from avp_api.models import BrandMention, Citation
-        from avp_api.models.engine_result import CitationType, EngineResultStatus
-
-        r = TestProofProjectionUnit._result(rid=rid, mentioned=False, position=None)
-        r.status = status or EngineResultStatus.ANSWERED_NO_MENTION
-        r.brand_mentions = [
-            BrandMention(id=f"bm{rid}", engine_result_id=rid, entity_name="Zendesk",
-                         entity_domain="zendesk.com", is_subject=False, position=1)
-        ]
-        r.citations = [
-            Citation(id=f"c{rid}", engine_result_id=rid, source_domain="g2.com",
-                     source_url="https://g2.com/x", source_type=CitationType.REVIEW,
-                     position=1, cites_subject=False)
-        ]
-        return r
-
-    @staticmethod
     def _mention(name: str, position: int | None, is_subject: bool = False, domain=None):  # noqa: ANN001, ANN205
         from avp_api.models import BrandMention
 
