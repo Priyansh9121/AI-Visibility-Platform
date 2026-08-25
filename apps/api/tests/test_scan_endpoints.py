@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient
 
+from avp_api.deps import scan_executor
 from avp_api.models.engine_result import Engine, EngineResultStatus, Sentiment
 from avp_api.models.prompt import PromptIntent
 from avp_api.services import scan_runner
@@ -32,6 +33,27 @@ async def _make_client(client: AsyncClient, domain: str = "helpscout.com") -> st
     resp = await client.post(f"{BASE}/clients", json={"url": domain, "classify": False})
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
+
+
+async def _run_scan(
+    client: AsyncClient, cid: str, payload: dict | None = None
+) -> dict:
+    """Queue a scan and return its COMPLETED detail — Epic 9.5.
+
+    The endpoint is asynchronous: it answers `202` with a QUEUED scan and never
+    reports completion itself. The suite installs an inline executor (conftest),
+    so the work has already finished by the time this returns — but the
+    completed shape is still read where a real caller reads it,
+    `GET /scans/{scanId}`, rather than from a queue receipt that does not carry
+    it. The `202` is asserted here so every caller of this helper covers the new
+    contract without restating it.
+    """
+    resp = await client.post(f"{BASE}/clients/{cid}/scans", json=payload or {})
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["status"] == "queued"
+    detail = await client.get(f"{BASE}/scans/{resp.json()['id']}")
+    assert detail.status_code == 200, detail.text
+    return detail.json()
 
 
 @pytest.fixture
@@ -90,9 +112,7 @@ class TestRunScan:
         cid = await _make_client(client)
         stub_engines(n_prompts=4)
 
-        resp = await client.post(f"{BASE}/clients/{cid}/scans", json={})
-        assert resp.status_code == 201, resp.text
-        body = resp.json()
+        body = await _run_scan(client, cid)
 
         assert body["promptSet"] is not None
         assert len(body["promptSet"]["prompts"]) == 4
@@ -111,7 +131,7 @@ class TestRunScan:
         cid = await _make_client(client)
         stub_engines(n_prompts=2)
 
-        body = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()
+        body = await _run_scan(client, cid)
         result = body["results"][0]
         assert result["mentioned"] is True
         # No competitor set exists for this scan, so only the subject is
@@ -162,21 +182,39 @@ class TestRunScan:
         )
         await session.commit()
 
-        body = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()
+        body = await _run_scan(client, cid)
         result = body["results"][0]
         assert result["brandsMentioned"] == 2
         assert result["position"] == 2, "Zendesk is named before Help Scout"
         names = [m["entityName"] for m in result["brandMentions"]]
         assert names == ["Zendesk", "helpscout.com"]
 
-    async def test_answer_text_never_appears_in_the_response(
+    async def test_answer_text_never_appears_in_any_response(
         self, client: AsyncClient, stub_engines
     ) -> None:  # noqa: ANN001
+        """ip-safety.md #7, asserted where the engine results actually are.
+
+        This used to search the POST response, which carried every result. The
+        queue receipt carries none (Epic 9.5), so that assertion alone would now
+        pass no matter what the pipeline did with the prose. The responses that
+        DO carry results are the ones worth searching, and the test asserts they
+        are non-empty first so it cannot go quietly vacuous again.
+        """
         await _sign_up(client)
         cid = await _make_client(client)
         stub_engines(n_prompts=2, answer_text="UNIQUE ENGINE PROSE MARKER 12345")
-        resp = await client.post(f"{BASE}/clients/{cid}/scans", json={})
-        assert "UNIQUE ENGINE PROSE MARKER" not in resp.text
+
+        queued = await client.post(f"{BASE}/clients/{cid}/scans", json={})
+        assert "UNIQUE ENGINE PROSE MARKER" not in queued.text
+        sid = queued.json()["id"]
+
+        detail = await client.get(f"{BASE}/scans/{sid}")
+        assert detail.json()["results"], "nothing to search — the scan produced no results"
+        assert "UNIQUE ENGINE PROSE MARKER" not in detail.text
+
+        results = await client.get(f"{BASE}/scans/{sid}/results")
+        assert results.json()["data"], "nothing to search — the results page is empty"
+        assert "UNIQUE ENGINE PROSE MARKER" not in results.text
 
     async def test_prompt_limit_caps_the_set(
         self, client: AsyncClient, stub_engines
@@ -184,7 +222,7 @@ class TestRunScan:
         await _sign_up(client)
         cid = await _make_client(client)
         stub_engines(n_prompts=10)
-        body = (await client.post(f"{BASE}/clients/{cid}/scans", json={"promptLimit": 3})).json()
+        body = await _run_scan(client, cid, {"promptLimit": 3})
         assert len(body["promptSet"]["prompts"]) == 3
         assert len(body["results"]) == 6
 
@@ -195,7 +233,7 @@ class TestRunScan:
         await _sign_up(client)
         cid = await _make_client(client)
         stub_engines(n_prompts=2, fail=True)
-        body = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()
+        body = await _run_scan(client, cid)
         assert body["status"] == "failed"
         assert body["errorCode"] == "ALL_ENGINE_CALLS_FAILED"
         assert all(r["status"] == "timeout" for r in body["results"])
@@ -207,7 +245,7 @@ class TestRunScan:
         await _sign_up(client)
         cid = await _make_client(client)
         stub_engines(n_prompts=2, answer_text="Zendesk and Front are the leaders here.")
-        body = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()
+        body = await _run_scan(client, cid)
         assert len(body["results"]) == 4
         assert all(r["mentioned"] is False for r in body["results"])
         assert all(r["status"] == "answered_no_mention" for r in body["results"])
@@ -220,7 +258,7 @@ class TestRunScan:
         await _sign_up(client)
         cid = await _make_client(client)
         stub_engines(n_prompts=1)
-        body = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()
+        body = await _run_scan(client, cid)
         assert set(body["engineVersions"]) == {"claude", "claude_search"}
 
     async def test_requires_authentication(self, client: AsyncClient) -> None:
@@ -295,3 +333,139 @@ class TestScanReads:
             await _sign_up(other, "two@scaniso.example")
             assert (await other.get(f"{BASE}/scans/{sid}")).status_code == 404
             assert (await other.get(f"{BASE}/scans/{sid}/results")).status_code == 404
+
+
+class TestScanIsQueued:
+    """The 202 contract — Epic 9.5.
+
+    These are the behaviours that did not exist before this slice. The rest of
+    the file runs against an inline executor and would pass whether the endpoint
+    were asynchronous or not; nothing here would.
+    """
+
+    @staticmethod
+    def _defer(client: AsyncClient) -> list:
+        """Swap the inline executor for one that records the job and never runs it.
+
+        Without this the suite's inline executor finishes the scan during the
+        POST, and "visible while still queued" becomes untestable — the very
+        thing this slice exists to make true.
+        """
+        jobs: list = []
+
+        class _Deferred:
+            async def submit(self, job, *, settings) -> None:  # noqa: ANN001
+                jobs.append(job)
+
+        app = client._transport.app  # noqa: SLF001
+        app.dependency_overrides[scan_executor] = lambda: _Deferred()
+        return jobs
+
+    async def test_post_returns_202_with_a_queued_scan(
+        self, client: AsyncClient, stub_engines
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_engines(n_prompts=2)
+        self._defer(client)
+
+        resp = await client.post(f"{BASE}/clients/{cid}/scans", json={})
+
+        assert resp.status_code == 202, resp.text
+        body = resp.json()
+        assert body["status"] == "queued"
+        assert body["id"].startswith("scan_")
+        # ScanOut, not ScanDetailOut with empty fields: at 202 the prompt set
+        # has not been generated, so the response must not offer a shape that
+        # cannot distinguish "not yet" from "none".
+        assert "results" not in body
+        assert "promptSet" not in body
+        assert body["promptCount"] == 0
+        assert body["engineResultCount"] == 0
+
+    async def test_the_scan_is_visible_as_queued_before_the_work_runs(
+        self, client: AsyncClient, stub_engines
+    ) -> None:  # noqa: ANN001
+        """The whole point of the slice.
+
+        Epic 9.3 found a running scan sat in an uncommitted transaction for its
+        entire ~303s, so no other request could see it — "there is nothing to
+        poll". This asserts there now is: the row is readable, by a different
+        request, while the work has demonstrably not happened.
+        """
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_engines(n_prompts=2)
+        jobs = self._defer(client)
+
+        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+
+        # The executor was handed the job and has not run it.
+        assert len(jobs) == 1
+        detail = (await client.get(f"{BASE}/scans/{sid}")).json()
+        assert detail["status"] == "queued"
+        assert detail["results"] == []
+        assert detail["finishedAt"] is None
+        # Not started, either — started_at is stamped by the executor, and the
+        # stale-scan reaper depends on that distinction holding.
+        assert detail["startedAt"] is None
+
+    async def test_the_queued_scan_reaches_the_dashboard(
+        self, client: AsyncClient, stub_engines
+    ) -> None:  # noqa: ANN001
+        """The consumer Epic 9.3 built, reading a scan that has not finished."""
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_engines(n_prompts=2)
+        self._defer(client)
+
+        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+
+        board = (await client.get(f"{BASE}/dashboard")).json()
+        row = next(s for s in board["recentScans"] if s["id"] == sid)
+        assert row["status"] == "queued"
+        # The LEFT join's reason for existing — an unscored scan still appears.
+        assert row["compositeScore"] is None
+        assert board["isEmpty"] is False
+
+    async def test_the_executor_is_handed_what_it_needs_to_run(
+        self, client: AsyncClient, stub_engines
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_engines(n_prompts=5)
+        jobs = self._defer(client)
+
+        sid = (await client.post(
+            f"{BASE}/clients/{cid}/scans",
+            json={"promptLimit": 3, "engines": ["claude"]},
+        )).json()["id"]
+
+        job = jobs[0]
+        assert job.scan_id == sid
+        assert job.client_id == cid
+        assert job.prompt_limit == 3
+        assert job.engines == (Engine.CLAUDE,)
+
+    async def test_queueing_twice_reuses_the_open_scan(
+        self, client: AsyncClient, stub_engines
+    ) -> None:  # noqa: ANN001
+        """Sequential reuse works now that QUEUED is committed.
+
+        `get_or_create_scan` always intended to reuse an open scan, but could
+        never see one: the row was uncommitted for the whole run. It can now.
+
+        This is the SEQUENTIAL case only. Two requests racing inside the window
+        between SELECT and COMMIT still create two scans — that is Epic 9.6's
+        partial unique index, and this test does not claim otherwise.
+        """
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_engines(n_prompts=2)
+        self._defer(client)
+
+        first = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+        second = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+
+        assert first == second
+        assert len((await client.get(f"{BASE}/clients/{cid}/scans")).json()["data"]) == 1
