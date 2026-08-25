@@ -70,6 +70,23 @@ DIMENSION_ORDER: tuple[str, ...] = tuple(
 # evidence rather than an arbitrary slice.
 MAX_CITED_DOMAINS = 12
 
+# What counts as the engine having ANSWERED.
+#
+# `ANSWERED_NO_MENTION` is not a failure. `EngineResult`'s own comment says so:
+# "the engine answered but the brand was absent. Distinct from ERROR: a
+# confirmed absence is a valid, scoreable data point; an error is not."
+#
+# Epic 7.0 read `status is OK` here, which folded every confirmed absence in
+# with the timeouts. On a scan where the subject is named in 3 of 6 answers
+# that made the proof beat report "Answered 3 of 6" and "Named <subject> 3 of
+# 3" — a 100% mention rate on a subject named half the time — and dropped the
+# citations and rival mentions carried by the other three answers, which are
+# the most damning evidence the beat has. It never showed on the Help Scout
+# fixture because that scan names the subject in all six answers, so no row
+# ever carried this status. Found while building the Answer Shelf (Epic 7.1),
+# whose entire purpose is to draw those absences.
+ANSWERED_STATUSES = (EngineResultStatus.OK, EngineResultStatus.ANSWERED_NO_MENTION)
+
 
 async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:
     """Assemble the full report projection for one scan."""
@@ -282,7 +299,7 @@ def _proof(results: list[EngineResult], competitor_set: CompetitorSet | None) ->
     Counts, domains, ordinals. Nothing else is available to aggregate —
     `engine_results` has no column capable of holding an answer.
     """
-    answered = [r for r in results if r.status is EngineResultStatus.OK]
+    answered = [r for r in results if r.status in ANSWERED_STATUSES]
     competitor_names = {
         c.id: c.name for c in (competitor_set.active_competitors if competitor_set else [])
     }
@@ -294,7 +311,7 @@ def _proof(results: list[EngineResult], competitor_set: CompetitorSet | None) ->
     for r in results:
         bucket = coverage[r.engine]
         bucket["prompts_run"] += 1
-        if r.status is EngineResultStatus.OK:
+        if r.status in ANSWERED_STATUSES:
             bucket["answered"] += 1
             if r.mentioned:
                 bucket["mentioned"] += 1
