@@ -239,6 +239,14 @@ async def run_scan(
         e.value: engine_service.ENGINE_REGISTRY[e].version for e in engines
     }
     await session.flush()
+    # Commit the RUNNING transition before any of the slow work starts — Epic
+    # 9.5. This function runs for minutes (Epic 9.2 measured 288.5s in the loop
+    # alone), and until this commit the row is invisible to every other request:
+    # the dashboard cannot show a scan in flight, and `get_or_create_scan`
+    # cannot see one to reuse. Committing here is what makes the status
+    # pollable, and it is why the caller must be prepared for a partially
+    # written scan rather than an all-or-nothing one.
+    await session.commit()
 
     competitors = await load_competitors(session, scan)
     competitor_ids = await _competitor_id_map(session, scan)
@@ -296,6 +304,10 @@ async def run_scan(
         scan.error_code = "ALL_ENGINE_CALLS_FAILED"
 
     await session.flush()
+    # The terminal status lands durably here rather than waiting for a caller to
+    # commit. A scan that has finished has finished, whatever the caller does
+    # next.
+    await session.commit()
     logger.info(
         "scan.completed",
         scan_id=scan.id,

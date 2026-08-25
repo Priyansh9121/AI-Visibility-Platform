@@ -3926,7 +3926,7 @@
         ]
       },
       "post": {
-        "description": "Generate a prompt set and run it against every engine.\n\nRuns **synchronously** and costs real money \u2014 a full scan is 20-30 prompts\nacross every engine, plus a sentiment call per mention. The grounded engine\ncan take 100s per prompt, so a full run takes minutes. `promptLimit` caps\nthe set for verification runs.\n\nReuses the scan Epic 3's competitor detection created, if one is open, so a\ndetect-then-scan flow does not strand an empty scan.",
+        "description": "Queue a scan. Returns immediately; the work happens out of band.\n\n**`202`, not `201`, and `ScanOut`, not `ScanDetailOut`** \u2014 Epic 9.5. This\nused to run the whole pipeline inline, which Epic 9.2 measured at ~303s, and\nEpic 9.3 found the real cost: the scan row sat in an uncommitted transaction\nfor that entire time, invisible to every other request. There was nothing\nfor a dashboard to poll because, as far as Postgres was concerned, the scan\ndid not exist yet.\n\nThe response model is `ScanOut` rather than `ScanDetailOut` with empty\nfields. At `202` there is no prompt set and there are no results \u2014 the\nprompt set is generated *by* the scan. Returning `ScanDetailOut` would\ndescribe a shape this endpoint never has, and leave a caller unable to tell\n\"not generated yet\" from \"generated, and empty\".\n\nPoll `GET /scans/{scanId}` for completion; it carries the prompt set and\nresults once they exist.\n\nStill costs real money once it runs \u2014 20-30 prompts across every engine plus\na sentiment call per mention. `promptLimit` caps the set for verification.\n\nReuses the scan Epic 3's competitor detection created, if one is open, so a\ndetect-then-scan flow does not strand an empty scan.",
         "operationId": "run_scan_api_v1_clients__clientId__scans_post",
         "parameters": [
           {
@@ -3950,11 +3950,11 @@
           "required": true
         },
         "responses": {
-          "201": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScanDetailOut"
+                  "$ref": "#/components/schemas/ScanOut"
                 }
               }
             },

@@ -464,9 +464,14 @@ from the registered routes.
 **Auth required.** §5.4 steps 3–4: generate a prompt set, run it against every
 engine, extract and persist facts.
 
-Runs **synchronously and costs real money** — a full scan is 20–30 prompts across
-every engine, plus a sentiment call per mention. The grounded engine has been
-measured at up to 216s for a single prompt, so a full run takes minutes.
+**Asynchronous since Epic 9.5.** Returns `202` immediately with a QUEUED scan;
+the pipeline runs out of band. It used to run inline and answer `201` with the
+finished scan, which meant the row sat in an uncommitted transaction for its
+whole duration — Epic 9.2 measured ~303s for this endpoint — and was therefore
+invisible to every other request, including the dashboard.
+
+Still **costs real money** once it runs: 20–30 prompts across every engine, plus
+a sentiment call per mention.
 
 **Request**
 ```json
@@ -476,8 +481,44 @@ measured at up to 216s for a single prompt, so a full run takes minutes.
 Both fields optional. `promptLimit` (1–30) caps the generated set for cost
 control; omit for a real scan. `engines` defaults to both.
 
-**Response `201`** — `ScanDetailOut` with `promptSet` and one `results` entry
-per **prompt × engine pair**.
+**Response `202`** — `ScanOut`. Identity and status only.
+
+```json
+{
+  "id": "scan_01J...", "status": "queued",
+  "clientId": "clnt_01J...", "trigger": "manual",
+  "promptCount": 0, "engineResultCount": 0,
+  "startedAt": null, "finishedAt": null
+}
+```
+
+`ScanOut`, **not** `ScanDetailOut` with empty fields: at `202` no prompt set has
+been generated and no results exist, and a shape carrying `promptSet: null` and
+`results: []` would leave a caller unable to tell "not generated yet" from
+"generated, and empty".
+
+The response always reports `queued` — it describes what was accepted, not how
+far it has since progressed.
+
+**Observing completion.** Poll **`GET /api/v1/scans/{scanId}`** (below), which
+carries the prompt set and results once they exist. `status` moves
+`queued → running →` one of `succeeded` / `partial` / `failed`.
+`GET /api/v1/dashboard` shows the same statuses across an agency's scans.
+
+**Reuse.** An open (`queued` or `running`) scan for the client is reused rather
+than duplicated, so a detect-then-scan flow does not strand an empty scan.
+*Concurrent* requests can still race into two scans — the partial unique index
+that closes that is Epic 9.6, not yet built.
+
+**Failure while running.** A pipeline that raises lands the scan at `failed`
+with `errorCode: "EXECUTION_FAILED"`. A scan whose executor disappears — a
+deploy or a crash — is failed by a reaper after 15 minutes with
+`errorCode: "EXECUTOR_LOST"`, distinguishing "the process running this went
+away" from `ALL_ENGINE_CALLS_FAILED`, where the pipeline ran and every engine
+failed.
+
+**`GET /api/v1/scans/{scanId}` response** — `ScanDetailOut` with `promptSet` and
+one `results` entry per **prompt × engine pair**.
 
 ```json
 {

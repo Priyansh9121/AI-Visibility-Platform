@@ -251,12 +251,26 @@ export interface paths {
         put?: never;
         /**
          * Run Scan
-         * @description Generate a prompt set and run it against every engine.
+         * @description Queue a scan. Returns immediately; the work happens out of band.
          *
-         *     Runs **synchronously** and costs real money — a full scan is 20-30 prompts
-         *     across every engine, plus a sentiment call per mention. The grounded engine
-         *     can take 100s per prompt, so a full run takes minutes. `promptLimit` caps
-         *     the set for verification runs.
+         *     **`202`, not `201`, and `ScanOut`, not `ScanDetailOut`** — Epic 9.5. This
+         *     used to run the whole pipeline inline, which Epic 9.2 measured at ~303s, and
+         *     Epic 9.3 found the real cost: the scan row sat in an uncommitted transaction
+         *     for that entire time, invisible to every other request. There was nothing
+         *     for a dashboard to poll because, as far as Postgres was concerned, the scan
+         *     did not exist yet.
+         *
+         *     The response model is `ScanOut` rather than `ScanDetailOut` with empty
+         *     fields. At `202` there is no prompt set and there are no results — the
+         *     prompt set is generated *by* the scan. Returning `ScanDetailOut` would
+         *     describe a shape this endpoint never has, and leave a caller unable to tell
+         *     "not generated yet" from "generated, and empty".
+         *
+         *     Poll `GET /scans/{scanId}` for completion; it carries the prompt set and
+         *     results once they exist.
+         *
+         *     Still costs real money once it runs — 20-30 prompts across every engine plus
+         *     a sentiment call per mention. `promptLimit` caps the set for verification.
          *
          *     Reuses the scan Epic 3's competitor detection created, if one is open, so a
          *     detect-then-scan flow does not strand an empty scan.
@@ -2238,12 +2252,12 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            201: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ScanDetailOut"];
+                    "application/json": components["schemas"]["ScanOut"];
                 };
             };
             /** @description Validation Error */
