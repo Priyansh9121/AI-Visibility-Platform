@@ -4913,3 +4913,191 @@ never committed.
 **834, unchanged** (api 571, workers 13, shared-types 53, design-system 99,
 web 98). Nothing was implemented, so nothing was added. Confirmed by running
 the suite rather than carried forward from the prior session.
+
+---
+
+## 2026-08-25 — Investigation · Detection-time organic rank cannot prioritise the fix list
+
+**Not an epic**, for the same reason as the previous entry: `product-spec.md`
+defines Epic 9 as MVP Launch Readiness, and this is speculative pre-work with
+no roadmap position.
+
+The previous investigation (`d39f70b`) ended with a *conditional* GO on
+persisting organic rank, on the grounds that the data is already fetched and
+already thrown away, so capturing it costs no API calls. It explicitly did not
+answer whether the data is the right data. **This answers that: it is not.**
+Capturing something for free and it being useful once captured are two
+different questions, and the second one comes back NO.
+
+**Outcome: NO-GO on usefulness. Nothing implemented.** No schema, no
+migration, no change to `serp.py`, `competitors.py`, `prompts.py` or
+`engines.py`. Suite unchanged at 834.
+
+### SerpApi spend
+
+Plan and quota re-confirmed live via `account.json` immediately before
+spending, not carried forward from the prior session.
+
+| | |
+|---|---|
+| Plan | **Free Plan**, $0.00/month |
+| Quota at gate | **101 left** of 250, renews 2026-09-20 |
+| Approved, in-session, before spending | **6 searches** — the exact set `build_queries()` produces for the Help Scout client |
+| Actually spent | **6** (101 → 95) |
+| Tracked-prompt side | **0 new calls** — reused the payloads the prior investigation already paid for |
+
+Run through `serp.search()` itself, not a hand-rolled script, so the domains
+come out of the same `registrable_domain` parsing production uses.
+
+### A premise that did not survive contact with the data
+
+The brief framed this as "detection's ≤6 queries versus the report's 20-30
+tracked prompts". The only real client in `avp_dev` has **3 tracked prompts**,
+not 24 — it was a budget-limited verification scan from the Epic 5/6 runs.
+
+That matters beyond arithmetic. At `TARGET_PROMPTS = 24` the 45% awareness
+quota yields ~11 non-branded questions, so `prompts.py`'s rule — "most
+questions must NOT contain the subject brand's name" — holds. At n=3 the quota
+rounds to one prompt per intent, and since the rule permits the brand in
+comparison and bottom-funnel, **2 of the 3 tracked prompts name Help Scout**.
+The real scan is therefore *more* brand-heavy than a real 24-prompt set would
+be, which biases every overlap measured below **in favour** of the feature.
+The conclusion is negative anyway, which makes it stronger, not weaker.
+
+### Structural comparison, and why it did not settle the question
+
+`build_queries()` produces, for this client:
+
+```
+BRAND   Help Scout alternatives / competitors / vs
+  -     best customer support software
+  -     top customer support software companies
+  -     customer support software providers
+```
+
+Half brand-anchored by construction; half terse category keywords. The tracked
+prompts are conversational buyer questions, and `prompts.py` deliberately
+suppresses the brand in awareness ones because "a question that names the
+brand can only confirm the brand exists; it cannot reveal whether the brand
+gets discovered."
+
+The tempting conclusion was that the two sets are structurally opposed and the
+brief could close there without spending. **That reasoning was wrong, and the
+live data said so.** Overlap by half:
+
+| Detection half | domains | also rank for a tracked prompt |
+|---|---|---|
+| Brand-anchored (3 queries) | 16 | **11 = 69%** |
+| Category-seeded (3 queries) | 17 | **4 = 24%** |
+
+The half predicted to be least relevant overlapped *most*. The explanation is
+the confound above — two of three tracked prompts name the brand, so both sets
+were drawing from the same pool of Help Scout comparison publishers. Worth
+recording as a caution: the structural argument was clean, plausible, and
+would have produced the right verdict for the wrong reason.
+
+### What the data actually shows
+
+**Rank does not carry across.** Over the 12 domains present in both sets,
+Spearman on best-rank: **rho = −0.434** (t = −1.52, df = 10, two-sided
+p ≈ 0.16). At n = 12 that is **not distinguishable from zero**, so the honest
+statement is *no positive correlation was observed* — not that it is inverted.
+Either way it is not the positive relationship the feature would need.
+
+```
+eesel.ai         detection #1  -> tracked #7
+zendesk.com      detection #2  -> tracked #6
+kayako.com       detection #2  -> tracked #9
+featurebase.app  detection #5  -> tracked #1
+happyfox.com     detection #8  -> tracked #1
+```
+
+**The decisive finding is coverage, not correlation.** The fix beat operates
+on *cited* domains — what engines cite when answering tracked prompts. Of the
+13 cited domains in this report, **8 (62%) appear in none of detection's six
+queries.** There is nothing to join on for most of the rows the feature would
+be prioritising.
+
+That includes the fix list's own output:
+
+```
+eesel.ai         6 citations   detection #1        <- would have a signal
+featurebase.app  4 citations   detection #5, #9    <- would have a signal
+hiverhq.com      4 citations   ABSENT              <- no row, no signal
+```
+
+One of the three domains Epic 7.1 actually names is invisible to detection.
+
+**And the same holds for the persisted competitor set.** `thecxlead.com` ranks
+**#1 twice** across detection's queries — the strongest organic performer in
+the whole set — and appears in **no** tracked prompt. `freshworks.com`
+(detection #2) likewise. The best detection signal available points at domains
+the report never mentions.
+
+This is structural rather than unlucky: detection samples the top ~10 of six
+queries, ~30 distinct domains. The report's citations come from what engines
+chose to cite across the prompt set, drawing on a far wider pool. Widening the
+overlap means more queries and deeper result pages — i.e. real recurring cost,
+which is the next section.
+
+### Go / no-go — on usefulness, kept separate from feasibility-of-capture
+
+**The prior entry's finding stands and is unchanged:** capture is free. The
+positions are fetched, reduced to a scalar by `_position_weight`, and
+discarded; persisting them costs no API call.
+
+**This entry's finding: NO-GO. Do not build it.** A prioritisation signal that
+covers 38% of the rows it is meant to rank, and shows no positive rank
+relationship on the 38% it does cover, is not a prioritisation signal. It
+would be a column that looks like evidence.
+
+**What a genuinely useful version would require, and why it is not affordable
+now.** The signal the fix beat would actually want is organic rank *for the
+tracked prompts themselves* — where the client and the cited domains rank on
+the questions the report is built from. That means SerpApi at report time
+against 20-30 prompts:
+
+| | Free Plan |
+|---|---|
+| Searches per scan (24 prompts) | ~24 |
+| Plus detection's own | ~6 |
+| **Per scan** | **~30 = 12% of a 250/month quota** |
+| Scans per month before the quota is gone | **~8, across all clients** |
+
+Eight scans a month is not a product. And it would be a *different* feature —
+"where do you rank organically versus where you get cited by AI", which is a
+new comparison worth considering on its own merits — not the "capture what we
+already discard" idea this brief set out to validate. No smaller version is
+proposed, because the measurements do not support one.
+
+Revisit only if the prompt count drops, a paid plan is taken for unrelated
+reasons, or the fix beat's inputs change shape. Re-measure then rather than
+assuming this result carries.
+
+### One data point, said plainly
+
+This is **one client, one scan, three tracked prompts, six detection queries**.
+It is not statistical proof of a general law, and the correlation figure in
+particular is not significant at this n. The right reading is: the coverage gap
+and the absent-domain cases are **consistent with** detection-time rank being
+the wrong input for this job, and nothing observed here **contradicts** that.
+A second client would strengthen or overturn it. Given the verdict is "do not
+build", the cost of being wrong is a deferred feature, not a shipped defect.
+
+### IP-safety self-check
+
+No code and no customer-facing screen changed, so constraint 9 does not
+strictly bite — recorded anyway because this handled SerpApi output.
+
+Everything touched was domains, positions and counts: exactly what constraint
+7 permits. Result titles and snippets were never printed, never persisted and
+never committed — `serp.search()` discards them by construction, and the
+tracked-prompt payloads were read from a scratchpad outside the repository and
+reduced to domain + ordinal before anything was displayed. `avp_dev` was read
+only; no row was written. No dependency added. **IP-safety check passed:**
+domains, ordinals and counts only, nothing persisted, nothing rendered.
+
+### Tests
+
+**834, unchanged** (api 571, workers 13, shared-types 53, design-system 99,
+web 98). Run, not assumed. Nothing was implemented, so nothing was added.
