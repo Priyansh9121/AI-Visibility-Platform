@@ -4,28 +4,27 @@
  * Presentational and pure, so it can be rendered to static markup and asserted
  * over the way ReportView is. The route owns fetching and re-run state.
  *
- * WHY THERE IS NO LIVE PROGRESS HERE
- * ----------------------------------
- * Epic 9.1 concluded slice 2 "must show progress, not wait", and at Epic 9.2's
- * measured 361.3s that instinct is still right. But progress is not buildable
- * against today's API, and the reason is structural rather than a matter of
- * taste:
+ * WHY THIS STILL DOES NOT POLL — updated by Epic 9.5
+ * --------------------------------------------------
+ * As built, this screen could not poll: POST /clients/{clientId}/scans ran the
+ * pipeline inline and committed once at the end, so a running scan was
+ * invisible to every other request and there was no status to observe.
  *
- *   POST /clients/{clientId}/scans runs the entire pipeline INLINE and calls
- *   db.commit() once, after the scan finishes (routers/scans.py). The scan row
- *   is created inside that uncommitted transaction, so no other request can
- *   see it while it runs.
+ * **Epic 9.5 fixed that.** The endpoint now returns 202 with a QUEUED scan and
+ * commits it immediately; the executor moves it to RUNNING and then to a
+ * terminal status, each committed as it happens. GET /api/v1/dashboard reports
+ * those transitions, and this component already renders them.
  *
- * GET /api/v1/dashboard therefore cannot observe a scan in flight — a running
- * scan is invisible until the moment it completes, at which point it appears
- * already finished. Polling would poll for a status that cannot exist yet, so
- * this screen does not poll. It states the wait honestly instead, following the
- * precedent set on the intake screen: no progress bar, because we cannot
- * measure real progress and a fake one is a lie the user will notice.
+ * So the blocker is gone, and this screen still does not poll — that is now a
+ * choice rather than an impossibility. Building the poller is its own slice.
+ * What already works without one: re-run returns immediately instead of hanging
+ * for minutes, the row appears as Queued, and re-run stays disabled for that
+ * client until the scan reaches a terminal status. A manual refresh advances it.
  *
- * Making progress real is a backend change — scans have to become a queued job
- * that commits QUEUED before it starts working. That is out of scope here and
- * recorded in the build log.
+ * There is still no progress BAR, for the reason the intake screen gives: we
+ * cannot measure real progress, and a fake one is a lie the user will notice.
+ * Phase-level progress needs the Epic 9.1 phase table exposed by the API, which
+ * is not built.
  */
 
 import type { JSX } from 'react';

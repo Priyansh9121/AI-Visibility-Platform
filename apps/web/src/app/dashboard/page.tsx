@@ -64,11 +64,15 @@ export default function DashboardRoute() {
   /**
    * Start a scan.
    *
-   * The request does not resolve until the scan has finished — Epic 9.2
-   * measured 361.3s — so the client is marked in-flight for the whole wait and
-   * the dashboard is reloaded once it lands. Marking it here is also the only
-   * double-submit guard available: the server cannot see its own uncommitted
-   * scan, so two clicks would buy two scans.
+   * Since Epic 9.5 this resolves as soon as the scan is QUEUED rather than
+   * blocking for the whole ~303s run, so reloading the dashboard here shows the
+   * new row immediately — as Queued, with re-run disabled for that client until
+   * it finishes.
+   *
+   * The in-flight marking is kept as a double-submit guard. It is a much
+   * shorter window than it was, and the server can now see its own committed
+   * QUEUED scan and reuse it, but two genuinely concurrent requests can still
+   * race into two scans. Closing that is Epic 9.6's partial unique index.
    */
   const rerun = useCallback(
     async (clientId: string) => {

@@ -559,14 +559,20 @@ async def get_or_create_scan(
     if existing is not None:
         return existing
 
+    # QUEUED, which is the model's own default (models/scan.py) and was the
+    # original intent — Epic 9.5. It used to be created RUNNING with a
+    # started_at, which claimed work had begun before anything had picked it up.
+    # `run_scan` sets RUNNING and stamps started_at when an executor actually
+    # starts, and the stale-scan reaper keys off exactly that: RUNNING means
+    # claimed, QUEUED means open. Detection also lands here, and a detect-only
+    # run correctly leaves an open QUEUED row for a later scan to reuse.
     scan = Scan(
         id=ids.new_id(ids.SCAN),
         client_id=client.id,
         agency_id=client.agency_id,
         requested_by_user_id=user_id,
-        status=ScanStatus.RUNNING,
+        status=ScanStatus.QUEUED,
         trigger=ScanTrigger.MANUAL,
-        started_at=datetime.now(UTC),
     )
     session.add(scan)
     await session.flush()

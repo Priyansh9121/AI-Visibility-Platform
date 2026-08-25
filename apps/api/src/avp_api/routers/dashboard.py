@@ -17,6 +17,7 @@ from ..models import Client, Scan, Score, ScoreStatus
 from ..schemas.auth import AgencyOut, SeatUsageOut
 from ..schemas.dashboard import DashboardOut, ScanSummaryOut
 from ..services import seats as seat_service
+from ..services.scan_executor import reap_stale_scans
 
 router = APIRouter(tags=["dashboard"])
 
@@ -30,6 +31,25 @@ async def dashboard(
     limit: int = Query(default=DEFAULT_RECENT_SCANS, ge=1, le=50),
 ) -> Any:
     agency_id = principal.agency_id
+
+    # Check-on-read — Epic 9.5. This is a GET that writes, which is deliberate.
+    #
+    # The failure mode is a scan left at RUNNING because the process executing
+    # it went away (a deploy, a crash), which BackgroundTasks makes an ordinary
+    # event rather than an exotic one. Nothing else in the system corrects it,
+    # and the damage is entirely here: the row renders "Running…" forever and
+    # Epic 9.3's screen disables re-run for that client on the strength of it.
+    #
+    # Reaping at the point of reading means the correction happens exactly where
+    # and when the lie would otherwise be told, and it needs no scheduler — which
+    # matters for the same reason Epic 9.4 chose BackgroundTasks over Celery: a
+    # periodic task means a process to run and supervise, and this product is
+    # pre-pilot and single-instance. A startup-only check would miss a scan
+    # stranded by a worker dying while its peers keep serving; this does not.
+    #
+    # One UPDATE against `ix_scans_status`, and it no-ops when nothing is stale.
+    if await reap_stale_scans(db):
+        await db.commit()
 
     client_count = int(
         (

@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Annotated
 
-from fastapi import Depends, Request
+from fastapi import BackgroundTasks, Depends, Request
 from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +16,7 @@ from .db import session_scope
 from .errors import AuthenticationRequired, PermissionDenied
 from .models import Agency, User, UserRole, UserStatus
 from .redis_client import get_redis
+from .services.scan_executor import BackgroundScanExecutor, ScanExecutor
 from .sessions import SessionStore
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
@@ -34,6 +35,21 @@ def redis_client() -> Redis:
 
 
 RedisDep = Annotated[Redis, Depends(redis_client)]
+
+
+def scan_executor(background: BackgroundTasks) -> ScanExecutor:
+    """How a queued scan gets run — Epic 9.5.
+
+    A dependency rather than a module-level singleton for two reasons.
+    `BackgroundTasks` is per-request, so there is nothing to hold onto between
+    requests. And it is the seam tests override with `InlineScanExecutor`, which
+    keeps "the scan is finished once the POST returns" true in the suite without
+    the endpoint pretending to be synchronous in production.
+    """
+    return BackgroundScanExecutor(background)
+
+
+ScanExecutorDep = Annotated[ScanExecutor, Depends(scan_executor)]
 
 
 def session_store(redis: RedisDep, settings: SettingsDep) -> SessionStore:

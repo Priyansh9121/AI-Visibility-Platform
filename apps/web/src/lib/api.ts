@@ -15,7 +15,7 @@ import type {
   Me,
   ProblemDetail,
   Report,
-  ScanDetail,
+  Scan,
   ValidationProblemDetail,
 } from '@avp/shared-types';
 import { isProblemDetail } from '@avp/shared-types';
@@ -96,13 +96,15 @@ export const api = {
   /**
    * Start a scan for a client — the dashboard's "re-run".
    *
-   * **This request does not return until the scan has finished.** The endpoint
-   * runs the whole pipeline inline and commits once at the end, which Epic 9.2
-   * measured at 361.3s. It is not a job submission, so there is no id to poll
-   * for while it runs; see DashboardView's note.
+   * Returns as soon as the scan is QUEUED (`202`), carrying identity and status
+   * only — no prompt set and no results, which do not exist yet. Epic 9.5 made
+   * the endpoint asynchronous; it previously blocked for the whole ~303s run.
+   *
+   * Completion is observed with `GET /scans/{scanId}`, or by re-reading the
+   * dashboard. This client does not poll — building the poller is a follow-up.
    */
   runScan: (clientId: string) =>
-    request<ScanDetail>(`/clients/${clientId}/scans`, {
+    request<Scan>(`/clients/${clientId}/scans`, {
       method: 'POST',
       body: JSON.stringify({}),
     }),

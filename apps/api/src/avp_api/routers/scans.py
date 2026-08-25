@@ -11,7 +11,7 @@ from fastapi import APIRouter, Path, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from ..deps import DbDep, PrincipalDep, SettingsDep
+from ..deps import DbDep, PrincipalDep, ScanExecutorDep, SettingsDep
 from ..errors import NotFound
 from ..models import EngineResult, Prompt, PromptSet, Scan
 from ..schemas.common import Page
@@ -23,9 +23,9 @@ from ..schemas.scan import (
     ScanOut,
 )
 from ..services import competitors as detection
-from ..services import scan_runner
 from ..services.engines import DEFAULT_ENGINES
 from ..services.intake import get_client
+from ..services.scan_executor import ScanJob, reap_stale_scans
 
 router = APIRouter(tags=["scans"])
 
@@ -81,37 +81,73 @@ async def _detail(db: Any, scan: Scan) -> ScanDetailOut:
 
 @router.post(
     "/clients/{clientId}/scans",
-    response_model=ScanDetailOut,
-    status_code=status.HTTP_201_CREATED,
+    response_model=ScanOut,
+    status_code=status.HTTP_202_ACCEPTED,
 )
 async def run_scan(
     payload: RunScanRequest,
     principal: PrincipalDep,
     db: DbDep,
     settings: SettingsDep,
+    executor: ScanExecutorDep,
     client_id: str = Path(alias="clientId"),
 ) -> Any:
-    """Generate a prompt set and run it against every engine.
+    """Queue a scan. Returns immediately; the work happens out of band.
 
-    Runs **synchronously** and costs real money — a full scan is 20-30 prompts
-    across every engine, plus a sentiment call per mention. The grounded engine
-    can take 100s per prompt, so a full run takes minutes. `promptLimit` caps
-    the set for verification runs.
+    **`202`, not `201`, and `ScanOut`, not `ScanDetailOut`** — Epic 9.5. This
+    used to run the whole pipeline inline, which Epic 9.2 measured at ~303s, and
+    Epic 9.3 found the real cost: the scan row sat in an uncommitted transaction
+    for that entire time, invisible to every other request. There was nothing
+    for a dashboard to poll because, as far as Postgres was concerned, the scan
+    did not exist yet.
+
+    The response model is `ScanOut` rather than `ScanDetailOut` with empty
+    fields. At `202` there is no prompt set and there are no results — the
+    prompt set is generated *by* the scan. Returning `ScanDetailOut` would
+    describe a shape this endpoint never has, and leave a caller unable to tell
+    "not generated yet" from "generated, and empty".
+
+    Poll `GET /scans/{scanId}` for completion; it carries the prompt set and
+    results once they exist.
+
+    Still costs real money once it runs — 20-30 prompts across every engine plus
+    a sentiment call per mention. `promptLimit` caps the set for verification.
 
     Reuses the scan Epic 3's competitor detection created, if one is open, so a
     detect-then-scan flow does not strand an empty scan.
     """
     client = await get_client(db, agency_id=principal.agency_id, client_id=client_id)
-    scan = await detection.get_or_create_scan(db, client, user_id=principal.user_id)
 
+    # Reap before reusing. A scan stranded at RUNNING by a lost executor would
+    # otherwise be picked up by `get_or_create_scan` and re-run, which dies on
+    # `prompt_sets`' unique constraint as a 500. This is the path where a
+    # stranded row does real harm, so it is the path that clears it.
+    if await reap_stale_scans(db):
+        await db.commit()
+
+    scan = await detection.get_or_create_scan(db, client, user_id=principal.user_id)
     engines = tuple(payload.engines) if payload.engines else DEFAULT_ENGINES
-    await scan_runner.run_scan(
-        db, scan, client,
-        settings=settings, engines=engines, prompt_limit=payload.prompt_limit,
-    )
+
+    # Commit BEFORE handing off. The executor loads the scan on its own session
+    # and would not find it otherwise.
     await db.commit()
     await db.refresh(scan)
-    return await _detail(db, scan)
+
+    await executor.submit(
+        ScanJob(
+            scan_id=scan.id,
+            client_id=client.id,
+            engines=engines,
+            prompt_limit=payload.prompt_limit,
+        ),
+        settings=settings,
+    )
+    # Deliberately returns the row as committed — QUEUED — and does not re-read
+    # after handing off. The `202` reports what was accepted, not how far it has
+    # since got; an executor that happens to run synchronously must not change
+    # this endpoint's contract. Completion is observed through
+    # `GET /scans/{scanId}`, which is the one place that answers it.
+    return scan
 
 
 @router.get("/scans/{scanId}", response_model=ScanDetailOut)
