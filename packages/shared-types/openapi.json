@@ -1623,6 +1623,68 @@
         "title": "PromptSetOut",
         "type": "object"
       },
+      "PromptShelfOut": {
+        "description": "One answer, as the ordered shelf of brands it named \u2014 Epic 7.1.\n\nDirection A of `design-direction.md` \u00a75. The report's aggregate tables\nanswer \"how often overall\"; this answers \"in THIS question, who stood\nwhere, and were you there at all\". The subject's absence is a fact this\nrow carries explicitly (`subject_present: false`) rather than an entry\nthat is merely missing, because the visualisation draws absence as an\nempty notch and a silently absent row would draw nothing.\n\nOn `prompt_text` \u2014 ip-safety.md #7 governs scraped and model-returned\ncontent ABOUT third parties. This is OUR OWN generated question, the same\nfield `PromptOut.text` has returned on `/scans/{id}/prompts` since Epic 4,\nand the exception is registered by name in `test_ip_safety.py` rather than\nleft to dodge the forbidden-field sweep by luck.",
+        "properties": {
+          "answered": {
+            "title": "Answered",
+            "type": "boolean"
+          },
+          "engine": {
+            "$ref": "#/components/schemas/Engine"
+          },
+          "promptId": {
+            "title": "Promptid",
+            "type": "string"
+          },
+          "promptPosition": {
+            "title": "Promptposition",
+            "type": "integer"
+          },
+          "promptText": {
+            "title": "Prompttext",
+            "type": "string"
+          },
+          "slots": {
+            "items": {
+              "$ref": "#/components/schemas/ShelfSlotOut"
+            },
+            "title": "Slots",
+            "type": "array"
+          },
+          "subjectCited": {
+            "default": false,
+            "title": "Subjectcited",
+            "type": "boolean"
+          },
+          "subjectPosition": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subjectposition"
+          },
+          "subjectPresent": {
+            "title": "Subjectpresent",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "promptId",
+          "promptText",
+          "promptPosition",
+          "engine",
+          "answered",
+          "subjectPresent",
+          "slots"
+        ],
+        "title": "PromptShelfOut",
+        "type": "object"
+      },
       "ReadyOut": {
         "properties": {
           "checks": {
@@ -2142,6 +2204,13 @@
             "title": "Mentionshares",
             "type": "array"
           },
+          "promptShelf": {
+            "items": {
+              "$ref": "#/components/schemas/PromptShelfOut"
+            },
+            "title": "Promptshelf",
+            "type": "array"
+          },
           "promptsRun": {
             "title": "Promptsrun",
             "type": "integer"
@@ -2164,6 +2233,13 @@
           "totalCitations": {
             "title": "Totalcitations",
             "type": "integer"
+          },
+          "unclaimedCitedDomains": {
+            "items": {
+              "$ref": "#/components/schemas/CitedDomainOut"
+            },
+            "title": "Unclaimedciteddomains",
+            "type": "array"
           }
         },
         "required": [
@@ -2933,6 +3009,57 @@
         ],
         "title": "Sentiment",
         "type": "string"
+      },
+      "ShelfSlotOut": {
+        "description": "One brand standing in one ordinal slot of one answer.\n\nip-safety.md #7 names exactly this shape as permitted: \"counts and ordinal\npositions (e.g. 'mentioned 3rd')\" plus \"names of entities mentioned\". There\nis no field here that could carry what the answer SAID about the brand \u2014\nonly that it named it, and where in the order.",
+        "properties": {
+          "cited": {
+            "default": false,
+            "title": "Cited",
+            "type": "boolean"
+          },
+          "competitorName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Competitorname"
+          },
+          "entityDomain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entitydomain"
+          },
+          "entityName": {
+            "title": "Entityname",
+            "type": "string"
+          },
+          "isSubject": {
+            "title": "Issubject",
+            "type": "boolean"
+          },
+          "position": {
+            "title": "Position",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "position",
+          "entityName",
+          "isSubject"
+        ],
+        "title": "ShelfSlotOut",
+        "type": "object"
       },
       "SignUpRequest": {
         "properties": {

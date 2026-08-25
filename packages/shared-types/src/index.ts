@@ -75,6 +75,10 @@ export type EngineCoverage = Schemas['EngineCoverageOut'];
 export type CitedDomain = Schemas['CitedDomainOut'];
 export type MentionShare = Schemas['MentionShareOut'];
 
+// --- Answer Shelf + unclaimed domains (Epic 7.1) ------------------------
+export type PromptShelfRow = Schemas['PromptShelfOut'];
+export type ShelfSlot = Schemas['ShelfSlotOut'];
+
 // --- action list (Epic 8) -----------------------------------------------
 export type ActionItem = Schemas['ActionItemOut'];
 export type ActionItemList = Schemas['ActionItemListOut'];

@@ -31,7 +31,7 @@ from sqlalchemy import select  # noqa: E402
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
 
 from avp_api.ids import new_id  # noqa: E402
-from avp_api.models import Agency, Client, Scan  # noqa: E402
+from avp_api.models import Agency, Client, Prompt, PromptSet, Scan  # noqa: E402
 from avp_api.models.client import ClassificationStatus, ClientKind  # noqa: E402
 from avp_api.models.scan import ScanStatus, ScanTrigger  # noqa: E402
 from avp_api.services import report as report_service  # noqa: E402
@@ -340,6 +340,100 @@ async def main() -> int:
             failures.append("an excluded dimension carried a sub-score — it must be null, not 0")
         if not failures:
             print("\n  -> null composite, no dimension scored zero. OK")
+
+        # ------------------------------------------------------------------
+        rule("PART 4 — Epic 7.1: the Answer Shelf, from the same REAL rows")
+        # ------------------------------------------------------------------
+        shelf = report.proof.prompt_shelf
+        print(f"\n  rows: {len(shelf)} (one per answer)\n")
+        for row in shelf:
+            named = " > ".join(
+                f"{'*' if s.is_subject else ''}{s.entity_name}({s.position})"
+                + ("^" if s.cited else "")
+                for s in row.slots
+            )
+            place = (
+                "NOT ANSWERED" if not row.answered
+                else f"#{row.subject_position}" if row.subject_present
+                else "ABSENT"
+            )
+            shown = named or "(nobody named)"
+            print(f"    p{row.prompt_position} {row.engine.value:14} {place:12} {shown}")
+        print("\n    * = subject   ^ = cited in that same answer")
+
+        # THE IDENTITY. Every answered row carries exactly one subject mark:
+        # a place, or an explicit absence. A row that carries neither renders
+        # nothing, and a chart that silently omits an absence deletes the only
+        # finding it exists to show.
+        unmarked = [
+            f"p{r.prompt_position}/{r.engine.value}"
+            for r in shelf
+            if r.answered and not r.subject_present and r.subject_position is not None
+        ]
+        if unmarked:
+            failures.append(f"rows carry a position while reporting absence: {unmarked}")
+        answered_rows = [r for r in shelf if r.answered]
+        absent_rows = [r for r in answered_rows if not r.subject_present]
+        print(f"\n    {len(answered_rows)} answered rows, {len(absent_rows)} of them absences")
+        if len(shelf) != report.proof.engine_results:
+            failures.append(
+                f"shelf has {len(shelf)} rows for {report.proof.engine_results} answers —"
+                " an answer with no row draws nothing at all"
+            )
+        else:
+            print("    -> every answer has a row. OK")
+
+        # The row label is OUR generated question. Asserted against the prompts
+        # table rather than eyeballed, because this is the one prose field in
+        # the whole report projection and ip-safety.md #7 turns on it being ours.
+        prompt_texts = {
+            row[0] for row in (await session.execute(
+                select(Prompt.text).join(PromptSet, PromptSet.id == Prompt.prompt_set_id)
+                .where(PromptSet.scan_id == scan.id)
+            )).all()
+        }
+        foreign = sorted({r.prompt_text for r in shelf} - prompt_texts)
+        if foreign:
+            failures.append(f"shelf row labels are not our stored prompts: {foreign}")
+        else:
+            print(f"    -> all {len(shelf)} row labels are our own stored prompts, verbatim. OK")
+
+        # ------------------------------------------------------------------
+        rule("PART 5 — Epic 7.1: the unclaimed domain, and the fix it produces")
+        # ------------------------------------------------------------------
+        print(f"\n  subject cited {report.proof.subject_citations} times"
+              f" of {report.proof.total_citations} total\n")
+        print("  cited domains, as the EVIDENCE table ranks them (attributed first):")
+        for row in report.proof.competitor_cited_domains[:6]:
+            who = row.competitor_name or "third party"
+            print(f"    {row.citations:3}  {row.domain:24} {who}")
+
+        print("\n  cited domains, as the FIX ranks them (unclaimed, by weight):")
+        for row in report.proof.unclaimed_cited_domains:
+            print(f"    {row.citations:3}  {row.domain}")
+
+        if report.proof.unclaimed_cited_domains:
+            heaviest = report.proof.unclaimed_cited_domains[0]
+            claimed = {
+                d.domain for d in report.proof.competitor_cited_domains if d.competitor_name
+            } | {d.domain for d in report.proof.subject_cited_domains}
+            if heaviest.domain in claimed:
+                failures.append(f"{heaviest.domain} is attributed — it is not unclaimed")
+            # The point of the separate field: the evidence table's ranking
+            # would have buried this behind every attributed domain.
+            table_rank = [d.domain for d in report.proof.competitor_cited_domains]
+            position = (
+                table_rank.index(heaviest.domain) + 1 if heaviest.domain in table_rank else None
+            )
+            print(f"\n    heaviest unclaimed : {heaviest.domain} ({heaviest.citations} citations)")
+            print(f"    its rank in the evidence table : {position}")
+            if heaviest.citations <= report.proof.subject_citations:
+                print("    note: the subject is cited at least as often — a weaker case")
+            else:
+                print(f"    -> out-cites the subject's own pages"
+                      f" ({heaviest.citations} vs {report.proof.subject_citations}). OK")
+        else:
+            print("\n    no unclaimed domain cleared the floor on this scan")
 
         print("\n  REPORT URLS")
         print(f"    real      : /scans/{report.scan_id}/report")

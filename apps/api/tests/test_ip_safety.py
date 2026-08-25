@@ -586,7 +586,19 @@ def test_report_projection_exposes_no_third_party_prose() -> None:
         "tagline", "summary", "positioning", "about", "title", "headline",
         "context", "sentence", "commentary", "narrative", "rationale",
         "meta_description", "copy",
+        # Epic 7.1 — added so the ONE sanctioned prose field has to be declared
+        # below rather than slip through by not matching any word on the list.
+        "prompt_text",
     }
+
+    # ip-safety.md #7 governs scraped and model-returned content ABOUT third
+    # parties. Our own generated question is not that: `PromptOut.text` has
+    # returned it on /scans/{id}/prompts since Epic 4, and the Answer Shelf
+    # needs it to label a row. Registered here BY NAME so the exception is a
+    # decision on the record — any OTHER class growing a `prompt_text`, or this
+    # one growing a second prose field, still fails.
+    sanctioned = {("PromptShelfOut", "prompt_text")}
+
     checked = 0
     for _name, obj in inspect.getmembers(report_schemas, inspect.isclass):
         if not (issubclass(obj, ApiModel) and obj is not ApiModel):
@@ -594,9 +606,16 @@ def test_report_projection_exposes_no_third_party_prose() -> None:
         if obj.__module__ != report_schemas.__name__:
             continue  # re-exported from another epic's module, asserted there
         checked += 1
-        leaks = forbidden & set(obj.model_fields)
+        leaks = {
+            f for f in forbidden & set(obj.model_fields)
+            if (obj.__name__, f) not in sanctioned
+        }
         assert not leaks, f"{obj.__name__}.{sorted(leaks)} could render third-party prose"
     assert checked >= 10, "the sweep should cover the whole report module"
+    # The allowlist must not outlive the field it was written for.
+    for cls_name, field in sanctioned:
+        cls = getattr(report_schemas, cls_name)
+        assert field in cls.model_fields, f"{cls_name}.{field} is gone; drop the exception"
 
 
 def test_report_evidence_is_a_domain_and_a_link_never_a_quotation() -> None:
@@ -1138,3 +1157,37 @@ def test_the_set_has_one_definition_of_which_competitors_are_real() -> None:
             f"{module.__name__} does not read the competitor set through "
             "active_competitors"
         )
+
+
+def test_answer_shelf_carries_ordinals_and_names_and_our_own_question() -> None:
+    """ip-safety.md #7 names this shape as permitted almost verbatim.
+
+    "counts and ordinal positions (e.g. 'mentioned 3rd')" and "names of
+    entities mentioned" are exactly what a shelf slot is. What must not exist
+    is any field able to carry what the answer SAID about a brand.
+    """
+    from avp_api.schemas.report import PromptShelfOut, ShelfSlotOut
+
+    slot = set(ShelfSlotOut.model_fields)
+    assert slot == {
+        "position", "entity_name", "entity_domain", "is_subject", "competitor_name", "cited",
+    }
+    for forbidden in ("text", "quote", "snippet", "excerpt", "sentiment_text", "description"):
+        assert forbidden not in slot, f"ShelfSlotOut.{forbidden} would quote the answer"
+
+    row = set(PromptShelfOut.model_fields)
+    # The row's only string content is OUR generated question and the ids.
+    assert "prompt_text" in row
+    for forbidden in ("answer", "answer_text", "response_text", "text", "snippet", "summary"):
+        assert forbidden not in row, f"PromptShelfOut.{forbidden} could hold the engine's prose"
+
+
+def test_the_unclaimed_domain_list_is_domains_and_counts() -> None:
+    """Direction C's deliverable names a DOMAIN to go build a page on. It never
+    describes what is on that domain today, which would be republishing it."""
+    from avp_api.schemas.report import CitedDomainOut, ReportProofOut
+
+    assert "unclaimed_cited_domains" in ReportProofOut.model_fields
+    # Same row type as the evidence table, whose shape is already asserted above.
+    annotation = str(ReportProofOut.model_fields["unclaimed_cited_domains"].annotation)
+    assert CitedDomainOut.__name__ in annotation

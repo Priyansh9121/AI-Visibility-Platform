@@ -194,6 +194,62 @@ class MentionShareOut(ApiModel):
     outranks_subject: bool
 
 
+class ShelfSlotOut(ApiModel):
+    """One brand standing in one ordinal slot of one answer.
+
+    ip-safety.md #7 names exactly this shape as permitted: "counts and ordinal
+    positions (e.g. 'mentioned 3rd')" plus "names of entities mentioned". There
+    is no field here that could carry what the answer SAID about the brand —
+    only that it named it, and where in the order.
+    """
+
+    # 1-based ordinal within this answer.
+    position: int
+    entity_name: str
+    entity_domain: str | None = None
+    is_subject: bool
+    # Set when the mention was attributed to a detected competitor.
+    competitor_name: str | None = None
+    # Whether a citation in THIS SAME answer was attributed to this entity.
+    # Direction A's "anchor tick": being named and being cited are different
+    # facts, and a brand can be either without the other.
+    cited: bool = False
+
+
+class PromptShelfOut(ApiModel):
+    """One answer, as the ordered shelf of brands it named — Epic 7.1.
+
+    Direction A of `design-direction.md` §5. The report's aggregate tables
+    answer "how often overall"; this answers "in THIS question, who stood
+    where, and were you there at all". The subject's absence is a fact this
+    row carries explicitly (`subject_present: false`) rather than an entry
+    that is merely missing, because the visualisation draws absence as an
+    empty notch and a silently absent row would draw nothing.
+
+    On `prompt_text` — ip-safety.md #7 governs scraped and model-returned
+    content ABOUT third parties. This is OUR OWN generated question, the same
+    field `PromptOut.text` has returned on `/scans/{id}/prompts` since Epic 4,
+    and the exception is registered by name in `test_ip_safety.py` rather than
+    left to dodge the forbidden-field sweep by luck.
+    """
+
+    prompt_id: str
+    prompt_text: str
+    # 1-based ordinal within the generated prompt set, so rows keep the order
+    # the operator sees on the prompts screen.
+    prompt_position: int
+    engine: Engine
+    # False when the engine errored or was filtered. Such a row carries no
+    # slots and must NOT be drawn as an absence — we did not get an answer to
+    # be absent from.
+    answered: bool
+    subject_present: bool
+    # 1-based ordinal of the subject among the brands named. Null when absent.
+    subject_position: int | None = None
+    subject_cited: bool = False
+    slots: list[ShelfSlotOut]
+
+
 class ReportProofOut(ApiModel):
     """The evidence beat's raw material — all of it aggregated counts.
 
@@ -214,6 +270,20 @@ class ReportProofOut(ApiModel):
     subject_cited_domains: list[CitedDomainOut]
     competitor_cited_domains: list[CitedDomainOut]
     mention_shares: list[MentionShareOut]
+
+    # Epic 7.1 — Direction C's deliverable, as its own field.
+    #
+    # A domain that was cited and belongs to NEITHER the subject NOR any
+    # detected competitor. `competitor_cited_domains` already contains these,
+    # but it ranks competitor-attributed domains above them deliberately (see
+    # `rank_domains`) and then truncates, so the heaviest unclaimed domain can
+    # be pushed off the end of the evidence table. The fix beat must not
+    # inherit a display cap's decision, so this list is computed from the full
+    # set, ranked by citations, and is the ONLY input to the citation fix.
+    unclaimed_cited_domains: list[CitedDomainOut] = Field(default_factory=list)
+
+    # Epic 7.1 — Direction A. One row per answer, in prompt order.
+    prompt_shelf: list[PromptShelfOut] = Field(default_factory=list)
 
 
 class ReportAuditFindingOut(AuditCheckOut):
