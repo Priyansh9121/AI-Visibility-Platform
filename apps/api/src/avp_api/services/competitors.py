@@ -29,6 +29,7 @@ from decimal import Decimal
 
 import structlog
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -535,27 +536,48 @@ async def detect_for_client(
     )
 
 
-async def get_or_create_scan(
-    session: AsyncSession, client: Client, *, user_id: str | None = None
-) -> Scan:
-    """The scan a competitor set hangs off.
+async def open_scan(session: AsyncSession, client_id: str) -> Scan | None:
+    """The client's open (queued or running) scan, if it has one.
 
-    §5.3 nests CompetitorSet under Scan, so detection needs one. Epic 3 reuses
-    the most recent non-terminal scan rather than creating a new one per
-    detection run, so repeated detection while tuning does not litter the
-    client with empty scans.
+    Factored out because `get_or_create_scan` asks the same question twice —
+    once optimistically, and once after losing a race.
     """
-    existing = (
+    return (
         await session.execute(
             select(Scan)
             .where(
-                Scan.client_id == client.id,
+                Scan.client_id == client_id,
                 Scan.status.in_([ScanStatus.QUEUED, ScanStatus.RUNNING]),
             )
             .order_by(Scan.id.desc())
             .limit(1)
         )
     ).scalar_one_or_none()
+
+
+async def get_or_create_scan(
+    session: AsyncSession, client: Client, *, user_id: str | None = None
+) -> Scan:
+    """The scan a competitor set hangs off, and the scan a run executes.
+
+    §5.3 nests CompetitorSet under Scan, so detection needs one. Epic 3 reuses
+    the most recent non-terminal scan rather than creating a new one per
+    detection run, so repeated detection while tuning does not litter the
+    client with empty scans.
+
+    **Race-safe since Epic 9.6.** Looking and then inserting is a check-then-act:
+    two concurrent requests can both look, both find nothing, and both insert —
+    two scans, and two scans' worth of paid model calls. Epic 9.5 narrowed that
+    window from ~303s to milliseconds by committing early; it could not close
+    it. `uq_scans_one_open_per_client` closes it, and the loser is handled here
+    rather than surfacing as a 500: a losing INSERT blocks until the winner
+    commits, then raises, and both callers end up pointing at the same scan.
+
+    The INSERT runs inside a SAVEPOINT so a lost race rolls back only its own
+    statement. A plain rollback would discard whatever else the caller had
+    pending in the surrounding transaction.
+    """
+    existing = await open_scan(session, client.id)
     if existing is not None:
         return existing
 
@@ -574,8 +596,21 @@ async def get_or_create_scan(
         status=ScanStatus.QUEUED,
         trigger=ScanTrigger.MANUAL,
     )
-    session.add(scan)
-    await session.flush()
+    try:
+        async with session.begin_nested():
+            session.add(scan)
+            await session.flush()
+    except IntegrityError:
+        # Someone else opened a scan for this client between our SELECT and our
+        # INSERT. Expected under concurrency, not an error: adopt their row.
+        if scan in session:
+            session.expunge(scan)
+        winner = await open_scan(session, client.id)
+        if winner is None:
+            # Not the race — a genuine constraint failure worth surfacing.
+            raise
+        logger.info("scan.create.lost_race", client_id=client.id, adopted=winner.id)
+        return winner
     return scan
 
 

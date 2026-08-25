@@ -6,7 +6,7 @@ import enum
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import DateTime, Index, Integer, String, Text
+from sqlalchemy import DateTime, Index, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -83,4 +83,27 @@ class Scan(Base, TimestampMixin):
         Index("ix_scans_agency_created", "agency_id", "id"),
         Index("ix_scans_client_created", "client_id", "id"),
         Index("ix_scans_status", "status"),
+        # AT MOST ONE OPEN SCAN PER CLIENT — Epic 9.6.
+        #
+        # `get_or_create_scan` has always intended this: it looks for an open
+        # scan and reuses it rather than starting a second. But a SELECT
+        # followed by an INSERT is a check-then-act, and two concurrent
+        # requests can both look, both find nothing, and both insert. Epic 9.5
+        # narrowed that window from ~303s to milliseconds by committing early;
+        # only the database can close it.
+        #
+        # A losing INSERT now blocks until the winner commits and then raises a
+        # unique violation, which `get_or_create_scan` treats as "someone else
+        # got there first" and resolves by returning the winner's row.
+        #
+        # Partial, because the invariant is about OPEN scans only: a client
+        # accumulates any number of finished ones. `status` is VARCHAR-backed
+        # with a CHECK constraint (models/base.py, `native_enum=False`), so the
+        # predicate is a plain string comparison and needs no enum casting.
+        Index(
+            "uq_scans_one_open_per_client",
+            "client_id",
+            unique=True,
+            postgresql_where=text("status IN ('queued', 'running')"),
+        ),
     )
