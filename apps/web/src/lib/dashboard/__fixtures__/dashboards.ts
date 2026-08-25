@@ -96,6 +96,24 @@ export const unscoredQueuedDashboard: Dashboard = dashboard([
   }),
 ]);
 
+/**
+ * Detection ran; no scan ever did — Epic 9.6's regression scenario.
+ *
+ * `POST /clients/{clientId}/competitors` opens a scan for the CompetitorSet to
+ * hang off. If nobody runs a scan afterwards, that QUEUED row stays open
+ * indefinitely. It must NOT disable re-run for the client: nothing is running,
+ * and re-run is precisely the action that would use it.
+ */
+export const detectionOnlyDashboard: Dashboard = dashboard([
+  scan({
+    status: 'queued',
+    compositeScore: null,
+    finishedAt: null,
+    clientName: 'Detected Only',
+    clientDomain: 'detected-only.example',
+  }),
+]);
+
 /** A scan in flight — the re-run action must not offer to start a second. */
 export const runningDashboard: Dashboard = dashboard([
   scan({

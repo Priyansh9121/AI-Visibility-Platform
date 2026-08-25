@@ -15,6 +15,7 @@ import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { DashboardView, formatStamp } from './DashboardView';
 import {
+  detectionOnlyDashboard,
   emptyDashboard,
   failedDashboard,
   fullPageDashboard,
@@ -178,6 +179,39 @@ describe('re-run reflects work already under way', () => {
     const html = render(scoredDashboard, { rerunError: 'The provider was unreachable.' });
     expect(html).toContain('The scan could not be started');
     expect(html).toContain('The provider was unreachable.');
+  });
+
+  it('a detect-only run does not disable re-run forever', () => {
+    // Epic 9.6's regression. Running competitor detection opens a QUEUED scan
+    // for the CompetitorSet to hang off. Treating QUEUED as busy disabled
+    // re-run for that client indefinitely, on the strength of a scan nobody
+    // had started — and it read as "Queued", which looks correct and does not
+    // invite the question. A pilot agency that detects without immediately
+    // scanning hit this.
+    const html = render(detectionOnlyDashboard);
+    expect(html).toContain('Queued');
+    expect(html).toContain('>Re-run<');
+    expect(html).not.toContain('disabled=""');
+  });
+
+  it('a running scan still blocks it — the guard did not simply go away', () => {
+    const html = render(runningDashboard);
+    expect(html).toContain('disabled=""');
+    expect(html).not.toContain('>Re-run<');
+  });
+
+  it('a queued scan alongside a running one is still blocked', () => {
+    // The block is per CLIENT, not per row. A client whose scan is running must
+    // not become re-runnable because some other row of theirs reads queued.
+    const board = {
+      ...runningDashboard,
+      recentScans: [
+        runningDashboard.recentScans[0]!,
+        { ...runningDashboard.recentScans[0]!, id: 'scan_queued_sibling', status: 'queued' as const },
+      ],
+    };
+    const html = render(board);
+    expect(html.match(/disabled=""/g) ?? []).toHaveLength(2);
   });
 
   it('renders read-only when no handler is supplied', () => {

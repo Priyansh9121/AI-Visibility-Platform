@@ -32,8 +32,34 @@ import { Badge, Button, Card, CardBody, DataTable, VisibilityBadge } from '@avp/
 import type { BadgeTone, Column } from '@avp/design-system';
 import type { Dashboard, ScanStatus, ScanSummary } from '@avp/shared-types';
 
-/** Scan statuses that mean "work is already under way for this client". */
-const IN_FLIGHT: readonly ScanStatus[] = ['queued', 'running'];
+/**
+ * Scan statuses that block a re-run.
+ *
+ * **RUNNING only — deliberately not QUEUED.** Epic 9.6.
+ *
+ * QUEUED used to be here too, on the reasonable-sounding grounds that a queued
+ * scan is about to run. Measured, it is not a state a real scan spends any time
+ * in: under the background executor the QUEUED → RUNNING transition takes 1.1ms
+ * (median of 20, 4.0ms worst) against a RUNNING phase of ~303s. Roughly one
+ * part in 275,000.
+ *
+ * The only QUEUED scan that lasts is the one detection leaves behind. Running
+ * competitor detection opens a scan for the CompetitorSet to hang off
+ * (`get_or_create_scan`), and if no scan is run afterwards that row stays open
+ * indefinitely — so treating QUEUED as busy disabled re-run for that client
+ * forever, on the strength of a scan nobody had started. Worse, it read as
+ * "Queued", which looks correct and does not invite the question.
+ *
+ * Offering re-run on it is not merely harmless, it is the point: the placeholder
+ * exists precisely so a later scan reuses it, and re-run is what runs it.
+ *
+ * This is safe because the double-spend defence is no longer this list.
+ * `uq_scans_one_open_per_client` makes a second open scan impossible, and a
+ * losing request adopts the winner's row (Epic 9.6), so a click inside that
+ * 1.1ms window returns the same scan rather than buying another. This flag now
+ * decides only whether offering the action would confuse, not whether it costs.
+ */
+const BLOCKS_RERUN: readonly ScanStatus[] = ['running'];
 
 const STATUS_LABEL: Record<ScanStatus, string> = {
   queued: 'Queued',
@@ -97,11 +123,11 @@ export function DashboardView({
 }: DashboardViewProps): JSX.Element {
   const { agency, seats, clientCount, scanCount, recentScans, isEmpty } = dashboard;
 
-  // A client is busy if ANY of its scans is unfinished — not just this row's.
-  // Two rows for the same client must not offer a re-run because the older one
+  // A client is busy if ANY of its scans is running — not just this row's. Two
+  // rows for the same client must not offer a re-run because the older one
   // happens to have finished.
   const busyClients = new Set(
-    recentScans.filter((s) => IN_FLIGHT.includes(s.status)).map((s) => s.clientId),
+    recentScans.filter((s) => BLOCKS_RERUN.includes(s.status)).map((s) => s.clientId),
   );
 
   const columns: readonly Column<ScanSummary>[] = [
