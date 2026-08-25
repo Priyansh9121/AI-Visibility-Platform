@@ -4,27 +4,25 @@
  * Presentational and pure, so it can be rendered to static markup and asserted
  * over the way ReportView is. The route owns fetching and re-run state.
  *
- * WHY THIS STILL DOES NOT POLL — updated by Epic 9.5
- * --------------------------------------------------
- * As built, this screen could not poll: POST /clients/{clientId}/scans ran the
- * pipeline inline and committed once at the end, so a running scan was
- * invisible to every other request and there was no status to observe.
+ * IT POLLS NOW — Epic 9.7
+ * -----------------------
+ * Three epics wrote a paragraph here about why it could not. The history, kept
+ * short because the conclusion changed: as originally built the scan endpoint
+ * ran inline and committed once at the end, so a running scan was invisible and
+ * there was no status to observe. Epic 9.5 made the status real, Epic 9.6 made
+ * it safe to act on, and both left the poller unbuilt so the screen needed a
+ * manual refresh to advance.
  *
- * **Epic 9.5 fixed that.** The endpoint now returns 202 with a QUEUED scan and
- * commits it immediately; the executor moves it to RUNNING and then to a
- * terminal status, each committed as it happens. GET /api/v1/dashboard reports
- * those transitions, and this component already renders them.
- *
- * So the blocker is gone, and this screen still does not poll — that is now a
- * choice rather than an impossibility. Building the poller is its own slice.
- * What already works without one: re-run returns immediately instead of hanging
- * for minutes, the row appears as Queued, and re-run stays disabled for that
- * client until the scan reaches a terminal status. A manual refresh advances it.
+ * It no longer does. The route refreshes the dashboard every 5s while a scan is
+ * running, or while a scan this session started has not finished, and stops as
+ * soon as it lands. This component takes `live` and renders that it is
+ * watching, so an auto-updating page says so rather than appearing to move on
+ * its own. The rules are in `lib/dashboard/polling.ts`.
  *
  * There is still no progress BAR, for the reason the intake screen gives: we
  * cannot measure real progress, and a fake one is a lie the user will notice.
  * Phase-level progress needs the Epic 9.1 phase table exposed by the API, which
- * is not built.
+ * is not built, and no amount of polling substitutes for it.
  */
 
 import type { JSX } from 'react';
@@ -113,6 +111,10 @@ export interface DashboardViewProps {
   rerunning?: ReadonlySet<string>;
   /** A failed re-run, surfaced above the table rather than swallowed. */
   rerunError?: string | null;
+  /** The page is refreshing itself. Told to the user, not just done to them. */
+  live?: boolean;
+  /** Polling has been failing. Surfaced, because a silently stale page lies. */
+  pollProblem?: string | null;
 }
 
 export function DashboardView({
@@ -120,6 +122,8 @@ export function DashboardView({
   onRerun,
   rerunning,
   rerunError,
+  live,
+  pollProblem,
 }: DashboardViewProps): JSX.Element {
   const { agency, seats, clientCount, scanCount, recentScans, isEmpty } = dashboard;
 
@@ -205,6 +209,17 @@ export function DashboardView({
         </dl>
       </header>
 
+      {pollProblem != null && (
+        <Card elevation="seated">
+          <CardBody>
+            <p className="text-ui-md font-medium text-text-primary">
+              This page has stopped updating
+            </p>
+            <p className="mt-2 text-ui-base leading-prose text-text-secondary">{pollProblem}</p>
+          </CardBody>
+        </Card>
+      )}
+
       {rerunError != null && (
         <Card elevation="seated">
           <CardBody>
@@ -216,7 +231,14 @@ export function DashboardView({
 
       {isEmpty ? <EmptyAgency /> : (
         <section className="flex flex-col gap-4">
-          <h2 className="text-ui-md font-medium text-text-primary">Recent scans</h2>
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="text-ui-md font-medium text-text-primary">Recent scans</h2>
+            {live === true && (
+              <p className="text-ui-sm text-text-tertiary">
+                A scan is running — this page updates itself.
+              </p>
+            )}
+          </div>
           <DataTable
             columns={columns}
             rows={recentScans}
