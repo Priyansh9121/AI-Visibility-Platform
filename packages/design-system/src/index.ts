@@ -29,6 +29,18 @@ export { TextField, type TextFieldProps } from './components/TextField.js';
 export { ChartFrame, type ChartFrameProps } from './components/chart/ChartFrame.js';
 export { ChartPatterns, patternPaint } from './components/chart/ChartPatterns.js';
 export { LuminanceLedger, type LuminanceLedgerProps } from './components/chart/LuminanceLedger.js';
+export { AnswerShelf, type AnswerShelfProps } from './components/chart/AnswerShelf.js';
+export {
+  layoutAnswerShelf,
+  shelfSummary,
+  type ShelfRowInput,
+  type ShelfSlotInput,
+  type ShelfLayout,
+  type ShelfLayoutOptions,
+  type ShelfRow,
+  type ShelfMark,
+  type SubjectMark,
+} from './components/chart/answerShelfLayout.js';
 export {
   layoutLedger,
   compositeScore,

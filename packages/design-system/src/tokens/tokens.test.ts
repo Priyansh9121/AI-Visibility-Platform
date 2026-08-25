@@ -174,6 +174,35 @@ describe('tailwind preset exposes the tokens it claims to', () => {
     expect(missing).toEqual([]);
   });
 
+  /*
+   * Epic 7.1 extends the same guard to the stylesheet. The preset was checked
+   * against tokens.css from Epic 7, but `components.css` — where every one of
+   * the system's own components is actually painted — was not. The Answer
+   * Shelf was written against `--avp-border-hairline`, which has never
+   * existed; the real token is `--avp-line-hairline`. It rendered, it looked
+   * plausible, and the rule it drew was invisible. Same silent no-op the
+   * preset check was written for, one file over.
+   */
+  it('every var() components.css references is defined in tokens.css', () => {
+    const components = readFileSync(
+      fileURLToPath(new URL('../styles/components.css', import.meta.url)),
+      'utf8',
+    );
+    // Skip the fallback arm of `var(--x, fallback)` — the fallback is the
+    // point of that form, so a missing first arm there is deliberate.
+    const referenced = new Set(
+      [...components.matchAll(/var\(\s*--avp-([a-z0-9-_]+)\s*[,)]/g)].map((m) => m[1]!),
+    );
+    expect(referenced.size).toBeGreaterThan(30);
+    const declaredHere = new Set(
+      [...components.matchAll(/^\s*--avp-([a-z0-9-_]+):/gm)].map((m) => m[1]!),
+    );
+    const missing = [...referenced]
+      .filter((name) => cssVar(name) === null && !declaredHere.has(name))
+      .sort();
+    expect(missing).toEqual([]);
+  });
+
   it('the leading tokens are reachable as utilities', async () => {
     const { default: preset } = await import('../tailwind-preset.js');
     const lineHeight = preset.theme.extend.lineHeight as Record<string, string>;
