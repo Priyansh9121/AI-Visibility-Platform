@@ -52,17 +52,26 @@ export default function Home() {
           </p>
         </div>
         {me && (
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={async () => {
-              await api.logOut();
-              setMe(null);
-              setView({ kind: 'signed-out' });
-            }}
-          >
-            Sign out
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => window.location.assign('/dashboard')}
+            >
+              Dashboard
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={async () => {
+                await api.logOut();
+                setMe(null);
+                setView({ kind: 'signed-out' });
+              }}
+            >
+              Sign out
+            </Button>
+          </div>
         )}
       </header>
 
