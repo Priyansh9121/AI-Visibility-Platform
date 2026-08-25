@@ -11,9 +11,11 @@ import type {
   CompetitorInput,
   CompetitorSet,
   CreateClientRequest,
+  Dashboard,
   Me,
   ProblemDetail,
   Report,
+  ScanDetail,
   ValidationProblemDetail,
 } from '@avp/shared-types';
 import { isProblemDetail } from '@avp/shared-types';
@@ -87,6 +89,23 @@ export const api = {
     }),
 
   logOut: () => request<void>('/auth/logout', { method: 'POST' }),
+
+  /** The agency dashboard — identity, seat usage and the recent scans. */
+  dashboard: () => request<Dashboard>('/dashboard'),
+
+  /**
+   * Start a scan for a client — the dashboard's "re-run".
+   *
+   * **This request does not return until the scan has finished.** The endpoint
+   * runs the whole pipeline inline and commits once at the end, which Epic 9.2
+   * measured at 361.3s. It is not a job submission, so there is no id to poll
+   * for while it runs; see DashboardView's note.
+   */
+  runScan: (clientId: string) =>
+    request<ScanDetail>(`/clients/${clientId}/scans`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
 
   createClient: (payload: CreateClientRequest) =>
     request<ClientDetail>('/clients', {
