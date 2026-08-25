@@ -24,11 +24,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from avp_api import db as db_module
 from avp_api import redis_client as redis_module
 from avp_api.config import Settings, get_settings
-from avp_api.deps import db_session
+from avp_api.deps import db_session, scan_executor
 from avp_api.main import create_app
 from avp_api.models import Base
 from avp_api.services import competitors as detection
 from avp_api.services.cocitation import CoCitationHit, CoCitationResult
+from avp_api.services.scan_executor import InlineScanExecutor
 from avp_api.services.serp import SerpHit, SerpResult
 
 TEST_DATABASE_URL = os.environ.get(
@@ -126,6 +127,21 @@ async def client(engine, settings: Settings) -> AsyncIterator[AsyncClient]:  # n
 
     app = create_app(settings)
     app.dependency_overrides[get_settings] = lambda: settings
+    # Scans execute INLINE in the suite — Epic 9.5.
+    #
+    # The endpoint is async in production: it returns 202 and the work happens
+    # after the response. Tests that merely need a finished scan to assert
+    # against should not each grow a poll loop, so the executor seam is
+    # substituted for one that runs to completion before `submit` returns.
+    # "The scan is done once the POST returns" therefore stays true here.
+    #
+    # It does NOT make the POST body report completion — the endpoint always
+    # answers `queued` (see routers/scans.py). Completion is read with
+    # `GET /scans/{scanId}`, exactly as a real caller would.
+    #
+    # Tests that need a scan to stay unexecuted override this again with their
+    # own executor; see test_scan_endpoints.py's TestScanIsQueued.
+    app.dependency_overrides[scan_executor] = lambda: InlineScanExecutor()
 
     factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
 
