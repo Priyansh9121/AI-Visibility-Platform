@@ -6467,3 +6467,184 @@ and again after. `ruff check` clean across `src/` and `tests/`; `mypy` unchanged
 at its pre-existing 38. `alembic check` clean, and the migration runs clean from
 zero and downgrades to base (`test_migrations.py`). `openapi.json` regenerated
 and unchanged, as expected — an index is not part of the API contract.
+
+---
+
+## 2026-08-25 — Epic 9.7 · The dashboard updates itself
+
+Epic 9.1 stated slice 2's requirement as "must show progress, not wait". 9.5
+made a scan's status genuinely readable while it runs; 9.6 made it safe to act
+on; both left the poller unbuilt. Pressing Re-run showed the row turn Queued and
+then required a manual refresh to learn anything else. This is that last piece.
+
+Pure frontend. `apps/api` is unchanged and its suite is unchanged at 605.
+
+### Which endpoint to poll — the measurement inverted the assumption
+
+The obvious guess is that `GET /scans/{scanId}` is the cheap, targeted poll and
+the full dashboard is the expensive one. **It is the other way round**, and by a
+wide margin:
+
+| | |
+|---|---|
+| `GET /api/v1/dashboard`, total DB time | **~1.74 ms** — reap 0.664 + clients 0.034 + scans 0.019 + recent-scans 0.248 + seats 0.777 |
+| `GET /scans/{scanId}`, a finished 24-prompt scan | **464 rows** across four tables — 48 engine results, 149 brand mentions, 243 citations, 24 prompts |
+
+`_detail` eagerly loads every engine result with its mentions and citations, so
+the single-scan endpoint is roughly the heaviest read in the product — and it is
+heaviest exactly at completion, which is when polling would last touch it. It
+also would not update what is on screen: the dashboard is the rendered view, so
+polling the scan would mean a second request to refresh the row anyway.
+
+**So: poll `GET /api/v1/dashboard`, and nothing else.** One request, one render,
+and the lighter of the two by ~50×. The hybrid the brief floated was worth
+checking and turned out to be the wrong way round.
+
+### The interval — 5 seconds, costed
+
+A scan's observable life is ~303s (Epic 9.2: prompt generation 14.6s + scan loop
+288.5s), and the transition worth catching happens once, at the end.
+
+| | |
+|---|---|
+| **5s** | ~61 polls per scan; completion at most 5s stale against a 300s+ wait — 1.6%, imperceptible |
+| 1s | ~303 polls to observe one transition; five times the traffic for latency nobody can feel |
+| 30s | a user stares at "Running" for up to half a minute after it finished, which reads as broken |
+
+At ~1.74 ms per load, a whole scan's polling costs **~106 ms** of database time.
+Server cost is simply not the constraint here.
+
+**No backoff.** It would optimise something already measured as free, and add a
+second timing behaviour to reason about and test for no gain. There is also no
+long tail to protect against: Epic 9.5's reaper caps a stuck scan at 900s.
+
+### When to poll — neither "any unfinished scan" nor "running" alone
+
+Both obvious rules are wrong, in opposite directions.
+
+**"Any non-terminal scan" polls forever.** A detect-only run leaves a QUEUED
+scan that nothing will move until somebody runs one. That rule would make a
+dashboard left open fire a request every five seconds, indefinitely, about a
+scan that is never going to start — the same trap Epic 9.6 removed from the
+re-run button, and worse here, because it is network traffic rather than a
+greyed-out button.
+
+**"RUNNING only" misses the scan the user just started.** `POST /clients/{id}/scans`
+returns `202` while the row is still QUEUED, and the executor promotes it ~1.1ms
+later (Epic 9.6's measurement) — *after* the refresh that follows the click has
+already read it. The poller would look once, see QUEUED, decline, and never
+look again. The one case the feature exists for.
+
+So the condition is **RUNNING, or a scan this session started that has not
+finished**. The watch set exists solely to cover that ~1.1ms window plus any
+queue backlog, and dissolves the moment the scan reaches a terminal status.
+
+**There is one polling mechanism, not two.** Pressing Re-run does not start a
+separate poller; it supplies the second of the two conditions the single poller
+starts on. Worth stating plainly, because "I just clicked re-run" and "the
+general poll" otherwise read as competing mechanisms.
+
+A backgrounded tab keeps its timer but does no work, and refocusing polls
+immediately rather than making the user wait out an interval on a stale view.
+
+### When polling fails
+
+A poll that fails must not leave the page looking live while it is frozen.
+
+* a blip **retries silently** — one or two failures heal themselves and the user
+  does not need to read about it
+* **three consecutive failures** surface a visible notice, *while still
+  retrying*. The notice reports reality; it does not give up on it
+* a **401 stops** polling and switches to the sign-in view. Retrying an expired
+  session every five seconds forever is noise, not resilience
+
+Silence is never indefinite, which was the one outcome to avoid.
+
+### Framework-free rules, and the first fake timers in this repo
+
+The timing rules are the part that can be wrong — starting when it should not,
+never stopping, leaking an interval, going quiet after a blip. None of that is
+visible in a rendered string, and this project's frontend tests use
+`renderToStaticMarkup`, which does not run effects.
+
+Rather than add a React test renderer, the rules were extracted into
+`lib/dashboard/polling.ts` and tested directly. That is not a novel move here —
+`derive.ts`, `ledgerLayout.ts` and `answerShelfLayout.ts` all pull decidable
+logic out of components for exactly this reason. `useDashboardPolling` is a thin
+wrapper. **No new dependency; `package.json` and the lockfile are untouched**, so
+ip-safety.md #6's licensing gate did not need to be opened.
+
+**This is the repo's first use of `vi.useFakeTimers`**, recorded here and in the
+test file's header rather than introduced silently.
+
+The two rules that matter were **mutation-checked**, because a test that cannot
+fail proves nothing: making the condition "any non-terminal scan" fails the
+placeholder test, and deleting the stop branch fails the two tests that watch a
+scan finish. Both confirmed to fail, then reverted.
+
+### The screen says what it is doing
+
+While polling: *"A scan is running — this page updates itself."* When polling has
+been failing: a notice saying so. A page that silently rearranges itself is
+unsettling, and a stale page that looks live is a lie — the same instinct as the
+intake screen's refusal to draw a progress bar it cannot honestly fill.
+
+### Stale comments corrected
+
+Per the convention 9.5 and 9.6 established, prior epics' "this does not exist
+yet" language was not left standing:
+
+* `DashboardView`'s **"WHY THIS STILL DOES NOT POLL"** header — three epics of
+  explanation for a state of affairs this slice ends — is now a short history
+  and a description of what exists.
+* The route's re-run docstring said the concurrent-request race was still open
+  and that "Closing that is Epic 9.6's partial unique index." **9.6 shipped it.**
+  That sentence was already stale before this brief and was corrected here.
+
+### Does this satisfy Epic 9.1's requirement?
+
+**"Must show progress, not wait" — the *wait* is fully gone, and *progress* is
+met at the level the backend can support.** Precisely:
+
+* A user presses Re-run and watches the row move Queued → Running → Complete
+  without touching the page. That is the requirement's plain reading, and it now
+  holds.
+* What is **not** built is phase-level progress — Epic 9.1's nine named stages
+  with real relative weights, one of which is 84% of the runtime and would need
+  its own sub-progress. **No endpoint exposes that**, and exposing it is a
+  separate and larger piece of work; it is explicitly out of scope here.
+* So a user sees *that* a scan is progressing, not *how far along* it is. For a
+  ~5-minute job that is a real limitation and worth naming rather than
+  papering over — but it is a gap in resolution, not the "request-and-wait
+  fails on the numbers" problem Epic 9.1 actually raised. That problem is
+  closed.
+
+Epic 9's **budget is untouched at 361.3s against 300s**. This brief changed how
+the wait is presented, not how long it is. `PROMPT_CONCURRENCY` and Epic 9.1's
+other candidate fixes remain unbuilt.
+
+### IP-safety self-check
+
+Constraint 9 applies — this is a behaviour change on a customer-facing screen.
+
+* **#1** — designed from the data model and the user goal: what the status field
+  can express and what someone waiting on a scan needs to know. No competitor
+  product consulted.
+* **#2** — every element still imports from `@avp/design-system`; the two added
+  elements reuse `Card`/`CardBody` and token utilities only. **No new primitive
+  and no ad hoc Tailwind.**
+* **#4/#6** — no icons, fonts or dependencies added.
+* **#7/#8** — the poller moves statuses, counts and timestamps. No engine text
+  or competitor prose enters the screen, and all new microcopy is newly written.
+
+**IP-safety check passed:** statuses, counts and timestamps only; design-system
+components and token utilities, no new primitive, no ad hoc Tailwind; no
+third-party prose; no dependency added.
+
+### Tests
+
+**922, up from 896** (api 605 **unchanged** — this brief touched no backend —
+workers 13, shared-types 53, design-system 99, web **126 → 152**). Run live at
+the start of the pass at 896 and again after. `next build` emits `/dashboard` as
+before, `tsc --noEmit` clean, and the API gates are unmoved (`ruff` clean,
+`mypy` at its pre-existing 38).
