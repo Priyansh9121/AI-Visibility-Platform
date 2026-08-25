@@ -6089,3 +6089,200 @@ domains only.
 
 **865, unchanged** (api 577, workers 13, shared-types 53, design-system 99,
 web 123). Run live at the start of the pass, not assumed. Nothing implemented.
+
+---
+
+## 2026-08-25 — Epic 9.5 · The scan becomes a job, and the row becomes visible
+
+Epic 9.4 scoped this; this builds it. `POST /clients/{clientId}/scans` now
+returns `202` with a QUEUED scan and executes out of band, and a stale-scan
+reaper ships with it rather than after it.
+
+### The fix was the commit boundary, not the background task
+
+Worth stating plainly because it shapes everything else: what made a running
+scan invisible was never "it runs in the request". It was that the row lived
+inside an uncommitted transaction for ~303s. Any executor works once the row
+commits early; no executor helps if it does not.
+
+So the three real changes are commits:
+
+* `get_or_create_scan` creates at **QUEUED** — the model's own default, which
+  it had been overriding to `RUNNING` with a `started_at` that claimed work had
+  begun before anything had picked it up. **RUNNING now means claimed, QUEUED
+  means open**, and the reaper below depends on that distinction holding.
+* `run_scan` commits the **RUNNING transition before any slow work starts**, so
+  the state is observable for the whole run rather than at the end of it.
+* `run_scan` commits its **terminal status** where it already computed it. A
+  scan that has finished has finished, whatever the caller does next.
+
+### `202` with `ScanOut`, not `201` with an empty `ScanDetailOut`
+
+Both halves were decisions, not defaults. At `202` there is no prompt set and
+there are no results — the prompt set is generated *by* the scan. A
+`ScanDetailOut` carrying `promptSet: null, results: []` would describe a shape
+this endpoint never has, and leave a caller unable to distinguish "not
+generated yet" from "generated, and empty".
+
+The response **always reports `queued`**, even under an executor that happens to
+run synchronously. It describes what was accepted, not how far it has since
+got; completion is answered in one place, `GET /scans/{scanId}`.
+
+### A narrow `ScanExecutor`, not `avp_workers.Orchestrator`
+
+Epic 1.2 built `Orchestrator` as the seam for exactly this moment, and Epic 9.4
+noted it was still unused. It is deliberately **not** reused:
+
+1. **`apps/api` cannot import it.** No dependency on `avp-workers` exists; the
+   path dependency runs the other way, and `orchestrator.py` states the API
+   "must not import worker code". Reusing it means inverting a direction chosen
+   on purpose.
+2. **Its shape is job-id-centric and this mechanism has no job ids.**
+   `enqueue` returns an opaque handle that `result`/`status` key on.
+3. **We do not want one.** The `Scan` row *is* the job record: `scan.status` is
+   the status, `GET /scans/{scanId}` is the result. A parallel job id would be a
+   second source of truth for "is this scan running", and that is how two
+   sources of truth drift.
+
+`ScanExecutor` is one method — `submit(job)`. Production supplies
+`BackgroundScanExecutor`; the suite supplies `InlineScanExecutor`; a future
+Celery slice supplies one that calls `send_task`.
+
+**This does not weaken Epic 9.4's "Celery migration is cheap" claim — it
+strengthens it,** and the correction is worth recording for whoever picks that
+slice up. 9.4 assumed the migration would implement `Orchestrator`. It will
+instead implement `ScanExecutor`: **one method rather than three, and no job-id
+plumbing to invent**, because nothing downstream asks for a job id. What
+changes is *which* seam to wire — `Orchestrator` remains unused and, for
+running scans, is now superseded. A future reader should not go looking for it.
+
+### The reaper, and why it was in this brief rather than the next one
+
+`BackgroundTasks` does not survive a restart. Without a correction mechanism,
+every deploy mid-scan strands a row at `RUNNING` **forever** — the dashboard
+renders "Running…", Epic 9.3's screen disables re-run for that client on the
+strength of it, and the next queue attempt reuses the row and dies on
+`prompt_sets`' unique constraint as a 500. Shipping the executor alone would
+have traded a visible failure mode (a request that hangs) for a silent one (an
+orphaned row nobody notices), which is worse than what it replaced.
+
+| Decision | Choice | Why |
+|---|---|---|
+| Threshold | **900s** | Derived, not rounded to taste: ~3x this endpoint's measured 303s share (Epic 9.2: prompt generation 14.6s + scan loop 288.5s), and clear of the 600s `task_soft_time_limit` the repo already treats as "stuck, not slow". |
+| What it reaps | **RUNNING only** | QUEUED means *open, unclaimed* — which is what a detect-only run leaves for a later scan to reuse. Reaping it would break detect-now-scan-tomorrow. A QUEUED row stranded by a crash is harmless anyway: `get_or_create_scan` reuses it. |
+| Error code | **`EXECUTOR_LOST`** | Distinct from `ALL_ENGINE_CALLS_FAILED` (the pipeline ran, every engine failed) and `EXECUTION_FAILED` (the pipeline raised). "The process running this went away" is a different fact. |
+| Where it runs | **Check-on-read**, on the dashboard *and* the queue path | No scheduler, for the same reason Epic 9.4 chose BackgroundTasks over Celery: a periodic task is a process to run and supervise, and this is pre-pilot and single-instance. The dashboard is where a stranded row does its **visible** damage; the queue path is where it does its **worst** damage. A startup-only check would miss a scan stranded by one worker dying while its peers keep serving; this does not. One UPDATE against the existing `ix_scans_status`, and a no-op when nothing is stale. |
+
+A GET that writes is deliberate, and noted where it happens.
+
+### The exception path
+
+`run_scan` raising used to surface as a 500 that somebody saw. In the
+background there is nobody to tell, so the row carries the news: `FAILED` with
+`EXECUTION_FAILED`, written on a **fresh session**, because Postgres aborts the
+transaction that raised and every further statement on it fails until rollback —
+writing the failure through it is exactly as likely to fail as the thing that
+just did. `session_scope` makes the same assumption for requests; a background
+task has no such wrapper, so it is explicit.
+
+Only the exception **type** is persisted. An exception message can carry a
+provider response body (ip-safety.md #7), and a test asserts a marker planted in
+one never reaches the row or any response.
+
+### The test migration — smaller than 9.4 sized it, and one trap in it
+
+9.4 sized this as the bulk of the work and expected ~18 assertions to move.
+The actual figure is smaller, because a single helper absorbed most of it. The
+sixteen call sites were accounted for individually rather than bulk-assumed:
+
+| Where | Sites | Disposition |
+|---|---|---|
+| `test_scan_endpoints.py` | 7 | move to a `_run_scan` helper that POSTs, asserts `202`, and reads the completed scan from `GET /scans/{scanId}` |
+| `test_scan_endpoints.py` | 5 | read only the scan id — untouched |
+| `test_scan_endpoints.py` | 1 | needed care (below) |
+| `test_score_endpoints.py` | 2 | untouched — not testing scan creation |
+| `test_fix_generator.py` | 1 | untouched — same |
+
+The seam is what keeps it small: `conftest` overrides the executor dependency
+with `InlineScanExecutor`, so "the scan is finished once the POST returns" stays
+true in the suite without the endpoint pretending to be synchronous in
+production. It deliberately does *not* make the POST body report completion.
+
+**The one that needed care.**
+`test_answer_text_never_appears_in_the_response` searched the POST response for
+engine prose. That response now carries no results, so **it would have kept
+passing no matter what the pipeline did with the text** — a green test guarding
+nothing, which is worse than a missing one. It now searches
+`GET /scans/{scanId}` and the results page, and asserts both are non-empty
+first, so it cannot go quietly vacuous again. It was found by reading the
+migration site by site; nothing in the suite would have reported it.
+
+### What is now true that was not
+
+* A scan is **readable as QUEUED by a separate request while the work has
+  demonstrably not run** — asserted directly with a deferred executor, not
+  inferred from other tests passing.
+* That queued scan **reaches `GET /api/v1/dashboard`**, which is the consumer
+  Epic 9.3 built.
+* `get_or_create_scan`'s reuse **actually functions** for sequential requests.
+  It always intended to and never could, because the row it was looking for was
+  invisible.
+* Re-run **returns immediately** instead of holding a connection open for
+  minutes.
+
+### What this does NOT close
+
+**The double-spend race is still open.** Early commit narrows the window between
+`SELECT` and `COMMIT` from ~303 seconds to milliseconds; it cannot close it. Two
+genuinely concurrent requests still create two scans. Epic 9.6's partial unique
+index is the fix, and this slice does not claim otherwise — a test asserts the
+sequential case and says so in its own docstring.
+
+**Epic 9.1's slice-2 requirement is partly met, and should not be read as done.**
+"Must show progress, not wait" had two halves. The *wait* is gone: the request
+returns in milliseconds instead of ~303s, and there is now a real status —
+`queued → running → succeeded/partial/failed` — that a client can poll. The
+*progress* half is not built: **no poller exists in `apps/web`**, and no
+phase-level progress exists at all (Epic 9.1's nine-stage table is not exposed
+by any endpoint). What changed is that polling is now *possible*; a dashboard
+that refreshes still needs a manual refresh. Progress UI is a follow-up slice,
+not a finished one.
+
+**The detection placeholder is improved, not fixed.** A detect-only run now
+leaves a QUEUED row rather than a RUNNING one, which is more honest — nothing is
+running — and the dashboard labels it "Queued" instead of "Running…" forever.
+But re-run is still disabled for that client, because the screen treats both as
+in-flight, and the reaper deliberately does not touch QUEUED. **Unchanged in
+effect, more honestly labelled.** 9.4 scoped the real fix into 9.6.
+
+Epic 9.3's code comments explaining that polling was impossible were corrected
+rather than left to mislead the next reader; no UI behaviour changed.
+
+### IP-safety self-check
+
+Constraint 9 applies: this changes API behaviour a customer-facing screen
+consumes, even though the screen itself was not rebuilt.
+
+* **#7** — the new failure path persists only an exception **type**, never the
+  message, which can carry a vendor response body. A test plants a marker in an
+  exception message and asserts it reaches neither the row nor any response.
+  The migrated ip-safety test was strengthened rather than allowed to go vacuous
+  (above). `EngineAnswer.text` is untouched and still transient.
+* **#2** — no UI component or style changed; the two edits under `apps/web` are
+  a type correction (`ScanDetail` → `Scan`) and comments. No new primitive, no
+  Tailwind.
+* **#6** — no dependency added. `BackgroundTasks` is Starlette, already present.
+
+**IP-safety check passed:** statuses, error codes, exception type names and
+timestamps only; no third-party prose persisted or rendered; no dependency
+added.
+
+### Tests
+
+**881, up from 865** (api **577 → 593**, workers 13, shared-types 53,
+design-system 99, web 123). Run live at the start of the pass at 865 and again
+after. `ruff check` clean across `src/` and `tests/` (the project's configured
+scope; `scripts/` carries 8 pre-existing errors, unchanged and verified against
+HEAD). `mypy` unchanged at its pre-existing 38. `openapi.json` and
+`api.gen.ts` regenerated — the response model change is a contract change, and
+FastAPI is the source of truth for it.
