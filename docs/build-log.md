@@ -5472,3 +5472,228 @@ counts, statuses and domains only.
 web 98). Run live at the start of the pass and again after the script landed,
 not assumed. `verify_e2e.py` is a script, not a test, and adds no test cases;
 `ruff check` is clean on it.
+
+---
+
+## 2026-08-25 — Epic 9.2 · The 90-second timeout that was really 271.6 seconds
+
+Slice 1.5, and the follow-up Epic 9.1 named but deliberately did not build. Epic
+9.1's headline (498.2s total, 419.7s scan loop) contained one `claude_search`
+call that consumed **271.6s and returned nothing** — 16.5% of all engine time in
+that run, and the reason the scan finished `partial`. That is a latent defect,
+not model latency, and leaving it in would have baked a known bad number into
+every estimate slice 2 draws from.
+
+### The SDK's real behaviour, confirmed rather than assumed
+
+Epic 9.1 inferred the cause as "90s × 3 attempts ≈ 270s". The inference was
+right, but this pass checked it against the pinned SDK instead of trusting the
+arithmetic — `pyproject.toml` allows anywhere in `anthropic>=0.40,<1`, and
+`uv.lock` pins **0.125.0**.
+
+| Claim | Where it was verified |
+|---|---|
+| `DEFAULT_MAX_RETRIES = 2` | `anthropic/_constants.py:10`, in the installed 0.125.0 — not from memory |
+| Timeouts **are** retried | `APITimeoutError` **subclasses** `APIConnectionError` (`_exceptions.py:99`), and `_should_retry_exception` returns `True` for any `APIConnectionError` unconditionally (`_base_client.py:895`) |
+| 3 attempts, not 3 tries-then-one | the retry loop is `for retries_taken in range(max_retries + 1)` (`_base_client.py:1131`) |
+| The 90s was not silently rescaled | `messages.create` only recomputes a non-streaming timeout when `client.timeout == DEFAULT_TIMEOUT` (`resources/messages/messages.py:1029`). Passing `90.0` opts out, so 90.0 stood |
+| Backoff between attempts | `INITIAL_RETRY_DELAY 0.5` doubling toward `MAX_RETRY_DELAY 8.0`, times jitter in `(0.75, 1.0]` → at two retries, **1.125–1.5s** |
+
+The concern worth checking was the real one: **some SDKs retry only 5xx and rate
+limits, not connection timeouts.** This one does not — a timeout is an
+`APIConnectionError` subclass and is always retried. Had that gone the other
+way, the 271.6s would have needed a different explanation entirely.
+
+Reproduced directly, with a fake httpx transport and no network:
+
+```
+kwargs engines.py passed: {'timeout': 90.0}          <- no max_retries at all
+PRE-FIX: 3 HTTP attempts, status=error, code=PROVIDER_UNREACHABLE
+implied worst case: 3 x 90.0s = 270.0s + backoff
+```
+
+270.0s + 1.125–1.5s backoff = **271.1–271.5s**, against **271.6s** observed.
+Epic 9.1 called the residual "rounding"; it was the retry backoff. Both the
+duration *and* the exact error code reproduce.
+
+**A second defect fell out of the same read.** `_map_error` tested
+`APIConnectionError` before `TimeoutError`, and since `APITimeoutError`
+subclasses it, every SDK timeout was reported as `PROVIDER_UNREACHABLE` —
+which is exactly what Epic 9.1 recorded. `EngineResultStatus.TIMEOUT` was
+unreachable on this path. Fixed by ordering the check correctly.
+
+### The fix, and the trade-off taken openly
+
+`engines.py` now states a ceiling and enforces it:
+
+```python
+DEFAULT_TIMEOUT = 60.0          # per attempt (was 90.0)
+MAX_RETRIES = 1                 # explicit — never inherited from the SDK
+RETRY_BACKOFF_ALLOWANCE = 2.0
+ENGINE_CALL_CEILING = 122.0     # 60 x 2 + 2
+```
+
+`max_retries` is now passed to `AsyncAnthropic` explicitly, and `ask()` wraps
+the request in `asyncio.timeout(ENGINE_CALL_CEILING)` so the bound holds by
+construction rather than as an arithmetic claim about someone else's internals
+across a `>=0.40,<1` version range.
+
+**Why `max_retries=1` and not `0`.** The brief offered both. Epic 9.1's own
+latency distribution decided it: two grounded calls landed at **117s and 118s**.
+No single attempt could exceed the 90s per-attempt bound, so each of those was a
+timed-out attempt plus a retry that **succeeded** at ~27s. `max_retries=0` would
+have converted 2 of 48 calls (4.2%) from answers into `PROVIDER_UNREACHABLE`.
+The retry is earning its place.
+
+**Why 60s and not 90s.** The slowest call that actually succeeded in that run
+was 46s, and 21 of 24 grounded calls landed between 11s and 44s. 60s keeps ~30%
+headroom over the slowest observed success while letting two attempts sum to
+something bounded.
+
+**What this costs, stated rather than buried.** A genuinely slow-but-alive call
+between 60s and 90s that would previously have completed now fails as a timeout,
+and one fewer retry means more transient failures surface as a status instead of
+silently recovering. That is the price of a ceiling that is actually a ceiling.
+
+### The test proves the ceiling, not "it eventually returns"
+
+`tests/test_engine_timeout.py`, 6 cases. The weak property — "the call returns"
+— was satisfied by the 271.6s call too, so it proves nothing. These bound it:
+
+* a call whose every attempt hangs **returns inside the deadline**, measured on
+  the clock, against a transport that ignores per-attempt timeouts entirely
+* exactly `MAX_RETRIES + 1` HTTP attempts, asserted *not* to equal the SDK
+  default's 3
+* `max_retries` and `timeout` are asserted **as constructor kwargs**, because a
+  dropped kwarg silently restores the SDK default — which is the whole bug
+* `ENGINE_CALL_CEILING` is pinned at 122.0 and asserted below 271.6
+
+There was no existing way to inject a timeout into the Anthropic client, so the
+minimal fake is a pair of `httpx.AsyncBaseTransport` subclasses. The Anthropic
+client itself stays real, so the retry budget under test is the one `engines.py`
+genuinely passes. **5 of the 6 fail against pre-fix `engines.py`**; the sixth is
+a regression guard on unchanged behaviour (a real connection failure is still
+`PROVIDER_UNREACHABLE`).
+
+### Spend, stated before it was spent
+
+| | |
+|---|---|
+| SerpApi, re-verified live immediately before the run | **161 used, 89 left** of 250 |
+| Approved and spent | **6 searches** |
+| SerpApi after the run | **167 used, 83 left** — the 6 predicted, no more |
+| Anthropic, predicted | ~96 `claude-opus-5` calls, from Epic 9.1's split |
+| Anthropic, actual | **103** — 48 engine + 48 sentiment + 1 classify + 4 co-citation + 1 prompt-generation + 1 fix-generation |
+
+The 7-call overshoot is honest and explainable: sentiment is only spent where an
+answer mentions the brand. Epic 9.1 spent 41 (of 48); this run spent 48, because
+**every** answer mentioned the subject. 103 is the top of the 55–103 band the
+script's own docstring documents.
+
+### The re-measurement
+
+`linear.app`, 24 prompts, one run. `scan_01M0VRFGKSSAAZNZ9AXVJ77KSS`. A fresh
+domain, so Epic 9.1's `basecamp.com` rows stay independently inspectable.
+
+```
+  phase                      epic          secs      %    db  external calls
+  client creation            —              0.0   0.0%     3  -
+  crawl + classify           2              8.3   2.3%     1  anthropic x1, playwright x1
+  competitor detection       3             20.9   5.8%     6  anthropic x4, serpapi x6
+  prompt generation          4             14.6   4.1%     2  anthropic x1
+  scan loop                  4            288.5  79.9%    10  anthropic x72
+  technical audit            6              8.4   2.3%     3  http x1
+  scoring                    5              0.0   0.0%     8  -
+  fix generation             8             20.3   5.6%    12  anthropic x1
+  report projection          7/7.1          0.0   0.0%    18  -
+  TOTAL                                   361.3 100.0%    63
+```
+
+| | Epic 9.1 | Epic 9.2 | change |
+|---|---|---|---|
+| total | 498.2s | **361.3s** | −136.9s (−27.5%) |
+| scan loop | 419.7s | **288.5s** | −131.2s (−31.3%) |
+| slowest single engine call | **271.6s** | **91.5s** | −180.1s |
+| scan status | `partial` | **`succeeded`** | 48/48 results `ok`, zero errors |
+| over the 300s budget by | 198.2s (1.66x) | **61.3s (1.20x)** | −136.9s |
+
+### Is the improvement really the fix? Yes — and here is the check
+
+The two runs use different subjects, which is a genuine confound the fresh-domain
+requirement forced. Decomposing the engine time settles it:
+
+* Epic 9.1: 1648.0s summed across 48 calls, of which **271.6s was the dead
+  call** → **1376.4s across 47 live calls, 29.3s mean**
+* Epic 9.2: **1353.4s across 48 live calls, 28.2s mean**
+
+Live engine latency is within 1.7% between the two runs. The subjects differ;
+their engine latency does not. **The improvement is the removed dead call, not a
+friendlier website.**
+
+The 91.5s slowest call is itself the trade-off working as designed: above the 60s
+per-attempt bound, so it was a timed-out attempt plus a retry that succeeded at
+~31s. Under `max_retries=0` that would have been a failure and this scan would
+have finished `partial` like the last one.
+
+**The outlier is gone.** No call can now exceed 122.0s by construction, and the
+worst observed was 91.5s.
+
+### The budget is still missed. This fixed one defect, not the timing problem
+
+**361.3s against a 300s budget — over by 61.3s.** Removing a 271.6s dead call
+recovered 27.5% and was not enough. Candidate fix 2 from Epic 9.1 — raising
+`PROMPT_CONCURRENCY` from 4 — remains **unbuilt and untouched here**, exactly as
+Epic 9.1 sequenced it: raising concurrency before the timeout was bounded would
+have multiplied a hung call across more parallel slots. That ordering constraint
+is now discharged, so fix 2 is unblocked. Fixes 3 and 4 (overlapping the
+technical audit; overlapping the two detection signals) are also still unbuilt.
+
+One correction to Epic 9.1's analysis while here. It reported the loop "running
+at 98% of the best it could do", from `summed ÷ concurrency` = 1648.0 ÷ 4 =
+412.0s. That model is not a floor: this run's loop took **288.5s against a
+`summed ÷ concurrency` of 338.4s**, beating it outright, because each prompt runs
+its two engines concurrently *inside* one of the 4 slots. The script's own
+printed floor (per-prompt max engine latency + sentiment, ÷ concurrency) gives
+245.7s here, leaving 42.8s (15%) of genuine unexplained overhead. The loop has
+more headroom than Epic 9.1's figure implied.
+
+### What this means for slice 2 — still "show progress", but the margin moved
+
+Epic 9.1's requirement was "must show progress, not wait." **That does not
+change at 361.3s.** Six minutes fails a request-and-wait design on ordinary
+proxy and browser timeouts long before it fails the user's patience, so slice 2
+still needs a queued scan and a polled status.
+
+What *has* changed is the shape of the problem, in two ways worth carrying into
+slice 2's design:
+
+* **The tail is no longer pathological.** The progress UI must represent a
+  ~360s job with a bounded worst-case call, not a 498s job with an unbounded
+  one. A single stalled phase can no longer sit for 4½ minutes.
+* **`partial` is no longer the expected outcome.** Epic 9.1 finished `partial`
+  on an ordinary healthy site *because of this bug*, and concluded the dashboard
+  must treat `partial` as normal. This run finished `succeeded` with 48/48
+  results `ok`. `partial` must still render honestly — real provider errors
+  remain possible — but it is a genuine degradation to surface, not the routine
+  case.
+
+Slice 2 should not read this as permission to simplify to "refresh to check".
+It is not near budget; it is 20% over it.
+
+### IP-safety self-check
+
+No UI changed, so constraint 9 does not strictly bite; recorded because the run
+touched live third-party data. `engines.py`'s facts-only boundary is untouched —
+`EngineAnswer.text` is still transient, and the new test asserts on statuses,
+error codes, attempt counts and elapsed time, never on answer content. The new
+fake transports carry no third-party text: one raises a timeout, the other
+sleeps. No engine prose, competitor copy or crawled text was printed, stored or
+committed. No dependency was added. **IP-safety check passed:** durations,
+attempt counts, statuses, error codes and domains only.
+
+### Tests
+
+**840, up from 834** (api 571 → **577**, workers 13, shared-types 53,
+design-system 99, web 98). Run live at the start of the pass at 834, and again
+after the fix. `ruff check` clean across `src/` and `tests/`; `mypy` unchanged at
+its pre-existing 38 errors, none of them new and none in the changed lines.
