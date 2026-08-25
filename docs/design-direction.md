@@ -1,6 +1,27 @@
-# Design Direction — Epic 0 Proposal (AWAITING APPROVAL)
+# Design Direction — Epic 0 Proposal (SIGNED OFF; see the status note)
 
 Nothing in `packages/design-system` is built until this is signed off.
+
+> **Status, added in Epic 7.1.** The heading said "AWAITING APPROVAL" for the
+> whole life of the project. It has been stale since Epic 0.4: all five items in
+> §6 are built, and this document's own rule is that nothing in
+> `packages/design-system` is built until they are signed off. (No approval event
+> is recorded anywhere in `build-log.md` — the sign-off is inferred from the work
+> having proceeded, which is the same evidence every epic since has relied on.)
+>
+> §6 item 5 asked to build **B (the Luminance Ledger)** as the motif, and only B.
+> **A and C were never in the sign-off list** — they appear in §5's
+> *Recommendation* prose, which is a proposal, not an approval. `design-system.md`
+> §5 nonetheless recorded them as "approved and land in Epic 7", and no epic ever
+> built them, because every downstream plan (`product-spec.md` §7's Epic 7
+> checklist, `api-contracts.md`'s deferred register, Epic 7's own brief) was
+> written from a different list that never mentioned them.
+>
+> Resolved in **Epic 7.1**: **Direction A is built** (`AnswerShelf`,
+> `design-system.md` §5a). **Direction C is half built** — its deliverable, the
+> heaviest unclaimed third-party domain, ships as a named fix in the fix beat,
+> while the bipartite map itself is deferred with a stated reason
+> (`design-system.md` §5b). See `build-log.md`, Epic 7.1.
 
 **Designed from:** the data model and the user goal only. No competitor screen,
 screenshot, or markup was referenced. (`docs/ip-safety.md` constraints 1 and 5.)
@@ -245,6 +266,12 @@ the page. You see *the shape of absence* before you read a single word.
 - **Beat:** **PROOF.** This is the receipt.
 - **Risk:** needs a sensible cap and grouping past ~40 prompts.
 
+> **Built in Epic 7.1** as `AnswerShelf`. The data was right: `BrandMention`
+> already carried the ordinal and `Citation` the attribution, so no pipeline work
+> was needed — only a per-prompt projection, which `ReportProofOut` had been
+> aggregating away. The cap landed at 20 prompts, kept in whole prompts so a row
+> is never missing one of its engines. See `design-system.md` §5a.
+
 ### Direction B — **The Luminance Ledger** ← recommended hero
 
 *The score, drawn as light.*
@@ -284,6 +311,20 @@ six pages we need to get you onto," which is the agency's actual product.
 - **Beat:** **FIX → PITCH.**
 - **Risk:** hairballs fast. Needs top-N aggregation and an "other" bucket. The
   heaviest engineering lift of the three.
+
+> **Half built in Epic 7.1.** The *deliverable* shipped: the heaviest unclaimed
+> domain is now a named fix in the fix beat ("Get onto eesel.ai — the source these
+> answers keep citing"), which is the "here are the six pages we need to get you
+> onto" this section argued for. The *map* did not. It re-presents data the
+> "Cited instead" table already shows, it is the hairball risk named directly
+> above, and it is the least likely of the three to survive §0's greyscale-print
+> ruling. Deferred with that reason. See `design-system.md` §5b.
+>
+> One thing this section did not anticipate: the proof beat's citation table
+> **ranks competitor-attributed domains above unattributed ones on purpose**, so
+> the heaviest unclaimed domain — the whole point of this direction — was being
+> ranked *below* one-citation rivals and could be truncated off the end. The fix
+> reads its own field, computed before that ordering and before the cap.
 
 ### Recommendation
 

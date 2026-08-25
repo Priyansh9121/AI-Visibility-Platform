@@ -27,6 +27,7 @@ import {
   FIX_FOR_DETAIL_CODE,
   FIX_FOR_DIMENSION,
   dimensionLabel,
+  fixForUnclaimedDomains,
   type FixCopy,
 } from './strings';
 
@@ -45,6 +46,19 @@ const MAX_FIXES = 5;
  * point value is unmeasurable, so it gets guaranteed room.
  */
 const MAX_DIMENSION_FIXES = 3;
+
+/**
+ * The unclaimed-domain fix gets a guaranteed slot, for the same reason audit
+ * fixes do.
+ *
+ * It carries no point value — this system does not measure how much getting
+ * onto one domain moves Citation Strength — so on a points ranking it sorts
+ * below every dimension gap and gets truncated away. That is the exact failure
+ * Epic 7 already found once with audit fixes: the abstract items crowd out the
+ * concrete one. And this is the most concrete item the scan can produce, since
+ * it names a specific domain rather than a dimension.
+ */
+const MAX_CITATION_FIXES = 1;
 
 /**
  * A dimension gap below this is not worth a line in the plan.
@@ -69,8 +83,17 @@ export interface DerivedFix {
    * invented one.
    */
   pointsUpside?: number;
-  /** Where this came from — for the build log and for debugging, not display. */
-  source: 'gap' | 'audit';
+  /**
+   * Where this came from — for the build log and for debugging, not display.
+   *
+   * `citation` was added in Epic 7.1. It is a third SOURCE and not a third
+   * flavour of `gap`, because it answers the same question the other two do —
+   * *what measurement produced this fix* — with a different, real answer: a
+   * count of citations to a domain nobody in the scan owns. That is why
+   * widening the union here is right where widening it for Epic 8's generated
+   * wording (below) would have been wrong.
+   */
+  source: 'gap' | 'audit' | 'citation';
   /**
    * Whether the wording above was written by Epic 8's generator rather than
    * read from the string table.
@@ -180,6 +203,8 @@ export function deriveNarrative(report: Report): DerivedNarrative {
     report.audit?.findings ?? [],
     exclusions,
     report.actionItems ?? [],
+    report.proof?.unclaimedCitedDomains ?? [],
+    report.proof?.subjectCitations ?? 0,
   );
 
   // Only dimension fixes carry a points figure, so only they can be summed.
@@ -222,8 +247,13 @@ export function deriveFixes(
   findings: readonly ReportAuditFinding[],
   exclusions: readonly { key: string; reason: string }[] = [],
   generated: readonly ActionItem[] = [],
+  unclaimed: readonly { domain: string; citations: number }[] = [],
+  subjectCitations = 0,
 ): DerivedFix[] {
   const fixes: DerivedFix[] = [];
+
+  // --- the unclaimed domain, named (Epic 7.1, Direction C) ---------------
+  const citationCopy = fixForUnclaimedDomains(unclaimed.slice(0, 3), subjectCitations);
 
   // --- dimension fixes, ranked by points left on the table ---------------
   const ranked = [...segments]
@@ -261,6 +291,21 @@ export function deriveFixes(
     });
   }
 
+  // The one recommendation on this list that names a specific page to go and
+  // get, rather than a dimension to improve.
+  if (citationCopy && unclaimed[0]) {
+    fixes.push({
+      id: `citation:${unclaimed[0].domain}`,
+      title: citationCopy.title,
+      detail: citationCopy.detail,
+      // Never 'high'. A dimension gap worth 19 points is a bigger claim than
+      // one domain, and this fix has no point value to defend a top slot with.
+      priority: 'medium',
+      effort: citationCopy.effort,
+      source: 'citation',
+    });
+  }
+
   // A dimension excluded because we have not measured it yet is OUR gap, not
   // the client's. It must never generate a fix telling them to change something.
   const notTheirProblem = new Set(
@@ -279,7 +324,27 @@ export function deriveFixes(
     return a.id.localeCompare(b.id);
   });
 
-  return enrich(ordered.slice(0, MAX_FIXES), generated);
+  // The citation fix gets its own slot ON TOP of MAX_FIXES rather than taking
+  // one from the measured list.
+  //
+  // Both alternatives were worse. Letting it compete on points truncates it
+  // away, because it has no point value by design — the same crowding-out Epic
+  // 7 already fixed once for audit findings. Taking a slot from the dimension
+  // budget drops the third-ranked gap out of the list, and the pitch beat sums
+  // exactly the listed fixes, so a concrete recommendation would have been
+  // bought with a visibly smaller projected composite on the sales beat.
+  //
+  // So the ceiling moves from 5 to 6, and only when there is a domain to name.
+  // "A list nobody finishes is not a plan" is why the cap exists; a sixth item
+  // that names one specific page does not cross that line, and it is the most
+  // concrete line on the list.
+  const citationFixes = ordered.filter((f) => f.source === 'citation').slice(0, MAX_CITATION_FIXES);
+  const measured = ordered.filter((f) => f.source !== 'citation').slice(0, MAX_FIXES);
+  const kept = [...measured, ...citationFixes].sort(
+    (a, b) => ordered.indexOf(a) - ordered.indexOf(b),
+  );
+
+  return enrich(kept, generated);
 }
 
 /**

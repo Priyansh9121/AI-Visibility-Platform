@@ -782,7 +782,17 @@ place that `tests/test_ip_safety.py` can assert over.
                                   "sampleUrl": "https://front.com/..." } ],
     "mentionShares": [ { "entityName": "Help Scout", "entityDomain": "helpscout.com",
                          "isSubject": true, "appearances": 6, "bestPosition": 1,
-                         "outranksSubject": false } ]
+                         "outranksSubject": false } ],
+    "unclaimedCitedDomains": [ { "domain": "eesel.ai", "citations": 6,
+                                 "citesSubject": false, "competitorName": null,
+                                 "sampleUrl": "https://www.eesel.ai/..." } ],
+    "promptShelf": [ { "promptId": "prmt_...", "promptText": "help scout vs zendesk...",
+                       "promptPosition": 1, "engine": "claude", "answered": true,
+                       "subjectPresent": true, "subjectPosition": 1,
+                       "subjectCited": false,
+                       "slots": [ { "position": 1, "entityName": "Help Scout",
+                                    "entityDomain": "helpscout.com", "isSubject": true,
+                                    "competitorName": null, "cited": false } ] } ]
   },
   "audit": {
     "status": "ok", "technicalFoundation": "87.50",
@@ -809,6 +819,53 @@ unattributed ones,** then by citation count. Who is cited *instead of* the
 subject is the evidence this section exists to show; a pure count ranking buried
 it under review blogs on the first real scan. `MAX_CITED_DOMAINS` caps each list
 at 12.
+
+**`unclaimedCitedDomains` (Epic 7.1) is its own field for a reason.** It holds
+domains that were cited and belong to **neither the subject nor any detected
+competitor**, ranked by citation count alone, floored at 2 citations and capped
+at 3. `competitorCitedDomains` already contains these rows — but it ranks
+attributed domains above them *deliberately* (see above) and then truncates at
+12, so on the real Help Scout scan the heaviest unclaimed domain (`eesel.ai`, 6
+citations, twice the subject's 3) sorted **third**, below two rivals cited once
+each. The fix beat names this domain as a concrete recommendation, and a
+recommendation must not inherit an evidence table's display cap. Computed from
+the full set, before that ranking and before the cap.
+
+**`promptShelf` (Epic 7.1) is the one place the projection is not aggregated.**
+Every other field here collapses the scan to totals; this keeps one row per
+answer, with the brands it named in the order it named them. It exists because
+"in THIS question, who stood where, and was the subject there at all" is not
+recoverable from `mentionShares`, which is keyed by entity across the whole scan.
+Capped at 20 prompts, in **whole prompts** — a row missing one of its engines
+reads as that engine not answering.
+
+  * `subjectPresent` reads `EngineResult.mentioned`, the authoritative flag —
+    never the length of `slots`. `BrandMention.position` is nullable, so a
+    positionless mention takes no slot, and deriving presence from the slots
+    would report an absence in an answer that named the subject.
+  * `slots` carries **stored** ordinals, never re-indexed. A brand named 5th is
+    `position: 5` even when 2–4 are not in the competitor set.
+  * `answered: false` means the engine errored. It is **not** the same as
+    answering without naming the subject, which is `answered: true,
+    subjectPresent: false` — see the status note below.
+  * `promptText` is **our own generated question**, the same string
+    `PromptOut.text` has returned since Epic 4. It is the only prose-bearing
+    field in the whole report projection, and it is registered by name in
+    `test_ip_safety.py`'s sweep rather than left to pass by not matching a word
+    on the forbidden list.
+
+**`ANSWERED_NO_MENTION` counts as answered (corrected in Epic 7.1).** Epic 7 read
+`status is OK` when computing `answeredResults`, `engineCoverage.answered`, the
+citation totals and the mention shares — which folded every *confirmed absence*
+in with the timeouts. `EngineResult`'s own comment has always said otherwise:
+"the engine answered but the brand was absent. Distinct from ERROR: a confirmed
+absence is a valid, scoreable data point." On a scan naming the subject in 3 of 6
+answers, the proof beat reported **"Answered 3 of 6"** and **"Named <subject> 3 of
+3"** — a 100% mention rate on a subject named half the time — and discarded the
+citations and rival mentions the other three answers carried, which is the most
+damning evidence the beat has. It never surfaced because no fixture contained one:
+the Help Scout scan names the subject in all six of its answers, and `seed_dev.py`
+had no absent answer either until this epic added two.
 
 **`score`, `competitorSet` and `audit` are nullable, and null means "never
 ran".** That is distinct from a score whose `status` is `insufficient_data`,

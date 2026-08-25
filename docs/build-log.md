@@ -4334,3 +4334,344 @@ three for detection having one implementation, four for the confidence scope on
 `CompetitorSetOut`, one for it on `ReportCompetitorSetOut` — and five new web
 tests for the rendered figure and its caveat. Six negative controls run across
 the two findings, each failing only the guard it targeted.
+
+---
+
+## 2026-08-24 — Epic 7.1 · The Answer Shelf, and five epics of a promise nobody read
+
+`design-system.md` §5 said Directions A and C were "approved and land in Epic 7."
+Epic 7's own entry describes a proof beat of citation tables and a fix beat of
+`FixList` text. Neither resembles a per-prompt ordinal shelf or a bipartite
+domain map. This epic found out which of those two documents was wrong.
+
+### The investigation, before any code
+
+The brief offered three possibilities: never built; built under different names;
+or descoped somewhere off the record. The evidence is unusually clean:
+
+| Search | Result |
+|---|---|
+| repo-wide grep, all source and docs | "Answer Shelf" / "Source Map" appear in **three places**: `design-direction.md` 231 and 270, `design-system.md` 275. Nothing else. (`sourceMap` in `tsconfig.base.json` is the compiler option; "shelf" in `test_prompts_extraction.py` is the substring fixture `"put it on the shelf"`.) |
+| `git log --all -S AnswerShelf` / `-S SourceMap` | nothing |
+| `git log --all -S 'Answer Shelf'` / `-S 'Source Map'` | only `1e8fdea`, the initial import — the design docs themselves entering the repo |
+| stashes, branches, dangling commits | one branch, no stashes; three dangling commits, all Epic 3.11 autostashes touching competitor and verify files |
+| `build-log.md`, all 4,300 lines | **zero** occurrences of "Direction", "Shelf" or "Source Map" in any entry — Epic 0.5, 0.6, 7.0, 8.0 included |
+| `api-contracts.md` deferred register | lists Epic 7.1 deferrals: PDF export, share link, branding. Not A or C. |
+| `packages/design-system` style guide | 9 sections; §07 is the Ledger. No shelf, no map, no draft, no commented-out block |
+| both source trees, by shape rather than name | one chart component exists, `LuminanceLedger` |
+
+**Answer: (a) — genuinely never built, with nothing recorded.** Not "built under
+another name": the shipped proof beat aggregates `mention_shares` by
+`entity_name` alone, discarding prompt identity at aggregation time, so it is
+structurally incapable of per-prompt ordinality; and `deriveFixes` had exactly
+two sources, with `ActionItemSource` carrying a docstring arguing for exactly
+two, so the fix beat had nowhere to put a domain recommendation.
+
+**One caveat stated honestly.** History is squashed — `1e8fdea "Initial import:
+Epics 0-3.7"` actually spans Epic 0 through Epic 8, since 7.0 and 8.0 are dated
+2026-08-22 and the 3.6+ series is a later remediation run. Git alone cannot prove
+a component was never written and deleted inside that window. The build log can,
+and it is the meticulous record.
+
+### Why the two documents disagreed for five epics
+
+The brief assumed all three directions "got explicit approval." They did not, and
+that turns out to be the whole mechanism.
+
+`design-direction.md` §6 — *"What I need signed off"* — is five numbered items,
+and item 5 reads: **"Motif — build B (Luminance Ledger) as the signature
+component."** A and C appear only in §5's *Recommendation* prose. `design-system.md`
+§5, written in Epic 0.6, upgraded that recommendation into "**approved** and land
+in Epic 7."
+
+Then nothing downstream ever read it again. Epic 7 was planned from
+`product-spec.md` §7's Epic 7 checklist — layout, white-labelling, PDF/share —
+which never mentions A or C; `api-contracts.md`'s deferred register was written
+from the same list. Epic 7 built its checklist faithfully and recorded its own
+scope-down of white-labelling in detail. The commitment existed in exactly one
+sentence, in the design system's own reference doc, which the report epic had no
+reason to open.
+
+So this is not a lapse in the build log's discipline. **The build log never knew.**
+Both design docs are now corrected: `design-direction.md` carries a status note
+reconciling its five-year-stale "AWAITING APPROVAL" heading and stating plainly
+that A and C were never in the sign-off list, and `design-system.md` §5b records
+what shipped, what did not, and why.
+
+### What was decided, and what it cost
+
+Presented as four options with costs. Chosen: **build A, build C's deliverable,
+defer C's map** — and make the new work **additive**, leaving Epic 7's tables
+exactly as they were.
+
+**Direction A shipped in full.** The data was already there at full fidelity —
+`BrandMention` carries the ordinal, `Citation` the attribution, `Prompt` the text
+— so there was no pipeline work, only a projection (`ReportProofOut.prompt_shelf`)
+that had been aggregating it away, and a component.
+
+**Direction C shipped its deliverable, not its picture.** The map re-presents what
+the "Cited instead" table already shows; `design-direction.md` itself called it
+"the heaviest engineering lift of the three" and "hairballs fast", and it is the
+least likely of the three to survive §0's greyscale-print ruling. What was
+genuinely missing was the *recommendation*, and that shipped: the fix beat now
+names the heaviest domain nobody owns.
+
+**One thing Direction C did not anticipate.** `rank_domains` sorts
+competitor-attributed domains **above** unattributed ones on purpose — Epic 7
+added that after `zendesk.com` and `front.com` were ranked out of the evidence
+table. Correct for evidence, and exactly backwards for this: on the real Help
+Scout scan the heaviest unclaimed domain (`eesel.ai`, 6 citations, twice the
+subject's 3) sorted **third**, below two rivals cited once each, and
+`MAX_CITED_DOMAINS = 12` could truncate it entirely. A recommendation must not
+inherit an evidence table's display cap, so `unclaimed_cited_domains` is computed
+from the full set before both.
+
+### The load-bearing identity, and the bug that would have deleted the finding
+
+The Ledger's correctness condition is that total lit height *is* the composite.
+The Shelf's is:
+
+```
+every answered row carries exactly one subject mark
+```
+
+A marker at the ordinal the answer gave it, or an explicit empty notch — never
+nothing. A row that renders nothing when the subject is missing does not look
+like a bug. **It looks like a clean report.** Asserted in
+`answerShelfLayout.test.ts`, not trusted.
+
+Three ways that identity can break, each closed and each negative-controlled:
+
+1. **Presence derived from the slot list.** `BrandMention.position` is nullable;
+   a positionless mention takes no slot, so `any(slot.isSubject)` would report an
+   absence in an answer that named the subject. Presence reads `mentioned`.
+2. **The display cap dropping the subject.** Past the visible track the subject
+   falls back to the notch column rather than off the edge, so a layout constant
+   can never fabricate an absence.
+3. **Re-indexing the visible slots.** A brand named 5th must not render 3rd
+   because 2–4 were not in the competitor set. Stored ordinals only.
+
+### The Epic 7.0 defect this epic exposed
+
+`ANSWERED_NO_MENTION` is a distinct status, and `EngineResult`'s own comment says
+why: *"the engine answered but the brand was absent. Distinct from ERROR: a
+confirmed absence is a valid, scoreable data point; an error is not."*
+
+Epic 7's `_proof` read `status is OK` everywhere — for `answered_results`,
+`engine_coverage.answered`, the citation aggregation and the mention shares. So
+every confirmed absence was filed with the timeouts. Demonstrated directly
+against `_proof`, on a scan naming the subject in 3 of 6 answers:
+
+```
+REALITY : 6 answers returned, subject named in 3
+REPORTED: answeredResults=3
+          coverage: Answered 3 of 6, Named subject 3 of 3   <- a 100% mention rate
+          totalCitations=3   (6 exist)
+          rival appearances=3 of 6
+```
+
+The proof beat claimed a perfect mention rate on a subject named half the time,
+and threw away the citations and rival mentions carried by the answers where the
+subject was missing — which is the most damning evidence the beat has. Worse,
+`proofHeading` would have said *"No engine returned an answer to measure"* for a
+scan where the subject was simply never named, hiding total invisibility behind
+an apparent technical failure.
+
+**Fixed, and it was in scope rather than adjacent to it:** the Shelf would
+otherwise have drawn three empty notches directly above a table reading "Named
+you 3 of 3". A report that contradicts itself on one page is worse than either
+half alone — the same reasoning Epic 7 used to refuse a second implementation of
+the gap formula. No existing test encoded the old behaviour; all 548 passed
+unchanged after the fix.
+
+**Why it survived from Epic 7 to now: no fixture had one.** The real Help Scout
+scan names the subject in all six of its answers, and `seed_dev.py`'s four
+answers were all `mentioned=True`. The single most important case this product
+measures — the client missing from an answer — was the one case no fixture
+covered. `seed_dev.py` now seeds two absences, with the real
+`ANSWERED_NO_MENTION` status rather than `OK`, because a fixture that cannot
+reproduce a real status cannot catch a bug in how that status is read.
+
+### Three more defects the work turned up
+
+**The seed contradicted itself on ordinals.** `seed_dev.py` recorded
+`EngineResult.position` from its `ANSWERS` table but always wrote the subject's
+`BrandMention` at ordinal 1 — so a seeded answer could say "named 3rd" and store
+the mention 1st. Nothing read both numbers, so nothing noticed. The Shelf draws
+both, and the fixture contradicted itself on screen. The subject now takes its
+declared place and rivals fill around it.
+
+**`components.css` was unguarded.** Epic 7 added a test that every `var()` the
+Tailwind preset references exists in `tokens.css`, after `leading-prose` compiled
+to nothing for two epics. The stylesheet where every component is actually
+painted was never checked. The Shelf was written against
+`--avp-border-hairline`, which has never existed — the real token is
+`--avp-line-hairline`. It rendered, it looked plausible, and the rule it drew was
+invisible. The guard now covers `components.css` too.
+
+**Two of this epic's own tests failed to fail.** The first negative control —
+deriving presence from the slot list — passed every endpoint test, because the
+stubbed scan runner always writes a positioned mention alongside a named subject,
+so the two facts can never disagree there. Same for the unclaimed ranking and its
+floor: the stub cites exactly one unclaimed domain, so every ordering and every
+threshold passed. Rewritten as pure-function tests over constructed rows, which
+is the only way to build the disagreement. Same failure class as Epic 5.1's
+injected float and Epic 3.8's tautological key check.
+
+### Existing tests this changed, and why each was safe
+
+Three assertions had to be restated. Each was exact when written and became too
+narrow once a third measurement existed; none had its intent weakened.
+
+| Test | Was | Now |
+|---|---|---|
+| `marks generated items without inventing a third source` | `source === 'gap' \|\| source === 'audit'` | sources come from the closed set of **measurements**, and `'generated'` is asserted absent by name. The target was always "model wording is not a measurement"; the enumeration was shorthand for it |
+| `carries no findings to turn into fixes` (failed audit) | `every(source === 'gap')` | `every(source !== 'audit')`. The claim is about the audit contributing nothing; a failed crawl does not make that scan's citations less true |
+| `every fix is generated` (Epic 8 fixture) | all fixes marked | all fixes **Epic 8 built a candidate for** are marked; the citation fix is deterministic, which is `enrich`'s documented behaviour for an unmatched item |
+
+**And one deliberate scope line.** Epic 8's `build_candidates` was **not**
+extended to the citation source. Doing so needs a migration, a change at the
+model boundary and paid calls to verify, and the deterministic string-table copy
+is exactly where Epic 7 left the entire list before Epic 8 enriched it. The
+consequence is visible rather than hidden: the fix beat's provenance note now
+says "*where* a change was drawn from a measured gap or an audit finding" rather
+than claiming the whole list was model-worded.
+
+### Two design decisions the rendered page forced
+
+Both invisible in tests and obvious in the capture — the Epic 7.0 pattern again.
+
+**The fix list grew to 6, not 5.** The citation fix carries no point value by
+design, so on a points ranking it truncates away — the same crowding-out Epic 7
+already fixed once for audit findings. Taking a slot from the dimension budget
+instead dropped the third-ranked gap, and the pitch beat sums exactly the listed
+fixes, so a concrete recommendation would have been bought with a visibly smaller
+projected composite on the sales beat. The ceiling moves to 6 only when there is
+a domain to name, and that sixth item is the most concrete line on the list.
+
+**The first render was unreadable in two ways.** The notch column's header ran
+straight out of the viewBox (`6Help Scou`), and each prompt produced two rows —
+one per engine — labelled identically, so the shelf read as every row printed
+twice. Row labels now carry prompt *and* engine, right-anchored so they can never
+cross into the track, and the notch column sits three pitches clear of the last
+ordinal.
+
+### Live verification
+
+`verify_report.py` gained PART 4 (the shelf) and PART 5 (the unclaimed domain).
+Costs nothing — no model, search or crawl calls.
+
+Run against the **real** Help Scout scan in `avp_dev`, the same scan Epics 5–7
+verified against. Real data was the right choice here over the synthetic seed for
+the reason Epic 3.8 established: a seeded run exercises the persistence
+guarantee, not the data. This chart's entire claim is about what real answers
+did.
+
+```
+p1 claude         #1   *Help Scout(1) > Front(2) > Freshdesk(3) > Zendesk(4)
+p1 claude_search  #1   *Help Scout(1) > Front(2)
+p2 claude         #1   *Help Scout(1) > Zendesk(2) > Front(3) > Freshdesk(4)
+p2 claude_search  #1   *Help Scout(1)^ > Zendesk(2) > Freshdesk(3)
+p3 claude         #1   *Help Scout(1) > Zendesk(2) > Freshdesk(3) > Front(4)
+p3 claude_search  #1   *Help Scout(1)^ > Zendesk(2)^ > Front(3)^
+                       (* = subject, ^ = cited in that same answer)
+
+    -> every answer has a row. OK
+    -> all 6 row labels are our own stored prompts, verbatim. OK
+
+  cited domains, as the EVIDENCE table ranks them (attributed first):
+      1  front.com       Front
+      1  zendesk.com     Zendesk
+      6  eesel.ai        third party
+  heaviest unclaimed : eesel.ai (6 citations), rank 3 in the evidence table
+    -> out-cites the subject's own pages (6 vs 3). OK
+```
+
+The row labels are checked against the `prompts` table rather than eyeballed,
+because `promptText` is the one prose-bearing field in the projection and #7
+turns on it being ours.
+
+**The real scan has no absences** — Help Scout is named first in all six answers
+— so it cannot exercise the band of holes, and saying otherwise would overstate
+what this run proved. That path was verified separately against a seeded
+throwaway database (`createdb`, `alembic upgrade head`, `seed_dev.py`, dropped
+after), which now carries two: `6 answered rows, 2 of them absences`, each still
+showing the rivals that were named.
+
+Captured from the running app (API on 8000 against `avp_dev`, Next on 3100):
+`docs/screenshots/epic71-answer-shelf.png` and `epic71-report-full.png`. The
+absence case is `epic71-answer-shelf-absence.png`, from the style guide's
+synthetic fixture, for the reason above.
+
+**`avp_dev` data untouched**, with one exception recorded rather than glossed:
+the Epic 7 UI-review account `review@epic7.example` had no recorded password, so
+its `password_hash` was reset to sign in for the capture. No scan, client, score,
+competitor or citation row was written. The throwaway seeded database was dropped.
+
+### IP-safety self-check
+
+Customer-facing screens changed, so constraint 9 applies. Covering 1–5, 7 and 8.
+
+**1 — designed from the data model.** The Shelf exists because `BrandMention`
+has an ordinal and `Citation` has an attribution. No competitor product was
+opened, referenced or described.
+
+**2 — imports from `@avp/design-system`.** `AnswerShelf` lives in the design
+system and mounts inside `ChartFrame`. `render.test.tsx` and
+`ReportView.test.tsx` both assert the emitted markup carries no raw hex or
+`rgb()` — extended this epic to SVG `fill`/`stroke` attributes, since chart marks
+are painted there rather than in `style=""`.
+
+**4 — assets.** No new icon, illustration or font. The Shelf is bespoke SVG over
+existing tokens.
+
+**5 — no competitor source inspected.** None fetched, viewed or read.
+
+**7 — the facts-only rule, at the surface this epic added.**
+- A shelf slot is `position`, `entity_name`, `entity_domain`, `is_subject`,
+  `competitor_name`, `cited`. ip-safety.md #7 names this shape almost verbatim:
+  *"counts and ordinal positions (e.g. 'mentioned 3rd')"* and *"names of entities
+  mentioned."* There is no field able to carry what the answer *said* about a
+  brand.
+- `prompt_text` is **our own generated question**, the same field `PromptOut.text`
+  has returned since Epic 4. It is the one prose-bearing field in the report
+  projection, and it is now **registered by name** in the sweep
+  (`sanctioned = {("PromptShelfOut", "prompt_text")}`) with `prompt_text` added to
+  the forbidden list, rather than passing by not matching a word on it. Three
+  negative controls confirm the allowlist is exactly one field on exactly one
+  class: a `snippet` elsewhere fails, a second prose field on `PromptShelfOut`
+  fails, and `prompt_text` on any other class fails. The allowlist is also
+  asserted not to outlive its field.
+- The unclaimed-domain fix names a **domain and two counts**. It never describes
+  what is on that domain, which would be republishing it — and we have never read
+  it. Asserted over the fix's own strings against nine describing phrases.
+- Verified live that every rendered row label matches a stored `Prompt.text`.
+
+**8 — no verbatim competitor marketing copy.** Every new string —
+`fixForUnclaimedDomains`, the shelf's caption, its titles, the style-guide prose
+— was written for this epic from the data model. The style-guide fixture is an
+invented practice with invented rivals at reserved TLDs.
+
+**IP-safety check passed:** the shelf renders ordinals, entity names and citation
+booleans only; the one prose field is our own prompt and is now an allowlisted,
+negative-controlled exception rather than an accident; the domain fix names a
+domain and counts and never its content; no ramp colour reaches a competitor
+series; and no raw colour value reaches the markup, including SVG paint
+attributes.
+
+### Dependencies
+
+**None added.**
+
+### Tests
+
+**834 total, up from 768.** api 548 → 571 (+23), design-system 72 → 99 (+27),
+web 82 → 98 (+16); workers 13 and shared-types 53 unchanged.
+
+Fifteen negative controls run in total, each failing only the guard it targeted:
+seven on the projection (presence source, stored ordinals, omitted absence rows,
+the two `ANSWERED_NO_MENTION` reads, unclaimed ranking, unclaimed floor), three
+on the ip-safety allowlist, one on the stylesheet token guard, and four on the
+web layer (ramp colour, the fix dropped, the shelf unmounted, the audit
+disclaimer widened). Three further controls **failed to fail** on first run and
+the tests behind them were rewritten before being counted.
