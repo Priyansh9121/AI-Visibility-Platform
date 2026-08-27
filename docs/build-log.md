@@ -7177,3 +7177,186 @@ reproduced; no fabricated social proof; design-system components and tokens only
 design-system 106 → **109**, web 153 → **166**. Suite **964**, up from 948
 (api 623, workers 13, shared-types 53, design-system 109, web 166).
 `tsc --noEmit` clean in both packages; `next build` compiles all five routes.
+
+---
+
+## 2026-08-27 — Epic 9.11 · The screens nobody looked at, and two bugs only a browser could find
+
+The last planned UI pass before Epic 10. Epics 7, 9.8, 9.9 and 9.10 brought the
+report, share page, dashboard and landing page to a standard. What was left were
+the screens a user hits **first** — sign-in, intake, classification — plus every
+loading and error state in the app. A polished report behind a rough sign-in
+form still reads as unfinished on first impression, which undermines exactly the
+credibility the rest of the session was building.
+
+### Four loading states and five error states, all the same
+
+The audit found `LoadingState`-shaped markup written out longhand four times
+(root, dashboard, report, share) and `ErrorState`-shaped markup five times
+(three full-page, plus the dashboard's poll-failure and re-run cards). Identical
+structure, different strings, no shared treatment. That is how a product ends up
+looking assembled rather than designed.
+
+Both are now single primitives in the design system, per Epic 0's
+build-before-screens rule.
+
+**`LoadingState` has no spinner and no progress bar**, and that is a rule rather
+than an omission. The intake screen set it in Epic 2 and the dashboard restated
+it in Epic 9.7: this product cannot measure real progress on any of its long
+operations — Epic 9.1's phase table is exposed by no endpoint — and a bar that
+fills on a timer is a lie the user eventually catches. Naming the work is what
+makes a wait tolerable, so that is all it does. It also omits an empty step list
+rather than rendering a bullet of nothing, because inventing steps would imply
+progress the screen cannot observe.
+
+**`ErrorState` owns the treatment, never the words.** Only the caller knows
+whether a 404 means "that scan is not yours" or "that link has been withdrawn",
+and collapsing those into one generic message is how error screens stop being
+useful. The title is a statement, never a status code; the machine code renders
+small and last, for someone who needs to quote it back.
+
+### Two width tokens, replacing two numbers nothing defined
+
+`--avp-form-width` (26rem) and `--avp-headline` (20ch) retire `max-w-[26rem]` in
+SignInPanel and `max-w-[20ch]` on the intake header. Neither was *broken* —
+arbitrary values do compile, unlike Epic 9.8's `border-border-subtle` — but both
+were off-system numbers, which is what ip-safety.md #2 rules out.
+
+**After this pass `apps/web` contains zero arbitrary-value and zero raw-palette
+classes**, verified by grep across every `.tsx` in the app. Every CSS custom
+property in the new blocks was checked against `tokens.css` first (13/13), and
+every className against the preset's real scales — the third time this project
+has run that audit deliberately, and the first time it found nothing.
+
+### The sign-in error was blamed on the password
+
+Every failure landed on the password field. An unreachable API rendered "Could
+not reach the API" underneath **Password**, so a network problem read as a wrong
+credential and sent people to reset something that was never wrong. Only a
+rejected credential (401/422) belongs on the field; everything else is now an
+`ErrorState` above the card.
+
+### The intake form showed a failure and its own progress at the same time
+
+**Found in a browser, and visible nowhere else.**
+
+Submitting a duplicate domain rendered the field error — *"helpscout.com is
+already tracked by this agency"* — with the "Reading the site" progress card
+still sitting underneath it. `onStarted` moved the page into `working`, and
+nothing ever moved it back, so a rejected submission left the screen claiming to
+be mid-flight indefinitely.
+
+**Neither component was wrong on its own.** `IntakeForm` handled its error
+correctly; `page.tsx` rendered `working` correctly. The defect lived in the
+handshake between them, which is precisely the class of bug a unit test on
+either side passes straight through — and the reason the brief asked for a
+browser walkthrough rather than a green suite.
+
+`onFailed` is **required, not optional**. An optional callback would let a caller
+silently drop the wiring and reintroduce it; required makes the compiler the
+guard. That is a stronger guarantee than a test, and one this repo could not
+write anyway — there is no DOM-driving test library here, and adding one for a
+single assertion would need a licence review under ip-safety.md #6. The test
+pins the decision with `@ts-expect-error`, so making the prop optional again
+fails the suite.
+
+### The classification screen reported a number it cannot stand behind
+
+**This one was not a cosmetic fix, and it is worth saying so.**
+
+The screen disagreed with itself about what kind of thing it was. Both failure
+branches already argued in sentences; the SUCCESS branch was a `<dl>` of
+Industry / Niche / Confidence — the generic field-list shape ip-safety.md #3
+rules against — on the screen that decides what every competitor and prompt in
+the scan is generated from.
+
+It now leads with the conclusion as a claim, the way the report's beats do:
+*"Ghost is a publishing and newsletter software."*
+
+**The confidence percentage is gone, deliberately.** `industryConfidenceScore`
+is the model's own self-report, and Epic 2.6 Finding 2 measured what it actually
+does:
+
+> Scores across five sites: **0.97, 0.97, 0.97, 0.97, 0.96.** Effectively one
+> value, despite the prompt explicitly asking for calibration.
+
+A number that does not move with its input carries no information, and rendering
+it as "97%" borrows the authority of a measurement it has not earned. That is
+the same error as rendering a null score as a zero, which this project already
+refuses to make. The qualitative label stays — the threshold behind it is real
+and does gate the AMBIGUOUS path — and the screen now says plainly that the
+label is not a calibrated score.
+
+**Presentation only. The calibration problem is still open and still Epic 2.6's.**
+
+The screen was also a dead end: it offered only "Scan another site", so a
+classified business led nowhere and the core loop's next step (product-spec.md
+§3: URL → detect → **run scan**) was reachable only by finding the client again
+on the dashboard. It now offers a route onward — navigation to a screen that
+already exists, not a new capability.
+
+### Verified in a browser, end to end, in one sitting
+
+No session, then signed in: landing → sign-in (including a rejected credential)
+→ intake → **live classification of `ghost.org`** → dashboard → report → share,
+plus the report's 404 and the share link's 404. **Zero JS errors at any step.**
+
+Spend: one classification was approved in-session. It took two attempts and cost
+less than approved — the first, against `northaven-dental.com`, is the intake
+form's own placeholder and does not resolve, so it returned `FETCH_FAILED`
+before any model call and incidentally verified the `unclassifiable` branch live.
+The second, `helpscout.com`, was rejected as a duplicate before any model call
+and is what exposed the progress/error collision above. Only `ghost.org` spent a
+model call. No SerpApi quota was touched.
+
+### WAS THIS COMPLETABLE AS ONE PASS? Mostly — with two things named, not built
+
+The brief asked for this to be answered plainly rather than discovered later.
+
+**Everything in scope was completed as a visual/structural pass**, with one
+screen needing genuine restructuring rather than polish (classification, above)
+and two bugs fixed that were state-handling defects rather than styling.
+
+**Two things are missing FEATURES, and were deliberately not built:**
+
+1. **There is no sign-up anywhere in `apps/web`.** `POST /auth/sign-up` has
+   existed since Epic 1.3 and nothing in the browser has ever called it. The
+   landing page's call to action leads to a sign-in form a new visitor cannot
+   use. Epic 9.10 shipped a public page inviting strangers in; the door it leads
+   to only opens from the inside. The panel now states the real situation, which
+   is honest but is not a fix.
+2. **A scan cannot be started from intake.** `runScan` is called only from the
+   dashboard, so the core loop in §3 is broken between "detect" and "scan": a
+   user classifies a business and must then find it again on another screen.
+   Adding a button there spends real money and belongs where the re-run guard
+   already lives, so it is a scoping decision, not a one-liner.
+
+Both are small, both are Epic 10 territory or a slice before it, and neither is
+a UI polish question.
+
+### IP-safety self-check (constraint 9)
+
+* **#1** — every decision came from the data model (`ClientDetail`'s real
+  fields), the build log, and what the screens already did. **No competitor
+  screen was referenced, opened, or described at any point in this pass.**
+* **#2** — every element from `@avp/design-system`; two new primitives built
+  into the design system rather than solved five times locally; **zero
+  arbitrary-value and zero raw-palette classes remain in `apps/web`.**
+* **#3** — the classification screen moved AWAY from a field list toward a
+  stated conclusion, which is the direction this constraint points.
+* **#4** — no icon pack, illustration or asset added. The only icons remain
+  Lucide (MIT), already in use since Epic 2.
+* **#7/#8** — no third-party content rendered anywhere; all new copy newly
+  written.
+
+**IP-safety check passed:** design-system components and tokens only, no ad hoc
+Tailwind anywhere in the app, no competitor reference, no third-party content,
+no dependency added.
+
+### Tests
+
+**995, up from 964** (api 623 unchanged — this pass touched no backend —
+workers 13, shared-types 53, design-system **109 → 117**, web **166 → 189**).
+Three components that had never had a test now have 21 between them. Run live
+before the pass at 964 and after at 995, with `set -o pipefail`. `tsc --noEmit`
+clean in both packages; `next build` compiles.
