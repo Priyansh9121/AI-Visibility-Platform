@@ -14,8 +14,15 @@ from avp_api.deps import scan_executor
 from avp_api.models.engine_result import Engine, EngineResultStatus, Sentiment
 from avp_api.models.prompt import PromptIntent
 from avp_api.services import scan_runner
-from avp_api.services.engines import CitedSource, EngineAnswer
+from avp_api.services.engines import DEFAULT_ENGINES, CitedSource, EngineAnswer
 from avp_api.services.prompts import GeneratedPrompt
+
+# Derived, never hardcoded. These tests asserted "x 2" until Epic 9.13 added a
+# third engine and broke six of them at once. The count is a property of the
+# registry, so read it from the registry — a fourth engine should not cost
+# another afternoon of arithmetic.
+N_ENGINES = len(DEFAULT_ENGINES)
+ENGINE_NAMES = {e.value for e in DEFAULT_ENGINES}
 
 BASE = "/api/v1"
 
@@ -116,12 +123,13 @@ class TestRunScan:
 
         assert body["promptSet"] is not None
         assert len(body["promptSet"]["prompts"]) == 4
-        # 4 prompts x 2 engines = 8 rows, one per pair, no gaps and no dupes.
-        assert len(body["results"]) == 8
-        assert body["engineResultCount"] == 8
+        # 4 prompts x N engines = one row per pair, no gaps and no dupes.
+        expected = 4 * N_ENGINES
+        assert len(body["results"]) == expected
+        assert body["engineResultCount"] == expected
         pairs = {(r["promptId"], r["engine"]) for r in body["results"]}
-        assert len(pairs) == 8
-        assert {e for _, e in pairs} == {"claude", "claude_search"}
+        assert len(pairs) == expected
+        assert {e for _, e in pairs} == ENGINE_NAMES
         assert body["status"] == "succeeded"
 
     async def test_mentions_and_citations_are_parsed(
@@ -224,7 +232,7 @@ class TestRunScan:
         stub_engines(n_prompts=10)
         body = await _run_scan(client, cid, {"promptLimit": 3})
         assert len(body["promptSet"]["prompts"]) == 3
-        assert len(body["results"]) == 6
+        assert len(body["results"]) == 3 * N_ENGINES
 
     async def test_all_engines_failing_marks_the_scan_failed(
         self, client: AsyncClient, stub_engines
@@ -246,7 +254,7 @@ class TestRunScan:
         cid = await _make_client(client)
         stub_engines(n_prompts=2, answer_text="Zendesk and Front are the leaders here.")
         body = await _run_scan(client, cid)
-        assert len(body["results"]) == 4
+        assert len(body["results"]) == 2 * N_ENGINES
         assert all(r["mentioned"] is False for r in body["results"])
         assert all(r["status"] == "answered_no_mention" for r in body["results"])
         assert all(r["sentiment"] is None for r in body["results"])
@@ -259,7 +267,7 @@ class TestRunScan:
         cid = await _make_client(client)
         stub_engines(n_prompts=1)
         body = await _run_scan(client, cid)
-        assert set(body["engineVersions"]) == {"claude", "claude_search"}
+        assert set(body["engineVersions"]) == ENGINE_NAMES
 
     async def test_requires_authentication(self, client: AsyncClient) -> None:
         from avp_api import ids
@@ -280,14 +288,28 @@ class TestScanReads:
 
         assert (await client.get(f"{BASE}/scans/{sid}")).status_code == 200
 
-        page1 = (await client.get(f"{BASE}/scans/{sid}/results?limit=4")).json()
-        assert len(page1["data"]) == 4
-        assert page1["nextCursor"] is not None
-        page2 = (await client.get(
-            f"{BASE}/scans/{sid}/results?limit=4&cursor={page1['nextCursor']}"
-        )).json()
-        assert len(page2["data"]) == 2
-        assert page2["nextCursor"] is None
+        # Walk every page rather than asserting a fixed two. The row count is
+        # 3 prompts x N engines, so a hardcoded page shape breaks whenever an
+        # engine is added — which is exactly what happened in Epic 9.13.
+        total = 3 * N_ENGINES
+        seen: list[dict] = []
+        cursor: str | None = None
+        pages = 0
+        while True:
+            url = f"{BASE}/scans/{sid}/results?limit=4"
+            if cursor:
+                url += f"&cursor={cursor}"
+            page = (await client.get(url)).json()
+            pages += 1
+            seen.extend(page["data"])
+            cursor = page["nextCursor"]
+            if cursor is None:
+                break
+            assert pages < 10, "pagination did not terminate"
+
+        assert len(seen) == total
+        assert len({r["id"] for r in seen}) == total, "a row was repeated across pages"
+        assert pages == (total + 3) // 4
 
     async def test_prompt_set_endpoint_returns_ordered_prompts(
         self, client: AsyncClient, stub_engines

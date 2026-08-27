@@ -34,9 +34,26 @@ different answer engines in the way this product measures:
 
 They routinely disagree, which is the point — a brand can be absent from
 grounded answers while present in parametric ones, and that gap is exactly what
-a report should surface. **They are still one vendor and one model**, so this
-does not test cross-vendor variance. That limitation is credential-bound, not
-design-bound.
+a report should surface.
+
+Cross-vendor variance — Epic 9.13
+----------------------------------
+Epic 4.2 ended: "**They are still one vendor and one model**, so this does not
+test cross-vendor variance. That limitation is credential-bound, not
+design-bound." An `OPENAI_API_KEY` has since been provisioned, so `chatgpt`
+joins as a third engine and that limitation is now partly closed.
+
+`chatgpt` is deliberately the PARAMETRIC analogue of `claude`, not of
+`claude_search`. Epic 4.2's reasoning is applied unchanged rather than replaced:
+two modes of one vendor answer differently, and so do two vendors in the same
+mode. Holding the mode constant is what makes "Claude names you, ChatGPT does
+not" a statement about the vendors rather than about browsing. A grounded
+OpenAI engine is a fourth adapter for a later brief, not a variant of this one.
+
+No `openai` SDK. Its current major requires `httpx2`, a second HTTP stack
+alongside the `httpx` this repo already pins, and the answer path needs only
+text out of a JSON POST. `httpx` is already vetted (BSD-3-Clause) — the same
+call Epic 3.1 made for SerpApi, for the same reason.
 """
 
 from __future__ import annotations
@@ -48,6 +65,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 import anthropic
+import httpx
 import structlog
 
 from ..config import Settings, get_settings
@@ -96,6 +114,16 @@ RETRY_BACKOFF_ALLOWANCE = 2.0
 # bound holds by construction even if the SDK's retry or backoff internals move
 # under the version range above.
 ENGINE_CALL_CEILING = DEFAULT_TIMEOUT * (MAX_RETRIES + 1) + RETRY_BACKOFF_ALLOWANCE
+
+# --- OpenAI (Epic 9.13) ------------------------------------------------------
+# Called over raw httpx, so there is no SDK retry policy to inherit and nothing
+# to pin defensively — `httpx.AsyncClient` does not retry at all. The same outer
+# `asyncio.timeout(ENGINE_CALL_CEILING)` still wraps the call, so the bound this
+# module advertises holds for every engine by the same mechanism rather than by
+# two different ones.
+OPENAI_BASE_URL = "https://api.openai.com/v1"
+OPENAI_ANSWER_MODEL = "gpt-5.5"
+OPENAI_MAX_TOKENS = 4_000
 
 
 @dataclass(slots=True)
@@ -286,12 +314,133 @@ class ClaudeSearchAdapter(_ClaudeBase):
     uses_search = True
 
 
+def _map_openai_error(exc: Exception) -> tuple[EngineResultStatus, str]:
+    """Map an OpenAI failure onto the SAME statuses and codes Claude uses.
+
+    **Mirrors `_map_error`; it does not invent a vocabulary.** `EngineResult`
+    rows from different vendors are read by one scoring path and rendered by one
+    report, so a rate limit has to look like a rate limit whoever refused. Every
+    code below already exists on the Claude path.
+
+    The branch ORDER carries the same lesson Epic 9.2 paid for on the Anthropic
+    side: `httpx.TimeoutException` and `httpx.ConnectError` are both
+    `httpx.TransportError`, so the timeout branch must come first or every
+    timeout is reported as PROVIDER_UNREACHABLE and `TIMEOUT` is unreachable.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        if code == 429:
+            return EngineResultStatus.RATE_LIMITED, "PROVIDER_RATE_LIMITED"
+        if code in (401, 403):
+            return EngineResultStatus.ERROR, "PROVIDER_AUTH_FAILED"
+        if code == 400:
+            # OpenAI reports an exhausted balance as a 400 with a typed body,
+            # the same way Anthropic reports it in a message string. Read the
+            # type rather than the prose, which is vendor copy and may change.
+            body = ""
+            try:
+                body = str(exc.response.json().get("error", {}).get("code", ""))
+            except Exception:  # noqa: BLE001 - a non-JSON 400 is just a bad request
+                body = ""
+            if body in ("insufficient_quota", "billing_hard_limit_reached"):
+                return EngineResultStatus.ERROR, "PROVIDER_QUOTA_EXHAUSTED"
+            return EngineResultStatus.ERROR, "PROVIDER_BAD_REQUEST"
+        if code == 402:
+            return EngineResultStatus.ERROR, "PROVIDER_QUOTA_EXHAUSTED"
+        return EngineResultStatus.ERROR, "PROVIDER_ERROR"
+    # Order matters, exactly as on the Claude path: TimeoutException subclasses
+    # TransportError, and so does ConnectError.
+    if isinstance(exc, httpx.TimeoutException):
+        return EngineResultStatus.TIMEOUT, "TIMEOUT"
+    if isinstance(exc, httpx.TransportError):
+        return EngineResultStatus.ERROR, "PROVIDER_UNREACHABLE"
+    if isinstance(exc, TimeoutError | asyncio.TimeoutError):
+        return EngineResultStatus.TIMEOUT, "TIMEOUT"
+    return EngineResultStatus.ERROR, "PROVIDER_ERROR"
+
+
+class ChatGptAdapter:
+    """OpenAI, answering from training only — the cross-vendor analogue of
+    `ClaudeParametricAdapter`.
+
+    No browsing and no tools, so it produces no `Citation` rows. That is not a
+    gap: it is the same shape as `claude`, and holding the mode constant is what
+    makes a disagreement between the two a statement about the VENDORS.
+
+    Structurally conforms to `EngineAdapter` (engine, version, ask) without
+    inheriting it — the Protocol is structural, and `_ClaudeBase` does not
+    inherit it either. It does NOT extend `_ClaudeBase`: that class is Anthropic
+    plumbing end to end (its client, its kwargs, its refusal field), and sharing
+    it would mean a base class with two vendors' branches in it.
+    """
+
+    engine = Engine.CHATGPT
+    version = f"{OPENAI_ANSWER_MODEL}/parametric"
+
+    async def ask(self, prompt: str, *, settings: Settings) -> EngineAnswer:
+        answer = EngineAnswer(
+            engine=self.engine, engine_version=self.version, prompt_text=prompt
+        )
+        started = time.perf_counter()
+
+        try:
+            async with asyncio.timeout(ENGINE_CALL_CEILING):
+                async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+                    response = await client.post(
+                        f"{OPENAI_BASE_URL}/chat/completions",
+                        headers={
+                            "Authorization": (
+                                f"Bearer {settings.provider_key('openai_api_key')}"
+                            ),
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": OPENAI_ANSWER_MODEL,
+                            "max_completion_tokens": OPENAI_MAX_TOKENS,
+                            "messages": [{"role": "user", "content": prompt}],
+                        },
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+        except Exception as exc:  # noqa: BLE001 - mapped to a status, never raised
+            answer.status, answer.error_code = _map_openai_error(exc)
+            answer.latency_ms = int((time.perf_counter() - started) * 1000)
+            return answer
+
+        answer.latency_ms = int((time.perf_counter() - started) * 1000)
+
+        choice = (payload.get("choices") or [{}])[0]
+        # `content_filter` is OpenAI's refusal signal, and `refusal` is the
+        # typed field on the message. Either maps to the SAME PROVIDER_REFUSED
+        # code `_ClaudeBase` sets on `stop_reason == "refusal"`.
+        if choice.get("finish_reason") == "content_filter" or (
+            choice.get("message") or {}
+        ).get("refusal"):
+            answer.status = EngineResultStatus.ERROR
+            answer.error_code = "PROVIDER_REFUSED"
+            return answer
+
+        answer.text = (choice.get("message") or {}).get("content") or ""
+        # No citations by construction: this adapter sends no tools, so there is
+        # nothing retrieved to cite. An empty list, never a fabricated one.
+        return answer
+
+
+# The whole registry. Both literals must be edited to add an engine — the list
+# is explicit, not derived from the Engine enum, because the enum names every
+# engine this product might ever measure while this dict names the ones that
+# actually have an adapter and a key behind them.
 ENGINE_REGISTRY: dict[Engine, EngineAdapter] = {
     Engine.CLAUDE: ClaudeParametricAdapter(),
     Engine.CLAUDE_SEARCH: ClaudeSearchAdapter(),
+    Engine.CHATGPT: ChatGptAdapter(),
 }
 
-DEFAULT_ENGINES: tuple[Engine, ...] = (Engine.CLAUDE, Engine.CLAUDE_SEARCH)
+DEFAULT_ENGINES: tuple[Engine, ...] = (
+    Engine.CLAUDE,
+    Engine.CLAUDE_SEARCH,
+    Engine.CHATGPT,
+)
 
 
 async def ask_all(

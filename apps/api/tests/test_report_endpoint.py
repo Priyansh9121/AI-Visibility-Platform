@@ -225,8 +225,11 @@ class TestProofBeat:
         sid = await _scored_scan(client, stub_engines)
         proof = (await client.get(f"{BASE}/scans/{sid}/report")).json()["proof"]
 
+        # Derived from the registry — see test_scan_endpoints.py's N_ENGINES.
+        from avp_api.services.engines import DEFAULT_ENGINES
+
         engines = {c["engine"] for c in proof["engineCoverage"]}
-        assert engines == {"claude", "claude_search"}
+        assert engines == {e.value for e in DEFAULT_ENGINES}
         for coverage in proof["engineCoverage"]:
             assert coverage["answered"] <= coverage["promptsRun"]
             assert coverage["mentioned"] <= coverage["answered"]

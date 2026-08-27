@@ -39,7 +39,32 @@ logger = structlog.get_logger(__name__)
 
 # Bounded because every unit of concurrency is a paid model call, and the
 # grounded engine can take 100s+ per prompt. Unbounded fan-out over 24 prompts x
-# 2 engines is 48 simultaneous requests, which buys rate limits, not speed.
+# 3 engines is 72 simultaneous requests, which buys rate limits, not speed.
+#
+# STILL 4, AND DELIBERATELY UNMEASURED AT THREE ENGINES — Epic 9.13.
+#
+# This value has been 4 since Epic 4 and unraised since Epic 9.1 named raising
+# it as candidate fix 2. Adding `chatgpt` changed what one slot costs, not how
+# many slots there are: each slot now awaits THREE concurrent engine calls
+# instead of two, so in-flight requests go from 8 to 12.
+#
+# Wall clock is expected to move very little, because the engines inside a slot
+# run concurrently (`ask_all` gathers them) and the slot costs
+# max(engine latencies), not their sum. Epic 9.8 measured a 22.7s median and a
+# 96.4s worst for the Claude pair; the one live `chatgpt` call measured while
+# building this adapter returned in 3.8s. A call that fast almost never becomes
+# the max, so it should hide inside the slot.
+#
+# **That is a prediction, not a measurement, and it is labelled as one.** Epic
+# 9.1's whole lesson was that the loop's cost had to be measured per phase
+# before anything was tuned, and the same discipline forbids asserting a
+# three-engine timing here from a two-engine run plus one isolated call.
+# Re-timing `verify_e2e.py` at three engines, and only then sizing
+# PROMPT_CONCURRENCY, is its own follow-up.
+#
+# What DID change and is not a prediction: per-scan COST. A 24-prompt scan goes
+# from 48 engine calls to 72, and sentiment (charged only where the subject is
+# named) from at most 48 to at most 72.
 PROMPT_CONCURRENCY = 4
 
 
