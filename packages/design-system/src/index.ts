@@ -68,4 +68,6 @@ export {
   type FixItem,
 } from './components/report/ReportLayout.js';
 
+export { PageSection, type PageSectionProps } from './components/marketing/PageSection.js';
+
 export { default as tailwindPreset } from './tailwind-preset.js';
