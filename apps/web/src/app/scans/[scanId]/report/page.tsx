@@ -14,6 +14,7 @@ import type { Report } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
 import { ReportView } from '@/components/report/ReportView';
 import { CompetitorEditor } from '@/components/report/CompetitorEditor';
+import { ShareLinkBar } from '@/components/report/ShareLinkBar';
 
 type View =
   | { kind: 'loading' }
@@ -103,6 +104,13 @@ export default function ReportPageRoute({
 
   return (
     <main className="mx-auto max-w-report px-6 py-18">
+      {/*
+        Operator chrome, deliberately ABOVE the report rather than inside it.
+        ReportView is the document that gets sent; anything to do with sending
+        it must not be part of what is sent. It is also why this is not passed
+        as a slot — a slot would put it inside the rendered page.
+      */}
+      <ShareLinkBar scanId={scanId} />
       <ReportView
         report={view.report}
         competitorEditor={

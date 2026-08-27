@@ -68,9 +68,28 @@ export interface ReportViewProps {
    * editing affordance exists.
    */
   competitorEditor?: ReactNode;
+  /**
+   * Render as a PUBLIC document — Epic 9.8, `/share/{token}`.
+   *
+   * Omitting `competitorEditor` already removes the only *editing* affordance,
+   * which is why this component was almost public-ready by construction. What
+   * that reasoning missed is the pitch beat's "Build the proposal" CTA: it is
+   * operator chrome (a prospect is not building the proposal), and it has no
+   * handler, so to a stranger it reads as a broken button rather than a
+   * disabled one.
+   *
+   * A boolean rather than another slot because there is nothing to put in its
+   * place — the public view wants the CTA *gone*, not replaced.
+   */
+  publicView?: boolean;
 }
 
-export function ReportView({ report, animate = true, competitorEditor }: ReportViewProps) {
+export function ReportView({
+  report,
+  animate = true,
+  competitorEditor,
+  publicView = false,
+}: ReportViewProps) {
   const narrative = deriveNarrative(report);
   const subjectName = report.subject.brandName || report.subject.name;
   const scanned = report.scannedAt ?? report.generatedAt;
@@ -100,7 +119,12 @@ export function ReportView({ report, animate = true, competitorEditor }: ReportV
         competitorEditor={competitorEditor}
       />
       <FixBeat report={report} narrative={narrative} />
-      <PitchBeat report={report} narrative={narrative} subjectName={subjectName} />
+      <PitchBeat
+        report={report}
+        narrative={narrative}
+        subjectName={subjectName}
+        publicView={publicView}
+      />
     </ReportPage>
   );
 }
@@ -853,10 +877,12 @@ function PitchBeat({
   report,
   narrative,
   subjectName,
+  publicView = false,
 }: {
   report: Report;
   narrative: Narrative;
   subjectName: string;
+  publicView?: boolean;
 }) {
   const canProject =
     narrative.status === 'scored' &&
@@ -903,11 +929,13 @@ function PitchBeat({
         </p>
       </Prose>
 
-      <div className="mt-6 flex flex-wrap gap-3">
-        <Button variant="primary" iconEnd={<ArrowRight />}>
-          Build the proposal
-        </Button>
-      </div>
+      {!publicView && (
+        <div className="mt-6 flex flex-wrap gap-3">
+          <Button variant="primary" iconEnd={<ArrowRight />}>
+            Build the proposal
+          </Button>
+        </div>
+      )}
 
       <p className="mt-6 text-ui-2xs uppercase tracking-caps text-text-tertiary">
         {`Beats ${BEAT_SEQUENCE.join(' · ')}`}
