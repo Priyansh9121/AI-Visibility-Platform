@@ -32,6 +32,35 @@ class SignUpRequest(ApiModel):
         return value
 
 
+class ResetPasswordRequest(ApiModel):
+    """Ask for a reset link. The response is identical whoever this is."""
+
+    email: EmailStr
+
+
+class ResetPasswordConfirm(ApiModel):
+    """Redeem a link and set a new password.
+
+    The password rules are the SIGN-UP rules, reused rather than restated —
+    same length bounds and the same repetitiveness check. A reset path with
+    weaker rules than registration is a way in, not a convenience.
+    """
+
+    token: str = Field(min_length=1, max_length=512)
+    new_password: str = Field(
+        min_length=MIN_PASSWORD_LENGTH, max_length=MAX_PASSWORD_LENGTH
+    )
+
+    @field_validator("new_password")
+    @classmethod
+    def _reject_trivial(cls, value: str) -> str:
+        if len(set(value)) < 5:
+            raise ValueError(
+                "Password is too repetitive. Use a longer, more varied passphrase."
+            )
+        return value
+
+
 class LoginRequest(ApiModel):
     email: EmailStr
     password: str = Field(min_length=1, max_length=MAX_PASSWORD_LENGTH)

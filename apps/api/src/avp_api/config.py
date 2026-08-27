@@ -92,6 +92,14 @@ class Settings(BaseSettings):
     # phishing URL carrying a real token. Configuration, not reflection.
     public_web_base_url: str = "http://localhost:3000"
 
+    # --- password reset (Epic 9.13) ----------------------------------------
+    # One hour. Long enough to walk to a different device and find the email,
+    # short enough that a link left in an inbox is not a standing key. The
+    # token is single-use as well as short-lived; neither alone is enough.
+    password_reset_ttl_seconds: int = 3600
+    # The From address. Unused while RESEND_API_KEY is unset.
+    email_from: str = "no-reply@localhost"
+
     # --- seats -------------------------------------------------------------
     default_seat_limit: int = 3
 
@@ -99,6 +107,11 @@ class Settings(BaseSettings):
     # All optional here; the scan pipeline validates presence at point of use
     # from Epic 2 onward.
     serpapi_key: SecretStr | None = None
+    # Outbound email (Epic 9.13). OPTIONAL, exactly like every key above it:
+    # unset is a supported mode, not a misconfiguration. With no key the reset
+    # email is logged instead of sent, and the endpoint's response is unchanged
+    # either way — see services/email.py.
+    resend_api_key: SecretStr | None = None
     anthropic_api_key: SecretStr | None = None
     openai_api_key: SecretStr | None = None
     perplexity_api_key: SecretStr | None = None

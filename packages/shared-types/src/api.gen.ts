@@ -75,6 +75,73 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/reset-password/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm Password Reset
+         * @description Redeem a reset link and set the new password.
+         *
+         *     **Every existing session is revoked.** A reset is what someone does when
+         *     they believe the account is compromised, so leaving the attacker's session
+         *     alive would defeat the exercise. `logout-all` already exists for the
+         *     deliberate version of this; here it is not optional.
+         *
+         *     The caller is NOT signed in afterwards, deliberately — unlike sign-up. The
+         *     person holding this link proved control of an inbox, not knowledge of the
+         *     old password, and making them sign in once with the new one confirms they
+         *     have it.
+         *
+         *     **Errors:** `400 invalid-reset-token` for unknown, expired, already-used,
+         *     and belonging-to-an-inactive-user alike — one response, no branch that says
+         *     which.
+         */
+        post: operations["confirm_password_reset_api_v1_auth_reset_password_confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/reset-password/request": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request Password Reset
+         * @description Ask for a reset link. **Always `200`, always this body.**
+         *
+         *     The response is byte-identical whether the address has an account, has a
+         *     suspended one, or has never been seen — and identical again whether or not
+         *     an email provider is configured. Any observable difference is an oracle for
+         *     enumerating who banks here, which is precisely what `authenticate` already
+         *     burns a dummy Argon2 hash to avoid on the login path.
+         *
+         *     The email is best-effort by construction: `send_password_reset` never raises
+         *     and never reports its outcome, so a provider outage cannot become a
+         *     different status code. With no `RESEND_API_KEY` the link is logged instead
+         *     of sent — a supported development mode, not a failure.
+         *
+         *     **Errors:** none. `422` only if the body is not an email address.
+         */
+        post: operations["request_password_reset_api_v1_auth_reset_password_request_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/sign-up": {
         parameters: {
             query?: never;
@@ -1541,6 +1608,31 @@ export interface components {
             name: string;
         };
         /**
+         * ResetPasswordConfirm
+         * @description Redeem a link and set a new password.
+         *
+         *     The password rules are the SIGN-UP rules, reused rather than restated —
+         *     same length bounds and the same repetitiveness check. A reset path with
+         *     weaker rules than registration is a way in, not a convenience.
+         */
+        ResetPasswordConfirm: {
+            /** Newpassword */
+            newPassword: string;
+            /** Token */
+            token: string;
+        };
+        /**
+         * ResetPasswordRequest
+         * @description Ask for a reset link. The response is identical whoever this is.
+         */
+        ResetPasswordRequest: {
+            /**
+             * Email
+             * Format: email
+             */
+            email: string;
+        };
+        /**
          * RunScanRequest
          * @description Start a scan.
          *
@@ -2037,6 +2129,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MeOut"];
+                };
+            };
+        };
+    };
+    confirm_password_reset_api_v1_auth_reset_password_confirm_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResetPasswordConfirm"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_password_reset_api_v1_auth_reset_password_request_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResetPasswordRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

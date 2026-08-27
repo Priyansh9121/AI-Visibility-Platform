@@ -9,16 +9,21 @@ from sqlalchemy import select
 
 from ..config import Settings
 from ..deps import DbDep, PrincipalDep, SessionStoreDep, SettingsDep
+from ..errors import InvalidResetToken
 from ..models import Agency
 from ..schemas.auth import (
     AgencyOut,
     LoginRequest,
     MeOut,
+    ResetPasswordConfirm,
+    ResetPasswordRequest,
     SeatUsageOut,
     SignUpRequest,
     UserOut,
 )
 from ..services import auth as auth_service
+from ..services import email as email_service
+from ..services import password_reset as reset_service
 from ..services import seats as seat_service
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -138,6 +143,93 @@ async def logout_everywhere(
     await store.revoke_all_for_user(principal.user_id)
     _clear_session_cookie(response, settings)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/reset-password/request", status_code=status.HTTP_200_OK)
+async def request_password_reset(
+    payload: ResetPasswordRequest,
+    db: DbDep,
+    settings: SettingsDep,
+) -> dict[str, str]:
+    """Ask for a reset link. **Always `200`, always this body.**
+
+    The response is byte-identical whether the address has an account, has a
+    suspended one, or has never been seen — and identical again whether or not
+    an email provider is configured. Any observable difference is an oracle for
+    enumerating who banks here, which is precisely what `authenticate` already
+    burns a dummy Argon2 hash to avoid on the login path.
+
+    The email is best-effort by construction: `send_password_reset` never raises
+    and never reports its outcome, so a provider outage cannot become a
+    different status code. With no `RESEND_API_KEY` the link is logged instead
+    of sent — a supported development mode, not a failure.
+
+    **Errors:** none. `422` only if the body is not an email address.
+    """
+    minted = await reset_service.request_reset(
+        db, email=payload.email, settings=settings
+    )
+    # Commit before sending. A token that reaches an inbox but not the database
+    # is a link that 404s; the reverse merely wastes a row.
+    await db.commit()
+
+    if minted is not None:
+        user, token = minted
+        reset_url = f"{settings.public_web_base_url.rstrip('/')}/reset-password/{token}"
+        await email_service.send_password_reset(
+            user.email, reset_url, settings=settings
+        )
+
+    return {
+        "status": "accepted",
+        "detail": (
+            "If that address has an account, a reset link is on its way. "
+            "The link works once and expires in an hour."
+        ),
+    }
+
+
+@router.post("/reset-password/confirm", status_code=status.HTTP_200_OK)
+async def confirm_password_reset(
+    payload: ResetPasswordConfirm,
+    response: Response,
+    db: DbDep,
+    store: SessionStoreDep,
+    settings: SettingsDep,
+) -> dict[str, str]:
+    """Redeem a reset link and set the new password.
+
+    **Every existing session is revoked.** A reset is what someone does when
+    they believe the account is compromised, so leaving the attacker's session
+    alive would defeat the exercise. `logout-all` already exists for the
+    deliberate version of this; here it is not optional.
+
+    The caller is NOT signed in afterwards, deliberately — unlike sign-up. The
+    person holding this link proved control of an inbox, not knowledge of the
+    old password, and making them sign in once with the new one confirms they
+    have it.
+
+    **Errors:** `400 invalid-reset-token` for unknown, expired, already-used,
+    and belonging-to-an-inactive-user alike — one response, no branch that says
+    which.
+    """
+    try:
+        user = await reset_service.confirm_reset(
+            db, token=payload.token, new_password=payload.new_password, settings=settings
+        )
+    except reset_service.ResetTokenError:
+        await db.rollback()
+        raise InvalidResetToken(
+            detail="That reset link is not valid. Links work once and expire after an hour."
+        ) from None
+
+    await db.commit()
+    await store.revoke_all_for_user(user.id)
+    _clear_session_cookie(response, settings)
+    return {
+        "status": "reset",
+        "detail": "Your password has been changed. Sign in with the new one.",
+    }
 
 
 @router.get("/me", response_model=MeOut)
