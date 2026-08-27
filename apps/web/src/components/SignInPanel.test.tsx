@@ -11,7 +11,13 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { SignInPanel } from './SignInPanel';
 
 const render = () =>
-  renderToStaticMarkup(<SignInPanel onSignedIn={() => {}} onSwitchToSignUp={() => {}} />);
+  renderToStaticMarkup(
+    <SignInPanel
+      onSignedIn={() => {}}
+      onSwitchToSignUp={() => {}}
+      onForgotPassword={() => {}}
+    />,
+  );
 
 describe('the form is built from the design system', () => {
   it('uses real fields with bound labels, not styled inputs', () => {
@@ -67,5 +73,13 @@ describe('it is honest about what it can and cannot do', () => {
     const out = render();
     expect(out).not.toContain('avp-errorstate');
     expect(out).not.toContain('avp-field__error');
+  });
+});
+
+describe('password reset is reachable from here', () => {
+  it('offers a forgot-password route — Epic 9.13', () => {
+    // Until 9.13 there was no reset flow at all, so there was nothing to link
+    // to and someone who forgot their password had no path forward.
+    expect(render()).toContain('Forgot your password?');
   });
 });

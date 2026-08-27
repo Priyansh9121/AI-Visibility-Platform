@@ -8,6 +8,7 @@ import { ClassificationResult } from '@/components/ClassificationResult';
 import { IntakeForm } from '@/components/IntakeForm';
 import { SignInPanel } from '@/components/SignInPanel';
 import { SignUpPanel } from '@/components/SignUpPanel';
+import { ForgotPasswordPanel } from '@/components/ForgotPasswordPanel';
 import { LandingView } from '@/components/marketing/LandingView';
 import { WorkspaceShell } from '@/components/shell/WorkspaceShell';
 
@@ -29,6 +30,7 @@ type View =
   | { kind: 'signed-out' }
   | { kind: 'sign-in' }
   | { kind: 'sign-up' }
+  | { kind: 'forgot' }
   | { kind: 'intake' }
   | { kind: 'working' }
   | { kind: 'result'; client: ClientDetail };
@@ -68,7 +70,7 @@ export default function Home() {
   // panel, because this route already owns the view machine, the back
   // navigation and `load`. Putting the toggle inside a panel would split
   // navigation ownership across two files — Epic 9.12.
-  if (view.kind === 'sign-in' || view.kind === 'sign-up') {
+  if (view.kind === 'sign-in' || view.kind === 'sign-up' || view.kind === 'forgot') {
     return (
       <main className="mx-auto max-w-report px-6 py-18">
         {/*
@@ -82,7 +84,9 @@ export default function Home() {
           </Button>
         </div>
         <div className="mt-4">
-          {view.kind === 'sign-up' ? (
+          {view.kind === 'forgot' ? (
+            <ForgotPasswordPanel onBackToSignIn={() => setView({ kind: 'sign-in' })} />
+          ) : view.kind === 'sign-up' ? (
             <SignUpPanel
               // A brand new agency goes to onboarding, not to an empty
               // dashboard — Epic 9.13, Part D.
@@ -97,6 +101,7 @@ export default function Home() {
               // been. Only the sign-in transition redirects.
               onSignedIn={() => window.location.assign('/dashboard')}
               onSwitchToSignUp={() => setView({ kind: 'sign-up' })}
+              onForgotPassword={() => setView({ kind: 'forgot' })}
             />
           )}
         </div>

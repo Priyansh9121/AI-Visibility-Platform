@@ -12,10 +12,11 @@ import { api, ApiProblem } from '@/lib/api';
  * until then there was no sign-up anywhere in `apps/web` and this paragraph
  * said so. Password reset and invitation-accept are still not built.
  *
- * `onSwitchToSignUp` is REQUIRED rather than optional, for the same reason
- * `IntakeForm.onFailed` is (Epic 9.11): an optional callback lets a caller
- * silently drop the wiring and strand the user, and the compiler is a cheaper
- * guard than a test this repo has no DOM library to write.
+ * `onSwitchToSignUp` and `onForgotPassword` are REQUIRED rather than optional,
+ * for the same reason `IntakeForm.onFailed` is (Epic 9.11): an optional
+ * callback lets a caller silently drop the wiring and strand the user, and the
+ * compiler is a cheaper guard than a test this repo has no DOM library to
+ * write. Password reset arrived in Epic 9.13.
  *
  * ip-safety.md #2: every element from `@avp/design-system`. The width comes
  * from `max-w-form`, a token added in 9.11 to retire the hardcoded
@@ -25,9 +26,12 @@ import { api, ApiProblem } from '@/lib/api';
 export function SignInPanel({
   onSignedIn,
   onSwitchToSignUp,
+  onForgotPassword,
 }: {
   onSignedIn: () => void;
   onSwitchToSignUp: () => void;
+  /** Required for the same reason the others are — see the module docstring. */
+  onForgotPassword: () => void;
 }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -103,6 +107,17 @@ export function SignInPanel({
             <Button type="submit" variant="primary" fullWidth disabled={busy}>
               {busy ? 'Signing in…' : 'Sign in'}
             </Button>
+
+            {/*
+              Inside the card and under the button, where someone looks after a
+              rejected attempt — not tucked in a footer beside "create an
+              account", which is a different intention entirely.
+            */}
+            <div>
+              <Button variant="ghost" size="sm" onClick={onForgotPassword}>
+                Forgot your password?
+              </Button>
+            </div>
           </form>
         </CardBody>
       </Card>
