@@ -6648,3 +6648,294 @@ workers 13, shared-types 53, design-system 99, web **126 → 152**). Run live at
 the start of the pass at 896 and again after. `next build` emits `/dashboard` as
 before, `tsc --noEmit` clean, and the API gates are unmoved (`ruff` clean,
 `mypy` at its pre-existing 38).
+
+---
+
+## 2026-08-27 — Epic 9.8 · The send path: a link, a stranger, and a class that never existed
+
+Slice 3 of Epic 9's order. §7's acceptance criterion is that a pilot agency can
+"generate and **send** at least one real prospect report," and until this entry
+the word *send* had nothing behind it: every report surface resolved a session
+cookie and scoped every query to one agency, so the person a report is *about*
+had no way to read it. north-star.md §5.4 and §6 both name the shareable link as
+the correct first build over PDF export, on cost, and §6 goes further — a scan
+without a way to help close the deal it supports is "evidence without a
+mechanism."
+
+**This is the first unauthenticated read surface in the product.** That framing
+did most of the design work: the interesting questions are all about what must
+not be reachable, not about the happy path, which is one request.
+
+### Storage: nullable, minted on demand, and never the ULID
+
+`share_token` on `scans` — nullable, unique on a partial index, minted the first
+time an operator asks rather than at scan creation.
+
+**Why not mint for every scan.** A token that exists is a URL that works. Minting
+one per scan would publish every scan ever run and then rely on nobody learning
+the address. Absent-by-default is the safer state and it makes "is this shared?"
+a column read rather than an inference.
+
+**Why not the scan's own ULID.** It is already in the authenticated URL, already
+in logs, and already handed to the browser. Reusing it would mean anyone who had
+ever seen a scan id could read that report forever. `security.new_share_token`
+sits directly beside `new_session_token` and is the same call —
+`secrets.token_urlsafe(32)`, **256 bits from the OS CSPRNG**. north-star.md §7
+claims this product's data discipline is a sellable asset; a share token drawn
+from anything weaker than the session token it stands in for would make that
+claim false in the one place a stranger can actually reach.
+
+One genuine asymmetry, recorded where it lives rather than glossed: session
+tokens are stored as a SHA-256 digest, this one is stored in the clear. A digest
+would make the link unrecoverable after minting, and an operator has to be able
+to come back and copy the URL again. The cost is that a database dump exposes
+live share links — acceptable only because the same dump exposes every report
+those links lead to.
+
+### The race the unique index cannot arbitrate
+
+`get_or_create_share_token` takes `SELECT … FOR UPDATE`, and the lock is
+load-bearing rather than defensive. This is **not** Epic 9.6's race, and the
+same fix does not apply.
+
+Epic 9.6's double-spend was two INSERTs competing for one constraint, so the
+database could pick a winner and the loser could adopt its row. Here two
+concurrent calls generate two *different* tokens and issue two UPDATEs against
+the *same row*. There is no unique violation to catch — the second write simply
+wins, and the first caller walks away holding a URL that 404s. Row locking makes
+the loser read the winner's token instead.
+
+`POST /scans/{scanId}/share` is therefore **`200` and idempotent, not `201`**.
+There is no revocation, so a second click minting a second token would leave a
+live URL nobody is tracking. The second call creates nothing, so it does not say
+it did.
+
+### Rejection is one code path, on purpose
+
+`GET /reports/{token}` answers `404` for a malformed token, an unknown token and
+a well-formed miss alike — identical status, identical body.
+
+There is deliberately **no shape or length pre-check**. Validating the charset
+first would answer "was that even a plausible token?" faster than it answers
+"does it exist?", and a timing difference between those two is what makes
+enumeration cheap. Every guess pays for the same index lookup.
+
+**Never `401`.** A `401` would mean "this token is real, now authenticate",
+which is precisely the bit an enumerator is trying to buy.
+
+`build_report` is reused rather than reimplemented, so the facts-only sweep in
+`test_ip_safety.py` covers the public response too. A test asserts the public and
+authenticated payloads are byte-identical apart from `generatedAt`, which is a
+clock read — a second assembly path would be a second place for a snippet to slip
+in, which is the whole reason Epic 7 put the projection in one module.
+
+`url` is built from `PUBLIC_WEB_BASE_URL`, never from the request's `Host` or
+`Origin`. Those are attacker-controlled, and a share link built from a spoofed
+Host is a phishing URL carrying a real token.
+
+### The index coexistence was verified, not assumed
+
+The brief said to confirm the new unique index does not interact with Epic 9.6's
+`uq_scans_one_open_per_client`. Read off the live schema after `upgrade()`:
+
+```
+"uq_scans_one_open_per_client" UNIQUE, btree (client_id) WHERE status IN ('queued','running')
+"uq_scans_share_token"         UNIQUE, btree (share_token) WHERE share_token IS NOT NULL
+```
+
+Different column, different predicate. A client still gets exactly one open scan
+while any number of its finished scans are shared.
+
+### 18 tests, weighted at the negative surface
+
+The happy path is one assertion. The rest are what must not be true: every
+bad-token shape returns 404 with an identical body (seven shapes, including the
+scan ULID, a traversal string and a 4000-character token); an unshared scan has
+no token at all; another agency gets 404 rather than 403; and the public payload
+is swept **recursively at every depth** for account, operator and credential keys
+— with a floor on keys walked, because a typo'd empty body would otherwise pass
+every assertion above it. The token also must not appear in the report it
+unlocks, or a forwarded screenshot carries its own credential.
+
+That sweep is the `test_ip_safety.py` pattern applied to a payload rather than a
+schema module: assert over everything present, not over a list someone
+remembered to update.
+
+### A design-token bug that no test could catch
+
+Found by reading the preset, not by any gate.
+
+The first draft of `ShareLinkBar` rolled its own bordered `<input>` and reached
+for **`border-border-subtle`**. That class does not exist. The preset's colour
+scale exposes `line.hairline` / `line.strong`, so there is no `border-*`
+namespace at all — the border silently rendered as nothing.
+
+**Every gate was green through all of it.** `tsc --noEmit` passed before and
+after, because Tailwind classes are opaque strings to the type checker. The JS
+suite was 152/99/53 before and is 152/99/53 now, because **nothing in this repo
+asserts that a class name resolves to a real token.**
+
+This has happened here before, and the evidence is still in the file.
+`tailwind-preset.ts` carries a comment from Epic 7: the leading tokens "existed
+in tokens.css from Epic 0 but were never exposed as utilities, so
+`leading-prose` silently compiled to nothing." Same failure mode, five epics
+apart, caught the same way both times — a human reading the preset.
+
+**The fix was not a better class.** `TextField`'s own docstring already said what
+the right answer was: it lives in the design system "because ip-safety.md #2
+prohibits ad hoc styling on customer-facing screens — a form input styled locally
+would be exactly that." The hand-rolled input *was* the violation; swapping one
+utility for another would have left it in place. Using `TextField` also replaced
+a faked `aria-label` with a real bound `<label>` and brought the focus ring with
+it. Confirmed in a real browser afterwards: the control computes to
+`1px solid oklch(0.87 0.012 75)`, where the original produced no border at all.
+
+The remaining 25 classes across both new files were then audited individually
+against the preset's actual scales. All resolve.
+
+**Naming the gap rather than closing it:** a preset-conformance lint — every
+`className` token checked against `tailwind-preset.ts` — is the thing that would
+catch this class of defect, and it is its own brief. Recording it here so the
+third occurrence is not also found by eye. north-star.md §8.1 would call this a
+Layer 0/1 concern, not Layer 5, which is why it does not belong in this one.
+
+### The public page reuses the report, and drops one button
+
+`/share/{token}` renders the same `ReportView` the authenticated screen renders.
+Epic 7 had already made this nearly free: `competitorEditor` is a slot, and its
+docstring says "rendered for a client, no slot is passed and no editing
+affordance exists."
+
+What that reasoning missed is the pitch beat's **"Build the proposal"** CTA. It
+is operator chrome — a prospect is not building the proposal — and it has no
+handler, so to a stranger it reads as a broken button rather than a disabled one.
+One boolean prop (`publicView`) drops it; a boolean rather than another slot
+because the public view wants it *gone*, not replaced.
+
+`ShareLinkBar` sits **above** `ReportView`, never inside it, and is deliberately
+not a slot: `ReportView` is the document that gets sent, so a control for sending
+it must not appear in what is sent.
+
+### Spend, stated before it was spent
+
+Approved in-session before any call.
+
+| | |
+|---|---|
+| SerpApi, re-verified live immediately before the run | **167 used, 83 left** of 250 |
+| Approved and spent | **6 searches** |
+| SerpApi after the run | **173 used, 77 left** — the 6 predicted, no more |
+| Anthropic, predicted | 55–103 `claude-opus-5` |
+| Anthropic, actual | **64** — 48 engine + 9 sentiment + 1 classify + 4 co-citation + 1 prompt-generation + 1 fix-generation |
+
+64 is near the **bottom** of the predicted band, and the reason is the finding
+itself: sentiment is only spent where an answer mentions the brand, and only 9 of
+48 answers did. Epic 9.1 spent 96 and Epic 9.2 spent 103 on the same shape of
+run, both because nearly every answer named the subject. **The cheap scan and the
+bad score are the same fact.**
+
+### The real run
+
+`psmdigitalagency.com`, 24 prompts, one run. `scan_01M10RH5BHT8EQJN7D2QWZ69T3`,
+status **`succeeded`** — 48/48 results, zero errors.
+
+```
+  phase                      epic          secs      %    db  external calls
+  scan loop                  4            273.0  74.7%    10  anthropic x33
+  fix generation             8             25.1   6.9%    12  anthropic x1
+  technical audit            6             15.0   4.1%     3  http x1
+  prompt generation          4             13.2   3.6%     2  anthropic x1
+  ...
+  TOTAL                                   365.6 100.0%    65
+```
+
+**365.6s against the 300s budget — over by 65.6s**, consistent with Epic 9.2's
+361.3s. This brief did not touch timing and does not claim to; `PROMPT_CONCURRENCY`
+remains Epic 9.1's unbuilt candidate fix 2.
+
+### What the scan says about PSM, unsoftened
+
+**Composite 28.89 / 100.** Recorded plainly because an unflattering finding is
+the pitch working, not a defect to fix before showing them.
+
+| Dimension | Score |
+|---|---|
+| Mention Rate | **18.75** |
+| Share of Voice | 25.71 |
+| Citation Strength | **0.85** |
+| Sentiment | 44.44 |
+| Technical Foundation | **100.00** |
+
+**39 of 48 answers named nobody at PSM at all.** Citation Strength at 0.85 means
+essentially no source the engines trust cites them. Technical Foundation at 100
+is the sharp half of the argument: **their site is not the problem.** Nothing is
+broken, and they are still invisible — which is exactly the gap this product
+exists to name, and a much better conversation than "your schema is malformed."
+
+Rivals detected and named more often: WebFX, Ignite Visibility, Thrive Internet
+Marketing Agency, Jumpingjackrabbit, Rightleftagency.
+
+The report renders it as "PSM Digital Agency is close to invisible when buyers
+ask", biggest gap "Mention Rate is costing the most — 24.4 points", and closes at
+"29 today. 92 with the fixes above."
+
+### Verified in a real browser, with no cookie
+
+A fresh Chromium context — no cookies, no storage, the incognito case — loaded
+the public URL: all five beats render, 40 Answer Shelf rows, 4 action items, 5
+competitors; `Build the proposal` absent; no editing affordance present.
+`ctx.cookies()` was `[]`.
+
+### Deliberately not built
+
+Named here so a fast, correct MVP is not mistaken for a finished feature:
+
+* **No expiry.** A minted link works until the scan row is deleted.
+* **No revocation.** There is no way to un-share a report.
+* **No PDF export** — still `[ ]`, still the other half of the send path.
+* **No branding customisation** — white-labelling remains name-and-slug only, so
+  a sent report carries the agency's name but not its logo or colours.
+
+The first two are the real debt. An agency that sends a link to the wrong address
+cannot take it back, and that is not acceptable as a permanent design. Revocation
+is nearly free — clear the column — but it needs a route and a UI, and neither is
+in this slice. Recorded in `models/scan.py`, `services/share.py`,
+api-contracts.md and the screen's own microcopy, which tells the operator
+plainly that the link "does not expire and cannot be withdrawn yet."
+
+### IP-safety self-check (constraint 9)
+
+Constraint 9 applies — a new customer-facing screen, and the first one a
+non-customer can reach.
+
+* **#1** — designed from the data model and the user goal: what a stranger
+  holding a link needs to see, and what an operator needs in order to send one.
+  No competitor product was consulted or referenced.
+* **#2** — every element imports from `@avp/design-system`. **This is the
+  constraint the epic actually caught itself on**: the hand-rolled `<input>` was
+  ad hoc styling on a customer-facing screen, and it was replaced with
+  `TextField` rather than patched. All 25 remaining classes audited against the
+  preset.
+* **#3** — the public page is the narrative report unchanged; the send control
+  lives outside the document.
+* **#7/#8** — the public projection is the same `build_report` output the
+  authenticated route returns, and `test_report_projection_exposes_no_third_party_prose`
+  sweeps it. A new recursive test additionally asserts the public payload carries
+  no account, operator or credential key at any depth. All new microcopy is newly
+  written.
+
+**IP-safety check passed:** design-system components only, no hand-styled input,
+no ad hoc Tailwind, no third-party prose in the public payload, no dependency
+added.
+
+### Tests
+
+**940, up from 922** (api 605 → **623**, workers 13, shared-types 53,
+design-system 99, web 152). Run live at the start of the pass at 922 and again
+after, with `set -o pipefail` so the reported exit code is pytest's and not the
+pipe's — north-star.md §4.3's own documented trap. `ruff` clean across `src/` and
+`tests/`; `mypy` unchanged at its pre-existing 38 errors across 65 source files.
+`tsc --noEmit` clean. `openapi.json` and `api.gen.ts` regenerated;
+api-contracts.md moved `GET /reports/{token}` out of "Planned, not yet built"
+into the shipped contract and corrected the surrounding prose, which still said
+no endpoint allowed Epic 9's "send".
