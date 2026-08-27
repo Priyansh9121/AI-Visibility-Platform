@@ -926,6 +926,84 @@ lives in the frontend string table, as with every other check code.
 **Errors:** `401`, `404` (unknown scan, or another agency's).
 
 
+### Public share link — Epic 9.8
+
+The Epic 9 **send** path. §7's Epic 9 acceptance is that a pilot agency can
+"generate and **send** at least one real prospect report", and every surface
+before this one is cookie-authenticated and agency-scoped — the person a report
+is *about* had no way to read it.
+
+**This is the first unauthenticated read surface in the product.** The rules
+below are narrow on purpose and are asserted in `tests/test_share_link.py`.
+
+#### `POST /api/v1/scans/{scanId}/share`
+**Auth required.** Mints (or returns) the scan's public share token. `200`.
+
+**An explicit act, not a side effect of running a scan.** A scan is a private
+measurement until an agency decides otherwise; minting a token for every scan
+and relying on the URL being unknown would make that decision for them.
+
+**`200`, not `201`, and idempotent.** Calling twice returns the *same* token
+rather than a second live link to the same report — there is no revocation, so
+every extra token would be a URL nobody is tracking. The second call creates
+nothing, so it does not claim to. Serialised with `SELECT … FOR UPDATE`: two
+concurrent calls would otherwise generate two different tokens and issue two
+UPDATEs against the same row, and the loser would walk away holding a URL that
+404s. There is no unique violation to catch in that race, so the lock is
+load-bearing rather than defensive.
+
+**Response `200`** — `ShareLinkOut`:
+```json
+{
+  "scanId": "scan_01J...",
+  "token": "uG6-k3CTaiAyPY0-OAOiezBwUerycAGiepPbgMwWlMk",
+  "url": "http://localhost:3000/share/uG6-k3CTaiAyPY0-OAOiezBwUerycAGiepPbgMwWlMk"
+}
+```
+
+`url` is built from `PUBLIC_WEB_BASE_URL`, **never** from the request's `Host`
+or `Origin` header. Those are attacker-controlled, and a share link built from a
+spoofed Host is a phishing URL carrying a real token. Configuration, not
+reflection.
+
+**Errors:** `401`, `404` (unknown scan, or another agency's).
+
+#### `GET /api/v1/reports/{token}`
+**No auth.** The report behind a share token. `200`.
+
+Returns **exactly** the same `ReportOut` as
+`GET /api/v1/scans/{scanId}/report` — `build_report` is reused, not
+reimplemented, so the facts-only sweep in `test_ip_safety.py` covers this
+response too. A second assembly path would be a second place for a snippet to
+slip in. `generatedAt` is a clock read and is the only field that differs
+between the two; a test asserts the rest are byte-identical.
+
+**The token is the whole credential.** There is no account behind it, which is
+the point — a prospect must not need one. It is `secrets.token_urlsafe(32)`:
+**256 bits from the OS CSPRNG**, the same generator and entropy as a session
+token (`security.new_share_token`, beside `new_session_token`). It is never the
+scan's ULID, which is already in the authenticated URL and in logs.
+
+**`404` for every rejection, on one code path.** A malformed token, an unknown
+token and a well-formed miss are indistinguishable in both status and body.
+There is deliberately no shape or length pre-check: rejecting an implausible
+token faster than a plausible one is a timing oracle that makes enumeration
+cheaper. **Never `401`** — that would confirm the token is real.
+
+**Read-only.** No sibling route mutates anything by token. A holder cannot edit
+the competitor set, re-run the scan, or reach any other scan; the token resolves
+to exactly one row.
+
+**No expiry and no revocation — a named gap, not an oversight.** A minted link
+works until the scan row is deleted. Accepted deliberately to meet a pilot
+deadline; **not acceptable as a permanent design**, since an agency that sends a
+link to the wrong address cannot take it back. Revocation (clearing the column)
+and expiry (a `share_expires_at`) are the next two columns this table should
+grow. Recorded in `models/scan.py`, `services/share.py` and build-log Epic 9.8.
+
+**Errors:** `404` only.
+
+
 ### Action list (generated fixes) — Epic 8
 
 #### `POST /api/v1/scans/{scanId}/fixes`
@@ -1029,7 +1107,6 @@ Recorded so the shape is agreed before it is implemented.
 | `POST /api/v1/agencies/{agencyId}/invitations` — invite a seat | 1.5 |
 | `DELETE /api/v1/users/{userId}` — release a seat | 1.5 |
 
-| `GET /api/v1/reports/{token}` — public shareable report link | 9 (send path, slice 3) |
 | `GET /api/v1/scans/{scanId}/report.pdf` — PDF export | 9 (send path, slice 3) |
 | `PATCH /api/v1/agencies/{agencyId}/branding` — logo, domain, colours | 9 (send path, slice 3) |
 
@@ -1041,14 +1118,24 @@ tokens an agency may override — the visibility ramp is load-bearing, and an
 agency free to recolour it changes what the score means. Recorded in
 `build-log.md` Epic 7.
 
-**These three were labelled Epic 7.1 until 2026-08-25.** Epic 7.1 has since
-shipped (`9542963`..`6f953f3`) and delivered the Answer Shelf and the
+**These were three rows labelled Epic 7.1 until 2026-08-25, and are now two.**
+Epic 7.1 shipped (`9542963`..`6f953f3`) and delivered the Answer Shelf and the
 unclaimed-domain fix — not export, sharing or branding. The label was pointing
 readers at an epic that came and went without doing what the row promised, so it
-now names the slice that will actually build it. Epic 9's acceptance is that a
-pilot agency can "generate and **send**" a report, which no current endpoint
-allows. See `build-log.md` Epic 9.0 for the slice order and Epic 9.1 for why the
-send path is now the last thing standing between the API and that acceptance.
+was re-pointed at the slice that would actually build it.
+
+**The shareable-link row is gone from this table because Epic 9.8 built it** —
+see *Public share link* above. Epic 9's acceptance is that a pilot agency can
+"generate and **send**" a report; `GET /api/v1/reports/{token}` is now the
+endpoint that allows it, and it was chosen over PDF export as the cheaper of the
+two mechanisms that satisfy the word *send* (north-star.md §5.4 and §6).
+
+**PDF export and branding remain unbuilt, and the send path is not "finished"
+because one mechanism exists.** A share link has no expiry and no revocation
+(recorded above), and white-labelling is still name-and-slug only, so a report
+sent today carries the agency's name but not its logo or colours. See
+`build-log.md` Epic 9.0 for the slice order and Epic 9.8 for what the link
+deliberately does not do.
 
 Seat invitation and removal endpoints are **not** in Epic 1. The `invitations`
 table, the seat-limit service, and `SessionStore.revoke_all_for_user` — the
