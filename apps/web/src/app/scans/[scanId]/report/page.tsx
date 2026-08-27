@@ -9,7 +9,7 @@
  */
 
 import { use, useCallback, useEffect, useState } from 'react';
-import { Button, Card, CardBody } from '@avp/design-system';
+import { Button, ErrorState, LoadingState } from '@avp/design-system';
 import type { Report } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
 import { ReportView } from '@/components/report/ReportView';
@@ -79,7 +79,7 @@ export default function ReportPageRoute({
   if (view.kind === 'loading') {
     return (
       <main className="mx-auto max-w-report px-6 py-18">
-        <p className="text-ui-base text-text-tertiary">Assembling the report…</p>
+        <LoadingState message="Assembling the report…" />
       </main>
     );
   }
@@ -87,17 +87,15 @@ export default function ReportPageRoute({
   if (view.kind === 'error') {
     return (
       <main className="mx-auto max-w-report px-6 py-18">
-        <Card elevation="seated">
-          <CardBody>
-            <p className="text-ui-md font-medium text-text-primary">{view.title}</p>
-            <p className="mt-2 text-ui-base leading-prose text-text-secondary">{view.detail}</p>
-            <div className="mt-5">
-              <Button variant="secondary" onClick={() => window.location.assign('/')}>
-                Back to intake
-              </Button>
-            </div>
-          </CardBody>
-        </Card>
+        <ErrorState
+          title={view.title}
+          detail={view.detail}
+          action={
+            <Button variant="secondary" onClick={() => window.location.assign('/')}>
+              Back to intake
+            </Button>
+          }
+        />
       </main>
     );
   }

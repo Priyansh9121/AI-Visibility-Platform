@@ -26,7 +26,7 @@
  */
 
 import type { JSX } from 'react';
-import { Badge, Button, Card, CardBody, DataTable, ScoreMeter } from '@avp/design-system';
+import { Badge, Button, Card, CardBody, DataTable, ErrorState, ScoreMeter } from '@avp/design-system';
 import type { BadgeTone, Column, ScoreAbsence } from '@avp/design-system';
 import type { Dashboard, ScanStatus, ScanSummary } from '@avp/shared-types';
 
@@ -222,24 +222,18 @@ export function DashboardView({
         </dl>
       </header>
 
+      {/*
+        Both of these were the same Card + title + detail written out longhand,
+        which is what `ErrorState` now owns app-wide (Epic 9.11). The copy stays
+        here rather than moving into the component: only this screen knows that
+        a poll failure means the page is stale rather than broken.
+      */}
       {pollProblem != null && (
-        <Card elevation="seated">
-          <CardBody>
-            <p className="text-ui-md font-medium text-text-primary">
-              This page has stopped updating
-            </p>
-            <p className="mt-2 text-ui-base leading-prose text-text-secondary">{pollProblem}</p>
-          </CardBody>
-        </Card>
+        <ErrorState title="This page has stopped updating" detail={pollProblem} />
       )}
 
       {rerunError != null && (
-        <Card elevation="seated">
-          <CardBody>
-            <p className="text-ui-md font-medium text-text-primary">The scan could not be started</p>
-            <p className="mt-2 text-ui-base leading-prose text-text-secondary">{rerunError}</p>
-          </CardBody>
-        </Card>
+        <ErrorState title="The scan could not be started" detail={rerunError} />
       )}
 
       {isEmpty ? <EmptyAgency /> : (

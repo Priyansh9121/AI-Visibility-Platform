@@ -24,7 +24,7 @@
  */
 
 import { use, useEffect, useState } from 'react';
-import { Card, CardBody } from '@avp/design-system';
+import { ErrorState, LoadingState } from '@avp/design-system';
 import type { Report } from '@avp/shared-types';
 import { api } from '@/lib/api';
 import { ReportView } from '@/components/report/ReportView';
@@ -63,7 +63,7 @@ export default function PublicReportRoute({
   if (view.kind === 'loading') {
     return (
       <main className="mx-auto max-w-report px-6 py-18">
-        <p className="text-ui-base text-text-tertiary">Loading the report…</p>
+        <LoadingState message="Loading the report…" />
       </main>
     );
   }
@@ -71,17 +71,10 @@ export default function PublicReportRoute({
   if (view.kind === 'gone') {
     return (
       <main className="mx-auto max-w-report px-6 py-18">
-        <Card elevation="seated">
-          <CardBody>
-            <p className="text-ui-md font-medium text-text-primary">
-              This report link is not available
-            </p>
-            <p className="mt-2 text-ui-base leading-prose text-text-secondary">
-              The link may be incomplete, or it may have been withdrawn. Ask
-              whoever sent it for a current one.
-            </p>
-          </CardBody>
-        </Card>
+        <ErrorState
+          title="This report link is not available"
+          detail="The link may be incomplete, or it may have been withdrawn. Ask whoever sent it for a current one."
+        />
       </main>
     );
   }
