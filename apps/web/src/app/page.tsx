@@ -7,10 +7,25 @@ import { api, ApiProblem } from '@/lib/api';
 import { ClassificationResult } from '@/components/ClassificationResult';
 import { IntakeForm } from '@/components/IntakeForm';
 import { SignInPanel } from '@/components/SignInPanel';
+import { LandingView } from '@/components/marketing/LandingView';
 
+/**
+ * `signed-out` is the PUBLIC LANDING PAGE — Epic 9.10.
+ *
+ * It used to be the sign-in panel, which meant a stranger who typed the domain
+ * was asked for credentials before being told what the product was. `sign-in`
+ * is now a separate step the landing page's call to action leads to, so the
+ * form is one click away rather than the front door.
+ *
+ * The route still resolves the session first, so a signed-in operator lands in
+ * the intake screen exactly as before and pays no extra click. That is why the
+ * landing page lives on this branch rather than at a new path: `/` is what
+ * someone types, and it is what an existing user has bookmarked.
+ */
 type View =
   | { kind: 'loading' }
   | { kind: 'signed-out' }
+  | { kind: 'sign-in' }
   | { kind: 'intake' }
   | { kind: 'working' }
   | { kind: 'result'; client: ClientDetail };
@@ -35,6 +50,29 @@ export default function Home() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // The public page carries its own voice and must not sit under the intake
+  // screen's header, which addresses someone who has already signed up.
+  if (view.kind === 'signed-out') {
+    return (
+      <main className="mx-auto max-w-report px-6 py-18">
+        <LandingView onGetStarted={() => setView({ kind: 'sign-in' })} />
+      </main>
+    );
+  }
+
+  if (view.kind === 'sign-in') {
+    return (
+      <main className="mx-auto max-w-report px-6 py-18">
+        <div className="mb-8">
+          <Button variant="ghost" size="sm" onClick={() => setView({ kind: 'signed-out' })}>
+            Back
+          </Button>
+        </div>
+        <SignInPanel onSignedIn={load} />
+      </main>
+    );
+  }
 
   return (
     <main className="mx-auto max-w-report px-6 py-18">
@@ -76,8 +114,6 @@ export default function Home() {
       </header>
 
       {view.kind === 'loading' && <p className="text-ui-base text-text-tertiary">Loading…</p>}
-
-      {view.kind === 'signed-out' && <SignInPanel onSignedIn={load} />}
 
       {(view.kind === 'intake' || view.kind === 'working') && (
         <div className="flex flex-col gap-8">

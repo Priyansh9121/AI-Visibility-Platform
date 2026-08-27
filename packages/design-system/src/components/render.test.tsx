@@ -6,6 +6,7 @@ import { Badge, VisibilityBadge } from './Badge.js';
 import { DataTable } from './Table.js';
 import { ScoreDisplay } from './ScoreDisplay.js';
 import { ScoreMeter } from './ScoreMeter.js';
+import { PageSection } from './marketing/PageSection.js';
 import { LuminanceLedger } from './chart/LuminanceLedger.js';
 import { AnswerShelf } from './chart/AnswerShelf.js';
 import type { ShelfRowInput } from './chart/answerShelfLayout.js';
@@ -274,5 +275,36 @@ describe('AnswerShelf renders', () => {
     const out = html(<AnswerShelf subjectName="Help Scout" rows={[]} />);
     expect(out).toContain('No answers were recorded');
     expect(out).not.toContain('role="img"');
+  });
+});
+
+describe('PageSection is the report voice without the report contract', () => {
+  it('renders its parts and marks the lead section', () => {
+    const out = html(
+      <PageSection tone="lead" eyebrow="Kicker" heading="A claim." lead="A sentence.">
+        <p>Body</p>
+      </PageSection>,
+    );
+    expect(out).toContain('avp-section--lead');
+    expect(out).toContain('Kicker');
+    expect(out).toContain('A claim.');
+    expect(out).toContain('Body');
+  });
+
+  it('omits every optional part rather than rendering an empty node', () => {
+    const out = html(<PageSection heading="Only a heading." />);
+    expect(out).toContain('Only a heading.');
+    expect(out).not.toContain('avp-section__eyebrow');
+    expect(out).not.toContain('avp-section__lead');
+    expect(out).not.toContain('avp-section__body');
+  });
+
+  it('does NOT borrow the report beat numbering', () => {
+    // Beat numbers itself from BEAT_SEQUENCE to enforce the narrative order
+    // ip-safety.md #3 mandates. If a marketing section could take a step
+    // number, that sequence would stop meaning anything where it matters.
+    const out = html(<PageSection heading="x" />);
+    expect(out).not.toContain('avp-beat');
+    expect(out).not.toContain('avp-beat__step');
   });
 });
