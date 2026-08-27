@@ -112,6 +112,33 @@ export const api = {
 
   logOut: () => request<void>('/auth/logout', { method: 'POST' }),
 
+  /**
+   * Ask for a password-reset link — Epic 9.13.
+   *
+   * **Always resolves.** The endpoint answers 200 with the same body whether or
+   * not that address has an account, so there is nothing here to branch on and
+   * the caller must not invent a difference. The response is deliberately not
+   * typed as anything the UI reads beyond "it came back".
+   */
+  requestPasswordReset: (email: string) =>
+    request<{ status: string; detail: string }>('/auth/reset-password/request', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    }),
+
+  /**
+   * Redeem a reset link and set the new password — Epic 9.13.
+   *
+   * Rejects with a 400 for a token that is unknown, expired, already used, or
+   * belongs to an inactive account — one refusal for all four, so the screen
+   * has exactly one thing to say.
+   */
+  confirmPasswordReset: (token: string, newPassword: string) =>
+    request<{ status: string; detail: string }>('/auth/reset-password/confirm', {
+      method: 'POST',
+      body: JSON.stringify({ token, newPassword }),
+    }),
+
   /** The agency dashboard — identity, seat usage and the recent scans. */
   dashboard: () => request<Dashboard>('/dashboard'),
 
