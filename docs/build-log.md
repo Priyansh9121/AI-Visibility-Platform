@@ -7360,3 +7360,229 @@ workers 13, shared-types 53, design-system **109 → 117**, web **166 → 189**)
 Three components that had never had a test now have 21 between them. Run live
 before the pass at 964 and after at 995, with `set -o pipefail`. `tsc --noEmit`
 clean in both packages; `next build` compiles.
+
+---
+
+## 2026-08-27 — Epic 9.13 · A shell, a second vendor, a way back in — and the gap the walkthrough found
+
+The largest brief in this project's history, and the first to add backend
+surface inside an otherwise frontend arc. Both exceptions are named here rather
+than left to look like scope creep, and the list of what was deliberately NOT
+built is at the end so nothing is later assumed to exist.
+
+### Part B was already done, and is not counted twice
+
+The brief asked for sign-up. **Epic 9.12 built it in the previous session** —
+`SignUpPanel`, `api.signUp`, the email-on-the-field error mapping, and
+SignInPanel's real link. Those two commits were unpushed when this brief
+arrived; they were pushed first and nothing was rebuilt. What 9.13 added on top
+is the routing decision: the landing CTA now leads to sign-**up** rather than
+sign-in, and a new agency goes to onboarding rather than an empty dashboard.
+
+### THE TWO BACKEND EXCEPTIONS, AND WHY NEITHER COULD BE UI
+
+**Password reset.** Cannot exist as a screen: it needs a token table, an expiry,
+single-use enforcement, and something that can reach an address only the account
+holder controls.
+
+**A second engine.** Cannot exist as a screen either — it is an adapter, a
+registry entry, and a provider key.
+
+Everything else in this epic is composition over what already shipped.
+
+### The migration the brief asked for, which would have been theatre
+
+Item 17 asked for an `Engine` enum migration modelled on
+`add_claude_search_engine`. **None is needed.** `Engine.CHATGPT = "chatgpt"` has
+existed since the initial schema, and the live CHECK constraint already permits
+it — read off `avp_dev`, not assumed:
+
+```
+CHECK (engine IN ('chatgpt','perplexity','google_ai_overview','gemini',
+                  'claude','claude_search','copilot'))
+```
+
+The migration the brief pointed at exists because `claude_search` was the
+SEVENTH member, added after the enum was fixed. `chatgpt` was in the original
+six. Writing one here would have altered nothing and claimed to have done work.
+
+`OPENAI_API_KEY` also turned out to be **provisioned already** — north-star.md
+§3 Layer 2 still records it as empty, which is now stale, and Epic 4.2's
+"credential-bound, not design-bound" limitation was therefore already liftable.
+
+### The engine: same reasoning, second vendor
+
+`chatgpt` is deliberately the PARAMETRIC analogue of `claude`, not of
+`claude_search`. Epic 4.2's argument is applied unchanged rather than replaced:
+two modes of one vendor answer differently, and so do two vendors in the same
+mode. Holding the MODE constant is what makes "Claude names you, ChatGPT does
+not" a statement about the vendors instead of about browsing.
+
+**No `openai` SDK.** Its current major requires `httpx2` — a second HTTP stack
+beside the pinned `httpx` — and pinning back to 2.x drags in `tqdm`, which is
+"MPL-2.0 AND MIT" and would slip past `license_audit.py`'s OR/AND handling. The
+answer path needs text out of a JSON POST, and `httpx` is already vetted. Same
+call Epic 3.1 made for SerpApi. **No `resend` SDK** either — its default client
+is synchronous `requests` inside an async service, the exact objection Epic 3.1
+raised. **Zero dependencies added across the whole epic.**
+
+`_map_openai_error` mirrors `_map_error` rather than inventing a vocabulary, and
+a test derives Claude's code set from the Anthropic exception hierarchy and
+asserts OpenAI's is a subset. Branch order carries Epic 9.2's lesson: httpx's
+`TimeoutException` subclasses `TransportError`, so testing transport first would
+make TIMEOUT unreachable — the same shape as the defect that cost 271.6s.
+
+Six existing tests asserted "x 2 engines" and now derive `N_ENGINES` from
+`DEFAULT_ENGINES`; the pagination test walks every page instead of asserting a
+fixed two-page shape. A fourth engine should not cost another afternoon of
+arithmetic.
+
+### Password reset: an endpoint built not to answer
+
+`POST /auth/reset-password/request` is **always 200 with the same body** — for a
+known address, an unknown one, a suspended one, and whether or not a provider is
+configured. Tests assert byte-identity, because a different sentence is as good
+an oracle as a different status. `authenticate` already burns a dummy Argon2
+hash on the login path for exactly this reason.
+
+**Only the digest is stored — deliberately NOT Epic 9.8's share-token pattern.**
+`Scan.share_token` is clear-text because an operator must be able to copy that
+URL again. A reset token is minted, emailed once and never shown back, so it
+follows `SessionStore`'s rule and a dump of the table hands an attacker nothing.
+
+`services/email.py` never raises and never reports its outcome — that is the
+security property the endpoint depends on, not tidiness. Unconfigured, it logs
+the would-be email and says plainly that nothing was sent. **It is not a fake
+send.** Verified live below.
+
+The migration drift test rejected an index declared by hand: `fk_column` already
+sets `index=True`, so it was a second index on one column. Removed, and `avp_dev`
+was dropped and re-migrated so it matches a fresh apply exactly.
+
+### The shell: no item is a stub
+
+`AppShell` + `NavItem` frame what Epics 7 / 9.8 / 9.9 / 9.10 settled and restyle
+none of it. A test asserts the shell renders exactly ONE `<main>` and passes its
+child through verbatim.
+
+`NavItem` has **no disabled state to reach for**. Settings is a destination that
+says what is missing and why; Clients reads `GET /clients`, which has existed
+since Epic 2 with nothing in the browser calling it — the same way `sign-up` sat
+unused until 9.12. `/share/{token}` deliberately does not get the shell, and the
+walkthrough confirmed a stranger sees no workspace navigation.
+
+Dashboard is the landing route after signing **in**, and only then: `/` typed
+directly still gives Compare, which is what it has always been.
+
+### Onboarding: orchestration, nothing forked
+
+`IntakeForm` and `ClassificationResult` are rendered as-is. The wizard has no
+scan button of its own because `ClassificationResult` grew one in 9.12, and a
+second would be the second scan-triggering path this project has avoided.
+
+**The agency's own client is an ORDINARY dashboard row**, stated before
+building: no column records "this one is ours", inferring it from the name is
+wrong for any agency whose trading name differs from its URL, and the loop
+treats every client identically. A visual exception would be a claim the data
+cannot support.
+
+### THE LIVE WALKTHROUGH, AND WHAT IT FOUND
+
+Approved in session. Twenty steps, one sitting, **zero JS errors at any step**:
+landing → sign-up → onboarding → classification → 3-engine scan → dashboard →
+report → Compare via nav → Clients → Settings → share (no cookie, no shell) →
+sign out → forgot password → reset link from the log → weak password refused →
+password changed → link reuse refused → sign in with the new password.
+
+Account created: `founder@northlight.example` / agency **Northlight Partners**.
+Password is now `a-brand-new-northlight-passphrase` (it was reset during the
+walkthrough, which was the point).
+
+**The scan: `scan_01M11J9HPQ533CN7JZMY7BQWAX`, 24 prompts, 72 engine results.**
+
+| engine | ok | other |
+|---|---|---|
+| `claude` | 24 | — |
+| `claude_search` | 23 | 1 `TIMEOUT` |
+| `chatgpt` | 23 | 1 `answered_no_mention` |
+
+Status `partial`, **caused by the incumbent grounded engine, not the new one** —
+`answered_no_mention` is a valid finding, not a failure. The new vendor was the
+cleanest of the three on its first real run.
+
+Measured spend: **120 Anthropic + 24 OpenAI = 144 calls, and ZERO SerpApi**
+against a predicted 79–151. The SerpApi zero is not good news — see below.
+
+**Three engines render with no frontend change**, verified rather than assumed:
+`ENGINE_LABEL` already mapped `chatgpt`, `engineLabel` falls back to the raw
+key, and the generated `Engine` union already contained it. The report showed
+three engine-coverage blocks and 40 ChatGPT references.
+
+### THE GAP THE WALKTHROUGH FOUND, AND IT IS SIGNIFICANT
+
+**A scan started from the UI runs prompt generation and engine execution, and
+nothing else.** `run_scan` does not detect competitors, does not score, does not
+audit, and does not generate the LLM fix list. Those are four separate endpoints
+that only `verify_e2e.py` has ever chained.
+
+Concretely, in the walkthrough: SerpApi spend was zero because detection never
+ran; the dashboard read **"Not scored"**; and scoring by hand afterwards returned
+66.57 carrying `NO_COMPETITOR_SET`, `NO_AUTHORITY_DATA` and
+`TECHNICAL_FOUNDATION_NOT_MEASURED` — three of the five dimensions unmeasured.
+
+The screens are all honest about it: Epic 9.9's `ScoreMeter` says "Not scored"
+rather than showing a zero, and the report renders the degraded state rather
+than smoothing it. **But the button reads "Run a scan" and produces a partial
+artifact**, which is a product defect, not a rendering one.
+
+This was not introduced here — it has been true since Epic 9.5 made the endpoint
+asynchronous, and Epic 9.12 inherited it when it wired the button. It is named
+now because a walkthrough is what surfaces it. **Fixing it is backend
+orchestration and its own brief**, and it is deliberately not smuggled into an
+epic whose backend exceptions were scoped to reset and the engine.
+
+### DELIBERATELY NOT BUILT — so nothing is later assumed to exist
+
+* **Content generation / briefs** — no endpoint, no screen, no button.
+* **Conversational agent chat** — none. north-star.md §2.4 still records
+  "where a real agent is worth its complexity" as [OPEN].
+* **Ads / shopping tracking** — none.
+* **Query fan-out** — none. Still `product-spec.md` §7 Epic 12, unchecked.
+
+Also absent and named: PDF export, share-link expiry and revocation, an
+authenticated password change, seat invitation endpoints, white-label logo and
+colours, and any billing surface. `/settings` lists most of these on screen with
+the reason each is missing, rather than hiding them.
+
+**`PROMPT_CONCURRENCY` is untouched at 4.** Each slot now awaits three
+concurrent calls rather than two. Wall clock should move little — a slot costs
+max(latency), and the measured `chatgpt` latency was 3.8s against the Claude
+pair's 22.7s median — but that is a **prediction**, labelled as one, and Epic
+9.1's discipline forbids asserting three-engine timing from a two-engine run.
+Re-timing `verify_e2e.py` at three engines is a follow-up.
+
+### IP-safety self-check (constraint 9)
+
+* **#1 / #5** — **no competitor screen, site, layout or algorithm was
+  referenced at any point.** The OpenAI adapter's design comes from Epic 4.2's
+  own precedent and the `EngineAdapter` Protocol; the shell comes from the four
+  destinations this product actually has.
+* **#2** — every element from `@avp/design-system`; four new primitives built
+  into it rather than locally. **`apps/web` still has zero arbitrary-value and
+  zero raw-palette classes**, audited again this epic.
+* **#4** — icons are Lucide (MIT), already in use since Epic 2. No pack added.
+* **#6** — **zero dependencies added.** Both candidate SDKs were assessed and
+  declined on licence and architecture grounds; licence audit unchanged.
+* **#7 / #8** — `EngineAnswer.text` remains transient on the new adapter, a test
+  asserts the answer never reaches a log view, and all copy is newly written.
+
+**IP-safety check passed:** no competitor reference, no third-party prose
+persisted or rendered, design-system components only, no ad hoc Tailwind, no
+dependency added.
+
+### Tests
+
+**1066, up from 1009** (api 623 → **665**, workers 13, shared-types 53,
+design-system 117 → **125**, web 203 → **210**). `ruff` clean, `mypy` unchanged
+at its pre-existing 38, `tsc --noEmit` clean in both packages, `next build`
+compiles 9 routes. `openapi.json` 24 → 26 paths.
