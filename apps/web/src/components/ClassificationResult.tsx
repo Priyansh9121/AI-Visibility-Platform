@@ -1,7 +1,9 @@
 'use client';
 
-import { Badge, Button, Card, CardBody } from '@avp/design-system';
+import { useState } from 'react';
+import { Badge, Button, Card, CardBody, ErrorState, LoadingState } from '@avp/design-system';
 import type { ClientDetail } from '@avp/shared-types';
+import { api, ApiProblem } from '@/lib/api';
 
 /**
  * The result of an intake classification.
@@ -50,6 +52,37 @@ export function ClassificationResult({
 }) {
   const status = client.classificationStatus;
   const name = client.brandName ?? client.name;
+  const [scan, setScan] = useState<ScanState>({ kind: 'idle' });
+
+  /**
+   * Start the scan — Epic 9.12, closing the second dead end Epic 9.11 named.
+   *
+   * Calls the SAME `api.runScan` the dashboard's re-run calls. There is
+   * deliberately no second scan-triggering path: `get_or_create_scan` owns the
+   * one-open-scan-per-client invariant (Epic 9.6) and a second client-side
+   * route into it would be a second place for that to be got wrong.
+   *
+   * The disable semantics mirror `RerunButton` in DashboardView: the button
+   * goes disabled the instant it is pressed, because a double click is not
+   * caught by the server — `get_or_create_scan` reuses an unfinished scan, but
+   * the first request has not committed one yet, so a second would buy a second
+   * scan's worth of model calls.
+   */
+  async function start() {
+    setScan({ kind: 'starting' });
+    try {
+      const started = await api.runScan(client.id);
+      setScan({ kind: 'started', scanId: started.id });
+    } catch (err) {
+      setScan({
+        kind: 'failed',
+        detail:
+          err instanceof ApiProblem
+            ? err.problem.detail
+            : 'The API did not respond. Check that it is running on port 8000.',
+      });
+    }
+  }
 
   return (
     <Card elevation="raised">
@@ -120,27 +153,85 @@ export function ClassificationResult({
           )}
 
           {/*
-            The screen used to end here, offering only "Scan another site" — so
-            a classified business was a dead end, and the core loop's next step
+            The screen used to end here offering only "Scan another site", so a
+            classified business was a dead end and the core loop's next step
             (product-spec.md §3: URL -> detect -> RUN SCAN) was reachable only
-            by finding the client again on the dashboard.
-            This is navigation to a screen that already exists, not a new
-            capability: starting a scan spends real money and stays where the
-            re-run guard lives. Named as a follow-up in build-log Epic 9.11.
+            by finding the client again on the dashboard. Epic 9.12 closes that.
+
+            SCANNING IS OFFERED ONLY ON A CLASSIFIED CLIENT. An ambiguous or
+            unreadable one has no industry, and the industry is what every
+            competitor and prompt is generated from — spending a scan's worth
+            of model calls on a guess is the one thing Epic 2.3 built the
+            AMBIGUOUS path to prevent.
           */}
-          <div className="flex flex-wrap gap-2">
-            <Button variant="primary" onClick={() => window.location.assign('/dashboard')}>
-              Go to your scans
-            </Button>
-            <Button variant="secondary" onClick={onReset}>
-              Scan another site
-            </Button>
-          </div>
+          {scan.kind === 'failed' && (
+            <ErrorState title="The scan could not be started" detail={scan.detail} />
+          )}
+
+          {scan.kind === 'started' ? (
+            /*
+              Confirmation in place rather than an immediate redirect. A scan
+              runs for about six minutes, so navigating away instantly would put
+              the action and its consequence on two different screens, with the
+              result one row among many. Saying what happened where it happened
+              is the same reasoning Epic 9.7 used to make the dashboard announce
+              that it is updating rather than silently doing it.
+            */
+            <div className="flex flex-col gap-4">
+              <LoadingState
+                message="Scan started."
+                steps={[
+                  'Finding who this business competes with',
+                  'Generating the questions its buyers ask',
+                  'Putting each question to the AI answer engines',
+                ]}
+                hint="This takes about six minutes. You can leave this page — it keeps running."
+              />
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="primary"
+                  onClick={() => window.location.assign('/dashboard')}
+                >
+                  Watch it on your dashboard
+                </Button>
+                <Button variant="secondary" onClick={onReset}>
+                  Scan another site
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {status === 'classified' && (
+                <Button
+                  variant="primary"
+                  disabled={scan.kind === 'starting'}
+                  onClick={start}
+                >
+                  {scan.kind === 'starting' ? 'Starting…' : 'Run a scan'}
+                </Button>
+              )}
+              <Button
+                variant={status === 'classified' ? 'secondary' : 'primary'}
+                onClick={() => window.location.assign('/dashboard')}
+              >
+                Go to your scans
+              </Button>
+              <Button variant="secondary" onClick={onReset}>
+                Scan another site
+              </Button>
+            </div>
+          )}
         </div>
       </CardBody>
     </Card>
   );
 }
+
+type ScanState =
+  | { kind: 'idle' }
+  | { kind: 'starting' }
+  | { kind: 'started'; scanId: string }
+  | { kind: 'failed'; detail: string };
 
 /** "a" or "an", so the sentence reads. Purely grammatical. */
 function article(industry: string | null | undefined): string {

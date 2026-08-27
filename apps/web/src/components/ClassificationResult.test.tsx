@@ -109,6 +109,33 @@ describe('the screen is not a dead end', () => {
     expect(out).toContain('Scan another site');
   });
 
+  it('offers RUN A SCAN on a classified client — Epic 9.12', () => {
+    // The core loop's actual next step (product-spec.md §3), finally reachable
+    // from the screen that produced the classification.
+    expect(render(base)).toContain('Run a scan');
+  });
+
+  it('does NOT offer a scan when there is no industry to scan against', () => {
+    // The industry is what every competitor and prompt is generated from.
+    // Spending a scan's worth of model calls on a guess is the one thing the
+    // AMBIGUOUS path exists to prevent (Epic 2.3), so the action is withheld
+    // rather than offered-and-failed.
+    for (const st of ['ambiguous', 'unclassifiable'] as const) {
+      const out = render(as({ classificationStatus: st, industry: null }));
+      expect(out, st).not.toContain('Run a scan');
+      // …but the screen still leads somewhere.
+      expect(out, st).toContain('Go to your scans');
+      expect(out, st).toContain('Scan another site');
+    }
+  });
+
+  it('shows no scan-started confirmation before one is started', () => {
+    const out = render(base);
+    expect(out).not.toContain('Scan started.');
+    expect(out).not.toContain('Watch it on your dashboard');
+    expect(out).not.toContain('avp-errorstate');
+  });
+
   it('reports what was actually read', () => {
     const out = render(base);
     expect(out).toContain('3 pages');
