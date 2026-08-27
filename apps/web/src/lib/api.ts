@@ -17,6 +17,7 @@ import type {
   Report,
   Scan,
   ShareLink,
+  SignUpRequest,
   ValidationProblemDetail,
 } from '@avp/shared-types';
 import { isProblemDetail } from '@avp/shared-types';
@@ -82,6 +83,25 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export const api = {
   me: () => request<Me>('/auth/me'),
+
+  /**
+   * Create an agency and its first user, and sign them in — Epic 9.12.
+   *
+   * `POST /auth/sign-up` has existed since Epic 1.3 and nothing in the browser
+   * had ever called it: the landing page invited strangers in through a door
+   * that only opened from the inside.
+   *
+   * Returns `MeOut` and sets the session cookie, so there is no second login
+   * step — api-contracts.md calls that out as deliberate ("requiring a fresh
+   * login right after choosing a password is friction with no security value").
+   *
+   * Errors: `409 email-already-registered`, `422 validation-failed`.
+   */
+  signUp: (payload: SignUpRequest) =>
+    request<Me>('/auth/sign-up', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 
   logIn: (email: string, password: string) =>
     request<Me>('/auth/login', {
