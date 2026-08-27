@@ -5,6 +5,7 @@ import { Card, CardBody } from './Card.js';
 import { Badge, VisibilityBadge } from './Badge.js';
 import { DataTable } from './Table.js';
 import { ScoreDisplay } from './ScoreDisplay.js';
+import { ScoreMeter } from './ScoreMeter.js';
 import { LuminanceLedger } from './chart/LuminanceLedger.js';
 import { AnswerShelf } from './chart/AnswerShelf.js';
 import type { ShelfRowInput } from './chart/answerShelfLayout.js';
@@ -63,6 +64,62 @@ describe('components render', () => {
     const out = html(<ScoreDisplay score={null} />);
     expect(out).toContain('—');
     expect(out).toContain('Not enough data to score this scan');
+  });
+});
+
+describe('ScoreMeter carries the Ledger identity at list scale', () => {
+  it('lit LENGTH is the score, not a rounded approximation of it', () => {
+    // The Ledger's correctness condition is that lit height IS the composite.
+    // This is that property at one dimension: the numeral rounds so it reads,
+    // the BAR keeps the real value.
+    const out = html(<ScoreMeter score={38.35} />);
+    expect(out).toContain('width:38.35%');
+    expect(out).toContain('>38<');
+  });
+
+  it('width tracks the value across the ramp, so the bar cannot be decorative', () => {
+    // A meter that ignored its input would still render a bar and still pass a
+    // test that only asserted a bar exists.
+    for (const [score, width] of [[0, '0%'], [25, '25%'], [100, '100%']] as const) {
+      expect(html(<ScoreMeter score={score} />)).toContain(`width:${width}`);
+    }
+  });
+
+  it('clamps out-of-range input rather than overflowing the track', () => {
+    expect(html(<ScoreMeter score={140} />)).toContain('width:100%');
+    expect(html(<ScoreMeter score={-20} />)).toContain('width:0%');
+  });
+
+  it('a null score renders an EMPTY track and names the absence', () => {
+    // Never a zero-width fill, which would read as a score of 0, and never a
+    // bare dash, which reads as a rendering fault.
+    const out = html(<ScoreMeter score={null} absence="unscored" />);
+    expect(out).toContain('—');
+    expect(out).toContain('Not scored');
+    expect(out).toContain('avp-meter--empty');
+    expect(out).not.toContain('avp-meter__lit');
+  });
+
+  it('distinguishes "no score yet" from "no score at all"', () => {
+    // Both are null in the payload. Collapsing them loses a real fact: one
+    // resolves on its own, the other never will without a re-run.
+    expect(html(<ScoreMeter score={null} absence="measuring" />)).toContain('Measuring');
+    expect(html(<ScoreMeter score={null} absence="unscored" />)).toContain('Not scored');
+  });
+
+  it('states the score to assistive tech, which cannot read a bar', () => {
+    expect(html(<ScoreMeter score={72} />)).toContain(
+      'aria-label="AI Visibility Score 72 out of 100 — Established"',
+    );
+  });
+
+  it('never borrows a semantic tone for a score', () => {
+    // tokens/color.ts keeps the semantic and visibility palettes disjoint so a
+    // red error chip is not misread as a bad score. A meter reaching for
+    // avp-badge--danger would breach that from the other side.
+    const out = html(<ScoreMeter score={8} />);
+    expect(out).not.toContain('avp-badge--danger');
+    expect(out).not.toContain('avp-badge--warn');
   });
 });
 

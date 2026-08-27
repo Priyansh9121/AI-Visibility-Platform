@@ -74,26 +74,63 @@ describe('the empty state is written, not blank', () => {
 });
 
 describe('a null score is a null score, never a zero', () => {
-  it('INSUFFICIENT_DATA renders an em dash', () => {
+  it('INSUFFICIENT_DATA renders an em dash and SAYS it is not scored', () => {
     const html = render(insufficientDataDashboard);
     expect(html).toContain('—');
     expect(html).not.toContain('0.0');
-    expect(html).not.toContain('avp-badge--visibility');
+    // Epic 9.9: a dash alone read as a rendering fault. The absence is now
+    // named. This scan FINISHED without a score, which is a permanent fact
+    // until it is re-run — not the same as one still being measured.
+    expect(html).toContain('Not scored');
+    expect(html).not.toContain('Measuring');
+    // The track still draws, so the row keeps its shape...
+    expect(html).toContain('avp-meter__track');
+    // ...but nothing is lit. A zero-width fill would read as a score of 0.
+    expect(html).toContain('avp-meter--empty');
+    expect(html).not.toContain('avp-meter__lit');
   });
 
-  it('an unscored queued scan still appears, with no score', () => {
+  it('an unscored queued scan still appears, and reads as MEASURING not unscored', () => {
     // The endpoint LEFT-joins the score so this row survives. If the screen
     // dropped it, that care would be wasted.
     const html = render(unscoredQueuedDashboard);
     expect(html).toContain('queued.example');
     expect(html).toContain('Queued');
     expect(html).not.toContain('0.0');
+    // The distinction Epic 9.9 added: no score YET is not no score. Both are
+    // null in the payload; `status` is what separates them, and the screen
+    // must not collapse them back together.
+    expect(html).toContain('Measuring');
+    expect(html).not.toContain('Not scored');
+    expect(html).not.toContain('avp-meter__lit');
   });
 
-  it('a real score renders its decimal value and an ordinal band', () => {
+  it('a real score renders the same rounded number the report shows', () => {
     const html = render(scoredDashboard);
-    expect(html).toContain('38.4'); // 38.35, to one decimal
-    expect(html).toContain('avp-badge--visibility');
+    // 38.35 renders as 38, matching ScoreDisplay's Math.round on the report.
+    // Epic 9.9 changed this from '38.4' deliberately: a dashboard showing 38.4
+    // beside a report showing 38 is exactly the two-screens-one-product
+    // mismatch this pass exists to close. Sub-point precision is not a
+    // distinction an agency operator acts on.
+    expect(html).toContain('>38<');
+    expect(html).not.toContain('38.4');
+    // Lit length IS the score — the Luminance Ledger's identity at list scale.
+    expect(html).toContain('avp-meter__lit');
+    expect(html).toContain('width:38.35%'); // the BAR keeps full precision
+    expect(html).toContain('Barely visible'); // visibilityBand(38) — under 40
+  });
+
+  it('the meter never lights a band it did not earn', () => {
+    // Guards the direction of the mapping. A meter that filled by row index,
+    // or inverted, would still render a bar and still pass every assertion
+    // above about a bar existing.
+    // 55.82 -> numeral 56, but the lit length stays 55.82%: the numeral is
+    // rounded for reading, the BAR is the number. Same discipline as the
+    // Ledger, whose lit height is the composite exactly.
+    const html = render(partialDashboard);
+    expect(html).toContain('width:55.82%');
+    expect(html).toContain('>56<');
+    expect(html).toContain('Emerging');
   });
 });
 

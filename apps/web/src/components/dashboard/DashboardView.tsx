@@ -26,8 +26,8 @@
  */
 
 import type { JSX } from 'react';
-import { Badge, Button, Card, CardBody, DataTable, VisibilityBadge } from '@avp/design-system';
-import type { BadgeTone, Column } from '@avp/design-system';
+import { Badge, Button, Card, CardBody, DataTable, ScoreMeter } from '@avp/design-system';
+import type { BadgeTone, Column, ScoreAbsence } from '@avp/design-system';
 import type { Dashboard, ScanStatus, ScanSummary } from '@avp/shared-types';
 
 /**
@@ -58,6 +58,18 @@ import type { Dashboard, ScanStatus, ScanSummary } from '@avp/shared-types';
  * decides only whether offering the action would confuse, not whether it costs.
  */
 const BLOCKS_RERUN: readonly ScanStatus[] = ['running'];
+
+/**
+ * Statuses where a missing score means "not yet" rather than "not at all".
+ *
+ * Both render without a number, but they are different facts and the screen
+ * says which: a queued scan has no score because nothing has run, while a
+ * finished scan with no score was either never scored or scored as
+ * INSUFFICIENT_DATA — a permanent state until it is re-run. Rendering both as
+ * one dash, as this screen did until Epic 9.9, made a real outcome look like a
+ * rendering fault.
+ */
+const SCORE_PENDING: readonly ScanStatus[] = ['queued', 'running'];
 
 const STATUS_LABEL: Record<ScanStatus, string> = {
   queued: 'Queued',
@@ -153,8 +165,9 @@ export function DashboardView({
     {
       key: 'score',
       header: 'Visibility',
-      align: 'end',
-      render: (scan) => <ScoreCell composite={scan.compositeScore} />,
+      render: (scan) => (
+        <ScoreCell composite={scan.compositeScore} status={scan.status} />
+      ),
     },
     {
       key: 'started',
@@ -262,31 +275,33 @@ function Stat({ label, value }: { label: string; value: string }): JSX.Element {
 }
 
 /**
- * The score cell.
+ * The score cell — `ScoreMeter`, Epic 9.9.
  *
  * `compositeScore` is a string-encoded decimal and is null for BOTH "not scored
  * yet" and INSUFFICIENT_DATA. Neither is a zero, and the endpoint left-joins
- * the score precisely so those scans still appear — so the cell renders an
- * em dash and says why, rather than a 0 that reads as "invisible".
+ * the score precisely so those scans still appear.
+ *
+ * It previously rendered a bare em dash for both, which read as a rendering
+ * fault rather than a fact. `ScoreMeter` draws an empty track and NAMES the
+ * absence, and `status` is what separates the two: a scan still in flight is
+ * "Measuring", a finished one without a score is "Not scored". That
+ * distinction is read off data the endpoint already serves — nothing is
+ * inferred and nothing is invented.
+ *
+ * The meter carries the same identity as the report's Luminance Ledger: lit
+ * length IS the score. That is why this screen and the report now read as one
+ * product rather than a table that links to a document.
  */
-function ScoreCell({ composite }: { composite: string | null | undefined }): JSX.Element {
-  if (composite == null) {
-    return (
-      <span className="text-ui-sm text-text-tertiary" title="No score for this scan yet">
-        —
-      </span>
-    );
-  }
-  const value = Number(composite);
-  if (Number.isNaN(value)) {
-    return <span className="text-ui-sm text-text-tertiary">—</span>;
-  }
-  return (
-    <span className="flex items-center justify-end gap-2">
-      <span className="font-mono text-ui-base text-text-primary">{value.toFixed(1)}</span>
-      <VisibilityBadge score={value} />
-    </span>
-  );
+function ScoreCell({
+  composite,
+  status,
+}: {
+  composite: string | null | undefined;
+  status: ScanStatus;
+}): JSX.Element {
+  const absence: ScoreAbsence = SCORE_PENDING.includes(status) ? 'measuring' : 'unscored';
+  const value = composite == null ? null : Number(composite);
+  return <ScoreMeter score={value == null || Number.isNaN(value) ? null : value} absence={absence} />;
 }
 
 function RerunButton({

@@ -24,6 +24,7 @@ export {
 export { Badge, VisibilityBadge, type BadgeProps, type BadgeTone } from './components/Badge.js';
 export { DataTable, type DataTableProps, type Column } from './components/Table.js';
 export { ScoreDisplay, type ScoreDisplayProps } from './components/ScoreDisplay.js';
+export { ScoreMeter, type ScoreMeterProps, type ScoreAbsence } from './components/ScoreMeter.js';
 export { TextField, type TextFieldProps } from './components/TextField.js';
 
 export { ChartFrame, type ChartFrameProps } from './components/chart/ChartFrame.js';

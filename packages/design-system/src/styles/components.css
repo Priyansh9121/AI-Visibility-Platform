@@ -227,6 +227,66 @@
   max-width: 34ch;
 }
 
+/* =========================== ScoreMeter ========================== */
+/* The Ledger's identity at list scale: lit length IS the score. Width is the
+   only channel that carries value — never colour alone, which would fail for
+   anyone who cannot separate the ramp's hues. */
+
+.avp-meter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--avp-space-1_5);
+  min-width: 8rem;
+}
+
+.avp-meter__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--avp-space-2);
+}
+
+.avp-meter__numeral {
+  font-family: var(--avp-font-editorial);
+  font-size: var(--avp-text-ed-2xs);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: var(--avp-tracking-display);
+  /* Tabular figures so a column of scores aligns on the decimal, the same
+     reason ScoreDisplay sets them. */
+  font-variant-numeric: lining-nums tabular-nums;
+}
+
+.avp-meter__numeral--empty { color: var(--avp-text-tertiary); }
+
+.avp-meter__band {
+  font-size: var(--avp-text-ui-2xs);
+  font-weight: 600;
+  letter-spacing: var(--avp-tracking-caps);
+  text-transform: uppercase;
+  color: var(--avp-text-tertiary);
+  white-space: nowrap;
+}
+
+.avp-meter__track {
+  position: relative;
+  height: var(--avp-space-1_5);
+  border-radius: var(--avp-radius-full);
+  /* The unearned remainder, drawn as an unlit void — the Ledger's own
+     treatment for the same thing. */
+  background: var(--avp-surface-sunken);
+  box-shadow: inset 0 0 0 1px var(--avp-line-hairline);
+  overflow: hidden;
+}
+
+.avp-meter__lit {
+  height: 100%;
+  border-radius: var(--avp-radius-full);
+}
+
+/* An absent score keeps its track so the row keeps its shape, but the track is
+   visibly empty rather than a zero-width fill that would read as a score of 0. */
+.avp-meter--empty .avp-meter__track { opacity: 0.55; }
+
 /* ========================== ChartFrame =========================== */
 
 .avp-chart-frame { margin: 0; display: flex; flex-direction: column; gap: var(--avp-space-3); }
