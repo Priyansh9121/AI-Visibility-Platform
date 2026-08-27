@@ -6939,3 +6939,241 @@ pipe's — north-star.md §4.3's own documented trap. `ruff` clean across `src/`
 api-contracts.md moved `GET /reports/{token}` out of "Planned, not yet built"
 into the shipped contract and corrected the surrounding prose, which still said
 no endpoint allowed Epic 9's "send".
+
+---
+
+## 2026-08-27 — Epic 9.9 · The dashboard joins the product
+
+A polish pass, not a redesign. The dashboard was a *correct* table — Epic 9.3
+built it carefully and Epic 9.7 taught it to update itself — sitting next to a
+report that uses the full design system. Correct data in a plain grid, one click
+from a narrative document with a signature visualisation, made a finished
+product look unfinished.
+
+**This is explicitly not a step toward a metrics dashboard.** ip-safety.md #3
+mandates narrative reports over generic metrics-tile dashboards and that ruling
+stands; no tile, trend arrow or percentage delta was added. No competitor
+dashboard was consulted.
+
+### `ScoreMeter`, and why it is not a miniature Ledger
+
+The Luminance Ledger's correctness condition is that total lit height IS the
+composite — *"the chart is the number rather than a picture of it."* `ScoreMeter`
+is that identity at one dimension: a track whose lit **length** is the score,
+filled from the visibility ramp, numeral in the editorial face.
+
+The obvious idea was a small Ledger in the row. **It cannot be built honestly.**
+A Ledger divides its column by per-dimension weight, and `ScanSummaryOut` carries
+`compositeScore` and nothing else — the dashboard endpoint serves no sub-scores.
+Drawing segments there would mean inventing the divisions, which destroys the one
+property that makes the Ledger trustworthy. One dimension is what the data
+supports, so one dimension is what it draws.
+
+**The numeral rounds; the bar does not.** 38.35 reads as `38` and lights 38.35%
+of its track. The number stays legible, the chart stays exact.
+
+Built into `packages/design-system` rather than locally in `apps/web`, per Epic
+0's build-before-screens rule. Pure and hook-free, so it stays server-renderable
+like Card, Badge and Table — Epic 7's static-markup path depends on that.
+
+### The em dash was hiding a real distinction
+
+`compositeScore` is null for **two different facts**, and the cell rendered both
+as `—`. A bare dash reads as a rendering fault, not an outcome — which is
+precisely the impression this pass set out to remove.
+
+`status` separates them, from data the endpoint already serves:
+
+* **queued / running** → no score *yet*. "Measuring". It will resolve on its own.
+* **anything terminal** → no score *at all*. "Not scored". Never scored, or
+  scored `INSUFFICIENT_DATA`, and permanent until re-run.
+
+Both draw an **empty track** rather than a zero-width fill, so the row keeps its
+shape and an absence is visibly an absence. That follows the precedent
+`ScoreDisplay` set on the report, which pairs its dash with "Not enough data to
+score this scan" rather than leaving a dash to speak for itself.
+
+### Status stays `Badge` — that is the decision, not an omission
+
+The brief asked for status to carry more weight. It does not get it from colour.
+`tokens/color.ts` keeps the semantic and visibility palettes **disjoint**, and
+`Badge`'s own docstring says why: it is "what stops a red error chip from being
+misread as 'bad score'". Giving status the ramp would breach that from the other
+side.
+
+The weight went where it earns something instead. The meter now carries the row,
+and the in-flight states say "Measuring" — so the rows that are *doing* something
+look different from the rows that are done. A finished scan's status is the least
+interesting thing about it; its score is not.
+
+### Typography, deliberately unchanged
+
+The agency name already used the editorial face, matching the report's voice, and
+the table stays in the UI face. This is an index, not a document: the report's
+editorial register belongs to the argument it makes, not to a list of rows.
+
+`VisibilityBadge` is no longer rendered here — the meter states the same band
+inline, and two chips per row was the noise the pass existed to remove. The
+component is untouched and still exported.
+
+### One existing assertion changed on purpose
+
+`expect(html).toContain('38.4')` became `'>38<'`. A dashboard showing **38.4**
+beside a report showing **38** is exactly the two-screens-one-product mismatch
+this brief closes, and sub-point precision is not a distinction an agency
+operator acts on. Recorded here rather than buried, because silently relaxing a
+test someone wrote deliberately is how a suite stops meaning anything. Its
+describe block's actual intent — *a null score is never a zero* — is asserted
+harder than before: the absence is now named, and the lit element must be absent.
+
+### Audits
+
+Every className checked against `tailwind-preset.ts`'s real scales before
+committing, per Epic 9.8's finding — all 40 resolve, and the pass **removed** ad
+hoc styling rather than adding any. Every CSS custom property in the new block
+checked against `tokens.css` the same way: all 11 exist. Epic 9.3's empty-state
+tests confirm `isEmpty` and no-scans-yet are unregressed.
+
+### IP-safety self-check
+
+* **#1** — designed from `ScanSummaryOut`'s real fields and the operator's goal.
+  **No competitor dashboard was referenced, opened, or described.**
+* **#2** — every element from `@avp/design-system`; the new primitive lives in
+  the design system, not in `apps/web`.
+* **#3** — no tiles, no trend arrows, no deltas. The narrative-report ruling is
+  untouched.
+* **#4/#7** — no icon, asset or third-party content added.
+
+**IP-safety check passed:** design-system components only, no ad hoc Tailwind, no
+new colour or type scale, no competitor reference, no third-party content.
+
+### Tests
+
+design-system 99 → **106**, web 152 → **153**. Suite **948**, up from 940.
+`tsc --noEmit` clean in both packages.
+
+---
+
+## 2026-08-27 — Epic 9.10 · A public page, including the part that says what it cannot do
+
+Until now `/` showed a sign-in panel to anyone without a session. A stranger who
+typed the domain was asked for credentials before being told what the product
+was, and there was nowhere to send a prospective agency. `apps/web` contained
+only authenticated screens plus Epic 9.8's share page.
+
+### Where it lives, and why not a new path
+
+The landing page takes over the **`signed-out` branch of `/`** rather than moving
+in at `/product` or similar.
+
+`/` is what someone types, and it is what an existing user has bookmarked. The
+route already resolves the session before rendering, so the branch was there for
+free: a signed-in operator still lands in intake and pays no extra click, while a
+stranger gets the explanation. Sign-in became one step *behind* the call to
+action rather than the front door.
+
+The cost, stated: the page waits on a session check before painting, so it is not
+a static document and is not ideal for indexing. If SEO ever matters more than
+the bookmark, `LandingView` is a standalone component and can be promoted to a
+static route without being rewritten. Not built now.
+
+Verified unaffected afterwards, in a browser: signed-in `/` renders intake and
+**not** the landing page; `/dashboard`, `/scans/{id}/report` and
+`/share/{token}` all still work.
+
+### Every claim is one the codebase can meet
+
+Each was checked against this log before it was written — the pipeline and its
+~6 minutes (9.2, 9.8), 24 intent-tagged prompts (4.1), five weighted dimensions
+(5.2), per-answer ordinality (7.1), facts-only storage enforced by sweep tests
+(ip-safety #7), named fixes with priority and effort (8.0), and one vendor in two
+modes (4.2's own stated limitation).
+
+**Nothing else is claimed.** No testimonials, no logo wall, no user count, no
+press mention, no funding line. This product has none of them. Inventing one
+would be contradicted three sections later by the page's own argument about
+verifiable data — the fabrication would not merely be dishonest, it would be
+self-defeating.
+
+Where a page like this normally carries social proof, this one carries
+north-star.md §7's argument instead: an agency puts its own name on the report,
+so what is underneath it matters, and "we never store or reproduce anyone's
+copyrighted content" is enforced by tests rather than asserted in a policy.
+
+**No price appears.** north-star.md §5.3's tiers are `[HYPOTHESIS]` and have met
+no customer; publishing them would convert a working assumption into a public
+promise. The page says access is by conversation during pilot, which is true.
+
+### The example chart is synthetic, and says so above itself
+
+Epic 9.8 produced a real scan of a real named business, and it would be more
+persuasive than any invented figure. **It is not this page's to publish.** That
+business never consented to having its visibility score made public, and a page
+whose central argument is that this tool can be trusted with client data does not
+get to open by breaching a client confidence. Consent was not merely unconfirmed
+— the conversation had not happened yet — so the brief's own default applied.
+
+The five dimensions and their §6 weights are real; the sub-scores are invented
+and labelled `Example — illustrative figures, not a real client`. A test asserts
+the label appears **before** the chart in the markup, so it cannot drift into a
+footnote below the fold where it would stop working.
+
+### The section that says what it cannot do
+
+One vendor today, no PDF export, name-only white-labelling, no self-serve plan.
+
+A page like this usually stops before that section. It is here because the
+section immediately above it is about verifiability, and a page that overstates
+its own product spends exactly the credibility it just asked for. It is also the
+cheapest possible demonstration of the claim: a reader can check every limitation
+against the product in a minute.
+
+### `PageSection`, and why it is not `Beat`
+
+New primitive, in the design system rather than `apps/web` — a hero styled
+locally is precisely the ad hoc styling ip-safety.md #2 prohibits, and Epic 0's
+build-before-screens rule does not exempt marketing layout.
+
+It deliberately does **not** reuse `Beat`. `Beat` is bound to `BeatId` and numbers
+itself from `BEAT_SEQUENCE` to enforce the score → gap → proof → fix → pitch
+order #3 mandates. If a marketing section could take a step number, that sequence
+would stop meaning anything on the screen where it is load-bearing. A test
+asserts `PageSection` never emits beat markup.
+
+### The tests are mostly negative, and one of them was wrong
+
+The risk on a marketing page is not that a heading fails to render. It is that a
+claim appears which nothing supports — and a suite that only checked the copy was
+present would pass just as happily on an invented testimonial. So the assertions
+are: no testimonial or press shapes, no `N+ brands` construction, no real client
+named, no price, the example label precedes the chart, no `<img>` or background
+image, no arbitrary-value or raw-palette utility.
+
+One of them was a false positive on honest copy: `toContain('rated')` matched
+inside **"Gene*rated*"**. Word-bounded. A small reminder that a lint-by-substring
+over prose fails in the direction that wastes time rather than the direction that
+ships a defect — but it fails.
+
+### IP-safety self-check
+
+* **#1 / #5** — written from the data model, this build log and product-spec.md
+  §3 only. **No competitor site was opened, referenced, or described to me while
+  building this**, and no section order, layout or visual element came from one.
+* **#8** — every sentence newly written. Nothing here is a reworded version of
+  anyone else's marketing copy.
+* **#4** — no icon pack, illustration kit or stock imagery. The only graphic is
+  the product's own Luminance Ledger; a test asserts no `<img>` and no background
+  image is emitted.
+* **#2** — every element from `@avp/design-system`; all classes audited against
+  `tailwind-preset.ts`, with tests rejecting arbitrary-value and raw-palette
+  utilities.
+* **#7** — no third-party content anywhere on the page.
+
+**IP-safety check passed:** no competitor copy, layout or asset referenced or
+reproduced; no fabricated social proof; design-system components and tokens only.
+
+### Tests
+
+design-system 106 → **109**, web 153 → **166**. Suite **964**, up from 948
+(api 623, workers 13, shared-types 53, design-system 109, web 166).
+`tsc --noEmit` clean in both packages; `next build` compiles all five routes.
