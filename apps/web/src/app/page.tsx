@@ -7,6 +7,7 @@ import { api, ApiProblem } from '@/lib/api';
 import { ClassificationResult } from '@/components/ClassificationResult';
 import { IntakeForm } from '@/components/IntakeForm';
 import { SignInPanel } from '@/components/SignInPanel';
+import { SignUpPanel } from '@/components/SignUpPanel';
 import { LandingView } from '@/components/marketing/LandingView';
 
 /**
@@ -26,6 +27,7 @@ type View =
   | { kind: 'loading' }
   | { kind: 'signed-out' }
   | { kind: 'sign-in' }
+  | { kind: 'sign-up' }
   | { kind: 'intake' }
   | { kind: 'working' }
   | { kind: 'result'; client: ClientDetail };
@@ -56,12 +58,16 @@ export default function Home() {
   if (view.kind === 'signed-out') {
     return (
       <main className="mx-auto max-w-report px-6 py-18">
-        <LandingView onGetStarted={() => setView({ kind: 'sign-in' })} />
+        <LandingView onGetStarted={() => setView({ kind: 'sign-up' })} />
       </main>
     );
   }
 
-  if (view.kind === 'sign-in') {
+  // Sign-in and sign-up are two view states here rather than two modes of one
+  // panel, because this route already owns the view machine, the back
+  // navigation and `load`. Putting the toggle inside a panel would split
+  // navigation ownership across two files — Epic 9.12.
+  if (view.kind === 'sign-in' || view.kind === 'sign-up') {
     return (
       <main className="mx-auto max-w-report px-6 py-18">
         {/*
@@ -75,7 +81,17 @@ export default function Home() {
           </Button>
         </div>
         <div className="mt-4">
-          <SignInPanel onSignedIn={load} />
+          {view.kind === 'sign-up' ? (
+            <SignUpPanel
+              onSignedUp={load}
+              onSwitchToSignIn={() => setView({ kind: 'sign-in' })}
+            />
+          ) : (
+            <SignInPanel
+              onSignedIn={load}
+              onSwitchToSignUp={() => setView({ kind: 'sign-up' })}
+            />
+          )}
         </div>
       </main>
     );

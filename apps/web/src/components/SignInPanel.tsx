@@ -7,20 +7,28 @@ import { api, ApiProblem } from '@/lib/api';
 /**
  * Sign in.
  *
- * **Scope, stated plainly: this signs an existing operator in and does nothing
- * else.** There is no sign-up form, no password reset and no invitation accept
- * in `apps/web` — `POST /auth/sign-up` exists on the API and has since Epic 1.3,
- * but nothing in the browser calls it. That is a missing FEATURE rather than a
- * rough edge, and Epic 9.11 deliberately did not build it: a landing page whose
- * call to action leads here is only complete once a stranger can actually get
- * an account, and that deserves its own brief. Named in build-log Epic 9.11.
+ * **Scope: this signs an existing operator in.** Creating an account is
+ * `SignUpPanel`, which Epic 9.12 added and which this panel now links to —
+ * until then there was no sign-up anywhere in `apps/web` and this paragraph
+ * said so. Password reset and invitation-accept are still not built.
+ *
+ * `onSwitchToSignUp` is REQUIRED rather than optional, for the same reason
+ * `IntakeForm.onFailed` is (Epic 9.11): an optional callback lets a caller
+ * silently drop the wiring and strand the user, and the compiler is a cheaper
+ * guard than a test this repo has no DOM library to write.
  *
  * ip-safety.md #2: every element from `@avp/design-system`. The width comes
  * from `max-w-form`, a token added in 9.11 to retire the hardcoded
  * `max-w-[26rem]` that used to live here — the only arbitrary Tailwind value
  * this component had, and exactly the off-system styling #2 prohibits.
  */
-export function SignInPanel({ onSignedIn }: { onSignedIn: () => void }) {
+export function SignInPanel({
+  onSignedIn,
+  onSwitchToSignUp,
+}: {
+  onSignedIn: () => void;
+  onSwitchToSignUp: () => void;
+}) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -100,8 +108,10 @@ export function SignInPanel({ onSignedIn }: { onSignedIn: () => void }) {
       </Card>
 
       <p className="text-ui-sm leading-prose text-text-tertiary">
-        No account yet? Access is by conversation while this is in pilot — reach out
-        and we will set your agency up.
+        No account yet?{' '}
+        <Button variant="ghost" size="sm" onClick={onSwitchToSignUp}>
+          Create your agency
+        </Button>
       </p>
     </div>
   );

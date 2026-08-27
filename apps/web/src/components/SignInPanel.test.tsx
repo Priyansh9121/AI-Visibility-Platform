@@ -10,7 +10,8 @@ import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { SignInPanel } from './SignInPanel';
 
-const render = () => renderToStaticMarkup(<SignInPanel onSignedIn={() => {}} />);
+const render = () =>
+  renderToStaticMarkup(<SignInPanel onSignedIn={() => {}} onSwitchToSignUp={() => {}} />);
 
 describe('the form is built from the design system', () => {
   it('uses real fields with bound labels, not styled inputs', () => {
@@ -52,12 +53,14 @@ describe('width comes from a token, not a hardcoded value', () => {
 });
 
 describe('it is honest about what it can and cannot do', () => {
-  it('says how to get an account, because it cannot create one', () => {
-    // There is no sign-up form in apps/web. Rather than leave a stranger who
-    // followed the landing page CTA staring at a form they cannot use, the
-    // panel says what to do instead. The real fix is a sign-up flow — named as
-    // a follow-up in build-log Epic 9.11, deliberately not built here.
-    expect(render()).toContain('No account yet?');
+  it('offers a real route to creating an account', () => {
+    // Until Epic 9.12 this was prose describing an offline process, because
+    // there was no sign-up form anywhere in apps/web. It is now a control that
+    // switches the view.
+    const out = render();
+    expect(out).toContain('No account yet?');
+    expect(out).toContain('Create your agency');
+    expect(out).toContain('avp-btn');
   });
 
   it('shows no error state before anything has been submitted', () => {
