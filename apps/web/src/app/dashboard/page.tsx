@@ -14,7 +14,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Card, CardBody } from '@avp/design-system';
+import { Button, Card, CardBody, ErrorState, LoadingState } from '@avp/design-system';
 import type { Dashboard } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
 import { DashboardView } from '@/components/dashboard/DashboardView';
@@ -169,7 +169,7 @@ export default function DashboardRoute() {
   if (view.kind === 'loading') {
     return (
       <main className="mx-auto max-w-app px-6 py-18">
-        <p className="text-ui-base text-text-tertiary">Loading your scans…</p>
+        <LoadingState message="Loading your scans…" />
       </main>
     );
   }
@@ -177,17 +177,15 @@ export default function DashboardRoute() {
   if (view.kind === 'error') {
     return (
       <main className="mx-auto max-w-app px-6 py-18">
-        <Card elevation="seated">
-          <CardBody>
-            <p className="text-ui-md font-medium text-text-primary">{view.title}</p>
-            <p className="mt-2 text-ui-base leading-prose text-text-secondary">{view.detail}</p>
-            <div className="mt-5">
-              <Button variant="secondary" onClick={() => window.location.assign('/')}>
-                Back to intake
-              </Button>
-            </div>
-          </CardBody>
-        </Card>
+        <ErrorState
+          title={view.title}
+          detail={view.detail}
+          action={
+            <Button variant="secondary" onClick={() => window.location.assign('/')}>
+              Back to intake
+            </Button>
+          }
+        />
       </main>
     );
   }

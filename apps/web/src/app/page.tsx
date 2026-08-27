@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Button } from '@avp/design-system';
+import { Button, Card, CardBody, LoadingState } from '@avp/design-system';
 import type { ClientDetail, Me } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
 import { ClassificationResult } from '@/components/ClassificationResult';
@@ -64,12 +64,19 @@ export default function Home() {
   if (view.kind === 'sign-in') {
     return (
       <main className="mx-auto max-w-report px-6 py-18">
-        <div className="mb-8">
+        {/*
+          The back link is aligned to the form column rather than the page, so
+          it reads as part of the same object instead of floating in the gutter
+          above it. 9.10 wired this step for function and said so nowhere.
+        */}
+        <div className="mx-auto max-w-form">
           <Button variant="ghost" size="sm" onClick={() => setView({ kind: 'signed-out' })}>
             Back
           </Button>
         </div>
-        <SignInPanel onSignedIn={load} />
+        <div className="mt-4">
+          <SignInPanel onSignedIn={load} />
+        </div>
       </main>
     );
   }
@@ -81,7 +88,7 @@ export default function Home() {
           <p className="text-ui-2xs uppercase tracking-caps text-text-tertiary">
             AI Visibility Platform
           </p>
-          <h1 className="mt-2 max-w-[20ch] font-editorial text-ed-sm leading-display tracking-display text-text-primary">
+          <h1 className="mt-2 max-w-headline font-editorial text-ed-sm leading-display tracking-display text-text-primary">
             Start with a website.
           </h1>
           <p className="mt-3 max-w-measure text-ui-md leading-prose text-text-secondary">
@@ -113,13 +120,14 @@ export default function Home() {
         )}
       </header>
 
-      {view.kind === 'loading' && <p className="text-ui-base text-text-tertiary">Loading…</p>}
+      {view.kind === 'loading' && <LoadingState message="Loading your workspace…" />}
 
       {(view.kind === 'intake' || view.kind === 'working') && (
         <div className="flex flex-col gap-8">
           <IntakeForm
             onStarted={() => setView({ kind: 'working' })}
             onClassified={(client) => setView({ kind: 'result', client })}
+            onFailed={() => setView({ kind: 'intake' })}
           />
           {view.kind === 'working' && <InProgress />}
         </div>
@@ -145,14 +153,18 @@ export default function Home() {
  */
 function InProgress() {
   return (
-    <div className="rounded-lg border border-line-hairline bg-surface-sunken p-6">
-      <p className="text-ui-md font-medium text-text-primary">Reading the site</p>
-      <ol className="mt-3 flex flex-col gap-2 text-ui-base text-text-secondary">
-        <li>Fetching the homepage and a few key pages</li>
-        <li>Pulling out structured data and page structure</li>
-        <li>Working out the industry and brand name</li>
-      </ol>
-      <p className="mt-4 text-ui-sm text-text-tertiary">This usually takes a few seconds.</p>
-    </div>
+    <Card elevation="seated">
+      <CardBody>
+        <LoadingState
+          message="Reading the site"
+          steps={[
+            'Fetching the homepage and a few key pages',
+            'Pulling out structured data and page structure',
+            'Working out the industry and brand name',
+          ]}
+          hint="This usually takes a few seconds."
+        />
+      </CardBody>
+    </Card>
   );
 }
