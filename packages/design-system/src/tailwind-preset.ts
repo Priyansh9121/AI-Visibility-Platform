@@ -157,6 +157,8 @@ const tailwindPreset = {
         measure: v('measure'),
         report: v('report-width'),
         app: v('app-max'),
+        form: v('form-width'),
+        headline: v('headline'),
       },
       transitionDuration: {
         hover: v('duration-hover'),

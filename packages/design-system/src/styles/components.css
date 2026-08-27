@@ -287,6 +287,58 @@
    visibly empty rather than a zero-width fill that would read as a score of 0. */
 .avp-meter--empty .avp-meter__track { opacity: 0.55; }
 
+/* ==================== LoadingState / ErrorState =================== */
+/* One treatment each, app-wide. Epic 9.11 replaced four bespoke loading
+   paragraphs and five bespoke error cards with these. */
+
+.avp-loading { display: flex; flex-direction: column; gap: var(--avp-space-3); }
+
+.avp-loading__message {
+  font-size: var(--avp-text-ui-md);
+  font-weight: 500;
+  color: var(--avp-text-primary);
+}
+
+.avp-loading__steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--avp-space-2);
+  font-size: var(--avp-text-ui-base);
+  line-height: var(--avp-leading-prose);
+  color: var(--avp-text-secondary);
+  max-width: var(--avp-measure);
+}
+
+.avp-loading__hint {
+  font-size: var(--avp-text-ui-sm);
+  color: var(--avp-text-tertiary);
+}
+
+.avp-errorstate__title {
+  font-size: var(--avp-text-ui-md);
+  font-weight: 500;
+  color: var(--avp-text-primary);
+}
+
+.avp-errorstate__detail {
+  margin-top: var(--avp-space-2);
+  font-size: var(--avp-text-ui-base);
+  line-height: var(--avp-leading-prose);
+  color: var(--avp-text-secondary);
+  max-width: var(--avp-measure);
+}
+
+/* Small, last, and monospaced: a reference to quote back to us, not a headline.
+   Same treatment ClassificationResult already used for its reason code. */
+.avp-errorstate__code {
+  margin-top: var(--avp-space-3);
+  font-family: var(--avp-font-mono);
+  font-size: var(--avp-text-ui-2xs);
+  color: var(--avp-text-tertiary);
+}
+
+.avp-errorstate__action { margin-top: var(--avp-space-5); }
+
 /* ========================== PageSection ========================== */
 /* Sections of a non-report page. Same editorial voice as the report's beats,
    deliberately without their numbering — see PageSection.tsx. */

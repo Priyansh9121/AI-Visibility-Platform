@@ -124,6 +124,13 @@
   --avp-report-width: 52rem;
   --avp-report-gutter: 3.5rem;
   --avp-app-max: 90rem;
+  /* A single-column form (sign-in, and any later account screen). Narrow
+     enough that a short field does not strand its label across dead space.
+     Added in Epic 9.11 to retire a hardcoded `max-w-[26rem]` in apps/web. */
+  --avp-form-width: 26rem;
+  /* Display headlines wrap by measure, not by container. Editorial type set to
+     the full prose measure reads as a paragraph rather than a headline. */
+  --avp-headline: 20ch;
 
   /* --- elevation: borders and hard offsets, not blur -------------- */
   --avp-elev-flat: none;

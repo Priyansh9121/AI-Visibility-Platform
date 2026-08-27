@@ -7,6 +7,8 @@ import { DataTable } from './Table.js';
 import { ScoreDisplay } from './ScoreDisplay.js';
 import { ScoreMeter } from './ScoreMeter.js';
 import { PageSection } from './marketing/PageSection.js';
+import { LoadingState } from './state/LoadingState.js';
+import { ErrorState } from './state/ErrorState.js';
 import { LuminanceLedger } from './chart/LuminanceLedger.js';
 import { AnswerShelf } from './chart/AnswerShelf.js';
 import type { ShelfRowInput } from './chart/answerShelfLayout.js';
@@ -306,5 +308,77 @@ describe('PageSection is the report voice without the report contract', () => {
     const out = html(<PageSection heading="x" />);
     expect(out).not.toContain('avp-beat');
     expect(out).not.toContain('avp-beat__step');
+  });
+});
+
+describe('LoadingState is the one way this product says wait', () => {
+  it('names the work, and announces itself to assistive tech', () => {
+    const out = html(<LoadingState message="Assembling the report…" />);
+    expect(out).toContain('Assembling the report…');
+    // A visual-only change tells a screen reader nothing.
+    expect(out).toContain('role="status"');
+    expect(out).toContain('aria-live="polite"');
+  });
+
+  it('renders named steps when the caller knows them', () => {
+    const out = html(
+      <LoadingState message="Reading the site" steps={['Fetching pages', 'Reading schema']} hint="A few seconds." />,
+    );
+    expect(out).toContain('Fetching pages');
+    expect(out).toContain('Reading schema');
+    expect(out).toContain('A few seconds.');
+  });
+
+  it('omits the step list entirely when there are none', () => {
+    // An empty <ol> is a bullet of nothing. A single-request wait has no steps
+    // worth naming, and inventing some would imply progress we cannot observe.
+    const out = html(<LoadingState message="Loading…" />);
+    expect(out).not.toContain('avp-loading__steps');
+    expect(out).not.toContain('avp-loading__hint');
+  });
+
+  it('has no spinner and no progress bar', () => {
+    // The rule Epic 2 set and Epic 9.7 restated: this product cannot measure
+    // real progress on any long operation, and a bar that fills on a timer is
+    // a lie the user eventually catches.
+    const out = html(<LoadingState message="Working" steps={['a', 'b']} />);
+    expect(out).not.toContain('role="progressbar"');
+    expect(out).not.toContain('aria-valuenow');
+    expect(out).not.toContain('animate-spin');
+  });
+});
+
+describe('ErrorState is the one way this product says that failed', () => {
+  it('states the problem and offers the way out', () => {
+    const out = html(
+      <ErrorState title="No report for that scan" detail="It may belong to another agency." action={<Button>Back</Button>} />,
+    );
+    expect(out).toContain('No report for that scan');
+    expect(out).toContain('It may belong to another agency.');
+    expect(out).toContain('Back');
+    expect(out).toContain('role="alert"');
+    // Seated, not raised: an error is not a thing to lift off the page.
+    expect(out).toContain('avp-card--seated');
+  });
+
+  it('drops every optional part rather than rendering an empty one', () => {
+    const out = html(<ErrorState title="Something went wrong" />);
+    expect(out).not.toContain('avp-errorstate__detail');
+    expect(out).not.toContain('avp-errorstate__code');
+    expect(out).not.toContain('avp-errorstate__action');
+  });
+
+  it('treats an empty-string code as no code', () => {
+    // `code=""` is what a stringly-typed API field gives you on a good day.
+    expect(html(<ErrorState title="x" code="" />)).not.toContain('avp-errorstate__code');
+    expect(html(<ErrorState title="x" code="E_NOPE" />)).toContain('E_NOPE');
+  });
+
+  it('never puts a raw status code in the title position', () => {
+    // The title is passed in, so this asserts the CONTRACT the docstring states
+    // by checking the component does not decorate it with one.
+    const out = html(<ErrorState title="No report for that scan" />);
+    expect(out).not.toContain('404');
+    expect(out).not.toContain('500');
   });
 });
