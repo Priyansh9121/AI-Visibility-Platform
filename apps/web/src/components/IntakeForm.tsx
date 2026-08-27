@@ -22,9 +22,25 @@ import { api, ApiProblem } from '@/lib/api';
 export function IntakeForm({
   onClassified,
   onStarted,
+  onFailed,
 }: {
   onClassified: (client: ClientDetail) => void;
   onStarted: () => void;
+  /**
+   * The request failed and the form is showing why — Epic 9.11.
+   *
+   * Without this the screen showed BOTH states at once: `onStarted` moved the
+   * page into `working`, nothing ever moved it back, so a rejected submission
+   * rendered the field error and left "Reading the site" sitting underneath it
+   * indefinitely. Found in a browser, not by a test — the two states live in
+   * different components and each was correct on its own.
+   *
+   * **Required, not optional.** An optional callback would let a caller drop
+   * the wiring again and reintroduce the exact bug, silently. Required, the
+   * compiler is the guard — which is a stronger guarantee than a test, and one
+   * this repo has no DOM-driving test library to write anyway.
+   */
+  onFailed: () => void;
 }) {
   const [url, setUrl] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -51,6 +67,9 @@ export function IntakeForm({
       } else {
         setError('Could not reach the API. Is it running on port 8000?');
       }
+      // Take the page out of "working" as well as showing the error here, or
+      // the progress card stays on screen next to the failure that ended it.
+      onFailed();
     } finally {
       setBusy(false);
     }
