@@ -3010,6 +3010,30 @@
         "title": "Sentiment",
         "type": "string"
       },
+      "ShareLinkOut": {
+        "description": "The public link for a report \u2014 Epic 9.8.\n\nCarries the complete URL, not just the token, because the operator's next\naction is to paste it into an email. Returning a bare token would force\nevery caller to rebuild the same string, which is how a frontend and a\nbackend end up disagreeing about a path.\n\n`token` is exposed alongside it deliberately: it is the operator's OWN\ncapability for their OWN scan, already implied by the URL beside it, and\ntests assert on it without having to parse a URL apart.",
+        "properties": {
+          "scanId": {
+            "title": "Scanid",
+            "type": "string"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scanId",
+          "token",
+          "url"
+        ],
+        "title": "ShareLinkOut",
+        "type": "object"
+      },
       "ShelfSlotOut": {
         "description": "One brand standing in one ordinal slot of one answer.\n\nip-safety.md #7 names exactly this shape as permitted: \"counts and ordinal\npositions (e.g. 'mentioned 3rd')\" plus \"names of entities mentioned\". There\nis no field here that could carry what the answer SAID about the brand \u2014\nonly that it named it, and where in the order.",
         "properties": {
@@ -4066,6 +4090,49 @@
         ]
       }
     },
+    "/api/v1/reports/{token}": {
+      "get": {
+        "description": "A report, by share token. **No session required** \u2014 Epic 9.8.\n\nThis is the send path Epic 9's acceptance criterion needs: the prospect a\nreport is about has no account, and must not need one to read it.\n\n**The token is the whole credential**, so the rules are narrow and worth\nstating:\n\n* **Read-only.** There is no sibling route that mutates anything by token.\n  A holder cannot edit the competitor set, re-run the scan, or reach any\n  other scan \u2014 the token resolves to exactly one row.\n* **`404` for every rejection, with one code path.** A malformed token, an\n  unknown token and a well-formed miss are indistinguishable in both status\n  and body. There is no shape or length pre-check, deliberately: rejecting\n  an implausible token faster than a plausible one is a timing oracle that\n  makes enumeration cheaper. Every guess pays for the same index lookup.\n* **No `401`, ever.** A `401` would say \"this token is real, authenticate to\n  use it\", which is precisely the bit an enumerator wants.\n* **Same projection as the authenticated route.** `build_report` is reused\n  rather than reimplemented, so the facts-only guarantee `test_ip_safety.py`\n  sweeps over this module covers this response too \u2014 a second assembly path\n  would be a second place for a snippet to slip in.\n\n**Errors:** `404` only.",
+        "operationId": "get_public_report_api_v1_reports__token__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "token",
+            "required": true,
+            "schema": {
+              "title": "Token",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Public Report",
+        "tags": [
+          "reports"
+        ]
+      }
+    },
     "/api/v1/scans/{scanId}": {
       "get": {
         "description": "A scan with its prompt set and every engine result.",
@@ -4562,6 +4629,49 @@
         "summary": "List Scan Scores",
         "tags": [
           "scores"
+        ]
+      }
+    },
+    "/api/v1/scans/{scanId}/share": {
+      "post": {
+        "description": "Mint (or return) the public link for this scan's report \u2014 Epic 9.8.\n\n**An explicit action, not a side effect of running a scan.** A scan is a\nprivate measurement until an agency decides otherwise; publishing every\nreport at creation time and relying on the URL being unknown would make\nthat decision for them. This is the moment they make it.\n\n**`200`, not `201`, and idempotent.** Calling twice returns the same token\nrather than minting a second live link to the same report \u2014 there is no\nrevocation, so every extra token would be a URL nobody is tracking. The\nsecond call creates nothing, so it does not claim to.\n\n**Errors:** `401`, `404` (unknown scan, or another agency's).",
+        "operationId": "create_share_link_api_v1_scans__scanId__share_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scanId",
+            "required": true,
+            "schema": {
+              "title": "Scanid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShareLinkOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Share Link",
+        "tags": [
+          "reports"
         ]
       }
     }

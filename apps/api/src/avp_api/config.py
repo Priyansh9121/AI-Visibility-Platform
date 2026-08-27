@@ -80,6 +80,18 @@ class Settings(BaseSettings):
         default_factory=lambda: ["http://localhost:3000"]
     )
 
+    # --- public share links (Epic 9.8) -------------------------------------
+    # Where the WEB app is reachable from outside. The API returns a complete,
+    # copyable URL from POST /scans/{id}/share rather than a bare token,
+    # because the operator's next action is to paste it into an email — and a
+    # token alone forces every caller to reinvent the same string, which is
+    # how a frontend and a backend end up disagreeing about the path.
+    #
+    # Deliberately NOT derived from the request's Host or Origin header: those
+    # are attacker-controlled, and a share link built from a spoofed Host is a
+    # phishing URL carrying a real token. Configuration, not reflection.
+    public_web_base_url: str = "http://localhost:3000"
+
     # --- seats -------------------------------------------------------------
     default_seat_limit: int = 3
 

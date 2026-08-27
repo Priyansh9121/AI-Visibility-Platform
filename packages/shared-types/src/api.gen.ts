@@ -343,6 +343,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/reports/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Public Report
+         * @description A report, by share token. **No session required** — Epic 9.8.
+         *
+         *     This is the send path Epic 9's acceptance criterion needs: the prospect a
+         *     report is about has no account, and must not need one to read it.
+         *
+         *     **The token is the whole credential**, so the rules are narrow and worth
+         *     stating:
+         *
+         *     * **Read-only.** There is no sibling route that mutates anything by token.
+         *       A holder cannot edit the competitor set, re-run the scan, or reach any
+         *       other scan — the token resolves to exactly one row.
+         *     * **`404` for every rejection, with one code path.** A malformed token, an
+         *       unknown token and a well-formed miss are indistinguishable in both status
+         *       and body. There is no shape or length pre-check, deliberately: rejecting
+         *       an implausible token faster than a plausible one is a timing oracle that
+         *       makes enumeration cheaper. Every guess pays for the same index lookup.
+         *     * **No `401`, ever.** A `401` would say "this token is real, authenticate to
+         *       use it", which is precisely the bit an enumerator wants.
+         *     * **Same projection as the authenticated route.** `build_report` is reused
+         *       rather than reimplemented, so the facts-only guarantee `test_ip_safety.py`
+         *       sweeps over this module covers this response too — a second assembly path
+         *       would be a second place for a snippet to slip in.
+         *
+         *     **Errors:** `404` only.
+         */
+        get: operations["get_public_report_api_v1_reports__token__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/scans/{scanId}": {
         parameters: {
             query?: never;
@@ -572,6 +615,38 @@ export interface paths {
         get: operations["list_scan_scores_api_v1_scans__scanId__scores_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/scans/{scanId}/share": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Share Link
+         * @description Mint (or return) the public link for this scan's report — Epic 9.8.
+         *
+         *     **An explicit action, not a side effect of running a scan.** A scan is a
+         *     private measurement until an agency decides otherwise; publishing every
+         *     report at creation time and relying on the URL being unknown would make
+         *     that decision for them. This is the moment they make it.
+         *
+         *     **`200`, not `201`, and idempotent.** Calling twice returns the same token
+         *     rather than minting a second live link to the same report — there is no
+         *     revocation, so every extra token would be a URL nobody is tracking. The
+         *     second call creates nothing, so it does not claim to.
+         *
+         *     **Errors:** `401`, `404` (unknown scan, or another agency's).
+         */
+        post: operations["create_share_link_api_v1_scans__scanId__share_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1703,6 +1778,27 @@ export interface components {
          */
         Sentiment: "positive" | "neutral" | "negative";
         /**
+         * ShareLinkOut
+         * @description The public link for a report — Epic 9.8.
+         *
+         *     Carries the complete URL, not just the token, because the operator's next
+         *     action is to paste it into an email. Returning a bare token would force
+         *     every caller to rebuild the same string, which is how a frontend and a
+         *     backend end up disagreeing about a path.
+         *
+         *     `token` is exposed alongside it deliberately: it is the operator's OWN
+         *     capability for their OWN scan, already implied by the URL beside it, and
+         *     tests assert on it without having to parse a URL apart.
+         */
+        ShareLinkOut: {
+            /** Scanid */
+            scanId: string;
+            /** Token */
+            token: string;
+            /** Url */
+            url: string;
+        };
+        /**
          * ShelfSlotOut
          * @description One brand standing in one ordinal slot of one answer.
          *
@@ -2342,6 +2438,37 @@ export interface operations {
             };
         };
     };
+    get_public_report_api_v1_reports__token__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_scan_api_v1_scans__scanId__get: {
         parameters: {
             query?: never;
@@ -2673,6 +2800,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ScoreOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_share_link_api_v1_scans__scanId__share_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scanId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShareLinkOut"];
                 };
             };
             /** @description Validation Error */
