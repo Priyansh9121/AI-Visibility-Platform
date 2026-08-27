@@ -15,6 +15,7 @@ import { api, ApiProblem } from '@/lib/api';
 import { ReportView } from '@/components/report/ReportView';
 import { CompetitorEditor } from '@/components/report/CompetitorEditor';
 import { ShareLinkBar } from '@/components/report/ShareLinkBar';
+import { WorkspaceShell } from '@/components/shell/WorkspaceShell';
 
 type View =
   | { kind: 'loading' }
@@ -78,15 +79,15 @@ export default function ReportPageRoute({
 
   if (view.kind === 'loading') {
     return (
-      <main className="mx-auto max-w-report px-6 py-18">
+      <WorkspaceShell current="dashboard">
         <LoadingState message="Assembling the report…" />
-      </main>
+      </WorkspaceShell>
     );
   }
 
   if (view.kind === 'error') {
     return (
-      <main className="mx-auto max-w-report px-6 py-18">
+      <WorkspaceShell current="dashboard">
         <ErrorState
           title={view.title}
           detail={view.detail}
@@ -96,12 +97,12 @@ export default function ReportPageRoute({
             </Button>
           }
         />
-      </main>
+      </WorkspaceShell>
     );
   }
 
   return (
-    <main className="mx-auto max-w-report px-6 py-18">
+    <WorkspaceShell current="dashboard">
       {/*
         Operator chrome, deliberately ABOVE the report rather than inside it.
         ReportView is the document that gets sent; anything to do with sending
@@ -121,6 +122,6 @@ export default function ReportPageRoute({
           ) : undefined
         }
       />
-    </main>
+    </WorkspaceShell>
   );
 }

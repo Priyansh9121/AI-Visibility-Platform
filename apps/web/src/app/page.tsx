@@ -9,6 +9,7 @@ import { IntakeForm } from '@/components/IntakeForm';
 import { SignInPanel } from '@/components/SignInPanel';
 import { SignUpPanel } from '@/components/SignUpPanel';
 import { LandingView } from '@/components/marketing/LandingView';
+import { WorkspaceShell } from '@/components/shell/WorkspaceShell';
 
 /**
  * `signed-out` is the PUBLIC LANDING PAGE — Epic 9.10.
@@ -83,12 +84,18 @@ export default function Home() {
         <div className="mt-4">
           {view.kind === 'sign-up' ? (
             <SignUpPanel
-              onSignedUp={load}
+              // A brand new agency goes to onboarding, not to an empty
+              // dashboard — Epic 9.13, Part D.
+              onSignedUp={() => window.location.assign('/welcome')}
               onSwitchToSignIn={() => setView({ kind: 'sign-in' })}
             />
           ) : (
             <SignInPanel
-              onSignedIn={load}
+              // Dashboard is the landing route after signing IN. It is not the
+              // landing route for `/` itself: a signed-in operator who types
+              // the bare domain gets Compare, which is what `/` has always
+              // been. Only the sign-in transition redirects.
+              onSignedIn={() => window.location.assign('/dashboard')}
               onSwitchToSignUp={() => setView({ kind: 'sign-up' })}
             />
           )}
@@ -97,43 +104,23 @@ export default function Home() {
     );
   }
 
+  // `/` signed in IS the Compare screen — the sidebar's second destination.
+  // The page keeps its own heading; the shell supplies navigation, and the
+  // Dashboard / Sign out buttons that used to live in this header moved into
+  // the sidebar where every screen can reach them.
   return (
-    <main className="mx-auto max-w-report px-6 py-18">
-      <header className="mb-14 flex items-end justify-between gap-6 border-b border-line-hairline pb-8">
-        <div>
-          <p className="text-ui-2xs uppercase tracking-caps text-text-tertiary">
-            AI Visibility Platform
-          </p>
-          <h1 className="mt-2 max-w-headline font-editorial text-ed-sm leading-display tracking-display text-text-primary">
-            Start with a website.
-          </h1>
-          <p className="mt-3 max-w-measure text-ui-md leading-prose text-text-secondary">
-            We read the site the way a buyer would, work out what the business actually does,
-            and use that to decide who it competes with.
-          </p>
-        </div>
-        {me && (
-          <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => window.location.assign('/dashboard')}
-            >
-              Dashboard
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={async () => {
-                await api.logOut();
-                setMe(null);
-                setView({ kind: 'signed-out' });
-              }}
-            >
-              Sign out
-            </Button>
-          </div>
-        )}
+    <WorkspaceShell current="compare" agencyName={me?.agency.name} seats={me?.seats}>
+      <header className="mb-14 border-b border-line-hairline pb-8">
+        <p className="text-ui-2xs uppercase tracking-caps text-text-tertiary">
+          Compare
+        </p>
+        <h1 className="mt-2 max-w-headline font-editorial text-ed-sm leading-display tracking-display text-text-primary">
+          Start with a website.
+        </h1>
+        <p className="mt-3 max-w-measure text-ui-md leading-prose text-text-secondary">
+          We read the site the way a buyer would, work out what the business actually does,
+          and use that to decide who it competes with.
+        </p>
       </header>
 
       {view.kind === 'loading' && <LoadingState message="Loading your workspace…" />}
@@ -155,7 +142,7 @@ export default function Home() {
           onReset={() => setView({ kind: 'intake' })}
         />
       )}
-    </main>
+    </WorkspaceShell>
   );
 }
 

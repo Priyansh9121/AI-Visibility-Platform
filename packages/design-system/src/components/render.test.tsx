@@ -7,6 +7,7 @@ import { DataTable } from './Table.js';
 import { ScoreDisplay } from './ScoreDisplay.js';
 import { ScoreMeter } from './ScoreMeter.js';
 import { PageSection } from './marketing/PageSection.js';
+import { AppShell, NavItem } from './shell/AppShell.js';
 import { LoadingState } from './state/LoadingState.js';
 import { ErrorState } from './state/ErrorState.js';
 import { LuminanceLedger } from './chart/LuminanceLedger.js';
@@ -380,5 +381,78 @@ describe('ErrorState is the one way this product says that failed', () => {
     const out = html(<ErrorState title="No report for that scan" />);
     expect(out).not.toContain('404');
     expect(out).not.toContain('500');
+  });
+});
+
+describe('AppShell frames a screen without restyling it', () => {
+  const shell = (wide = false) =>
+    html(
+      <AppShell
+        brand={<span>Northlight</span>}
+        nav={<NavItem href="/dashboard" label="Dashboard" current />}
+        footer={<span>Sign out</span>}
+        wide={wide}
+      >
+        <p id="payload">the screen</p>
+      </AppShell>,
+    );
+
+  it('renders brand, nav, footer and the content untouched', () => {
+    const out = shell();
+    expect(out).toContain('Northlight');
+    expect(out).toContain('Dashboard');
+    expect(out).toContain('Sign out');
+    // The child is passed through verbatim — the shell is a frame, not a
+    // wrapper that decorates what it holds.
+    expect(out).toContain('<p id="payload">the screen</p>');
+  });
+
+  it('names the navigation landmark for assistive tech', () => {
+    const out = shell();
+    expect(out).toContain('<nav');
+    expect(out).toContain('aria-label="Main"');
+    // One <main> per document. The shell owns it, so wrapped pages must not
+    // also render one — that is why the routes were changed to drop theirs.
+    expect(out.match(/<main/g)).toHaveLength(1);
+  });
+
+  it('widens only when asked', () => {
+    expect(shell(false)).not.toContain('avp-shell__content--wide');
+    expect(shell(true)).toContain('avp-shell__content--wide');
+  });
+
+  it('omits the footer entirely when there is none', () => {
+    const out = html(<AppShell brand={<span>x</span>} nav={<span>y</span>}>z</AppShell>);
+    expect(out).not.toContain('avp-shell__footer');
+  });
+});
+
+describe('NavItem is a link, never a dead control', () => {
+  it('renders an anchor with a real href', () => {
+    const out = html(<NavItem href="/clients" label="Clients" />);
+    expect(out).toContain('<a href="/clients"');
+    // Not a button: every destination is a real URL, so it must be
+    // middle-clickable and bookmarkable.
+    expect(out).not.toContain('<button');
+  });
+
+  it('marks the current page for assistive tech, not by colour alone', () => {
+    expect(html(<NavItem href="/x" label="X" current />)).toContain('aria-current="page"');
+    expect(html(<NavItem href="/x" label="X" />)).not.toContain('aria-current');
+  });
+
+  it('has no disabled state to reach for', () => {
+    // A nav item that looks like a destination and goes nowhere is the
+    // "button that does nothing" this epic's brief ruled out. There is no
+    // prop that would produce one.
+    const out = html(<NavItem href="/x" label="X" note="a note" />);
+    expect(out).not.toContain('disabled');
+    expect(out).not.toContain('aria-disabled');
+    expect(out).toContain('a note');
+  });
+
+  it('hides its icon from the accessibility tree', () => {
+    const out = html(<NavItem href="/x" label="X" icon={<svg />} />);
+    expect(out).toContain('aria-hidden="true"');
   });
 });
