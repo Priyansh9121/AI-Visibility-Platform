@@ -7,6 +7,7 @@
  */
 
 import type {
+  Client,
   ClientDetail,
   CompetitorInput,
   CompetitorSet,
@@ -129,6 +130,15 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({}),
     }),
+
+  /**
+   * Every client this agency has added — Epic 9.13's Clients screen.
+   *
+   * The endpoint has existed since Epic 2 and nothing in the browser called it,
+   * the same way `sign-up` sat unused until 9.12. Cursor-paginated; the screen
+   * reads the first page and says so rather than pretending it is the whole set.
+   */
+  clients: () => request<{ data: Client[]; nextCursor: string | null }>('/clients'),
 
   createClient: (payload: CreateClientRequest) =>
     request<ClientDetail>('/clients', {

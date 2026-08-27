@@ -287,6 +287,99 @@
    visibly empty rather than a zero-width fill that would read as a score of 0. */
 .avp-meter--empty .avp-meter__track { opacity: 0.55; }
 
+/* ============================= AppShell ========================== */
+/* The persistent frame around signed-in screens (Epic 9.13). It frames what
+   Epics 7 / 9.8 / 9.9 / 9.10 settled; it does not restyle it. */
+
+.avp-shell {
+  display: grid;
+  grid-template-columns: 15rem minmax(0, 1fr);
+  min-height: 100vh;
+  background: var(--avp-surface-ground);
+}
+
+.avp-shell__sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--avp-space-8);
+  padding: var(--avp-space-8) var(--avp-space-5);
+  border-right: 1px solid var(--avp-line-hairline);
+  background: var(--avp-surface-sunken);
+}
+
+.avp-shell__brand {
+  display: flex;
+  flex-direction: column;
+  gap: var(--avp-space-1);
+}
+
+.avp-shell__footer { margin-top: auto; }
+
+.avp-shell__content {
+  min-width: 0;
+  padding: var(--avp-space-18) var(--avp-space-6);
+  margin-inline: auto;
+  width: 100%;
+  max-width: calc(var(--avp-report-width) + (2 * var(--avp-space-6)));
+}
+
+.avp-shell__content--wide { max-width: var(--avp-app-max); }
+
+.avp-nav { display: flex; flex-direction: column; gap: var(--avp-space-0_5); }
+
+.avp-nav__item {
+  display: flex;
+  align-items: center;
+  gap: var(--avp-space-3);
+  padding: var(--avp-space-2) var(--avp-space-3);
+  border-radius: var(--avp-radius-md);
+  color: var(--avp-text-secondary);
+  text-decoration: none;
+  transition: background var(--avp-duration-hover) var(--avp-ease-standard),
+    color var(--avp-duration-hover) var(--avp-ease-standard);
+}
+
+.avp-nav__item:hover { background: var(--avp-surface-seated); color: var(--avp-text-primary); }
+
+/* Current is marked by weight and a rule, not by colour alone — the same
+   reason VisibilityBadge resolves its label colour rather than relying on hue. */
+.avp-nav__item.is-current {
+  background: var(--avp-surface-seated);
+  color: var(--avp-text-primary);
+  font-weight: 600;
+  box-shadow: inset 2px 0 0 var(--avp-beacon-600);
+}
+
+.avp-nav__icon { display: inline-flex; flex: none; }
+
+.avp-nav__text { display: flex; flex-direction: column; min-width: 0; }
+
+.avp-nav__label { font-size: var(--avp-text-ui-base); }
+
+.avp-nav__note {
+  font-size: var(--avp-text-ui-2xs);
+  color: var(--avp-text-tertiary);
+}
+
+/* One breakpoint, no drawer. At four destinations a hamburger is machinery
+   nobody needs, so the sidebar becomes a strip above the content instead. */
+@media (max-width: 60rem) {
+  .avp-shell { grid-template-columns: minmax(0, 1fr); }
+  .avp-shell__sidebar {
+    flex-direction: row;
+    align-items: center;
+    gap: var(--avp-space-5);
+    padding: var(--avp-space-4) var(--avp-space-6);
+    border-right: none;
+    border-bottom: 1px solid var(--avp-line-hairline);
+    overflow-x: auto;
+  }
+  .avp-shell__footer { margin-top: 0; margin-left: auto; }
+  .avp-nav { flex-direction: row; gap: var(--avp-space-1); }
+  .avp-nav__note { display: none; }
+  .avp-shell__content { padding: var(--avp-space-10) var(--avp-space-6); }
+}
+
 /* ==================== LoadingState / ErrorState =================== */
 /* One treatment each, app-wide. Epic 9.11 replaced four bespoke loading
    paragraphs and five bespoke error cards with these. */

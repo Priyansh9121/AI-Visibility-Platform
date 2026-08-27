@@ -18,6 +18,7 @@ import { Button, Card, CardBody, ErrorState, LoadingState } from '@avp/design-sy
 import type { Dashboard } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
 import { DashboardView } from '@/components/dashboard/DashboardView';
+import { WorkspaceShell } from '@/components/shell/WorkspaceShell';
 import { type Poller, createPoller, settled, shouldPoll } from '@/lib/dashboard/polling';
 
 type View =
@@ -168,15 +169,15 @@ export default function DashboardRoute() {
 
   if (view.kind === 'loading') {
     return (
-      <main className="mx-auto max-w-app px-6 py-18">
+      <WorkspaceShell current="dashboard" wide>
         <LoadingState message="Loading your scans…" />
-      </main>
+      </WorkspaceShell>
     );
   }
 
   if (view.kind === 'error') {
     return (
-      <main className="mx-auto max-w-app px-6 py-18">
+      <WorkspaceShell current="dashboard" wide>
         <ErrorState
           title={view.title}
           detail={view.detail}
@@ -186,12 +187,20 @@ export default function DashboardRoute() {
             </Button>
           }
         />
-      </main>
+      </WorkspaceShell>
     );
   }
 
   return (
-    <main className="mx-auto max-w-app px-6 py-18">
+    // The shell FRAMES the dashboard; DashboardView is untouched. Its own
+    // header still names the agency, which is deliberate — the sidebar says
+    // whose workspace this is, the page says what the page is.
+    <WorkspaceShell
+      current="dashboard"
+      agencyName={view.dashboard.agency.name}
+      seats={view.dashboard.seats}
+      wide
+    >
       <DashboardView
         dashboard={view.dashboard}
         onRerun={rerun}
@@ -200,6 +209,6 @@ export default function DashboardRoute() {
         live={live}
         pollProblem={pollProblem}
       />
-    </main>
+    </WorkspaceShell>
   );
 }

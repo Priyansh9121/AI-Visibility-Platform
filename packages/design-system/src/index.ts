@@ -68,6 +68,13 @@ export {
   type FixItem,
 } from './components/report/ReportLayout.js';
 
+export {
+  AppShell,
+  NavItem,
+  type AppShellProps,
+  type NavItemProps,
+} from './components/shell/AppShell.js';
+
 export { LoadingState, type LoadingStateProps } from './components/state/LoadingState.js';
 export { ErrorState, type ErrorStateProps } from './components/state/ErrorState.js';
 
