@@ -67,6 +67,20 @@ class InvalidCredentials(ProblemError):
     title = "Invalid email or password"
 
 
+class InvalidResetToken(ProblemError):
+    """A password-reset token that is unknown, expired, used, or orphaned.
+
+    **400, not 404, and one class for all four reasons.** A 404 would confirm
+    which guesses were shaped like real tokens; separate classes would leak the
+    same thing through `type`. The reset-confirm endpoint has exactly one
+    failure to report.
+    """
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    problem_type = "invalid-reset-token"
+    title = "That reset link is not valid"
+
+
 class PermissionDenied(ProblemError):
     status_code = status.HTTP_403_FORBIDDEN
     problem_type = "permission-denied"

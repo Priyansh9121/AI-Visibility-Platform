@@ -2314,6 +2314,44 @@
         "title": "ReportSubjectOut",
         "type": "object"
       },
+      "ResetPasswordConfirm": {
+        "description": "Redeem a link and set a new password.\n\nThe password rules are the SIGN-UP rules, reused rather than restated \u2014\nsame length bounds and the same repetitiveness check. A reset path with\nweaker rules than registration is a way in, not a convenience.",
+        "properties": {
+          "newPassword": {
+            "maxLength": 256,
+            "minLength": 12,
+            "title": "Newpassword",
+            "type": "string"
+          },
+          "token": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "newPassword"
+        ],
+        "title": "ResetPasswordConfirm",
+        "type": "object"
+      },
+      "ResetPasswordRequest": {
+        "description": "Ask for a reset link. The response is identical whoever this is.",
+        "properties": {
+          "email": {
+            "format": "email",
+            "title": "Email",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "title": "ResetPasswordRequest",
+        "type": "object"
+      },
       "RunScanRequest": {
         "description": "Start a scan.\n\n`promptLimit` caps the generated set. It exists for cost control during\nverification \u2014 a full run is 20-30 prompts across every engine, and the\ngrounded engine can take 100s per prompt. Omit it for a real scan.",
         "properties": {
@@ -3508,6 +3546,98 @@
           }
         },
         "summary": "Me",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/reset-password/confirm": {
+      "post": {
+        "description": "Redeem a reset link and set the new password.\n\n**Every existing session is revoked.** A reset is what someone does when\nthey believe the account is compromised, so leaving the attacker's session\nalive would defeat the exercise. `logout-all` already exists for the\ndeliberate version of this; here it is not optional.\n\nThe caller is NOT signed in afterwards, deliberately \u2014 unlike sign-up. The\nperson holding this link proved control of an inbox, not knowledge of the\nold password, and making them sign in once with the new one confirms they\nhave it.\n\n**Errors:** `400 invalid-reset-token` for unknown, expired, already-used,\nand belonging-to-an-inactive-user alike \u2014 one response, no branch that says\nwhich.",
+        "operationId": "confirm_password_reset_api_v1_auth_reset_password_confirm_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetPasswordConfirm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Confirm Password Reset Api V1 Auth Reset Password Confirm Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Confirm Password Reset",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/reset-password/request": {
+      "post": {
+        "description": "Ask for a reset link. **Always `200`, always this body.**\n\nThe response is byte-identical whether the address has an account, has a\nsuspended one, or has never been seen \u2014 and identical again whether or not\nan email provider is configured. Any observable difference is an oracle for\nenumerating who banks here, which is precisely what `authenticate` already\nburns a dummy Argon2 hash to avoid on the login path.\n\nThe email is best-effort by construction: `send_password_reset` never raises\nand never reports its outcome, so a provider outage cannot become a\ndifferent status code. With no `RESEND_API_KEY` the link is logged instead\nof sent \u2014 a supported development mode, not a failure.\n\n**Errors:** none. `422` only if the body is not an email address.",
+        "operationId": "request_password_reset_api_v1_auth_reset_password_request_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Request Password Reset Api V1 Auth Reset Password Request Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Request Password Reset",
         "tags": [
           "auth"
         ]

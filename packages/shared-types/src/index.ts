@@ -92,6 +92,9 @@ export type Effort = Schemas['Effort'];
 
 // --- request aliases ----------------------------------------------------
 export type SignUpRequest = Schemas['SignUpRequest'];
+// --- password reset (Epic 9.13) ------------------------------------------
+export type ResetPasswordRequest = Schemas['ResetPasswordRequest'];
+export type ResetPasswordConfirm = Schemas['ResetPasswordConfirm'];
 export type LoginRequest = Schemas['LoginRequest'];
 export type CreateClientRequest = Schemas['CreateClientRequest'];
 export type RunScanRequest = Schemas['RunScanRequest'];

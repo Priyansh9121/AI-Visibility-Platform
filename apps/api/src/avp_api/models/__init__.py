@@ -29,6 +29,7 @@ from .engine_result import (
     EngineResultStatus,
     Sentiment,
 )
+from .password_reset import PasswordResetToken
 from .prompt import Prompt, PromptIntent, PromptSet
 from .scan import Scan, ScanStatus, ScanTrigger
 from .score import DEFAULT_WEIGHTS, DIMENSION_KEYS, Score, ScoreStatus
@@ -37,6 +38,7 @@ from .tenancy import Agency, Invitation, User, UserRole, UserStatus
 
 __all__ = [
     "DEFAULT_WEIGHTS",
+    "PasswordResetToken",
     "DIMENSION_KEYS",
     "ActionItem",
     "ActionItemSource",
