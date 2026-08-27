@@ -16,6 +16,7 @@ import type {
   ProblemDetail,
   Report,
   Scan,
+  ShareLink,
   ValidationProblemDetail,
 } from '@avp/shared-types';
 import { isProblemDetail } from '@avp/shared-types';
@@ -124,6 +125,26 @@ export const api = {
    * and mention counts on each render.
    */
   report: (scanId: string) => request<Report>(`/scans/${scanId}/report`),
+
+  /**
+   * Mint (or fetch) the public share link for a scan's report — Epic 9.8.
+   *
+   * Idempotent: asking twice returns the same URL rather than a second live
+   * link to the same report, because there is no revocation and every extra
+   * token would be a URL nobody is tracking.
+   */
+  shareLink: (scanId: string) =>
+    request<ShareLink>(`/scans/${scanId}/share`, { method: 'POST' }),
+
+  /**
+   * A report by share token — the UNAUTHENTICATED read, Epic 9.8.
+   *
+   * Called from /share/{token} by someone with no account and no cookie. Goes
+   * through the same `request` helper as everything else: it sends credentials
+   * that will not exist, which the endpoint ignores. Any bad token is a 404,
+   * deliberately indistinguishable from any other bad token.
+   */
+  publicReport: (token: string) => request<Report>(`/reports/${token}`),
 
   /**
    * Replace a client's competitor set by hand — Epic 3.
