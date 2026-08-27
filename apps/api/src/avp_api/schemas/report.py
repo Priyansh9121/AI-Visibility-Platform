@@ -52,6 +52,24 @@ from .competitor import CompetitorOut
 from .score import ScoreDetailOut
 
 
+class ShareLinkOut(ApiModel):
+    """The public link for a report — Epic 9.8.
+
+    Carries the complete URL, not just the token, because the operator's next
+    action is to paste it into an email. Returning a bare token would force
+    every caller to rebuild the same string, which is how a frontend and a
+    backend end up disagreeing about a path.
+
+    `token` is exposed alongside it deliberately: it is the operator's OWN
+    capability for their OWN scan, already implied by the URL beside it, and
+    tests assert on it without having to parse a URL apart.
+    """
+
+    scan_id: str
+    token: str
+    url: str
+
+
 class ReportAgencyOut(ApiModel):
     """The white-label surface.
 

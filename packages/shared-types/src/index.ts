@@ -79,6 +79,9 @@ export type MentionShare = Schemas['MentionShareOut'];
 export type PromptShelfRow = Schemas['PromptShelfOut'];
 export type ShelfSlot = Schemas['ShelfSlotOut'];
 
+// --- public share link (Epic 9.8) ---------------------------------------
+export type ShareLink = Schemas['ShareLinkOut'];
+
 // --- action list (Epic 8) -----------------------------------------------
 export type ActionItem = Schemas['ActionItemOut'];
 export type ActionItemList = Schemas['ActionItemListOut'];

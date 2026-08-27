@@ -69,6 +69,26 @@ def new_session_token() -> str:
     return secrets.token_urlsafe(_TOKEN_BYTES)
 
 
+def new_share_token() -> str:
+    """Mint an opaque, URL-safe token for a public report link — Epic 9.8.
+
+    Same generator and same 256 bits as `new_session_token`, deliberately. The
+    link is unauthenticated: the token IS the credential, so it must be as hard
+    to guess as the session cookie it stands in for. `secrets.token_urlsafe`
+    draws from the OS CSPRNG — never `random`, and never anything derived from
+    the scan id, the clock or a counter, all of which would be enumerable.
+
+    Stored in the clear, unlike a session token, which is stored as a digest.
+    That is a real difference and it is deliberate: a session token can be
+    hashed because the client presents it for comparison, whereas this one has
+    to be handed back to an operator who wants to copy a URL. A digest would
+    make the link unrecoverable after minting. The trade-off is that a database
+    dump exposes live share links — acceptable while the same dump would also
+    expose every report those links lead to, which it would.
+    """
+    return secrets.token_urlsafe(_TOKEN_BYTES)
+
+
 def token_digest(token: str) -> str:
     """SHA-256 of a session token, hex encoded.
 

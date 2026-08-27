@@ -75,6 +75,29 @@ class Scan(Base, TimestampMixin):
     prompt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     engine_result_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
+    # THE PUBLIC SHARE LINK — Epic 9.8.
+    #
+    # Nullable and minted on demand, never at scan creation. Most scans are
+    # never shared, and a token that exists is a URL that works: minting one
+    # for every scan would create a live public link for every scan ever run
+    # and then rely on nobody learning it. Absent by default is the safer
+    # state, and it makes "is this shared?" answerable by reading the column.
+    #
+    # NOT the scan's own ULID. `id` is already handed to the browser, appears
+    # in the authenticated URL and is logged; reusing it would mean anyone who
+    # ever saw a scan id could read that report forever. This is an independent
+    # 256-bit secret (`security.new_share_token`, the same generator and the
+    # same entropy as a session token).
+    #
+    # DELIBERATELY NOT BUILT, and this is a known gap rather than an oversight:
+    # there is NO EXPIRY and NO REVOCATION. Once minted, the link works until
+    # the row is deleted. That is an accepted risk for a pilot conversation and
+    # is NOT acceptable as a permanent design — the first agency that shares a
+    # report with the wrong prospect has no way to take it back. Revocation
+    # (clearing the column) and expiry (a `share_expires_at`) are the next two
+    # columns this table should grow. See build-log Epic 9.8.
+    share_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     client: Mapped[Client] = relationship(back_populates="scans")
 
     __table_args__ = (
@@ -105,5 +128,21 @@ class Scan(Base, TimestampMixin):
             "client_id",
             unique=True,
             postgresql_where=text("status IN ('queued', 'running')"),
+        ),
+        # Unique, and the lookup index for GET /reports/{token} — Epic 9.8.
+        #
+        # Partial on NOT NULL for both halves of that. Postgres treats NULLs as
+        # distinct so a plain unique index would already permit many unshared
+        # scans, but saying so explicitly keeps the index off every row that
+        # has no token — which is most of them — and makes the intent readable.
+        #
+        # Independent of uq_scans_one_open_per_client above: that one constrains
+        # `client_id` over open scans, this one constrains `share_token` over
+        # shared scans. Different column, different predicate, no interaction.
+        Index(
+            "uq_scans_share_token",
+            "share_token",
+            unique=True,
+            postgresql_where=text("share_token IS NOT NULL"),
         ),
     )
