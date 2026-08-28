@@ -21,6 +21,10 @@ import {
   ownerMe,
   seatsWithPending,
 } from '@/lib/settings/__fixtures__/seats';
+import {
+  activeSubscription,
+  noSubscription,
+} from '@/lib/settings/__fixtures__/billing';
 
 const render = (state: SettingsState) =>
   renderToStaticMarkup(<SettingsView state={state} onChanged={() => {}} />);
@@ -30,6 +34,8 @@ const READY: SettingsState = {
   me: ownerMe,
   seats: seatsWithPending,
   seatsError: null,
+  billing: noSubscription,
+  billingError: null,
 };
 
 describe('loading', () => {
@@ -93,6 +99,8 @@ describe('the seat list is allowed to fail on its own', () => {
       me: memberMe,
       seats: null,
       seatsError: 'Only an owner or an admin can see and change who holds a seat.',
+      billing: null,
+      billingError: 'Only an owner or an admin can see and change billing.',
     });
     // Identity survives — losing the whole page over a permission a member was
     // never meant to have would be the wrong trade.
@@ -118,17 +126,75 @@ describe('the "not built yet" list is maintained in both directions', () => {
     expect(html).toContain('>Current password<');
   });
 
+  it('no longer claims billing is missing', () => {
+    const html = render(READY);
+    expect(html).not.toContain('Billing, plans and usage limits');
+    expect(html).not.toContain('records pricing as undecided');
+    // The real thing is there instead.
+    expect(html).toContain('What you pay');
+    expect(html).toContain('$29 a month');
+  });
+
   it('still names the things that genuinely are missing', () => {
     const html = render(READY);
     expect(html).toContain('white-labelling is still name-and-slug only');
     expect(html).toContain('Changing the seat limit');
-    expect(html).toContain('Billing, plans and usage limits');
+    expect(html).toContain('Usage limits and any view of how much you have used');
   });
 
   it('promises no dates and offers no controls for what is absent', () => {
     const html = render(READY).toLowerCase();
     for (const tell of ['coming soon', 'shortly', 'next release', 'roadmap']) {
       expect(html, `found "${tell}"`).not.toContain(tell);
+    }
+  });
+});
+
+describe('billing', () => {
+  it('says plainly that nothing is behind the plan', () => {
+    const html = render(READY);
+    expect(html).toContain('subscribing is how you pay for this, not how you unlock it');
+    expect(html).toContain('there is nothing behind this that you are missing');
+  });
+
+  it('offers the plan card when there is no subscription', () => {
+    const html = render(READY);
+    expect(html).toContain('No subscription');
+    expect(html).toContain('Subscribe');
+    expect(html).toContain('$29');
+  });
+
+  it('states the renewal date when a subscription is live', () => {
+    const html = render({ ...READY, billing: activeSubscription });
+    expect(html).toContain('Active');
+    expect(html).toContain('Renews 21 Sep 2026');
+    // And stops selling to someone who has already bought.
+    expect(html).not.toContain('>Subscribe<');
+  });
+
+  it('degrades on its own when a member may not read it', () => {
+    const html = render({
+      kind: 'ready',
+      me: memberMe,
+      seats: null,
+      seatsError: 'nope',
+      billing: null,
+      billingError: 'Only an owner or an admin can see and change billing.',
+    });
+    // The rest of the page survives, exactly as it does for the seat roster.
+    expect(html).toContain('kit@northlight.example');
+    expect(html).toContain('Only an owner or an admin can see and change billing.');
+  });
+
+  it('never renders an unsubscribed agency as broken', () => {
+    const html = render(READY).toLowerCase();
+    // WORD-BOUNDED, and the reason is in the file already: a bare
+    // `toContain('rated')` once matched inside "Generated". Here a bare
+    // `toContain('locked')` matched inside the password panel's "an unlocked
+    // laptop is a valid session too" — an honest sentence in a different
+    // section. The tell is the whole word, not the letters.
+    for (const tell of ['upgrade to unlock', 'locked', 'restricted', 'suspended']) {
+      expect(html, `found "${tell}"`).not.toMatch(new RegExp(`\\b${tell}\\b`));
     }
   });
 });

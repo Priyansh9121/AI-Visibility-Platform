@@ -19,7 +19,7 @@
  */
 
 import { useCallback, useEffect, useState, type JSX } from 'react';
-import type { SeatList } from '@avp/shared-types';
+import type { BillingStatus, SeatList } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
 import {
   SettingsView,
@@ -45,7 +45,22 @@ export default function SettingsRoute(): JSX.Element {
           ? 'Only an owner or an admin can see and change who holds a seat.'
           : 'The seat list could not be loaded.';
     }
-    setState({ kind: 'ready', me, seats, seatsError });
+
+    // Billing is a THIRD independent failure, for the same reason the roster is
+    // a second one: a member gets a 403 here by design, and one section they
+    // were never meant to see must not take the page down with it. Epic 9.15.
+    let billing: BillingStatus | null = null;
+    let billingError: string | null = null;
+    try {
+      billing = await api.billing(me.agency.id);
+    } catch (err) {
+      billingError =
+        err instanceof ApiProblem && err.status === 403
+          ? 'Only an owner or an admin can see and change billing.'
+          : 'Your billing status could not be loaded. Nothing has changed either way.';
+    }
+
+    setState({ kind: 'ready', me, seats, seatsError, billing, billingError });
   }, []);
 
   useEffect(() => {

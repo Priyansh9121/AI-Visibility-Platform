@@ -7,6 +7,8 @@
  */
 
 import type {
+  BillingStatus,
+  CheckoutSession,
   Client,
   ClientDetail,
   CompetitorInput,
@@ -358,6 +360,42 @@ export const api = {
    * withholding it would protect nothing while making the send path worse.
    */
   publicReportPdf: (token: string) => requestBlob(`/reports/${token}.pdf`),
+
+  /**
+   * This agency's subscription, as recorded — Epic 9.15.
+   *
+   * Reads the columns the Stripe webhook maintains. **It does not ask Stripe**,
+   * so it is as fast as any other read here and does not fail when a payment
+   * processor is slow.
+   *
+   * Owner or admin only; a member gets a 403, which the settings screen
+   * degrades the same way it degrades a forbidden seat roster.
+   *
+   * Every field is null/false for an agency that has not subscribed. That is
+   * not an error state and must not be rendered as one — nothing in the
+   * product is gated on it.
+   */
+  billing: (agencyId: string) =>
+    request<BillingStatus>(`/agencies/${agencyId}/billing`),
+
+  /**
+   * Create a Stripe Checkout Session and get the URL to navigate to — 9.15.
+   *
+   * The caller's next move is `window.location.assign(url)`. There is no Stripe
+   * JavaScript library in this app and this shape is why one is not needed: the
+   * browser goes to a page Stripe hosts and comes back.
+   *
+   * **Calling this does not subscribe anybody.** It returns a URL. The
+   * subscription starts when Stripe tells the API it did, over the webhook —
+   * which is also why closing the tab mid-payment does not lose it.
+   *
+   * Rejects with `503 billing-not-configured` when a Stripe setting is unset,
+   * carrying a detail that names the exact environment variable.
+   */
+  startCheckout: (agencyId: string) =>
+    request<CheckoutSession>(`/agencies/${agencyId}/billing/checkout`, {
+      method: 'POST',
+    }),
 
   /**
    * Replace a client's competitor set by hand — Epic 3.
