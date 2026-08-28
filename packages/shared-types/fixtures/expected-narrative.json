@@ -1,0 +1,336 @@
+{
+  "scored-no-generated-fixes": {
+    "composite": 58.24,
+    "status": "scored",
+    "biggestGapKey": "citation_strength",
+    "recoverablePoints": 40.6,
+    "potentialComposite": 98.8,
+    "fixes": [
+      {
+        "id": "gap:citation_strength",
+        "title": "Make the site the source an answer cites, not just a name it mentions",
+        "detail": "The brand is named more often than its own pages are cited. Citation follows structure: pages that state a claim plainly, mark it up, and are crawlable get quoted; pages that bury it in prose get paraphrased without attribution.",
+        "priority": "high",
+        "effort": "M",
+        "pointsUpside": 19.3,
+        "source": "gap",
+        "generated": false
+      },
+      {
+        "id": "gap:share_of_voice",
+        "title": "Compete on the comparisons where rivals currently appear alone",
+        "detail": "Rivals are named more often than the brand in the same answers. Comparison and alternatives pages are the surfaces those answers are assembled from.",
+        "priority": "medium",
+        "effort": "L",
+        "pointsUpside": 17.5,
+        "source": "gap",
+        "generated": false
+      },
+      {
+        "id": "gap:sentiment",
+        "title": "Address how the brand is characterised where it is described unfavourably",
+        "detail": "Where the brand is named, the surrounding characterisation is not consistently positive. The lever is the third-party material those answers draw on — reviews, comparisons and documentation.",
+        "priority": "low",
+        "effort": "M",
+        "pointsUpside": 3.8,
+        "source": "gap",
+        "generated": false
+      },
+      {
+        "id": "audit:schema_faq",
+        "title": "Add FAQPage schema to the pages that answer buyer questions",
+        "detail": "Buyers reach these engines by asking questions. FAQ markup pairs a question with its answer explicitly, which is the form an answer engine can quote and cite directly.",
+        "priority": "medium",
+        "effort": "M",
+        "pointsUpside": null,
+        "source": "audit",
+        "generated": false
+      },
+      {
+        "id": "audit:schema_product_or_service",
+        "title": "Add Product or Service schema to the offering pages",
+        "detail": "Without it, what the business actually sells has to be inferred from page copy rather than read from the markup.",
+        "priority": "medium",
+        "effort": "M",
+        "pointsUpside": null,
+        "source": "audit",
+        "generated": false
+      },
+      {
+        "id": "citation:eesel.ai",
+        "title": "Get onto eesel.ai — the source these answers keep citing",
+        "detail": "eesel.ai was cited 6 times and belongs to neither you nor any rival in this scan. The same is true of featurebase.app and hiverhq.com. Your own pages were cited 3 times across the same answers. A page on a source an engine already trusts is the shortest route into the answer, because the engine does not have to start trusting a new domain to use it.",
+        "priority": "medium",
+        "effort": "M",
+        "pointsUpside": null,
+        "source": "citation",
+        "generated": false
+      }
+    ]
+  },
+  "scored-with-generated-fixes": {
+    "composite": 58.24,
+    "status": "scored",
+    "biggestGapKey": "citation_strength",
+    "recoverablePoints": 40.6,
+    "potentialComposite": 98.8,
+    "fixes": [
+      {
+        "id": "gap:citation_strength",
+        "title": "Publish comparison and 'best help desk software' reference pages on helpscout.com that AI answers can cite directly",
+        "detail": "Across the six answers, 45 citations were collected and only 3 pointed at helpscout.com; the sources doing the work are third-party roundups such as eesel.ai, featurebase.app and hiverhq.com. Owned pages that answer the same comparison and category questions those roundups answer give the answer engines a first-party source to cite, and they are the same pages that would carry the missing FAQ and product markup.",
+        "priority": "high",
+        "effort": "L",
+        "pointsUpside": 19.3,
+        "source": "gap",
+        "generated": true
+      },
+      {
+        "id": "gap:share_of_voice",
+        "title": "Build side-by-side pages covering Help Scout against Zendesk, Freshdesk, Front and Kustomer",
+        "detail": "Help Scout is named in all six answers, but shares those answers with Zendesk, Freshdesk, Front and Kustomer, leaving share of voice at 30 out of 100. Pages that set out where Help Scout fits relative to each named competitor give answer engines subject-specific material to draw on in the same responses, and feed the citation gap above.",
+        "priority": "high",
+        "effort": "M",
+        "pointsUpside": 17.5,
+        "source": "gap",
+        "generated": true
+      },
+      {
+        "id": "gap:sentiment",
+        "title": "Add evidence pages covering support outcomes, migration and pricing detail to strengthen how Help Scout is characterised",
+        "detail": "Sentiment scored 75 out of 100, so the brand is described favourably but not uniformly. Documented customer outcomes, migration guidance and clear pricing explanations on helpscout.com give the answer engines first-party material to characterise the product from, rather than relying on third-party roundups.",
+        "priority": "medium",
+        "effort": "M",
+        "pointsUpside": 3.8,
+        "source": "gap",
+        "generated": true
+      },
+      {
+        "id": "audit:schema_faq",
+        "title": "Add FAQPage markup to the pages that answer buyer questions about Help Scout",
+        "detail": "The site currently declares Corporation, VideoObject and WebSite types only, with no FAQ markup. Marking up the question-and-answer sections of the comparison and category pages described above makes those answers machine-readable at the point where the citation gap is being addressed.",
+        "priority": "medium",
+        "effort": "S",
+        "pointsUpside": null,
+        "source": "audit",
+        "generated": true
+      },
+      {
+        "id": "audit:schema_product_or_service",
+        "title": "Add Product or SoftwareApplication markup describing the Help Scout product and its plans",
+        "detail": "No product or service type is declared among the Corporation, VideoObject and WebSite markup found. Declaring the product and its plans explicitly lets answer engines tie the crawled 877-word homepage content to a named software product rather than only to a company entity.",
+        "priority": "medium",
+        "effort": "S",
+        "pointsUpside": null,
+        "source": "audit",
+        "generated": true
+      },
+      {
+        "id": "citation:eesel.ai",
+        "title": "Get onto eesel.ai — the source these answers keep citing",
+        "detail": "eesel.ai was cited 6 times and belongs to neither you nor any rival in this scan. The same is true of featurebase.app and hiverhq.com. Your own pages were cited 3 times across the same answers. A page on a source an engine already trusts is the shortest route into the answer, because the engine does not have to start trusting a new domain to use it.",
+        "priority": "medium",
+        "effort": "M",
+        "pointsUpside": null,
+        "source": "citation",
+        "generated": false
+      }
+    ]
+  },
+  "unscored": {
+    "composite": null,
+    "status": "not_scored",
+    "biggestGapKey": null,
+    "recoverablePoints": 0,
+    "potentialComposite": null,
+    "fixes": [
+      {
+        "id": "audit:schema_faq",
+        "title": "Add FAQPage schema to the pages that answer buyer questions",
+        "detail": "Buyers reach these engines by asking questions. FAQ markup pairs a question with its answer explicitly, which is the form an answer engine can quote and cite directly.",
+        "priority": "medium",
+        "effort": "M",
+        "pointsUpside": null,
+        "source": "audit",
+        "generated": false
+      },
+      {
+        "id": "audit:schema_product_or_service",
+        "title": "Add Product or Service schema to the offering pages",
+        "detail": "Without it, what the business actually sells has to be inferred from page copy rather than read from the markup.",
+        "priority": "medium",
+        "effort": "M",
+        "pointsUpside": null,
+        "source": "audit",
+        "generated": false
+      },
+      {
+        "id": "citation:eesel.ai",
+        "title": "Get onto eesel.ai — the source these answers keep citing",
+        "detail": "eesel.ai was cited 6 times and belongs to neither you nor any rival in this scan. The same is true of featurebase.app and hiverhq.com. Your own pages were cited 3 times across the same answers. A page on a source an engine already trusts is the shortest route into the answer, because the engine does not have to start trusting a new domain to use it.",
+        "priority": "medium",
+        "effort": "M",
+        "pointsUpside": null,
+        "source": "citation",
+        "generated": false
+      }
+    ]
+  },
+  "no-competitor-set": {
+    "composite": 58.24,
+    "status": "scored",
+    "biggestGapKey": "citation_strength",
+    "recoverablePoints": 30.7,
+    "potentialComposite": 88.9,
+    "fixes": [
+      {
+        "id": "gap:citation_strength",
+        "title": "Make the site the source an answer cites, not just a name it mentions",
+        "detail": "The brand is named more often than its own pages are cited. Citation follows structure: pages that state a claim plainly, mark it up, and are crawlable get quoted; pages that bury it in prose get paraphrased without attribution.",
+        "priority": "high",
+        "effort": "M",
+        "pointsUpside": 25.7,
+        "source": "gap",
+        "generated": false
+      },
+      {
+        "id": "gap:sentiment",
+        "title": "Address how the brand is characterised where it is described unfavourably",
+        "detail": "Where the brand is named, the surrounding characterisation is not consistently positive. The lever is the third-party material those answers draw on — reviews, comparisons and documentation.",
+        "priority": "low",
+        "effort": "M",
+        "pointsUpside": 5,
+        "source": "gap",
+        "generated": false
+      },
+      {
+        "id": "audit:schema_faq",
+        "title": "Add FAQPage schema to the pages that answer buyer questions",
+        "detail": "Buyers reach these engines by asking questions. FAQ markup pairs a question with its answer explicitly, which is the form an answer engine can quote and cite directly.",
+        "priority": "medium",
+        "effort": "M",
+        "pointsUpside": null,
+        "source": "audit",
+        "generated": false
+      },
+      {
+        "id": "audit:schema_product_or_service",
+        "title": "Add Product or Service schema to the offering pages",
+        "detail": "Without it, what the business actually sells has to be inferred from page copy rather than read from the markup.",
+        "priority": "medium",
+        "effort": "M",
+        "pointsUpside": null,
+        "source": "audit",
+        "generated": false
+      },
+      {
+        "id": "citation:eesel.ai",
+        "title": "Get onto eesel.ai — the source these answers keep citing",
+        "detail": "eesel.ai was cited 6 times and belongs to neither you nor any rival in this scan. The same is true of featurebase.app and hiverhq.com. Your own pages were cited 3 times across the same answers. A page on a source an engine already trusts is the shortest route into the answer, because the engine does not have to start trusting a new domain to use it.",
+        "priority": "medium",
+        "effort": "M",
+        "pointsUpside": null,
+        "source": "citation",
+        "generated": false
+      }
+    ]
+  },
+  "not-yet-measured": {
+    "composite": 58.24,
+    "status": "scored",
+    "biggestGapKey": "share_of_voice",
+    "recoverablePoints": 26.6,
+    "potentialComposite": 84.8,
+    "fixes": [
+      {
+        "id": "gap:share_of_voice",
+        "title": "Compete on the comparisons where rivals currently appear alone",
+        "detail": "Rivals are named more often than the brand in the same answers. Comparison and alternatives pages are the surfaces those answers are assembled from.",
+        "priority": "high",
+        "effort": "L",
+        "pointsUpside": 21.9,
+        "source": "gap",
+        "generated": false
+      },
+      {
+        "id": "gap:sentiment",
+        "title": "Address how the brand is characterised where it is described unfavourably",
+        "detail": "Where the brand is named, the surrounding characterisation is not consistently positive. The lever is the third-party material those answers draw on — reviews, comparisons and documentation.",
+        "priority": "low",
+        "effort": "M",
+        "pointsUpside": 4.7,
+        "source": "gap",
+        "generated": false
+      },
+      {
+        "id": "audit:schema_faq",
+        "title": "Add FAQPage schema to the pages that answer buyer questions",
+        "detail": "Buyers reach these engines by asking questions. FAQ markup pairs a question with its answer explicitly, which is the form an answer engine can quote and cite directly.",
+        "priority": "medium",
+        "effort": "M",
+        "pointsUpside": null,
+        "source": "audit",
+        "generated": false
+      },
+      {
+        "id": "audit:schema_product_or_service",
+        "title": "Add Product or Service schema to the offering pages",
+        "detail": "Without it, what the business actually sells has to be inferred from page copy rather than read from the markup.",
+        "priority": "medium",
+        "effort": "M",
+        "pointsUpside": null,
+        "source": "audit",
+        "generated": false
+      },
+      {
+        "id": "citation:eesel.ai",
+        "title": "Get onto eesel.ai — the source these answers keep citing",
+        "detail": "eesel.ai was cited 6 times and belongs to neither you nor any rival in this scan. The same is true of featurebase.app and hiverhq.com. Your own pages were cited 3 times across the same answers. A page on a source an engine already trusts is the shortest route into the answer, because the engine does not have to start trusting a new domain to use it.",
+        "priority": "medium",
+        "effort": "M",
+        "pointsUpside": null,
+        "source": "citation",
+        "generated": false
+      }
+    ]
+  },
+  "bare": {
+    "composite": 58.24,
+    "status": "scored",
+    "biggestGapKey": "citation_strength",
+    "recoverablePoints": 40.6,
+    "potentialComposite": 98.8,
+    "fixes": [
+      {
+        "id": "gap:citation_strength",
+        "title": "Make the site the source an answer cites, not just a name it mentions",
+        "detail": "The brand is named more often than its own pages are cited. Citation follows structure: pages that state a claim plainly, mark it up, and are crawlable get quoted; pages that bury it in prose get paraphrased without attribution.",
+        "priority": "high",
+        "effort": "M",
+        "pointsUpside": 19.3,
+        "source": "gap",
+        "generated": false
+      },
+      {
+        "id": "gap:share_of_voice",
+        "title": "Compete on the comparisons where rivals currently appear alone",
+        "detail": "Rivals are named more often than the brand in the same answers. Comparison and alternatives pages are the surfaces those answers are assembled from.",
+        "priority": "medium",
+        "effort": "L",
+        "pointsUpside": 17.5,
+        "source": "gap",
+        "generated": false
+      },
+      {
+        "id": "gap:sentiment",
+        "title": "Address how the brand is characterised where it is described unfavourably",
+        "detail": "Where the brand is named, the surrounding characterisation is not consistently positive. The lever is the third-party material those answers draw on — reviews, comparisons and documentation.",
+        "priority": "low",
+        "effort": "M",
+        "pointsUpside": 3.8,
+        "source": "gap",
+        "generated": false
+      }
+    ]
+  }
+}

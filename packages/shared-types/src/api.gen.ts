@@ -558,6 +558,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/reports/{token}.pdf": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Public Report Pdf
+         * @description A report PDF, by share token. **No session required** — Epic 9.14.
+         *
+         *     THE DECISION, STATED RATHER THAN DEFAULTED
+         *     ------------------------------------------
+         *     A stranger holding a share token CAN download the PDF, and the share page
+         *     offers it. Three reasons, in order of weight:
+         *
+         *     1. **It exposes nothing new.** The PDF carries strictly the facts
+         *        `GET /reports/{token}` already serves to the same holder, rendered
+         *        differently. Withholding it would not protect a single datum.
+         *     2. **The send path is the point.** Epic 9.8 built this token because "the
+         *        prospect a report is about has no account, and must not need one to read
+         *        it". Granting the harder-to-forward form (a live URL) while withholding
+         *        the easy one (a file they can keep) is backwards for a mechanism whose
+         *        whole job is *send*.
+         *     3. **A prospect wants a file.** The realistic next step for someone sent a
+         *        report is forwarding it to a colleague or putting it in front of a
+         *        budget holder, and a link that dies when they change jobs is worse for
+         *        the agency than a PDF that does not.
+         *
+         *     **What it costs, said plainly:** a downloaded PDF outlives any future
+         *     revocation of the link. That cost is currently zero, because share links
+         *     have no expiry and no revocation at all — recorded as known debt in
+         *     api-contracts.md and explicitly out of scope for this epic. The PDF
+         *     therefore takes away nothing the link does not already give away
+         *     permanently. **When revocation ships, this is the route to revisit**, and
+         *     that is the moment to decide whether a revoked link should stop serving
+         *     files — not now, by pre-emptively refusing something that costs nothing yet.
+         *
+         *     Every rule the JSON share route states holds here unchanged, because it is
+         *     the same lookup: read-only, one code path, `404` for every rejection with no
+         *     shape pre-check, and never a `401` — which would say "this token is real,
+         *     authenticate to use it".
+         *
+         *     **Errors:** `404` only.
+         */
+        get: operations["get_public_report_pdf_api_v1_reports__token__pdf_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/scans/{scanId}": {
         parameters: {
             query?: never;
@@ -700,6 +754,46 @@ export interface paths {
          *     **Errors:** `401`, `404` (unknown scan, or another agency's).
          */
         get: operations["get_report_api_v1_scans__scanId__report_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/scans/{scanId}/report.pdf": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Report Pdf
+         * @description The same report, as a PDF — Epic 9.14 (Epic 9 send path, slice 3).
+         *
+         *     **A rendering target, not a second report.** It calls the same
+         *     `build_report` the JSON route calls and renders what comes back; there is no
+         *     second query, no second aggregation and no second set of numbers. A PDF
+         *     assembled independently would eventually disagree with the page it was
+         *     downloaded from, and the disagreement would reach a client.
+         *
+         *     It degrades exactly as the web report does, because it is derived from the
+         *     same payload: a null composite prints "Not scored" and never a zero,
+         *     `insufficient_data` gets its own sentence, an excluded dimension prints its
+         *     reason rather than a sub-score, a null competitor set says detection did not
+         *     run instead of quietly dropping the beat, and an empty `actionItems` renders
+         *     the deterministic fix derivation — the case api-contracts.md's note on that
+         *     field describes.
+         *
+         *     **No dependency was added to build this.** WeasyPrint's required `Pyphen` is
+         *     GPL/LGPL/MPL, which ip-safety.md #6 blocks; React-PDF is a Node library and
+         *     this is a Python process. See `services/pdf.py` for the full assessment.
+         *
+         *     **Errors:** `401`, `404` (unknown scan, or another agency's).
+         */
+        get: operations["get_report_pdf_api_v1_scans__scanId__report_pdf_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2976,6 +3070,37 @@ export interface operations {
             };
         };
     };
+    get_public_report_pdf_api_v1_reports__token__pdf_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_scan_api_v1_scans__scanId__get: {
         parameters: {
             query?: never;
@@ -3180,6 +3305,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReportOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_report_pdf_api_v1_scans__scanId__report_pdf_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scanId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": unknown;
                 };
             };
             /** @description Validation Error */
