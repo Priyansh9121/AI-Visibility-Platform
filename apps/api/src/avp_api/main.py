@@ -19,6 +19,7 @@ from .routers import (
     agencies,
     audits,
     auth,
+    billing,
     clients,
     competitors,
     dashboard,
@@ -94,6 +95,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health.router, prefix=base)
     app.include_router(auth.router, prefix=base)
     app.include_router(agencies.router, prefix=base)
+    app.include_router(billing.router, prefix=base)
     app.include_router(clients.router, prefix=base)
     app.include_router(competitors.router, prefix=base)
     app.include_router(scans.router, prefix=base)

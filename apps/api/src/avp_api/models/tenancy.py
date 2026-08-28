@@ -58,6 +58,73 @@ class Agency(Base, TimestampMixin, SoftDeleteMixin):
     # that module for why.
     seat_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
 
+    # --- subscription (Epic 9.15) ------------------------------------------
+    #
+    # Four nullable columns, and NULL is the correct, expected state for every
+    # agency that exists today. north-star.md §5.4 row 1 asked for a `Plan` /
+    # `Subscription` model; this is deliberately less than that, because there
+    # is one plan. A `plans` table with one row in it, joined through a
+    # `subscriptions` table with one row per agency, would be a schema modelling
+    # a product decision nobody has made. When a second plan exists, that is the
+    # work; until then these columns say everything there is to say.
+    #
+    # NOTHING IN THE PRODUCT IS GATED ON ANY OF THEM. An agency with all four
+    # NULL has exactly the access it had before this epic — scanning, scoring,
+    # reporting, seats. These record whether an agency PAYS, not what it may do.
+    # A future brief that wants a paywall is proposing a product decision and
+    # must say so out loud.
+
+    # The Stripe Customer this agency is. Written once, then reused forever —
+    # `services/billing.py` looks here before creating one, so a second visit to
+    # checkout does not leave a duplicate customer holding a duplicate card.
+    #
+    # UNIQUE: one Stripe customer belongs to one agency. Without the constraint,
+    # a mis-scoped write could point two agencies at one customer, and the
+    # webhook — which resolves an agency BY this column — would then update
+    # whichever it found first. Postgres permits many NULLs under a unique
+    # index, which is what makes it usable on a column almost every row leaves
+    # empty.
+    stripe_customer_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, unique=True
+    )
+
+    # The current Subscription. Also unique, for the same reason and a sharper
+    # one: `customer.subscription.deleted` arrives carrying a subscription id
+    # and nothing else useful, so that id is a lookup key, and a lookup key that
+    # can match two rows is a cancellation applied to the wrong agency.
+    stripe_subscription_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, unique=True
+    )
+
+    # Stripe's own status string, stored VERBATIM and not mapped to an enum of
+    # ours. Every other status in this schema is an `enum_column`, so this is a
+    # deliberate exception rather than an oversight.
+    #
+    # The values are Stripe's to define and to extend: active, trialing,
+    # past_due, canceled, unpaid, incomplete, incomplete_expired, paused. A
+    # Postgres enum listing them is a constraint on a vocabulary we do not own,
+    # and the failure mode is the worst kind — Stripe adds a status, the webhook
+    # raises on write, the event is retried and then abandoned, and the database
+    # quietly holds a status that stopped being true days ago. Storing the
+    # string means an unrecognised status is recorded accurately and rendered
+    # honestly rather than lost.
+    #
+    # `services/billing.py` owns the one interpretation that matters — which
+    # statuses count as ACTIVE — in one place, so this column never has to be
+    # read as a boolean at the call site.
+    subscription_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+    # When the paid-up period ends — the "renews 5 October" in Settings.
+    #
+    # A fourth column beyond the three the brief named, and it is here because
+    # two of the brief's own requirements need it together: Settings must say
+    # "Active — renews <date>", and the status endpoint must never call Stripe
+    # on page load. Both cannot hold unless the date is written by the webhook
+    # alongside the status, so it is.
+    subscription_current_period_end: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     users: Mapped[list[User]] = relationship(back_populates="agency")
     clients: Mapped[list[Client]] = relationship(back_populates="agency")
 

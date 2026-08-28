@@ -128,6 +128,31 @@ class Settings(BaseSettings):
     perplexity_api_key: SecretStr | None = None
     google_ai_api_key: SecretStr | None = None
 
+    # --- billing (Epic 9.15) -----------------------------------------------
+    # Optional here, exactly like every provider key above, and for the same
+    # reason: an API that refuses to boot without a payment processor is an API
+    # nobody can run locally to work on anything else. Each is validated at
+    # point of use with an error naming the variable, via `provider_key` below.
+    #
+    # THESE ARE TEST-MODE KEYS AND THE CODE DOES NOT KNOW THE DIFFERENCE.
+    # There is deliberately no `stripe_live_mode` flag and no branch anywhere
+    # that behaves differently on an `sk_live_` key. Going live is a key swap
+    # made by the founder when Stripe's business verification is done — if that
+    # switch required a code change, the code would be the thing standing
+    # between a decision and its effect, and it would get made under pressure.
+    stripe_secret_key: SecretStr | None = None
+    # NOT a secret, and deliberately not wrapped in one. A Price id identifies a
+    # published product; it is the sort of thing that appears in client-side
+    # code in most Stripe integrations. Marking it `SecretStr` would say
+    # something untrue about it, and `test_env_template.py` reads this file to
+    # decide what a credential looks like.
+    stripe_price_id: str | None = None
+    # Produced by `stripe listen`, or by the dashboard for a deployed endpoint.
+    # Absent by default, which is a supported state — see routers/billing.py for
+    # what the webhook does when a request arrives and this is unset. It does
+    # NOT fall back to trusting the payload.
+    stripe_webhook_secret: SecretStr | None = None
+
     @field_validator("cors_allow_origins", mode="before")
     @classmethod
     def _split_origins(cls, value: object) -> object:
@@ -157,19 +182,26 @@ class Settings(BaseSettings):
         return self.database_url.replace("+asyncpg", "").replace("postgresql+psycopg", "postgresql")
 
     def provider_key(self, name: str) -> str:
-        """Fetch a required provider key, raising a clear error when unset.
+        """Fetch a required provider setting, raising a clear error when unset.
 
         Used from Epic 2 onward. Kept here so that the failure message names the
         environment variable an operator has to set, rather than surfacing as a
         401 from a vendor.
+
+        Epic 9.15 widened this to plain strings as well as `SecretStr`, for one
+        setting: `STRIPE_PRICE_ID`. A Price id is not a credential and saying it
+        is would be a lie told in a type. The alternative was a second accessor
+        with a second copy of the message below, which is how two failure modes
+        end up phrased differently and one of them ends up unhelpful. One
+        accessor, one message, both kinds of setting.
         """
-        value: SecretStr | None = getattr(self, name, None)
+        value: SecretStr | str | None = getattr(self, name, None)
         if value is None:
             raise RuntimeError(
                 f"{name.upper()} is not configured. Add it to your .env "
                 f"(see .env.example) or the deployment secret store."
             )
-        return value.get_secret_value()
+        return value.get_secret_value() if isinstance(value, SecretStr) else value
 
 
 @lru_cache

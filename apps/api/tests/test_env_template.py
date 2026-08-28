@@ -26,6 +26,11 @@ SECRET_KEYS = {
     "SERPAPI_KEY",
     "PERPLEXITY_API_KEY",
     "GOOGLE_AI_API_KEY",
+    # Epic 9.15. STRIPE_PRICE_ID is deliberately NOT here: a Price id names a
+    # published product and is not a credential, so requiring it to be blank
+    # would be asserting something untrue about it.
+    "STRIPE_SECRET_KEY",
+    "STRIPE_WEBHOOK_SECRET",
 }
 
 # Shapes that are secrets regardless of which key they sit under.
@@ -34,6 +39,13 @@ SECRET_SHAPES = [
     re.compile(r"sk-[A-Za-z0-9]{32,}"),          # OpenAI-style
     re.compile(r"AIza[A-Za-z0-9_\-]{30,}"),      # Google
     re.compile(r"pplx-[A-Za-z0-9]{20,}"),        # Perplexity
+    # Stripe uses underscores where the patterns above use hyphens, so none of
+    # them would have matched a pasted Stripe key. Added with the keys, in the
+    # same task, rather than left as a gap that only shows up on the day it
+    # matters. Covers live and test secret keys and a webhook signing secret.
+    re.compile(r"sk_(live|test)_[A-Za-z0-9]{20,}"),  # Stripe secret key
+    re.compile(r"rk_(live|test)_[A-Za-z0-9]{20,}"),  # Stripe restricted key
+    re.compile(r"whsec_[A-Za-z0-9]{20,}"),           # Stripe webhook secret
 ]
 
 

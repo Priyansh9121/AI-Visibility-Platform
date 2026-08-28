@@ -295,6 +295,50 @@
         "title": "AuditStatus",
         "type": "string"
       },
+      "BillingStatusOut": {
+        "description": "An agency's subscription, as recorded \u2014 never as freshly asked of Stripe.\n\nEvery field here is read from the `agencies` row. **This endpoint makes no\ncall to Stripe**, which is a deliberate property rather than an optimisation:\na settings screen that reached a payment API on every page load would be\nslower, would fail when Stripe was slow, and would put a third party in the\npath of a page that has four other things to render. The webhook is what\nkeeps these columns true.\n\n`subscriptionStatus` is Stripe's own string, passed through unmapped \u2014 see\n`models/tenancy.py` for why the column is not an enum. A client that wants\nto know \"is this agency paid up\" should read `isActive` rather than\ncomparing strings, because the set of statuses that mean yes is a decision\nthat lives in `services/billing.py` and may grow.",
+        "properties": {
+          "currentPeriodEnd": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currentperiodend"
+          },
+          "hasBillingAccount": {
+            "title": "Hasbillingaccount",
+            "type": "boolean"
+          },
+          "isActive": {
+            "title": "Isactive",
+            "type": "boolean"
+          },
+          "subscriptionStatus": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subscriptionstatus"
+          }
+        },
+        "required": [
+          "subscriptionStatus",
+          "isActive",
+          "currentPeriodEnd",
+          "hasBillingAccount"
+        ],
+        "title": "BillingStatusOut",
+        "type": "object"
+      },
       "BrandMentionOut": {
         "properties": {
           "competitorId": {
@@ -384,6 +428,20 @@
         ],
         "title": "CheckStatus",
         "type": "string"
+      },
+      "CheckoutSessionOut": {
+        "description": "Where to send the browser to pay.\n\nA URL and nothing else. The frontend navigates to it; there is no Stripe\nJavaScript library in `apps/web` and this shape is why one is not needed.",
+        "properties": {
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "CheckoutSessionOut",
+        "type": "object"
       },
       "CitationOut": {
         "properties": {
@@ -3622,6 +3680,92 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/agencies/{agencyId}/billing": {
+      "get": {
+        "description": "This agency's subscription, as recorded. **Never asks Stripe.**\n\nEvery field comes off the `agencies` row the webhook maintains. A settings\nscreen that called a payment processor on page load would be slower, would\nfail whenever Stripe was slow, and would put a third party in the render\npath of a page with four other sections on it \u2014 for a value that would be\nno more current than the webhook already makes it.\n\nThe agency is already loaded on the principal, so there is no query here at\nall beyond the one `current_principal` performs on every request.\n\n**Errors:** `401`, `403` (member role), `404` (another agency's id).",
+        "operationId": "read_billing_api_v1_agencies__agencyId__billing_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agencyId",
+            "required": true,
+            "schema": {
+              "title": "Agencyid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingStatusOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Billing",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/api/v1/agencies/{agencyId}/billing/checkout": {
+      "post": {
+        "description": "Create a Stripe Checkout Session. Returns the URL to navigate to.\n\n**`201`, because a session really is created** \u2014 at Stripe, with an id and a\nlifetime, and this call is what makes it. That it lives in someone else's\ndatabase does not make it less of a created resource.\n\nThe agency's Stripe customer is created here too, if it does not have one\nyet, and REUSED if it does. A second visit to this endpoint does not mint a\nsecond customer \u2014 see `services/billing.py`, where the reuse and the unique\nconstraint under it are explained.\n\n**This endpoint does not subscribe anybody.** It returns a URL. The\nsubscription begins when Stripe says it did, over the webhook below.\n\n**Errors:** `401`, `403` (member role), `404` (another agency's id), `503\nbilling-not-configured` when `STRIPE_SECRET_KEY` or `STRIPE_PRICE_ID` is\nunset \u2014 carrying a detail that names the variable.",
+        "operationId": "start_checkout_api_v1_agencies__agencyId__billing_checkout_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agencyId",
+            "required": true,
+            "schema": {
+              "title": "Agencyid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckoutSessionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Checkout",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
     "/api/v1/agencies/{agencyId}/invitations": {
       "post": {
         "description": "Invite an address to a seat.\n\n**The seat limit is enforced here, server-side, in the same transaction as\nthe insert.** `GET /auth/me`'s `seats` object lets a screen grey out the\nform when the agency is full, but that is a courtesy \u2014 the limit is\ncommercial policy and a client-side check is a suggestion. Refused with\n`409 /problems/seat-limit-reached`, carrying `seatsUsed` and `seatLimit` so\nthe screen can say what to do about it rather than just that it failed.\n\n**Re-inviting an address that already holds an INVITED seat is allowed** and\nconsumes no second seat: it revokes the outstanding link and mints a new\none. `seatConsumed: false` in the response says that is what happened. See\n`services/invitations.py` for why refusing it would be a trap.\n\n**`201` in both cases.** An invitation row is genuinely created either way \u2014\nthat is the resource this endpoint makes. Whether a SEAT was newly consumed\nis a different question and it is answered in the body, not in the status.\n\n**Errors:** `401`, `403`, `404` (another agency's id), `409\nseat-limit-reached`, `409 email-already-registered` (a live account, here or\nelsewhere), `422`.",
