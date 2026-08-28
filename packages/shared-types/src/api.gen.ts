@@ -394,6 +394,56 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/billing/webhook": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stripe Webhook
+         * @description Stripe telling us what happened. **The only writer of subscription state.**
+         *
+         *     **No session auth, and that is not a hole.** The caller is a machine with no
+         *     account; what authenticates it is an HMAC over the exact bytes of this
+         *     request body, keyed on `STRIPE_WEBHOOK_SECRET`. That is a stronger claim
+         *     than a session cookie makes, because it is a claim about the payload and not
+         *     merely about the sender.
+         *
+         *     **The raw body is read, not a parsed model.** `await request.body()` rather
+         *     than a Pydantic parameter, because the signature covers the bytes Stripe
+         *     sent. Letting FastAPI parse and re-serialise first would verify a signature
+         *     against a payload that is equal as JSON and different as bytes, which fails
+         *     for something as ordinary as key order. This is the single most common way
+         *     webhook verification is written wrongly, and it fails closed and confusingly
+         *     rather than obviously.
+         *
+         *     **With no secret configured this refuses.** `503`, naming the variable, and
+         *     it does not fall back to trusting the body — see `verify_webhook`, which
+         *     explains why this is the opposite of the answer `services/email.py` gives
+         *     for its own unset key.
+         *
+         *     **An unrecognised event type is a `200`.** Stripe sends whatever the account
+         *     is configured to send, and answering non-2xx to an event nobody wants makes
+         *     Stripe retry it, back off, and eventually mark the endpoint unhealthy —
+         *     which degrades delivery of the events that DO matter. The body says whether
+         *     it was acted on, so a human reading `stripe listen` output can tell the
+         *     difference between "handled" and "politely ignored".
+         *
+         *     **Errors:** `400 invalid-webhook-signature` for a missing, malformed or
+         *     wrong signature, and for a body that is not JSON. `503
+         *     billing-not-configured` when `STRIPE_WEBHOOK_SECRET` is unset.
+         */
+        post: operations["stripe_webhook_api_v1_billing_webhook_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/clients": {
         parameters: {
             query?: never;
@@ -2933,6 +2983,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MeOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stripe_webhook_api_v1_billing_webhook_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Stripe-Signature"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */

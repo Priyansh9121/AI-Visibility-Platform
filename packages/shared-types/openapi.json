@@ -4171,6 +4171,58 @@
         ]
       }
     },
+    "/api/v1/billing/webhook": {
+      "post": {
+        "description": "Stripe telling us what happened. **The only writer of subscription state.**\n\n**No session auth, and that is not a hole.** The caller is a machine with no\naccount; what authenticates it is an HMAC over the exact bytes of this\nrequest body, keyed on `STRIPE_WEBHOOK_SECRET`. That is a stronger claim\nthan a session cookie makes, because it is a claim about the payload and not\nmerely about the sender.\n\n**The raw body is read, not a parsed model.** `await request.body()` rather\nthan a Pydantic parameter, because the signature covers the bytes Stripe\nsent. Letting FastAPI parse and re-serialise first would verify a signature\nagainst a payload that is equal as JSON and different as bytes, which fails\nfor something as ordinary as key order. This is the single most common way\nwebhook verification is written wrongly, and it fails closed and confusingly\nrather than obviously.\n\n**With no secret configured this refuses.** `503`, naming the variable, and\nit does not fall back to trusting the body \u2014 see `verify_webhook`, which\nexplains why this is the opposite of the answer `services/email.py` gives\nfor its own unset key.\n\n**An unrecognised event type is a `200`.** Stripe sends whatever the account\nis configured to send, and answering non-2xx to an event nobody wants makes\nStripe retry it, back off, and eventually mark the endpoint unhealthy \u2014\nwhich degrades delivery of the events that DO matter. The body says whether\nit was acted on, so a human reading `stripe listen` output can tell the\ndifference between \"handled\" and \"politely ignored\".\n\n**Errors:** `400 invalid-webhook-signature` for a missing, malformed or\nwrong signature, and for a body that is not JSON. `503\nbilling-not-configured` when `STRIPE_WEBHOOK_SECRET` is unset.",
+        "operationId": "stripe_webhook_api_v1_billing_webhook_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Stripe-Signature",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Stripe-Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Stripe Webhook Api V1 Billing Webhook Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stripe Webhook",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
     "/api/v1/clients": {
       "get": {
         "description": "Cursor-paginated client list, newest first.\n\nIDs are ULIDs, so `id < cursor ORDER BY id DESC` is a stable, index-backed\nwindow that does not skip or repeat rows when something is inserted\nmid-scroll \u2014 which for an active prospecting list is the common case.",
