@@ -1,4 +1,4 @@
-"""Signup, login, and seat invitation logic."""
+"""Signup, login, and password change. Seat invitations live in `invitations.py`."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import ids
 from ..config import Settings, get_settings
-from ..errors import EmailAlreadyRegistered, InvalidCredentials
+from ..errors import EmailAlreadyRegistered, InvalidCredentials, ValidationProblem
 from ..models import Agency, User, UserRole, UserStatus
 from ..security import dummy_verify, hash_password, needs_rehash, verify_password
 from . import seats
@@ -178,5 +178,79 @@ async def create_user_in_agency(
         status=UserStatus.ACTIVE,
     )
     session.add(user)
+    await session.flush()
+    return user
+
+
+class SamePasswordError(ValidationProblem):
+    """The new password is the current one.
+
+    A `422` on the field, not a silent success. Silently accepting it would
+    revoke every other session — which is what a change does — for a change
+    that did not happen, and the person would have no way to tell.
+
+    This leaks nothing: the caller has already proved they know the current
+    password, so being told it matches tells them something they supplied.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            detail="One or more fields were invalid.",
+            errors=[
+                {
+                    "field": "newPassword",
+                    "message": "That is already your password. Choose a different one.",
+                    "type": "value_error",
+                }
+            ],
+        )
+
+
+async def change_password(
+    session: AsyncSession,
+    *,
+    user: User,
+    current_password: str,
+    new_password: str,
+    settings: Settings | None = None,
+) -> User:
+    """Re-verify the current password, then set the new one.
+
+    **The current password is re-verified server-side even though the caller
+    holds a valid session.** A session proves someone got in once; it does not
+    prove they are still the account holder. An unlocked laptop, a borrowed
+    phone, or a stolen cookie all present a valid session, and without this
+    check any of them silently becomes permanent ownership of the account.
+
+    NO DUMMY HASH HERE, AND THAT IS DELIBERATE
+    ------------------------------------------
+    `authenticate` burns a throwaway Argon2 verification on the unknown-email
+    path because login latency would otherwise reveal whether an address has an
+    account. There is nothing equivalent to hide here: there is exactly one user
+    — the authenticated caller — and no branch that depends on a fact the caller
+    does not already know. A wrong current password does return faster than a
+    right one, because success goes on to hash the new password and write it.
+    That difference tells an observer only that a guess against a session they
+    already control was wrong, which the response status says outright. Adding a
+    dummy hash would be copying a defence to a place with nothing to defend.
+
+    Raises `InvalidCredentials` for a wrong current password and
+    `SamePasswordError` when nothing would change.
+    """
+    settings = settings or get_settings()
+
+    if user.password_hash is None or not verify_password(
+        current_password, user.password_hash, settings
+    ):
+        # The same class login uses, so there is one vocabulary for "those
+        # credentials are wrong" rather than a second one to learn. The detail
+        # names the field and says nothing further — there is no "no such user"
+        # to leak, because the caller is authenticated.
+        raise InvalidCredentials(detail="That is not your current password.")
+
+    if verify_password(new_password, user.password_hash, settings):
+        raise SamePasswordError()
+
+    user.password_hash = hash_password(new_password, settings)
     await session.flush()
     return user

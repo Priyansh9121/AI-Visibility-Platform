@@ -27,14 +27,22 @@ import { Button } from '@avp/design-system';
 import { api, ApiProblem, saveBlob } from '@/lib/api';
 
 export interface DownloadPdfButtonProps {
-  /** The authenticated route. Exactly one of these two is supplied. */
-  scanId?: string;
+  /**
+   * The authenticated route. Exactly one of these two is supplied.
+   *
+   * Explicitly `| undefined` because this project runs
+   * `exactOptionalPropertyTypes`, under which `?:` alone rejects a value that
+   * is present-but-undefined — which is exactly what a caller choosing between
+   * the two routes passes. Same reason `WorkspaceShell` spells its optionals
+   * out.
+   */
+  scanId?: string | undefined;
   /** The share-token route, for a reader with no account. */
-  token?: string;
+  token?: string | undefined;
   /** Used for the fallback filename only; the server names the file. */
   subjectName: string;
   /** True when the scan behind this report has no score. */
-  unscored?: boolean;
+  unscored?: boolean | undefined;
 }
 
 export function DownloadPdfButton({

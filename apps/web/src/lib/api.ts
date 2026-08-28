@@ -171,6 +171,27 @@ export const api = {
   logOut: () => request<void>('/auth/logout', { method: 'POST' }),
 
   /**
+   * Change your own password while signed in — Epic 9.14.
+   *
+   * The current password is re-verified server-side: a session proves somebody
+   * got in once, not that they are still the account holder.
+   *
+   * **Every OTHER session is revoked; this one survives on a fresh cookie.**
+   * That is deliberately not the reset flow's answer — see the endpoint's own
+   * docstring. It means the caller stays signed in and every other device is
+   * signed out, which is what someone changing a password usually intends.
+   *
+   * Rejects with `401 invalid-credentials` for a wrong current password (there
+   * is no "no such user" branch — the caller is authenticated) and `422` for a
+   * new password that fails the sign-up rules or is the current one.
+   */
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<Me>('/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
+
+  /**
    * Ask for a password-reset link — Epic 9.13.
    *
    * **Always resolves.** The endpoint answers 200 with the same body whether or

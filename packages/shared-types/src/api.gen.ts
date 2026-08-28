@@ -70,6 +70,63 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/change-password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Change Password
+         * @description Change your own password while signed in. **Auth required.**
+         *
+         *     The current password is re-verified server-side. A session proves somebody
+         *     got in once; it does not prove they are still the account holder, and an
+         *     unlocked laptop or a stolen cookie presents a perfectly valid one.
+         *
+         *     EVERY OTHER SESSION IS REVOKED. THIS ONE IS NOT.
+         *     ------------------------------------------------
+         *     **This is not the reset flow's answer copied over.** `reset-password/confirm`
+         *     revokes everything and leaves the caller signed OUT, because the person
+         *     holding a reset link proved control of an inbox rather than knowledge of a
+         *     password — they may be recovering from a compromise, they might not be the
+         *     account holder at all, and making them sign in once with the new password
+         *     confirms they hold it.
+         *
+         *     Neither of those applies here. The caller just demonstrated knowledge of the
+         *     current password, so the caller is not the suspect and signing them out of
+         *     the session they are actively using would be friction with no security
+         *     value — the same argument api-contracts.md already makes for signing a user
+         *     in at sign-up.
+         *
+         *     The OTHER sessions are a different question, and the answer is still revoke.
+         *     The commonest reason someone changes a password while signed in is that they
+         *     think somebody else has it; a change that left every other device alive
+         *     would fail at the one job the user believed they were doing. `logout-all`
+         *     exists for the explicit version, but requiring two deliberate actions to
+         *     accomplish the obvious intent of one is a trap.
+         *
+         *     So: `revoke_all_for_user`, then a FRESH session for this caller and a new
+         *     cookie. Every other device is signed out; this one keeps working. The new
+         *     token is minted rather than the old one spared, because "spare this digest"
+         *     is a special case in the revocation path and a bulk revoke with an exception
+         *     in it is the kind of code that later fails to revoke.
+         *
+         *     **Errors:** `401 authentication-required` (no session), `401
+         *     invalid-credentials` (wrong current password — no "no such user" branch
+         *     exists, because the caller is authenticated), `422 validation-failed` for a
+         *     new password that fails the SIGN-UP rules or that is the current one.
+         */
+        post: operations["change_password_api_v1_auth_change_password_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/invitations/accept": {
         parameters: {
             query?: never;
@@ -1116,6 +1173,20 @@ export interface components {
             isSubject: boolean;
             /** Position */
             position?: number | null;
+        };
+        /**
+         * ChangePasswordRequest
+         * @description Change your own password while signed in — Epic 9.14.
+         *
+         *     `current_password` is presented, not set, so it carries the login bounds
+         *     for the reason `LoginRequest` gives. `new_password` is set, so it carries
+         *     the full rule — the same `Password` sign-up and reset-confirm use.
+         */
+        ChangePasswordRequest: {
+            /** Currentpassword */
+            currentPassword: string;
+            /** Newpassword */
+            newPassword: string;
         };
         /**
          * CheckStatus
@@ -2437,6 +2508,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SeatListOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    change_password_api_v1_auth_change_password_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangePasswordRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeOut"];
                 };
             };
             /** @description Validation Error */

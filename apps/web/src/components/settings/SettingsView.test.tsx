@@ -109,10 +109,18 @@ describe('the "not built yet" list is maintained in both directions', () => {
     expect(html).not.toContain('Inviting or removing seats');
   });
 
+  it('no longer claims an authenticated password change is missing', () => {
+    const html = render(READY);
+    expect(html).not.toContain('an authenticated change is a different endpoint');
+    expect(html).not.toContain('Changing your password while signed in.');
+    // The real form is there instead.
+    expect(html).toContain('Change your password');
+    expect(html).toContain('>Current password<');
+  });
+
   it('still names the things that genuinely are missing', () => {
     const html = render(READY);
     expect(html).toContain('white-labelling is still name-and-slug only');
-    expect(html).toContain('Changing your password while signed in');
     expect(html).toContain('Changing the seat limit');
     expect(html).toContain('Billing, plans and usage limits');
   });

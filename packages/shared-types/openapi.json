@@ -351,6 +351,29 @@
         "title": "BrandMentionOut",
         "type": "object"
       },
+      "ChangePasswordRequest": {
+        "description": "Change your own password while signed in \u2014 Epic 9.14.\n\n`current_password` is presented, not set, so it carries the login bounds\nfor the reason `LoginRequest` gives. `new_password` is set, so it carries\nthe full rule \u2014 the same `Password` sign-up and reset-confirm use.",
+        "properties": {
+          "currentPassword": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Currentpassword",
+            "type": "string"
+          },
+          "newPassword": {
+            "maxLength": 256,
+            "minLength": 12,
+            "title": "Newpassword",
+            "type": "string"
+          }
+        },
+        "required": [
+          "currentPassword",
+          "newPassword"
+        ],
+        "title": "ChangePasswordRequest",
+        "type": "object"
+      },
       "CheckStatus": {
         "enum": [
           "pass",
@@ -3692,6 +3715,48 @@
         "summary": "List Seats",
         "tags": [
           "agencies"
+        ]
+      }
+    },
+    "/api/v1/auth/change-password": {
+      "post": {
+        "description": "Change your own password while signed in. **Auth required.**\n\nThe current password is re-verified server-side. A session proves somebody\ngot in once; it does not prove they are still the account holder, and an\nunlocked laptop or a stolen cookie presents a perfectly valid one.\n\nEVERY OTHER SESSION IS REVOKED. THIS ONE IS NOT.\n------------------------------------------------\n**This is not the reset flow's answer copied over.** `reset-password/confirm`\nrevokes everything and leaves the caller signed OUT, because the person\nholding a reset link proved control of an inbox rather than knowledge of a\npassword \u2014 they may be recovering from a compromise, they might not be the\naccount holder at all, and making them sign in once with the new password\nconfirms they hold it.\n\nNeither of those applies here. The caller just demonstrated knowledge of the\ncurrent password, so the caller is not the suspect and signing them out of\nthe session they are actively using would be friction with no security\nvalue \u2014 the same argument api-contracts.md already makes for signing a user\nin at sign-up.\n\nThe OTHER sessions are a different question, and the answer is still revoke.\nThe commonest reason someone changes a password while signed in is that they\nthink somebody else has it; a change that left every other device alive\nwould fail at the one job the user believed they were doing. `logout-all`\nexists for the explicit version, but requiring two deliberate actions to\naccomplish the obvious intent of one is a trap.\n\nSo: `revoke_all_for_user`, then a FRESH session for this caller and a new\ncookie. Every other device is signed out; this one keeps working. The new\ntoken is minted rather than the old one spared, because \"spare this digest\"\nis a special case in the revocation path and a bulk revoke with an exception\nin it is the kind of code that later fails to revoke.\n\n**Errors:** `401 authentication-required` (no session), `401\ninvalid-credentials` (wrong current password \u2014 no \"no such user\" branch\nexists, because the caller is authenticated), `422 validation-failed` for a\nnew password that fails the SIGN-UP rules or that is the current one.",
+        "operationId": "change_password_api_v1_auth_change_password_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Change Password",
+        "tags": [
+          "auth"
         ]
       }
     },

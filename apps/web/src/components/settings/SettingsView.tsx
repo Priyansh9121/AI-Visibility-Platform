@@ -25,6 +25,7 @@ import {
 import type { Me, SeatList } from '@avp/shared-types';
 import { WorkspaceShell } from '@/components/shell/WorkspaceShell';
 import { SeatsPanel } from '@/components/settings/SeatsPanel';
+import { PasswordChangePanel } from '@/components/settings/PasswordChangePanel';
 
 /** Roles that may invite and remove. A member holds a seat; they do not grant them. */
 const MANAGING_ROLES = new Set(['owner', 'admin']);
@@ -98,13 +99,20 @@ export function SettingsView({
           </PageSection>
 
           <PageSection
+            eyebrow="Your account"
+            heading="Your password"
+            lead="Changing it here signs out every other device and leaves this one signed in."
+          >
+            <PasswordChangePanel />
+          </PageSection>
+
+          <PageSection
             eyebrow="Not built yet"
             heading="What is still missing."
             lead="Listed rather than hidden, so it is clear what is absent instead of looking for a control that is not there."
           >
             <ul className="flex flex-col gap-3">
               <Missing text="Changing your agency name, and the logo and colours a report carries — white-labelling is still name-and-slug only, and needs a written policy on which design tokens an agency may override before it is safe to open up." />
-              <Missing text="Changing your password while signed in. The reset-by-email flow works; an authenticated change is a different endpoint and is not built." />
               <Missing text="Changing the seat limit. Seats can be invited and removed, but how many an agency gets is a billing question, and north-star.md §5.3 records pricing as undecided — showing a plan picker would imply a decision nobody has made." />
               <Missing text="Billing, plans and usage limits, for the same reason." />
             </ul>
