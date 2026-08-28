@@ -615,18 +615,72 @@ is the thing that costs money. **Metering something the schema does not already
 treat as a unit would be inventing a billing concept; metering the scan is
 recognising one that exists.**
 
-### 5.3 Illustrative tier structure — [HYPOTHESIS — numbers are placeholders]
+### 5.3 The published price — [DECIDED] · and the tier structure above it — [HYPOTHESIS]
 
-> **These numbers have met no customer. They are shape, not price.** Their only
-> job is to make §5.4's engineering work concrete. **Do not quote them.** They
-> also rest on a per-scan cost that has never been measured (§5.1) — so the
-> margin implied by any of them is currently unknowable.
+> **UPDATED 2026-08-28, Epic 9.15.** This section previously read
+> *"Illustrative tier structure — [HYPOTHESIS — numbers are placeholders]"* and
+> instructed the reader **"Do not quote them."** That instruction is now wrong
+> for one number and still right for every other, so the section is split rather
+> than relabelled wholesale. Read both halves.
+
+#### 5.3.1 What is now real — [DECIDED, on the founder's explicit instruction]
+
+**One plan, $29/month, 3 seats, published on the public landing page.**
+
+| | |
+|---|---|
+| Price | **$29.00 USD / month**, recurring, no annual option |
+| Seats | **3** — `Agency.seat_limit`'s existing default, not a new entitlement |
+| Where it is published | `apps/web/src/components/marketing/LandingView.tsx`, Pricing section |
+| Where the number lives in code | `PricingCard.tsx`'s `PLAN_PRICE_USD`, and the Stripe Price object |
+| Payment processor | **Stripe** — chosen and built, Epic 9.15 |
+| Stripe mode | **TEST MODE.** `sk_test_…` / `price_…` with `livemode: false` |
+| Real money moved | **None. Not one cent.** See the caveat below |
+
+**This supersedes the [HYPOTHESIS] flag that used to cover this number, and it
+did so by founder decision rather than by evidence.** The re-validation trigger
+at §0 has NOT fired: no pilot conversation has happened, no pricing objection
+has been heard, and §5.1's per-scan dollar cost is still unmeasured. So the
+$29 figure is **decided, not validated** — those are different things, and the
+distinction is the whole reason this document has labels. What changed is that
+the founder chose to publish a number and charge against it; what did not
+change is that nobody has yet paid it or argued about it.
+
+> **⚠ The price is live. The payments are not.**
+>
+> The Stripe account backing this (`PSM Digital sandbox`) has
+> `charges_enabled: false` and `details_submitted: false` — business
+> verification is not done, and finishing it is the founder's call, whenever he
+> is ready. Until then a real card cannot be charged even if one were entered.
+> **Going live is a key swap, not a code change**, by deliberate design: Epic
+> 9.15 ships no branch that behaves differently on a live key.
+
+**There is no paywall, and adding one is a separate decision nobody has made.**
+Sign-up, the onboarding wizard, scanning, scoring and reporting are all exactly
+as free as they were before this price existed. Subscribing is how an agency
+pays for the product; it is not how an agency unlocks it. Any brief that wants
+to gate a feature behind `subscription_status` is proposing a new product
+decision and must say so.
+
+#### 5.3.2 What is still a placeholder — [HYPOTHESIS, unchanged]
+
+**The multi-tier structure below has met no customer and does not exist in
+code.** Only ONE plan is built and sold. These three rows remain shape, not
+price. **Do not quote them.** They also rest on a per-scan cost that has never
+been measured (§5.1) — so the margin implied by any of them is currently
+unknowable, which is equally true of the $29 above.
 
 | Tier | Seats | Scans / month | Intended buyer |
 |---|---|---|---|
 | **Starter** | 1–3 | low | A solo operator or a small agency prospecting occasionally |
 | **Agency** | 3–10 | mid | The core case: an agency prospecting continuously and servicing retained clients |
 | **Agency Pro** | 10+ | high | Bulk prospecting, batch scoring, multiple account managers |
+
+Where the single shipped plan sits against them is deliberately not answered
+here. It is 3 seats, which is Starter's range, at a price the table never
+proposed — because the table was drawn before the price was chosen and has not
+been redrawn against it. **Redrawing it is a pricing exercise, not a
+documentation one**, and it belongs after the first real pilot conversation.
 
 **This maps onto tenancy that already exists** and requires no schema invention:
 `Agency.seat_limit` (`models/tenancy.py:59`, default 3,
@@ -641,9 +695,9 @@ already built and tested.** Only the scan-metering half is missing.
 
 | # | Work | Notes |
 |---|---|---|
-| 1 | **`Plan` / `Subscription` model tied to `Agency`** | Does not exist. `models/tenancy.py` has `seat_limit` and nothing else commercial. No `plan`, `subscription`, `billing` or `stripe` identifier appears anywhere in `models/`. |
+| 1 | **`Plan` / `Subscription` model tied to `Agency`** | **BUILT, minimally — Epic 9.15.** `Agency` now carries `stripe_customer_id`, `stripe_subscription_id`, `subscription_status` and `subscription_current_period_end`. There is still no `Plan` ENTITY and no tier concept, because there is one plan; if a second ever exists, that table is the work. The claim this row used to make — *"no `plan`, `subscription`, `billing` or `stripe` identifier appears anywhere in `models/`"* — is no longer true. |
 | 2 | **`UsageRecord`, persisted at the moment a scan is billed** | **Same discipline as `EngineResult`: persist the fact when it happens.** A usage count derived by re-querying scans at invoice time is a reconstruction, and reconstructions disagree with reality exactly when a dispute makes it expensive. Write the billing event when it occurs. |
-| 3 | **Stripe metered / usage-based billing integration** | **Vendor NOT decided** — Stripe is the obvious candidate, not a commitment. Any choice must clear `ip-safety.md` #6 (MIT/Apache-2.0/BSD) and be recorded in the licence ledger. |
+| 3 | **Stripe metered / usage-based billing integration** | **Vendor DECIDED and integrated: Stripe — Epic 9.15.** The `stripe` Python SDK is MIT (verified against the LICENSE file in the sdist, not the classifier) and is recorded in the licence ledger. **The METERED half is still not built** and is what this row now means: what ships is flat monthly subscription billing — Checkout, a webhook, and the hosted Billing Portal. Usage-based billing needs row 2's `UsageRecord` first. |
 | 4 | **A billing-failure state on `Agency`, rendered as honestly as `partial` is today** | The precedent is live and load-bearing: `ScanStatus.PARTIAL` renders as a real, visible degradation, and Epic 9.2 corrected the dashboard's earlier assumption that `partial` was routine. **Never silent degradation.** An agency whose payment failed must see that, in those words, not discover it as features quietly not working. |
 | 5 | **[OPEN] — what happens to a scan already in flight when payment fails** | See below. |
 

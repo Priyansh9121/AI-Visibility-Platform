@@ -58,11 +58,21 @@ export default function Home() {
 
   // The public page carries its own voice and must not sit under the intake
   // screen's header, which addresses someone who has already signed up.
+  //
+  // It owns its own `<main>` and page padding as of Epic 9.15, rather than
+  // being handed them here. The header bar it now carries has to run the full
+  // width of the viewport and stick to the top of it, and a header nested
+  // inside this route's padded, max-width column can do neither.
   if (view.kind === 'signed-out') {
     return (
-      <main className="mx-auto max-w-report px-6 py-18">
-        <LandingView onGetStarted={() => setView({ kind: 'sign-up' })} />
-      </main>
+      <LandingView
+        onGetStarted={() => setView({ kind: 'sign-up' })}
+        // Two different intents, two different destinations. Somebody who
+        // already has an account and somebody evaluating the product want
+        // different forms, and landing a returning customer on a sign-up panel
+        // asks them to read their way back out of it.
+        onLogIn={() => setView({ kind: 'sign-in' })}
+      />
     );
   }
 

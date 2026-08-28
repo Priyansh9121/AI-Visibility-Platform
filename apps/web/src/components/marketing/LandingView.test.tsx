@@ -1,5 +1,5 @@
 /**
- * The public landing page — Epic 9.10.
+ * The public landing page — Epic 9.10, extended in Epic 9.15.
  *
  * Rendered to static markup and asserted over, the approach ReportView.test.tsx
  * and DashboardView.test.tsx use.
@@ -8,6 +8,24 @@
  * marketing page is not that a heading fails to render — it is that a claim
  * appears which nothing in the product supports. A test suite that only checked
  * the copy was present would pass just as happily on invented testimonials.
+ *
+ * ONE ASSERTION WAS INVERTED IN 9.15, AND IT IS WORTH SAYING WHY IN THE FILE
+ * -------------------------------------------------------------------------
+ * `advertises no price or plan, because none is decided` was correct while
+ * north-star.md §5.3's tiers were [HYPOTHESIS]. The founder has since decided a
+ * real price, §5.3 has been updated to record that, and the page publishes it.
+ * The test now asserts the opposite — that the price IS there, and is the right
+ * number in both places it appears. Deleting the test outright would have left
+ * the page's most commercially consequential sentence unguarded.
+ *
+ * WHAT THESE TESTS CANNOT REACH
+ * -----------------------------
+ * This suite has no DOM: `renderToStaticMarkup` produces a string, and a click
+ * handler is not in it. So "Log in goes to sign-in rather than sign-up" is
+ * asserted here only as far as it can be — two distinct controls exist, with
+ * distinct labels — and the destination itself is covered by the live browser
+ * pass recorded in build-log.md, not by this file. Stating that plainly is
+ * better than a test named after a behaviour it does not exercise.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -27,6 +45,17 @@ describe('the page explains the product', () => {
     expect(out).toContain('six minutes');
   });
 
+  it('walks the whole pipeline, not only the parts that photograph well', () => {
+    const out = html();
+    // product-spec.md §5.4's seven stages. The 9.10 page described four and
+    // skipped intake, competitor detection and the technical audit — the three
+    // that answer "what do I have to fill in?", which is a prospect's first
+    // question.
+    expect(out).toContain('One URL in, and nothing else to fill in');
+    expect(out).toContain('Rivals found rather than guessed at');
+    expect(out).toContain('The site itself checked for what the engines need');
+  });
+
   it('leads with a call to action that reaches the sign-up surface', () => {
     expect(html()).toContain('Scan a website');
   });
@@ -40,6 +69,9 @@ describe('the page explains the product', () => {
       'What is different',
       'What you can stand behind',
       'What it does not do yet',
+      // Matched on the heading rather than the eyebrow: "Pricing" also appears
+      // in the header nav, which is earlier in the markup by design.
+      'One plan. Twenty-nine dollars a month.',
       'Start',
     ];
     let cursor = -1;
@@ -52,12 +84,97 @@ describe('the page explains the product', () => {
   });
 });
 
+describe('the header is on page one, before any scrolling or clicking', () => {
+  it('carries the wordmark, both nav links, log in and the primary action', () => {
+    const out = html();
+    expect(out).toContain('AI Visibility Platform');
+    expect(out).toContain('>Product<');
+    expect(out).toContain('>Pricing<');
+    expect(out).toContain('Log in');
+    expect(out).toContain('Get started free');
+  });
+
+  it('puts all five above the first section, not in a footer', () => {
+    const out = html();
+    // Everything in the header must precede the hero's eyebrow, which is the
+    // first thing under it.
+    const hero = out.indexOf('For SEO and digital marketing agencies');
+    for (const label of ['AI Visibility Platform', '>Product<', '>Pricing<', 'Log in', 'Get started free']) {
+      expect(out.indexOf(label), `${label} is not above the fold`).toBeLessThan(hero);
+    }
+  });
+
+  it('navigates within the page rather than to routes that do not exist', () => {
+    const out = html();
+    // One plan does not earn a comparison page, so both nav links are in-page
+    // anchors and the sections they name really carry those ids.
+    expect(out).toContain('href="#product"');
+    expect(out).toContain('href="#pricing"');
+    expect(out).toContain('id="product"');
+    expect(out).toContain('id="pricing"');
+  });
+
+  it('offers log in and get started as two separate controls', () => {
+    const out = html();
+    // The destinations differ — sign-in versus sign-up — and this suite has no
+    // DOM to click, so what is asserted is that they are not the same control
+    // wearing two labels. The destination itself is verified in the browser.
+    expect(out).toContain('Log in');
+    expect(out).toContain('Get started free');
+    expect(out.indexOf('Log in')).not.toBe(out.indexOf('Get started free'));
+  });
+
+  it('stays put while the page scrolls', () => {
+    // The pricing card and the limitations section are both below the fold by
+    // design; a header that scrolled away would take "Log in" with it exactly
+    // when a reader has decided.
+    expect(html()).toMatch(/class="[^"]*\bsticky\b/);
+  });
+});
+
+describe('the price is published, deliberately', () => {
+  it('states $29 a month on the pricing card', () => {
+    const out = html();
+    expect(out).toContain('$29');
+    expect(out).toContain('per month');
+  });
+
+  it('says what the plan includes, seats named rather than implied', () => {
+    const out = html();
+    expect(out).toContain('3 seats');
+    expect(out).toContain('the same seat limit every agency already gets');
+  });
+
+  it('agrees with itself everywhere a number appears', () => {
+    const out = html();
+    // A page that says $29 in one place and something else in another is worse
+    // than a page with no price. Both mentions come from one constant; this
+    // asserts no third, hand-typed one crept in.
+    const prices = out.match(/\$\d+/g) ?? [];
+    expect(prices.length).toBeGreaterThan(0);
+    expect(new Set(prices)).toEqual(new Set(['$29']));
+  });
+
+  it('offers sign-up, not checkout, to a visitor with no account', () => {
+    const out = html();
+    // You cannot subscribe an agency that does not exist yet.
+    expect(out).toContain('Get started');
+    expect(out).not.toContain('>Subscribe<');
+  });
+
+  it('says plainly that nothing is gated behind the plan', () => {
+    const out = html();
+    expect(out).toContain('Signing up is free and stays free');
+  });
+});
+
 describe('nothing on this page is fabricated', () => {
   it('carries no testimonial, logo wall, user count or press mention', () => {
     const out = html();
     // The specific shapes a page like this is usually padded with. This product
     // has none of them yet, and north-star.md §7's trust argument is worth
-    // nothing on a page that opens with an invented one.
+    // nothing on a page that opens with an invented one. Publishing a real
+    // price changed nothing about this rule.
     for (const tell of [
       'testimonial',
       'trusted by',
@@ -78,7 +195,9 @@ describe('nothing on this page is fabricated', () => {
 
   it('claims no scale it cannot evidence', () => {
     const out = html();
-    // Any "N+ brands / agencies / customers / users" construction.
+    // Any "N+ brands / agencies / customers / users" construction. Scoped to
+    // exclude the seat count, which is a fact about the plan rather than a
+    // claim about how many people bought it.
     expect(out).not.toMatch(/\d[\d,]*\s*\+?\s*(brands|agencies|customers|users|companies|teams)/i);
   });
 
@@ -106,17 +225,18 @@ describe('nothing on this page is fabricated', () => {
     // React escapes the apostrophe in static markup, so match around it.
     expect(out).toContain('measures one vendor');
     expect(out).toContain('models today');
-    expect(out).toContain('no PDF export yet');
+    expect(out).toContain('Nothing tracks whether a fix was actually done');
   });
 
-  it('advertises no price or plan, because none is decided', () => {
+  it('no longer claims two things that have since shipped', () => {
     const out = html();
-    // north-star.md §5.3's tiers are [HYPOTHESIS] and have met no customer.
-    // Publishing them would turn a working assumption into a public promise.
-    expect(out).not.toMatch(/\$\s?\d/);
-    expect(out).not.toContain('per month');
-    expect(out).not.toContain('/mo');
-    expect(out).toContain('Access is by conversation while this is in pilot');
+    // Both sentences were true when 9.10 wrote them and false by 9.15. On a
+    // page whose whole argument is that its claims are checkable, a stale
+    // limitation is the same defect as an inflated feature — it is just the
+    // flattering direction that usually gets caught.
+    expect(out).not.toContain('no PDF export yet');
+    expect(out).not.toContain('Access is by conversation while this is in pilot');
+    expect(out).not.toContain('no self-serve plan');
   });
 });
 
@@ -127,13 +247,19 @@ describe('it is built from the design system, not styled locally', () => {
     expect(out).toContain('avp-section--lead');
   });
 
+  it('builds the pricing card from the shared card, not a bespoke panel', () => {
+    expect(html()).toContain('avp-card');
+  });
+
   it('shows the product own signature visualisation, not stock artwork', () => {
     const out = html();
     expect(out).toContain('avp-ledger');
     expect(out).toContain('avp-meter');
-    // No external asset of any kind: ip-safety.md #4.
+    // No external asset of any kind: ip-safety.md #4. The header wordmark is
+    // type, not an image, for the same reason.
     expect(out).not.toContain('<img');
     expect(out).not.toContain('background-image');
+    expect(out).not.toContain('<svg viewBox="0 0 24 24"');
   });
 
   it('carries no ad hoc colour or type value', () => {
@@ -141,7 +267,7 @@ describe('it is built from the design system, not styled locally', () => {
     // The Epic 9.8 failure mode: a class that looks plausible and resolves to
     // nothing. Arbitrary-value and raw-palette utilities are the two shapes
     // that would bypass the preset entirely.
-    expect(out).not.toMatch(/class="[^"]*\b(bg|text|border)-\[/);
+    expect(out).not.toMatch(/class="[^"]*\b(bg|text|border|max-w)-\[/);
     expect(out).not.toMatch(/class="[^"]*\b(slate|gray|zinc|blue|red|green)-\d{3}\b/);
   });
 });
