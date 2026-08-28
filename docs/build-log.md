@@ -7586,3 +7586,283 @@ dependency added.
 design-system 117 → **125**, web 203 → **210**). `ruff` clean, `mypy` unchanged
 at its pre-existing 38, `tsc --noEmit` clean in both packages, `next build`
 compiles 9 routes. `openapi.json` 24 → 26 paths.
+
+---
+
+## 2026-08-28 — Epic 9.14 · The last agency-facing surface: seats, a PDF, a password
+
+Three screens that close out what an agency can actually do with this product,
+plus the test-coverage gap 9.13's own review left open. Three backend
+exceptions, two of them pre-agreed and one designed here from nothing.
+
+### The two exceptions that were already agreed, and the ones that were not
+
+`POST /agencies/{agencyId}/invitations` and `DELETE /users/{userId}` sat in
+api-contracts.md's "planned, not yet built" table from Epic 1, with a note
+saying the `invitations` table, `services/seats.py` and
+`SessionStore.revoke_all_for_user` were built and tested and only the HTTP
+surface was outstanding. That note was accurate — no migration, no new domain
+logic, no new table.
+
+**But two more endpoints turned out to be necessary, and neither was in the
+table.** `GET /agencies/{id}/seats`, because `/auth/me` carries the seat COUNT
+and never the roster, and a management screen needs the roster. And `POST
+/auth/invitations/accept`, because an INVITED user has a null `password_hash`
+and `authenticate` refuses it by design — an invitation nobody can redeem is a
+seat consumed by nobody, and the brief's own walkthrough step ("sign in as that
+account") is impossible without it. Both are written up in full rather than
+merely shipped.
+
+### THE THREE DECISIONS THE BRIEF ASKED TO BE STATED
+
+**Re-inviting a pending address is allowed, and consumes no second seat.** The
+`User` row with `status = INVITED` is what occupies the seat, and it is the row
+being re-invited, so the call revokes the outstanding link and mints a new one.
+Refusing — which the sign-up path's `email-already-registered` check would have
+done — leaves an agency with a seat consumed, nobody in it, and no way out but
+removing the seat and starting over. A new link retires the old one, the same
+rule `password_reset.request_reset` applies for the same reason.
+
+**Removing a seat revokes every session it holds, immediately.** `sessions.py`
+opens by saying this exact case is why the product has a server-side session
+store rather than JWTs. There IS a fallback and it is not the mechanism:
+`current_principal` re-reads the user and 401s on a soft-deleted row, closing
+the door within one request; revocation closes it within zero, and the
+difference is a request already in flight.
+
+**An authenticated password change revokes every OTHER session and keeps the
+caller's.** Deliberately not the reset flow's answer:
+
+| | reset-confirm | change-password |
+|---|---|---|
+| What the caller proved | control of an inbox | knowledge of the password |
+| Other sessions | revoked | revoked |
+| The caller's session | revoked; signed out | re-minted; stays signed in |
+
+The reset flow signs the caller out because they proved control of a mailbox,
+not knowledge of a password. Here they just demonstrated the password, so
+signing them out of the session they are using is friction with no security
+value — the argument sign-up already makes. The other sessions are a separate
+question with the same answer: the commonest reason to change a password while
+signed in is thinking somebody else has it. The caller's token is **re-minted
+rather than spared**, because "revoke all except this digest" is a special case
+inside a revocation path, and a bulk revoke with an exception in it is the code
+that later fails to revoke.
+
+**A third decision nobody asked for.** `uq_users_email` does not exclude
+soft-deleted rows, so a removed address could never be invited again — a
+permanent ban earned by one mis-click. Re-inviting a removed seat REVIVES the
+row, which also keeps `scans.requested_by_user_id` pointing somewhere live.
+
+### THE PDF, AND WHY NO DEPENDENCY WAS ADDED
+
+product-spec.md §5.1 names React-PDF or WeasyPrint. Both were checked against
+ip-safety.md #6 rather than assumed — the discipline 9.13 applied to `openai`
+and `resend` — and both were declined:
+
+* **WeasyPrint** is BSD, but hard-requires **Pyphen**, whose PyPI classifiers
+  are `GPLv2+`, `LGPLv2+` and `MPL 1.1`. All three trip `license_audit.py`; #6
+  requires explicit sign-off for GPL/LGPL and MPL is not in ALLOWED either.
+  Read off PyPI metadata, not memory. It also needs system pango/cairo.
+* **React-PDF** is MIT and architecturally wrong: a Node library called from a
+  FastAPI endpoint means a subprocess in the request path. And the reuse
+  argument that would justify it does not survive the library — it renders its
+  own `StyleSheet` primitives, not HTML with Tailwind classes, so `ReportView`
+  could not be rendered by it in any case.
+* Checked while there: **fpdf2** is `LGPL-3.0-only`, blocked. **reportlab** is
+  BSD with clean transitive licences and would pass — declined because this
+  document has no image and no embedded font, so it buys a native Pillow wheel
+  for nothing.
+
+So `services/pdf.py` writes the file directly, using the PDF standard-14 fonts
+(no embedding) and stdlib `zlib`. **Zero dependencies added, again.** It is not
+a layout engine and says so: one column, rules, page breaks. Adobe's AFM width
+tables are embedded because wrapping has to measure, and the standard 14 are
+frozen by the specification.
+
+### The uncomfortable part, named rather than hidden
+
+`derive.ts` computes the report's argument, and its own docstring warns against
+a second implementation — "the chart annotating one dimension while the headline
+names another". A Python process cannot call it, so
+`services/report_narrative.py` IS that second implementation.
+
+**It is policed, not trusted.** `tests/test_report_narrative.py` and
+`crossLanguage.test.ts` read the same two checked-in files — six report payloads
+(real Help Scout data from the Epic 5/6 run, plus its degraded variants) and the
+expected output generated from the TypeScript side — and both assert against
+them. Change either derivation and one suite reddens on the field that moved.
+Ported with it: JavaScript's `Math.round` is half-away-from-zero and Python's is
+banker's rounding, which would have printed a fix as 19.2 points in the PDF and
+19.3 on screen.
+
+**A stranger holding a share token can download the PDF**, and the share page
+offers it. It exposes nothing the JSON route does not already serve the same
+holder; Epic 9.8 minted the token because a prospect must not need an account;
+and granting the live URL while withholding the file is backwards for a send
+path. The cost — a downloaded file outlives revocation — is currently zero,
+because share links have no revocation at all. **When revocation ships, that is
+the route to revisit.**
+
+### Three defects found while building
+
+* **`redis_client.get_redis()` fell back to `get_settings()`**, which the
+  `client` fixture had just cache-cleared — so every session the suite minted
+  went to Redis DB 0 while `_clean_state` flushed DB 15. The conftest
+  docstring's promise ("DB 15 deliberately, so a local dev session on DB 0 is
+  never signed out") was not being kept. Found because the seat-removal test
+  reads Redis directly and got an empty set from the wrong database.
+* **Starlette's path converter matches `.`**, so `/reports/{token}` matched
+  `/reports/abc.pdf` with a token of `"abc.pdf"`, and routes are tried in
+  registration order — every PDF request silently became a 404 JSON request.
+  The `.pdf` route is registered first and a test asserts it.
+* **api-contracts.md never recorded `reset-password/request` or `/confirm`.**
+  Epic 9.13 built both; the file's opening rule says every endpoint is recorded
+  in the task that adds it. Both are written up now, saying plainly they are
+  late.
+
+Also noted, not fixed: **`ApiModel` sets `str_strip_whitespace=True`, so
+passwords are whitespace-trimmed on every path** — sign-up, login, reset and
+change alike. Consistent, so nobody can be locked out by it. Recorded because it
+is surprising.
+
+### A MISTAKE MADE AND CORRECTED IN THIS EPIC
+
+The first draft of the PDF endpoint tests called `POST /clients/{id}/scans`
+against the suite's INLINE executor, which runs prompt generation and every
+engine call **for real**. It hung for five minutes and burned at least one
+Anthropic call before it was killed; no results were persisted, and the leftover
+row was truncated. `test_report_endpoint.py` avoids this with a stub fixture.
+The tests now defer execution entirely — which is also the better test, because
+an unscored scan is exactly what a UI-started scan produces today. The brief
+said "no paid API calls in this brief"; that was breached and is recorded here
+rather than quietly fixed.
+
+### Part E: the four screens 9.13 shipped with no tests
+
+ClientsRoute, SettingsRoute, WelcomeRoute and ResetPasswordRoute had zero
+coverage — not through neglect, but because every state that mattered lived
+inside an effect a static render never runs. Each is now split the way
+`DashboardView` was in Epic 9.3: a pure prop-driven view in `components/`, a
+route that only fetches. They live in `components/` because a Next.js page
+module may only export a default plus framework fields; `next build` rejects
+anything else by name.
+
+`ResetPasswordView` carries the property the brief singled out.
+`test_password_reset.py` proves the BACKEND cannot distinguish unknown from
+expired from used from orphaned; that was never checked where it reaches a
+person, and it is exactly what a screen can undo with one helpful sentence. One
+`invalid` state, a fixed title naming no reason, the API's sentence verbatim,
+and a sweep over the screen's own copy for every phrase that could name a cause.
+
+**Item 16 resolved: the Clients copy was right.** `GET /clients` does
+`.order_by(Client.id.desc())` over ULIDs and
+`test_intake.py::test_list_paginates_newest_first` has asserted it since Epic 2.
+The review flagged it unconfirmed, not wrong. Confirmed; the copy stays.
+
+### THE LIVE WALKTHROUGH
+
+One sitting, real Chromium against real servers, **zero JavaScript exceptions**
+(the console entries were Chromium logging the expected 403 for a member reading
+the roster and 401s for the revoked seat — no `pageerror` at any step).
+Screenshots in `docs/screenshots/epic914-*`.
+
+Sign in → Settings → invite `colleague@northlight.example` → recover the link
+from the API log (no provider configured, the supported development mode) →
+accept in a clean browser context → signed straight into the dashboard →
+confirm **2 of 3 seats** from the new account, and that a member is refused the
+roster with "Only an owner or an admin can see and change who holds a seat" →
+owner removes the seat, after a confirmation that states the consequence first →
+**1 of 3 seats** → the removed session is dead on its next request AND cannot
+sign back in → change the password while signed in → still signed in, on a fresh
+cookie → sign out → sign in with the new password → report → **Download PDF**.
+
+**Credentials as they now stand:** `founder@northlight.example` /
+`northlight-changed-while-signed-in` (changed during the walkthrough, which was
+the point). `colleague@northlight.example` was invited, accepted with
+`the-second-seat-passphrase`, and removed — its row is soft-deleted.
+
+**The PDF matched the on-screen report line for line**, including both degraded
+states the ghost.org scan carries: Share of Voice excluded with "No comparison
+was made" and Technical Foundation with "Not yet checked", each with its reason
+and no sub-score — never a zero. Same agency name, same beat headings, same
+biggest gap (Citation Strength, 30.5 points), same three degradation flags.
+The share-token download was **byte-identical** to the authenticated one, and
+the share page leaked no workspace navigation.
+
+The null-score path was verified separately by rendering the `unscored` fixture
+and opening it: a large **"Not scored"** and the sentence "Nothing here should
+be read as a low score", with no number anywhere. The ghost.org scan is scored
+(66.57), so the live walkthrough could not exercise that branch.
+
+### DELIBERATELY NOT BUILT — repeated verbatim from the brief
+
+* **The scan-orchestration gap (build-log Epic 9.13):** a UI-started scan still
+  doesn't chain competitor detection, technical audit, scoring, or fix
+  generation the way `verify_e2e.py` does. NOT fixed here. Named so it stays
+  visible instead of getting rediscovered from zero next time. Any screen built
+  in this brief must degrade honestly (the existing "Not scored" / null-not-zero
+  pattern) rather than assume the pipeline ran to completion.
+* **White-label branding** (`PATCH /agencies/{agencyId}/branding`) — blocked on
+  a written token-override policy per api-contracts.md, not a missing screen.
+  Do not build a UI for this.
+* **Billing/plans** — blocked on north-star.md §5.3's pricing [HYPOTHESIS],
+  which is still undecided. Do not build a pricing or plan-selection screen.
+* **Share-link expiry/revocation** — known debt, not addressed here.
+* **Two items Epic 9.13's own review surfaced and didn't fix:** the
+  reset-password-request timing side-channel (the "user exists" branch does real
+  DB work the "doesn't exist" branch skips — a possible timing tell against the
+  "never reveal account existence" requirement), and the session-revocation test
+  that would still pass even if `revoke_all_for_user` were deleted from the
+  code. Both backend/test-rigor, both deliberately deferred, neither silently
+  forgotten.
+* **Motion/interactivity direction** — a separate, parallel thread (prototype
+  first, decide, then spec). Not folded into this brief.
+* **Content generation, conversational agent chat, ads/shopping tracking, query
+  fan-out** — as in every prior brief. Not built, not stubbed, not hinted at.
+
+Two notes on that list. The **second** deferred review item is now partially
+addressed as a side effect rather than as work: seat removal and password change
+both assert revocation by **reading Redis directly**, so those two call sites
+fail if `revoke_all_for_user` is deleted. The reset flow's own test is
+unchanged and still has the weakness described. And the **first** — the
+orchestration gap — is what makes the ghost.org report carry `NO_COMPETITOR_SET`
+and an unmeasured Technical Foundation, which is precisely the degraded state
+the PDF was verified against.
+
+### IP-safety self-check (constraint 9)
+
+* **#1 / #5** — **no competitor product, screen, layout or algorithm was
+  referenced at any point.** Seat management was derived from the data model and
+  from `CompetitorEditor`, this codebase's own precedent for "manage a list
+  against a mutating endpoint" (brief item 15). The password form was derived
+  from the endpoint's own requirements. The PDF's structure is the five beats
+  ip-safety.md #3 already mandates. **This is also the first epic under the new
+  wording of #1 and #5**, and it was followed as written: nothing was designed
+  from a competitor's screenshot, and nothing was measured against one in either
+  direction.
+* **#2** — every element from `@avp/design-system`. `SelectField` was built INTO
+  the system rather than beside it, after a first draft hand-assembled a
+  `<select>` from `avp-field__*` classes — the same rule in a thinner disguise.
+  **`apps/web` still has ZERO arbitrary-value and ZERO raw-palette classes**,
+  audited again.
+* **#4** — icons are Lucide (MIT), already in use. No pack added.
+* **#6** — **zero dependencies added.** Four PDF candidates assessed, two
+  blocked on licence, two declined on architecture. Licence audit PASS,
+  unchanged.
+* **#7 / #8** — the PDF is the first surface to render the collected facts to a
+  FILE, so the facts-only sweep was extended to it: a test decompresses the
+  content streams and asserts no third-party prose reaches the document. All
+  copy is our own, and `report_narrative.py`'s string table is asserted
+  character-for-character against the TypeScript original.
+
+**IP-safety check passed:** no competitor reference in design or algorithm, no
+third-party prose persisted or rendered, design-system components only, no ad
+hoc Tailwind, no dependency added.
+
+### Tests
+
+**1313, up from 1066** (api 665 → **766**, workers 13, shared-types 53,
+design-system 125, web 210 → **356**). `ruff` clean, `mypy` unchanged at its
+pre-existing 38, `tsc --noEmit` clean across all three packages, `next build`
+compiles 10 routes. `openapi.json` 26 → **33 paths, 39 operations**.
