@@ -22,8 +22,8 @@ the shape of the one above it, and copies the wrong one. `report.py` is the
 precedent for a router spanning two path families with no prefix, so that is
 the shape used here — `/agencies/{id}/billing/...` and `/billing/webhook`.
 
-WHY BOTH AUTHENTICATED ROUTES ARE OWNER/ADMIN
-----------------------------------------------
+WHY ALL THREE AUTHENTICATED ROUTES ARE OWNER/ADMIN
+---------------------------------------------------
 Epic 9.14 set owner-or-admin for seat management on the argument that a member
 holds a seat and does not decide who else does. The same argument applies more
 strongly to money: `UserRole`'s own docstring says "OWNER is the billing
@@ -38,7 +38,7 @@ this for the seat roster, which a member also cannot read.
 THE ONE THING THE BROWSER CANNOT DO
 ------------------------------------
 **No route here lets a browser set a subscription status.** Checkout returns a
-URL; it does not write a status. The only thing in the
+URL and the portal returns a URL; neither writes a status. The only thing in the
 entire system that may mark an agency subscribed is a Stripe-signed webhook.
 That is not defensive tidiness — it is the difference between a subscription
 being a fact and a subscription being whatever the last request claimed.
@@ -51,7 +51,7 @@ from typing import Any
 from fastapi import APIRouter, Header, Path, Request, status
 
 from ..deps import DbDep, RequireAdmin, SettingsDep, assert_own_agency
-from ..schemas.billing import BillingStatusOut, CheckoutSessionOut
+from ..schemas.billing import BillingStatusOut, CheckoutSessionOut, PortalSessionOut
 from ..services import billing as billing_service
 
 router = APIRouter(tags=["billing"])
@@ -130,6 +130,36 @@ async def start_checkout(
     await db.commit()
 
     return CheckoutSessionOut(url=url)
+
+
+@router.post(
+    "/agencies/{agencyId}/billing/portal",
+    response_model=PortalSessionOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def open_portal(
+    principal: RequireAdmin,
+    settings: SettingsDep,
+    agency_id: str = Path(alias="agencyId"),
+) -> Any:
+    """Create a Stripe Billing Portal session. Returns the URL to navigate to.
+
+    Update a card, cancel, download invoices — Stripe's own hosted screens, for
+    one API call and no UI here. Building those would mean handling card
+    details, dunning and invoice PDFs, which is a product rather than a feature,
+    and one that already exists.
+
+    Nothing is written, so nothing is committed. The `201` is for the session
+    created at Stripe, exactly as above.
+
+    **Errors:** `401`, `403`, `404`, `503 billing-not-configured` — including
+    when the agency has never subscribed and so has no customer for the portal
+    to be about.
+    """
+    assert_own_agency(principal.agency_id, agency_id)
+
+    url = await billing_service.create_portal_session(principal.agency, settings=settings)
+    return PortalSessionOut(url=url)
 
 
 @router.post("/billing/webhook", include_in_schema=True)

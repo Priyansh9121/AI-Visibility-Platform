@@ -9,6 +9,7 @@
 import type {
   BillingStatus,
   CheckoutSession,
+  PortalSession,
   Client,
   ClientDetail,
   CompetitorInput,
@@ -394,6 +395,24 @@ export const api = {
    */
   startCheckout: (agencyId: string) =>
     request<CheckoutSession>(`/agencies/${agencyId}/billing/checkout`, {
+      method: 'POST',
+    }),
+
+  /**
+   * Open Stripe's hosted billing portal — Epic 9.15.
+   *
+   * Update a card, cancel, download an invoice. Same shape as `startCheckout`:
+   * an endpoint returns a URL and the browser navigates to it. Building any of
+   * those screens here would mean handling card details, dunning states and
+   * invoice PDFs — a product in itself, and one Stripe already ships.
+   *
+   * Requires an existing Stripe customer. An agency that has never subscribed
+   * gets `503`, because the portal for one would be an empty page with no card
+   * and no invoices — a worse answer than the button not being there, which is
+   * why Settings only offers it once a subscription exists.
+   */
+  openBillingPortal: (agencyId: string) =>
+    request<PortalSession>(`/agencies/${agencyId}/billing/portal`, {
       method: 'POST',
     }),
 

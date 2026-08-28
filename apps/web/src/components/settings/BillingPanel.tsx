@@ -37,7 +37,7 @@
  */
 
 import { useState, type JSX } from 'react';
-import { Badge, Card, CardBody } from '@avp/design-system';
+import { Badge, Button, Card, CardBody } from '@avp/design-system';
 import type { BadgeTone } from '@avp/design-system';
 import type { BillingStatus } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
@@ -125,6 +125,22 @@ export function BillingPanel({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(initialError);
 
+  async function manage(): Promise<void> {
+    setBusy(true);
+    setError(null);
+    try {
+      const { url } = await api.openBillingPortal(agencyId);
+      window.location.assign(url);
+    } catch (err) {
+      setBusy(false);
+      setError(
+        err instanceof ApiProblem
+          ? err.problem.detail
+          : 'The billing portal could not be opened. Nothing has changed.',
+      );
+    }
+  }
+
   async function subscribe(): Promise<void> {
     setBusy(true);
     setError(null);
@@ -208,6 +224,25 @@ export function BillingPanel({
             <p role="alert" className="max-w-measure text-ui-sm leading-prose text-danger">
               {error}
             </p>
+          )}
+
+          {/*
+            Offered whenever a Stripe customer exists, which is a wider
+            condition than `isActive` on purpose. A cancelled or past-due
+            subscription is exactly when somebody needs to reach their invoices
+            and their card, and hiding the door at that moment would be hiding
+            it in the only situation that makes it urgent.
+          */}
+          {billing.hasBillingAccount && (
+            <div className="flex flex-wrap items-center gap-4">
+              <Button variant="secondary" onClick={() => void manage()} disabled={busy}>
+                {busy ? 'Opening portal…' : 'Manage billing'}
+              </Button>
+              <p className="max-w-measure text-ui-sm text-text-tertiary">
+                Opens Stripe, where your card, your invoices and cancelling all
+                live. We never see or store a card number.
+              </p>
+            </div>
           )}
         </div>
       </CardBody>

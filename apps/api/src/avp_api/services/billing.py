@@ -7,8 +7,8 @@ the integration.
 WHAT THIS IS, AND WHAT IT DELIBERATELY IS NOT
 ---------------------------------------------
 It is flat monthly subscription billing against ONE Stripe Price: create a
-Checkout Session, and believe the webhook. Stripe's hosted portal, for managing
-the result, lands in the commit after this one.
+Checkout Session, believe the webhook, and hand the customer Stripe's own
+portal to manage the result. That is the entire surface.
 
 It is **not** metered or usage-based billing, which north-star.md §5.2 argues
 is the right eventual model. That needs §5.4 row 2's `UsageRecord` to exist
@@ -311,6 +311,36 @@ async def create_checkout_session(
         )
 
     logger.info("billing.checkout_created", agency_id=agency.id, session_id=session.id)
+    return session.url
+
+
+async def create_portal_session(agency: Agency, *, settings: Settings) -> str:
+    """Stripe's hosted billing portal. Returns the URL to navigate to.
+
+    Update a card, cancel, download an invoice — all of it, for one more API
+    call and no UI of our own. Building any of those screens here would mean
+    handling card details, dunning states and invoice PDFs, which is a product
+    in itself and one Stripe already ships.
+
+    Requires a customer. The caller checks, and the check is not merely
+    defensive: the portal for an agency that has never paid is an empty page
+    with no invoices and no card, which is a worse answer than the button not
+    being there.
+    """
+    if not agency.stripe_customer_id:
+        raise BillingNotConfigured(
+            detail=(
+                "This agency has no billing account yet. Subscribe first — the "
+                "portal manages an existing subscription and cannot start one."
+            )
+        )
+
+    base = settings.public_web_base_url.rstrip("/")
+    client = _client(settings)
+    session = await client.v1.billing_portal.sessions.create_async(
+        params={"customer": agency.stripe_customer_id, "return_url": f"{base}/settings"}
+    )
+    logger.info("billing.portal_created", agency_id=agency.id)
     return session.url
 
 

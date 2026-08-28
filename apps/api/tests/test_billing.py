@@ -98,8 +98,10 @@ class _StripeStub:
     def __init__(self) -> None:
         self.customers_created: list[dict[str, Any]] = []
         self.sessions_created: list[dict[str, Any]] = []
+        self.portals_created: list[dict[str, Any]] = []
         self.next_customer_id = "cus_test_001"
         self.next_session_url = "https://checkout.stripe.test/c/pay/cs_test_001"
+        self.next_portal_url = "https://billing.stripe.test/p/session/bps_test_001"
         self.session_url_override: str | None = ""
 
     # -- shape mirroring `client.v1.<resource>.<verb>_async` ----------------
@@ -122,9 +124,15 @@ class _StripeStub:
                 )
                 return SimpleNamespace(id="cs_test_001", url=url)
 
+        class _PortalSessions:
+            async def create_async(self, params: dict[str, Any]) -> Any:
+                stub.portals_created.append(params)
+                return SimpleNamespace(id="bps_test_001", url=stub.next_portal_url)
+
         return SimpleNamespace(
             customers=_Customers(),
             checkout=SimpleNamespace(sessions=_Sessions()),
+            billing_portal=SimpleNamespace(sessions=_PortalSessions()),
         )
 
 
@@ -411,6 +419,7 @@ async def test_billing_requires_a_session(client: AsyncClient) -> None:
     for method, path in [
         ("GET", f"{BASE}/agencies/agcy_01ANY/billing"),
         ("POST", f"{BASE}/agencies/agcy_01ANY/billing/checkout"),
+        ("POST", f"{BASE}/agencies/agcy_01ANY/billing/portal"),
     ]:
         resp = await client.request(method, path)
         assert resp.status_code == 401, f"{method} {path} -> {resp.status_code}"
@@ -431,6 +440,7 @@ async def test_a_member_may_not_touch_billing(client: AsyncClient, engine) -> No
     for method, path in [
         ("GET", f"{BASE}/agencies/{agency_id}/billing"),
         ("POST", f"{BASE}/agencies/{agency_id}/billing/checkout"),
+        ("POST", f"{BASE}/agencies/{agency_id}/billing/portal"),
     ]:
         resp = await client.request(method, path)
         assert resp.status_code == 403, f"{method} {path} -> {resp.text}"
@@ -445,6 +455,7 @@ async def test_another_agencys_id_is_404_never_403(client: AsyncClient) -> None:
     for method, path in [
         ("GET", f"{BASE}/agencies/{other}/billing"),
         ("POST", f"{BASE}/agencies/{other}/billing/checkout"),
+        ("POST", f"{BASE}/agencies/{other}/billing/portal"),
     ]:
         resp = await client.request(method, path)
         assert resp.status_code == 404, f"{method} {path} -> {resp.text}"
@@ -895,3 +906,43 @@ async def test_the_webhook_needs_no_session(client: AsyncClient, engine) -> None
     )
     assert (await _deliver(client, payload)).status_code == 200
     assert (await _agency(engine, agency_id)).subscription_status == "active"
+
+
+# ---------------------------------------------------------------------------
+# the hosted portal
+# ---------------------------------------------------------------------------
+
+
+async def test_portal_returns_a_url_for_a_subscribed_agency(
+    client: AsyncClient, engine, stripe_stub: _StripeStub
+) -> None:  # noqa: ANN001
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+    async with factory() as s:
+        agency = (
+            await s.execute(select(Agency).where(Agency.id == agency_id))
+        ).scalar_one()
+        agency.stripe_customer_id = "cus_test_001"
+        agency.subscription_status = "active"
+        await s.commit()
+
+    resp = await client.post(f"{BASE}/agencies/{agency_id}/billing/portal")
+    assert resp.status_code == 201, resp.text
+    assert resp.json() == {"url": stripe_stub.next_portal_url}
+    assert stripe_stub.portals_created[0]["customer"] == "cus_test_001"
+
+
+async def test_portal_before_subscribing_refuses_with_a_sentence(
+    client: AsyncClient,
+) -> None:
+    """An empty portal is a worse answer than an absent button.
+
+    No `stripe_stub`: this must refuse before reaching for a client at all.
+    """
+    me = await _sign_up(client)
+
+    resp = await client.post(f"{BASE}/agencies/{me['agency']['id']}/billing/portal")
+    assert resp.status_code == 503, resp.text
+    assert "Subscribe first" in resp.json()["detail"]
