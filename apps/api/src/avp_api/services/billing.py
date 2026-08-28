@@ -6,10 +6,9 @@ the integration.
 
 WHAT THIS IS, AND WHAT IT DELIBERATELY IS NOT
 ---------------------------------------------
-It is flat monthly subscription billing against ONE Stripe Price. This commit
-carries the half a browser can reach: create a Stripe customer once, and create
-a Checkout Session against the configured Price. The webhook that believes
-Stripe, and the hosted portal, land in their own commits after this one.
+It is flat monthly subscription billing against ONE Stripe Price: create a
+Checkout Session, and believe the webhook. Stripe's hosted portal, for managing
+the result, lands in the commit after this one.
 
 It is **not** metered or usage-based billing, which north-star.md §5.2 argues
 is the right eventual model. That needs §5.4 row 2's `UsageRecord` to exist
@@ -64,14 +63,16 @@ our own customers.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 import stripe
 import structlog
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings
-from ..errors import BillingNotConfigured
+from ..errors import BillingNotConfigured, InvalidWebhookSignature
 from ..models import Agency
 
 logger = structlog.get_logger(__name__)
@@ -89,6 +90,17 @@ logger = structlog.get_logger(__name__)
 # `partial` is today", and quietly counting a failed payment as active would be
 # the silent degradation that row exists to forbid.
 ACTIVE_STATUSES = frozenset({"active", "trialing"})
+
+# The events this service acts on. Anything else is acknowledged and ignored —
+# see `apply_event`.
+HANDLED_EVENT_TYPES = frozenset(
+    {
+        "checkout.session.completed",
+        "customer.subscription.created",
+        "customer.subscription.updated",
+        "customer.subscription.deleted",
+    }
+)
 
 
 def _require(settings: Settings, name: str) -> str:
@@ -133,6 +145,46 @@ def is_active(agency: Agency) -> bool:
     that encodes it.
     """
     return agency.subscription_status in ACTIVE_STATUSES
+
+
+def period_end_of(subscription: Any) -> datetime | None:
+    """When the current paid period ends, across two shapes of Subscription.
+
+    **`current_period_end` is no longer a top-level field on Subscription.** On
+    the API version this SDK pins (`2026-08-26.dahlia`) it lives on each
+    subscription ITEM, because a subscription's items can bill on different
+    schedules. Reading `subscription["current_period_end"]` — the field every
+    older example uses — returns nothing, and the failure is silent: the status
+    saves correctly, Settings says "Active", and the renewal date is simply
+    never there.
+
+    So items are read first, and the legacy top-level field is the fallback
+    rather than the other way round. The fallback is not dead code: a webhook
+    delivery is stamped with the API version configured on the endpoint, which
+    may be older than the SDK's, and events can be replayed from Stripe's
+    dashboard months later.
+
+    With one Price and one item there is exactly one date to find. If a
+    subscription ever carries several items the earliest is taken, because the
+    first thing that renews is the first thing that can fail.
+    """
+    candidates: list[int] = []
+
+    items = _get(subscription, "items")
+    data = _get(items, "data") if items is not None else None
+    for item in data or []:
+        value = _get(item, "current_period_end")
+        if isinstance(value, int):
+            candidates.append(value)
+
+    if not candidates:
+        legacy = _get(subscription, "current_period_end")
+        if isinstance(legacy, int):
+            candidates.append(legacy)
+
+    if not candidates:
+        return None
+    return datetime.fromtimestamp(min(candidates), tz=UTC)
 
 
 def _get(obj: Any, key: str) -> Any:
@@ -260,3 +312,207 @@ async def create_checkout_session(
 
     logger.info("billing.checkout_created", agency_id=agency.id, session_id=session.id)
     return session.url
+
+
+# ---------------------------------------------------------------------------
+# webhook
+# ---------------------------------------------------------------------------
+
+
+def verify_webhook(payload: bytes, signature: str | None, *, settings: Settings) -> Any:
+    """Verify a webhook against `STRIPE_WEBHOOK_SECRET`, or refuse.
+
+    **There is no path through this function that returns an unverified event.**
+    Not when the signature header is missing, not when it is wrong, and — the
+    one worth stating loudest — not when the secret is unset. An unconfigured
+    server refuses with `BillingNotConfigured`; it does not decide that
+    verification is optional today. A payload claiming a subscription is active
+    is precisely what somebody would forge, and "we were not set up to check" is
+    not a reason to believe one.
+
+    That is deliberately NOT the shape `services/email.py` uses for its own
+    unset key. There, an absent `RESEND_API_KEY` logs instead of sending, and
+    that is a real, supported development mode because the consequence of the
+    unconfigured path is a message nobody receives. Here the consequence would
+    be trusting a stranger about money. Same question, opposite answer, because
+    the thing at stake is different.
+
+    `construct_event` also enforces a replay window (Stripe's default tolerance,
+    300 seconds), so a signature captured and replayed later fails too. That is
+    a property of the SDK's implementation and a second reason not to have
+    hand-rolled this.
+    """
+    secret = _require(settings, "stripe_webhook_secret")
+
+    if not signature:
+        raise InvalidWebhookSignature(
+            detail="No Stripe-Signature header was supplied."
+        )
+
+    try:
+        return stripe.Webhook.construct_event(payload, signature, secret)
+    except stripe.SignatureVerificationError as exc:
+        logger.warning("billing.webhook_rejected", reason=type(exc).__name__)
+        raise InvalidWebhookSignature(
+            detail="The Stripe-Signature header did not match this payload."
+        ) from exc
+    except ValueError as exc:
+        # Malformed JSON. Same refusal: an unparseable body is not an event.
+        raise InvalidWebhookSignature(
+            detail="The webhook payload could not be parsed."
+        ) from exc
+
+
+async def _resolve_agency(db: AsyncSession, obj: Any) -> Agency | None:
+    """Find the agency an event object belongs to.
+
+    Three routes, tried in order of how directly each one says what it means:
+
+    1. `metadata.agency_id` — written by us when the session, customer and
+       subscription were created. It is not a lookup at all, it is the answer.
+    2. The subscription id. `customer.subscription.deleted` carries a
+       subscription and little else that helps.
+    3. The customer id. The fallback for anything created outside our checkout
+       flow — a subscription started by hand in the Stripe dashboard, which is
+       a real thing a founder does while testing.
+
+    Metadata is trusted because this is only ever called on a payload that
+    `verify_webhook` has already authenticated. On an unverified body it would
+    be an attacker naming the agency they would like to upgrade, which is
+    exactly why nothing calls this without verifying first.
+    """
+    metadata = _get(obj, "metadata")
+    agency_id = _get(metadata, "agency_id") if metadata is not None else None
+    if agency_id:
+        found = (
+            await db.execute(select(Agency).where(Agency.id == str(agency_id)))
+        ).scalar_one_or_none()
+        if found is not None:
+            return found
+
+    subscription_id = _get(obj, "subscription") or (
+        _get(obj, "id") if str(_get(obj, "object") or "") == "subscription" else None
+    )
+    if subscription_id:
+        found = (
+            await db.execute(
+                select(Agency).where(Agency.stripe_subscription_id == str(subscription_id))
+            )
+        ).scalar_one_or_none()
+        if found is not None:
+            return found
+
+    customer_id = _get(obj, "customer")
+    if customer_id:
+        return (
+            await db.execute(
+                select(Agency).where(Agency.stripe_customer_id == str(customer_id))
+            )
+        ).scalar_one_or_none()
+
+    return None
+
+
+async def apply_event(db: AsyncSession, event: Any) -> bool:
+    """Apply one verified Stripe event. Returns whether it was acted on.
+
+    **This is the only thing in the system that may change a subscription
+    status.** No endpoint the browser can reach writes one. That is the whole
+    architecture of this feature in one sentence: the browser's redirect after
+    checkout is a UX nicety, and Stripe telling us is the fact. An operator who
+    pays and then closes the tab before the redirect still ends up subscribed,
+    because nothing was ever waiting on that tab.
+
+    **An unhandled event type is a success, not an error.** Stripe endpoints
+    receive whatever the account is configured to send, and answering non-2xx to
+    an event we simply do not care about makes Stripe retry it, back off, and
+    eventually mark the endpoint unhealthy — degrading delivery of the events we
+    DO care about. So this returns False and the router answers 200.
+    """
+    event_type = str(_get(event, "type") or "")
+    data = _get(event, "data")
+    obj = _get(data, "object") if data is not None else None
+
+    if event_type not in HANDLED_EVENT_TYPES or obj is None:
+        logger.info("billing.webhook_ignored", event_type=event_type)
+        return False
+
+    agency = await _resolve_agency(db, obj)
+    if agency is None:
+        # Not an error either. A Stripe account can carry customers this
+        # database has never heard of — a founder clicking around the dashboard
+        # makes one — and asking Stripe to retry forever would not conjure a
+        # row. Logged loudly enough to notice if it ever becomes common.
+        logger.warning("billing.webhook_unmatched", event_type=event_type)
+        return False
+
+    if event_type == "checkout.session.completed":
+        _apply_checkout_completed(agency, obj)
+    else:
+        _apply_subscription_event(agency, obj, deleted=event_type.endswith(".deleted"))
+
+    logger.info(
+        "billing.webhook_applied",
+        event_type=event_type,
+        agency_id=agency.id,
+        status=agency.subscription_status,
+    )
+    return True
+
+
+def _apply_checkout_completed(agency: Agency, session: Any) -> None:
+    """Checkout finished: record the customer and subscription, mark active.
+
+    The session object carries ids but no subscription status and no period end
+    — those belong to the Subscription, which arrives in its own event moments
+    later and fills them in. Rather than making an extra API call inside a
+    webhook to fetch what is already on its way, the status is set to `active`
+    here and corrected by the subscription event if it turns out to be anything
+    else.
+
+    Writing `active` optimistically is safe in a way it would not be in the
+    other direction: a completed Checkout Session in `subscription` mode means
+    payment succeeded. If it somehow did not, the `customer.subscription.*`
+    event that follows overwrites this with the truth within seconds, and the
+    worst case is a screen that was briefly too generous — not a screen that
+    denied somebody something they had paid for.
+    """
+    customer_id = _get(session, "customer")
+    subscription_id = _get(session, "subscription")
+
+    if customer_id:
+        agency.stripe_customer_id = str(customer_id)
+    if subscription_id:
+        agency.stripe_subscription_id = str(subscription_id)
+    agency.subscription_status = "active"
+
+
+def _apply_subscription_event(agency: Agency, subscription: Any, *, deleted: bool) -> None:
+    """A subscription was created, changed, or cancelled.
+
+    The status is taken from the payload rather than inferred from the event
+    type, with one exception: `customer.subscription.deleted` is authoritative
+    that the subscription is over, so `canceled` is used if the payload somehow
+    disagrees. Stripe does send `status: "canceled"` on that event; not relying
+    on it costs nothing and means the cancellation cannot be missed.
+
+    Every status Stripe sends is stored verbatim, including ones this codebase
+    has never seen. `models/tenancy.py` explains why the column is a string
+    rather than an enum, and this is the write that would otherwise raise.
+    """
+    subscription_id = _get(subscription, "id")
+    if subscription_id:
+        agency.stripe_subscription_id = str(subscription_id)
+
+    customer_id = _get(subscription, "customer")
+    if customer_id:
+        agency.stripe_customer_id = str(customer_id)
+
+    status = _get(subscription, "status")
+    agency.subscription_status = "canceled" if deleted else (str(status) if status else None)
+
+    # A cancelled subscription has no next renewal, and leaving yesterday's date
+    # behind would let Settings render "renews" against a date in the past.
+    agency.subscription_current_period_end = (
+        None if deleted else period_end_of(subscription)
+    )

@@ -7,11 +7,10 @@ WHY THIS IS A NEW ROUTER AND NOT MORE OF `agencies.py`
 Three of these four routes are agency-scoped and would sit perfectly well in
 `agencies.py`. The fourth is why they do not.
 
-`POST /billing/webhook`, which lands in a later commit, has **no session, no
-principal, no role and no agency in its path.** It is authenticated by an HMAC
-over its own raw body, its caller is a machine at Stripe, and the question it
-answers is "did Stripe really send this" rather than "who are you and may you".
-Every other route in `agencies.py`
+`POST /billing/webhook` has **no session, no principal, no role and no agency in
+its path.** It is authenticated by an HMAC over its own raw body, its caller is
+a machine at Stripe, and the question it answers is "did Stripe really send
+this" rather than "who are you and may you". Every other route in `agencies.py`
 opens by resolving a principal and checking a role; this one cannot, and a
 router whose module docstring says "Owner or admin. A member holds a seat; they
 do not decide who else does" would then be carrying a route that gate does not
@@ -23,8 +22,8 @@ the shape of the one above it, and copies the wrong one. `report.py` is the
 precedent for a router spanning two path families with no prefix, so that is
 the shape used here — `/agencies/{id}/billing/...` and `/billing/webhook`.
 
-WHY THE AUTHENTICATED ROUTES ARE OWNER/ADMIN
----------------------------------------------------
+WHY BOTH AUTHENTICATED ROUTES ARE OWNER/ADMIN
+----------------------------------------------
 Epic 9.14 set owner-or-admin for seat management on the argument that a member
 holds a seat and does not decide who else does. The same argument applies more
 strongly to money: `UserRole`'s own docstring says "OWNER is the billing
@@ -49,7 +48,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Path, status
+from fastapi import APIRouter, Header, Path, Request, status
 
 from ..deps import DbDep, RequireAdmin, SettingsDep, assert_own_agency
 from ..schemas.billing import BillingStatusOut, CheckoutSessionOut
@@ -131,3 +130,52 @@ async def start_checkout(
     await db.commit()
 
     return CheckoutSessionOut(url=url)
+
+
+@router.post("/billing/webhook", include_in_schema=True)
+async def stripe_webhook(
+    request: Request,
+    db: DbDep,
+    settings: SettingsDep,
+    stripe_signature: str | None = Header(default=None, alias="Stripe-Signature"),
+) -> dict[str, Any]:
+    """Stripe telling us what happened. **The only writer of subscription state.**
+
+    **No session auth, and that is not a hole.** The caller is a machine with no
+    account; what authenticates it is an HMAC over the exact bytes of this
+    request body, keyed on `STRIPE_WEBHOOK_SECRET`. That is a stronger claim
+    than a session cookie makes, because it is a claim about the payload and not
+    merely about the sender.
+
+    **The raw body is read, not a parsed model.** `await request.body()` rather
+    than a Pydantic parameter, because the signature covers the bytes Stripe
+    sent. Letting FastAPI parse and re-serialise first would verify a signature
+    against a payload that is equal as JSON and different as bytes, which fails
+    for something as ordinary as key order. This is the single most common way
+    webhook verification is written wrongly, and it fails closed and confusingly
+    rather than obviously.
+
+    **With no secret configured this refuses.** `503`, naming the variable, and
+    it does not fall back to trusting the body — see `verify_webhook`, which
+    explains why this is the opposite of the answer `services/email.py` gives
+    for its own unset key.
+
+    **An unrecognised event type is a `200`.** Stripe sends whatever the account
+    is configured to send, and answering non-2xx to an event nobody wants makes
+    Stripe retry it, back off, and eventually mark the endpoint unhealthy —
+    which degrades delivery of the events that DO matter. The body says whether
+    it was acted on, so a human reading `stripe listen` output can tell the
+    difference between "handled" and "politely ignored".
+
+    **Errors:** `400 invalid-webhook-signature` for a missing, malformed or
+    wrong signature, and for a body that is not JSON. `503
+    billing-not-configured` when `STRIPE_WEBHOOK_SECRET` is unset.
+    """
+    payload = await request.body()
+    event = billing_service.verify_webhook(payload, stripe_signature, settings=settings)
+
+    handled = await billing_service.apply_event(db, event)
+    if handled:
+        await db.commit()
+
+    return {"received": True, "handled": handled}
