@@ -9,8 +9,17 @@ in writing.
 
 ## DESIGN / IP SAFETY — read before writing any UI code
 
-1. Never design any screen from a competitor's screenshot or "make it like
-   X but better." Design from the data model and user goal only.
+**On competitors, in one line: learn from them constantly, copy from them
+never** — not their screens, not their code, not their algorithms. The
+numbered constraints below are what that means in practice.
+
+1. Look at competitor products, read their marketing, know what agencies
+   are used to — that's normal research, not a violation. What's not
+   allowed: designing FROM a competitor's screenshot, or working from a
+   "make it like X but better" brief. Derive every screen from the data
+   model and the user goal first; check it against competitors afterward,
+   to confirm the result is different — never before, to decide what it
+   should look like.
 2. Build the proprietary design system (Epic 0) BEFORE any screen work.
    Every screen must import from it — no ad hoc Tailwind defaults on
    customer-facing screens.
@@ -19,9 +28,14 @@ in writing.
 4. Only use permissively licensed visual assets: Lucide icons (MIT) or
    custom-drawn, Google Fonts (OFL) or purchased/licensed fonts. No icon
    packs or illustration kits sourced from competitor products.
-5. Never inspect or copy competitor source code, HTML/CSS/JS, or DOM
-   structure. Looking at a rendered competitor page for UX research is
-   fine; lifting its code is not, even "as a reference."
+5. Never copy competitor source code, HTML/CSS/JS, DOM structure, or
+   algorithms — a scoring formula, a detection method, a ranking approach —
+   even reimplemented in different syntax. Looking at a rendered competitor
+   page for UX research is fine; reverse-engineering how it works and
+   reproducing the mechanism is not, even reworded or "as a reference."
+   Every algorithm here is justified from our own spec (`scoring-spec.md`,
+   the `EngineAdapter` design, etc.) — not by resemblance to, or
+   deliberate difference from, anyone else's.
 6. Every dependency must be MIT/Apache-2.0/BSD licensed. Flag anything
    GPL/AGPL and stop for my explicit sign-off before adding it.
 7. Scraped data from AI engines or competitor pages is for FACTS ONLY
