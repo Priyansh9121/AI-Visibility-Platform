@@ -93,6 +93,12 @@ const EXAMPLE_DIMENSIONS: LedgerDimension[] = [
  * Scroll-to on the same page rather than routes of their own: there is one
  * plan and one product, and a comparison page with a single column in it is a
  * page that exists to look like a bigger company's page.
+ *
+ * Both targets carry `scroll-mt-18`, which is the header's own height plus
+ * room. Without it the browser scrolls the anchor to y=0 and the sticky header
+ * covers the heading the reader just asked to see — the nav link appearing to
+ * land one section too far down. Caught in the live browser pass, not by a
+ * test: a static render has no scroll position to be wrong about.
  */
 const PRODUCT_ID = 'product';
 const PRICING_ID = 'pricing';
@@ -145,7 +151,7 @@ export function LandingView({
           </div>
         </PageSection>
 
-        <div id={PRODUCT_ID} className="flex flex-col gap-24">
+        <div id={PRODUCT_ID} className="flex scroll-mt-18 flex-col gap-24">
           <PageSection
             eyebrow="What a scan does"
             heading="It asks the questions your client's buyers actually ask."
@@ -292,7 +298,7 @@ export function LandingView({
           </ul>
         </PageSection>
 
-        <div id={PRICING_ID}>
+        <div id={PRICING_ID} className="scroll-mt-18">
           <PageSection
             eyebrow="Pricing"
             heading="One plan. Twenty-nine dollars a month."
