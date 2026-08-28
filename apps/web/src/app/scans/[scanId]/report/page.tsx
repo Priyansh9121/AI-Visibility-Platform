@@ -15,6 +15,7 @@ import { api, ApiProblem } from '@/lib/api';
 import { ReportView } from '@/components/report/ReportView';
 import { CompetitorEditor } from '@/components/report/CompetitorEditor';
 import { ShareLinkBar } from '@/components/report/ShareLinkBar';
+import { DownloadPdfButton } from '@/components/report/DownloadPdfButton';
 import { WorkspaceShell } from '@/components/shell/WorkspaceShell';
 
 type View =
@@ -110,6 +111,13 @@ export default function ReportPageRoute({
         as a slot — a slot would put it inside the rendered page.
       */}
       <ShareLinkBar scanId={scanId} />
+      <div className="mt-4">
+        <DownloadPdfButton
+          scanId={scanId}
+          subjectName={view.report.subject.brandName || view.report.subject.name}
+          unscored={view.report.score === null}
+        />
+      </div>
       <ReportView
         report={view.report}
         competitorEditor={

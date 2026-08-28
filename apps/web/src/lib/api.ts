@@ -55,6 +55,61 @@ export class ApiProblem extends Error {
   }
 }
 
+/**
+ * A binary GET — Epic 9.14's PDF export.
+ *
+ * Separate from `request` rather than a flag on it, because almost nothing it
+ * does applies here: there is no JSON body to send, no `Content-Type` to set,
+ * and no `response.json()` to parse. What IS shared is the part that matters —
+ * `credentials: 'include'`, without which the session cookie is silently
+ * omitted and every call is a 401.
+ *
+ * A failure still arrives as `application/problem+json`, so the error path
+ * parses one and throws the same `ApiProblem` every other call throws. A
+ * caller should not have to handle two error vocabularies depending on what
+ * the success case returns.
+ */
+async function requestBlob(path: string): Promise<Blob> {
+  const response = await fetch(`${API_BASE}${path}`, { credentials: 'include' });
+
+  if (!response.ok) {
+    const body: unknown = await response.json().catch(() => null);
+    if (isProblemDetail(body)) throw new ApiProblem(body);
+    throw new ApiProblem({
+      type: '/problems/unknown',
+      title: 'Request failed',
+      status: response.status,
+      detail: `The server returned ${response.status}.`,
+      instance: path,
+    });
+  }
+
+  return response.blob();
+}
+
+/**
+ * Hand a blob to the browser as a download, using the server's filename.
+ *
+ * A plain `<a href>` to the API would be simpler and is wrong here: the API is
+ * a different origin in every environment this runs in, so the download would
+ * depend on the session cookie surviving a cross-origin top-level navigation —
+ * which `SameSite` governs and which changes with deployment topology. Fetching
+ * with credentials and clicking a blob URL works the same everywhere.
+ *
+ * The object URL is revoked afterwards. Left alive it pins the whole file in
+ * memory until the tab closes, and a report is not small.
+ */
+export function saveBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
@@ -261,6 +316,27 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ token, fullName, password }),
     }),
+
+  /**
+   * The report as a PDF — Epic 9.14.
+   *
+   * The SAME document the report screen shows, rendered server-side from the
+   * same `build_report` payload. It is not a second report and must never be
+   * described to a user as an "export" of something different.
+   *
+   * Degrades identically: an unscored scan downloads a PDF that says "Not
+   * scored", exactly as the screen does — never a zero, and never a failure.
+   */
+  reportPdf: (scanId: string) => requestBlob(`/scans/${scanId}/report.pdf`),
+
+  /**
+   * The same PDF, by share token — Epic 9.14, unauthenticated.
+   *
+   * A stranger holding the link can download the file as well as read the
+   * page. It carries strictly the facts `publicReport` already serves them, so
+   * withholding it would protect nothing while making the send path worse.
+   */
+  publicReportPdf: (token: string) => requestBlob(`/reports/${token}.pdf`),
 
   /**
    * Replace a client's competitor set by hand — Epic 3.

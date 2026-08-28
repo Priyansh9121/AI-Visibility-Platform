@@ -28,6 +28,7 @@ import { ErrorState, LoadingState } from '@avp/design-system';
 import type { Report } from '@avp/shared-types';
 import { api } from '@/lib/api';
 import { ReportView } from '@/components/report/ReportView';
+import { DownloadPdfButton } from '@/components/report/DownloadPdfButton';
 
 type View =
   | { kind: 'loading' }
@@ -81,6 +82,27 @@ export default function PublicReportRoute({
 
   return (
     <main className="mx-auto max-w-report px-6 py-18">
+      {/*
+        The one affordance a stranger DOES get — Epic 9.14.
+
+        It is not an operator control: it hands the reader the same document
+        they are already reading, in a form they can keep and forward. Epic 9.8
+        minted this token because "the person a report is about has no account",
+        and giving them the live URL while withholding the file would be
+        backwards for a mechanism whose whole job is *send*. Nothing new is
+        exposed — the PDF carries strictly the facts on this page.
+
+        Above the report rather than inside it, for the reason the authenticated
+        screen states: `ReportView` is the document that gets sent, and a
+        control for sending it must not appear in what is sent.
+      */}
+      <div className="mb-8">
+        <DownloadPdfButton
+          token={token}
+          subjectName={view.report.subject.brandName || view.report.subject.name}
+          unscored={view.report.score === null}
+        />
+      </div>
       <ReportView report={view.report} publicView />
     </main>
   );
