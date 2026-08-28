@@ -7866,3 +7866,357 @@ hoc Tailwind, no dependency added.
 design-system 125, web 210 → **356**). `ruff` clean, `mypy` unchanged at its
 pre-existing 38, `tsc --noEmit` clean across all three packages, `next build`
 compiles 10 routes. `openapi.json` 26 → **33 paths, 39 operations**.
+
+---
+
+## 2026-08-28 — Epic 9.15 · A price on page one, and a checkout that really charges a test card
+
+The first commercial code in this product. north-star.md §5.4 row 3 recorded
+the payment vendor as *"NOT decided — Stripe is the obvious candidate, not a
+commitment."* It is decided, built, and verified against real Stripe pages.
+
+### SAY THIS FIRST: THESE ARE TEST KEYS AND NOTHING CHARGES REAL MONEY
+
+**`STRIPE_SECRET_KEY` is `sk_test_…`. `STRIPE_PRICE_ID` points at a Price with
+`livemode: false`. Not one cent of real money can move through any of this.**
+
+The Stripe account behind it is `acct_1U9FZr7Qi3nSzCKc`, "PSM Digital sandbox",
+and it reports `charges_enabled: false` and `details_submitted: false` — Stripe's
+business verification has not been done. Even if a real card were entered, it
+could not be charged. Finishing that verification is the founder's decision,
+whenever he wants to make it, and it is explicitly out of scope here.
+
+**What would have to change to go live: the keys. Nothing else.** There is
+deliberately no `stripe_live_mode` setting, no `if key.startswith("sk_live")`
+anywhere, and no branch in `services/billing.py`, `routers/billing.py` or any
+component that behaves differently on a live key. That is a design constraint
+this brief asked for and it was honoured literally, for a reason worth writing
+down: if the live switch required a code change, the code would be the thing
+standing between a commercial decision and its effect — and that change would
+get written in a hurry, on the day revenue was waiting on it.
+
+**Existing free sign-up and onboarding are untouched and ungated.** Sign-up,
+the onboarding wizard, intake, scanning, scoring, the report, the share link and
+the PDF all work exactly as they did yesterday for an agency with no
+subscription — which is every agency in the database. `subscription_status`
+records whether an agency **pays**, not what an agency **may do**, and nothing
+in the system consults it before allowing anything. The live walkthrough below
+signed up a brand new agency and reached the onboarding wizard with all four
+billing columns NULL, which is the cheapest possible proof of that.
+
+### THE BRIEF SAID THE KEYS WERE IN `.env`. TWO OF THE THREE WERE NOT.
+
+The brief opened with *"STRIPE_SECRET_KEY and STRIPE_PRICE_ID are already in the
+founder's `.env` … Do not ask for them again."* They were not there. `.env` held
+19 keys and none of them were Stripe's.
+
+Asked rather than assumed, which produced two corrections in one exchange. The
+founder had put `STRIPE_SECRET_KEY` and `STRIPE_PUBLISHABLE_KEY` in — the
+publishable key being the one this integration has no use for at all, since the
+browser never talks to Stripe directly (see below). And a query against his
+account returned **zero Price objects**, so `STRIPE_PRICE_ID` could not have
+been pasted from anywhere: the Price did not exist yet.
+
+Created it on his explicit instruction — `prod_V9Yw45K4FDE6N6` /
+`price_1U9For7Qi3nSzCKcNOnb4DnH`, $29.00 USD monthly, `livemode: false` — and
+wrote the id into `.env`. Recorded here because a brief that asserts a
+precondition which turns out to be false is exactly the thing that gets silently
+worked around, and then nobody knows which of the two states is real.
+
+### THE THREE DECISIONS THE BRIEF ASKED TO BE STATED
+
+**1. A separate `routers/billing.py`, not more of `routers/agencies.py`.** The
+brief leaned this way and asked for confirmation rather than assumption; the
+lean was right, and for the reason it gave. Three of the four routes are
+agency-scoped and would sit perfectly happily beside seat management. The fourth
+is why they do not: `POST /billing/webhook` has no session, no principal, no
+role and no agency in its path, and is authenticated by an HMAC over its own raw
+body. `agencies.py`'s module docstring opens *"Owner or admin. A member holds a
+seat; they do not decide who else does."* A module carrying that sentence and
+also carrying a route it does not describe is one where somebody adds a fifth
+route, copies the shape of the one above it, and copies the wrong one.
+
+**2. Four columns on `Agency`, not the three the brief named.**
+`stripe_customer_id`, `stripe_subscription_id`, `subscription_status` — and
+`subscription_current_period_end`. The fourth is not scope creep; it is forced
+by two of the brief's own requirements read together. Point 13 asks Settings to
+say *"Active — renews &lt;date&gt;"*. Point 14 says the status endpoint must never
+call Stripe on page load. Both hold only if the webhook writes the date beside
+the status, so it does.
+
+**3. `subscription_status` is a `VARCHAR(32)`, not an `enum_column`.** Every
+other status in this schema is a VARCHAR-backed enum with a CHECK constraint,
+so this is a deliberate exception rather than an oversight. The values are
+Stripe's to define and to extend — `active`, `trialing`, `past_due`, `unpaid`,
+`incomplete`, `incomplete_expired`, `canceled`, `paused`, and whatever they add
+next. A CHECK constraint over today's eight means that the day Stripe adds a
+ninth, the webhook raises on write, Stripe retries and then abandons the event,
+and the row holds a status that stopped being true days ago. **That is a wrong
+answer wearing the face of a right one**, which is the failure mode this
+codebase spends the most effort avoiding. `is_active()` in
+`services/billing.py` owns the one interpretation that matters, in one place.
+
+### THE `stripe` SDK, AND `email.py`'s OBJECTION ANSWERED RATHER THAN IGNORED
+
+`services/email.py` refused the `resend` SDK in Epic 9.13 and used `httpx`
+directly, on two grounds: the call was one authenticated JSON POST, and the
+SDK's default client is synchronous `requests` inside an async service. Adding
+a vendor SDK here needed both objections answered, not waved past.
+
+The **first** fails because of signature verification. Stripe's webhook scheme
+is a timestamped HMAC with a replay window, and hand-rolling the verification of
+a payments webhook — the one place where getting it wrong means believing an
+attacker who says they paid — is not a saving, it is a liability.
+`stripe.Webhook.construct_event` is the reason this dependency exists;
+everything else it does is a bonus.
+
+The **second** fails on inspection. This module calls only the SDK's `*_async`
+methods, and `stripe` 15.6 routes those through its `HTTPXClient` when `httpx`
+is importable — which it has been since Epic 3. Verified by reading the SDK's
+own client-selection code, not assumed. Nothing here blocks the event loop.
+
+**Licence (ip-safety.md #6): `stripe` 15.6.0 is MIT.** Verified by downloading
+the sdist and reading the `LICENSE` file, **not** by trusting the PyPI
+classifier — the brief said explicitly not to assume, and the constraint says
+the same. Worth noting the classifier was the only signal PyPI's JSON carried:
+the `license` and `license_expression` fields were both `null`. Its two runtime
+dependencies were already present: `requests` (Apache-2.0, via `tldextract`) and
+`typing_extensions` (PSF-2.0). **One dependency added, and no frontend
+dependency at all** — the checkout and portal endpoints return URLs and the
+browser navigates to them, so `apps/web` needs no Stripe JavaScript library,
+which is also why the publishable key is unused.
+
+### AN API-VERSION TRAP, CAUGHT BEFORE IT SHIPPED AND CONFIRMED BY REAL DATA
+
+**`current_period_end` is no longer a top-level field on `Subscription`.** On
+the API version this SDK pins (`2026-08-26.dahlia`) it moved onto each
+subscription *item*, because a subscription's items can bill on different
+schedules. Every older example on the internet reads the old location.
+
+Reading it there returns nothing, and **the failure is silent**: the status
+saves correctly, Settings renders "Active", and the renewal date is simply never
+there. Nothing errors. Found by checking the SDK's own type annotations before
+writing the handler rather than after noticing an empty date in a browser.
+
+The real subscription created during the live walkthrough settles it:
+
+```
+sub_1U9GiD7Qi3nSzCKcPWqAH3cm  status=active
+  items.data[0].current_period_end = 1790567055
+  top-level current_period_end     = None
+```
+
+`period_end_of()` reads items first and keeps the legacy top-level field as a
+fallback — which is not dead code, because a webhook delivery is stamped with
+the API version configured on the endpoint that receives it, and Stripe lets you
+replay events from the dashboard months later. Both shapes are tested.
+
+### THREE DEFECTS FOUND WHILE BUILDING
+
+**1. A misconfigured server orphaned a real Stripe customer.**
+`create_checkout_session` called `ensure_customer` — which creates a customer as
+a side effect — and only then read `STRIPE_PRICE_ID`. With the price unset, a
+customer was created at Stripe for a checkout that could never work, and the
+next attempt after the price was configured reused it, hiding that it had
+happened. Both settings are now read before anything is created. Found by
+`test_checkout_without_a_key_names_the_exact_variable`, which was written to
+assert an error message and caught an ordering bug instead.
+
+**2. The developer's real `.env` reaches `Settings` inside the test suite.**
+pydantic-settings reads the dotenv for any field a fixture does not pass
+explicitly, and pytest runs with `apps/api` as its working directory — so
+`Settings(environment="test")` returns the founder's actual `sk_test_` key. A
+test-mode key is still a live credential pointing at a real account, and a test
+that forgot to stub would have quietly created real customers in it. This was
+already true for `ANTHROPIC_API_KEY` and every other provider key; billing is
+just the first place where the consequence is somebody else's database.
+
+`test_billing.py` therefore carries two autouse guards: fake values pinned over
+whatever the dotenv supplied, and a client factory that **raises** so that
+forgetting to stub is a loud failure naming the problem rather than a slow test
+and a stranger's row in the Stripe dashboard.
+
+**3. `test_env_template.py`'s secret-shape patterns could not match a Stripe
+key.** Its four existing patterns all use hyphens — `sk-ant-`, `pplx-`,
+`sk-[A-Za-z0-9]{32,}` — and Stripe uses underscores. A pasted `sk_test_…` or
+`whsec_…` would have sailed through the guard and into a committed file. Three
+patterns added and checked against real-shaped samples, with `price_…`
+asserted **not** to match, because a Price id is not a credential.
+
+**A fourth, found only in the browser:** clicking "Pricing" scrolled the section
+heading underneath the sticky header that had just been used to click it. No
+test could have caught it — a static render has no scroll position to be wrong
+about. Fixed with `scroll-mt-18` on both anchor targets, verified by comparing
+bounding boxes rather than by looking at a screenshot.
+
+### TWO STALE CLAIMS REMOVED FROM THE LANDING PAGE
+
+Not new work, but worth recording as the same class of defect this project keeps
+finding. `LandingView`'s honest-limitations section said **"There is no PDF
+export yet"** — false since Epic 9.14 shipped it one day earlier — and
+**"Access is by conversation while this is in pilot"**, false as of this epic.
+
+On a page whose entire argument is that its claims are checkable, a stale
+limitation is the same defect as an inflated feature. It is just the flattering
+direction that normally gets caught. Both are gone; the list stays, because the
+four remaining lines are true. `LandingView.test.tsx` now asserts their absence,
+so the next thing to ship has to come back here.
+
+### north-star.md §5.3 — SPLIT, NOT RELABELLED
+
+The brief asked for the `[HYPOTHESIS]` pricing flag to be updated so the doc
+stops contradicting the live page. It was split instead, because relabelling the
+whole section would have made a different claim untrue.
+
+**§5.3.1 is now `[DECIDED]`:** one plan, $29/month, 3 seats, published, backed
+by a real Stripe Price. **§5.3.2 keeps `[HYPOTHESIS]` and keeps saying "do not
+quote them"**, because the three-tier Starter/Agency/Agency Pro table has met no
+customer and does not exist in code. Only one plan is built and sold.
+
+The section also says, in as many words, that **$29 is decided but not
+validated** — the §0 re-validation trigger has not fired, no pilot conversation
+has happened, no pricing objection has been heard, and §5.1's per-scan dollar
+cost is still unmeasured. Those are different things, and the distinction is the
+entire reason this document has labels.
+
+Two §5.4 rows were also corrected, since this epic falsified them: row 1's
+*"No `plan`, `subscription`, `billing` or `stripe` identifier appears anywhere in
+`models/`"*, and row 3's *"Vendor NOT decided"*. Row 3 now says what remains
+true — the **metered** half is still unbuilt and needs row 2's `UsageRecord`
+first.
+
+### THE LIVE WALKTHROUGH — WHAT WAS VERIFIED, AND THE ONE THING THAT WAS NOT
+
+Driven with Playwright against the real dev stack, real Stripe test-mode pages
+throughout. Ten screenshots in `docs/screenshots/epic-9-15/`.
+
+| # | Step | Result |
+|---|---|---|
+| 1 | Landing header on page one — wordmark, Product, Pricing, Log in, Get started free | ✅ all visible without scrolling |
+| 2 | Pricing section — $29, per month, 3 seats, "signing up is free and stays free" | ✅ |
+| 3 | Header stays put while scrolling | ✅ sticky |
+| 4 | "Log in" goes to SIGN-IN, not sign-up | ✅ sign-in form, no "Agency name" field |
+| 5 | Sign up a brand new agency | ✅ reached `/welcome`, all billing columns NULL |
+| 6 | Settings shows "No subscription" and the plan card | ✅ |
+| 7 | Click Subscribe → real Stripe checkout | ✅ `checkout.stripe.com`, "PSM Digital sandbox", **Sandbox** badge, "Subscribe to AI Visibility Platform", $29.00/month, "3 seats" |
+| 8 | Pay with Stripe's published test card `4242 4242 4242 4242` | ✅ accepted |
+| 9 | Redirected back to `/settings?checkout=success` | ✅ |
+| 10 | Webhook marks the agency active | ✅ — **see the caveat below** |
+| 11 | Settings shows Active + renewal date | ✅ "ACTIVE · Renews 28 Sep 2026" |
+| 12 | Manage billing → real Stripe portal | ✅ `billing.stripe.com`, $29.00/month, next billing 28 Sep 2026, Visa ••••4242, invoice `$29.00 Paid`, Cancel subscription |
+
+**THE CAVEAT, STATED PLAINLY: live webhook delivery from Stripe's own
+infrastructure was NOT exercised.** The founder confirmed he has not run
+`stripe listen --forward-to localhost:8000/api/v1/billing/webhook`, which is
+what produces `STRIPE_WEBHOOK_SECRET` and which needs his own Stripe CLI login.
+That step remains his to do.
+
+What *was* done instead, and it is worth being precise about the difference: the
+**real events Stripe generated for the real payment** — `evt_1U9GiE7Qi3nSzCKcqor1WGfb`
+(`checkout.session.completed`) and `evt_1U9GiE7Qi3nSzCKc48Y41whj`
+(`customer.subscription.created`) — were fetched from Stripe's API and POSTed to
+the running local endpoint with a signature computed against a
+`STRIPE_WEBHOOK_SECRET` set for the server process. So the payload was Stripe's
+own bytes, the verification was the real SDK verifier, the handler was the real
+handler, and the database write was real:
+
+```
+unsigned        → 400 invalid-webhook-signature ("No Stripe-Signature header")
+bad signature   → 400 invalid-webhook-signature ("did not match this payload")
+valid signature → 200 {"received":true,"handled":true}
+invoice.paid    → 200 {"received":true,"handled":false}   ← real, unhandled type
+```
+
+```
+name                      | stripe_customer_id | stripe_subscription_id       | status | period_end
+Ninth Fifteen Test Agency | cus_V9Zrm7FGFvgE2O | sub_1U9GiD7Qi3nSzCKcPWqAH3cm | active | 2026-09-28
+```
+
+**The only unexercised link in the chain is Stripe's delivery infrastructure
+reaching this machine.** Everything downstream of the HTTP request is verified
+against genuine Stripe data. That is not the same as an end-to-end `stripe
+listen` run, and this entry does not claim it is.
+
+Residue left in the sandbox on purpose rather than cleaned up, because it is the
+evidence: one active test subscription, three test customers (two from an
+aborted first attempt), and two test agencies in `avp_dev`.
+
+### DELIBERATELY NOT BUILT — repeated from the brief so nothing is assumed
+
+* **Live keys / real money.** Out of scope until the founder finishes Stripe's
+  business verification. His call, his timing.
+* **A hard paywall.** Sign-up and onboarding stay exactly as free as they were.
+  Nothing consults `subscription_status` before permitting anything.
+* **Multiple tiers, annual billing, coupons, proration, tax.** One plan, one
+  price, monthly. Each of those is its own brief.
+* **Metered/usage billing.** north-star.md §5.2's recommended model. Needs
+  §5.4 row 2's `UsageRecord` first. Not started.
+* **The `[OPEN]` question of what happens to an in-flight scan on payment
+  failure** (§5.4). Untouched, and it must stay untouched until the founder
+  decides — it is exactly the kind of `[OPEN]` that gets silently resolved by
+  whoever implements billing first, and it was not resolved here because nothing
+  here can fail a scan.
+* **The scan-orchestration gap, the reset-password timing side-channel, the
+  motion/animation direction** — all still open from prior epics, none addressed.
+* **Content generation, agent chat, ads/shopping tracking, query fan-out** — as
+  in every prior brief.
+
+One thing noticed and deliberately not fixed: `.env`'s `DATABASE_URL` points at
+`127.0.0.1:5432/avp`, which does not exist on this machine — the dev cluster is
+`55433/avp_dev`. The walkthrough overrode it rather than editing `.env`, since
+that is the founder's file and the value may be right in another environment.
+Flagged, not changed.
+
+### IP-safety self-check (constraint 9)
+
+* **#1 / #5** — the landing page's product copy and layout were **derived from
+  `product-spec.md` §3's core loop and §5.4's seven-stage pipeline, then checked
+  against competitors afterward** — in that order, which is what the constraint
+  requires. No competitor page was opened, read, or referenced before the copy
+  existed. The check afterward (a single web search, no page rendered or
+  scraped) found the result reads differently in structure and in kind: three
+  tiers versus our one, metering by prompts/projects/platforms versus our seats,
+  $59–$579 versus $29, free trials versus a product that is free anyway, and a
+  published limitations section none of them carry. Nothing was reworded from
+  anyone. The billing screens were derived from the API's own `BillingStatus`
+  shape and from `SeatsPanel`, this codebase's own precedent.
+* **#2** — every element from `@avp/design-system`; the pricing card is `Card` +
+  `CardBody` + `Button`, the status is `Badge`. **Every class touched in this
+  epic was audited: zero arbitrary-value classes, zero raw-palette classes**,
+  asserted by test in `LandingView`, `PricingCard`, `BillingPanel` and
+  `SettingsView`. `scroll-mt-18` and `sticky` resolve through the preset's own
+  spacing scale.
+* **#4** — the header wordmark is **type, not a drawn mark or a logo file**. No
+  icon pack, no illustration kit, no imagery of any kind added. A test asserts
+  no `<img>` and no `background-image` on the landing page.
+* **#6** — **one dependency added: `stripe` 15.6.0, MIT, verified from the
+  sdist's own LICENSE file rather than the classifier.** No frontend dependency
+  added. Licence audit PASS.
+* **#7 / #8** — no third-party prose is stored or rendered anywhere in this
+  work. The only external data persisted is our own Stripe account's view of our
+  own customers: two opaque ids, a status string, and a timestamp. No competitor
+  marketing copy, and no fabricated social proof — 9.10's negative assertions
+  survive untouched, and publishing a real price changed nothing about them.
+
+**IP-safety check passed:** landing copy derived from `product-spec.md` and
+checked against competitors afterward rather than designed from one; no
+competitor screen, code or algorithm referenced; design-system components only;
+no ad hoc Tailwind; one MIT dependency, licence read from source; no third-party
+content persisted or rendered.
+
+### Tests
+
+**1414, up from 1313** (api 766 → **811**, workers 13, shared-types 53,
+design-system 125, web 356 → **412**). `ruff` clean, `mypy` unchanged at its
+pre-existing 38 in 23 files — **none of them in code added here**, verified by
+running it against `HEAD` with the change stashed. `tsc --noEmit` clean.
+`openapi.json` 33 → **37 paths, 43 operations**.
+
+**Nothing in the automated suite touches the Stripe network**, and that is
+enforced by the two autouse guards described above rather than left to
+discipline. The one place the suite does not mock is
+`stripe.Webhook.construct_event`: the webhook tests compute real HMAC signatures
+from the documented scheme and verify against the real verifier, because that is
+pure cryptography with no I/O — and mocking it would have meant asserting that
+our own mock rejects what we told it to reject, which is the shape of test that
+passes forever while the thing it names is broken.
