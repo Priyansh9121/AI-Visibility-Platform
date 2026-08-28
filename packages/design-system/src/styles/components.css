@@ -829,6 +829,23 @@
 .avp-field__input::placeholder { color: var(--avp-text-tertiary); }
 .avp-field__input:disabled { cursor: not-allowed; }
 
+/* The native select needs its own appearance reset — a UA-drawn control keeps
+   its own border and background inside our wrapper, which reads as two nested
+   fields. `appearance: none` removes the platform arrow with it, so one is
+   drawn back as a background chevron; without it the control looks like a
+   text input that cannot be typed in. */
+.avp-field__select {
+  appearance: none;
+  cursor: pointer;
+  padding-right: var(--avp-space-5);
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: right var(--avp-space-2) center, right calc(var(--avp-space-2) - 4px) center;
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+}
+.avp-field__select:disabled { cursor: not-allowed; }
+
 .avp-field__hint { font-size: var(--avp-text-ui-sm); color: var(--avp-text-secondary); }
 .avp-field__error { font-size: var(--avp-text-ui-sm); color: var(--avp-danger); font-weight: 500; }
 

@@ -1,102 +1,77 @@
 'use client';
 
 /**
- * /settings — Epic 9.13.
+ * /settings — Epic 9.13, with two of its four "not built yet" lines removed in
+ * Epic 9.14.
  *
- * **This screen exists so the sidebar item is not a lie.** The brief called
- * Settings a placeholder, and the honest form of a placeholder is a destination
- * that says what is not built yet — not a nav item whose click does nothing,
- * and not a form of switches that are wired to nothing.
+ * The screen was built so the sidebar item would not be a lie: a destination
+ * that says plainly what is missing and why, rather than a nav item whose click
+ * does nothing or a form of switches wired to nothing. That is still the rule,
+ * and it now cuts the other way — seat management shipped, so its line comes
+ * off and the real thing takes its place.
  *
- * Everything listed below is genuinely absent, and each line names the reason
- * rather than promising a date. When one of them ships, its line comes off.
+ * This file is now only the fetching shell. The screen itself is
+ * `components/settings/SettingsView`, pure and prop-driven, which is what makes
+ * it testable — the split `DashboardView` / `dashboard/page.tsx` established in
+ * Epic 9.3. It is also why this screen shipped in 9.13 with zero tests: every
+ * state that mattered lived inside the effect below, which a static render
+ * never runs.
  */
 
-import { useEffect, useState } from 'react';
-import { Card, CardBody, LoadingState, PageSection } from '@avp/design-system';
-import type { Me } from '@avp/shared-types';
-import { api } from '@/lib/api';
-import { WorkspaceShell } from '@/components/shell/WorkspaceShell';
+import { useCallback, useEffect, useState, type JSX } from 'react';
+import type { SeatList } from '@avp/shared-types';
+import { api, ApiProblem } from '@/lib/api';
+import {
+  SettingsView,
+  type SettingsState,
+} from '@/components/settings/SettingsView';
 
-export default function SettingsRoute() {
-  const [me, setMe] = useState<Me | null>(null);
-  const [loading, setLoading] = useState(true);
+export default function SettingsRoute(): JSX.Element {
+  const [state, setState] = useState<SettingsState>({ kind: 'loading' });
+
+  const load = useCallback(async () => {
+    const me = await api.me();
+    // The roster is a SEPARATE failure from identity, and is allowed to fail
+    // on its own: a member gets a 403 here by design, and losing the whole
+    // settings screen over a permission they were never meant to have would
+    // be the wrong trade. Identity failing is what makes this page unusable.
+    let seats: SeatList | null = null;
+    let seatsError: string | null = null;
+    try {
+      seats = await api.seats(me.agency.id);
+    } catch (err) {
+      seatsError =
+        err instanceof ApiProblem && err.status === 403
+          ? 'Only an owner or an admin can see and change who holds a seat.'
+          : 'The seat list could not be loaded.';
+    }
+    setState({ kind: 'ready', me, seats, seatsError });
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const identity = await api.me();
-        if (!cancelled) setMe(identity);
-      } catch {
-        // The shell renders regardless; an unauthenticated visitor is bounced
-        // by the nav rather than by an error card on a page with nothing on it.
-      } finally {
-        if (!cancelled) setLoading(false);
+        await load();
+      } catch (err) {
+        if (cancelled) return;
+        setState({
+          kind: 'error',
+          title:
+            err instanceof ApiProblem && err.status === 401
+              ? 'Sign in to see your settings'
+              : 'Your settings could not be loaded',
+          detail:
+            err instanceof ApiProblem
+              ? err.problem.detail
+              : 'The request did not complete.',
+        });
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [load]);
 
-  return (
-    <WorkspaceShell current="settings" agencyName={me?.agency.name} seats={me?.seats}>
-      {loading ? (
-        <LoadingState message="Loading your settings…" />
-      ) : (
-        <div className="flex flex-col gap-10">
-          <PageSection
-            eyebrow="Settings"
-            heading="Your agency"
-            lead="What the product knows about your account today."
-          >
-            <Card elevation="seated">
-              <CardBody>
-                <dl className="flex flex-col gap-4">
-                  <Row label="Agency" value={me?.agency.name ?? '—'} />
-                  <Row label="Signed in as" value={me?.user.email ?? '—'} />
-                  <Row label="Role" value={me?.user.role ?? '—'} />
-                  <Row
-                    label="Seats"
-                    value={me ? `${me.seats.used} of ${me.seats.limit}` : '—'}
-                  />
-                </dl>
-              </CardBody>
-            </Card>
-          </PageSection>
-
-          <PageSection
-            eyebrow="Not built yet"
-            heading="Nothing here is editable."
-            lead="Listed rather than hidden, so it is clear what is missing instead of looking for a control that is not there."
-          >
-            <ul className="flex flex-col gap-3">
-              <Missing text="Changing your agency name, and the logo and colours a report carries — white-labelling is still name-and-slug only, and needs a written policy on which design tokens an agency may override before it is safe to open up." />
-              <Missing text="Inviting or removing seats. The invitations table, the seat-limit service and session revocation all exist; the HTTP endpoints do not." />
-              <Missing text="Changing your password while signed in. The reset-by-email flow works; an authenticated change is a different endpoint and is not built." />
-              <Missing text="Billing, plans and usage limits. north-star.md §5.4 records these as undecided — showing a plan picker would imply a decision nobody has made." />
-            </ul>
-          </PageSection>
-        </div>
-      )}
-    </WorkspaceShell>
-  );
-}
-
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <dt className="text-ui-2xs uppercase tracking-caps text-text-tertiary">{label}</dt>
-      <dd className="mt-1 text-ui-md text-text-primary">{value}</dd>
-    </div>
-  );
-}
-
-function Missing({ text }: { text: string }) {
-  return (
-    <li className="max-w-measure text-ui-base leading-prose text-text-secondary">
-      {text}
-    </li>
-  );
+  return <SettingsView state={state} onChanged={load} />;
 }

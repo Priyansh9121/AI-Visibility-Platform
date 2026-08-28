@@ -26,6 +26,11 @@ export { DataTable, type DataTableProps, type Column } from './components/Table.
 export { ScoreDisplay, type ScoreDisplayProps } from './components/ScoreDisplay.js';
 export { ScoreMeter, type ScoreMeterProps, type ScoreAbsence } from './components/ScoreMeter.js';
 export { TextField, type TextFieldProps } from './components/TextField.js';
+export {
+  SelectField,
+  type SelectFieldProps,
+  type SelectOption,
+} from './components/SelectField.js';
 
 export { ChartFrame, type ChartFrameProps } from './components/chart/ChartFrame.js';
 export { ChartPatterns, patternPaint } from './components/chart/ChartPatterns.js';
