@@ -7,38 +7,18 @@
  * the same way `sign-up` sat unused until Epic 9.12. This is wiring, not a new
  * capability.
  *
- * It is a LIST, not a management screen: there is no rename, no delete and no
- * bulk action, because none of those endpoints exist. It ends at the boundary
- * of what is real rather than showing a control that would fail.
+ * The screen itself is `components/clients/ClientsView` — pure and prop-driven,
+ * split out in Epic 9.14 so its states can be rendered statically and asserted
+ * over. This file is only the fetching shell.
  */
 
-import { useEffect, useState } from 'react';
-import { Badge, DataTable, ErrorState, LoadingState } from '@avp/design-system';
-import type { Client, Me } from '@avp/shared-types';
+import { useEffect, useState, type JSX } from 'react';
+import type { Me } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
-import { WorkspaceShell } from '@/components/shell/WorkspaceShell';
+import { ClientsView, type ClientsState } from '@/components/clients/ClientsView';
 
-type View =
-  | { kind: 'loading' }
-  | { kind: 'ready'; clients: Client[]; more: boolean }
-  | { kind: 'error'; title: string; detail: string };
-
-const STATUS_TONE = {
-  classified: 'success',
-  ambiguous: 'warn',
-  unclassifiable: 'danger',
-  pending: 'neutral',
-} as const;
-
-const STATUS_LABEL = {
-  classified: 'Identified',
-  ambiguous: 'Needs review',
-  unclassifiable: 'Could not read',
-  pending: 'Pending',
-} as const;
-
-export default function ClientsRoute() {
-  const [view, setView] = useState<View>({ kind: 'loading' });
+export default function ClientsRoute(): JSX.Element {
+  const [state, setState] = useState<ClientsState>({ kind: 'loading' });
   const [me, setMe] = useState<Me | null>(null);
 
   useEffect(() => {
@@ -48,10 +28,10 @@ export default function ClientsRoute() {
         const [identity, page] = await Promise.all([api.me(), api.clients()]);
         if (cancelled) return;
         setMe(identity);
-        setView({ kind: 'ready', clients: page.data, more: page.nextCursor !== null });
+        setState({ kind: 'ready', clients: page.data, more: page.nextCursor !== null });
       } catch (err) {
         if (cancelled) return;
-        setView({
+        setState({
           kind: 'error',
           title:
             err instanceof ApiProblem && err.status === 401
@@ -69,90 +49,5 @@ export default function ClientsRoute() {
     };
   }, []);
 
-  return (
-    <WorkspaceShell
-      current="clients"
-      agencyName={me?.agency.name}
-      seats={me?.seats}
-      wide
-    >
-      {view.kind === 'loading' && <LoadingState message="Loading your clients…" />}
-
-      {view.kind === 'error' && (
-        <ErrorState title={view.title} detail={view.detail} />
-      )}
-
-      {view.kind === 'ready' && (
-        <div className="flex flex-col gap-8">
-          <header className="flex flex-wrap items-end justify-between gap-6 border-b border-line-hairline pb-8">
-            <div>
-              <p className="text-ui-2xs uppercase tracking-caps text-text-tertiary">
-                Clients
-              </p>
-              <h1 className="mt-2 font-editorial text-ed-sm leading-display tracking-display text-text-primary">
-                {view.clients.length === 1
-                  ? 'One business'
-                  : `${view.clients.length} businesses`}
-              </h1>
-            </div>
-          </header>
-
-          <DataTable
-            columns={[
-              {
-                key: 'name',
-                header: 'Business',
-                render: (c: Client) => (
-                  <div className="flex flex-col gap-0.5">
-                    <span className="text-ui-base font-medium text-text-primary">
-                      {c.brandName ?? c.name}
-                    </span>
-                    <span className="font-mono text-ui-xs text-text-tertiary">
-                      {c.domain}
-                    </span>
-                  </div>
-                ),
-              },
-              {
-                key: 'industry',
-                header: 'Industry',
-                render: (c: Client) =>
-                  c.industry ? (
-                    <span className="text-ui-sm text-text-secondary">{c.industry}</span>
-                  ) : (
-                    // Never a dash that reads like data — the same rule the
-                    // dashboard's ScoreMeter follows for a null score.
-                    <span className="text-ui-sm text-text-tertiary">Not identified</span>
-                  ),
-              },
-              {
-                key: 'status',
-                header: 'Classification',
-                render: (c: Client) => (
-                  <Badge tone={STATUS_TONE[c.classificationStatus]}>
-                    {STATUS_LABEL[c.classificationStatus]}
-                  </Badge>
-                ),
-              },
-            ]}
-            rows={view.clients}
-            rowKey={(c: Client) => c.id}
-            emptyMessage={
-              <span className="text-ui-base text-text-secondary">
-                No businesses yet. Use Compare to scan the first one.
-              </span>
-            }
-          />
-
-          {view.more && (
-            // Said plainly rather than silently truncating. There is no
-            // paging control because building one is its own piece of work.
-            <p className="text-ui-sm text-text-tertiary">
-              Showing the most recent page only.
-            </p>
-          )}
-        </div>
-      )}
-    </WorkspaceShell>
-  );
+  return <ClientsView state={state} me={me} />;
 }
