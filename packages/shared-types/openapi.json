@@ -4540,6 +4540,45 @@
         ]
       }
     },
+    "/api/v1/reports/{token}.pdf": {
+      "get": {
+        "description": "A report PDF, by share token. **No session required** \u2014 Epic 9.14.\n\nTHE DECISION, STATED RATHER THAN DEFAULTED\n------------------------------------------\nA stranger holding a share token CAN download the PDF, and the share page\noffers it. Three reasons, in order of weight:\n\n1. **It exposes nothing new.** The PDF carries strictly the facts\n   `GET /reports/{token}` already serves to the same holder, rendered\n   differently. Withholding it would not protect a single datum.\n2. **The send path is the point.** Epic 9.8 built this token because \"the\n   prospect a report is about has no account, and must not need one to read\n   it\". Granting the harder-to-forward form (a live URL) while withholding\n   the easy one (a file they can keep) is backwards for a mechanism whose\n   whole job is *send*.\n3. **A prospect wants a file.** The realistic next step for someone sent a\n   report is forwarding it to a colleague or putting it in front of a\n   budget holder, and a link that dies when they change jobs is worse for\n   the agency than a PDF that does not.\n\n**What it costs, said plainly:** a downloaded PDF outlives any future\nrevocation of the link. That cost is currently zero, because share links\nhave no expiry and no revocation at all \u2014 recorded as known debt in\napi-contracts.md and explicitly out of scope for this epic. The PDF\ntherefore takes away nothing the link does not already give away\npermanently. **When revocation ships, this is the route to revisit**, and\nthat is the moment to decide whether a revoked link should stop serving\nfiles \u2014 not now, by pre-emptively refusing something that costs nothing yet.\n\nEvery rule the JSON share route states holds here unchanged, because it is\nthe same lookup: read-only, one code path, `404` for every rejection with no\nshape pre-check, and never a `401` \u2014 which would say \"this token is real,\nauthenticate to use it\".\n\n**Errors:** `404` only.",
+        "operationId": "get_public_report_pdf_api_v1_reports__token__pdf_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "token",
+            "required": true,
+            "schema": {
+              "title": "Token",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/pdf": {}
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Public Report Pdf",
+        "tags": [
+          "reports"
+        ]
+      }
+    },
     "/api/v1/scans/{scanId}": {
       "get": {
         "description": "A scan with its prompt set and every engine result.",
@@ -4832,6 +4871,45 @@
           }
         },
         "summary": "Get Report",
+        "tags": [
+          "reports"
+        ]
+      }
+    },
+    "/api/v1/scans/{scanId}/report.pdf": {
+      "get": {
+        "description": "The same report, as a PDF \u2014 Epic 9.14 (Epic 9 send path, slice 3).\n\n**A rendering target, not a second report.** It calls the same\n`build_report` the JSON route calls and renders what comes back; there is no\nsecond query, no second aggregation and no second set of numbers. A PDF\nassembled independently would eventually disagree with the page it was\ndownloaded from, and the disagreement would reach a client.\n\nIt degrades exactly as the web report does, because it is derived from the\nsame payload: a null composite prints \"Not scored\" and never a zero,\n`insufficient_data` gets its own sentence, an excluded dimension prints its\nreason rather than a sub-score, a null competitor set says detection did not\nrun instead of quietly dropping the beat, and an empty `actionItems` renders\nthe deterministic fix derivation \u2014 the case api-contracts.md's note on that\nfield describes.\n\n**No dependency was added to build this.** WeasyPrint's required `Pyphen` is\nGPL/LGPL/MPL, which ip-safety.md #6 blocks; React-PDF is a Node library and\nthis is a Python process. See `services/pdf.py` for the full assessment.\n\n**Errors:** `401`, `404` (unknown scan, or another agency's).",
+        "operationId": "get_report_pdf_api_v1_scans__scanId__report_pdf_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scanId",
+            "required": true,
+            "schema": {
+              "title": "Scanid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/pdf": {}
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Report Pdf",
         "tags": [
           "reports"
         ]
