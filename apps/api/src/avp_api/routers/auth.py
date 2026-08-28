@@ -14,6 +14,7 @@ from ..models import Agency
 from ..schemas.auth import (
     AcceptInvitationRequest,
     AgencyOut,
+    ChangePasswordRequest,
     LoginRequest,
     MeOut,
     ResetPasswordConfirm,
@@ -145,6 +146,82 @@ async def logout_everywhere(
     await store.revoke_all_for_user(principal.user_id)
     _clear_session_cookie(response, settings)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/change-password", response_model=MeOut)
+async def change_password(
+    payload: ChangePasswordRequest,
+    response: Response,
+    principal: PrincipalDep,
+    db: DbDep,
+    store: SessionStoreDep,
+    settings: SettingsDep,
+) -> Any:
+    """Change your own password while signed in. **Auth required.**
+
+    The current password is re-verified server-side. A session proves somebody
+    got in once; it does not prove they are still the account holder, and an
+    unlocked laptop or a stolen cookie presents a perfectly valid one.
+
+    EVERY OTHER SESSION IS REVOKED. THIS ONE IS NOT.
+    ------------------------------------------------
+    **This is not the reset flow's answer copied over.** `reset-password/confirm`
+    revokes everything and leaves the caller signed OUT, because the person
+    holding a reset link proved control of an inbox rather than knowledge of a
+    password — they may be recovering from a compromise, they might not be the
+    account holder at all, and making them sign in once with the new password
+    confirms they hold it.
+
+    Neither of those applies here. The caller just demonstrated knowledge of the
+    current password, so the caller is not the suspect and signing them out of
+    the session they are actively using would be friction with no security
+    value — the same argument api-contracts.md already makes for signing a user
+    in at sign-up.
+
+    The OTHER sessions are a different question, and the answer is still revoke.
+    The commonest reason someone changes a password while signed in is that they
+    think somebody else has it; a change that left every other device alive
+    would fail at the one job the user believed they were doing. `logout-all`
+    exists for the explicit version, but requiring two deliberate actions to
+    accomplish the obvious intent of one is a trap.
+
+    So: `revoke_all_for_user`, then a FRESH session for this caller and a new
+    cookie. Every other device is signed out; this one keeps working. The new
+    token is minted rather than the old one spared, because "spare this digest"
+    is a special case in the revocation path and a bulk revoke with an exception
+    in it is the kind of code that later fails to revoke.
+
+    **Errors:** `401 authentication-required` (no session), `401
+    invalid-credentials` (wrong current password — no "no such user" branch
+    exists, because the caller is authenticated), `422 validation-failed` for a
+    new password that fails the SIGN-UP rules or that is the current one.
+    """
+    user = await auth_service.change_password(
+        db,
+        user=principal.user,
+        current_password=payload.current_password,
+        new_password=payload.new_password,
+        settings=settings,
+    )
+    await db.commit()
+    await db.refresh(user)
+
+    agency = (
+        await db.execute(select(Agency).where(Agency.id == user.agency_id))
+    ).scalar_one()
+
+    # Revoke AFTER the commit. Revoking first and then failing to commit would
+    # sign every device out over a password that never changed.
+    await store.revoke_all_for_user(user.id)
+    token, _ = await store.create(user_id=user.id, agency_id=user.agency_id)
+    _set_session_cookie(response, token, settings)
+
+    used, limit = await seat_service.seat_usage(db, user.agency_id)
+    return MeOut(
+        user=UserOut.model_validate(user),
+        agency=AgencyOut.model_validate(agency),
+        seats=SeatUsageOut(used=used, limit=limit),
+    )
 
 
 @router.post("/reset-password/request", status_code=status.HTTP_200_OK)
