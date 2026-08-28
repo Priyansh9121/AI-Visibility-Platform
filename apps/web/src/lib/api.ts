@@ -13,12 +13,15 @@ import type {
   CompetitorSet,
   CreateClientRequest,
   Dashboard,
+  InviteSeatResponse,
   Me,
   ProblemDetail,
   Report,
   Scan,
+  SeatList,
   ShareLink,
   SignUpRequest,
+  UserRole,
   ValidationProblemDetail,
 } from '@avp/shared-types';
 import { isProblemDetail } from '@avp/shared-types';
@@ -202,6 +205,62 @@ export const api = {
    * deliberately indistinguishable from any other bad token.
    */
   publicReport: (token: string) => request<Report>(`/reports/${token}`),
+
+  /**
+   * Who holds a seat, and which invitations are still live — Epic 9.14.
+   *
+   * `me()` already carries `seats: {used, limit}` and always has. That is the
+   * COUNT, which is what the shell renders; this is the ROSTER, which is what a
+   * management screen needs. Owner or admin only — a member gets a 403.
+   */
+  seats: (agencyId: string) =>
+    request<SeatList>(`/agencies/${agencyId}/seats`),
+
+  /**
+   * Invite an address to a seat — Epic 9.14.
+   *
+   * The seat limit is enforced server-side inside the insert's transaction, so
+   * a full agency rejects with `409 /problems/seat-limit-reached` carrying
+   * `seatsUsed` and `seatLimit`. Greying out the form on `me().seats` is a
+   * courtesy; this refusal is the actual limit.
+   *
+   * Re-inviting an address that already holds a pending seat is allowed and
+   * consumes no second seat — the response says which happened in
+   * `seatConsumed`, and the screen must not report a seat as newly taken when
+   * the count did not move.
+   *
+   * The response deliberately carries NO token and no invite URL. The link goes
+   * in one email; a response body is not that email.
+   */
+  inviteSeat: (agencyId: string, email: string, role: UserRole = 'member') =>
+    request<InviteSeatResponse>(`/agencies/${agencyId}/invitations`, {
+      method: 'POST',
+      body: JSON.stringify({ email, role }),
+    }),
+
+  /**
+   * Release a seat — Epic 9.14.
+   *
+   * Ends the person's sessions as well as their seat, on every device, at once.
+   * `204`, no body. Refused with a `409` for your own seat or the last owner's,
+   * and a `403` when an admin aims at an owner.
+   */
+  removeSeat: (userId: string) =>
+    request<void>(`/users/${userId}`, { method: 'DELETE' }),
+
+  /**
+   * Redeem a seat invitation and sign in — Epic 9.14.
+   *
+   * Unauthenticated: the holder has no account yet, which is what the link is
+   * for. Rejects with a 400 for a token that is unknown, expired, already
+   * used, revoked, or points at a seat that has since been removed — one
+   * refusal for all five, so the screen has exactly one thing to say.
+   */
+  acceptInvitation: (token: string, fullName: string, password: string) =>
+    request<Me>('/auth/invitations/accept', {
+      method: 'POST',
+      body: JSON.stringify({ token, fullName, password }),
+    }),
 
   /**
    * Replace a client's competitor set by hand — Epic 3.

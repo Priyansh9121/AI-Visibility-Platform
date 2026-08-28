@@ -29,6 +29,7 @@ import type { JSX } from 'react';
 import { Badge, Button, Card, CardBody, DataTable, ErrorState, ScoreMeter } from '@avp/design-system';
 import type { BadgeTone, Column, ScoreAbsence } from '@avp/design-system';
 import type { Dashboard, ScanStatus, ScanSummary } from '@avp/shared-types';
+import { formatStamp } from '@/lib/dates';
 
 /**
  * Scan statuses that block a re-run.
@@ -93,27 +94,16 @@ const STATUS_TONE: Record<ScanStatus, BadgeTone> = {
   cancelled: 'neutral',
 };
 
-const MONTHS = [
-  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-] as const;
-
 /**
- * Format an ISO timestamp in UTC.
+ * Re-exported so this module's existing callers and its test are unchanged.
  *
- * Deliberately not `toLocaleDateString`: that varies with the host's locale and
- * timezone, which would make this component render differently in CI than in a
- * browser and make the assertions below untrustworthy.
+ * The implementation moved to `lib/dates.ts` in Epic 9.14, when the seat panel
+ * became the second screen that needed UTC formatting. It was moved rather
+ * than copied: the reason it exists at all — locale formatting differs between
+ * CI and a browser — applies just as much to the second screen, and two copies
+ * would drift where one cannot.
  */
-export function formatStamp(iso: string | null | undefined): string {
-  if (!iso) return '—';
-  const at = new Date(iso);
-  if (Number.isNaN(at.getTime())) return '—';
-  const day = String(at.getUTCDate()).padStart(2, '0');
-  const hh = String(at.getUTCHours()).padStart(2, '0');
-  const mm = String(at.getUTCMinutes()).padStart(2, '0');
-  return `${day} ${MONTHS[at.getUTCMonth()]} ${at.getUTCFullYear()}, ${hh}:${mm} UTC`;
-}
+export { formatStamp };
 
 export interface DashboardViewProps {
   dashboard: Dashboard;
