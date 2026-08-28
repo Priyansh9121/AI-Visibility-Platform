@@ -26,6 +26,7 @@ dependencies = [
     "playwright>=1.49,<2",          # Apache-2.0 — page crawl (Epic 2)
     "tldextract>=5.1,<6",           # BSD-3-Clause — registrable-domain parsing
     "httpx>=0.28,<0.29",            # BSD-3-Clause — SerpApi calls (Epic 3)
+    "stripe>=15.6,<16",             # MIT — subscription billing (Epic 9.15)
 ]
 
 [project.optional-dependencies]

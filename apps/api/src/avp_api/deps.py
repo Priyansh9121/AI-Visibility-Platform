@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import Settings, get_settings
 from .db import session_scope
-from .errors import AuthenticationRequired, PermissionDenied
+from .errors import AuthenticationRequired, NotFound, PermissionDenied
 from .models import Agency, User, UserRole, UserStatus
 from .redis_client import get_redis
 from .services.scan_executor import BackgroundScanExecutor, ScanExecutor
@@ -119,6 +119,23 @@ async def current_principal(
 
 
 PrincipalDep = Annotated[Principal, Depends(current_principal)]
+
+
+def assert_own_agency(principal_agency_id: str, agency_id: str) -> None:
+    """The agency id in a path must be the caller's own.
+
+    **404, not 403.** Answering "you may not touch that agency" confirms the
+    agency exists, which is the cross-tenant leak every scoped route in this
+    service already refuses to make. An id that is not yours is an id that does
+    not exist, as far as this API is concerned.
+
+    Lives here rather than in a router because Epic 9.15 gave it a second
+    caller. It was a private helper in `routers/agencies.py`; a tenant-isolation
+    rule with two copies is a rule with two chances to be relaxed, and the one
+    that gets relaxed is never the one under test.
+    """
+    if principal_agency_id != agency_id:
+        raise NotFound(detail="No agency with that identifier.")
 
 
 def require_role(*allowed: UserRole):  # noqa: ANN201 - returns a dependency

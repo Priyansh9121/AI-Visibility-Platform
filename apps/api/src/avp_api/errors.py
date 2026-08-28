@@ -120,6 +120,49 @@ class EmailAlreadyRegistered(Conflict):
     title = "That email address is already registered"
 
 
+class InvalidWebhookSignature(ProblemError):
+    """A billing webhook whose Stripe signature is missing, malformed or wrong.
+
+    **400, and it says so plainly** — unlike `InvalidResetToken` and
+    `InvalidInvitation` above, which blur several causes into one refusal
+    because the caller might be an attacker probing for real tokens. There is
+    nobody to protect here: the only legitimate caller is Stripe, Stripe is not
+    enumerating anything, and a webhook endpoint that is vague about why it
+    refused is a webhook endpoint nobody can debug at three in the morning.
+
+    Not 401: there is no session to have, and no credentials to re-present.
+    """
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    problem_type = "invalid-webhook-signature"
+    title = "Webhook signature verification failed"
+
+
+class BillingNotConfigured(ProblemError):
+    """A billing route reached while a required Stripe setting is unset.
+
+    **503, not 500.** Nothing is broken — the server is running correctly and
+    has been told to do something it has not been given the credentials for.
+    That is a deployment state, and 503 is the status that says "try again once
+    somebody fixes the configuration" rather than "this code has a bug".
+
+    The `detail` carries `provider_key`'s own message, which names the exact
+    environment variable, so an operator reading a browser network panel is told
+    what to set rather than being sent to the logs. That is the same courtesy
+    every other integration in this codebase already gets, and it is the reason
+    this class exists instead of letting a RuntimeError become a bare 500.
+
+    **This is the webhook's answer when `STRIPE_WEBHOOK_SECRET` is unset.** It
+    refuses. It does not fall back to trusting an unverified payload, because a
+    payload claiming a subscription is active is exactly what an attacker would
+    send, and "we were not configured to check" is not a reason to believe one.
+    """
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    problem_type = "billing-not-configured"
+    title = "Billing is not configured on this server"
+
+
 class SeatLimitReached(ProblemError):
     status_code = status.HTTP_409_CONFLICT
     problem_type = "seat-limit-reached"

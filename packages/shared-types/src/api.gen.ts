@@ -4,6 +4,73 @@
  */
 
 export interface paths {
+    "/api/v1/agencies/{agencyId}/billing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Billing
+         * @description This agency's subscription, as recorded. **Never asks Stripe.**
+         *
+         *     Every field comes off the `agencies` row the webhook maintains. A settings
+         *     screen that called a payment processor on page load would be slower, would
+         *     fail whenever Stripe was slow, and would put a third party in the render
+         *     path of a page with four other sections on it — for a value that would be
+         *     no more current than the webhook already makes it.
+         *
+         *     The agency is already loaded on the principal, so there is no query here at
+         *     all beyond the one `current_principal` performs on every request.
+         *
+         *     **Errors:** `401`, `403` (member role), `404` (another agency's id).
+         */
+        get: operations["read_billing_api_v1_agencies__agencyId__billing_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agencies/{agencyId}/billing/checkout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Checkout
+         * @description Create a Stripe Checkout Session. Returns the URL to navigate to.
+         *
+         *     **`201`, because a session really is created** — at Stripe, with an id and a
+         *     lifetime, and this call is what makes it. That it lives in someone else's
+         *     database does not make it less of a created resource.
+         *
+         *     The agency's Stripe customer is created here too, if it does not have one
+         *     yet, and REUSED if it does. A second visit to this endpoint does not mint a
+         *     second customer — see `services/billing.py`, where the reuse and the unique
+         *     constraint under it are explained.
+         *
+         *     **This endpoint does not subscribe anybody.** It returns a URL. The
+         *     subscription begins when Stripe says it did, over the webhook below.
+         *
+         *     **Errors:** `401`, `403` (member role), `404` (another agency's id), `503
+         *     billing-not-configured` when `STRIPE_SECRET_KEY` or `STRIPE_PRICE_ID` is
+         *     unset — carrying a detail that names the variable.
+         */
+        post: operations["start_checkout_api_v1_agencies__agencyId__billing_checkout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agencies/{agencyId}/invitations": {
         parameters: {
             query?: never;
@@ -1159,6 +1226,33 @@ export interface components {
          * @enum {string}
          */
         AuditStatus: "ok" | "partial" | "failed";
+        /**
+         * BillingStatusOut
+         * @description An agency's subscription, as recorded — never as freshly asked of Stripe.
+         *
+         *     Every field here is read from the `agencies` row. **This endpoint makes no
+         *     call to Stripe**, which is a deliberate property rather than an optimisation:
+         *     a settings screen that reached a payment API on every page load would be
+         *     slower, would fail when Stripe was slow, and would put a third party in the
+         *     path of a page that has four other things to render. The webhook is what
+         *     keeps these columns true.
+         *
+         *     `subscriptionStatus` is Stripe's own string, passed through unmapped — see
+         *     `models/tenancy.py` for why the column is not an enum. A client that wants
+         *     to know "is this agency paid up" should read `isActive` rather than
+         *     comparing strings, because the set of statuses that mean yes is a decision
+         *     that lives in `services/billing.py` and may grow.
+         */
+        BillingStatusOut: {
+            /** Currentperiodend */
+            currentPeriodEnd: string | null;
+            /** Hasbillingaccount */
+            hasBillingAccount: boolean;
+            /** Isactive */
+            isActive: boolean;
+            /** Subscriptionstatus */
+            subscriptionStatus: string | null;
+        };
         /** BrandMentionOut */
         BrandMentionOut: {
             /** Competitorid */
@@ -1193,6 +1287,17 @@ export interface components {
          * @enum {string}
          */
         CheckStatus: "pass" | "warn" | "fail" | "not_applicable" | "error";
+        /**
+         * CheckoutSessionOut
+         * @description Where to send the browser to pay.
+         *
+         *     A URL and nothing else. The frontend navigates to it; there is no Stripe
+         *     JavaScript library in `apps/web` and this shape is why one is not needed.
+         */
+        CheckoutSessionOut: {
+            /** Url */
+            url: string;
+        };
         /** CitationOut */
         CitationOut: {
             /** Citessubject */
@@ -2455,6 +2560,68 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    read_billing_api_v1_agencies__agencyId__billing_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agencyId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingStatusOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_checkout_api_v1_agencies__agencyId__billing_checkout_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agencyId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckoutSessionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     invite_seat_api_v1_agencies__agencyId__invitations_post: {
         parameters: {
             query?: never;

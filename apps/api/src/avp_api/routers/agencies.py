@@ -32,7 +32,7 @@ from typing import Any
 from fastapi import APIRouter, Path, Response, status
 from sqlalchemy import select
 
-from ..deps import DbDep, RequireAdmin, SessionStoreDep, SettingsDep
+from ..deps import DbDep, RequireAdmin, SessionStoreDep, SettingsDep, assert_own_agency
 from ..errors import Conflict, NotFound, PermissionDenied
 from ..models import User
 from ..schemas.agency import (
@@ -49,18 +49,6 @@ from ..services import seats as seat_service
 router = APIRouter(tags=["agencies"])
 
 
-def _assert_own_agency(principal_agency_id: str, agency_id: str) -> None:
-    """The path's agency must be the caller's.
-
-    **404, not 403.** Answering "you may not touch that agency" confirms the
-    agency exists, which is the cross-tenant leak `report.py` and every other
-    scoped route already refuse to make. An id that is not yours is an id that
-    does not exist as far as this API is concerned.
-    """
-    if principal_agency_id != agency_id:
-        raise NotFound(detail="No agency with that identifier.")
-
-
 @router.get("/agencies/{agencyId}/seats", response_model=SeatListOut)
 async def list_seats(
     principal: RequireAdmin,
@@ -75,7 +63,7 @@ async def list_seats(
 
     **Errors:** `401`, `403` (member role), `404` (another agency's id).
     """
-    _assert_own_agency(principal.agency_id, agency_id)
+    assert_own_agency(principal.agency_id, agency_id)
 
     members = await invitation_service.seat_holders(db, agency_id)
     pending = await invitation_service.pending_invitations(db, agency_id)
@@ -122,7 +110,7 @@ async def invite_seat(
     seat-limit-reached`, `409 email-already-registered` (a live account, here or
     elsewhere), `422`.
     """
-    _assert_own_agency(principal.agency_id, agency_id)
+    assert_own_agency(principal.agency_id, agency_id)
 
     minted = await invitation_service.invite_seat(
         db,

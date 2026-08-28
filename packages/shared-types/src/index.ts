@@ -88,6 +88,10 @@ export type PendingInvitation = Schemas['PendingInvitationOut'];
 export type InviteSeatRequest = Schemas['InviteSeatRequest'];
 export type InviteSeatResponse = Schemas['InviteSeatResponse'];
 
+// --- billing (Epic 9.15) ------------------------------------------------
+export type BillingStatus = Schemas['BillingStatusOut'];
+export type CheckoutSession = Schemas['CheckoutSessionOut'];
+
 // --- action list (Epic 8) -----------------------------------------------
 export type ActionItem = Schemas['ActionItemOut'];
 export type ActionItemList = Schemas['ActionItemListOut'];
