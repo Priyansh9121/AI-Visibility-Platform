@@ -22,17 +22,26 @@ import {
   LoadingState,
   PageSection,
 } from '@avp/design-system';
-import type { Me, SeatList } from '@avp/shared-types';
+import type { BillingStatus, Me, SeatList } from '@avp/shared-types';
 import { WorkspaceShell } from '@/components/shell/WorkspaceShell';
 import { SeatsPanel } from '@/components/settings/SeatsPanel';
 import { PasswordChangePanel } from '@/components/settings/PasswordChangePanel';
+import { BillingPanel } from '@/components/settings/BillingPanel';
 
 /** Roles that may invite and remove. A member holds a seat; they do not grant them. */
 const MANAGING_ROLES = new Set(['owner', 'admin']);
 
 export type SettingsState =
   | { kind: 'loading' }
-  | { kind: 'ready'; me: Me; seats: SeatList | null; seatsError: string | null }
+  | {
+      kind: 'ready';
+      me: Me;
+      seats: SeatList | null;
+      seatsError: string | null;
+      /** Null when the caller may not read billing — a member gets a 403. */
+      billing: BillingStatus | null;
+      billingError: string | null;
+    }
   | { kind: 'error'; title: string; detail: string };
 
 /**
@@ -107,14 +116,26 @@ export function SettingsView({
           </PageSection>
 
           <PageSection
+            eyebrow="Billing"
+            heading="What you pay"
+            lead="One plan, $29 a month, 3 seats. Nothing in the product is behind it — subscribing is how you pay for this, not how you unlock it."
+          >
+            <BillingPanel
+              agencyId={state.me.agency.id}
+              billing={state.billing}
+              billingError={state.billingError}
+            />
+          </PageSection>
+
+          <PageSection
             eyebrow="Not built yet"
             heading="What is still missing."
             lead="Listed rather than hidden, so it is clear what is absent instead of looking for a control that is not there."
           >
             <ul className="flex flex-col gap-3">
               <Missing text="Changing your agency name, and the logo and colours a report carries — white-labelling is still name-and-slug only, and needs a written policy on which design tokens an agency may override before it is safe to open up." />
-              <Missing text="Changing the seat limit. Seats can be invited and removed, but how many an agency gets is a billing question, and north-star.md §5.3 records pricing as undecided — showing a plan picker would imply a decision nobody has made." />
-              <Missing text="Billing, plans and usage limits, for the same reason." />
+              <Missing text="Changing the seat limit. Seats can be invited and removed, but three is what every plan includes and there is only one plan, so there is no number here to change yet." />
+              <Missing text="Usage limits and any view of how much you have used. Scans are not metered in either direction — there is no cap to hit and no figure to look at." />
             </ul>
           </PageSection>
         </div>
