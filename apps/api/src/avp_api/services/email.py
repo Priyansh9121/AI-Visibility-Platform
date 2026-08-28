@@ -58,24 +58,61 @@ def _body(reset_url: str) -> str:
     )
 
 
-async def send_password_reset(to: str, reset_url: str, *, settings: Settings) -> None:
-    """Send a reset link. **Never raises, whatever happens.**
+def _invitation_subject(agency_name: str) -> str:
+    return f"{agency_name} invited you to their workspace"
 
-    Returns `None` in every path on purpose. A caller that could distinguish
-    "sent" from "not sent" would eventually branch on it, and the endpoint's
-    guarantee is that it cannot.
+
+def _invitation_body(invite_url: str, *, agency_name: str, inviter_name: str) -> str:
+    """Our own copy again. Plain text, no HTML, no tracking pixel.
+
+    It names who invited and which agency because an unexplained link asking a
+    stranger to choose a password is indistinguishable from phishing. Both are
+    facts the inviting session already established; nothing here is generated,
+    inferred, or guessed.
+    """
+    return (
+        f"{inviter_name} added you to {agency_name} on their AI visibility "
+        "workspace.\n\n"
+        f"{invite_url}\n\n"
+        "Opening the link lets you choose a password and sign in. It works "
+        "once and expires in seven days.\n\n"
+        "If you were not expecting this, you can ignore it — the seat cannot "
+        "be used without opening the link."
+    )
+
+
+async def _send(
+    *,
+    settings: Settings,
+    to: str,
+    subject: str,
+    text: str,
+    log_event: str,
+    unconfigured_extra: dict[str, str] | None = None,
+) -> None:
+    """One send. **Never raises, in any path.**
+
+    Shared by both messages rather than copied, so the two cannot end up with
+    different failure behaviour — which is the failure mode that matters here,
+    because the reset endpoint's security property depends on its send never
+    reporting an outcome. A second hand-written copy of this would be one
+    stray `raise` away from becoming an account-enumeration oracle.
+
+    `unconfigured_extra` is what gets logged INSTEAD of sending when no
+    provider is configured. It exists because the two messages want different
+    things there: each URL is the recoverable credential in development, and
+    that log line is how it is recovered.
     """
     key = settings.resend_api_key
 
     if key is None:
         # The development path, and an honest one: nothing is claimed to have
-        # been sent. The URL is logged because recovering it from here IS the
-        # mechanism when no provider is configured.
+        # been sent, and the log line says so in as many words.
         logger.info(
-            "email.password_reset.not_configured",
+            f"{log_event}.not_configured",
             to=to,
-            reset_url=reset_url,
             reason="RESEND_API_KEY is unset; no message was sent",
+            **(unconfigured_extra or {}),
         )
         return
 
@@ -90,21 +127,64 @@ async def send_password_reset(to: str, reset_url: str, *, settings: Settings) ->
                 json={
                     "from": settings.email_from,
                     "to": [to],
-                    "subject": _SUBJECT,
-                    "text": _body(reset_url),
+                    "subject": subject,
+                    "text": text,
                 },
             )
             response.raise_for_status()
     except Exception as exc:  # noqa: BLE001 - swallowed on purpose, see docstring
         # Logged, never surfaced. A provider outage must not turn into a
         # different HTTP response, because the difference is the oracle.
-        logger.warning(
-            "email.password_reset.failed",
-            to=to,
-            error=type(exc).__name__,
-        )
+        logger.warning(f"{log_event}.failed", to=to, error=type(exc).__name__)
         return
 
-    # Deliberately no reset_url here: once a real message carries the token,
-    # the token is a live credential and a log line holding it is a copy of it.
-    logger.info("email.password_reset.sent", to=to)
+    # Deliberately no URL here: once a real message carries the token, the
+    # token is a live credential and a log line holding it is a copy of it.
+    logger.info(f"{log_event}.sent", to=to)
+
+
+async def send_password_reset(to: str, reset_url: str, *, settings: Settings) -> None:
+    """Send a reset link. **Never raises, whatever happens.**
+
+    Returns `None` in every path on purpose. A caller that could distinguish
+    "sent" from "not sent" would eventually branch on it, and the endpoint's
+    guarantee is that it cannot.
+    """
+    await _send(
+        settings=settings,
+        to=to,
+        subject=_SUBJECT,
+        text=_body(reset_url),
+        log_event="email.password_reset",
+        unconfigured_extra={"reset_url": reset_url},
+    )
+
+
+async def send_invitation(
+    to: str,
+    invite_url: str,
+    *,
+    agency_name: str,
+    inviter_name: str,
+    settings: Settings,
+) -> None:
+    """Send a seat invitation. **Never raises** — for a DIFFERENT reason.
+
+    The reset path swallows failures because a distinguishable outcome would be
+    an account-enumeration oracle. Nothing is being concealed here: the caller
+    is authenticated and named the address themselves. The reason is durability
+    instead — the invitation row and the seat it consumes are committed before
+    this runs, so a provider outage must not turn a seat grant that SUCCEEDED
+    into a 500 that invites the operator to retry it. Re-inviting re-sends the
+    link, which is the supported recovery.
+    """
+    await _send(
+        settings=settings,
+        to=to,
+        subject=_invitation_subject(agency_name),
+        text=_invitation_body(
+            invite_url, agency_name=agency_name, inviter_name=inviter_name
+        ),
+        log_event="email.invitation",
+        unconfigured_extra={"invite_url": invite_url, "agency": agency_name},
+    )

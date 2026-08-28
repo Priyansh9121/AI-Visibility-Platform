@@ -102,6 +102,17 @@ class Settings(BaseSettings):
 
     # --- seats -------------------------------------------------------------
     default_seat_limit: int = 3
+    # Seven days, deliberately NOT the reset token's hour (Epic 9.14).
+    #
+    # They are different credentials with different exposure. A reset link is a
+    # recovery key for an account that may be under attack right now, so the
+    # window is as short as a person can act in. An invitation is an onboarding
+    # link for someone who is not expecting it, may be away, and has nothing to
+    # recover — and the seat it points at is already being paid for, so a link
+    # that dies over a long weekend costs the agency a seat and an operator a
+    # second round trip. Still bounded rather than open-ended: an invitation
+    # that never expires is a standing key to a seat.
+    invitation_ttl_seconds: int = 60 * 60 * 24 * 7
 
     # --- third-party providers (§5.1) --------------------------------------
     # All optional here; the scan pipeline validates presence at point of use

@@ -1,6 +1,36 @@
 {
   "components": {
     "schemas": {
+      "AcceptInvitationRequest": {
+        "description": "Redeem a seat invitation and choose a password \u2014 Epic 9.14.\n\n`full_name` is required here and not on the invitation itself: the person\nwho sent the invite knows an email address, not how the recipient writes\ntheir own name. Until this is submitted the seat list shows the address,\nwhich is the only fact anybody has.",
+        "properties": {
+          "fullName": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Fullname",
+            "type": "string"
+          },
+          "password": {
+            "maxLength": 256,
+            "minLength": 12,
+            "title": "Password",
+            "type": "string"
+          },
+          "token": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "fullName",
+          "password"
+        ],
+        "title": "AcceptInvitationRequest",
+        "type": "object"
+      },
       "ActionItemListOut": {
         "description": "The scan's fix list, plus what happened the last time it was generated.",
         "properties": {
@@ -1362,6 +1392,51 @@
         "title": "HealthOut",
         "type": "object"
       },
+      "InviteSeatRequest": {
+        "description": "Invite an address to a seat.\n\nRole defaults to MEMBER, the least-privileged seat there is. An invite form\nthat defaults to ADMIN is how an agency ends up with five owners.",
+        "properties": {
+          "email": {
+            "format": "email",
+            "title": "Email",
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/UserRole",
+            "default": "member"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "title": "InviteSeatRequest",
+        "type": "object"
+      },
+      "InviteSeatResponse": {
+        "description": "What the invite produced, and what the agency's seat position now is.\n\n`seat_consumed` is false when the address already held an `INVITED` seat and\nthis call only re-issued its link. The distinction is the difference between\n\"Invited\" and \"A new link is on its way\", and a screen that cannot tell them\napart will report a seat as newly taken when the count did not move.\n\n`seats` is returned so a caller does not have to re-read `GET /auth/me` to\nfind out how much room is left after acting.",
+        "properties": {
+          "invitation": {
+            "$ref": "#/components/schemas/PendingInvitationOut"
+          },
+          "seatConsumed": {
+            "title": "Seatconsumed",
+            "type": "boolean"
+          },
+          "seats": {
+            "$ref": "#/components/schemas/SeatUsageOut"
+          },
+          "user": {
+            "$ref": "#/components/schemas/UserOut"
+          }
+        },
+        "required": [
+          "invitation",
+          "user",
+          "seatConsumed",
+          "seats"
+        ],
+        "title": "InviteSeatResponse",
+        "type": "object"
+      },
       "LoginRequest": {
         "properties": {
           "email": {
@@ -1534,6 +1609,41 @@
           "data"
         ],
         "title": "Page[ScanOut]",
+        "type": "object"
+      },
+      "PendingInvitationOut": {
+        "description": "An invitation that has not been accepted, revoked, or expired.\n\nNo token and no URL \u2014 see the module docstring.",
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "title": "Expiresat",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/UserRole"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "role",
+          "expiresAt",
+          "createdAt"
+        ],
+        "title": "PendingInvitationOut",
         "type": "object"
       },
       "Priority": {
@@ -3021,6 +3131,35 @@
         "title": "ScoreStatus",
         "type": "string"
       },
+      "SeatListOut": {
+        "description": "Everyone occupying a seat, plus the invitations still outstanding.\n\nBoth lists, not one merged list. A pending invitee appears in `members`\nwith `status: \"invited\"` because they occupy a seat and that is what the\nseat count is about; they appear again in `invitations` because only that\nrow knows when the link expires. Merging them would force one of those two\nfacts to be dropped.",
+        "properties": {
+          "invitations": {
+            "items": {
+              "$ref": "#/components/schemas/PendingInvitationOut"
+            },
+            "title": "Invitations",
+            "type": "array"
+          },
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/UserOut"
+            },
+            "title": "Members",
+            "type": "array"
+          },
+          "seats": {
+            "$ref": "#/components/schemas/SeatUsageOut"
+          }
+        },
+        "required": [
+          "members",
+          "invitations",
+          "seats"
+        ],
+        "title": "SeatListOut",
+        "type": "object"
+      },
       "SeatUsageOut": {
         "properties": {
           "limit": {
@@ -3460,6 +3599,144 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/agencies/{agencyId}/invitations": {
+      "post": {
+        "description": "Invite an address to a seat.\n\n**The seat limit is enforced here, server-side, in the same transaction as\nthe insert.** `GET /auth/me`'s `seats` object lets a screen grey out the\nform when the agency is full, but that is a courtesy \u2014 the limit is\ncommercial policy and a client-side check is a suggestion. Refused with\n`409 /problems/seat-limit-reached`, carrying `seatsUsed` and `seatLimit` so\nthe screen can say what to do about it rather than just that it failed.\n\n**Re-inviting an address that already holds an INVITED seat is allowed** and\nconsumes no second seat: it revokes the outstanding link and mints a new\none. `seatConsumed: false` in the response says that is what happened. See\n`services/invitations.py` for why refusing it would be a trap.\n\n**`201` in both cases.** An invitation row is genuinely created either way \u2014\nthat is the resource this endpoint makes. Whether a SEAT was newly consumed\nis a different question and it is answered in the body, not in the status.\n\n**Errors:** `401`, `403`, `404` (another agency's id), `409\nseat-limit-reached`, `409 email-already-registered` (a live account, here or\nelsewhere), `422`.",
+        "operationId": "invite_seat_api_v1_agencies__agencyId__invitations_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agencyId",
+            "required": true,
+            "schema": {
+              "title": "Agencyid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InviteSeatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteSeatResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Invite Seat",
+        "tags": [
+          "agencies"
+        ]
+      }
+    },
+    "/api/v1/agencies/{agencyId}/seats": {
+      "get": {
+        "description": "Who holds a seat, and which invitations are still live.\n\n`GET /auth/me` already carries `seats: {used, limit}` \u2014 the COUNT. It has\nnever carried the roster, because the shell needs a number and not a list,\nand a management screen needs the list. This is that list.\n\n**Errors:** `401`, `403` (member role), `404` (another agency's id).",
+        "operationId": "list_seats_api_v1_agencies__agencyId__seats_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agencyId",
+            "required": true,
+            "schema": {
+              "title": "Agencyid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SeatListOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Seats",
+        "tags": [
+          "agencies"
+        ]
+      }
+    },
+    "/api/v1/auth/invitations/accept": {
+      "post": {
+        "description": "Redeem a seat invitation, set a password, and sign in. **No auth.**\n\nUnauthenticated by necessity: the person holding this link has no account\nto authenticate with yet. That is what the link is for.\n\n**This signs them in \u2014 unlike the reset path, and for the reason sign-up\ngives.** `reset-password/confirm` deliberately leaves the caller signed out\nbecause they proved control of an inbox rather than knowledge of a\npassword, and one deliberate sign-in confirms they hold the new one. There\nis no prior state to protect here: this is a first password on a seat that\nhas never been used, exactly the situation api-contracts.md already calls\n\"friction with no security value\" on the sign-up path.\n\n**`200`, not `201`.** Nothing is created. The `User` row was inserted when\nthe invitation was sent and has occupied a seat ever since; this fills it.\n\n**Errors:** `400 invalid-invitation` for unknown, expired, already-accepted,\nrevoked, and pointing-at-a-seat-that-has-since-been-removed alike \u2014 one\nresponse, no branch that says which. `422` for a password that fails the\nsame rules sign-up applies.",
+        "operationId": "accept_invitation_api_v1_auth_invitations_accept_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptInvitationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Accept Invitation",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/api/v1/auth/login": {
       "post": {
         "operationId": "login_api_v1_auth_login_post",
@@ -4802,6 +5079,42 @@
         "summary": "Create Share Link",
         "tags": [
           "reports"
+        ]
+      }
+    },
+    "/api/v1/users/{userId}": {
+      "delete": {
+        "description": "Remove a seat. **Every session that seat holds dies immediately.**\n\nNot merely the seat. `sessions.py` opens by saying this is why the product\nhas a server-side session store at all rather than JWTs: \"when an agency\nremoves a seat, that person's access has to end *now* \u2014 not whenever their\naccess token happens to expire\". This endpoint is the case that argument was\nmade for, so it calls `revoke_all_for_user` rather than relying on the\nfallback.\n\nThere IS a fallback, and it is not the mechanism: `deps.current_principal`\nre-reads the user on every request and 401s on a soft-deleted row, so access\nwould end on the removed user's next call even if revocation were skipped.\nThat closes the door within one request. Revocation closes it within zero,\nand the difference is a request that is already in flight.\n\nThe row is soft-deleted, so the seat is released while `scans.requested_by_\nuser_id` and the rest of that person's history stay intact \u2014 the rule\n`models/base.py` states for the whole schema.\n\n**Two refusals, both `409`:**\n\n* Removing yourself. An owner who deletes their own row is authenticated by\n  a session that is about to be revoked, mid-request. `logout-all` is the\n  deliberate version of signing yourself out.\n* Removing the last active owner. `UserRole` says why in the model: an\n  agency with no owner has nobody who can manage seats \u2014 including nobody\n  who can undo this.\n\n**Errors:** `401`, `403`, `404` (unknown user, or another agency's \u2014 never\n`403`, which would confirm the id), `409`.",
+        "operationId": "release_seat_api_v1_users__userId__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": {
+              "title": "Userid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Release Seat",
+        "tags": [
+          "agencies"
         ]
       }
     }

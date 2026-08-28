@@ -82,6 +82,12 @@ export type ShelfSlot = Schemas['ShelfSlotOut'];
 // --- public share link (Epic 9.8) ---------------------------------------
 export type ShareLink = Schemas['ShareLinkOut'];
 
+// --- seat management (Epic 9.14) ----------------------------------------
+export type SeatList = Schemas['SeatListOut'];
+export type PendingInvitation = Schemas['PendingInvitationOut'];
+export type InviteSeatRequest = Schemas['InviteSeatRequest'];
+export type InviteSeatResponse = Schemas['InviteSeatResponse'];
+
 // --- action list (Epic 8) -----------------------------------------------
 export type ActionItem = Schemas['ActionItemOut'];
 export type ActionItemList = Schemas['ActionItemListOut'];
@@ -95,6 +101,8 @@ export type SignUpRequest = Schemas['SignUpRequest'];
 // --- password reset (Epic 9.13) ------------------------------------------
 export type ResetPasswordRequest = Schemas['ResetPasswordRequest'];
 export type ResetPasswordConfirm = Schemas['ResetPasswordConfirm'];
+// --- seat invitations (Epic 9.14) ----------------------------------------
+export type AcceptInvitationRequest = Schemas['AcceptInvitationRequest'];
 export type LoginRequest = Schemas['LoginRequest'];
 export type CreateClientRequest = Schemas['CreateClientRequest'];
 export type RunScanRequest = Schemas['RunScanRequest'];

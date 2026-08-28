@@ -81,6 +81,22 @@ class InvalidResetToken(ProblemError):
     title = "That reset link is not valid"
 
 
+class InvalidInvitation(ProblemError):
+    """A seat invitation that is unknown, expired, used, revoked, or orphaned.
+
+    **400, not 404, and one class for all five reasons** — the same shape as
+    `InvalidResetToken` above, and for the same reason. A 404 would confirm
+    which guesses were shaped like real tokens; separate classes would leak the
+    same thing through `type`. "The seat this points at has since been removed"
+    is folded in here too: distinguishing it would tell a stranger about an
+    agency's roster changes.
+    """
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    problem_type = "invalid-invitation"
+    title = "That invitation link is not valid"
+
+
 class PermissionDenied(ProblemError):
     status_code = status.HTTP_403_FORBIDDEN
     problem_type = "permission-denied"
