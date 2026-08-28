@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from avp_api import db as db_module
 from avp_api import redis_client as redis_module
 from avp_api.config import Settings, get_settings
-from avp_api.deps import db_session, scan_executor
+from avp_api.deps import db_session, redis_client, scan_executor
 from avp_api.main import create_app
 from avp_api.models import Base
 from avp_api.services import competitors as detection
@@ -127,6 +127,21 @@ async def client(engine, settings: Settings) -> AsyncIterator[AsyncClient]:  # n
 
     app = create_app(settings)
     app.dependency_overrides[get_settings] = lambda: settings
+    # The session store must reach the TEST Redis, not the developer's.
+    #
+    # `redis_client.get_redis()` takes an optional Settings and falls back to
+    # `get_settings()` when given none — and `get_settings` is an lru_cache
+    # that has just been cleared, so the fallback rebuilds Settings from the
+    # environment and `.env`. That is REDIS_URL=.../0 on a normal machine, so
+    # every session this suite minted was landing in database 0 while
+    # `_clean_state` dutifully flushed 15. The module docstring's promise —
+    # "DB 15 deliberately, so a local dev session on DB 0 is never signed out"
+    # — was not being kept, and sessions accumulated in the developer's own
+    # Redis with no TTL sweep between tests.
+    #
+    # Found by Epic 9.14's seat-removal test, which reads Redis directly to
+    # prove revocation happened and got an empty set from the wrong database.
+    app.dependency_overrides[redis_client] = lambda: redis_module.get_redis(settings)
     # Scans execute INLINE in the suite — Epic 9.5.
     #
     # The endpoint is async in production: it returns 202 and the work happens

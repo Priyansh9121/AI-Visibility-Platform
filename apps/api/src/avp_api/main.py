@@ -16,6 +16,7 @@ from .errors import register_error_handlers
 from .redis_client import close_redis
 from .routers import (
     action_items,
+    agencies,
     audits,
     auth,
     clients,
@@ -92,6 +93,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     base = settings.api_base_path
     app.include_router(health.router, prefix=base)
     app.include_router(auth.router, prefix=base)
+    app.include_router(agencies.router, prefix=base)
     app.include_router(clients.router, prefix=base)
     app.include_router(competitors.router, prefix=base)
     app.include_router(scans.router, prefix=base)

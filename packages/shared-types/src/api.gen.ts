@@ -4,6 +4,111 @@
  */
 
 export interface paths {
+    "/api/v1/agencies/{agencyId}/invitations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Invite Seat
+         * @description Invite an address to a seat.
+         *
+         *     **The seat limit is enforced here, server-side, in the same transaction as
+         *     the insert.** `GET /auth/me`'s `seats` object lets a screen grey out the
+         *     form when the agency is full, but that is a courtesy — the limit is
+         *     commercial policy and a client-side check is a suggestion. Refused with
+         *     `409 /problems/seat-limit-reached`, carrying `seatsUsed` and `seatLimit` so
+         *     the screen can say what to do about it rather than just that it failed.
+         *
+         *     **Re-inviting an address that already holds an INVITED seat is allowed** and
+         *     consumes no second seat: it revokes the outstanding link and mints a new
+         *     one. `seatConsumed: false` in the response says that is what happened. See
+         *     `services/invitations.py` for why refusing it would be a trap.
+         *
+         *     **`201` in both cases.** An invitation row is genuinely created either way —
+         *     that is the resource this endpoint makes. Whether a SEAT was newly consumed
+         *     is a different question and it is answered in the body, not in the status.
+         *
+         *     **Errors:** `401`, `403`, `404` (another agency's id), `409
+         *     seat-limit-reached`, `409 email-already-registered` (a live account, here or
+         *     elsewhere), `422`.
+         */
+        post: operations["invite_seat_api_v1_agencies__agencyId__invitations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agencies/{agencyId}/seats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Seats
+         * @description Who holds a seat, and which invitations are still live.
+         *
+         *     `GET /auth/me` already carries `seats: {used, limit}` — the COUNT. It has
+         *     never carried the roster, because the shell needs a number and not a list,
+         *     and a management screen needs the list. This is that list.
+         *
+         *     **Errors:** `401`, `403` (member role), `404` (another agency's id).
+         */
+        get: operations["list_seats_api_v1_agencies__agencyId__seats_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/invitations/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept Invitation
+         * @description Redeem a seat invitation, set a password, and sign in. **No auth.**
+         *
+         *     Unauthenticated by necessity: the person holding this link has no account
+         *     to authenticate with yet. That is what the link is for.
+         *
+         *     **This signs them in — unlike the reset path, and for the reason sign-up
+         *     gives.** `reset-password/confirm` deliberately leaves the caller signed out
+         *     because they proved control of an inbox rather than knowledge of a
+         *     password, and one deliberate sign-in confirms they hold the new one. There
+         *     is no prior state to protect here: this is a first password on a seat that
+         *     has never been used, exactly the situation api-contracts.md already calls
+         *     "friction with no security value" on the sign-up path.
+         *
+         *     **`200`, not `201`.** Nothing is created. The `User` row was inserted when
+         *     the invitation was sent and has occupied a seat ever since; this fills it.
+         *
+         *     **Errors:** `400 invalid-invitation` for unknown, expired, already-accepted,
+         *     revoked, and pointing-at-a-seat-that-has-since-been-removed alike — one
+         *     response, no branch that says which. `422` for a password that fails the
+         *     same rules sign-up applies.
+         */
+        post: operations["accept_invitation_api_v1_auth_invitations_accept_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/login": {
         parameters: {
             query?: never;
@@ -720,10 +825,76 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/users/{userId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Release Seat
+         * @description Remove a seat. **Every session that seat holds dies immediately.**
+         *
+         *     Not merely the seat. `sessions.py` opens by saying this is why the product
+         *     has a server-side session store at all rather than JWTs: "when an agency
+         *     removes a seat, that person's access has to end *now* — not whenever their
+         *     access token happens to expire". This endpoint is the case that argument was
+         *     made for, so it calls `revoke_all_for_user` rather than relying on the
+         *     fallback.
+         *
+         *     There IS a fallback, and it is not the mechanism: `deps.current_principal`
+         *     re-reads the user on every request and 401s on a soft-deleted row, so access
+         *     would end on the removed user's next call even if revocation were skipped.
+         *     That closes the door within one request. Revocation closes it within zero,
+         *     and the difference is a request that is already in flight.
+         *
+         *     The row is soft-deleted, so the seat is released while `scans.requested_by_
+         *     user_id` and the rest of that person's history stay intact — the rule
+         *     `models/base.py` states for the whole schema.
+         *
+         *     **Two refusals, both `409`:**
+         *
+         *     * Removing yourself. An owner who deletes their own row is authenticated by
+         *       a session that is about to be revoked, mid-request. `logout-all` is the
+         *       deliberate version of signing yourself out.
+         *     * Removing the last active owner. `UserRole` says why in the model: an
+         *       agency with no owner has nobody who can manage seats — including nobody
+         *       who can undo this.
+         *
+         *     **Errors:** `401`, `403`, `404` (unknown user, or another agency's — never
+         *     `403`, which would confirm the id), `409`.
+         */
+        delete: operations["release_seat_api_v1_users__userId__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AcceptInvitationRequest
+         * @description Redeem a seat invitation and choose a password — Epic 9.14.
+         *
+         *     `full_name` is required here and not on the invitation itself: the person
+         *     who sent the invite knows an email address, not how the recipient writes
+         *     their own name. Until this is submitted the seat list shows the address,
+         *     which is the only fact anybody has.
+         */
+        AcceptInvitationRequest: {
+            /** Fullname */
+            fullName: string;
+            /** Password */
+            password: string;
+            /** Token */
+            token: string;
+        };
         /**
          * ActionItemListOut
          * @description The scan's fix list, plus what happened the last time it was generated.
@@ -1226,6 +1397,41 @@ export interface components {
             /** Version */
             version: string;
         };
+        /**
+         * InviteSeatRequest
+         * @description Invite an address to a seat.
+         *
+         *     Role defaults to MEMBER, the least-privileged seat there is. An invite form
+         *     that defaults to ADMIN is how an agency ends up with five owners.
+         */
+        InviteSeatRequest: {
+            /**
+             * Email
+             * Format: email
+             */
+            email: string;
+            /** @default member */
+            role: components["schemas"]["UserRole"];
+        };
+        /**
+         * InviteSeatResponse
+         * @description What the invite produced, and what the agency's seat position now is.
+         *
+         *     `seat_consumed` is false when the address already held an `INVITED` seat and
+         *     this call only re-issued its link. The distinction is the difference between
+         *     "Invited" and "A new link is on its way", and a screen that cannot tell them
+         *     apart will report a seat as newly taken when the count did not move.
+         *
+         *     `seats` is returned so a caller does not have to re-read `GET /auth/me` to
+         *     find out how much room is left after acting.
+         */
+        InviteSeatResponse: {
+            invitation: components["schemas"]["PendingInvitationOut"];
+            /** Seatconsumed */
+            seatConsumed: boolean;
+            seats: components["schemas"]["SeatUsageOut"];
+            user: components["schemas"]["UserOut"];
+        };
         /** LoginRequest */
         LoginRequest: {
             /**
@@ -1289,6 +1495,29 @@ export interface components {
             data: components["schemas"]["ScanOut"][];
             /** Nextcursor */
             nextCursor?: string | null;
+        };
+        /**
+         * PendingInvitationOut
+         * @description An invitation that has not been accepted, revoked, or expired.
+         *
+         *     No token and no URL — see the module docstring.
+         */
+        PendingInvitationOut: {
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /** Email */
+            email: string;
+            /**
+             * Expiresat
+             * Format: date-time
+             */
+            expiresAt: string;
+            /** Id */
+            id: string;
+            role: components["schemas"]["UserRole"];
         };
         /**
          * Priority
@@ -1857,6 +2086,23 @@ export interface components {
          * @enum {string}
          */
         ScoreStatus: "scored" | "insufficient_data";
+        /**
+         * SeatListOut
+         * @description Everyone occupying a seat, plus the invitations still outstanding.
+         *
+         *     Both lists, not one merged list. A pending invitee appears in `members`
+         *     with `status: "invited"` because they occupy a seat and that is what the
+         *     seat count is about; they appear again in `invitations` because only that
+         *     row knows when the link expires. Merging them would force one of those two
+         *     facts to be dropped.
+         */
+        SeatListOut: {
+            /** Invitations */
+            invitations: components["schemas"]["PendingInvitationOut"][];
+            /** Members */
+            members: components["schemas"]["UserOut"][];
+            seats: components["schemas"]["SeatUsageOut"];
+        };
         /** SeatUsageOut */
         SeatUsageOut: {
             /** Limit */
@@ -2044,6 +2290,105 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    invite_seat_api_v1_agencies__agencyId__invitations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agencyId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InviteSeatRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InviteSeatResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_seats_api_v1_agencies__agencyId__seats_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agencyId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeatListOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    accept_invitation_api_v1_auth_invitations_accept_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AcceptInvitationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     login_api_v1_auth_login_post: {
         parameters: {
             query?: never;
@@ -2994,6 +3339,35 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ShareLinkOut"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    release_seat_api_v1_users__userId__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

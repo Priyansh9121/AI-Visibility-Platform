@@ -9,9 +9,10 @@ from sqlalchemy import select
 
 from ..config import Settings
 from ..deps import DbDep, PrincipalDep, SessionStoreDep, SettingsDep
-from ..errors import InvalidResetToken
+from ..errors import InvalidInvitation, InvalidResetToken
 from ..models import Agency
 from ..schemas.auth import (
+    AcceptInvitationRequest,
     AgencyOut,
     LoginRequest,
     MeOut,
@@ -23,6 +24,7 @@ from ..schemas.auth import (
 )
 from ..services import auth as auth_service
 from ..services import email as email_service
+from ..services import invitations as invitation_service
 from ..services import password_reset as reset_service
 from ..services import seats as seat_service
 
@@ -230,6 +232,70 @@ async def confirm_password_reset(
         "status": "reset",
         "detail": "Your password has been changed. Sign in with the new one.",
     }
+
+
+@router.post("/invitations/accept", response_model=MeOut)
+async def accept_invitation(
+    payload: AcceptInvitationRequest,
+    response: Response,
+    db: DbDep,
+    store: SessionStoreDep,
+    settings: SettingsDep,
+) -> Any:
+    """Redeem a seat invitation, set a password, and sign in. **No auth.**
+
+    Unauthenticated by necessity: the person holding this link has no account
+    to authenticate with yet. That is what the link is for.
+
+    **This signs them in — unlike the reset path, and for the reason sign-up
+    gives.** `reset-password/confirm` deliberately leaves the caller signed out
+    because they proved control of an inbox rather than knowledge of a
+    password, and one deliberate sign-in confirms they hold the new one. There
+    is no prior state to protect here: this is a first password on a seat that
+    has never been used, exactly the situation api-contracts.md already calls
+    "friction with no security value" on the sign-up path.
+
+    **`200`, not `201`.** Nothing is created. The `User` row was inserted when
+    the invitation was sent and has occupied a seat ever since; this fills it.
+
+    **Errors:** `400 invalid-invitation` for unknown, expired, already-accepted,
+    revoked, and pointing-at-a-seat-that-has-since-been-removed alike — one
+    response, no branch that says which. `422` for a password that fails the
+    same rules sign-up applies.
+    """
+    try:
+        user = await invitation_service.accept_invitation(
+            db,
+            token=payload.token,
+            full_name=payload.full_name,
+            password=payload.password,
+            settings=settings,
+        )
+    except invitation_service.InvitationTokenError:
+        await db.rollback()
+        raise InvalidInvitation(
+            detail=(
+                "That invitation link is not valid. Links work once and expire "
+                "after seven days. Ask whoever invited you to send a new one."
+            )
+        ) from None
+
+    await db.commit()
+    await db.refresh(user)
+
+    agency = (
+        await db.execute(select(Agency).where(Agency.id == user.agency_id))
+    ).scalar_one()
+
+    token, _ = await store.create(user_id=user.id, agency_id=user.agency_id)
+    _set_session_cookie(response, token, settings)
+
+    used, limit = await seat_service.seat_usage(db, user.agency_id)
+    return MeOut(
+        user=UserOut.model_validate(user),
+        agency=AgencyOut.model_validate(agency),
+        seats=SeatUsageOut(used=used, limit=limit),
+    )
 
 
 @router.get("/me", response_model=MeOut)
