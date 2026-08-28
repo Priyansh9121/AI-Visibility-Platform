@@ -52,3 +52,16 @@ class CheckoutSessionOut(ApiModel):
     """
 
     url: str
+
+
+class PortalSessionOut(ApiModel):
+    """Where to send the browser to manage an existing subscription.
+
+    Same shape as `CheckoutSessionOut` and deliberately a separate class. They
+    are two different resources with two different preconditions — a portal
+    session requires an existing customer and a checkout session creates one —
+    and collapsing them into a shared `UrlOut` would make the OpenAPI schema
+    describe them as interchangeable.
+    """
+
+    url: str

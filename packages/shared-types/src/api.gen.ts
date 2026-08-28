@@ -71,6 +71,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agencies/{agencyId}/billing/portal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Open Portal
+         * @description Create a Stripe Billing Portal session. Returns the URL to navigate to.
+         *
+         *     Update a card, cancel, download invoices — Stripe's own hosted screens, for
+         *     one API call and no UI here. Building those would mean handling card
+         *     details, dunning and invoice PDFs, which is a product rather than a feature,
+         *     and one that already exists.
+         *
+         *     Nothing is written, so nothing is committed. The `201` is for the session
+         *     created at Stripe, exactly as above.
+         *
+         *     **Errors:** `401`, `403`, `404`, `503 billing-not-configured` — including
+         *     when the agency has never subscribed and so has no customer for the portal
+         *     to be about.
+         */
+        post: operations["open_portal_api_v1_agencies__agencyId__billing_portal_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agencies/{agencyId}/invitations": {
         parameters: {
             query?: never;
@@ -1840,6 +1872,20 @@ export interface components {
             role: components["schemas"]["UserRole"];
         };
         /**
+         * PortalSessionOut
+         * @description Where to send the browser to manage an existing subscription.
+         *
+         *     Same shape as `CheckoutSessionOut` and deliberately a separate class. They
+         *     are two different resources with two different preconditions — a portal
+         *     session requires an existing customer and a checkout session creates one —
+         *     and collapsing them into a shared `UrlOut` would make the OpenAPI schema
+         *     describe them as interchangeable.
+         */
+        PortalSessionOut: {
+            /** Url */
+            url: string;
+        };
+        /**
          * Priority
          * @enum {string}
          */
@@ -2659,6 +2705,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CheckoutSessionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    open_portal_api_v1_agencies__agencyId__billing_portal_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agencyId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PortalSessionOut"];
                 };
             };
             /** @description Validation Error */

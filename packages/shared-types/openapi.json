@@ -1727,6 +1727,20 @@
         "title": "PendingInvitationOut",
         "type": "object"
       },
+      "PortalSessionOut": {
+        "description": "Where to send the browser to manage an existing subscription.\n\nSame shape as `CheckoutSessionOut` and deliberately a separate class. They\nare two different resources with two different preconditions \u2014 a portal\nsession requires an existing customer and a checkout session creates one \u2014\nand collapsing them into a shared `UrlOut` would make the OpenAPI schema\ndescribe them as interchangeable.",
+        "properties": {
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "PortalSessionOut",
+        "type": "object"
+      },
       "Priority": {
         "enum": [
           "high",
@@ -3761,6 +3775,49 @@
           }
         },
         "summary": "Start Checkout",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/api/v1/agencies/{agencyId}/billing/portal": {
+      "post": {
+        "description": "Create a Stripe Billing Portal session. Returns the URL to navigate to.\n\nUpdate a card, cancel, download invoices \u2014 Stripe's own hosted screens, for\none API call and no UI here. Building those would mean handling card\ndetails, dunning and invoice PDFs, which is a product rather than a feature,\nand one that already exists.\n\nNothing is written, so nothing is committed. The `201` is for the session\ncreated at Stripe, exactly as above.\n\n**Errors:** `401`, `403`, `404`, `503 billing-not-configured` \u2014 including\nwhen the agency has never subscribed and so has no customer for the portal\nto be about.",
+        "operationId": "open_portal_api_v1_agencies__agencyId__billing_portal_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agencyId",
+            "required": true,
+            "schema": {
+              "title": "Agencyid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortalSessionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Open Portal",
         "tags": [
           "billing"
         ]

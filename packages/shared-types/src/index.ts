@@ -91,6 +91,7 @@ export type InviteSeatResponse = Schemas['InviteSeatResponse'];
 // --- billing (Epic 9.15) ------------------------------------------------
 export type BillingStatus = Schemas['BillingStatusOut'];
 export type CheckoutSession = Schemas['CheckoutSessionOut'];
+export type PortalSession = Schemas['PortalSessionOut'];
 
 // --- action list (Epic 8) -----------------------------------------------
 export type ActionItem = Schemas['ActionItemOut'];

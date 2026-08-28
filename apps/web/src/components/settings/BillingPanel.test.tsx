@@ -54,6 +54,31 @@ describe('no subscription — the state every agency is in today', () => {
   });
 });
 
+describe('managing an existing subscription', () => {
+  it('offers the portal once a Stripe customer exists', () => {
+    const html = render({ billing: activeSubscription });
+    expect(html).toContain('Manage billing');
+    expect(html).toContain('We never see or store a card number');
+  });
+
+  it('offers it for a CANCELLED subscription too', () => {
+    // Wider than `isActive` on purpose: a cancelled or failed subscription is
+    // exactly when somebody needs their invoices and their card, and hiding
+    // the door then would hide it in the only situation that makes it urgent.
+    expect(render({ billing: canceledSubscription })).toContain('Manage billing');
+  });
+
+  it('offers it for a failed payment too', () => {
+    expect(render({ billing: pastDueSubscription })).toContain('Manage billing');
+  });
+
+  it('does not offer it to an agency that has never subscribed', () => {
+    // The portal for one would be an empty page with no card and no invoices —
+    // a worse answer than the button not being there.
+    expect(render({ billing: noSubscription })).not.toContain('Manage billing');
+  });
+});
+
 describe('active', () => {
   it('states the status and when it renews', () => {
     const html = render({ billing: activeSubscription });
