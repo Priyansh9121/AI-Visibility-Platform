@@ -155,6 +155,17 @@
   --avp-ease-standard: cubic-bezier(0.2, 0, 0.2, 1);
   --avp-ease-out: cubic-bezier(0, 0, 0.2, 1);
   --avp-ease-reveal: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* Gap between siblings arriving in sequence — Epic 9.16.
+     The only motion value this project has added since Epic 0, and it is a
+     DELAY rather than a duration on purpose: the reveal itself already has a
+     duration (`reveal`, 600ms) and design-direction.md §4 defines that as *the*
+     reveal. A staggered group needs to know how far apart its members start,
+     not how long each one takes.
+     70ms is tight enough that four hero elements finish inside a second
+     (3 x 70 + 600 = 810ms) and slow enough to read as a sequence rather than
+     as one block with a soft edge. */
+  --avp-stagger-reveal: 70ms;
 }
 
 /**

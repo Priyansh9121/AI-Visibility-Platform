@@ -214,15 +214,32 @@ rise toward the viewer — it **illuminates**:
   `cubic-bezier(0.22, 1, 0.36, 1)`. A count-up says "loading"; an illumination
   says what the product measures.
 
-Motion: `120ms` hover · `200ms` state · `320ms` layout · `600ms` reveal.
+Motion: `120ms` hover · `200ms` state · `320ms` layout · `600ms` reveal ·
+`70ms` stagger between siblings arriving in sequence (Epic 9.16 — the only
+motion value added since Epic 0, and a **delay** rather than a duration).
 `prefers-reduced-motion` is honoured globally and in each animated component —
 `reveal` degrades to an instant paint, never a slower version of itself.
+
+> The global block in `base.css` reset every animation and transition
+> **duration** and left every **delay** alone until Epic 9.16. A staggered
+> sequence would therefore have honoured the setting by animating instantly and
+> then waiting up to half a second before doing it. Both delays are reset now.
 
 ---
 
 ## 5. The Luminance Ledger — signature visualisation
 
-`<LuminanceLedger subjectName dimensions competitors height animate annotateGap />`
+`<LuminanceLedger subjectName dimensions competitors height animate
+staggerDimensions annotateGap />`
+
+> **`staggerDimensions` defaults to `false`, and that default is a guardrail.**
+> This is the same component the report renders. With it, bars light one at a
+> time as the chart scrolls into view; without it they light together on mount,
+> exactly as they have since Epic 0. Neither report route passes it, so the
+> document cannot acquire the flourish by omission — enforced by a regression
+> test in `ReportView.test.tsx`, not by this note. Note the opposite default to
+> `animate`, which is `true` because the dim-to-lit dissolve is the signature
+> moment the component exists for.
 
 **The score, drawn as light.** Each sub-score is a segment whose **height is its
 weight** (points available) and whose **lit portion is its value** (points
@@ -354,6 +371,77 @@ sentence here.
 
 ---
 
+## 5c. Reveal — content arrives, Epic 9.16
+
+`<Reveal as index animate />` · `<RevealGroup as step animate />`
+
+**One element fades and rises into place when it reaches the viewport; a group
+does the same in sequence, one step apart.** That is the entire behaviour. It
+does not scale, bounce, slide in from a side, or parallax — §4's rule that
+emphasis is light rather than lift applies to arrival as much as to focus.
+
+It reuses `--avp-duration-reveal` and `--avp-ease-reveal` rather than
+introducing a page-motion timing of its own. §4 defines that pairing as *the*
+reveal — the dim-to-lit dissolve that states the product's metaphor — so a
+second curve for text would have put the page and its signature chart on two
+different rhythms.
+
+### One trigger, two shapes
+
+`useRevealOnIntersect` is shared by `Reveal` and by `LuminanceLedger`'s
+staggered mode. An `IntersectionObserver` fires its first callback for every
+observed element right after `observe()`, with `isIntersecting` already true for
+anything on screen — so **content above the fold and content below it need no
+separate modes.** The hero reveals on the first callback; a later section
+reveals on a later one.
+
+A `RevealGroup` runs **one observer for the set**, not one per child. Observing
+each child separately would make the stagger depend on scroll speed — collapsing
+when scrolled fast, stretching when scrolled slowly — instead of being a fixed,
+authored rhythm.
+
+### The delay is CSS, not JavaScript
+
+`Reveal` sets `--avp-reveal-index` inline and the stylesheet multiplies it by
+`--avp-stagger-reveal`. **No millisecond value is computed in any component.** A
+call site wanting a different rhythm passes `step`, which overrides the custom
+property; it does not do arithmetic. `--avp-reveal-index` and
+`--avp-ledger-index` are declared in `components.css` rather than `tokens.css`
+because they are per-instance runtime values, not design tokens — a distinction
+`tokens.test.ts` enforces.
+
+### It must never hide content
+
+Everything here starts at `opacity: 0`, so every path that fails to reveal is a
+**blank page**, not a still one. Four independent guarantees, only one of which
+is JavaScript:
+
+| Guarantee | Mechanism |
+|---|---|
+| Reduced motion | CSS paints `.avp-reveal` fully revealed, no transition. Not a faster animation — none. |
+| JavaScript disabled | `@media (scripting: none)` does the same. |
+| No `IntersectionObserver` | The hook reveals immediately. |
+| `animate={false}` | Starts revealed — what every static render and test gets. |
+
+### Where it is applied, and where it is deliberately not
+
+**Applied:** the landing page (hero as a staggered group, each section as a
+unit, the step list, the pricing card, the ledger's bars) and the auth and
+onboarding cards.
+
+**Not applied, on purpose:** the client-facing report, Settings, and the
+dashboard shell. The report is a document — it gets printed and PDF'd, and
+`design-direction.md` §0 makes the presenting context win ties. Settings and the
+dashboard are dense, functional screens where arrival motion costs attention and
+buys nothing.
+
+`PageSection` takes `stagger` (default **false**) to sequence its own four
+parts, because they are props rather than children and a caller cannot wrap
+them. A section that should reveal as one unit needs nothing from that prop —
+wrap the whole `<PageSection>` in a `<Reveal>`.
+
+---
+
 ## 6. Components
 
 | Component | Notes |
@@ -367,6 +455,7 @@ sentence here.
 | `ChartFrame` | Shared shell: title, caption, **required** `ariaLabel`, hidden data table. Recharts charts mount inside it too, inheriting the same a11y contract. |
 | `ChartPatterns` | SVG pattern defs for competitor series — the B&W fallback. |
 | `LuminanceLedger` | The hero. See §5. |
+| `Reveal` / `RevealGroup` | Arrival motion. Client-only. See §5c. |
 | `AnswerShelf` | The proof beat's shelf of ordinal slots. See §5a. |
 | `ReportPage` / `ReportHeader` / `Beat` / `Prose` / `Evidence` / `FixList` | Narrative report primitives. See §7. |
 

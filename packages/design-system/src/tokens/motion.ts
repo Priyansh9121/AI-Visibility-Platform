@@ -17,6 +17,22 @@ export const duration = {
   reveal: '600ms',
 } as const;
 
+/**
+ * How far apart siblings start when a set arrives in sequence — Epic 9.16.
+ *
+ * A delay, not a duration: `duration.reveal` already says how long one element
+ * takes, and design-direction.md §4 defines that as *the* reveal. This says how
+ * far apart the members of a group begin.
+ *
+ * Consumers should NOT read this value in JavaScript. `Reveal` sets an index as
+ * a CSS custom property and the stylesheet multiplies, so a call site that
+ * wants a different rhythm overrides `--avp-stagger-reveal` rather than doing
+ * arithmetic. It is exported for the styleguide and for documentation.
+ */
+export const stagger = {
+  reveal: '70ms',
+} as const;
+
 export const easing = {
   standard: 'cubic-bezier(0.2, 0, 0.2, 1)',
   out: 'cubic-bezier(0, 0, 0.2, 1)',

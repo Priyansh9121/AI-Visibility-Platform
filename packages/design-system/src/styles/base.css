@@ -64,7 +64,15 @@ textarea {
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+    /* `transition-delay` added in Epic 9.16, and it was a real hole rather
+       than tidying. This block collapsed every DURATION and left every DELAY
+       alone, so the first staggered thing this product shipped would have
+       honoured reduced-motion by animating instantly — and then waiting up to
+       half a second before doing it. A visitor who asked for less motion would
+       have watched content appear one piece at a time regardless. */
+    animation-delay: 0.01ms !important;
     transition-duration: 0.01ms !important;
+    transition-delay: 0.01ms !important;
     scroll-behavior: auto !important;
   }
 }

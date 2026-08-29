@@ -505,6 +505,29 @@
   transition: transform var(--avp-duration-reveal) var(--avp-ease-reveal);
 }
 
+/*
+ * Per-bar stagger — Epic 9.16, and OPT-IN ONLY.
+ *
+ * Reached only when `LuminanceLedger` is given `staggerDimensions`, which the
+ * report never passes and which defaults to false. Without the modifier class
+ * every bar lights at once, exactly as it has since Epic 0. See the component
+ * for why the default is off rather than on.
+ *
+ * Same `--avp-stagger-reveal` the page's text uses, so the chart builds to the
+ * same rhythm as the section around it rather than to one of its own — which is
+ * what made the earlier standalone bar-by-bar experiment read as a gimmick.
+ */
+.avp-ledger--staggered {
+  /* Set inline per segment by the component; declared here for the same reason
+     `--avp-reveal-index` is. Inherits to the rects, which override it. */
+  --avp-ledger-index: 0;
+}
+
+.avp-ledger--staggered .avp-ledger__lit,
+.avp-ledger--staggered .avp-ledger__value {
+  transition-delay: calc(var(--avp-ledger-index) * var(--avp-stagger-reveal));
+}
+
 .avp-ledger__rule { stroke: var(--avp-surface-ground); stroke-width: 1; }
 .avp-ledger__outline { fill: none; stroke: var(--avp-line-strong); stroke-width: 1; }
 .avp-ledger__base { stroke: var(--avp-ink-800); stroke-width: 1; }
@@ -901,3 +924,76 @@
 /* The engine, beside the question. Dimmer than the prompt: it identifies the
    row, it is not the row's subject. */
 .avp-shelf__engine { fill: var(--avp-text-tertiary); }
+
+/* ============================== Reveal =============================== */
+
+/*
+ * Content arrives rather than being already there — Epic 9.16.
+ *
+ * Fades up by one spacing step over the SAME duration and curve as the score's
+ * dim-to-lit dissolve, because design-direction.md §4 defines that pairing as
+ * *the* reveal. A second timing for text would put the page and its signature
+ * chart on two different rhythms.
+ *
+ * The delay is computed here rather than in JavaScript. `Reveal` sets
+ * `--avp-reveal-index` and the multiplication happens in CSS, so there is no
+ * millisecond literal anywhere in the component and a call site that wants a
+ * different rhythm overrides `--avp-stagger-reveal` instead of doing sums.
+ */
+.avp-reveal {
+  /* Set inline, per sibling, by `Reveal`. Declared here rather than in
+     tokens.css because it is a per-instance runtime value, not a design token —
+     and tokens.test.ts is right to insist on the difference: a component-local
+     property in the token layer is a token nobody can find the meaning of. */
+  --avp-reveal-index: 0;
+  opacity: 0;
+  transform: translateY(var(--avp-space-3));
+  transition:
+    opacity var(--avp-duration-reveal) var(--avp-ease-reveal),
+    transform var(--avp-duration-reveal) var(--avp-ease-reveal);
+  transition-delay: calc(var(--avp-reveal-index) * var(--avp-stagger-reveal));
+  /* Hint the compositor for the one property pair that actually moves. Not
+     `will-change: auto` on everything — that costs a layer per element for the
+     life of the page. */
+  will-change: opacity, transform;
+}
+
+.avp-reveal--revealed {
+  opacity: 1;
+  transform: none;
+  /* The animation is over; release the layer. */
+  will-change: auto;
+}
+
+/* The group is a positioning-neutral wrapper. It exists to be observed and to
+   carry a stagger override, and must not introduce a box of its own. */
+.avp-reveal-group { display: contents; }
+
+/*
+ * THE PART THAT IS NOT AN ENHANCEMENT.
+ *
+ * Every rule above starts content at `opacity: 0`, so a visitor who never gets
+ * a reveal gets a blank page. These two blocks make the revealed state the
+ * answer in CSS, with no dependence on JavaScript running at all — which is
+ * also why they are `!important`: they must beat the base rule regardless of
+ * what a component sets inline.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .avp-reveal,
+  .avp-reveal-group > * {
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
+  }
+}
+
+/* JavaScript disabled. The landing page carries the product's only public
+   explanation of itself and its only published price; it does not get to be
+   invisible because a script did not run. */
+@media (scripting: none) {
+  .avp-reveal {
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
+  }
+}

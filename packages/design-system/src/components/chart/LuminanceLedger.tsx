@@ -5,7 +5,7 @@
 // Badge, Table and the report primitives are pure and stay server-renderable,
 // which Epic 7's server-side PDF render depends on.
 
-import { useEffect, useState, useId, type JSX } from 'react';
+import { useEffect, useState, useId, type CSSProperties, type JSX } from 'react';
 import {
   layoutLedger,
   type LedgerCompetitor,
@@ -14,6 +14,8 @@ import {
 import { ChartFrame } from './ChartFrame.js';
 import { onVisibility } from '../../tokens/color.js';
 import { cn } from '../../lib/cn.js';
+import { prefersReducedMotion } from '../../lib/motion.js';
+import { useRevealOnIntersect } from '../../lib/useRevealOnIntersect.js';
 
 export interface LuminanceLedgerProps {
   /** The client/prospect being reported on. */
@@ -24,6 +26,33 @@ export interface LuminanceLedgerProps {
   height?: number;
   /** Animate the dim-to-lit reveal on mount. Honours prefers-reduced-motion. */
   animate?: boolean;
+  /**
+   * Light the dimensions ONE AT A TIME, when the chart scrolls into view —
+   * Epic 9.16. **Defaults to `false`, and that default is a guardrail.**
+   *
+   * This component is rendered by two things with opposite requirements. The
+   * marketing page wants the chart to build as you arrive at it, in the same
+   * rhythm as the text around it. The REPORT is a document — it is printed, it
+   * is PDF'd, and it is put in front of a prospect's CMO. `design-direction.md`
+   * §0 makes the presenting context win ties, and its own Direction C was
+   * declined partly because motion does not survive becoming a document.
+   *
+   * So the report must not acquire this, and the way to guarantee that is not a
+   * comment asking people not to pass it. It is that **neither report call site
+   * passes anything**, and the default they therefore get is the Epic 0
+   * behaviour: every bar lights at once, on mount.
+   *
+   * Note this is the opposite default to `animate`, deliberately. `animate`
+   * defaults TRUE because the dim-to-lit dissolve is the signature moment this
+   * component exists for — design-direction.md §4 calls it "the metaphor stated
+   * in motion the first time you see the product", and the report should have
+   * it. Staggering is a page flourish, and a document should not acquire a
+   * flourish by omission.
+   *
+   * Enforced by `ReportView.test.tsx`'s report-path regression test, not by
+   * this paragraph.
+   */
+  staggerDimensions?: boolean;
   /** Show the auto-derived "biggest gap" annotation. */
   annotateGap?: boolean;
   className?: string;
@@ -63,25 +92,37 @@ export function LuminanceLedger({
   competitors = [],
   height = 420,
   animate = true,
+  staggerDimensions = false,
   annotateGap = true,
   className,
 }: LuminanceLedgerProps): JSX.Element {
   const layout = layoutLedger(dimensions, { height, competitors });
   const uid = useId().replace(/:/g, '');
-  const [revealed, setRevealed] = useState(!animate);
+
+  // TWO TRIGGERS, AND THE UNSTAGGERED ONE IS UNCHANGED FROM EPIC 0.
+  //
+  // Default (the report, the styleguide, the PDF): reveal on mount, via the
+  // rAF below. Exactly the code that shipped in Epic 0, byte for byte.
+  //
+  // Staggered (the landing page only): reveal when the chart reaches the
+  // viewport, using the same hook `Reveal` uses. That is not decoration — the
+  // chart sits well below the fold on the marketing page, so a mount-triggered
+  // build would have finished before anybody scrolled to it, and the bar-by-bar
+  // sequence nobody ever saw would have been pure cost.
+  const onIntersect = useRevealOnIntersect<SVGSVGElement>(animate && staggerDimensions);
+  const [mountRevealed, setMountRevealed] = useState(!animate);
 
   useEffect(() => {
-    if (!animate) return;
-    const reduced =
-      typeof window !== 'undefined' &&
-      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    if (reduced) {
-      setRevealed(true);
+    if (!animate || staggerDimensions) return;
+    if (prefersReducedMotion()) {
+      setMountRevealed(true);
       return;
     }
-    const id = requestAnimationFrame(() => setRevealed(true));
+    const id = requestAnimationFrame(() => setMountRevealed(true));
     return () => cancelAnimationFrame(id);
-  }, [animate]);
+  }, [animate, staggerDimensions]);
+
+  const revealed = staggerDimensions ? onIntersect.revealed : mountRevealed;
 
   const ghostBlockWidth =
     competitors.length > 0 ? competitors.length * (GHOST_WIDTH + GHOST_GAP) + GHOST_GAP : 0;
@@ -105,7 +146,12 @@ export function LuminanceLedger({
 
   return (
     <ChartFrame
-      className={cn('avp-ledger', className)}
+      className={cn(
+        'avp-ledger',
+        // The one marker the report-path regression test looks for.
+        staggerDimensions && 'avp-ledger--staggered',
+        className,
+      )}
       ariaLabel={
         `AI Visibility Score for ${subjectName}: ${score} out of 100. ` +
         layout.segments
@@ -148,6 +194,7 @@ export function LuminanceLedger({
       }
     >
       <svg
+        ref={onIntersect.ref}
         width="100%"
         viewBox={`0 0 ${width} ${totalHeight}`}
         className="avp-ledger__svg"
@@ -156,8 +203,14 @@ export function LuminanceLedger({
       >
         <g transform={`translate(0, ${PAD_TOP})`}>
           {/* ---- subject column ---- */}
-          {layout.segments.map((seg) => {
+          {layout.segments.map((seg, segIndex) => {
             const labelFits = seg.height >= 22;
+            // Only emitted when staggering. An unstaggered ledger carries no
+            // index at all, so the report's markup is unchanged rather than
+            // merely unaffected — which is what the regression test asserts.
+            const stagger: CSSProperties | undefined = staggerDimensions
+              ? ({ '--avp-ledger-index': segIndex } as CSSProperties)
+              : undefined;
             return (
               <g key={seg.key}>
                 {/* unlit void: what this dimension could have been */}
@@ -179,6 +232,7 @@ export function LuminanceLedger({
                   style={{
                     transformOrigin: `${columnX + COLUMN_WIDTH / 2}px ${seg.y + seg.height}px`,
                     transform: revealed ? 'scaleY(1)' : 'scaleY(0)',
+                    ...stagger,
                   }}
                 />
                 {/* segment boundary */}
@@ -220,7 +274,7 @@ export function LuminanceLedger({
                     textAnchor="middle"
                     className="avp-ledger__value"
                     fill={onVisibility(seg.subscore)}
-                    style={{ opacity: revealed ? 1 : 0 }}
+                    style={{ opacity: revealed ? 1 : 0, ...stagger }}
                   >
                     {Math.round(seg.subscore)}
                   </text>
