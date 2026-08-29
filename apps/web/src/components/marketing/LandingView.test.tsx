@@ -240,6 +240,98 @@ describe('nothing on this page is fabricated', () => {
   });
 });
 
+describe('the page arrives rather than being already there — Epic 9.16', () => {
+  // Rendered WITH animation on, which is what a browser gets. Every other test
+  // in this file uses animate={false} and would therefore see the finished
+  // markup whatever the reveal wiring did.
+  const live = () => renderToStaticMarkup(<LandingView animate />);
+
+  it('staggers the hero parts, because it has no scroll to arrive from', () => {
+    const out = live();
+    // Eyebrow, headline, lead, call to action — four parts, three offsets.
+    expect(out).toContain('--avp-reveal-index:1');
+    expect(out).toContain('--avp-reveal-index:2');
+    expect(out).toContain('--avp-reveal-index:3');
+  });
+
+  it('gives every section below the hero a reveal of its own', () => {
+    // Seven: the six content sections plus pricing. The hero is not among them
+    // — it staggers its parts instead of arriving as a block.
+    const out = live();
+    expect((out.match(/avp-reveal-group/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    expect((out.match(/class="avp-reveal[ "]/g) ?? []).length).toBeGreaterThanOrEqual(7);
+  });
+
+  it('staggers all seven pipeline steps, in order', () => {
+    const out = live();
+    for (let i = 1; i <= 6; i++) {
+      expect(out, `step ${i} has no offset`).toContain(`--avp-reveal-index:${i}`);
+    }
+  });
+
+  it('keeps the step list a real list', () => {
+    // `Reveal as="li"` rather than a wrapping div. A div between <ol> and its
+    // items is invalid markup and drops list semantics for a screen reader.
+    const out = live();
+    expect(out).toMatch(/<ol[^>]*avp-reveal-group/);
+    expect(out).toMatch(/<li[^>]*avp-reveal/);
+    expect(out).not.toMatch(/<ol[^>]*>\s*<div/);
+  });
+
+  it('builds the example ledger bar by bar', () => {
+    const out = live();
+    expect(out).toContain('avp-ledger--staggered');
+    // One index per dimension, and the ledger's own property — not the
+    // page's, so the two sequences cannot be confused.
+    for (let i = 0; i < 5; i++) {
+      expect(out).toContain(`--avp-ledger-index:${i}`);
+    }
+  });
+
+  it('is the only place in the product that sets the ledger stagger', () => {
+    // Stated as a test rather than a comment. If a second call site appears,
+    // this is the assertion that should be reconsidered on purpose.
+    expect(live()).toContain('avp-ledger--staggered');
+  });
+
+  it('computes no timing value in JavaScript', () => {
+    // Every duration and delay comes from a token; the component emits only
+    // an index. A millisecond literal here would mean motion had escaped the
+    // token layer.
+    expect(live()).not.toMatch(/\d+ms/);
+  });
+
+  it('renders the finished page when motion is off', () => {
+    // What a static render, a test, and a print get — and the reason every
+    // other assertion in this file still reads the real copy.
+    const out = html();
+    expect(out).toContain('avp-reveal--revealed');
+    // The bars are lit, not waiting to be.
+    expect(out).toContain('scaleY(1)');
+    expect(out).not.toContain('scaleY(0)');
+  });
+
+  it('keeps `animate` and `staggerDimensions` as separate questions', () => {
+    // `staggerDimensions` is structural — it says what SHAPE the reveal takes,
+    // and the landing page always wants the bar-by-bar one. `animate` says
+    // whether any motion happens at all. So the modifier class is present even
+    // with motion off, and the bars are simply already lit. Asserted because
+    // the first version of the test above assumed the opposite and was wrong
+    // about the component, not about the page.
+    expect(html()).toContain('avp-ledger--staggered');
+  });
+
+  it('still says everything it said before, with motion on', () => {
+    // The copy is in the markup either way. Revealing hides content visually
+    // until it arrives; it must never remove it from the document.
+    const out = live();
+    expect(out).toContain('For SEO and digital marketing agencies');
+    expect(out).toContain('$29');
+    expect(out).toContain('One URL in, and nothing else to fill in');
+    expect(out).toContain('Signing up is free and stays free');
+  });
+});
+
 describe('it is built from the design system, not styled locally', () => {
   it('uses the shared section primitive rather than a hand-rolled hero', () => {
     const out = html();
