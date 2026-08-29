@@ -311,3 +311,114 @@ describe('the screen carries no third-party prose', () => {
     expect(html).not.toContain('“');
   });
 });
+
+/**
+ * The empty states, rebuilt in Epic 9.19.
+ *
+ * Both were already written rather than blank — Epic 9.3 and 9.9 saw to that —
+ * so what these assert is the second half: that they are drawn in this
+ * product's own language, and that the drawing does not start asserting
+ * measurements nobody took.
+ */
+describe('a brand-new agency is shown the shape of a scan, not a graphic', () => {
+  it('draws the five real dimensions and their real weights', () => {
+    // Not example data. These are scoring-spec.md §6's weights, the same five
+    // every report is built from — which is the whole reason it is honest to
+    // draw them before anything has been measured.
+    const html = render(emptyDashboard);
+    for (const [label, weight] of [
+      ['Mention Rate', 30],
+      ['Share of Voice', 25],
+      ['Citation Strength', 20],
+      ['Sentiment', 15],
+      ['Technical Foundation', 10],
+    ] as const) {
+      expect(html).toContain(label);
+      expect(html).toContain(`${weight}% weight`);
+    }
+  });
+
+  it('the weights sum to 100, so the figure is the real scoring model', () => {
+    // A drawing whose parts did not add up would be decoration wearing the
+    // Ledger's clothes.
+    expect(30 + 25 + 20 + 15 + 10).toBe(100);
+  });
+
+  it('claims no score, because none has been taken', () => {
+    const html = render(emptyDashboard);
+    expect(html).toContain('avp-ledger--unmeasured');
+    expect(html).toContain('none of them measured yet');
+    expect(html).not.toContain('0 out of 100');
+  });
+
+  it('does not animate — the dashboard performs no entrance', () => {
+    // `animate={false}` means the bars are painted in their final state on
+    // first paint. There is nothing to light anyway; what this guards is the
+    // screen acquiring a build-in on a page checked fifty times a day.
+    expect(render(emptyDashboard)).not.toContain('avp-ledger--staggered');
+  });
+
+  it('still says everything it said before, and still offers the way out', () => {
+    const html = render(emptyDashboard);
+    expect(html).toContain('No scans yet');
+    expect(html).toContain('about six minutes');
+    expect(html).toContain('Add your first client');
+  });
+});
+
+describe('clients but no scans gets the same treatment, without the figure', () => {
+  it('keeps its own sentence — it is a different fact from an empty agency', () => {
+    const html = render(noScansYetDashboard);
+    expect(html).toContain('2 clients added, but no scans have been run yet.');
+    expect(html).not.toContain('Add your first client');
+  });
+
+  it('is an EmptyState with an action rather than a bare line in a table cell', () => {
+    const html = render(noScansYetDashboard);
+    expect(html).toContain('avp-empty');
+    expect(html).toContain('Run the first scan');
+  });
+
+  it('carries no ledger — there is nothing to explain twice', () => {
+    // The unmeasured ledger belongs to the agency that has never scanned
+    // anything. Repeating it here would make the figure furniture.
+    expect(render(noScansYetDashboard)).not.toContain('avp-ledger');
+  });
+});
+
+/**
+ * Status motion — Epic 9.19.
+ *
+ * The dashboard is deliberately excluded from arrival motion, and stays so.
+ * What it gains is motion tied to something that is genuinely still happening,
+ * which on this screen is exactly one thing: a scan that is running while the
+ * page re-reads itself every five seconds.
+ */
+describe('the live dot marks what is actually happening', () => {
+  it('breathes on a running scan', () => {
+    expect(render(runningDashboard)).toContain('avp-badge__pulse');
+  });
+
+  it('does not breathe on a finished one', () => {
+    expect(render(scoredDashboard)).not.toContain('avp-badge__pulse');
+    expect(render(failedDashboard)).not.toContain('avp-badge__pulse');
+  });
+
+  it('marks the running row and not its finished neighbour', () => {
+    // Two rows for the same client, one running and one complete. Exactly one
+    // dot, or the mark says nothing.
+    const html = render(runningPlusFinishedDashboard, { live: true });
+    const dots = html.split('avp-badge__pulse').length - 1;
+    // One on the running row, one on the header's "Live" chip.
+    expect(dots).toBe(2);
+  });
+
+  it('the header chip appears only while the page is really polling', () => {
+    expect(render(runningPlusFinishedDashboard, { live: true })).toContain('>Live<');
+    expect(render(runningPlusFinishedDashboard)).not.toContain('>Live<');
+  });
+
+  it('a queued scan is not marked live — nothing is running yet', () => {
+    expect(render(unscoredQueuedDashboard)).not.toContain('avp-badge__pulse');
+  });
+});

@@ -129,6 +129,48 @@
   letter-spacing: var(--avp-tracking-caps);
   text-transform: uppercase;
   border: 1px solid transparent;
+  /* A status badge is the one element on a Working screen that changes on its
+     own: the dashboard re-reads itself every 5s while a scan runs, and
+     "Running" becomes "Complete" underneath the reader. Crossfading the tone
+     over the existing state duration is what stops that reading as a flicker.
+     Nothing here animates on first paint — a transition needs a previous
+     value, and a badge that never changes tone never moves. */
+  transition: background-color var(--avp-duration-state) var(--avp-ease-out),
+    border-color var(--avp-duration-state) var(--avp-ease-out),
+    color var(--avp-duration-state) var(--avp-ease-out);
+}
+
+/*
+ * The live dot — `<Badge live>`. See Badge.tsx for why this motion is allowed
+ * on a screen that is deliberately excluded from arrival motion.
+ *
+ * The period is `--avp-duration-reveal` x 3 rather than a new number: this is
+ * the score's dim-to-lit dissolve put on a loop, slowed to a rate that reads as
+ * breathing rather than blinking, and it stays tied to the reveal if that value
+ * is ever retuned. The corona is a static beacon ring, so the dot reads as lit
+ * rather than merely coloured — design-direction.md section 4, emphasis is
+ * light, not lift.
+ *
+ * The keyframe ENDS fully lit on purpose. base.css collapses animations to
+ * 0.01ms and one iteration under `prefers-reduced-motion`, which lands the dot
+ * on its final frame — so a reader who asked for less motion gets a lit dot,
+ * not a dot stuck at 35% that looks disabled.
+ */
+.avp-badge__pulse {
+  flex: none;
+  width: var(--avp-space-2);
+  height: var(--avp-space-2);
+  border-radius: var(--avp-radius-full);
+  background: var(--avp-beacon-600);
+  box-shadow: 0 0 0 3px var(--avp-beacon-100);
+  animation: avp-live-breath calc(var(--avp-duration-reveal) * 3) var(--avp-ease-standard)
+    infinite;
+}
+
+@keyframes avp-live-breath {
+  0% { opacity: 1; }
+  50% { opacity: 0.35; }
+  100% { opacity: 1; }
 }
 
 .avp-badge--neutral {
@@ -176,6 +218,12 @@
   padding: var(--avp-space-3);
   border-bottom: 1px solid var(--avp-line-hairline);
   color: var(--avp-text-body);
+  /* Hover was an instant repaint, which is the default-browser feel this
+     product avoids everywhere else — buttons, fields and nav items have all
+     eased over `--avp-duration-hover` since Epic 0. The comparison table is
+     the surface an operator's pointer spends the most time on, and it was the
+     one that never got it. */
+  transition: background-color var(--avp-duration-hover) var(--avp-ease-out);
 }
 
 .avp-table tbody tr:hover td { background: var(--avp-surface-sunken); }
@@ -258,6 +306,11 @@
 
 .avp-meter__numeral--empty { color: var(--avp-text-tertiary); }
 
+/* A polled row whose scan lands goes tertiary-grey -> ramp colour on the SAME
+   element, so this eases rather than snaps. Layout duration, because it is the
+   score arriving rather than a pointer passing over. */
+.avp-meter__numeral { transition: color var(--avp-duration-layout) var(--avp-ease-out); }
+
 .avp-meter__band {
   font-size: var(--avp-text-ui-2xs);
   font-weight: 600;
@@ -276,11 +329,26 @@
   background: var(--avp-surface-sunken);
   box-shadow: inset 0 0 0 1px var(--avp-line-hairline);
   overflow: hidden;
+  /* Dimmed while there is no score (below) and full strength once there is.
+     The track element survives that switch — React keeps it, only the class
+     changes — so the row comes up out of its "measuring" state instead of
+     blinking into a new one. */
+  transition: opacity var(--avp-duration-state) var(--avp-ease-out);
 }
 
 .avp-meter__lit {
   height: 100%;
   border-radius: var(--avp-radius-full);
+  /*
+   * A score that MOVES eases to its new length. A score that ARRIVES does not,
+   * and that asymmetry is the point: this element does not exist while a scan
+   * is unscored (see ScoreMeter.tsx — a zero-width fill would read as a score
+   * of zero), and a CSS transition never runs on an element's first paint. So
+   * re-running a client and watching 41 become 48 is animated, and loading the
+   * dashboard for the fiftieth time today is not.
+   */
+  transition: width var(--avp-duration-layout) var(--avp-ease-out),
+    background-color var(--avp-duration-layout) var(--avp-ease-out);
 }
 
 /* An absent score keeps its track so the row keeps its shape, but the track is
@@ -432,6 +500,103 @@
 
 .avp-errorstate__action { margin-top: var(--avp-space-5); }
 
+/* ============================= EmptyState ========================= */
+/*
+ * "There is nothing here yet", one treatment app-wide — the third member of
+ * the set LoadingState and ErrorState opened in Epic 9.11. See EmptyState.tsx
+ * for why it is dashed rather than seated: a dashed hairline already means
+ * "an absence that is itself the finding" in this system (`.avp-shelf__notch`,
+ * `.avp-ledger__gap-zone`, `.avp-ledger--empty`), and an empty screen is that
+ * fact at page scale.
+ */
+
+.avp-empty {
+  display: grid;
+  gap: var(--avp-space-8);
+  align-items: center;
+  padding: var(--avp-space-10);
+  border: 1px dashed var(--avp-line-strong);
+  border-radius: var(--avp-radius-lg);
+  background: var(--avp-surface-ground);
+  /* Left-aligned, unlike `.avp-ledger--empty`, because this one carries an
+     action: centring the column puts the button somewhere the eye is not
+     already reading from. It also has to survive being dropped into a table's
+     empty cell, which centres its text. */
+  text-align: left;
+}
+
+/* With a figure the copy takes the reading measure and the drawing takes the
+   rest — which is what stops a Working screen's empty state from being one
+   short sentence stranded in a very wide box. */
+.avp-empty--figured {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 60rem) {
+  .avp-empty--figured {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--avp-space-14);
+  }
+}
+
+.avp-empty__copy { display: flex; flex-direction: column; gap: var(--avp-space-3); }
+
+.avp-empty__eyebrow {
+  font-size: var(--avp-text-ui-2xs);
+  font-weight: 600;
+  letter-spacing: var(--avp-tracking-caps);
+  text-transform: uppercase;
+  color: var(--avp-text-tertiary);
+}
+
+/* The editorial face, at the section scale rather than the report's — an empty
+   state is a statement, and it should read in the same voice as everything
+   else this product says. */
+.avp-empty__title {
+  font-family: var(--avp-font-editorial);
+  font-size: var(--avp-text-ed-xs);
+  font-weight: 600;
+  line-height: var(--avp-leading-display);
+  letter-spacing: var(--avp-tracking-display);
+  color: var(--avp-text-primary);
+  max-width: var(--avp-headline);
+}
+
+.avp-empty__body {
+  font-size: var(--avp-text-ui-base);
+  line-height: var(--avp-leading-prose);
+  color: var(--avp-text-secondary);
+  max-width: var(--avp-measure);
+}
+
+.avp-empty__note {
+  font-size: var(--avp-text-ui-sm);
+  line-height: var(--avp-leading-prose);
+  color: var(--avp-text-tertiary);
+  max-width: var(--avp-measure);
+}
+
+.avp-empty__action { margin-top: var(--avp-space-2); }
+
+/*
+ * BOUNDED, and not for tidiness. A chart drawn from a viewBox scales its TYPE
+ * with its box: the Ledger's 13px dimension labels are 13px at its natural
+ * 344 units wide and 30px stretched across a Working screen's full column,
+ * which is bigger than the page's own headline. Capping the figure near its
+ * natural width keeps the labels the size the chart was drawn at.
+ */
+.avp-empty__figure {
+  min-width: 0;
+  width: min(100%, 22rem);
+}
+
+/* Nested in a DataTable's empty cell, the cell's own padding and centring are
+   the wrong frame for a box that brings both. */
+.avp-table__empty:has(> .avp-empty) {
+  padding: var(--avp-space-4) 0 var(--avp-space-2);
+  text-align: left;
+}
+
 /* ========================== PageSection ========================== */
 /* Sections of a non-report page. Same editorial voice as the report's beats,
    deliberately without their numbering — see PageSection.tsx. */
@@ -527,6 +692,14 @@
 .avp-ledger--staggered .avp-ledger__value {
   transition-delay: calc(var(--avp-ledger-index) * var(--avp-stagger-reveal));
 }
+
+/*
+ * Unmeasured: the void carries the whole drawing, so it needs to be visible as
+ * a SHAPE rather than as the faint remainder behind a lit column. One step up
+ * the same neutral ramp — seated rather than sunken — which is the tone every
+ * other "this is a surface, not the page" in the product already uses.
+ */
+.avp-ledger--unmeasured .avp-ledger__void { fill: var(--avp-surface-seated); }
 
 .avp-ledger__rule { stroke: var(--avp-surface-ground); stroke-width: 1; }
 .avp-ledger__outline { fill: none; stroke: var(--avp-line-strong); stroke-width: 1; }

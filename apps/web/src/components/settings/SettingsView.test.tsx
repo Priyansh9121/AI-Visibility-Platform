@@ -230,3 +230,63 @@ describe('Settings deliberately did NOT get arrival motion — Epic 9.16', () =>
     expect(html).toContain('What you pay');
   });
 });
+
+/**
+ * Width and density — Epic 9.19.
+ *
+ * design-direction.md §0 splits every screen into Working and Presenting, and
+ * this is the screen that was on the wrong side of it: an operator's account
+ * and seat roster, rendered at `--avp-report-width`, which is the measure a
+ * DOCUMENT is read at. The dashboard and clients have been `wide` since Epic
+ * 9.13. This is the correction and the test that keeps it.
+ */
+describe('Settings is a Working screen', () => {
+  it('takes the app width rather than the report measure', () => {
+    expect(render(READY)).toContain('avp-shell__content--wide');
+  });
+
+  it('is wide in every state, including the ones with no data', () => {
+    // The shell is rendered by all three branches, so a loading or errored
+    // Settings must not narrow back to the document measure mid-session.
+    expect(render({ kind: 'loading' })).toContain('avp-shell__content--wide');
+    expect(
+      render({ kind: 'error', title: 'nope', detail: 'nope' }),
+    ).toContain('avp-shell__content--wide');
+  });
+
+  it('nothing inside grows unbounded with it', () => {
+    // The width buys table columns and the agency grid, not 90rem-long lines:
+    // every panel still caps its own prose and its own forms.
+    const html = render(READY);
+    expect(html).toContain('max-w-measure');
+    expect(html).toContain('max-w-form');
+  });
+
+  it('sets the four agency facts as a grid, not a tall thin column', () => {
+    const html = render(READY);
+    expect(html).toContain('lg:grid-cols-4');
+    expect(html).toContain('Signed in as');
+  });
+});
+
+describe('what is still missing is a numbered list, not small print', () => {
+  it('numbers each entry in the report fix list idiom', () => {
+    const html = render(READY);
+    expect(html).toContain('>01<');
+    expect(html).toContain('>02<');
+    expect(html).toContain('>03<');
+  });
+
+  it('is an ordered list, because the numbers are structure and not decoration', () => {
+    expect(render(READY)).toContain('<ol');
+  });
+
+  it('still says all three things, word for word', () => {
+    // The point of the section is that it is true, so a visual pass must not
+    // quietly drop an entry while restyling it.
+    const html = render(READY);
+    expect(html).toContain('white-labelling is still name-and-slug only');
+    expect(html).toContain('there is no number here to change yet');
+    expect(html).toContain('there is no cap to hit and no figure to look at');
+  });
+});

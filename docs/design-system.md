@@ -225,6 +225,25 @@ motion value added since Epic 0, and a **delay** rather than a duration).
 > sequence would therefore have honoured the setting by animating instantly and
 > then waiting up to half a second before doing it. Both delays are reset now.
 
+> **Epic 9.19 — the Working screens got motion, and added no value to do it.**
+> The dashboard, clients and settings are excluded from *arrival* motion and
+> stay so; what they gained is motion where something is genuinely changing,
+> spelled entirely in the durations above:
+>
+> | Where | Token | Why it is motion at all |
+> |---|---|---|
+> | `.avp-table tbody td` hover | `120ms` hover | The one interactive surface still repainting instantly, on the screen a pointer spends the most time on. |
+> | `.avp-badge` tone | `200ms` state | The dashboard re-reads itself every 5s; "Running" becomes "Complete" under the reader. |
+> | `.avp-meter__track` opacity | `200ms` state | The track survives the switch out of "measuring", so the row comes up rather than blinks. |
+> | `.avp-meter__lit` width/fill | `320ms` layout | A score that MOVES eases. A score that ARRIVES does not — that element does not exist while unscored, and a transition never runs on first paint. |
+> | `.avp-badge__pulse` | `calc(reveal × 3)` = 1.8s | The only loop in the system. Derived from the reveal rather than being a new number: the dim-to-lit dissolve slowed to a breath. |
+>
+> The pulse's keyframe **ends fully lit**, because the global reduced-motion
+> block collapses animations to one 0.01ms iteration and lands them on their
+> final frame. A keyframe ending at 35% would have left a reader who asked for
+> less motion looking at a dot that reads as disabled. Measured live in Epic
+> 9.19: nine opacity samples, all `1.0`, with `animation-iteration-count: 1`.
+
 ---
 
 ## 5. The Luminance Ledger — signature visualisation
@@ -459,6 +478,13 @@ dashboard shell. The report is a document — it gets printed and PDF'd, and
 dashboard are dense, functional screens where arrival motion costs attention and
 buys nothing.
 
+> **Still true after Epic 9.19, and worth stating precisely.** That epic gave
+> the Working screens hover, status and live motion, and gave them **no
+> `Reveal`**. The distinction it turns on: *arrival* motion performs on every
+> load, which a dashboard checked fifty times a day should not do; the motion
+> 9.19 added fires only when something has actually changed since the last
+> paint. `ReportView.test.tsx` asserts the report acquires neither.
+
 `PageSection` takes `stagger` (default **false**) to sequence its own four
 parts, because they are props rather than children and a caller cannot wrap
 them. A section that should reveal as one unit needs nothing from that prop —
@@ -472,16 +498,68 @@ wrap the whole `<PageSection>` in a `<Reveal>`.
 |---|---|
 | `Button` | `primary \| secondary \| ghost \| danger` × `sm \| md \| lg`. Hover darkens; focus illuminates. |
 | `Card` + `CardHeader/Title/Body/Footer` | Print-safe elevations only. `selected` reads as lit from within. |
-| `Badge` | **System state only** — never a score. |
+| `Badge` | **System state only** — never a score. `live` (default off) adds a breathing dot for a state that is still happening. Tone crossfades over `200ms`. |
 | `VisibilityBadge` | The ordinal read of a score. Label colour resolved by luminance. |
 | `DataTable<Row>` | Tabular figures, right-aligned numerics, hairline rules. Subject row accented *and* marked `aria-current`. |
 | `ScoreDisplay` | The composite at 112px. Dim-to-lit reveal. Renders `—` for null. |
 | `ChartFrame` | Shared shell: title, caption, **required** `ariaLabel`, hidden data table. Recharts charts mount inside it too, inheriting the same a11y contract. |
 | `ChartPatterns` | SVG pattern defs for competitor series — the B&W fallback. |
-| `LuminanceLedger` | The hero. See §5. |
+| `LuminanceLedger` | The hero. See §5. `unmeasured` (default off) draws the column as shape only and stops it claiming a score nobody took. |
+| `LoadingState` / `ErrorState` / `EmptyState` | The three things a screen says when it has no content to show. See §6a. |
 | `Reveal` / `RevealGroup` | Arrival motion. Client-only. See §5c. |
 | `AnswerShelf` | The proof beat's shelf of ordinal slots. See §5a. |
 | `ReportPage` / `ReportHeader` / `Beat` / `Prose` / `Evidence` / `FixList` | Narrative report primitives. See §7. |
+
+---
+
+## 6a. The three empty voices — `LoadingState`, `ErrorState`, `EmptyState`
+
+A screen with no content to show is saying one of exactly three things, and each
+has one treatment app-wide. Epic 9.11 unified the first two — it replaced four
+bespoke loading paragraphs and five bespoke error cards. Epic 9.19 added the
+third, which had been four hand-written variants of the same idea, three of them
+a bare `<span>` inside a table cell.
+
+| | Says | Treatment |
+|---|---|---|
+| `LoadingState` | "wait" | Names the work. **No spinner, no progress bar** — this product cannot measure progress on any of its long operations, and a bar that fills on a timer is a lie. |
+| `ErrorState` | "that did not work" | Seated card. Title is a statement, never a status code. Machine code small and last. |
+| `EmptyState` | "there is nothing here yet" | Dashed hairline, editorial title, an action, and an optional data-drawn figure. |
+
+### Why `EmptyState` is dashed rather than seated
+
+A dashed stroke already means one specific thing in this system: **an absence
+that is itself the finding.** `.avp-shelf__notch` draws the rank nobody is
+standing in, `.avp-ledger__gap-zone` outlines the points not earned, and
+`.avp-ledger--empty` frames a scan with nothing to score. An empty screen is
+that same fact at page scale, so it takes the same stroke instead of a new one.
+`ErrorState` stays a seated card because an error is a thing that *happened*.
+
+### The `figure` slot is not an icon slot
+
+ip-safety.md #4 rules out icon packs and illustration kits, and this system's
+house style is that a graphic is **data drawn as illustration** — the Luminance
+Ledger and the Answer Shelf both are. So what a caller passes is the shape of
+the data that will exist once the screen is not empty.
+
+The dashboard's brand-new-agency state passes a `LuminanceLedger` with the five
+real §6 weights and every sub-score at zero: the column draws as an unlit void
+with the weights named beside it. That is the palette's organising idea —
+visibility is luminance — applied to the one screen in the product where
+nothing is lit yet.
+
+**`unmeasured` is what makes it honest.** Sub-scores of zero already draw the
+right picture, but the chart would still tell a screen reader *"AI Visibility
+Score: 0 out of 100"* and tabulate five measured zeroes. The prop suppresses the
+composite claim, the gap annotation and the per-dimension values, and names the
+chart as the structure of a scan rather than the result of one. It defaults to
+**false**, so neither report call site is affected — the same guardrail
+`staggerDimensions` uses, and asserted the same way.
+
+The figure is capped at `22rem`, near the Ledger's natural 344 units. A chart
+drawn from a viewBox scales its **type** with its box: 13px dimension labels
+become 30px stretched across a Working screen's full column, which is larger
+than the page's own headline.
 
 ---
 

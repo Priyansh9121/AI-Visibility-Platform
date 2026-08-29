@@ -182,6 +182,11 @@ export function SeatsPanel({
     {
       key: 'action',
       header: '',
+      // To the far edge — Epic 9.19. Settings became a full-width Working
+      // screen in that pass, and a Remove button that had sat next to its row
+      // was suddenly stranded in the middle of a very wide table with nothing
+      // to its right.
+      align: 'end',
       render: (u: User) => {
         if (!canManage) return null;
         if (u.id === currentUserId) {
@@ -266,8 +271,16 @@ export function SeatsPanel({
                 </p>
               </div>
 
+              {/*
+                The email field is capped at the form measure rather than left
+                to `flex-1` — Epic 9.19. On the widened screen an unbounded
+                field ran nearly the whole viewport for an address that is
+                never that long, and it no longer matched the password form
+                two sections below, which has used `--avp-form-width` since
+                Epic 9.11.
+              */}
               <div className="flex flex-wrap items-end gap-3">
-                <div className="min-w-0 flex-1">
+                <div className="min-w-0 flex-1 basis-full sm:basis-auto sm:max-w-form">
                   <TextField
                     label="Email"
                     type="email"

@@ -55,6 +55,28 @@ export interface LuminanceLedgerProps {
   staggerDimensions?: boolean;
   /** Show the auto-derived "biggest gap" annotation. */
   annotateGap?: boolean;
+  /**
+   * Draw the column as SHAPE ONLY — nothing has been measured yet. Epic 9.19.
+   *
+   * **Defaults to `false`, so the report is untouched**, the same guardrail
+   * `staggerDimensions` uses and for the same reason: neither report call site
+   * passes anything, so the default they get is Epic 0's behaviour.
+   *
+   * What it changes is what the chart CLAIMS, not how it is drawn. A ledger
+   * given five dimensions at sub-score 0 already draws the right picture — an
+   * unlit column with the real weights in the gutter — but it would still tell
+   * a screen reader "AI Visibility Score: 0 out of 100" and tabulate five
+   * zeroes. That is a measurement nobody took, and this product's whole
+   * argument is that it does not assert figures it does not have. So this
+   * suppresses the composite claim, the gap annotation and the per-dimension
+   * values, and names the chart as the structure of a scan rather than the
+   * result of one.
+   *
+   * It exists so an empty screen can be illustrated with THIS product's own
+   * chart instead of a decorative graphic — see `EmptyState`'s note on why the
+   * figure slot is not an icon slot.
+   */
+  unmeasured?: boolean;
   className?: string;
 }
 
@@ -94,6 +116,7 @@ export function LuminanceLedger({
   animate = true,
   staggerDimensions = false,
   annotateGap = true,
+  unmeasured = false,
   className,
 }: LuminanceLedgerProps): JSX.Element {
   const layout = layoutLedger(dimensions, { height, competitors });
@@ -150,18 +173,44 @@ export function LuminanceLedger({
         'avp-ledger',
         // The one marker the report-path regression test looks for.
         staggerDimensions && 'avp-ledger--staggered',
+        unmeasured && 'avp-ledger--unmeasured',
         className,
       )}
       ariaLabel={
-        `AI Visibility Score for ${subjectName}: ${score} out of 100. ` +
-        layout.segments
-          .map((s) => `${s.label} ${Math.round(s.subscore)} of 100, weighted ${s.weight} percent`)
-          .join('. ') +
-        (layout.biggestGap
-          ? `. Largest recoverable gap: ${layout.biggestGap.label}, worth ${layout.biggestGap.gap.toFixed(1)} points.`
-          : '')
+        unmeasured
+          ? `The ${layout.segments.length} weighted dimensions an AI Visibility scan measures, none of them measured yet: ` +
+            layout.segments.map((s) => `${s.label}, worth ${s.weight} points`).join('. ') +
+            '.'
+          : `AI Visibility Score for ${subjectName}: ${score} out of 100. ` +
+            layout.segments
+              .map((s) => `${s.label} ${Math.round(s.subscore)} of 100, weighted ${s.weight} percent`)
+              .join('. ') +
+            (layout.biggestGap
+              ? `. Largest recoverable gap: ${layout.biggestGap.label}, worth ${layout.biggestGap.gap.toFixed(1)} points.`
+              : '')
       }
       dataTable={
+        unmeasured ? (
+          <table>
+            <caption>What an AI Visibility scan measures</caption>
+            <thead>
+              <tr>
+                <th scope="col">Dimension</th>
+                <th scope="col">Points available</th>
+                <th scope="col">Measured</th>
+              </tr>
+            </thead>
+            <tbody>
+              {layout.segments.map((s) => (
+                <tr key={s.key}>
+                  <th scope="row">{s.label}</th>
+                  <td>{s.weight}</td>
+                  <td>Not yet</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
         <table>
           <caption>{`AI Visibility Score breakdown for ${subjectName}`}</caption>
           <thead>
@@ -191,6 +240,7 @@ export function LuminanceLedger({
             </tr>
           </tfoot>
         </table>
+        )
       }
     >
       <svg
@@ -266,8 +316,11 @@ export function LuminanceLedger({
                   </>
                 )}
 
-                {/* sub-score inside the lit area, colour picked by luminance */}
-                {seg.litHeight >= 20 && (
+                {/* sub-score inside the lit area, colour picked by luminance.
+                    Never drawn when unmeasured — a nothing-measured ledger has
+                    no per-dimension figure to print, and at sub-score 0 there
+                    is no lit area to print it in either. */}
+                {!unmeasured && seg.litHeight >= 20 && (
                   <text
                     x={columnX + COLUMN_WIDTH / 2}
                     y={seg.litY + Math.min(seg.litHeight, seg.height) / 2 + 4}
@@ -293,7 +346,7 @@ export function LuminanceLedger({
           />
 
           {/* ---- biggest-gap annotation: this IS the report headline ---- */}
-          {annotateGap && layout.biggestGap && layout.biggestGap.gap > 0.5 && (
+          {annotateGap && !unmeasured && layout.biggestGap && layout.biggestGap.gap > 0.5 && (
             <g className="avp-ledger__annotation" style={{ opacity: revealed ? 1 : 0 }}>
               <line
                 x1={columnX}
