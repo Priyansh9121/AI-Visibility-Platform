@@ -8899,3 +8899,109 @@ a better setup than the one it replaces.
 `test_scan_endpoints`' position assertion flipped from 1-of-1 to 2-of-3. Its own
 comment read *"No competitor set exists for this scan"*. That was the
 degradation, and it is gone.
+
+### Addendum, 2026-08-29 — Epic 9.18 · The overlong title that lost the whole fix list
+
+Epic 9.17's live walkthrough closed with three of four boxes ticked and the
+fourth blocked: the report had a score, a competitor set and technical findings,
+and **no fixes**, because `generate_fixes` crashed on a model-authored title
+longer than 200 characters. That entry named the bug and deliberately left it.
+This closes it.
+
+#### What was actually wrong
+
+`generate_fixes` catches five `anthropic.*` exception types and maps each to a
+`FixOutcome`. But `client.messages.parse` validates the response against
+`GeneratedFixSet` **inside the SDK** — `TypeAdapter(...).validate_json(text)` in
+`anthropic/lib/_parse/_response.py` — and a schema violation raises
+`pydantic.ValidationError`, which is not an `anthropic.APIError`. **The entire
+ladder was bypassed by the one failure the model itself causes.** It propagated
+as a crash inside the scan chain and a raw `500` through
+`POST /scans/{id}/fixes`.
+
+#### Three things checked before changing anything
+
+1. **`pydantic.ValidationError` IS `pydantic_core.ValidationError`** — the same
+   object, not a wrapper. So the catch is exactly precise. Worth confirming
+   because it subclasses `ValueError`, and catching *that* would have been
+   broader than the bug.
+2. **The SDK's validation is whole-response, with no per-item hook.**
+   `parse_text` validates the entire document in one call, and the exception
+   escapes before any `ParsedMessage` is constructed — so neither the valid
+   fixes nor the raw JSON survive to be salvaged, and `ValidationError` carries
+   the offending value but never the document around it. Keeping four good
+   fixes and dropping the fifth would mean replacing `messages.parse` with
+   `messages.create` plus a hand-rolled parse: a larger change to how this call
+   is made than the bug warrants. **So it degrades as a whole**, which is what
+   the brief specified for exactly this finding.
+3. **No existing test covered it.** The tested failure paths were
+   `NO_CANDIDATES`, a provider error, and `NO_USABLE_FIXES`.
+
+#### The fix
+
+One more clause in the same ladder, mapping to
+`FixOutcome(status="failed", reason_code="PROVIDER_SCHEMA_VIOLATION")` — an
+empty, honestly-labelled fix list, exactly like every other failure above it.
+The report falls back to Epic 7's deterministic list, as it does for a provider
+outage.
+
+The log line records the field path, the error type and the **length** of the
+offending value, never the value: it is model-authored copy, and a length is
+what makes the failure diagnosable.
+
+#### The root cause of the FREQUENCY, which was the more interesting half
+
+**The length limit existed only as JSON-schema `maxLength`.** Neither the system
+prompt nor either field description mentioned brevity at all — the model's only
+signal was a schema constraint it did not reliably honour, and it overshot three
+times out of three on this scan. The rule is now stated in words in the system
+prompt and in both field descriptions, reading `MAX_TITLE_CHARS` and
+`MAX_DETAIL_CHARS` so the prose cannot drift from the constants.
+
+That reduces how often this fires. It is emphatically **not** why it is now
+safe — the `except` clause is, and it holds however badly the prompt performs.
+
+#### Verified live
+
+The exact call that returned a raw `500` at the end of Epic 9.17 —
+`POST /scans/scan_01M15SVH…/fixes` — now returns **`201`, `status: "generated"`,
+five fixes**.
+
+Then a full chained scan from the dashboard's re-run button, `plausible.io`,
+24 prompts, 3 engines:
+
+```
+14:26:56  competitors.carried_forward   competitors=5      (0 SerpApi)
+14:32:19  scan.engine_phase_completed   failures=0 results=72
+14:32:23  audit.completed               technical_foundation=67.00
+14:32:23  scoring.completed             composite=58.50 excluded=[]
+14:32:44  fixes.generated               accepted=5 rejected=0
+14:32:44  scan.finalized                status=succeeded
+```
+
+**347.3s, `succeeded`, and a fix list.** Zero schema violations logged. The
+generated titles came in at 145, 117, 114, 112 and 126 characters — the first
+run since the prompt was tightened, and every one comfortably inside the limit.
+
+The report's fix beat now reads **"6 changes, worth 39.0 points"**: five
+model-authored fixes citing this scan's own figures ("Only 10 of 281 citations
+in this scan pointed at plausible.io"), plus Epic 7.1's derived
+unclaimed-domain fix. Screenshots in `docs/screenshots/epic-9-18/`.
+
+**All four of Epic 9.17's boxes are now ticked on one report.**
+
+#### Tests
+
+**1496, up from 1494** (api 820 → **822**). `ruff` clean, `mypy` unchanged at
+its pre-existing 38.
+
+Both new tests drive the failure through the **real validator** — the SDK's own
+`TypeAdapter(...).validate_json` on an over-length title — rather than raising a
+hand-built `ValidationError`. A test that raises the exception itself proves the
+`except` clause is spelled correctly and nothing more; this one proves the thing
+the SDK actually does is the thing that gets caught. Negative control: removing
+the clause fails both, with the raw `ValidationError`.
+
+The second asserts the log carries `fixes.0.title` and the length `260` and
+**not** the offending string, so the diagnostic cannot quietly become a channel
+for model-authored prose.
