@@ -29,6 +29,25 @@ from avp_api.services.fix_generator import (
 BASE = "/api/v1"
 
 
+@pytest.fixture
+def scan_executor_factory(engines_only_executor):  # noqa: ANN201
+    """Stop after the engine phase — Epic 9.17.
+
+    These tests assert how the product renders a MISSING score / audit /
+    competitor set / fix list. Since 9.17 a scan started through the endpoint
+    runs the whole chain and produces all four, so those absences are no longer
+    reachable by simply not asking for them.
+
+    They are still reachable in production — any chained phase can fail, and
+    `scan_executor._attempt` deliberately lets the rest continue — so the states
+    remain worth testing. This constructs them on purpose instead of relying on
+    the product not finishing, which is a more honest setup than the one it
+    replaces.
+    """
+    return engines_only_executor
+
+
+
 def dim(key: str, weight: str, subscore: str) -> DimensionFact:
     w = Decimal(weight)
     s = Decimal(subscore)

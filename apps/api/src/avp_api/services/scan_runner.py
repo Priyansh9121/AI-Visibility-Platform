@@ -12,7 +12,7 @@ import asyncio
 from datetime import UTC, datetime
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -66,6 +66,86 @@ logger = structlog.get_logger(__name__)
 # from 48 engine calls to 72, and sentiment (charged only where the subject is
 # named) from at most 48 to at most 72.
 PROMPT_CONCURRENCY = 4
+
+
+def terminal_status_for(failures: int, total: int) -> tuple[ScanStatus, str | None]:
+    """The engine phase's verdict, as a pure function — Epic 9.17.
+
+    Extracted because it now has two callers: `run_scan`, which knows the
+    failure count it just produced, and `finalize_scan`, which recounts it from
+    the persisted rows after the rest of the chain has run. Two copies of this
+    rule would be two answers to "did this scan succeed", and they would
+    disagree on the day it mattered.
+
+    PARTIAL exists so a report can say "one engine was down" rather than
+    presenting a depressed mention rate as fact.
+    """
+    if failures == 0:
+        return ScanStatus.SUCCEEDED, None
+    if failures < total:
+        return ScanStatus.PARTIAL, None
+    return ScanStatus.FAILED, "ALL_ENGINE_CALLS_FAILED"
+
+
+async def count_engine_failures(session: AsyncSession, scan_id: str) -> int:
+    """Persisted engine results that did not produce an answer.
+
+    The same predicate `run_scan` applies in memory, asked of the database
+    instead — `OK` and `ANSWERED_NO_MENTION` are both answers, and a subject
+    the engine did not mention is a finding rather than a failure.
+    """
+    return int(
+        (
+            await session.execute(
+                select(func.count())
+                .select_from(EngineResult)
+                .where(
+                    EngineResult.scan_id == scan_id,
+                    EngineResult.status.not_in(
+                        (EngineResultStatus.OK, EngineResultStatus.ANSWERED_NO_MENTION)
+                    ),
+                )
+            )
+        ).scalar_one()
+    )
+
+
+async def finalize_scan(session: AsyncSession, scan: Scan) -> Scan:
+    """Stamp the terminal status, after every phase of the chain has run.
+
+    The other half of `run_scan(defer_terminal_status=True)`. Recounts failures
+    from the persisted `EngineResult` rows rather than being handed a number,
+    so it is correct whether or not the caller kept one — and applies exactly
+    the rule above.
+
+    Idempotent by the same guard the executor uses: a scan already terminal is
+    left alone, because a second stamp would move `finished_at` forward for a
+    scan that finished earlier.
+    """
+    if scan.status in (
+        ScanStatus.SUCCEEDED,
+        ScanStatus.PARTIAL,
+        ScanStatus.FAILED,
+        ScanStatus.CANCELLED,
+    ):
+        return scan
+
+    failures = await count_engine_failures(session, scan.id)
+    status, error_code = terminal_status_for(failures, scan.engine_result_count)
+    scan.status = status
+    if error_code is not None:
+        scan.error_code = error_code
+    scan.finished_at = datetime.now(UTC)
+    await session.flush()
+    await session.commit()
+    logger.info(
+        "scan.finalized",
+        scan_id=scan.id,
+        status=scan.status.value,
+        failures=failures,
+        results=scan.engine_result_count,
+    )
+    return scan
 
 
 async def load_competitors(session: AsyncSession, scan: Scan) -> list[tuple[str, str | None]]:
@@ -253,8 +333,21 @@ async def run_scan(
     settings: Settings | None = None,
     engines: tuple[Engine, ...] = engine_service.DEFAULT_ENGINES,
     prompt_limit: int | None = None,
+    defer_terminal_status: bool = False,
 ) -> Scan:
-    """Execute a scan end to end and persist every prompt x engine result."""
+    """Execute a scan end to end and persist every prompt x engine result.
+
+    `defer_terminal_status` leaves the scan RUNNING with its counts committed,
+    for a caller that has more phases to run — Epic 9.17's chain. Without it
+    the scan reaches SUCCEEDED the moment the engine loop ends, while the
+    audit, the score and the fix list are still forty seconds away: the
+    dashboard stops polling, the operator clicks through, and the report they
+    open is the degraded one this chain exists to stop producing.
+
+    The caller stamps the terminal status with `finalize_scan` once every
+    phase has been attempted. Defaults to False, so every existing caller —
+    `verify_e2e.py`, the tests, a direct call — behaves exactly as before.
+    """
     settings = settings or get_settings()
     subject_name = client.brand_name or client.name or client.domain
 
@@ -317,16 +410,27 @@ async def run_scan(
                 failures += 1
 
     scan.engine_result_count = len(ordered) * len(engines)
+
+    if defer_terminal_status:
+        # Counts committed, status left RUNNING. The results are durable — a
+        # crash after this point loses no engine spend — and the reaper still
+        # covers a chain whose process disappears, because RUNNING is exactly
+        # what it looks for.
+        await session.flush()
+        await session.commit()
+        logger.info(
+            "scan.engine_phase_completed",
+            scan_id=scan.id,
+            prompts=scan.prompt_count,
+            results=scan.engine_result_count,
+            failures=failures,
+        )
+        return scan
+
     scan.finished_at = datetime.now(UTC)
-    # PARTIAL exists so a report can say "one engine was down" rather than
-    # presenting a depressed mention rate as fact.
-    if failures == 0:
-        scan.status = ScanStatus.SUCCEEDED
-    elif failures < scan.engine_result_count:
-        scan.status = ScanStatus.PARTIAL
-    else:
-        scan.status = ScanStatus.FAILED
-        scan.error_code = "ALL_ENGINE_CALLS_FAILED"
+    scan.status, error_code = terminal_status_for(failures, scan.engine_result_count)
+    if error_code is not None:
+        scan.error_code = error_code
 
     await session.flush()
     # The terminal status lands durably here rather than waiting for a caller to
@@ -366,8 +470,11 @@ async def _competitor_id_map(session: AsyncSession, scan: Scan) -> dict[str, str
 __all__ = [
     "Competitor",
     "build_prompt_set",
+    "count_engine_failures",
+    "finalize_scan",
     "load_competitors",
     "persist_result",
     "run_prompt",
     "run_scan",
+    "terminal_status_for",
 ]
