@@ -167,7 +167,7 @@ cd apps/api     && uv run pytest -q            # API
 cd apps/workers && uv run pytest -q            # workers
 ```
 
-1485 tests as of Epic 9.16 — api 811, workers 13, shared-types 53,
+1494 tests as of Epic 9.17 — api 820, workers 13, shared-types 53,
 design-system 149, web 459.
 
 Live verification of the Epic 2 acceptance criterion — real crawl, real model

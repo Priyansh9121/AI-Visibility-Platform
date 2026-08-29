@@ -8617,3 +8617,285 @@ already had.
 imagery — an existing design-system primitive applied to two more screens
 following the precedent already in this repo. No competitor page, markup or
 stylesheet inspected or referenced.
+
+---
+
+## 2026-08-29 — Epic 9.17 · Orchestration: the product finishes what it starts
+
+Every scan a real user started produced a report reading "Not scored",
+`NO_COMPETITOR_SET` and `TECHNICAL_FOUNDATION_NOT_MEASURED`. Not because those
+phases were unbuilt — competitor detection (Epic 3), scoring (Epic 5), the
+technical audit (Epic 6) and fix generation (Epic 8) have all been done and
+tested for epics — but because **nothing called them.** `verify_e2e.py` proved
+the pipeline worked by calling each phase itself. The product never did.
+
+No new scoring, audit or fix logic here. This is entirely wiring.
+
+### THE BRIEF'S PROPOSED ORDER WAS WRONG, AND THE CODE SAID SO
+
+The brief asked for detection *after* engine execution, and invited a correction
+if the code disagreed. It does, and the disagreement is the central finding.
+
+`scan_runner.run_scan` loads the competitor set at its top (`:276-277`) and
+feeds it into two places nothing can correct afterwards:
+
+* **prompt generation** is seeded with the rival names (`:280` → `:113`), and
+* **fact extraction** scopes brand detection to them (`:294`), which is what
+  produces `position`, `brands_mentioned`, Share of Voice, and the
+  `competitor_id` on every `BrandMention` and `Citation`.
+
+A scan with no set does not fail. It reports SUCCEEDED with the subject at
+position 1 of 1 in every answer — the independent read of `scan_runner` put it
+best: *"no error, no warning, no degraded status — the scan reports SUCCEEDED
+with silently degenerate data."* Detection afterwards would have written a set
+nothing had used, and the report would have looked better while measuring
+exactly as little as before.
+
+So the order is `verify_e2e.py`'s, which was right all along:
+
+```
+competitor set  ->  engine loop  ->  audit  ->  score  ->  fixes
+```
+
+Audit before scoring because `scoring_runner.load_technical_foundation` reads
+the audit row and excludes the dimension as `NOT_YET_MEASURED` without one.
+Fixes last because they read all three.
+
+### THE ONE PIECE OF GENUINELY NEW CODE, AND WHY IT IS UNAVOIDABLE
+
+`CompetitorSet` hangs off a **scan**, and `load_competitors` looks it up by
+`scan_id` alone. A client's second scan therefore starts with no rivals unless
+something puts them there. Both obvious answers are wrong:
+
+| Option | Why it fails |
+|---|---|
+| "Skip because the client already has a set" — the brief's assumption | Leaves the new scan with nothing. The set being skipped on account of belongs to a *different scan*. |
+| "Re-detect on every scan" | Six SerpApi searches per scan against a 250/month quota (north-star §5.1: ~41 scans/month platform-wide) — **and it discards the operator's correction.** `persist_detection` preserves manual rows only within the set it is writing; a brand-new set on a brand-new scan has none to preserve, so a hand-corrected list silently reverts. The brief named that as the thing to protect against. |
+
+So `competitors.ensure_set_for_scan` is **existing → carry forward → detect**,
+and `carry_forward_set` copies the rows including suppressed tombstones — a
+strike that lasted one scan would not be a strike. Detection, the only branch
+that spends money, runs **once per client**.
+
+> **A reading hazard worth recording.** A carried-forward set copies
+> `serp_queries_run` and `co_citation_prompts_run` verbatim, because they
+> describe the detection run that produced the set. Summing that column across
+> sets to estimate monthly SerpApi spend therefore **double-counts**.
+> `detected_at` is what distinguishes a real run from a copy — on the live run
+> below, the carried set carries `serp_queries_run = 6` and a `detected_at` of
+> two hours earlier, and spent nothing.
+
+### FAILURE ISOLATION IS NOT DEFENSIVENESS HERE
+
+Every phase is attempted regardless of the ones before it, each committing on
+its own. The failures are named and reachable, not hypothetical:
+
+* `run_audit` raises `ValueError` on a domain `crawl.normalise_url` cannot
+  parse — an *unreachable* site degrades, an *unparseable* one raises.
+* `score_scan` raises `SubScoreOutOfRangeError` if an audit ever writes a
+  Technical Foundation outside 0–100, which `technical_audits` has **no CHECK
+  constraint** to prevent (unlike `scores`, which range-checks every column).
+* `generate_for_scan` raises `RuntimeError` when `ANTHROPIC_API_KEY` is unset.
+
+Aborting on any one would turn one missing report section into three, and the
+report already renders each absence honestly on its own.
+
+**Commits per phase, not once at the end.** `run_audit`, `score_scan` and
+`generate_for_scan` all only *flush* — the caller owns the transaction — so a
+single trailing commit would let a raise in fix generation discard a good audit
+and score, including the paid model calls that produced them.
+
+### A BUG IN MY OWN FIRST VERSION, FOUND BY REVIEW
+
+`session.rollback()` **expires every persistent instance**, and unlike
+`commit()` it does so regardless of `expire_on_commit=False`. `scan` and
+`client` are handed to every later phase, and the first attribute access on an
+expired instance under the async session raises `MissingGreenlet` rather than
+reloading. One failed phase would therefore have taken out every phase after
+it — by exactly the mechanism `_attempt` exists to prevent. It reloads both
+instances after a rollback now.
+
+### SCAN STATUS NOW MEANS "THE REPORT IS READY"
+
+`run_scan` gained `defer_terminal_status`. Without it the scan reaches
+SUCCEEDED the moment the engine loop ends, while the audit, score and fix list
+are still ~25s away: the dashboard stops polling, the operator clicks through,
+and opens the degraded report this epic exists to stop producing. The executor
+stamps the status with `finalize_scan` once every phase has been attempted.
+
+Both paths share `terminal_status_for`, so "did this scan succeed" has one
+definition. It defaults to `False`, so `verify_e2e.py`, the tests and any direct
+caller behave exactly as before. The terminal value still describes the
+**engine** phase — a failed audit is not a failed scan.
+
+### AN EPIC 8 BUG, FOUND AND DELIBERATELY NOT FIXED
+
+The brief said that if wiring surfaced a real bug in one of the four phases, to
+**stop and name it** rather than fix it as a side effect. One surfaced.
+
+`fix_generator.generate_fixes` catches a careful ladder of `anthropic.*`
+exceptions — `AuthenticationError`, `RateLimitError`, `BadRequestError` (with a
+credit-balance branch), `APIConnectionError`, `APIError` — and maps each to a
+`FixOutcome(status="failed", reason_code=...)`. But `client.messages.parse`
+validates the model's JSON against `GeneratedFixSet` **inside the SDK**, and a
+schema violation raises `pydantic_core.ValidationError`, which is not an
+`anthropic.APIError` and is caught by none of them.
+
+```
+pydantic_core.ValidationError: 1 validation error for GeneratedFixSet
+fixes.0.title
+  String should have at most 200 characters
+```
+
+**The entire defensive ladder is bypassed by the one failure the model itself
+causes.** Reproduced three times: once in the pre-change `verify_e2e.py`
+baseline, once inside the chain, and once through `POST /scans/{id}/fixes`
+directly — where it surfaces as a **500**, which it has always done. It is not
+caused by, or specific to, this epic's chaining.
+
+It is Epic 8's bug and it needs its own brief. What this epic does is *contain*
+it: `_attempt` catches it, and the scan still produces a competitor set, an
+audit and a full score. Recorded in `product-spec.md` §7 Epic 8 as an open
+defect.
+
+### THE MEASUREMENTS — AND THE BUDGET IS FURTHER OVER
+
+All figures measured, none estimated. Two runs on `plausible.io`, 24 prompts,
+3 engines.
+
+**Before** — `verify_e2e.py` as it stands, run before any change was made:
+
+| phase | seconds |
+|---|---|
+| crawl + classify (Epic 2) | ~20 |
+| competitor detection | **24** |
+| prompt generation + engine loop | **279** |
+| technical audit | **5** |
+| scoring | **<1** |
+| fix generation | **crashed** (the bug above) |
+
+**After** — a scan started from the **dashboard's re-run button**, in a browser,
+end to end:
+
+```
+13:43:45  competitors.carried_forward   competitors=5   (0 SerpApi searches)
+13:48:30  scan.engine_phase_completed   prompts=24 results=72 failures=2   (285s)
+13:48:34  audit.completed               technical_foundation=67.00          (4s)
+13:48:34  scoring.completed             composite=57.82 excluded=[]        (<1s)
+13:48:55  scan.chain.phase_failed       phase=fixes                        (21s)
+13:48:55  scan.finalized                status=partial
+```
+
+**Measured chained wall clock: 309.9s**, against a 300s budget.
+
+**The chain costs ~25s on a repeat scan** (audit 4s + scoring <1s + the 21s
+fix generation spent before it raised), and **~49s on a client's first scan**,
+where detection's 24s is added and cannot be carried forward.
+
+Stated carefully, because the numbers are not like-for-like: north-star's
+**361.3s** is a full-script run *including* crawl + classify and a live
+detection. The 309.9s above is a UI-triggered **repeat** scan — the client was
+already classified and the competitor set carried forward. The like-for-like
+statement is the one that matters: **the endpoint used to do ~303s of work and
+stop; it now does the same engine work plus ~25s more, and finishes the job.**
+
+**The budget was already missed on the engine loop alone** — 285s of the 309.9s
+here, 95% of a 300s budget before a single chained phase runs — and it is now
+missed by more, deliberately. That is the honest cost of the product finishing
+what it starts, not a regression to hide. **`PROMPT_CONCURRENCY` is still 4,
+unraised since Epic 9.1 named it as candidate fix 2, and sizing it is the known
+next lever — and explicitly not this epic's job.**
+
+### THE LIVE WALKTHROUGH
+
+Signed in through the UI, pressed **Re-run** on the dashboard, waited. The
+report at `/scans/{id}/report`:
+
+| The brief asks the report to show | Result |
+|---|---|
+| an actual score | ✅ **58/100**, "Present, but losing the answer to competitors", EMERGING |
+| an actual competitor set | ✅ 5 rivals, carried forward |
+| actual technical findings | ✅ 17 checks, Technical Foundation **67.00** |
+| actual named fixes | ❌ **0** — the Epic 8 bug above |
+
+```
+Not scored                          present=False
+no comparison was made              present=False
+not yet checked                     present=False
+NO_COMPETITOR_SET                   present=False
+TECHNICAL_FOUNDATION_NOT_MEASURED   present=False
+```
+
+`excluded_dimensions` is `{}` — **empty**. Every one of the five dimensions was
+measured: Mention Rate 98.57, Share of Voice 35.03, Citation Strength 0.89,
+Sentiment 84.06, Technical Foundation 67.00. The biggest-gap beat reads
+*"Citation Strength is costing the most — 19.8 points."* Screenshots in
+`docs/screenshots/epic-9-17/`.
+
+Three of the brief's four are verified. **The fourth is not, and the reason is
+the pre-existing Epic 8 defect, not the chain** — the report's fix beat still
+renders its own derived content (audit findings, the unclaimed-domain fix from
+Epic 7.1), but Epic 8's generated `action_items` are absent because the phase
+raised.
+
+**Zero SerpApi searches were spent on the live run**, by choosing the re-run
+path deliberately: the client already had a set, so the chain carried it
+forward. Detection's live behaviour is evidenced by the baseline run above
+(status `ok`, 5 rivals, confidence 0.800, 6 searches).
+
+### NO FRONTEND CHANGE, AS THE BRIEF PREDICTED
+
+`git diff --name-only` over `apps/web` and `packages` for this epic's code
+commit is **empty**. The report already degraded honestly; once real data
+exists those states simply stop appearing. The brief asked for this to be
+stated explicitly rather than assumed, and it held.
+
+### DELIBERATELY NOT DONE
+
+* **No new scoring, audit or fix logic.** The Epic 8 bug above was named, not
+  fixed.
+* **The scan-time budget.** Measured and reported, not minimised.
+  `PROMPT_CONCURRENCY` sizing is the tracked lever and is not this brief.
+* **Phase-level progress reporting.** A user still sees *that* a scan
+  progresses, not *how far* — and the chain makes the wait longer, so this is
+  now a better idea than it was. Still not built; still its own brief.
+* The reset-password timing side-channel and everything else open from prior
+  epics. Untouched.
+
+### A DEV-DATABASE CHANGE, RECORDED
+
+The live pass needed to sign in as the agency owning the clients that have
+competitor sets, so `review@epic7.example`'s password was set to a known value
+via the app's own `hash_password`. A dev-DB convenience, written down rather
+than done quietly.
+
+### Tests
+
+**1494, up from 1485** (api 811 → **820**, workers 13, shared-types 53,
+design-system 149, web 459). `ruff` clean; `mypy` unchanged at its pre-existing
+**38 in 23 files**; the one error the first draft added (an unannotated
+`coro_factory`) was fixed rather than absorbed.
+
+The load-bearing test calls **one endpoint** and then reads the **database**,
+not the API: the claim is "nothing else had to be called", and calling nothing
+else is the cleanest way to demonstrate it. Negative control: deleting the
+chain fails **6 of the 9** new tests, including that one.
+
+`tests/conftest.py` gains an autouse guard keeping the chain off the network.
+The first run without it **hung** and would have spent real money — with
+`InlineScanExecutor` the suite now runs the whole pipeline inside every scan
+request, reaching SerpApi, Playwright and Anthropic from tests that previously
+touched none of them. Fix generation is stubbed at the SDK boundary
+`test_fix_generator.py` already patches, so the real `generate_fixes` still runs
+in-chain with its schema validation, banned-claim guard and `accept()` matching
+intact.
+
+`EnginesOnlyScanExecutor` exists so the degraded states stay testable. Several
+tests asserted "no score" / "no audit" / "no fixes" by simply not asking; those
+states are still real, because any chained phase can fail, so they are now
+constructed **on purpose** rather than by relying on the product not finishing —
+a better setup than the one it replaces.
+
+`test_scan_endpoints`' position assertion flipped from 1-of-1 to 2-of-3. Its own
+comment read *"No competitor set exists for this scan"*. That was the
+degradation, and it is gone.
