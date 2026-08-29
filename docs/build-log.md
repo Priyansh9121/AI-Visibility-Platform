@@ -8220,3 +8220,236 @@ from the documented scheme and verify against the real verifier, because that is
 pure cryptography with no I/O — and mocking it would have meant asserting that
 our own mock rejects what we told it to reject, which is the shape of test that
 passes forever while the thing it names is broken.
+
+---
+
+## 2026-08-29 — Epic 9.16 · Motion: a primitive, a page that arrives, and a document that must not
+
+Founder feedback on the built landing page: correct, and static. Three
+directions were prototyped in conversation — a dark AI-native look, "editorial
+but kinetic", and matching a named competitor directly. The founder chose
+kinetic: keep every visual decision already made and add staggered, eased motion
+on top. Nothing else.
+
+### THE ONE REAL RISK IN THIS BRIEF, NAMED FIRST
+
+**`LuminanceLedger` sits on both sides of the report/marketing boundary.** The
+same component renders on the public landing page and inside the client-facing
+report — `/scans/{id}/report`, `/share/{token}`, and the PDF. The marketing page
+wants it to build bar by bar as you scroll to it. The report is a *document*:
+it gets printed and put in front of a prospect's CMO, `design-direction.md` §0
+makes the presenting context win ties, and §5's Direction C was declined partly
+because motion does not survive becoming a document.
+
+So the risk is not hypothetical and it is not "someone might be careless". It is
+that a shared component with a new behaviour has exactly one thing standing
+between the marketing flourish and the document, and that thing has to be
+stronger than a comment.
+
+**What stops it, concretely:**
+
+1. **`staggerDimensions` defaults to `false`** — the OPPOSITE default to
+   `animate`, deliberately. `animate` defaults true because the dim-to-lit
+   dissolve is the signature moment the component exists for and the report
+   should have it. Staggering is a page flourish, and a document must not
+   acquire a flourish by omission.
+2. **Neither report route passes it.** Both leave it unset, so both get the
+   Epic 0 behaviour byte for byte.
+3. **Six tests in `ReportView.test.tsx`** across four report fixtures and both
+   routes, asserting no `avp-ledger--staggered` and no `--avp-ledger-index`
+   reaches the report's markup — plus one asserting the ledger is still
+   rendered, so deleting the chart cannot make the others pass.
+
+**Verified by injected breakage, not by reading:**
+
+| Breakage | Failures |
+|---|---|
+| Flip the default to `true` | 5 |
+| Couple stagger to `animate` | 2 — and only the two `animate`-on renders |
+
+The second is the one worth having. Every other test in that file renders with
+`animate={false}`, and both report routes leave `animate` at its default of
+`true` in production. A stagger accidentally wired to `animate` would have been
+invisible to the entire existing suite and shipped into the document. Two tests
+render with animation ON for exactly that case, and they are the only thing that
+caught it.
+
+### TWO OF THE BRIEF'S PREMISES WERE WRONG, AND BOTH CHANGED SOMETHING
+
+**"`duration-reveal` and `ease-reveal` are unused."** They are not. Four rules
+read them: `ScoreDisplay`'s numeral and three of the ledger's.
+`design-direction.md` §4 defines that pairing as *the* reveal — the dim-to-lit
+dissolve that states the product's metaphor.
+
+That is better than the brief assumed and it decided the design. Reusing them
+rather than adding page-motion timings means the text and the signature chart
+arrive to the same rhythm. A second curve for text would have been the
+difference between a product that reads as authored and one that reads as
+assembled. The brief asked for the grep before relying on the claim, and this is
+what it was for.
+
+**"Check whether a `prefers-reduced-motion` convention exists."** It does — the
+same five-line `matchMedia` read, written out longhand in `ScoreDisplay` and
+again in `LuminanceLedger`. It is now `lib/motion.ts`: extracted, not
+redesigned. Three hand-copied copies of an accessibility check is how one of
+them ends up subtly different and nobody notices, because the failure is
+invisible to anyone without the setting turned on.
+
+### ONE TOKEN ADDED, AND ONE REAL HOLE CLOSED
+
+`--avp-stagger-reveal: 70ms` — the only motion value this project has added
+since Epic 0, and a **delay** rather than a duration. The reveal already has a
+duration; this says how far apart the members of a group begin. 70ms puts four
+hero elements at 810ms end to end.
+
+The hole: `base.css`'s global reduced-motion block reset every animation and
+transition **duration** and left every **delay** alone. The first staggered
+thing this product ever shipped would therefore have honoured the setting by
+animating instantly — and then waiting up to half a second before doing it. A
+visitor who asked for less motion would still have watched content appear one
+piece at a time. Both delays are reset now. Not a retrofit of existing
+transitions, which the brief put out of scope; a one-line hole in a rule that
+was about to be walked into.
+
+### THE THING THIS PRIMITIVE MUST NOT DO IS HIDE CONTENT
+
+Everything revealed starts at `opacity: 0`, so **every path that fails to reveal
+is a blank page, not a still one.** The landing page carries this product's only
+public explanation of itself and its only published price. Four independent
+guarantees, only one of which is JavaScript:
+
+| Guarantee | Mechanism |
+|---|---|
+| Reduced motion | CSS paints `.avp-reveal` fully revealed, no transition. Not a faster animation — none, and no dependence on the component running. |
+| JavaScript disabled | `@media (scripting: none)` does the same. |
+| No `IntersectionObserver` | The hook reveals immediately rather than waiting for a callback that will never come. |
+| `animate={false}` | Starts revealed — what every static render and test gets. |
+
+### THE BUG ONLY A BROWSER COULD FIND
+
+`.avp-reveal-group { display: contents; }`, written to keep the group from
+introducing a box of its own. It does not introduce one; **it is one** —
+`RevealGroup` renders the `<section>` or the `<ol>` itself.
+
+`display: contents` removes an element's box entirely, and **an element with no
+box never intersects.** IntersectionObserver had nothing to observe. The entire
+hero and all seven pipeline steps sat at `opacity: 0` forever. It also overrode
+`.avp-section`'s own `display: flex`, silently dropping the gap between the
+hero's parts.
+
+147 unit tests passed the whole time, and none of them could have seen it: jsdom
+computes no layout and a static render has no observer at all. The first
+measurement in a real browser read `t≈0ms [0,0,0,0]` … `t≈1100ms [0,0,0,0]`.
+That is what item 21 exists for, and it is the second epic running where the
+live pass found something the suite structurally could not.
+
+`tokens.test.ts` now asserts the rule stays absent — at the stylesheet level,
+because that is where the mistake was.
+
+### ONE TEST I WROTE WRONG
+
+I asserted that `animate={false}` should produce no `avp-ledger--staggered`. It
+failed, and the component was right: `staggerDimensions` is *structural* — it
+says what shape the reveal takes — while `animate` says whether motion happens
+at all. With motion off the modifier is present and the bars are simply already
+lit. The corrected test asserts that separation deliberately rather than
+deleting the question.
+
+### THE LIVE WALKTHROUGH — MEASURED, NOT EYEBALLED
+
+Opacity and transform sampled over time in a real browser. Fourteen screenshots
+in `docs/screenshots/epic-9-16/`.
+
+```
+hero    [0.60 0.21 0    0   ] -> [0.84 0.65 0.30 0   ] -> all 1
+steps   [0.44 0 0 0 0 0 0   ] -> [0.95 0.89 0.75 0.47 0.03 0 0] -> all 1
+ledger  scaleY [0.51 0.08 0 0 0] -> [0.97 0.92 0.83 0.62 0.26] -> all 1
+```
+
+Before being scrolled to: steps `[0,0,0,0,0,0,0]`, whole-section reveals
+`[0,0]`, ledger `scaleY(0)`. Nothing arrives before it is reached.
+
+Auth cards, one reveal each: sign-in `0.24 → 0.66 → 0.93 → 1`, sign-up
+`0 → 0.44 → 0.87 → 1`, forgot-password `0 → 0.53 → 0.84 → 1`, `/welcome`
+`0.24 → 0.72 → 0.94 → 1`.
+
+**Reduced motion, toggled at the browser and reloaded:** hero `[1,1,1,1]` at
+first paint, `transition-delay: 0s`, `transition-duration: 0s`, ledger bars at 1
+after 50ms with no wait, sign-in card `[1]`. Instant, not fast — verified live
+as well as by test, which the brief asked for specifically.
+
+### DELIBERATELY NOT DONE — so nothing is later assumed
+
+* **The client-facing report, in any form.** No `Reveal` anywhere in it, and a
+  test asserts the report's markup contains none. See the risk section above.
+* **Settings and the dashboard shell.** Dense, functional, information-first
+  screens. Settings is five `PageSection`s, and the mechanism keeping it still
+  is `stagger` defaulting to false — now asserted by a test, plus a companion
+  asserting the screen still renders its sections so the first cannot pass on an
+  empty page.
+* **`AcceptInvitationView` and `ResetPasswordView`.** Also auth cards, also not
+  among the four the brief enumerated. **One line each if they should match** —
+  flagged rather than guessed in either direction.
+* **A full `prefers-reduced-motion` audit of the app.** In scope: the new
+  primitive respects it, and the delay hole above. Out of scope: every existing
+  transition.
+* **New colour, type, spacing or imagery.** None. Kinetic was chosen precisely
+  because it keeps everything already built.
+* The scan-orchestration gap, the reset-password timing question, and everything
+  else open from prior epics. Untouched.
+
+### Dependency
+
+`jsdom` ^30.0.1 — **MIT, verified by reading `LICENSE.txt` out of the tarball**,
+not the registry field. Dev-only, `@avp/design-system` only, and scoped with a
+per-file `// @vitest-environment jsdom` docblock so the other 130 assertions in
+that package stay in `node`.
+
+Needed because the primitive's contract is "starts hidden, becomes revealed when
+an observer says so", and the interesting half only happens in an effect that
+`renderToStaticMarkup` never runs. A test that could only see static output
+would assert the hidden state and call it covered — the exact shape of test that
+passes while a page renders blank.
+
+### IP-safety self-check (constraint 9)
+
+* **#1 / #5** — the reveal was **derived from this product's own content and
+  Epic 0's own tokens.** No real company's site, code, markup or stylesheet was
+  inspected, measured or referenced at any point. "Editorial but kinetic" is a
+  genre name from a conversation, not a reference to a product; the technique —
+  content fades and rises, staggered by a fixed delay per sibling, triggered by
+  scroll position — is generic and has nothing proprietary to derive it from.
+  The timing came from `design-direction.md` §4, which was written in Epic 0
+  from the data model and the user goal.
+* **#2** — the primitive lives in `@avp/design-system` and every screen imports
+  it; Epic 0's build-the-primitive-then-apply-it order was kept, and the
+  primitive shipped in its own commit with no screen depending on it. **Every
+  class touched audited: 50 utility classes, all token-backed or structural,
+  zero arbitrary values, zero raw palette.** The only inline styles the new code
+  emits are custom properties carrying an integer.
+* **#4** — no icon, illustration or image added. Nothing visual was added at
+  all; existing elements move.
+* **#6** — one dev dependency, MIT, licence read from source.
+* **#7 / #8** — no content of any kind added or persisted; this epic renders
+  nothing new.
+
+**IP-safety check passed:** motion derived from this product's own content and
+tokens, checked against nobody's page; design-system primitive built before any
+screen used it; no ad hoc Tailwind; no new colour, type, spacing or imagery; one
+MIT dev dependency with its licence read from the tarball.
+
+### Docs
+
+`design-system.md` §5c documents the primitive the way §5 and §5a document the
+ledger and the shelf, and §5's signature line now carries the guardrail.
+`design-direction.md`'s motion section says **what was built and where**, in a
+table, plus what was deliberately left un-animated. That document has a named
+history of a recommendation being approved and then not read again for five
+epics; a motion section that says what should happen and never says whether it
+did would be the same failure with a different subject.
+
+### Tests
+
+**1471, up from 1414** (api 811, workers 13, shared-types 53, design-system
+125 → **148**, web 412 → **447**). `tsc --noEmit` clean across all three
+packages. API and workers untouched and unchanged.
