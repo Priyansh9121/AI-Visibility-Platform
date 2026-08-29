@@ -65,6 +65,8 @@ import {
   CardBody,
   LuminanceLedger,
   PageSection,
+  Reveal,
+  RevealGroup,
   ScoreMeter,
 } from '@avp/design-system';
 import type { LedgerDimension } from '@avp/design-system';
@@ -128,7 +130,16 @@ export function LandingView({
       <LandingHeader onGetStarted={onGetStarted} onLogIn={onLogIn} />
 
       <main className="mx-auto flex w-full max-w-report flex-col gap-24 px-6 py-18">
+        {/*
+          The hero staggers its OWN parts rather than arriving as one block —
+          eyebrow, then headline, then lead, then the call to action. It is the
+          only section that does, because it is the only one already on screen
+          when the page loads: there is no scroll to give it an arrival, so the
+          sequence is the arrival.
+        */}
         <PageSection
+          stagger
+          animate={animate}
           tone="lead"
           eyebrow="For SEO and digital marketing agencies"
           heading="Find out what AI assistants say when your client's buyers ask."
@@ -152,6 +163,7 @@ export function LandingView({
         </PageSection>
 
         <div id={PRODUCT_ID} className="flex scroll-mt-18 flex-col gap-24">
+          <Reveal animate={animate}>
           <PageSection
             eyebrow="What a scan does"
             heading="It asks the questions your client's buyers actually ask."
@@ -163,45 +175,67 @@ export function LandingView({
               </>
             }
           >
-            <ol className="flex flex-col gap-4">
+            {/*
+              A group, so all seven arrive together one step apart rather than
+              each waiting to cross the fold itself — which on a list this tall
+              would mean the stagger reading as scroll speed rather than as an
+              authored sequence.
+            */}
+            <RevealGroup as="ol" animate={animate} className="flex flex-col gap-4">
               <Step
+                index={0}
                 n="01"
+                animate={animate}
                 title="One URL in, and nothing else to fill in"
                 body="You paste the website. It fetches the homepage and a few key pages, reads the structure and the copy, and works out for itself what the business sells and to whom — so the first thing you do is not a form about your prospect's industry."
               />
               <Step
+                index={1}
                 n="02"
+                animate={animate}
                 title="Rivals found rather than guessed at"
                 body="Two independent signals: who ranks for the niche in search, and which brands the AI engines name in the same breath as your prospect. Both, deduplicated and ranked — and you can overrule the result, which then survives every later re-detection."
               />
               <Step
+                index={2}
                 n="03"
+                animate={animate}
                 title="Twenty-four questions, tagged by buying stage"
                 body="Generated for that specific business — awareness, comparison and bottom-of-funnel — so the result is not one lucky prompt but a spread across how people actually shop."
               />
               <Step
+                index={3}
                 n="04"
+                animate={animate}
                 title="Each question, put to AI answer engines"
                 body="Today that is Claude in two modes: what it recalls unprompted, and what it says when it searches the live web and cites sources. Those disagree more often than you would expect, and the difference is itself a finding."
               />
               <Step
+                index={4}
                 n="05"
+                animate={animate}
                 title="Every answer read for facts, never stored as prose"
                 body="Was the brand named? Where in the answer? Which sources were cited, and who owns them? Which rivals appeared instead?"
               />
               <Step
+                index={5}
                 n="06"
+                animate={animate}
                 title="The site itself checked for what the engines need"
                 body="Structured data, page structure, indexability — the technical signals that decide whether a page can be quoted at all, scored as one of the five dimensions rather than filed as a separate audit nobody reads."
               />
               <Step
+                index={6}
                 n="07"
+                animate={animate}
                 title="A score, a gap, and a fix list"
                 body="Five weighted dimensions into one number out of 100, the biggest gap named in points, and specific changes ordered by what they would move and what they would cost to do."
               />
-            </ol>
+            </RevealGroup>
           </PageSection>
+          </Reveal>
 
+          <Reveal animate={animate}>
           <PageSection
             eyebrow="The report"
             heading="A document, not a dashboard."
@@ -221,17 +255,27 @@ export function LandingView({
                   Example — illustrative figures, not a real client
                 </p>
                 <div className="mt-4">
+                  {/*
+                    `staggerDimensions` is set HERE and nowhere else in the
+                    product. It is the same component the client-facing report
+                    renders, and the report must not acquire this — see the
+                    prop's own docstring, and the regression test in
+                    ReportView.test.tsx that fails if it ever does.
+                  */}
                   <LuminanceLedger
                     subjectName="Example Co"
                     dimensions={EXAMPLE_DIMENSIONS}
                     animate={animate}
+                    staggerDimensions
                     annotateGap
                   />
                 </div>
               </CardBody>
             </Card>
           </PageSection>
+          </Reveal>
 
+          <Reveal animate={animate}>
           <PageSection
             eyebrow="What is different"
             heading="It records where your client placed in each answer, not just how often."
@@ -251,7 +295,9 @@ export function LandingView({
               that is exactly the finding you most need to see.
             </p>
           </PageSection>
+          </Reveal>
 
+          <Reveal animate={animate}>
           <PageSection
             eyebrow="What you can stand behind"
             heading="Every claim in the report traces back to something recorded."
@@ -277,8 +323,10 @@ export function LandingView({
               </p>
             </div>
           </PageSection>
+          </Reveal>
         </div>
 
+        <Reveal animate={animate}>
         <PageSection
           eyebrow="What it does not do yet"
           heading="The honest version."
@@ -297,8 +345,10 @@ export function LandingView({
             <Limit body="Nothing tracks whether a fix was actually done, or re-measures what it changed. The report ends at the recommendation." />
           </ul>
         </PageSection>
+        </Reveal>
 
         <div id={PRICING_ID} className="scroll-mt-18">
+          <Reveal animate={animate}>
           <PageSection
             eyebrow="Pricing"
             heading="One plan. Twenty-nine dollars a month."
@@ -312,8 +362,10 @@ export function LandingView({
           >
             <PricingCard signedIn={false} onGetStarted={onGetStarted} />
           </PageSection>
+          </Reveal>
         </div>
 
+        <Reveal animate={animate}>
         <PageSection
           eyebrow="Start"
           heading="Run one scan on a prospect you already want."
@@ -336,6 +388,7 @@ export function LandingView({
             </div>
           </div>
         </PageSection>
+        </Reveal>
       </main>
     </div>
   );
@@ -414,15 +467,30 @@ function LandingHeader({
   );
 }
 
-function Step({ n, title, body }: { n: string; title: string; body: string }): JSX.Element {
+function Step({
+  n,
+  title,
+  body,
+  index,
+  animate,
+}: {
+  n: string;
+  title: string;
+  body: string;
+  index: number;
+  animate: boolean;
+}): JSX.Element {
   return (
-    <li className="flex gap-4">
+    // `as="li"` rather than a wrapping div: this sits directly inside an <ol>,
+    // and a div between them is invalid markup that breaks list semantics for
+    // a screen reader.
+    <Reveal as="li" index={index} animate={animate} className="flex gap-4">
       <span className="font-mono text-ui-xs text-text-tertiary">{n}</span>
       <div className="flex flex-col gap-1">
         <p className="text-ui-md font-medium text-text-primary">{title}</p>
         <p className="max-w-measure text-ui-base leading-prose text-text-secondary">{body}</p>
       </div>
-    </li>
+    </Reveal>
   );
 }
 

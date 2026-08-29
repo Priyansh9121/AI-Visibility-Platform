@@ -534,3 +534,70 @@ describe('the unclaimed-domain fix — Epic 7.1, Direction C', () => {
     expect(degraded).not.toContain('Get onto');
   });
 });
+
+/**
+ * THE REPORT/MARKETING BOUNDARY — Epic 9.16.
+ *
+ * `LuminanceLedger` is rendered by two things with opposite requirements. The
+ * landing page wants the chart to build bar by bar as you scroll to it. The
+ * report is a DOCUMENT: it is printed, it is PDF'd, and it is put in front of a
+ * prospect's CMO. `design-direction.md` §0 makes the presenting context win
+ * ties, and §5's Direction C was declined partly because motion does not
+ * survive becoming a document.
+ *
+ * The guardrail is that `staggerDimensions` defaults to `false` and neither
+ * report route passes it. These tests are what stop that being a promise. They
+ * fail if someone threads the new behaviour through the report by mistake — by
+ * passing the prop, by flipping the default, or by coupling it to `animate`,
+ * which the report DOES set and which is `true` on both routes in production.
+ */
+describe('the report never acquires the landing page motion', () => {
+  const REPORTS = [
+    ['helpscout', helpscoutReport],
+    ['unscored', unscoredReport],
+    ['no competitor set', noCompetitorSetReport],
+    ['weak signal', weakSignalReport],
+  ] as const;
+
+  for (const [name, report] of REPORTS) {
+    it(`carries no stagger markup — ${name}`, () => {
+      const html = render(report);
+      expect(html).not.toContain('avp-ledger--staggered');
+      expect(html).not.toContain('--avp-ledger-index');
+    });
+  }
+
+  it('carries none of it with animation ON, which is what production sends', () => {
+    // The discriminating case. Every other test in this file renders with
+    // `animate={false}`, so a stagger accidentally coupled to `animate` would
+    // be invisible to all of them — and both report routes leave `animate` at
+    // its default of `true`. This is the render that would catch it.
+    const html = renderToStaticMarkup(<ReportView report={helpscoutReport} animate />);
+    expect(html).toContain('avp-ledger');
+    expect(html).not.toContain('avp-ledger--staggered');
+    expect(html).not.toContain('--avp-ledger-index');
+  });
+
+  it('carries none of it in the public share view either', () => {
+    // `/share/{token}` renders the same component with `publicView`, and is the
+    // route a prospect actually opens.
+    const html = renderToStaticMarkup(<ReportView report={helpscoutReport} publicView animate />);
+    expect(html).not.toContain('avp-ledger--staggered');
+    expect(html).not.toContain('--avp-ledger-index');
+  });
+
+  it('has no arrival motion anywhere on the page, not only in the chart', () => {
+    // The report is not made of `Reveal`s at all. A beat that faded up as it
+    // scrolled would be motion inside the thing that gets printed.
+    const html = renderToStaticMarkup(<ReportView report={helpscoutReport} animate />);
+    expect(html).not.toContain('avp-reveal');
+  });
+
+  it('still renders the ledger, so the tests above are not passing on absence', () => {
+    // Without this, deleting the chart entirely would make every assertion in
+    // this group pass.
+    const html = render(helpscoutReport);
+    expect(html).toContain('avp-ledger');
+    expect(html).toContain('avp-ledger__lit');
+  });
+});
