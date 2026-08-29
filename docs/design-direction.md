@@ -237,6 +237,53 @@ Everything else: 120ms for hovers, 200ms for state, 320ms for layout,
 all `ease-out`. Full `prefers-reduced-motion` fallbacks (reveal becomes an
 instant paint).
 
+> ### BUILT — Epic 9.16, 2026-08-29. Where each of these actually lives.
+>
+> This note exists because of this document's own history. §5's Directions A
+> and C were recorded as approved and then **not read again for five epics**,
+> and the status note at the head of this file is the correction. A motion
+> section that says what should happen and never says whether it did is the same
+> failure with a different subject, so:
+>
+> | Value | Where it is read today |
+> |---|---|
+> | `600ms` / `cubic-bezier(0.22, 1, 0.36, 1)` — the reveal | `--avp-duration-reveal` / `--avp-ease-reveal`. Read by `ScoreDisplay`'s numeral, the Luminance Ledger's bars, values and gap annotation, and — from 9.16 — by `Reveal`. |
+> | `120ms` hover · `200ms` state · `320ms` layout | `components.css`, on buttons, cards, nav items and fields. |
+> | The score reveal as dim-to-lit dissolve, not a count-up | `LuminanceLedger` and `ScoreDisplay`. Built in Epic 0, unchanged. |
+> | `prefers-reduced-motion` fallbacks | Globally in `base.css`, and per-component via `lib/motion.ts`. |
+>
+> **Epic 9.16 added exactly one value to this section: a `70ms` stagger**
+> (`--avp-stagger-reveal`), for siblings arriving in sequence. It is a delay,
+> not a duration — the reveal already has a duration, and this says how far
+> apart the members of a group begin. It is the only motion value this project
+> has added since Epic 0.
+>
+> It also fixed a hole in the last row of that table. The global
+> `prefers-reduced-motion` block reset every animation and transition
+> **duration** and left every **delay** untouched, so the first staggered thing
+> ever shipped would have honoured the setting by animating instantly and then
+> waiting up to half a second before doing it. Both delays are reset now.
+>
+> **What was deliberately NOT given arrival motion**, so a later brief does not
+> assume otherwise: the client-facing report (`ReportPage`, `Beat`,
+> `AnswerShelf`, and both `/scans/{id}/report` and `/share/{token}`), Settings,
+> and the dashboard shell. §0's ruling is that the presenting context wins ties,
+> and §5's Direction C was declined partly because motion does not survive
+> becoming a document. The Luminance Ledger sits on both sides of that boundary
+> — the marketing page and the report render the same component — so its
+> staggered mode is an opt-in prop defaulting to off, enforced by a regression
+> test rather than by this paragraph. See `design-system.md` §5c and
+> `build-log.md` Epic 9.16.
+>
+> **On "editorial but kinetic"**, the phrase the direction was chosen under:
+> that is a genre name from a conversation, not a reference to anybody's site.
+> The technique — content fades and rises, staggered by a fixed delay per
+> sibling, triggered by scroll position — is generic. It was derived from this
+> product's own content and Epic 0's own tokens; no real company's page, markup
+> or stylesheet was inspected, measured or referenced. ip-safety.md #1 and #5
+> apply here exactly as they apply to the three named competitors in
+> `north-star.md` §2.
+
 ---
 
 ## 5. Signature visualisation — three directions

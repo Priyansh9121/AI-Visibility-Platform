@@ -1,5 +1,6 @@
 import type { JSX, ReactNode } from 'react';
 import { cn } from '../../lib/cn.js';
+import { Reveal, RevealGroup } from '../Reveal.js';
 
 export interface PageSectionProps {
   /** Small structural label above the heading. Optional. */
@@ -11,6 +12,24 @@ export interface PageSectionProps {
   children?: ReactNode;
   /** Larger type and more space — for the first section on a page. */
   tone?: 'default' | 'lead';
+  /**
+   * Reveal the eyebrow, heading, lead and body in sequence — Epic 9.16.
+   *
+   * **Defaults to false, and every existing caller keeps today's markup
+   * exactly.** That matters because this component is not only a marketing
+   * primitive: `SettingsView` builds five sections out of it and `WelcomeView`
+   * one more. Settings is a dense, functional screen that this brief
+   * deliberately leaves alone, so a default of `true` would have quietly
+   * animated a screen nobody asked to animate.
+   *
+   * Staggering the PARTS is offered here rather than left to the call site
+   * because they are props, not children — a caller cannot wrap `eyebrow` in
+   * anything. A section that should reveal as one unit needs nothing from this
+   * component: wrap the whole `<PageSection>` in a `<Reveal>`.
+   */
+  stagger?: boolean;
+  /** Turn motion off entirely — tests, static renders, the print path. */
+  animate?: boolean;
   className?: string;
 }
 
@@ -38,14 +57,64 @@ export function PageSection({
   lead,
   children,
   tone = 'default',
+  stagger = false,
+  animate = true,
   className,
 }: PageSectionProps): JSX.Element {
-  return (
-    <section className={cn('avp-section', tone === 'lead' && 'avp-section--lead', className)}>
+  const parts = (
+    <>
       {eyebrow != null && <p className="avp-section__eyebrow">{eyebrow}</p>}
       {heading != null && <h2 className="avp-section__heading">{heading}</h2>}
       {lead != null && <p className="avp-section__lead">{lead}</p>}
       {children != null && <div className="avp-section__body">{children}</div>}
-    </section>
+    </>
+  );
+
+  // Not staggered: the Epic 0 markup, untouched. No wrappers, no extra boxes,
+  // no `avp-reveal` anywhere — which is what keeps Settings identical.
+  if (!stagger) {
+    return (
+      <section className={cn('avp-section', tone === 'lead' && 'avp-section--lead', className)}>
+        {parts}
+      </section>
+    );
+  }
+
+  // Staggered: the same four parts, each in its own wrapper, revealing together
+  // one step apart. Indices are written out rather than counted, because the
+  // parts are optional — a section with no eyebrow must not leave a gap where
+  // its delay would have been.
+  let index = 0;
+  const next = (): number => index++;
+
+  return (
+    <RevealGroup
+      as="section"
+      animate={animate}
+      className={cn('avp-section', tone === 'lead' && 'avp-section--lead', className)}
+    >
+      {eyebrow != null && (
+        <Reveal as="p" index={next()} animate={animate} className="avp-section__eyebrow">
+          {eyebrow}
+        </Reveal>
+      )}
+      {heading != null && (
+        <h2 className="avp-section__heading">
+          <Reveal as="span" index={next()} animate={animate}>
+            {heading}
+          </Reveal>
+        </h2>
+      )}
+      {lead != null && (
+        <Reveal as="p" index={next()} animate={animate} className="avp-section__lead">
+          {lead}
+        </Reveal>
+      )}
+      {children != null && (
+        <Reveal index={next()} animate={animate} className="avp-section__body">
+          {children}
+        </Reveal>
+      )}
+    </RevealGroup>
   );
 }

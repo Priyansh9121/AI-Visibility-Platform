@@ -19,6 +19,46 @@ import { DIMENSIONS, COMPETITORS, SUBJECT } from '../styleguide/fixtures.js';
 
 const html = (node: Parameters<typeof renderToStaticMarkup>[0]) => renderToStaticMarkup(node);
 
+describe('LuminanceLedger stagger is opt-in — Epic 9.16', () => {
+  /*
+   * The component half of the report guardrail. The other half lives in
+   * apps/web's ReportView.test.tsx, which asserts the report's actual markup;
+   * this one asserts the component's own default, so the guarantee does not
+   * rest on every future call site remembering.
+   */
+  it('emits no stagger markup by default', () => {
+    const markup = html(<LuminanceLedger subjectName={SUBJECT} dimensions={DIMENSIONS} />);
+    expect(markup).not.toContain('avp-ledger--staggered');
+    expect(markup).not.toContain('--avp-ledger-index');
+  });
+
+  it('emits no stagger markup when only `animate` is set', () => {
+    // `animate` is TRUE on both report routes. If staggering rode on it, the
+    // document would have acquired a page flourish by default.
+    const markup = html(
+      <LuminanceLedger subjectName={SUBJECT} dimensions={DIMENSIONS} animate />,
+    );
+    expect(markup).not.toContain('avp-ledger--staggered');
+  });
+
+  it('emits it only when asked, and indexes every dimension', () => {
+    const markup = html(
+      <LuminanceLedger subjectName={SUBJECT} dimensions={DIMENSIONS} staggerDimensions />,
+    );
+    expect(markup).toContain('avp-ledger--staggered');
+    for (let i = 0; i < DIMENSIONS.length; i++) {
+      expect(markup).toContain(`--avp-ledger-index:${i}`);
+    }
+  });
+
+  it('computes no millisecond value in JavaScript', () => {
+    const markup = html(
+      <LuminanceLedger subjectName={SUBJECT} dimensions={DIMENSIONS} staggerDimensions />,
+    );
+    expect(markup).not.toMatch(/\d+ms/);
+  });
+});
+
 describe('components render', () => {
   it('Button renders every variant without crashing', () => {
     for (const variant of ['primary', 'secondary', 'ghost', 'danger'] as const) {

@@ -85,4 +85,12 @@ export { ErrorState, type ErrorStateProps } from './components/state/ErrorState.
 
 export { PageSection, type PageSectionProps } from './components/marketing/PageSection.js';
 
+export {
+  Reveal,
+  RevealGroup,
+  type RevealProps,
+  type RevealGroupProps,
+  type RevealElement,
+} from './components/Reveal.js';
+
 export { default as tailwindPreset } from './tailwind-preset.js';
