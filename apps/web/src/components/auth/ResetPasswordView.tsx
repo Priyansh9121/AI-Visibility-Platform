@@ -26,7 +26,7 @@
  */
 
 import type { FormEvent, JSX } from 'react';
-import { Button, Card, CardBody, ErrorState, TextField } from '@avp/design-system';
+import { Button, Card, CardBody, ErrorState, Reveal, TextField } from '@avp/design-system';
 
 export type ResetState =
   | { kind: 'form' }
@@ -35,23 +35,47 @@ export type ResetState =
   | { kind: 'rejected'; detail: string }
   | { kind: 'invalid'; detail: string };
 
+/**
+ * Epic 9.16: the card arrives rather than being already there.
+ *
+ * The same single `Reveal` the other four auth surfaces got — no stagger,
+ * because there is one object here and a sequence needs at least two.
+ *
+ * The `Reveal` REPLACES the card column rather than nesting inside it, so no
+ * box is added and the layout classes stay on the element they were already
+ * on. It does NOT replace the `<main>`: that is a landmark element a screen
+ * reader navigates by, and `Reveal` renders none of the elements it could
+ * legitimately be.
+ *
+ * **`animate` threads through this VIEW, not the route.** This screen follows
+ * the pure-view-plus-fetching-route split (`SettingsView`, `DashboardView`,
+ * `ReportView`) rather than the self-contained-panel shape `SignInPanel` uses,
+ * so the wrapper being replaced lives here and the route passes nothing —
+ * taking the `true` default, which is what a browser should get.
+ *
+ * Every branch is wrapped, not only the form. A refusal is a card arriving too,
+ * and `ForgotPasswordPanel` already set that precedent with its two states.
+ */
 export function ResetPasswordView({
   state,
   password,
   onPassword,
   onSubmit,
   onGoToSignIn,
+  animate = true,
 }: {
   state: ResetState;
   password: string;
   onPassword: (value: string) => void;
   onSubmit: (event: FormEvent) => void;
   onGoToSignIn: () => void;
+  /** Turn the arrival off — tests and static renders. */
+  animate?: boolean;
 }): JSX.Element {
   if (state.kind === 'done') {
     return (
       <main className="mx-auto max-w-report px-6 py-18">
-        <div className="mx-auto flex max-w-form flex-col gap-4">
+        <Reveal animate={animate} className="mx-auto flex max-w-form flex-col gap-4">
           <Card elevation="raised">
             <CardBody>
               <h1 className="font-editorial text-ed-xs leading-display text-text-primary">
@@ -68,7 +92,7 @@ export function ResetPasswordView({
               </div>
             </CardBody>
           </Card>
-        </div>
+        </Reveal>
       </main>
     );
   }
@@ -76,7 +100,7 @@ export function ResetPasswordView({
   if (state.kind === 'invalid') {
     return (
       <main className="mx-auto max-w-report px-6 py-18">
-        <div className="mx-auto flex max-w-form flex-col gap-4">
+        <Reveal animate={animate} className="mx-auto flex max-w-form flex-col gap-4">
           <ErrorState
             title="This reset link is not valid"
             detail={state.detail}
@@ -86,7 +110,7 @@ export function ResetPasswordView({
               </Button>
             }
           />
-        </div>
+        </Reveal>
       </main>
     );
   }
@@ -95,7 +119,7 @@ export function ResetPasswordView({
 
   return (
     <main className="mx-auto max-w-report px-6 py-18">
-      <div className="mx-auto flex max-w-form flex-col gap-4">
+      <Reveal animate={animate} className="mx-auto flex max-w-form flex-col gap-4">
         <Card elevation="raised">
           <CardBody>
             <form onSubmit={onSubmit} className="flex flex-col gap-5">
@@ -126,7 +150,7 @@ export function ResetPasswordView({
             </form>
           </CardBody>
         </Card>
-      </div>
+      </Reveal>
     </main>
   );
 }

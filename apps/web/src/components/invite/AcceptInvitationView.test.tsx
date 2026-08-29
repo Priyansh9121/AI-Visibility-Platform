@@ -155,3 +155,66 @@ describe('no ad hoc styling', () => {
     expect(html).not.toMatch(/class="[^"]*\b(slate|gray|zinc|blue|red|green)-\d{3}\b/);
   });
 });
+
+describe('the card arrives — Epic 9.16', () => {
+  // Rendered WITH animation on, which is what a browser gets. The rest of this
+  // file renders the default, so it would see the finished markup either way.
+  const live = (state: InviteState = { kind: 'form' }) => render(state);
+  const still = (state: InviteState = { kind: 'form' }) =>
+    renderToStaticMarkup(
+      <AcceptInvitationView
+        state={state}
+        fullName=""
+        password=""
+        onFullName={() => {}}
+        onPassword={() => {}}
+        onSubmit={() => {}}
+        animate={false}
+      />,
+    );
+
+  it('wraps the card in a single reveal, not a stagger', () => {
+    const out = live();
+    expect(out).toContain('avp-reveal');
+    // One object cannot be a sequence, so no sibling offsets are emitted.
+    expect(out).not.toContain('--avp-reveal-index');
+  });
+
+  it('adds no box — the layout classes stay on the same element', () => {
+    // `Reveal` REPLACES the card column rather than nesting inside it.
+    expect(live()).toMatch(/class="avp-reveal[^"]*max-w-form/);
+  });
+
+  it('leaves the <main> landmark alone', () => {
+    // A screen reader navigates by landmarks. The reveal wraps the column
+    // inside <main>, never <main> itself.
+    const out = live();
+    expect(out).toMatch(/<main[^>]*max-w-report/);
+    expect(out).not.toMatch(/<main[^>]*avp-reveal/);
+  });
+
+  it('starts hidden and renders finished when motion is off', () => {
+    expect(live()).not.toContain('avp-reveal--revealed');
+    expect(still()).toContain('avp-reveal--revealed');
+  });
+
+  it('reveals the refusal too, not only the form', () => {
+    // A refusal is a card arriving as much as the form is, and
+    // `ForgotPasswordPanel` already set that precedent with its two states.
+    const invalid: InviteState = { kind: 'invalid', detail: 'Nope.' };
+    expect(live(invalid)).toContain('avp-reveal');
+    expect(still(invalid)).toContain('avp-reveal--revealed');
+  });
+
+  it('still carries every word it carried before', () => {
+    // Revealing hides content visually until it arrives; it must never remove
+    // it from the document.
+    const out = live();
+    expect(out).toContain('Join the workspace');
+    expect(out).toContain('>Your name<');
+    expect(out).toContain('Links work once and expire seven days after they are sent.');
+    expect(live({ kind: 'invalid', detail: 'Nope.' })).toContain(
+      'This invitation link is not valid',
+    );
+  });
+});

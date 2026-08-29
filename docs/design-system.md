@@ -410,18 +410,42 @@ property; it does not do arithmetic. `--avp-reveal-index` and
 because they are per-instance runtime values, not design tokens — a distinction
 `tokens.test.ts` enforces.
 
-### It must never hide content
+### It must never hide content — and the default is VISIBLE
 
-Everything here starts at `opacity: 0`, so every path that fails to reveal is a
-**blank page**, not a still one. Four independent guarantees, only one of which
-is JavaScript:
+**`.avp-reveal` is fully visible by default.** The hidden state applies only
+under `.avp-motion-ready`, a class added to `<html>` by a synchronous inline
+script in the document head (`apps/web/src/app/layout.tsx`) — which runs before
+the first paint, and only if scripting genuinely works.
+
+> **This was inverted in Epic 9.16a, and the original way round was wrong.**
+> 9.16 shipped `opacity: 0` as the default and enumerated the ways JS might fail
+> to reveal it. The enumeration missed server rendering. `/invite/{token}` and
+> `/reset-password/{token}` put their card straight into the HTML, so those two
+> screens were **blank from first paint until hydration** — on the two screens
+> people open cold, from an email, on a phone. `curl` returned the card markup
+> carrying `avp-reveal` and no `--revealed`.
+>
+> The four screens done first never showed it because they are never
+> server-rendered: `/` and `/welcome` both start at `{ kind: 'loading' }` and
+> only construct a `Reveal` after a client-side fetch. `curl /` returns zero
+> occurrences of `avp-reveal`. **The precedent was only accidentally safe**, and
+> copying it faithfully was not enough.
 
 | Guarantee | Mechanism |
 |---|---|
-| Reduced motion | CSS paints `.avp-reveal` fully revealed, no transition. Not a faster animation — none. |
-| JavaScript disabled | `@media (scripting: none)` does the same. |
+| Server-rendered HTML | Visible by default. The hidden state needs a class only a script can add. |
+| JavaScript disabled | Same mechanism — the inline script never runs, so nothing hides. Verified with a JS-disabled browser, not inferred. |
+| Bundle fails or is slow | Same again. The page is readable while it waits, and animates if it arrives. |
+| Reduced motion | CSS paints `.avp-reveal` revealed with `!important`, no transition. Not a faster animation — none. |
 | No `IntersectionObserver` | The hook reveals immediately. |
 | `animate={false}` | Starts revealed — what every static render and test gets. |
+
+The inline script is deliberately **not** a React effect: an effect runs after
+hydration, and hydration is precisely the window this exists to cover. If the
+script is ever deleted, nothing breaks visibly — the product simply stops
+animating, which is the correct failure direction.
+
+`tokens.test.ts` asserts the default stays visible.
 
 ### Where it is applied, and where it is deliberately not
 
