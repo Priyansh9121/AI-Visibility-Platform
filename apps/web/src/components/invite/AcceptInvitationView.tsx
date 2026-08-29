@@ -38,7 +38,7 @@
  */
 
 import { type FormEvent, type JSX } from 'react';
-import { Button, Card, CardBody, ErrorState, TextField } from '@avp/design-system';
+import { Button, Card, CardBody, ErrorState, Reveal, TextField } from '@avp/design-system';
 
 export type InviteState =
   | { kind: 'form' }
@@ -50,6 +50,27 @@ export type InviteState =
  * The screen itself. Pure, so every state is reachable by passing a prop —
  * including the refusal, which no static render could otherwise get to.
  */
+/**
+ * Epic 9.16: the card arrives rather than being already there.
+ *
+ * The same single `Reveal` the other four auth surfaces got — no stagger,
+ * because there is one object here and a sequence needs at least two.
+ *
+ * The `Reveal` REPLACES the card column rather than nesting inside it, so no
+ * box is added and the layout classes stay on the element they were already
+ * on. It does NOT replace the `<main>`: that is a landmark element a screen
+ * reader navigates by, and `Reveal` renders none of the elements it could
+ * legitimately be.
+ *
+ * **`animate` threads through this VIEW, not the route.** This screen follows
+ * the pure-view-plus-fetching-route split (`SettingsView`, `DashboardView`,
+ * `ReportView`) rather than the self-contained-panel shape `SignInPanel` uses,
+ * so the wrapper being replaced lives here and the route passes nothing —
+ * taking the `true` default, which is what a browser should get.
+ *
+ * Every branch is wrapped, not only the form. A refusal is a card arriving too,
+ * and `ForgotPasswordPanel` already set that precedent with its two states.
+ */
 export function AcceptInvitationView({
   state,
   fullName,
@@ -57,6 +78,7 @@ export function AcceptInvitationView({
   onFullName,
   onPassword,
   onSubmit,
+  animate = true,
 }: {
   state: InviteState;
   fullName: string;
@@ -64,11 +86,13 @@ export function AcceptInvitationView({
   onFullName: (value: string) => void;
   onPassword: (value: string) => void;
   onSubmit: (event: FormEvent) => void;
+  /** Turn the arrival off — tests and static renders. */
+  animate?: boolean;
 }): JSX.Element {
   if (state.kind === 'invalid') {
     return (
       <main className="mx-auto max-w-report px-6 py-18">
-        <div className="mx-auto flex max-w-form flex-col gap-4">
+        <Reveal animate={animate} className="mx-auto flex max-w-form flex-col gap-4">
           <ErrorState
             title="This invitation link is not valid"
             detail={state.detail}
@@ -78,7 +102,7 @@ export function AcceptInvitationView({
               </Button>
             }
           />
-        </div>
+        </Reveal>
       </main>
     );
   }
@@ -88,7 +112,7 @@ export function AcceptInvitationView({
 
   return (
     <main className="mx-auto max-w-report px-6 py-18">
-      <div className="mx-auto flex max-w-form flex-col gap-4">
+      <Reveal animate={animate} className="mx-auto flex max-w-form flex-col gap-4">
         <Card elevation="raised">
           <CardBody>
             <form onSubmit={onSubmit} className="flex flex-col gap-5">
@@ -143,7 +167,7 @@ export function AcceptInvitationView({
           Links work once and expire seven days after they are sent. If this one has
           run out, ask whoever invited you to send another.
         </p>
-      </div>
+      </Reveal>
     </main>
   );
 }

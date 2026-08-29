@@ -940,12 +940,47 @@
  * millisecond literal anywhere in the component and a call site that wants a
  * different rhythm overrides `--avp-stagger-reveal` instead of doing sums.
  */
+/*
+ * THE DEFAULT IS VISIBLE. This is the single most important line in the file.
+ *
+ * Epic 9.16 shipped this rule as `opacity: 0` and reasoned about the ways JS
+ * might fail to reveal it. That reasoning had a hole, and the two screens added
+ * in 9.16a walked straight into it: `/invite/{token}` and
+ * `/reset-password/{token}` are SERVER-RENDERED — their routes' initial state
+ * IS the rendered state — so Next put the card in the HTML at `opacity: 0` and
+ * the page stayed blank until the client bundle hydrated. On the two screens
+ * people open cold, from an email, on a phone.
+ *
+ * The four screens 9.16 already did never showed it, because they are never
+ * server-rendered at all: `/` and `/welcome` both start at `{ kind: 'loading' }`
+ * and only construct a `Reveal` after a client-side fetch. `curl /` returns zero
+ * occurrences of `avp-reveal`; `curl /invite/x` returned one, unrevealed. The
+ * precedent looked safe and was only ever accidentally safe.
+ *
+ * So the hidden state is no longer the default. It applies only under
+ * `.avp-motion-ready`, a class added to <html> by a SYNCHRONOUS inline script in
+ * the document head — which runs before the first paint, and only if scripting
+ * genuinely works. Server HTML is therefore visible on its own, and a visitor
+ * whose bundle never arrives reads the page instead of a blank rectangle.
+ */
 .avp-reveal {
   /* Set inline, per sibling, by `Reveal`. Declared here rather than in
      tokens.css because it is a per-instance runtime value, not a design token —
      and tokens.test.ts is right to insist on the difference: a component-local
      property in the token layer is a token nobody can find the meaning of. */
   --avp-reveal-index: 0;
+  opacity: 1;
+  transform: none;
+}
+
+/*
+ * The arrival, gated on proof that scripting runs BEFORE the page paints.
+ *
+ * Two classes deep, so it beats the visible default above without `!important`
+ * — which matters, because the reduced-motion block below still has to beat
+ * THIS, and it does so with `!important`.
+ */
+.avp-motion-ready .avp-reveal {
   opacity: 0;
   transform: translateY(var(--avp-space-3));
   transition:
@@ -958,7 +993,7 @@
   will-change: opacity, transform;
 }
 
-.avp-reveal--revealed {
+.avp-motion-ready .avp-reveal--revealed {
   opacity: 1;
   transform: none;
   /* The animation is over; release the layer. */
@@ -990,26 +1025,20 @@
 /*
  * THE PART THAT IS NOT AN ENHANCEMENT.
  *
- * Every rule above starts content at `opacity: 0`, so a visitor who never gets
- * a reveal gets a blank page. These two blocks make the revealed state the
- * answer in CSS, with no dependence on JavaScript running at all — which is
- * also why they are `!important`: they must beat the base rule regardless of
- * what a component sets inline.
+ * Reduced motion is painted revealed here, with `!important`, because it must
+ * beat `.avp-motion-ready .avp-reveal` above — which is two classes deep — and
+ * because it must hold regardless of what a component sets inline.
+ *
+ * There is deliberately no `@media (scripting: none)` block any more. It used
+ * to be one of four guarantees against a blank page; it is now redundant by
+ * construction, because with scripting off the inline script never runs, the
+ * `.avp-motion-ready` class is never added, and `.avp-reveal` keeps its visible
+ * default. A rule that can no longer fire is a rule the next reader has to
+ * reason about for nothing.
  */
 @media (prefers-reduced-motion: reduce) {
   .avp-reveal,
   .avp-reveal-group > * {
-    opacity: 1 !important;
-    transform: none !important;
-    transition: none !important;
-  }
-}
-
-/* JavaScript disabled. The landing page carries the product's only public
-   explanation of itself and its only published price; it does not get to be
-   invisible because a script did not run. */
-@media (scripting: none) {
-  .avp-reveal {
     opacity: 1 !important;
     transform: none !important;
     transition: none !important;

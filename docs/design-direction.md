@@ -275,7 +275,15 @@ instant paint).
 > test rather than by this paragraph. See `design-system.md` §5c and
 > `build-log.md` Epic 9.16.
 >
-> **On "editorial but kinetic"**, the phrase the direction was chosen under:
+> **Corrected in Epic 9.16a.** The reveal originally defaulted to hidden and
+> was revealed by script. That is safe only on screens which are never
+> server-rendered, which the first four happened to be and the next two were
+> not — `/invite/{token}` and `/reset-password/{token}` shipped blank until
+> hydration. The default is now VISIBLE, and the hidden state is gated on a
+> class a synchronous inline script adds before first paint. See
+> `design-system.md` §5c.
+>
+> > **On "editorial but kinetic"**, the phrase the direction was chosen under:
 > that is a genre name from a conversation, not a reference to anybody's site.
 > The technique — content fades and rises, staggered by a fixed delay per
 > sibling, triggered by scroll position — is generic. It was derived from this

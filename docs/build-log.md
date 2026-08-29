@@ -8450,6 +8450,170 @@ did would be the same failure with a different subject.
 
 ### Tests
 
-**1471, up from 1414** (api 811, workers 13, shared-types 53, design-system
-125 → **148**, web 412 → **447**). `tsc --noEmit` clean across all three
+**1472, up from 1414** (api 811, workers 13, shared-types 53, design-system
+125 → **148**, web 412 → **447**). *[Corrected from 1471 in the 9.16a addendum
+below — the per-package figures were right and the total was added up wrong.]* `tsc --noEmit` clean across all three
 packages. API and workers untouched and unchanged.
+
+
+### Addendum, same day — Epic 9.16a · the two screens the entry above flagged
+
+The 9.16 entry named `AcceptInvitationView` (`/invite/{token}`) and
+`ResetPasswordView` (`/reset-password/{token}`) as auth cards that did NOT get
+arrival motion, because they were not among the four the brief enumerated, and
+said it was one line each if the answer was that they should match. Asked, and
+answered: they should. This closes that gap.
+
+**They are pure Views, not self-contained panels, so `animate` threads through
+the VIEW and neither route changed.** Both follow the split
+`SettingsView`/`settings/page.tsx` established — the route owns fetching, the
+view owns markup — so the wrapper being replaced lives in the view and both
+routes pass nothing, taking the `true` default. `SignInPanel` is the other
+shape; naming which one applies here mattered, because guessing wrong would
+have put the prop on a file that does not own the wrapper.
+
+**Every branch is wrapped, not just the form.** `ResetPasswordView` has three
+return branches (form / done / invalid) and `AcceptInvitationView` has two
+(form / invalid) — where the four already-done screens had one or two. A
+wrapper missed in one branch is invisible until somebody redeems a dead link
+and watches the page not move, so the test asserts every state.
+
+**The `<main>` landmark is deliberately not the thing replaced.** The reveal
+wraps the card column *inside* `<main>`, matching `WelcomeView` — which is the
+precedent for a view that owns its own `<main>`, where `SignInPanel` (which does
+not) replaces its outermost element. A screen reader navigates by landmarks and
+`Reveal` renders none of the elements `<main>` could legitimately be. Asserted.
+
+#### What the live pass found that a test could not
+
+Both routes were exercised with **genuinely valid tokens**, minted by writing
+the SHA-256 digest directly onto a real row — the technique
+`test_seat_endpoints.py`'s `_live_token_for` uses, because the raw token is
+never returned by the API and that is the point of the design. Both were then
+**redeemed**, which is what proves they were valid rather than merely
+well-formed: the reset landed on "Password changed", and the invitation landed
+on `/dashboard`.
+
+```
+/invite/{token}          0 → 0 → 0.24 → 0.66 → 1
+/reset-password/{token}  0 → 0 → 0.34 → 0.72 → 1
+reduced motion, both     [1] at first paint, delay 0s, duration 0s
+```
+
+**The post-submit branches do not re-animate, and that is correct.** Submitting
+a bad invitation token showed the refusal at opacity 1 immediately, and
+redeeming the reset showed "Password changed" the same way. The reason is that
+React reconciles `<main><Reveal>` to the same component instance across the
+state change, so `revealed` is already true — the reveal is about arriving on
+the page, and the page has already arrived. A refusal that faded in from nothing
+after a deliberate click would read as a second page load. Recorded because it
+looks like a bug in a screenshot and is not one, and a later reviewer
+"fixing" it would make the screen worse.
+
+#### A correction to the entry above
+
+**The 9.16 test total was written as 1471. It was 1472.** The five per-package
+figures were correct and the addition was not. Corrected in place above and in
+the README. Worth a line rather than a silent edit: this project's build log is
+the thing later epics quote figures from, and a wrong total that nobody
+recomputes is exactly how a number becomes folklore.
+
+#### THE DEFECT THIS ADDENDUM ALMOST SHIPPED
+
+An adversarial review of the change — three reviewers, one refutation pass —
+found something the unit tests, the live pass and I all missed, and it is the
+more interesting half of this addendum.
+
+**These two screens are SERVER-RENDERED, and the reveal defaulted to hidden.**
+Their routes' initial state *is* the rendered state
+(`useState<InviteState>({ kind: 'form' })` at `invite/[token]/page.tsx:47`,
+`useState<ResetState>({ kind: 'form' })` at `reset-password/[token]/page.tsx:37`),
+so Next put the card straight into the HTML at `opacity: 0`. First paint was a
+blank page, and it stayed blank until the client bundle hydrated — on the two
+screens people open cold, from an email, on a phone, with no alternative route
+if the link looks dead.
+
+```
+curl /invite/abc123          -> avp-reveal=1  revealed=0   (card in HTML, hidden)
+curl /reset-password/abc123  -> avp-reveal=1  revealed=0
+curl /                       -> avp-reveal=0
+curl /welcome                -> avp-reveal=0
+```
+
+**The precedent was only accidentally safe.** `/` and `/welcome` both start at
+`{ kind: 'loading' }`, so their `Reveal`s are only ever constructed after a
+client-side fetch — at a moment when JS is provably already running, making
+`opacity: 0` last one frame. Copying those four faithfully, which is exactly
+what this task asked for, was not enough. The difference is in the routes, not
+in the components, and nothing in the component's own file could have shown it.
+
+**The primitive's stated guarantee was false.** `Reveal`'s docstring listed four
+guarantees against hiding content and this case slipped all four:
+`prefers-reduced-motion` does not match when motion is not reduced;
+`@media (scripting: none)` does not match when scripting is *enabled but has not
+run yet*; the `IntersectionObserver` fallback is itself JavaScript; and
+`animate={false}` was not passed.
+
+#### The fix: the default is now VISIBLE
+
+Founder's call between three options, taken deliberately rather than patched at
+the call site. `.avp-reveal` is now `opacity: 1`, and the hidden state lives
+under `.avp-motion-ready` — a class added to `<html>` by a **synchronous inline
+script in the document head** (`apps/web/src/app/layout.tsx`). It runs before
+the first paint and only if scripting genuinely works, so:
+
+* server HTML is readable on its own;
+* a visitor whose bundle never arrives reads the page instead of a rectangle;
+* a visitor whose bundle *does* arrive still gets the full arrival, hidden from
+  the very first frame — no flash in either direction.
+
+Deliberately not a React effect: an effect runs after hydration, and hydration
+is the exact window this exists to cover. If the script is ever deleted nothing
+breaks visibly — the product just stops animating, which is the correct failure
+direction and the reason the default was inverted rather than the symptom
+patched.
+
+`@media (scripting: none)` was **removed**, not kept as belt-and-braces: with
+the visible default it can no longer fire, and a rule that cannot fire is one
+the next reader has to reason about for nothing.
+
+`tokens.test.ts` asserts the default stays visible, negative-controlled by
+putting `opacity: 0` back (fails) and restoring (passes).
+
+#### Verified again, including the case that started it
+
+```
+JS enabled       /reset-password  [0, 0, 0, 0.12, 0.6, 0.8, 0.93] -> 1
+JS DISABLED      /invite          card renders in full          (screenshot 22)
+JS DISABLED      /reset-password  card renders in full          (screenshot 23)
+reduced motion   both             [1] at first paint, delay 0s
+landing page     hero             [0.52 0.09 0 0] -> [0.93 0.83 0.64 0.28] -> all 1
+landing page     steps below fold [0 0 0 0 0 0 0] before scrolling
+```
+
+The landing page is re-checked because this change touches all seven revealing
+screens, not just the two the task named.
+
+**Two process notes, both worth keeping.** My own first attempt to verify the
+finding returned `avp-reveal=0` on every route and appeared to refute it — the
+dev server had died and `curl` was returning `status=000, bytes=0`. I nearly
+dismissed a correct finding on the strength of a failed request. And the finding
+itself is one no test in this repo could have produced: jsdom applies no
+stylesheet, a static render has no browser, and the four reference screens
+structurally cannot exhibit it.
+
+#### Tests
+
+**1485, up from 1472** (api 811, workers 13, shared-types 53, design-system
+148 → **149**, web 447 → **459**). `tsc --noEmit` clean. API and workers
+untouched.
+
+Residue in `avp_dev` from the live pass, left rather than cleaned because it is
+the evidence: one accepted seat (`live-verify-916@invite.example`) on the Epic
+9.15 test agency, and that agency's owner password re-set to the value it
+already had.
+
+**IP-safety check passed:** no new component, token, colour, type, spacing or
+imagery — an existing design-system primitive applied to two more screens
+following the precedent already in this repo. No competitor page, markup or
+stylesheet inspected or referenced.

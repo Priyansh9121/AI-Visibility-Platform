@@ -187,3 +187,66 @@ describe('no ad hoc styling', () => {
     expect(html).not.toMatch(/class="[^"]*\b(slate|gray|zinc|blue|red|green)-\d{3}\b/);
   });
 });
+
+describe('the card arrives — Epic 9.16', () => {
+  // Rendered WITH animation on, which is what a browser gets. The rest of this
+  // file renders the default, so it would see the finished markup either way.
+  const live = (state: ResetState = { kind: 'form' }) => render(state);
+  const still = (state: ResetState = { kind: 'form' }) =>
+    renderToStaticMarkup(
+      <ResetPasswordView
+        state={state}
+        password=""
+        onPassword={() => {}}
+        onSubmit={() => {}}
+        onGoToSignIn={() => {}}
+        animate={false}
+      />,
+    );
+
+  it('wraps the card in a single reveal, not a stagger', () => {
+    const out = live();
+    expect(out).toContain('avp-reveal');
+    // One object cannot be a sequence, so no sibling offsets are emitted.
+    expect(out).not.toContain('--avp-reveal-index');
+  });
+
+  it('adds no box — the layout classes stay on the same element', () => {
+    // `Reveal` REPLACES the card column rather than nesting inside it.
+    expect(live()).toMatch(/class="avp-reveal[^"]*max-w-form/);
+  });
+
+  it('leaves the <main> landmark alone', () => {
+    const out = live();
+    expect(out).toMatch(/<main[^>]*max-w-report/);
+    expect(out).not.toMatch(/<main[^>]*avp-reveal/);
+  });
+
+  it('starts hidden and renders finished when motion is off', () => {
+    expect(live()).not.toContain('avp-reveal--revealed');
+    expect(still()).toContain('avp-reveal--revealed');
+  });
+
+  it('reveals all three states, not only the form', () => {
+    // This screen has three branches where the panels had one or two. A
+    // wrapper missed in one of them is invisible until somebody redeems a
+    // dead link and watches the page not move.
+    for (const state of [
+      { kind: 'form' },
+      { kind: 'done' },
+      { kind: 'invalid', detail: API_DETAIL },
+    ] as ResetState[]) {
+      expect(live(state), `${state.kind} does not reveal`).toContain('avp-reveal');
+      expect(still(state), `${state.kind} does not settle`).toContain('avp-reveal--revealed');
+    }
+  });
+
+  it('still carries every word it carried before', () => {
+    expect(live()).toContain('Choose a new password');
+    expect(live({ kind: 'done' })).toContain('Password changed');
+    expect(live({ kind: 'invalid', detail: API_DETAIL })).toContain(
+      'This reset link is not valid',
+    );
+    expect(live({ kind: 'invalid', detail: API_DETAIL })).toContain(API_DETAIL);
+  });
+});

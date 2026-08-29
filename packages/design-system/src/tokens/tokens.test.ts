@@ -192,6 +192,40 @@ describe('tailwind preset exposes the tokens it claims to', () => {
    *
    * Asserted at the stylesheet level because that is where the mistake was.
    */
+  /*
+   * Epic 9.16a, and the more important of the two stylesheet guards.
+   *
+   * `.avp-reveal` must be VISIBLE by default. The hidden state belongs only
+   * under `.avp-motion-ready`, which a synchronous inline script in the
+   * document head adds before the first paint.
+   *
+   * 9.16 had it the other way round and reasoned about the ways JS might fail
+   * to reveal. The reasoning missed server rendering entirely: `/invite/{token}`
+   * and `/reset-password/{token}` put their card in the HTML, so those two
+   * screens were blank from paint until hydration. Nothing caught it — jsdom
+   * applies no stylesheet, a static render has no browser, and the four screens
+   * done first are never server-rendered so they could not show it.
+   *
+   * Asserted at the stylesheet level because that is where the default lives.
+   */
+  it('leaves `.avp-reveal` visible by default, hiding only under .avp-motion-ready', () => {
+    const components = readFileSync(
+      fileURLToPath(new URL('../styles/components.css', import.meta.url)),
+      'utf8',
+    );
+
+    const base = components.match(/(?:^|\n)\.avp-reveal\s*\{([^}]*)\}/);
+    expect(base, '.avp-reveal base rule is missing').not.toBeNull();
+    // The failure this exists for: an SSR'd card that paints blank.
+    expect(base![1]).not.toMatch(/opacity\s*:\s*0/);
+    expect(base![1]).toMatch(/opacity\s*:\s*1/);
+
+    // And the arrival still exists, gated on the class.
+    const gated = components.match(/\.avp-motion-ready\s+\.avp-reveal\s*\{([^}]*)\}/);
+    expect(gated, '.avp-motion-ready .avp-reveal rule is missing').not.toBeNull();
+    expect(gated![1]).toMatch(/opacity\s*:\s*0/);
+  });
+
   it('never gives the observed reveal group `display: contents`', () => {
     const components = readFileSync(
       fileURLToPath(new URL('../styles/components.css', import.meta.url)),
