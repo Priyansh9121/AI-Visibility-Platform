@@ -183,6 +183,25 @@ describe('tailwind preset exposes the tokens it claims to', () => {
    * plausible, and the rule it drew was invisible. Same silent no-op the
    * preset check was written for, one file over.
    */
+  /*
+   * Epic 9.16. `.avp-reveal-group` is the element an IntersectionObserver
+   * watches, and `display: contents` removes an element's box — so an observer
+   * given one never fires. The whole hero and every pipeline step stayed
+   * invisible, and no unit test could see it: jsdom computes no layout and a
+   * static render has no observer at all. It took loading the page.
+   *
+   * Asserted at the stylesheet level because that is where the mistake was.
+   */
+  it('never gives the observed reveal group `display: contents`', () => {
+    const components = readFileSync(
+      fileURLToPath(new URL('../styles/components.css', import.meta.url)),
+      'utf8',
+    );
+    const block = components.match(/\.avp-reveal-group\s*\{([^}]*)\}/);
+    expect(block, '.avp-reveal-group rule is missing').not.toBeNull();
+    expect(block![1]).not.toMatch(/display\s*:\s*contents/);
+  });
+
   it('every var() components.css references is defined in tokens.css', () => {
     const components = readFileSync(
       fileURLToPath(new URL('../styles/components.css', import.meta.url)),

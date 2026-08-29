@@ -965,9 +965,27 @@
   will-change: auto;
 }
 
-/* The group is a positioning-neutral wrapper. It exists to be observed and to
-   carry a stagger override, and must not introduce a box of its own. */
-.avp-reveal-group { display: contents; }
+/*
+ * The group is a marker class ONLY. It sets no layout, and specifically NOT
+ * `display: contents`.
+ *
+ * The first version did, reasoning that the group should not introduce a box.
+ * It does not introduce one — it IS one: `RevealGroup` renders the <section> or
+ * the <ol> itself, carrying whatever layout class the caller gave it. And
+ * `display: contents` removes the element's box entirely, which has two
+ * consequences that took a live browser to see:
+ *
+ *   1. An element with no box NEVER INTERSECTS. IntersectionObserver had
+ *      nothing to observe, so every grouped reveal — the whole hero and all
+ *      seven pipeline steps — stayed at opacity 0 forever. A blank page, from
+ *      a rule written to be tidy.
+ *   2. It overrode `.avp-section`'s own `display: flex`, silently dropping the
+ *      gap between the hero's parts.
+ *
+ * Neither is visible to a static render or to jsdom, which computes no layout.
+ * `tokens.test.ts` now asserts this rule stays absent.
+ */
+.avp-reveal-group { /* intentionally empty — see above */ }
 
 /*
  * THE PART THAT IS NOT AN ENHANCEMENT.

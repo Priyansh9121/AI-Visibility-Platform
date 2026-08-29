@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, type FormEvent } from 'react';
-import { Button, Card, CardBody, ErrorState, TextField } from '@avp/design-system';
+import { Button, Card, CardBody, ErrorState, Reveal, TextField } from '@avp/design-system';
 import { api, ApiProblem } from '@/lib/api';
 
 /**
@@ -37,12 +37,26 @@ import { api, ApiProblem } from '@/lib/api';
  * ip-safety.md #2: every element from `@avp/design-system`; width from the
  * `max-w-form` token added in 9.11.
  */
+/**
+ * Epic 9.16: the card arrives rather than being already there.
+ *
+ * A single `Reveal` on the card itself — no stagger, because there is one
+ * object here and a sequence needs at least two. These screens were flagged as
+ * bare rather than as static, and a plain fade-and-rise answers that without
+ * anything structural changing.
+ *
+ * The `Reveal` REPLACES the outer wrapper rather than nesting inside it, so no
+ * box is added and the layout classes stay exactly where they were.
+ */
 export function SignUpPanel({
   onSignedUp,
   onSwitchToSignIn,
+  animate = true,
 }: {
   onSignedUp: () => void;
   onSwitchToSignIn: () => void;
+  /** Turn the arrival off — tests and static renders. */
+  animate?: boolean;
 }) {
   const [agencyName, setAgencyName] = useState('');
   const [fullName, setFullName] = useState('');
@@ -79,7 +93,7 @@ export function SignUpPanel({
   }
 
   return (
-    <div className="mx-auto flex max-w-form flex-col gap-4">
+    <Reveal animate={animate} className="mx-auto flex max-w-form flex-col gap-4">
       {error != null && <ErrorState title="Could not create your agency" detail={error} />}
 
       <Card elevation="raised">
@@ -155,6 +169,6 @@ export function SignUpPanel({
           Sign in
         </Button>
       </p>
-    </div>
+    </Reveal>
   );
 }

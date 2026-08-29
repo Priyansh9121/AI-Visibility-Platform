@@ -33,7 +33,7 @@
  */
 
 import type { JSX } from 'react';
-import { Button, Card, CardBody, LoadingState, PageSection } from '@avp/design-system';
+import { Button, Card, CardBody, LoadingState, PageSection, Reveal } from '@avp/design-system';
 import type { ClientDetail, Me } from '@avp/shared-types';
 import { IntakeForm } from '@/components/IntakeForm';
 import { ClassificationResult } from '@/components/ClassificationResult';
@@ -50,12 +50,22 @@ export function WelcomeView({
   onStarted,
   onClassified,
   onReset,
+  animate = true,
 }: {
   state: WelcomeState;
   me: Me | null;
   onStarted: () => void;
   onClassified: (client: ClientDetail) => void;
   onReset: () => void;
+  /**
+   * Epic 9.16: the step arrives rather than being already there.
+   *
+   * One reveal over the whole step, not a stagger. This is the first screen
+   * after signing up, and someone who has just chosen a password is waiting to
+   * get on with something — a sequence here would be four beats of nothing
+   * happening at exactly the wrong moment.
+   */
+  animate?: boolean;
 }): JSX.Element {
   if (state.kind === 'loading') {
     return (
@@ -67,7 +77,7 @@ export function WelcomeView({
 
   return (
     <main className="mx-auto max-w-report px-6 py-18">
-      <div className="flex flex-col gap-10">
+      <Reveal animate={animate} className="flex flex-col gap-10">
         <PageSection
           tone="lead"
           eyebrow={me ? `Welcome, ${me.agency.name}` : 'Welcome'}
@@ -126,7 +136,7 @@ export function WelcomeView({
             <Skip />
           </div>
         )}
-      </div>
+      </Reveal>
     </main>
   );
 }

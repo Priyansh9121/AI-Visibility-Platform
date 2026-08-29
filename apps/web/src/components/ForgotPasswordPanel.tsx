@@ -15,13 +15,27 @@
  */
 
 import { useState, type FormEvent } from 'react';
-import { Button, Card, CardBody, ErrorState, TextField } from '@avp/design-system';
+import { Button, Card, CardBody, ErrorState, Reveal, TextField } from '@avp/design-system';
 import { api } from '@/lib/api';
 
+/**
+ * Epic 9.16: the card arrives rather than being already there.
+ *
+ * A single `Reveal` on the card itself — no stagger, because there is one
+ * object here and a sequence needs at least two. These screens were flagged as
+ * bare rather than as static, and a plain fade-and-rise answers that without
+ * anything structural changing.
+ *
+ * The `Reveal` REPLACES the outer wrapper rather than nesting inside it, so no
+ * box is added and the layout classes stay exactly where they were.
+ */
 export function ForgotPasswordPanel({
   onBackToSignIn,
+  animate = true,
 }: {
   onBackToSignIn: () => void;
+  /** Turn the arrival off — tests and static renders. */
+  animate?: boolean;
 }) {
   const [email, setEmail] = useState('');
   const [sent, setSent] = useState(false);
@@ -45,7 +59,7 @@ export function ForgotPasswordPanel({
 
   if (sent) {
     return (
-      <div className="mx-auto flex max-w-form flex-col gap-4">
+      <Reveal animate={animate} className="mx-auto flex max-w-form flex-col gap-4">
         <Card elevation="raised">
           <CardBody>
             <div className="flex flex-col gap-3">
@@ -71,12 +85,12 @@ export function ForgotPasswordPanel({
             </div>
           </CardBody>
         </Card>
-      </div>
+      </Reveal>
     );
   }
 
   return (
-    <div className="mx-auto flex max-w-form flex-col gap-4">
+    <Reveal animate={animate} className="mx-auto flex max-w-form flex-col gap-4">
       {error != null && <ErrorState title="Could not send the request" detail={error} />}
 
       <Card elevation="raised">
@@ -114,6 +128,6 @@ export function ForgotPasswordPanel({
           Sign in
         </Button>
       </p>
-    </div>
+    </Reveal>
   );
 }
