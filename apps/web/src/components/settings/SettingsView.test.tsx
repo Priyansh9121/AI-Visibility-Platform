@@ -206,3 +206,27 @@ describe('no ad hoc styling', () => {
     expect(html).not.toMatch(/class="[^"]*\b(slate|gray|zinc|blue|red|green)-\d{3}\b/);
   });
 });
+
+describe('Settings deliberately did NOT get arrival motion — Epic 9.16', () => {
+  /*
+   * Stated as a test because it is a scope decision, not an oversight.
+   * Settings is a dense, functional screen — five PageSections of roster,
+   * password and billing — where arrival motion costs attention and buys
+   * nothing. The landing page and the auth cards were given it; this was not.
+   *
+   * The mechanism is `PageSection`'s `stagger` prop defaulting to false, which
+   * this screen never sets. Without the assertion, flipping that default would
+   * animate Settings and nothing would notice.
+   */
+  it('emits no reveal markup at all', () => {
+    const html = render(READY);
+    expect(html).not.toContain('avp-reveal');
+    expect(html).not.toContain('--avp-reveal-index');
+  });
+
+  it('still renders its sections, so the assertion is not passing on absence', () => {
+    const html = render(READY);
+    expect(html).toContain('avp-section');
+    expect(html).toContain('What you pay');
+  });
+});

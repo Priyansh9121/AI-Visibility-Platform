@@ -83,3 +83,34 @@ describe('password reset is reachable from here', () => {
     expect(render()).toContain('Forgot your password?');
   });
 });
+
+describe('the card arrives — Epic 9.16', () => {
+  // Rendered WITH animation on, which is what a browser gets. The rest of this
+  // file renders the default, so it would see the finished markup either way.
+  const live = () => renderToStaticMarkup(<SignInPanel onSignedIn={() => {}} onSwitchToSignUp={() => {}} onForgotPassword={() => {}} />);
+
+  it('wraps the card in a single reveal, not a stagger', () => {
+    const out = live();
+    expect(out).toContain('avp-reveal');
+    // One object cannot be a sequence, so no sibling offsets are emitted.
+    expect(out).not.toContain('--avp-reveal-index');
+  });
+
+  it('adds no box — the layout classes stay on the same element', () => {
+    // `Reveal` REPLACES the wrapper rather than nesting inside it.
+    expect(live()).toMatch(/class="avp-reveal[^"]*max-w-form/);
+  });
+
+  it('starts hidden and renders finished when motion is off', () => {
+    expect(live()).not.toContain('avp-reveal--revealed');
+    expect(renderToStaticMarkup(<SignInPanel onSignedIn={() => {}} onSwitchToSignUp={() => {}} onForgotPassword={() => {}} animate={false} />)).toContain('avp-reveal--revealed');
+  });
+
+  it('still carries every word it carried before', () => {
+    // Revealing hides content visually until it arrives; it must never remove
+    // it from the document.
+    const out = live();
+    expect(out).toContain('Sign in');
+    expect(out).toContain('Forgot your password?');
+  });
+});

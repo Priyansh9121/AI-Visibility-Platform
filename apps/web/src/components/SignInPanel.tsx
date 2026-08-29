@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, type FormEvent } from 'react';
-import { Button, Card, CardBody, ErrorState, TextField } from '@avp/design-system';
+import { Button, Card, CardBody, ErrorState, Reveal, TextField } from '@avp/design-system';
 import { api, ApiProblem } from '@/lib/api';
 
 /**
@@ -23,15 +23,29 @@ import { api, ApiProblem } from '@/lib/api';
  * `max-w-[26rem]` that used to live here — the only arbitrary Tailwind value
  * this component had, and exactly the off-system styling #2 prohibits.
  */
+/**
+ * Epic 9.16: the card arrives rather than being already there.
+ *
+ * A single `Reveal` on the card itself — no stagger, because there is one
+ * object here and a sequence needs at least two. These screens were flagged as
+ * bare rather than as static, and a plain fade-and-rise answers that without
+ * anything structural changing.
+ *
+ * The `Reveal` REPLACES the outer wrapper rather than nesting inside it, so no
+ * box is added and the layout classes stay exactly where they were.
+ */
 export function SignInPanel({
   onSignedIn,
   onSwitchToSignUp,
   onForgotPassword,
+  animate = true,
 }: {
   onSignedIn: () => void;
   onSwitchToSignUp: () => void;
   /** Required for the same reason the others are — see the module docstring. */
   onForgotPassword: () => void;
+  /** Turn the arrival off — tests and static renders. */
+  animate?: boolean;
 }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -65,7 +79,7 @@ export function SignInPanel({
   }
 
   return (
-    <div className="mx-auto flex max-w-form flex-col gap-4">
+    <Reveal animate={animate} className="mx-auto flex max-w-form flex-col gap-4">
       {error != null && (
         <ErrorState title="Could not sign you in" detail={error} />
       )}
@@ -128,6 +142,6 @@ export function SignInPanel({
           Create your agency
         </Button>
       </p>
-    </div>
+    </Reveal>
   );
 }

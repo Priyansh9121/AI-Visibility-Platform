@@ -178,3 +178,32 @@ describe('no ad hoc styling', () => {
     expect(html).not.toMatch(/class="[^"]*\b(slate|gray|zinc|blue|red|green)-\d{3}\b/);
   });
 });
+
+describe('the step arrives — Epic 9.16', () => {
+  const props = {
+    state: { kind: 'ask' } as const,
+    me: null,
+    onStarted: () => {},
+    onClassified: () => {},
+    onReset: () => {},
+  };
+
+  it('reveals the whole step as one unit, with no stagger', () => {
+    const out = renderToStaticMarkup(<WelcomeView {...props} />);
+    expect(out).toContain('avp-reveal');
+    // Someone who has just chosen a password is waiting to get on with
+    // something. A four-beat sequence here would be nothing happening at
+    // exactly the wrong moment.
+    expect(out).not.toContain('--avp-reveal-index');
+  });
+
+  it('renders finished when motion is off', () => {
+    const out = renderToStaticMarkup(<WelcomeView {...props} animate={false} />);
+    expect(out).toContain('avp-reveal--revealed');
+  });
+
+  it('still says everything it said before', () => {
+    const out = renderToStaticMarkup(<WelcomeView {...props} />);
+    expect(out).toContain('Start with a site you already know.');
+  });
+});
