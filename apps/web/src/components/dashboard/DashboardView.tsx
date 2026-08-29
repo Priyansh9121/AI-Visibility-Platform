@@ -26,8 +26,16 @@
  */
 
 import type { JSX } from 'react';
-import { Badge, Button, Card, CardBody, DataTable, ErrorState, ScoreMeter } from '@avp/design-system';
-import type { BadgeTone, Column, ScoreAbsence } from '@avp/design-system';
+import {
+  Badge,
+  Button,
+  DataTable,
+  EmptyState,
+  ErrorState,
+  LuminanceLedger,
+  ScoreMeter,
+} from '@avp/design-system';
+import type { BadgeTone, Column, LedgerDimension, ScoreAbsence } from '@avp/design-system';
 import type { Dashboard, ScanStatus, ScanSummary } from '@avp/shared-types';
 import { formatStamp } from '@/lib/dates';
 
@@ -150,7 +158,17 @@ export function DashboardView({
     {
       key: 'status',
       header: 'Status',
-      render: (scan) => <Badge tone={STATUS_TONE[scan.status]}>{STATUS_LABEL[scan.status]}</Badge>,
+      render: (scan) => (
+        // `live` on the running one only. This screen re-reads itself every 5s
+        // while a scan is in flight and the row it is waiting on is otherwise
+        // indistinguishable from a finished one — same chip, same weight. A
+        // badge that breathes says which row the page is watching, and it is
+        // the only motion here that runs without anybody doing anything,
+        // because it is the only thing that is genuinely still happening.
+        <Badge tone={STATUS_TONE[scan.status]} live={scan.status === 'running'}>
+          {STATUS_LABEL[scan.status]}
+        </Badge>
+      ),
     },
     {
       key: 'score',
@@ -180,7 +198,11 @@ export function DashboardView({
       render: (scan) => (
         <div className="flex items-center justify-end gap-2">
           <a
-            className="text-ui-sm font-medium text-beacon-600 underline"
+            // Underline offset and an eased hover, on the same 120ms every
+            // button and nav item in this product has used since Epic 0. It
+            // was the one interactive thing on the screen still behaving
+            // exactly like an unstyled anchor.
+            className="text-ui-sm font-medium text-beacon-600 underline underline-offset-2 transition-colors duration-hover ease-out hover:text-beacon-700"
             href={`/scans/${scan.id}/report`}
           >
             View report
@@ -231,7 +253,10 @@ export function DashboardView({
           <div className="flex flex-wrap items-baseline justify-between gap-2">
             <h2 className="text-ui-md font-medium text-text-primary">Recent scans</h2>
             {live === true && (
-              <p className="text-ui-sm text-text-tertiary">
+              <p className="flex items-center gap-3 text-ui-sm text-text-tertiary">
+                <Badge tone="beacon" live>
+                  Live
+                </Badge>
                 A scan is running — this page updates itself.
               </p>
             )}
@@ -319,29 +344,61 @@ function RerunButton({
   );
 }
 
+/**
+ * THE FIVE DIMENSIONS, UNLIT — the figure on an empty dashboard.
+ *
+ * Not example data and not a placeholder score: these are the real dimensions
+ * and the real §6 weights from `scoring-spec.md`, the same five the landing
+ * page publishes and the same five every report is built from. What is missing
+ * is the only thing that could be missing here — the measurements — so every
+ * sub-score is zero and the column draws as an unlit void with the weights
+ * named beside it.
+ *
+ * That is the point of drawing it at all. The palette's organising idea is
+ * that visibility IS luminance, and a brand-new agency's dashboard is the one
+ * screen in the product where nothing is lit yet. Showing the shape of the
+ * scan unlit says what a scan will produce and how much each part of it is
+ * worth, using this product's own chart rather than a graphic imported from
+ * nowhere (ip-safety.md #4).
+ *
+ * `unmeasured` is what keeps it honest: without it the Ledger would tell a
+ * screen reader "AI Visibility Score: 0 out of 100", which is a measurement
+ * nobody took. See LuminanceLedger.tsx.
+ */
+const UNMEASURED_DIMENSIONS: readonly LedgerDimension[] = [
+  { key: 'mention_rate', label: 'Mention Rate', weight: 30, subscore: 0 },
+  { key: 'share_of_voice', label: 'Share of Voice', weight: 25, subscore: 0 },
+  { key: 'citation_strength', label: 'Citation Strength', weight: 20, subscore: 0 },
+  { key: 'sentiment', label: 'Sentiment', weight: 15, subscore: 0 },
+  { key: 'technical', label: 'Technical Foundation', weight: 10, subscore: 0 },
+];
+
 /** A brand new agency: no clients, no scans, nothing to list. */
 function EmptyAgency(): JSX.Element {
   return (
-    <Card elevation="seated">
-      <CardBody>
-        <h2 className="font-editorial text-ed-2xs leading-display text-text-primary">
-          No scans yet
-        </h2>
-        <p className="mt-3 max-w-measure text-ui-base leading-prose text-text-secondary">
-          A scan starts with a website. We read the site the way a buyer would, work out who
-          it competes with, then ask AI assistants the questions its buyers ask — and record
-          who they name.
-        </p>
-        <p className="mt-3 max-w-measure text-ui-sm leading-prose text-text-tertiary">
-          A full scan takes about six minutes.
-        </p>
-        <div className="mt-5">
-          <Button variant="primary" onClick={() => window.location.assign('/')}>
-            Add your first client
-          </Button>
-        </div>
-      </CardBody>
-    </Card>
+    <EmptyState
+      eyebrow="Nothing measured yet"
+      title="No scans yet"
+      body="A scan starts with a website. We read the site the way a buyer would, work out who it competes with, then ask AI assistants the questions its buyers ask — and record who they name."
+      note="A full scan takes about six minutes. The five bars are the dimensions it fills in, sized by how much each is worth."
+      action={
+        <Button variant="primary" onClick={() => window.location.assign('/')}>
+          Add your first client
+        </Button>
+      }
+      figure={
+        <LuminanceLedger
+          subjectName="Your first client"
+          dimensions={UNMEASURED_DIMENSIONS}
+          height={260}
+          unmeasured
+          // No dim-to-lit dissolve: there is nothing to light. Passing
+          // `animate` would also make this screen perform on every load, which
+          // is exactly what the dashboard is excluded from.
+          animate={false}
+        />
+      }
+    />
   );
 }
 
@@ -354,10 +411,21 @@ function EmptyAgency(): JSX.Element {
  */
 function NoScansYet({ clientCount }: { clientCount: number }): JSX.Element {
   return (
-    <span className="text-ui-base text-text-secondary">
-      {clientCount === 1
-        ? 'One client added, but no scans have been run yet.'
-        : `${clientCount} clients added, but no scans have been run yet.`}
-    </span>
+    <EmptyState
+      // No eyebrow. This one sits directly under the "Recent scans" heading
+      // and inside that section's own table, so a structural label here would
+      // be the same words twice, six lines apart.
+      title={
+        clientCount === 1
+          ? 'One client added, but no scans have been run yet.'
+          : `${clientCount} clients added, but no scans have been run yet.`
+      }
+      body="A client is a website we know about; a scan is what measures it. Until one runs there is no score, no competitor set and no report to send."
+      action={
+        <Button variant="secondary" onClick={() => window.location.assign('/')}>
+          Run the first scan
+        </Button>
+      }
+    />
   );
 }

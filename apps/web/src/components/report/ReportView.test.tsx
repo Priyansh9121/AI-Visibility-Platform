@@ -601,3 +601,70 @@ describe('the report never acquires the landing page motion', () => {
     expect(html).toContain('avp-ledger__lit');
   });
 });
+
+/**
+ * THE REPORT IS UNCHANGED BY EPIC 9.19 — the same guardrail, one epic later.
+ *
+ * That pass widened Settings, gave the Working screens hover and status motion,
+ * and rebuilt their empty states around `EmptyState` and an unmeasured Ledger.
+ * The report was explicitly out of scope: its width and its exclusion from
+ * arrival motion stay exactly as they are, because it is the artefact that gets
+ * printed and handed to a prospect (design-direction.md §0).
+ *
+ * The width is settled by `.avp-report`'s own `max-width: var(--avp-report-width)`
+ * and by the report routes not passing `wide`, and both are asserted here.
+ * Everything else in the group is the same shape as the 9.16 block above: the
+ * new behaviours are all opt-in, and these fail if one is threaded through by
+ * mistake.
+ */
+describe('the report acquires none of the Working screens visual pass', () => {
+  const REPORTS = [
+    ['helpscout', helpscoutReport],
+    ['unscored', unscoredReport],
+    ['no competitor set', noCompetitorSetReport],
+    ['weak signal', weakSignalReport],
+  ] as const;
+
+  for (const [name, report] of REPORTS) {
+    it(`never draws its ledger as unmeasured — ${name}`, () => {
+      // The empty-state mode. On a report the score is the whole document, so
+      // a ledger that declined to state one would be a blank argument.
+      expect(render(report)).not.toContain('avp-ledger--unmeasured');
+    });
+  }
+
+  it('keeps the document measure — it is not a Working screen', () => {
+    // `.avp-report` carries `max-width: var(--avp-report-width)`, and the two
+    // report routes deliberately do not pass `wide` to the shell. This asserts
+    // the component side; the routes are the other half.
+    const html = render(helpscoutReport);
+    expect(html).toContain('avp-report');
+    expect(html).not.toContain('avp-shell__content--wide');
+  });
+
+  it('carries no live dot, with animation ON, which is what production sends', () => {
+    // The report has plenty of Badges — detection status, manual overrides,
+    // audit failure. None of them is a thing that is still happening: a report
+    // is a finished measurement, and a breathing chip on a printed page is
+    // motion in a document.
+    const html = renderToStaticMarkup(<ReportView report={helpscoutReport} animate />);
+    expect(html).toContain('avp-badge');
+    expect(html).not.toContain('avp-badge__pulse');
+  });
+
+  it('carries none of it in the public share view either', () => {
+    const html = renderToStaticMarkup(<ReportView report={helpscoutReport} publicView animate />);
+    expect(html).not.toContain('avp-badge__pulse');
+    expect(html).not.toContain('avp-ledger--unmeasured');
+    expect(html).not.toContain('avp-empty');
+  });
+
+  it('states its degraded cases in its own words, not in an EmptyState', () => {
+    // `EmptyState` is Working-screen furniture: dashed, with a button that
+    // navigates. The report's absences are part of the argument it makes and
+    // are written as prose inside the beat that would have carried the figure.
+    for (const report of [unscoredReport, noCompetitorSetReport]) {
+      expect(render(report)).not.toContain('avp-empty');
+    }
+  });
+});

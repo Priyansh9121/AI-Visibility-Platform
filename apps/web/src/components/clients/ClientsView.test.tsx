@@ -59,7 +59,22 @@ describe('empty', () => {
   it('writes an empty state rather than an empty grid', () => {
     const html = render({ kind: 'ready', clients: [], more: false });
     expect(html).toContain('No businesses yet');
-    expect(html).toContain('Use Compare to scan the first one');
+    expect(html).toContain('avp-empty');
+  });
+
+  it('offers the way out rather than naming it in prose — Epic 9.19', () => {
+    // The copy used to end "Use Compare to scan the first one", which named a
+    // destination the sentence could not reach. The empty state now carries
+    // the control itself.
+    const html = render({ kind: 'ready', clients: [], more: false });
+    expect(html).toContain('Scan the first business');
+    expect(html).toContain('avp-btn--primary');
+  });
+
+  it('does not draw header figures over an empty list', () => {
+    // Three zeroes is not a summary, it is furniture.
+    const html = render({ kind: 'ready', clients: [], more: false });
+    expect(html).not.toContain('Awaiting review');
   });
 
   it('counts zero honestly rather than hiding the heading', () => {
@@ -146,5 +161,48 @@ describe('no ad hoc styling', () => {
     const html = render(READY);
     expect(html).not.toMatch(/class="[^"]*\b(bg|text|border|max-w)-\[/);
     expect(html).not.toMatch(/class="[^"]*\b(slate|gray|zinc|blue|red|green)-\d{3}\b/);
+  });
+});
+
+/**
+ * The header figures — Epic 9.19.
+ *
+ * A visual pass, so the assertions are about what is CLAIMED rather than about
+ * layout: each figure has to be a count of the same `classificationStatus` the
+ * badge column already renders, or the header is asserting something the table
+ * below it contradicts.
+ */
+describe('the classification split in the header', () => {
+  it('counts the states the rows already show', () => {
+    // severalClients: one classified, one unclassifiable, one ambiguous, one
+    // pending — so identified 1, awaiting review 2 (ambiguous + pending),
+    // unreadable 1.
+    const html = render(READY);
+    expect(html).toContain('Identified');
+    expect(html).toContain('Awaiting review');
+    expect(html).toContain('Unreadable');
+  });
+
+  it('folds pending in with ambiguous rather than showing a fourth mostly-zero figure', () => {
+    const ambiguousAndPending = severalClients.filter(
+      (c) => c.classificationStatus === 'ambiguous' || c.classificationStatus === 'pending',
+    ).length;
+    expect(ambiguousAndPending).toBe(2);
+    const html = render(READY);
+    // The two are summed into one figure, so `2` appears under that label.
+    expect(html).toContain('>Awaiting review</dt><dd class="text-ui-lg font-medium text-text-primary">2</dd>');
+  });
+
+  it('agrees with the badge column rather than counting something else', () => {
+    const html = render({ kind: 'ready', clients: [unreadableClient], more: false });
+    expect(html).toContain('Could not read');
+    expect(html).toContain('>Unreadable</dt><dd class="text-ui-lg font-medium text-text-primary">1</dd>');
+    expect(html).toContain('>Identified</dt><dd class="text-ui-lg font-medium text-text-primary">0</dd>');
+  });
+});
+
+describe('width — design-direction.md §0', () => {
+  it('is a Working screen and takes the app width, not the report measure', () => {
+    expect(render(READY)).toContain('avp-shell__content--wide');
   });
 });

@@ -82,6 +82,7 @@ export {
 
 export { LoadingState, type LoadingStateProps } from './components/state/LoadingState.js';
 export { ErrorState, type ErrorStateProps } from './components/state/ErrorState.js';
+export { EmptyState, type EmptyStateProps } from './components/state/EmptyState.js';
 
 export { PageSection, type PageSectionProps } from './components/marketing/PageSection.js';
 

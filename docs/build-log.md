@@ -9005,3 +9005,175 @@ the clause fails both, with the raw `ValidationError`.
 The second asserts the log carries `fixes.0.title` and the length `260` and
 **not** the offending string, so the diagnostic cannot quietly become a channel
 for model-authored prose.
+
+### Addendum, 2026-08-29 — Epic 9.19 · The Working screens, brought up to level
+
+A visual pass over screens and data that already existed: width, motion, and
+empty states on the dashboard, clients and settings. **No new feature, no new
+data, no backend work** — `git diff --name-only` over `apps/api` and
+`apps/workers` for this commit is empty.
+
+#### THE ONE THING THAT DID NOT CHANGE, EVIDENCED RATHER THAN ASSERTED
+
+The report's width and its exclusion from arrival motion were out of scope. The
+rendered page is **byte-identical** before and after — same SHA-256 on a
+full-page 2× screenshot of `/scans/{id}/report`,
+`66459b061fd15edb…`, `docs/screenshots/epic-9-19/08-report-{before,after}.png`.
+Six new assertions in `ReportView.test.tsx` keep it that way: the report never
+draws `avp-ledger--unmeasured`, never carries `avp-badge__pulse` (with
+`animate` ON, which is what production sends), never renders an `avp-empty`,
+and never picks up `avp-shell__content--wide`.
+
+#### PART A — the width mistake was in exactly one place, and it was checked
+
+`design-direction.md` §0 has split every screen into Working and Presenting
+since Epic 0 and **never said which screen was which**, so the answer was not
+lookup-able and the brief was right to ask for each to be confirmed rather than
+assumed.
+
+| Screen | Before | Verdict |
+|---|---|---|
+| `/dashboard` | `wide` → `--avp-app-max` (90rem) | already correct |
+| `/clients` | `wide` → 90rem | already correct |
+| **`/settings`** | **no `wide`** → `52rem + 3rem` | **the mistake** |
+| `/scans/{id}/report` | `--avp-report-width` | out of scope, untouched |
+
+Settings is an operator's account and seat roster. It is never printed and never
+handed to a prospect, so it was rendering at the measure a *document* is read
+at. §0 now carries the table above, so the next reader can look it up.
+
+**Widening is not free, and this paid for it.** At 90rem the seat roster's
+Remove button and the clients list's status badge were both stranded in the
+middle of a very wide table, and the invite form's email field ran nearly the
+full viewport for an address that is never that long. Alignment (`align: 'end'`,
+which `DataTable` already owned and had simply never been asked for) and
+`--avp-form-width` fixed those in the same pass, and the four one-line agency
+facts became a 1→2→4 column grid instead of a tall thin stack.
+
+#### PART B — motion, and ZERO new motion values
+
+The exclusion from arrival motion holds: a dashboard checked fifty times a day
+should not perform an entrance. But no arrival motion is not the same as no
+motion, and this screen polls itself every 5s — it should not look frozen while
+a scan finishes underneath the reader.
+
+Everything added is spelled in the four durations `design-direction.md` §4
+already defines:
+
+| Where | Token | Measured live |
+|---|---|---|
+| `.avp-table tbody td` hover | `120ms` hover | `0.12s`; at t=30ms mid-transition at alpha `0.615`, settled by 330ms |
+| `.avp-badge` tone | `200ms` state | `0.2s`; beacon→success crossfades through 5 intermediate oklab values |
+| `.avp-meter__track` opacity | `200ms` state | `0.55 → 0.81 → 0.928 → 0.984 → 1.0` |
+| `.avp-meter__lit` width/fill | `320ms` layout | 41→68: `70 → 89.2 → 102.8 → 110.4 → 114.3 → 115.5px` |
+| `.avp-badge__pulse` | `calc(reveal × 3)` = **1.8s** | `avp-live-breath`, infinite; opacity sweeps `1.0 → 0.35 → 0.97` |
+
+The pulse is the only loop in the system and it deliberately is **not** a fifth
+number: `calc(var(--avp-duration-reveal) * 3)` is §4's own dim-to-lit dissolve
+slowed to a breath, and it stays tied to the reveal if that value is retuned.
+
+**The asymmetry in `.avp-meter__lit` is the interesting one.** A score that
+*moves* eases to its new length; a score that *arrives* does not. That is not an
+oversight — the lit element does not exist while a scan is unscored (Epic 9.9
+decided a zero-width fill would read as a score of zero, and `render.test.tsx`
+asserts it), and a CSS transition never runs on an element's first paint. So
+re-running a client and watching 41 become 48 is animated, and loading the
+dashboard for the fiftieth time today is not. What *does* ease on arrival is the
+track's opacity and the numeral's colour, because React keeps both elements
+across the switch out of "measuring".
+
+**Reduced motion, toggled at the browser and re-measured**, because a keyframe
+loop is the first thing in this product that could get it wrong: every
+transition collapses to `1e-05s`, row hover is already settled at t=30ms
+(instant, not fast), and the pulse reports `animation-iteration-count: 1` with
+**nine consecutive opacity samples of `1.0`**. The keyframe ends at opacity 1
+precisely so the global block's "collapse to one 0.01ms iteration" lands the dot
+lit rather than freezing it at 35%, where it would read as disabled.
+`tokens.test.ts` asserts that `100% { opacity: 1; }` at the stylesheet level.
+
+#### PART C — the empty states, drawn from the product's own data
+
+Four hand-written variants of "there is nothing here yet", three of them a bare
+`<span>` inside a table cell. `EmptyState` is now the third member of the set
+`LoadingState` and `ErrorState` opened in Epic 9.11.
+
+**It is dashed, and that is a reference rather than a style choice.** A dashed
+hairline already means one specific thing here: an absence that is itself the
+finding. `.avp-shelf__notch` draws the rank nobody is standing in,
+`.avp-ledger__gap-zone` outlines the points not earned, `.avp-ledger--empty`
+frames a scan with nothing to score. An empty screen is that fact at page scale.
+
+**The figure on a brand-new agency's dashboard is a real Luminance Ledger.** The
+five real dimensions at their real §6 weights, every sub-score zero — the column
+draws as an unlit void with the weights named beside it. Not decoration bolted
+on beside the copy, which ip-safety.md #4 prohibits and which the house style
+(the Ledger and the Answer Shelf are both *data drawn as illustration*) rules
+out anyway. It is the palette's organising idea — visibility is luminance —
+applied to the one screen where nothing is lit yet.
+
+**`unmeasured` is what makes that honest, and it is the whole reason the prop
+exists.** Sub-scores of zero already draw the right picture. They would also
+have told a screen reader *"AI Visibility Score for your first client: 0 out of
+100"* and tabulated five measured zeroes — a measurement nobody took, in a
+product whose entire argument is that it does not assert figures it does not
+have. The prop suppresses the composite claim, the gap annotation and the
+per-dimension values, and names the chart as the structure of a scan rather than
+the result of one. It defaults to **false**, the same guardrail
+`staggerDimensions` uses.
+
+**A bug only a browser could find, again.** The first version rendered the
+figure into a full-width grid column. A chart drawn from a viewBox scales its
+*type* with its box, so the Ledger's 13px dimension labels came out at ~30px —
+larger than the page's own headline — and no test could see it: jsdom computes
+no layout and a static render has no box. The figure is now capped at `22rem`,
+near the chart's natural 344 units.
+
+Clients also gained the classification split in its header, in the dashboard
+header's own `Stat` treatment. **Nothing new is fetched or computed** — every
+figure counts the `classificationStatus` already rendered as a badge two hundred
+pixels below. `pending` is folded in with `ambiguous` deliberately: both are
+rows an operator may still have to look at, and splitting them would put a
+fourth figure on screen that is usually zero.
+
+Settings' "not built yet" list became a numbered ledger in the report fix
+list's idiom — leading-zero mono ordinal, hairline between rows. Three
+paragraphs of tertiary prose read as small print left over; the same three
+numbered read as a list somebody keeps.
+
+#### Verified live
+
+Both halves. The **real signed-in app** for the states a real account reaches —
+a brand-new agency (`dev@test.com` / Dev Visual Pass, created through the
+product's own sign-up) lands on the empty dashboard, the empty clients list and
+settings. A **temporary uncommitted harness route** rendering the same view
+components against the repo's own committed fixtures for the states the dev
+database does not contain — a twelve-client dashboard, a running scan beside a
+finished one, and the report. Both at 1440×900, `deviceScaleFactor: 2`, full
+page, **zero JS errors at every step**. Twenty-three screenshots in
+`docs/screenshots/epic-9-19/`, before and after for every screen including the
+one that did not change.
+
+The harness was deleted before this commit; `next build` and
+`git status` confirm it.
+
+#### Tests
+
+**1542, up from 1496** — design-system 149 → **161**, web 459 → **493**. api
+822, workers 13 and shared-types 53 all unchanged, and no Python file is in this
+diff. `ruff check src tests` clean.
+
+The assertions worth naming are the ones that could not have been written
+before. `tokens.test.ts` reads `components.css` and fails if any of the five
+motion rules is spelled as a hand-typed millisecond value instead of a token —
+the exact failure the brief warned against ("extend the language, don't invent a
+second one"), and one invisible to every other kind of test here, since jsdom
+applies no stylesheet and a static render has no computed style. It also asserts
+the pulse keyframe's final frame, because that frame *is* the reduced-motion
+behaviour.
+
+One existing test changed rather than being loosened. `ClientsView.test.tsx`
+asserted the copy `"Use Compare to scan the first one"` — a sentence that named
+a destination it could not reach. The empty state now carries the control
+itself, so the assertion became "offers the way out rather than naming it in
+prose", plus a check that an empty list draws no header figures, because three
+zeroes is furniture rather than a summary.

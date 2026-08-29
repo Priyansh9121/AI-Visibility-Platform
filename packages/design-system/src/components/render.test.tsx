@@ -10,6 +10,7 @@ import { PageSection } from './marketing/PageSection.js';
 import { AppShell, NavItem } from './shell/AppShell.js';
 import { LoadingState } from './state/LoadingState.js';
 import { ErrorState } from './state/ErrorState.js';
+import { EmptyState } from './state/EmptyState.js';
 import { LuminanceLedger } from './chart/LuminanceLedger.js';
 import { AnswerShelf } from './chart/AnswerShelf.js';
 import type { ShelfRowInput } from './chart/answerShelfLayout.js';
@@ -494,5 +495,121 @@ describe('NavItem is a link, never a dead control', () => {
   it('hides its icon from the accessibility tree', () => {
     const out = html(<NavItem href="/x" label="X" icon={<svg />} />);
     expect(out).toContain('aria-hidden="true"');
+  });
+});
+
+/**
+ * EmptyState — Epic 9.19.
+ *
+ * The third member of the set LoadingState and ErrorState opened in Epic 9.11.
+ * The assertions worth having are the ones about what it refuses to become: a
+ * decorative box, and a dead end.
+ */
+describe('EmptyState is a statement with a way out', () => {
+  it('renders the title as the statement it is', () => {
+    const out = html(<EmptyState title="No scans yet" />);
+    expect(out).toContain('avp-empty');
+    expect(out).toContain('No scans yet');
+  });
+
+  it('carries no figure, eyebrow, note or action unless given one', () => {
+    // A slot that renders an empty box when unused is how a treatment starts
+    // looking like furniture.
+    const out = html(<EmptyState title="Nothing here" />);
+    expect(out).not.toContain('avp-empty__figure');
+    expect(out).not.toContain('avp-empty__eyebrow');
+    expect(out).not.toContain('avp-empty__note');
+    expect(out).not.toContain('avp-empty__action');
+    expect(out).not.toContain('avp-empty--figured');
+  });
+
+  it('switches to the two-column reading only when a figure is actually passed', () => {
+    const out = html(<EmptyState title="x" figure={<svg />} />);
+    expect(out).toContain('avp-empty--figured');
+    expect(out).toContain('avp-empty__figure');
+  });
+
+  it('is a plain block, not a Card — it is framed by a dashed rule instead', () => {
+    // ErrorState is seated because an error is a thing that happened. An
+    // absence is drawn with the same dashed stroke the shelf notch and the
+    // ledger's gap zone use, so it must NOT pick up card chrome as well.
+    const out = html(<EmptyState title="x" />);
+    expect(out).not.toContain('avp-card');
+  });
+});
+
+/**
+ * The live badge — Epic 9.19.
+ *
+ * The only motion this product runs on a Working screen without anybody doing
+ * anything, so the two things that matter are that it is opt-in and that it is
+ * invisible to assistive tech (the label already says "Running").
+ */
+describe('Badge live dot', () => {
+  it('is off by default, so no existing badge acquires motion', () => {
+    expect(html(<Badge tone="beacon">Running</Badge>)).not.toContain('avp-badge__pulse');
+  });
+
+  it('adds one decorative dot when asked', () => {
+    const out = html(
+      <Badge tone="beacon" live>
+        Running
+      </Badge>,
+    );
+    expect(out).toContain('avp-badge__pulse');
+    expect(out).toContain('aria-hidden="true"');
+    expect(out).toContain('Running');
+  });
+});
+
+/**
+ * The unmeasured Ledger — Epic 9.19.
+ *
+ * Sub-scores of zero already draw the right picture. The whole reason this
+ * mode exists is that they would also make CLAIMS nobody measured, and those
+ * claims are only reachable through the accessible name and the data table.
+ */
+describe('LuminanceLedger, unmeasured', () => {
+  const UNLIT = DIMENSIONS.map((d) => ({ ...d, subscore: 0 }));
+
+  it('never asserts a score of zero to assistive tech', () => {
+    const out = html(
+      <LuminanceLedger subjectName="Acme" dimensions={UNLIT} unmeasured animate={false} />,
+    );
+    expect(out).not.toContain('0 out of 100');
+    expect(out).toContain('none of them measured yet');
+  });
+
+  it('tabulates points AVAILABLE rather than five measured zeroes', () => {
+    const out = html(
+      <LuminanceLedger subjectName="Acme" dimensions={UNLIT} unmeasured animate={false} />,
+    );
+    expect(out).toContain('What an AI Visibility scan measures');
+    expect(out).toContain('Not yet');
+    expect(out).not.toContain('Composite');
+  });
+
+  it('still names every real dimension and weight — it is the shape of a scan', () => {
+    const out = html(
+      <LuminanceLedger subjectName="Acme" dimensions={UNLIT} unmeasured animate={false} />,
+    );
+    for (const d of DIMENSIONS) {
+      expect(out).toContain(d.label);
+      expect(out).toContain(`${d.weight}% weight`);
+    }
+  });
+
+  it('draws no gap annotation, because a gap from nothing is not a finding', () => {
+    const out = html(
+      <LuminanceLedger subjectName="Acme" dimensions={UNLIT} unmeasured animate={false} />,
+    );
+    expect(out).not.toContain('avp-ledger__gap-label');
+  });
+
+  it('defaults OFF, so a measured ledger is unchanged', () => {
+    const out = html(<LuminanceLedger subjectName="Acme" dimensions={DIMENSIONS} animate={false} />);
+    expect(out).not.toContain('avp-ledger--unmeasured');
+    expect(out).toContain('out of 100');
+    expect(out).toContain('Composite');
   });
 });

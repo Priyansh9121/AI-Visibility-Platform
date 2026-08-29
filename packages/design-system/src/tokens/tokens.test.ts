@@ -256,6 +256,47 @@ describe('tailwind preset exposes the tokens it claims to', () => {
     expect(missing).toEqual([]);
   });
 
+  /**
+   * Epic 9.19 — the Working screens' motion, asserted where it lives.
+   *
+   * The brief for that pass said to EXTEND the motion language rather than
+   * invent a second one alongside it, so the test is not "these rules exist"
+   * but "these rules are spelled in the existing tokens". A hand-typed `150ms`
+   * anywhere below is the failure this catches, and it is invisible to every
+   * other kind of test in this repo: jsdom applies no stylesheet and a static
+   * render has no computed style.
+   */
+  it('the Working screens move only in durations the system already defines', () => {
+    const components = readFileSync(
+      fileURLToPath(new URL('../styles/components.css', import.meta.url)),
+      'utf8',
+    );
+
+    const ruleFor = (selector: string): string => {
+      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const m = components.match(new RegExp(`(?:^|\n)${escaped}\\s*\\{([^}]*)\\}`));
+      expect(m, `${selector} rule is missing`).not.toBeNull();
+      return m![1]!;
+    };
+
+    // The three surfaces the pass touched, and the token each is spelled in.
+    expect(ruleFor('.avp-table tbody td')).toMatch(/transition:[^;]*--avp-duration-hover/);
+    expect(ruleFor('.avp-badge')).toMatch(/transition:[^;]*--avp-duration-state/);
+    expect(ruleFor('.avp-meter__lit')).toMatch(/transition:[^;]*--avp-duration-layout/);
+    expect(ruleFor('.avp-meter__track')).toMatch(/transition:[^;]*--avp-duration-state/);
+
+    // The live dot is a LOOP, which nothing else in this system is, so its
+    // period is derived from the reveal rather than being a fourth number.
+    const pulse = ruleFor('.avp-badge__pulse');
+    expect(pulse).toMatch(/animation:\s*avp-live-breath\s*calc\(\s*var\(--avp-duration-reveal\)/);
+
+    // And it ends lit, so reduced motion (which collapses the animation to one
+    // 0.01ms iteration) leaves a lit dot rather than one frozen at 35%.
+    const frames = components.match(/@keyframes\s+avp-live-breath\s*\{([\s\S]*?)\n\}/);
+    expect(frames, 'avp-live-breath keyframes are missing').not.toBeNull();
+    expect(frames![1]).toMatch(/100%\s*\{\s*opacity:\s*1;\s*\}/);
+  });
+
   it('the leading tokens are reachable as utilities', async () => {
     const { default: preset } = await import('../tailwind-preset.js');
     const lineHeight = preset.theme.extend.lineHeight as Record<string, string>;

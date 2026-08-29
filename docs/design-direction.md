@@ -48,6 +48,30 @@ It also means the report is a *document*, which is exactly what IP-safety
 constraint 3 (narrative report, not a metrics-tile grid) is pushing toward. The
 two constraints agree, so I've leaned in hard.
 
+> ### BUILT — Epic 9.19, 2026-08-29. Which screen is on which side, and how wide.
+>
+> This table stated a split for six epics and never said which screen was
+> which, so one of them was on the wrong side of it for six epics without
+> anybody being able to look it up. **Settings** — an operator's account and
+> seat roster, never printed, never handed to a prospect — was rendering at
+> `--avp-report-width`, which is the measure a *document* is read at. It is the
+> only width mistake that existed; the dashboard and clients were checked
+> directly rather than assumed, and both have been `wide` since Epic 9.13.
+>
+> | Screen | Context | Width | Arrival motion |
+> |---|---|---|---|
+> | `/dashboard` | Working | `--avp-app-max` (90rem) | No |
+> | `/clients` | Working | `--avp-app-max` | No |
+> | `/settings` | Working | `--avp-app-max` — **corrected in 9.19** | No |
+> | `/scans/{id}/report`, `/share/{token}` | Presenting | `--avp-report-width` (52rem) | No — §4 |
+> | `/` (landing), auth, `/welcome` | Presenting | `--avp-report-width` | Yes — §4, Epic 9.16 |
+>
+> Widening a screen is not free, and 9.19 paid for it rather than declaring it
+> done: at 90rem the seat roster's Remove button and the clients list's status
+> badge were both stranded mid-table, and the invite form's email field ran
+> nearly the full viewport. Alignment and `--avp-form-width` fixed those in the
+> same pass. **Screenshots before and after in `docs/screenshots/epic-9-19/`.**
+
 ---
 
 ## 1. Colour — "Lit / Unlit"
@@ -274,6 +298,22 @@ instant paint).
 > staggered mode is an opt-in prop defaulting to off, enforced by a regression
 > test rather than by this paragraph. See `design-system.md` §5c and
 > `build-log.md` Epic 9.16.
+>
+> **Epic 9.19 kept that exclusion and drew the line more precisely.** No
+> arrival motion is not the same as no motion. A dashboard should not perform
+> an entrance on a page checked fifty times a day; it should also not look
+> frozen while a scan it is polling finishes underneath the reader. So the
+> Working screens now move where something is *actually changing* — an eased
+> table hover, a status badge that crossfades tone, a score bar that eases when
+> it moves, and a single breathing dot on the one row that is still running —
+> and every one of those is spelled in the four durations this section already
+> defines. **Zero motion values were added.** The pulse's period is
+> `calc(var(--avp-duration-reveal) * 3)`, which is this section's own
+> dim-to-lit dissolve slowed to a breath, not a fifth number.
+>
+> The report acquired none of it. Its width and its exclusion here are
+> unchanged, and `ReportView.test.tsx` asserts both — plus a byte-identical
+> before/after screenshot in `docs/screenshots/epic-9-19/`.
 >
 > **Corrected in Epic 9.16a.** The reveal originally defaulted to hidden and
 > was revealed by script. That is safe only on screens which are never

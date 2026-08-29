@@ -14,7 +14,7 @@
  */
 
 import type { JSX } from 'react';
-import { Badge, DataTable, ErrorState, LoadingState } from '@avp/design-system';
+import { Badge, Button, DataTable, EmptyState, ErrorState, LoadingState } from '@avp/design-system';
 import type { Client, Me } from '@avp/shared-types';
 import { WorkspaceShell } from '@/components/shell/WorkspaceShell';
 
@@ -36,6 +36,29 @@ const STATUS_LABEL = {
   unclassifiable: 'Could not read',
   pending: 'Pending',
 } as const;
+
+/** How many of these clients are in one classification state. */
+function countOf(clients: readonly Client[], status: Client['classificationStatus']): number {
+  return clients.filter((c) => c.classificationStatus === status).length;
+}
+
+/**
+ * One header figure.
+ *
+ * Deliberately the same shape as `DashboardView`'s `Stat` rather than a
+ * shared import: that one is a private helper inside a screen this file does
+ * not otherwise touch, and hoisting it into the design system for two call
+ * sites would be a component built for a coincidence. If a third screen wants
+ * it, that is the point to move it.
+ */
+function Stat({ label, value }: { label: string; value: number }): JSX.Element {
+  return (
+    <div className="flex flex-col gap-1">
+      <dt className="text-ui-2xs uppercase tracking-caps text-text-tertiary">{label}</dt>
+      <dd className="text-ui-lg font-medium text-text-primary">{value}</dd>
+    </div>
+  );
+}
 
 export function ClientsView({
   state,
@@ -70,6 +93,36 @@ export function ClientsView({
                   : `${state.clients.length} businesses`}
               </h1>
             </div>
+            {/*
+              The classification split, in the dashboard header's own treatment
+              — Epic 9.19. Three columns of table stretched across a Working
+              screen's full width left this header carrying a single number and
+              a rule, which is what made the screen read as bare.
+
+              NOTHING NEW IS FETCHED OR COMPUTED. Every one of these counts the
+              `classificationStatus` already rendered as a badge two hundred
+              pixels below, on rows already in hand; the header says what the
+              column says, at a glance, which is the whole job of a Working
+              screen. `Pending` is folded into "waiting" alongside the
+              ambiguous ones deliberately — both are rows an operator may still
+              have to look at, and splitting them would put a stat on screen
+              that is usually zero.
+            */}
+            {state.clients.length > 0 && (
+              <dl className="flex flex-wrap items-end gap-8">
+                <Stat label="Identified" value={countOf(state.clients, 'classified')} />
+                <Stat
+                  label="Awaiting review"
+                  value={
+                    countOf(state.clients, 'ambiguous') + countOf(state.clients, 'pending')
+                  }
+                />
+                <Stat
+                  label="Unreadable"
+                  value={countOf(state.clients, 'unclassifiable')}
+                />
+              </dl>
+            )}
           </header>
 
           <DataTable
@@ -103,6 +156,12 @@ export function ClientsView({
               {
                 key: 'status',
                 header: 'Classification',
+                // To the far edge, the way the dashboard's Actions column is —
+                // three columns spread across a Working screen's full width
+                // otherwise leave the last one floating in the middle with a
+                // third of the table empty beside it. `DataTable` already owns
+                // this alignment; it simply was not asked for.
+                align: 'end',
                 render: (c: Client) => (
                   <Badge tone={STATUS_TONE[c.classificationStatus]}>
                     {STATUS_LABEL[c.classificationStatus]}
@@ -113,9 +172,26 @@ export function ClientsView({
             rows={state.clients}
             rowKey={(c: Client) => c.id}
             emptyMessage={
-              <span className="text-ui-base text-text-secondary">
-                No businesses yet. Use Compare to scan the first one.
-              </span>
+              /*
+                An agency that has just signed up lands here, and it used to be
+                one grey sentence centred under three empty column headings.
+                `EmptyState` gives it the treatment the rest of the product has
+                and, more usefully, a way out — Compare was named in the copy
+                but was not reachable from the words naming it.
+              */
+              <EmptyState
+                // No eyebrow: an empty state nested inside a labelled section
+                // would repeat the label. The dashboard's full-page one keeps
+                // its eyebrow because there is no heading above it to repeat.
+                title="No businesses yet"
+                body="Every client here starts the same way: a website. Compare reads the site the way a buyer would, works out who it competes with, and scans from there."
+                note="Anything you scan from Compare appears in this list."
+                action={
+                  <Button variant="primary" onClick={() => window.location.assign('/')}>
+                    Scan the first business
+                  </Button>
+                }
+              />
             }
           />
 
