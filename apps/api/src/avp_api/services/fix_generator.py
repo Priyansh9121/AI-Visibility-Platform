@@ -56,7 +56,7 @@ from decimal import Decimal
 
 import anthropic
 import structlog
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from ..config import Settings, get_settings
 from ..models.action_item import ActionItemSource, Effort, Priority
@@ -225,7 +225,10 @@ class GeneratedFix(BaseModel):
             "The change, written as an instruction someone can be handed and "
             "act on. Name the specific artefact — the page type, the schema "
             "type, the file. 'Add FAQPage schema to the pages that answer "
-            "buyer questions', not 'improve structured data'."
+            "buyer questions', not 'improve structured data'. "
+            f"HARD LIMIT {MAX_TITLE_CHARS} characters — one short sentence, no "
+            "clauses stacked with semicolons or 'and'. Anything longer is "
+            "refused and the whole fix list is lost."
         ),
     )
     detail: str = Field(
@@ -233,7 +236,7 @@ class GeneratedFix(BaseModel):
         description=(
             "One or two sentences on what this changes about the measurement, "
             "referring to this scan's actual numbers. State only what the "
-            "supplied facts support."
+            f"supplied facts support. HARD LIMIT {MAX_DETAIL_CHARS} characters."
         ),
     )
     priority: Priority = Field(
@@ -293,7 +296,11 @@ codes like NO_FAQ_SCHEMA are how this system talks to itself; the client sees \
 what they MEAN. Write "the site declares no FAQ markup", not "the schema_faq \
 check returned NO_FAQ_SCHEMA".
 - Plain professional English. No marketing language, no superlatives, no \
-urgency, no promises about outcomes."""
+urgency, no promises about outcomes.
+- LENGTH IS A HARD LIMIT, not a preference. A title is ONE short sentence of \
+at most 200 characters; a detail is at most 600. Do not stack clauses to fit \
+more in. A single title over the limit invalidates the entire response and \
+the client gets no fix list at all."""
 
 
 # --------------------------------------------------------------------------
@@ -651,6 +658,51 @@ async def generate_fixes(
     except anthropic.APIError as exc:
         logger.error("fixes.api_error", status=getattr(exc, "status_code", None))
         return FixOutcome(status="failed", reason_code="PROVIDER_ERROR")
+    except ValidationError as exc:
+        # THE MODEL ANSWERED, AND ITS ANSWER DID NOT FIT THE SCHEMA.
+        #
+        # `messages.parse` validates the whole response against
+        # `GeneratedFixSet` INSIDE the SDK — `TypeAdapter(...).validate_json`
+        # in `anthropic/lib/_parse/_response.py` — and a violation raises
+        # `pydantic.ValidationError`, which is not an `anthropic.APIError` and
+        # was therefore caught by none of the five clauses above. It escaped
+        # `generate_fixes` entirely: a crash inside the scan chain, and a raw
+        # 500 through `POST /scans/{id}/fixes`. The whole careful ladder was
+        # bypassed by the one failure the model itself causes.
+        #
+        # Observed live three times on the same scan, always the same shape:
+        #
+        #     1 validation error for GeneratedFixSet
+        #     fixes.0.title
+        #       String should have at most 200 characters
+        #
+        # WHOLE-RESPONSE, NOT PER-ITEM, AND THAT IS THE SDK'S DOING.
+        # `parse_text` validates the entire document in one call and the
+        # exception escapes before any `ParsedMessage` is constructed, so
+        # neither the valid fixes nor the raw JSON are recoverable here —
+        # `ValidationError` carries the offending value, never the document
+        # around it. Keeping the four good fixes and dropping the fifth would
+        # mean abandoning `messages.parse` for `messages.create` plus a
+        # hand-rolled parse, which is a larger change to how this call is made
+        # than the bug warrants. So it degrades as a whole, exactly like every
+        # other failure above.
+        #
+        # The length rule is now stated in words in the system prompt and in
+        # both field descriptions as well as in the JSON schema, because
+        # `maxLength` alone was the only signal the model had and it did not
+        # hold. That reduces how often this fires; it is not why it is safe.
+        errors = [
+            {
+                "field": ".".join(str(part) for part in err.get("loc", ())),
+                "type": err.get("type"),
+                # The LENGTH of the offending value, never the value: it is
+                # model-authored copy and this is a log line.
+                "length": len(v) if isinstance(v := err.get("input"), str) else None,
+            }
+            for err in exc.errors()[:5]
+        ]
+        logger.error("fixes.schema_violation", errors=errors)
+        return FixOutcome(status="failed", reason_code="PROVIDER_SCHEMA_VIOLATION")
 
     if response.stop_reason == "refusal":
         logger.warning("fixes.refused")

@@ -7,6 +7,7 @@ persistence. The live generation against a real scan is scripts/verify_fixes.py.
 
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 
 import pytest
@@ -401,6 +402,115 @@ class TestFailurePaths:
         assert outcome.status == "failed"
         assert outcome.reason_code == "PROVIDER_UNREACHABLE"
         assert outcome.fixes == []
+
+    async def test_an_overlong_title_degrades_rather_than_crashing(
+        self, monkeypatch
+    ) -> None:  # noqa: ANN001
+        """THE reproduction from Epic 9.17's live walkthrough.
+
+        `messages.parse` validates the response against `GeneratedFixSet`
+        inside the SDK, so a schema violation raises `pydantic.ValidationError`
+        — which is not an `anthropic.APIError` and was caught by none of the
+        five clauses in the ladder. It escaped `generate_fixes` entirely: a
+        crash inside the scan chain, and a raw 500 through the endpoint.
+
+        Reproduced here the way it actually happened — by letting the REAL
+        validator reject a real over-length title, rather than by raising a
+        hand-built ValidationError. A test that raises the exception itself
+        proves the `except` clause is spelled correctly and nothing more; this
+        one proves the thing the SDK does is the thing that gets caught.
+        """
+        import anthropic
+        from pydantic import TypeAdapter
+
+        # 240 characters — the shape of the live failure, which was a title
+        # that ran to a second clause instead of stopping at one sentence.
+        overlong = (
+            "Publish citable reference documentation for the analytics API and "
+            "keep every page at a stable URL so third-party writers can link to "
+            "them directly, then cross-link the repository so the docs and the "
+            "code stay discoverable together"
+        )
+        assert len(overlong) > fix_generator.MAX_TITLE_CHARS
+
+        payload = {
+            "fixes": [
+                {
+                    "candidate_id": "gap:citation_strength",
+                    "title": overlong,
+                    "detail": "A detail that is entirely within its own limit.",
+                    "priority": "high",
+                    "effort": "M",
+                    "priority_reason": "Worth the most points.",
+                    "effort_reason": "Days of writing.",
+                }
+            ]
+        }
+
+        async def fake(**kwargs):  # noqa: ANN003, ARG001
+            # Exactly what the SDK does: validate the whole document at once.
+            TypeAdapter(fix_generator.GeneratedFixSet).validate_json(json.dumps(payload))
+            raise AssertionError("the schema should have rejected that title")
+
+        monkeypatch.setattr(
+            anthropic.resources.messages.AsyncMessages, "parse", lambda self, **kw: fake(**kw)
+        )
+        candidates = build_candidates(HELPSCOUT, HELPSCOUT_FINDINGS)
+
+        outcome = await fix_generator.generate_fixes(facts(), candidates)
+
+        assert outcome.status == "failed"
+        assert outcome.reason_code == "PROVIDER_SCHEMA_VIOLATION"
+        assert outcome.fixes == []
+
+    async def test_the_schema_violation_is_reported_without_the_offending_copy(
+        self, monkeypatch, capsys
+    ) -> None:  # noqa: ANN001
+        """The log says which field and how long, never what it said.
+
+        The offending value is model-authored copy. A length is what makes the
+        failure diagnosable; the text itself adds nothing and would put
+        generated prose in the logs.
+        """
+        import anthropic
+        from pydantic import TypeAdapter
+
+        secret = "Q" * 260
+
+        async def fake(**kwargs):  # noqa: ANN003, ARG001
+            TypeAdapter(fix_generator.GeneratedFixSet).validate_json(
+                json.dumps(
+                    {
+                        "fixes": [
+                            {
+                                "candidate_id": "gap:citation_strength",
+                                "title": secret,
+                                "detail": "Short enough.",
+                                "priority": "high",
+                                "effort": "M",
+                                "priority_reason": "r",
+                                "effort_reason": "r",
+                            }
+                        ]
+                    }
+                )
+            )
+
+        monkeypatch.setattr(
+            anthropic.resources.messages.AsyncMessages, "parse", lambda self, **kw: fake(**kw)
+        )
+        candidates = build_candidates(HELPSCOUT, HELPSCOUT_FINDINGS)
+
+        outcome = await fix_generator.generate_fixes(facts(), candidates)
+
+        assert outcome.reason_code == "PROVIDER_SCHEMA_VIOLATION"
+        # structlog writes to stdout in this project, not through stdlib
+        # logging, so `capsys` is what sees it — `caplog` returns empty.
+        logged = capsys.readouterr().out
+        assert "fixes.schema_violation" in logged
+        assert "fixes.0.title" in logged
+        assert "260" in logged, "the length is what makes this diagnosable"
+        assert secret not in logged, "model-authored copy must not reach the log"
 
     async def test_a_response_with_nothing_usable_is_a_failure_not_an_empty_list(
         self, monkeypatch
