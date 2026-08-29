@@ -125,6 +125,14 @@ Each sub-score normalized 0-100, weighted sum = final score. Tune weights per-in
 - [x] AI co-citation based competitor discovery (run seed prompts, extract co-mentioned brands)
 - [x] Dedupe + rank top 3-5 competitors
 - [x] Manual override/edit UI for competitor list
+- [x] **Reached automatically by a scan — Epic 9.17.** Until then detection had
+      one caller, `POST /clients/{id}/competitors/detect`, and nothing invoked it,
+      so every scan started from the UI ran with no competitor set. The chain now
+      guarantees a set before the engine loop, which is the only order that works:
+      `run_scan` seeds prompt generation and scopes fact extraction with it.
+      Detection itself still runs **once per client** — a later scan carries the
+      existing set forward, so an operator's override survives and the SerpApi
+      quota is not spent per scan.
 - **Acceptance:** for 10 test URLs across different industries, detected competitors are manually verified as accurate ≥80% of the time
 
 ### Epic 4 — Prompt Generation & Engine Runner
@@ -145,12 +153,24 @@ Each sub-score normalized 0-100, weighted sum = final score. Tune weights per-in
 - [x] Implement composite scoring formula (Section 6)
 - [x] Sub-score breakdowns stored and retrievable
 - [x] Score comparison across brand + competitors
+- [x] **Run automatically after every scan — Epic 9.17.** The formula was correct
+      from Epic 5; nothing called it. Every UI-started scan reported "Not scored"
+      because `POST /scans/{id}/score` was operator-triggered and no operator
+      triggered it. It now runs in the chain, **after** the technical audit, so
+      Technical Foundation is included rather than excluded as `NOT_YET_MEASURED`
+      and the effective weights return to §6's table.
 - **Acceptance:** score recalculates correctly and deterministically from a given EngineResult set; unit tests cover edge cases (zero mentions, all competitors tied, etc.)
 
 ### Epic 6 — Technical SEO Audit Module
 - [x] Core Web Vitals check
 - [x] Schema/structured data presence check
 - [x] Indexation/crawlability check
+- [x] **Run automatically after every scan — Epic 9.17**, and before scoring,
+      because scoring reads the audit row and excludes the dimension without one.
+      It depends on nothing but the client's domain, so it is the phase most
+      independent of the rest of the chain — and the one whose absence was most
+      visible, as `TECHNICAL_FOUNDATION_NOT_MEASURED` on every score this product
+      had ever produced.
 - **Acceptance:** audit returns pass/fail + detail for each check on a known test site
 
 ### Epic 7 — Report Generation (built on Epic 0 design system)
@@ -169,14 +189,37 @@ Each sub-score normalized 0-100, weighted sum = final score. Tune weights per-in
 ### Epic 8 — Action List / Fix Generator
 - [x] LLM cross-references audit + scan gaps into named, specific recommendations
 - [x] Priority/effort estimation per fix
+- [x] **Run automatically after every scan — Epic 9.17**, last in the chain,
+      because it reads the score, the audit and the competitor set. Before that
+      the action list existed and was empty on every scan a user started.
+- [ ] **OPEN DEFECT, found by Epic 9.17's baseline run and deliberately NOT fixed
+      there.** `generate_fixes` catches a careful ladder of `anthropic.*` errors
+      and maps each to a `FixOutcome`, but the SDK validates the model's JSON
+      against `GeneratedFixSet` *inside* `messages.parse` — so a
+      `pydantic.ValidationError` bypasses every one of them and propagates. A
+      live run against `plausible.io` hit it: the model returned a `title` longer
+      than `MAX_TITLE_CHARS` and the whole phase raised. It is Epic 8's bug, not
+      the chain's; the chain contains it, because each phase is attempted
+      independently, so the scan still produces a score and an audit and only the
+      fix list is missing. Needs its own brief.
 - **Acceptance:** for a test scan with known gaps, the generated fix list correctly names those gaps with actionable language
 
 ### Epic 9 — MVP Launch Readiness (Phase 1 complete)
-- [~] End-to-end test: URL in → report out — **built and run; the budget is MISSED.**
-      `apps/api/scripts/verify_e2e.py` times all nine phases. One live run at 24 prompts measured
-      **498.2s against the 300s budget** (build-log Epic 9.1). The scan loop is 84.2% of it and is
-      genuinely engine-latency-bound. The test exists; the five-minute target does not yet hold.
-- [ ] Basic agency dashboard: list of past scans, re-run scan
+- [~] End-to-end test: URL in → report out — **built and run; the budget is MISSED, and by more
+      since Epic 9.17.** `apps/api/scripts/verify_e2e.py` times all nine phases. One live run at 24
+      prompts measured **498.2s against the 300s budget** (build-log Epic 9.1), later improved to
+      361.3s (Epic 9.2). The scan loop dominates and is genuinely engine-latency-bound.
+      **Epic 9.17 made the UI-triggered path run the same nine phases the script does**, which is
+      the point of that epic and also adds real wall-clock to what a user waits for: the endpoint
+      used to do ~303s of work and stop. The budget was already missed on the engine loop alone;
+      it is now missed by more, deliberately and measurably. **`PROMPT_CONCURRENCY` sizing — still
+      4, unraised since Epic 9.1 named it as candidate fix 2 — is the known next lever, and is not
+      Epic 9.17's job.** See build-log Epic 9.17 for the measured figures.
+- [x] Basic agency dashboard: list of past scans, re-run scan — shipped in Epic 9.3
+      (`26be4d0`, `9a3228a`), self-updating since 9.7. This box read `[ ]` for six epics after the
+      work landed; north-star.md §3 Layer 1 recorded it as a known stale checkbox rather than
+      correcting it. Corrected here in passing, since 9.17 is the epic that made what the dashboard
+      polls for actually mean "the report is ready".
 - [ ] Pilot with 3-5 real agencies, collect feedback
 - **Acceptance:** pilot agencies successfully generate and send at least one real prospect report
 
