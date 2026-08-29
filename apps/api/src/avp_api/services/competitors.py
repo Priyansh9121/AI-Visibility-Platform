@@ -880,3 +880,149 @@ async def persist_detection(
 
     await session.flush()
     return competitor_set
+
+# ---------------------------------------------------------------------------
+# Guaranteeing a scan has a competitor set — Epic 9.17
+# ---------------------------------------------------------------------------
+
+
+async def latest_set_for_client(
+    session: AsyncSession, client_id: str, *, excluding_scan_id: str | None = None
+) -> CompetitorSet | None:
+    """The client's most recent competitor set, on any of its scans.
+
+    The same query `routers/competitors.py::_latest_set_for_client` runs for
+    `GET /clients/{id}/competitors`, factored here because the chain needs it
+    too and a second copy of "which set is the current one" is a second answer
+    waiting to disagree with the first.
+    """
+    stmt = (
+        select(CompetitorSet)
+        .join(Scan, Scan.id == CompetitorSet.scan_id)
+        .where(Scan.client_id == client_id)
+        .order_by(CompetitorSet.id.desc())
+        .limit(1)
+        .options(selectinload(CompetitorSet.competitors))
+    )
+    if excluding_scan_id is not None:
+        stmt = stmt.where(CompetitorSet.scan_id != excluding_scan_id)
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def carry_forward_set(
+    session: AsyncSession, scan: Scan, source: CompetitorSet
+) -> CompetitorSet:
+    """Copy a client's existing competitor set onto a new scan.
+
+    WHY THIS EXISTS AT ALL, AND WHY IT IS NOT A CACHE
+    -------------------------------------------------
+    `CompetitorSet` hangs off a SCAN (`models/competitor.py`, `scan_id`), and
+    `scan_runner.load_competitors` looks it up by `scan_id` and nothing else.
+    So a client's second scan starts with no rivals unless something puts them
+    there — and `scan_runner` is not defensive about that: it runs to
+    SUCCEEDED with a set of one, reporting the subject at position 1 of 1 in
+    every answer, with no competitor to compare against and no flag saying so.
+
+    The two obvious alternatives are both worse:
+
+    * **Skip detection because "the client already has a set"** — the shape the
+      brief assumed. It leaves the new scan with nothing, because the set it
+      is skipping on account of belongs to a different scan.
+    * **Re-detect on every scan** — which spends six SerpApi searches against a
+      250/month quota (north-star.md §5.1: ~41 scans/month platform-wide), and,
+      worse, DISCARDS THE OPERATOR'S CORRECTION. `persist_detection` preserves
+      manual overrides only within the set it is writing; a brand-new set on a
+      brand-new scan has no manual rows to preserve, so the hand-corrected list
+      would silently revert to whatever detection found this time.
+
+    Copying is the only option that leaves a second scan measuring the same
+    rivals as the first, which is also what makes two scans of one client
+    comparable at all.
+
+    **Suppressed tombstones are copied too.** They are how `persist_detection`
+    knows not to re-offer a rival an operator struck; dropping them here would
+    make the strike last exactly one scan.
+
+    Provenance is copied verbatim rather than re-stamped: these rows record
+    what detection found when it ran, and a `detected_at` of now would claim a
+    detection run that did not happen.
+    """
+    copy = CompetitorSet(
+        id=ids.new_id(ids.COMPETITOR_SET),
+        scan_id=scan.id,
+        status=source.status,
+        detection_confidence=source.detection_confidence,
+        serp_queries_run=source.serp_queries_run,
+        co_citation_prompts_run=source.co_citation_prompts_run,
+        candidates_considered=source.candidates_considered,
+        used_industry_seed=source.used_industry_seed,
+        detected_at=source.detected_at,
+        competitors=[],
+    )
+    session.add(copy)
+    await session.flush()
+
+    for row in source.competitors:
+        copy.competitors.append(
+            Competitor(
+                id=ids.new_id(ids.COMPETITOR),
+                competitor_set_id=copy.id,
+                name=row.name,
+                domain=row.domain,
+                rank=row.rank,
+                detection_source=row.detection_source,
+                signal_count=row.signal_count,
+                serp_mentions=row.serp_mentions,
+                co_citation_mentions=row.co_citation_mentions,
+                corroborated=row.corroborated,
+                score=row.score,
+                is_manual_override=row.is_manual_override,
+                is_suppressed=row.is_suppressed,
+            )
+        )
+    await session.flush()
+    logger.info(
+        "competitors.carried_forward",
+        scan_id=scan.id,
+        source_set_id=source.id,
+        competitors=len(copy.competitors),
+    )
+    return copy
+
+
+async def ensure_set_for_scan(
+    session: AsyncSession, scan: Scan, client: Client, *, settings: Settings | None = None
+) -> tuple[CompetitorSet | None, str]:
+    """Guarantee this scan has a competitor set before it is run.
+
+    Returns `(set, how)` where `how` is one of `existing`, `carried_forward`,
+    `detected` or `failed` — recorded so a log line can say which of the three
+    paths a scan took, and in particular whether it spent SerpApi quota.
+
+    **Ordering: this must run BEFORE `scan_runner.run_scan`, not after.**
+    `run_scan` reads the competitor list at its top and feeds it into two
+    places that cannot be corrected afterwards — prompt generation is seeded
+    with the rival names, and fact extraction scopes brand detection to them.
+    A set written after the loop would be a set nothing ever used.
+
+    Detection is the only branch that costs money, and it runs once per client
+    rather than once per scan.
+    """
+    existing = (
+        await session.execute(
+            select(CompetitorSet)
+            .where(CompetitorSet.scan_id == scan.id)
+            .options(selectinload(CompetitorSet.competitors))
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        # The detect-then-scan flow: `get_or_create_scan` handed detection and
+        # this run the same open scan, so the set is already here.
+        return existing, "existing"
+
+    previous = await latest_set_for_client(session, client.id, excluding_scan_id=scan.id)
+    if previous is not None:
+        return await carry_forward_set(session, scan, previous), "carried_forward"
+
+    outcome = await detect_for_client(client, settings=settings)
+    return await persist_detection(session, scan, outcome), "detected"

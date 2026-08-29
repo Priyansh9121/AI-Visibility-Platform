@@ -142,12 +142,20 @@ class TestRunScan:
         body = await _run_scan(client, cid)
         result = body["results"][0]
         assert result["mentioned"] is True
-        # No competitor set exists for this scan, so only the subject is
-        # detectable — brand detection is scoped to the subject plus KNOWN
-        # competitors, never open-ended entity extraction. Position is therefore
-        # 1 of 1 here. Ordering against rivals is covered below.
-        assert result["position"] == 1
-        assert result["brandsMentioned"] == 1
+        # UPDATED IN EPIC 9.17, AND THE CHANGE IS THE POINT.
+        #
+        # This used to assert `position == 1` and `brandsMentioned == 1`, with a
+        # comment explaining that no competitor set existed for the scan so the
+        # subject was alone in its own ranking. That was true, and it was the
+        # degradation this epic exists to remove: the endpoint now detects
+        # rivals before the engine loop, so brand detection has something to
+        # rank against.
+        #
+        # The stub answer names Zendesk, then Help Scout, then Front, and the
+        # chain's detection stub returns Zendesk and Front — so the subject is
+        # genuinely second of three rather than first of one.
+        assert result["position"] == 2
+        assert result["brandsMentioned"] == 3
         assert result["sentiment"] == "positive"
         assert len(result["responseDigest"]) == 64
 

@@ -40,6 +40,7 @@ purpose is superseded.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
@@ -52,7 +53,8 @@ from ..config import Settings
 from ..db import get_sessionmaker
 from ..models import Client, Scan, ScanStatus
 from ..models.engine_result import Engine
-from . import scan_runner
+from . import audit_runner, fix_runner, scan_runner, scoring_runner
+from . import competitors as detection
 
 logger = structlog.get_logger(__name__)
 
@@ -99,6 +101,63 @@ class ScanExecutor(Protocol):
     async def submit(self, job: ScanJob, *, settings: Settings) -> None: ...
 
 
+async def _attempt(
+    session: AsyncSession,
+    scan: Scan,
+    client: Client,
+    phase: str,
+    coro_factory: Callable[[], Awaitable[object]],
+) -> bool:
+    """Run one chained phase. Log and swallow whatever it raises. Commit on success.
+
+    **Every phase is attempted regardless of whether an earlier one failed**,
+    which is the whole point of doing it this way rather than with a single
+    try around the chain. The phases are independent producers, not steps that
+    build on each other's success: the audit needs only the client's domain,
+    scoring degrades to `NOT_YET_MEASURED` without an audit, and fix generation
+    degrades again without a score. Aborting the rest on one failure would turn
+    one missing section of the report into three, and the report already knows
+    how to render each absence honestly on its own.
+
+    These are not hypothetical failures. `run_audit` raises `ValueError` on a
+    domain `crawl.normalise_url` cannot parse; `score_scan` raises
+    `SubScoreOutOfRangeError` if an audit ever writes a Technical Foundation
+    outside 0-100, which `technical_audits` has no CHECK constraint to prevent;
+    and `generate_for_scan` raises `RuntimeError` when `ANTHROPIC_API_KEY` is
+    unset. Each is one phase's problem and none of them should cost the others.
+
+    **Commits per phase, not once at the end.** `run_audit`, `score_scan` and
+    `generate_for_scan` all only flush — the caller owns the transaction — so a
+    single commit at the end would mean a raise in fix generation discarding a
+    perfectly good audit and score, including the paid model calls that
+    produced them. It also rolls back on failure, because Postgres aborts a
+    transaction on error and every later statement on that connection would
+    fail until it is cleared.
+    """
+    try:
+        await coro_factory()
+        await session.commit()
+        return True
+    except Exception:  # noqa: BLE001 - one phase's failure is not the chain's
+        logger.exception("scan.chain.phase_failed", scan_id=scan.id, phase=phase)
+        await session.rollback()
+        # `rollback()` EXPIRES every persistent instance, and unlike `commit()`
+        # it does so regardless of `expire_on_commit=False` (db.py). `scan` and
+        # `client` are handed to every phase after this one, and the first
+        # attribute access on an expired instance under the async session is a
+        # lazy refresh — which raises MissingGreenlet rather than reloading.
+        #
+        # So one failed phase would take out every phase after it, by exactly
+        # the mechanism this function exists to prevent. Reloading here is what
+        # makes "attempt them all" true rather than merely intended.
+        try:
+            await session.refresh(scan)
+            await session.refresh(client)
+        except Exception:  # noqa: BLE001 - the row is gone; nothing left to run
+            logger.exception("scan.chain.reload_failed", scan_id=scan.id, phase=phase)
+        return False
+
+
 async def execute_scan(job: ScanJob, *, settings: Settings) -> None:
     """Run a queued scan to completion, on its own session.
 
@@ -109,6 +168,33 @@ async def execute_scan(job: ScanJob, *, settings: Settings) -> None:
     Never raises. A background task with nobody to catch it would otherwise
     disappear into the event loop's exception handler, leaving the row at
     RUNNING with no record of why.
+
+    THE CHAIN — Epic 9.17
+    ---------------------
+    Until this epic, this function ran the engine loop and stopped. Every scan
+    started from the UI therefore produced a report reading "Not scored",
+    `NO_COMPETITOR_SET` and `TECHNICAL_FOUNDATION_NOT_MEASURED` — not because
+    those phases were unbuilt, but because nothing called them. `verify_e2e.py`
+    proved the whole pipeline worked by calling each phase itself; the product
+    never did.
+
+    The order below is `verify_e2e.py`'s, and it is not arbitrary:
+
+        competitor set -> engine loop -> audit -> score -> fixes
+
+    **Competitor detection comes FIRST, before the engine loop, not after it.**
+    `run_scan` reads the competitor list at its top and feeds it into two
+    places nothing can correct afterwards: prompt generation is seeded with the
+    rival names, and fact extraction scopes brand detection to them, which is
+    what produces `position`, `brands_mentioned`, Share of Voice, and the
+    `competitor_id` attribution on every mention and citation. A scan run
+    without a set does not fail — it reports SUCCEEDED with the subject at
+    position 1 of 1 in every answer. Detection afterwards would write a set
+    that nothing had used.
+
+    Audit before scoring, because `scoring_runner.load_technical_foundation`
+    reads the audit row and excludes the dimension as `NOT_YET_MEASURED` when
+    there is none. Fixes last, because they read all three.
     """
     factory = get_sessionmaker(settings)
     try:
@@ -128,10 +214,58 @@ async def execute_scan(job: ScanJob, *, settings: Settings) -> None:
                     scan_id=scan.id, status=scan.status.value,
                 )
                 return
+
+            # -- phase 3: the competitor set, BEFORE the loop that reads it --
+            #
+            # Attempted like every other phase rather than allowed to abort the
+            # scan: a scan with no rivals is degraded, and the report says so,
+            # but it still measures whether the subject is mentioned at all,
+            # which is most of what a first scan is for.
+            await _attempt(
+                session, scan, client, "competitors",
+                lambda: detection.ensure_set_for_scan(
+                    session, scan, client, settings=settings
+                ),
+            )
+
+            # -- phases 4-5: prompt generation and the engine loop -----------
+            #
+            # Not wrapped in `_attempt`. This one IS the scan: it commits its
+            # own progress, and if it raises there is nothing downstream worth
+            # running, so the outer handler marks the scan FAILED as it always
+            # has. `defer_terminal_status` leaves it RUNNING so the dashboard
+            # keeps polling while the phases below finish.
             await scan_runner.run_scan(
                 session, scan, client,
                 settings=settings, engines=job.engines, prompt_limit=job.prompt_limit,
+                defer_terminal_status=True,
             )
+
+            # -- phase 6: the technical audit --------------------------------
+            await _attempt(
+                session, scan, client, "audit",
+                lambda: audit_runner.run_audit(session, scan, client),
+            )
+
+            # -- phase 7: scoring --------------------------------------------
+            await _attempt(
+                session, scan, client, "scoring",
+                lambda: scoring_runner.score_scan(session, scan),
+            )
+
+            # -- phase 8: the fix list ---------------------------------------
+            await _attempt(
+                session, scan, client, "fixes",
+                lambda: fix_runner.generate_for_scan(
+                    session, scan, client, settings=settings
+                ),
+            )
+
+            # Only now is the scan finished. Stamped from the persisted engine
+            # results, so it says what the ENGINE phase achieved — the chained
+            # phases each record their own outcome on their own rows, and a
+            # failed audit is not a failed scan.
+            await scan_runner.finalize_scan(session, scan)
     except Exception as exc:  # noqa: BLE001 - recorded on the row, never re-raised
         logger.exception("scan.execute.failed", scan_id=job.scan_id)
         await _mark_failed(job.scan_id, exc, settings=settings)
