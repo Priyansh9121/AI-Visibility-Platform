@@ -13,6 +13,8 @@ import { ErrorState } from './state/ErrorState.js';
 import { EmptyState } from './state/EmptyState.js';
 import { LuminanceLedger } from './chart/LuminanceLedger.js';
 import { AnswerShelf } from './chart/AnswerShelf.js';
+import { TrendChart } from './chart/TrendChart.js';
+import { LocalNav, LocalNavItem } from './shell/LocalNav.js';
 import type { ShelfRowInput } from './chart/answerShelfLayout.js';
 import { Beat, Evidence, ReportPage, BEAT_SEQUENCE } from './report/ReportLayout.js';
 import { visibility, beacon, oklch } from '../tokens/color.js';
@@ -611,5 +613,137 @@ describe('LuminanceLedger, unmeasured', () => {
     expect(out).not.toContain('avp-ledger--unmeasured');
     expect(out).toContain('out of 100');
     expect(out).toContain('Composite');
+  });
+});
+
+/**
+ * TrendChart — Epic 9.20, the first time-series shape in this system.
+ *
+ * The assertions that matter are the palette rule (design-direction.md §1) and
+ * the gap rule, because both are silent failures: a rival drawn in the brand
+ * colour reads as an endorsement, and a gap drawn as zero reads as a collapse.
+ */
+describe('TrendChart', () => {
+  const POINTS = [
+    { label: '27 Aug', stamp: '2026-08-27T00:00:00Z' },
+    { label: '28 Aug', stamp: '2026-08-28T00:00:00Z' },
+  ];
+  const SERIES = [
+    { key: 'me', label: 'Plausible', isSubject: true, values: [36, 35] },
+    { key: 'r1', label: 'Matomo', values: [21, 24] },
+    { key: 'r2', label: 'Fathom', values: [9, null] },
+  ];
+  const chart = (extra: Record<string, unknown> = {}) =>
+    html(<TrendChart points={POINTS} series={SERIES} ariaLabel="Share of voice" {...extra} />);
+
+  it('paints the client in the brand accent', () => {
+    expect(chart()).toContain(oklch(beacon['600']));
+  });
+
+  it('never paints a competitor from the visibility ramp', () => {
+    // §1: a rival in "good green" implies an endorsement and one in "bad red"
+    // reads as a hatchet job. Competitors come from the neutral slate family.
+    const out = chart();
+    for (const stop of Object.values(visibility)) {
+      expect(out).not.toContain(oklch(stop));
+    }
+  });
+
+  it('separates competitors by dash as well as by lightness', () => {
+    // Five neutral greys are one grey in greyscale print; five dash patterns
+    // are five lines. Same reason ChartPatterns exists for fills.
+    expect(chart()).toContain('stroke-dasharray');
+  });
+
+  it('draws the client solid — only rivals are dashed', () => {
+    const single = html(
+      <TrendChart
+        points={POINTS}
+        series={[SERIES[0]!]}
+        ariaLabel="Share of voice"
+      />,
+    );
+    expect(single).not.toContain('stroke-dasharray');
+  });
+
+  it('carries the accessibility contract every chart here carries', () => {
+    const out = chart({ title: 'Share of voice' });
+    expect(out).toContain('aria-label="Share of voice"');
+    expect(out).toContain('avp-visually-hidden');
+    expect(out).toContain('<table>');
+  });
+
+  it('says "not measured" in the data table rather than printing a zero', () => {
+    // The hidden table is the only way a screen reader reads this chart, so the
+    // gap has to be a word there, not an absent cell or a 0.
+    expect(chart()).toContain('not measured');
+  });
+
+  it('draws a broken series as two strokes, not one through the gap', () => {
+    const withGap = html(
+      <TrendChart
+        points={[...POINTS, { label: '29 Aug', stamp: '2026-08-29T00:00:00Z' }]}
+        series={[{ key: 'r', label: 'Fathom', values: [9, null, 11] }]}
+        ariaLabel="x"
+      />,
+    );
+    // Two separate move commands means two separate strokes.
+    expect((withGap.match(/ d="M/g) ?? []).length).toBe(2);
+  });
+
+  it('renders every series name, so no line is anonymous', () => {
+    const out = chart();
+    for (const label of ['Plausible', 'Matomo', 'Fathom']) {
+      expect(out).toContain(label);
+    }
+  });
+});
+
+/**
+ * LocalNav — Epic 9.20. Navigation scoped to one record.
+ */
+describe('LocalNav', () => {
+  const nav = (current?: string) =>
+    html(
+      <LocalNav title="Plausible" subtitle="plausible.io" back={{ href: '/clients', label: 'All clients' }}>
+        <LocalNavItem href="/clients/x" label="Overview" current={current === 'overview'} />
+        <LocalNavItem href="/scans/s/report" label="Report" external />
+        <LocalNavItem href="/clients/x/sources" label="Sources" current={current === 'sources'} />
+      </LocalNav>,
+    );
+
+  it('names whose space this is and how to get back out', () => {
+    const out = nav();
+    expect(out).toContain('Plausible');
+    expect(out).toContain('plausible.io');
+    expect(out).toContain('href="/clients"');
+    expect(out).toContain('All clients');
+  });
+
+  it('marks the current item for assistive tech, not by weight alone', () => {
+    expect(nav('sources')).toContain('aria-current="page"');
+    expect((nav('sources').match(/aria-current="page"/g) ?? []).length).toBe(1);
+  });
+
+  it('is a real nav landmark with a name', () => {
+    expect(nav()).toContain('<nav');
+    expect(nav()).toContain('aria-label=');
+  });
+
+  it('uses anchors, never buttons — these are URLs', () => {
+    const out = nav();
+    expect(out).toContain('<a href="/clients/x"');
+    expect(out).not.toContain('<button');
+  });
+
+  it('has no disabled variant to reach for', () => {
+    // Same rule as NavItem: an item either goes somewhere real or is absent.
+    expect(nav()).not.toContain('disabled');
+    expect(nav()).not.toContain('aria-disabled');
+  });
+
+  it('flags a destination that leaves the record space', () => {
+    // The Report item is a path into the existing document, not a copy of it.
+    expect(nav()).toContain('avp-localnav__out');
   });
 });

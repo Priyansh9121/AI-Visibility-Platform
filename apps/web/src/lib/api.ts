@@ -11,6 +11,7 @@ import type {
   CheckoutSession,
   PortalSession,
   Client,
+  ClientHistory,
   ClientDetail,
   CompetitorInput,
   CompetitorSet,
@@ -248,6 +249,24 @@ export const api = {
    * reads the first page and says so rather than pretending it is the whole set.
    */
   clients: () => request<{ data: Client[]; nextCursor: string | null }>('/clients'),
+
+  client: (clientId: string) => request<Client>(`/clients/${clientId}`),
+
+  /**
+   * A client's whole scan history, shaped for a trend — Epic 9.20.
+   *
+   * One call rather than one report per scan, for the reason
+   * `services/client_history.py` sets out and measured: the report path is
+   * ~2.7x the work per scan and most of what it returns (narrative, audit,
+   * fixes) is discarded by a trend line, and its cited-domain lists are
+   * truncated for display — so a Sources trend built from them would silently
+   * be a trend over whatever survived a display cap.
+   *
+   * Oldest first. The clients LIST is newest-first, deliberately: a list wants
+   * the newest thing at the top, a trend wants the earliest at the left.
+   */
+  clientHistory: (clientId: string) =>
+    request<ClientHistory>(`/clients/${clientId}/history`),
 
   createClient: (payload: CreateClientRequest) =>
     request<ClientDetail>('/clients', {

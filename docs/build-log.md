@@ -9177,3 +9177,172 @@ a destination it could not reach. The empty state now carries the control
 itself, so the assertion became "offers the way out rather than naming it in
 prose", plus a check that an empty list draws no header figures, because three
 zeroes is furniture rather than a summary.
+
+### Addendum, 2026-08-31 — Epic 9.20 · Every client gets a space of its own
+
+Until this epic a client row went nowhere. `ClientsView` said so in its own
+comment — *"a LIST, not a management screen"* — and it rendered **zero links**;
+the rows were inert text. That was the real gap: not that depth had been cut,
+but that there was no room with a door on it for depth to live in. This builds
+the room.
+
+**Routing, stated explicitly because nested navigation scoped to one record is
+genuinely new here** — the only nested dynamic route in the whole app was
+`/scans/[scanId]/report`, a single segment:
+
+```
+/clients/{id}            Overview  — the front door, where a row lands
+/clients/{id}/sources    Sources   — citations per domain over time
+/clients/{id}/rankings   Rankings  — share of voice over time
+    ↗ Report             a LINK OUT to /scans/{latest}/report
+```
+
+`Overview` exists because a nav has to have a current item and a space has to
+have a front door. `Report` is deliberately a link out: the report is a
+Presenting-context document at `--avp-report-width`, and rendering it inside a
+wide Working shell under a nav strip would change the artefact. A fourth item
+(Prompts) is expected here later; nothing in the frame assumes three.
+
+The agency sidebar is untouched. It is agency-wide — every item in it is about
+the whole account across every client at once — and depth about one client
+cannot go there without either changing what those items mean or inventing a
+global "selected client" this product does not have. `LocalNav` is the second
+level of the same tree, and it is not a tab widget: these are pages with real
+URLs, not panels behind a `role="tablist"` that would lie to a screen reader
+about what just happened.
+
+#### THE VERIFY-FIRST ITEM THAT CHANGED THE DESIGN
+
+The brief said every number this needs is "already computed and stored on every
+scan". **That is half right, and the half that is wrong decided the
+architecture.**
+
+- **Sources** reads `engine_result_citations` — persisted rows. The count per
+  domain is an aggregation over them.
+- **Rankings** has **no stored column at all.** `CompetitorComparison` is
+  derived on read *by design*, and `scoring_runner.score_scan` says why: *"a
+  pure function of rows already persisted, so storing it would create a second
+  copy that can fall out of step with the first."*
+
+Nothing is missing — every input is stored — but there is nothing to `SELECT`.
+So the choice was N calls to `GET /scans/{id}/report` versus one read endpoint.
+Measured against the real three-scan `plausible.io` history rather than guessed:
+
+| | Report path | `GET /clients/{id}/history` |
+|---|---|---|
+| Per scan | **17.6ms** warm (61ms cold) | **6.5ms** |
+| Three scans | 96.4ms + 3 round trips | 52ms, one round trip |
+| Cited domains | ranked and **truncated to 13** of ~300 citations | full tally, capped at 40 |
+
+The truncation was decisive. A Sources trend built from the report's display
+lists would silently have been a trend over *whatever survived a display cap*,
+which moves between scans. The endpoint calls the same
+`score_scan(persist=False)` the report calls, so a figure on Rankings cannot
+disagree with the same figure on the report for the same scan. A test asserts
+that three consecutive reads add no `Scan` and no `Score` row.
+
+#### SHARE OF VOICE, NOT COMPOSITE — and the reason is not preference
+
+**There is no per-competitor composite and there deliberately never has been.**
+`CompetitorComparison`'s docstring: sentiment is classified toward the subject
+only and technical foundation is the subject's own site, so 25% of the weight
+has no rival input, and a rival "composite" over the other 75% would not be
+comparable to the client's. Plotting the client's real composite against five
+partial ones would be a chart whose lines mean different things.
+
+Share of voice is also the only one of the three measured dimensions that is a
+genuine **share**. `scoring.share_of_voice` is subject mentions over total brand
+mentions; `compare_competitors` is that rival's appearances over the *identical*
+total. Same formula, same denominator — so a rise for one really is a fall for
+another. Verified on live rows: subject plus five rivals summed to **99.99** on
+one scan and **100.00** on another.
+
+Mention rate would be honest per line but does not compose — every brand in the
+field can sit at 100% at once, so the chart would carry no information about the
+contest between them, which is the entire point of Rankings.
+
+#### THE RULE THE CHART IS BUILT AROUND: A NULL IS NOT A ZERO
+
+A competitor set is re-detected per scan, so a rival can be present, absent,
+then present again. Two wrong answers are easy to reach and **both are silent**:
+
+1. Drop the series → the chart shows fewer rivals than the client has.
+2. Fill the gap with zero → the line dives to the floor and back, asserting a
+   collapse that was never measured.
+
+So a missing reading is `null`, every series spans every point, and
+`trendLayout.segments()` breaks the line into runs. A lone run draws as a dot;
+the hidden data table prints **"not measured"**. Rankings also *names* the
+rivals whose lines will have gaps, so the holes are explained rather than left
+to be noticed.
+
+Sources distinguishes further, because there both cases are real: a domain
+absent from a scan whose list came back **under** the 40-row cap genuinely
+measured zero citations and plots at zero; one absent from a **full** list is
+unknown and plots as a gap.
+
+#### `TrendChart` — the first time-series shape in this system
+
+Confirmed first that neither existing chart could be it. `LuminanceLedger` is a
+snapshot — its correctness condition is that total lit height *is* the
+composite, a statement about one measurement, with no axis for time.
+`AnswerShelf` is ordinal position within one scan. **Recharts is not a
+dependency anywhere**, despite `apps/web/README.md` still mentioning it, so this
+is hand-rolled SVG like every other chart here.
+
+The palette is §1's, unchanged: client always `beacon-600` solid; competitors
+from `seriesStyle('competitor', i)`, the same neutral slate family the Ledger's
+ghost columns use, and **the visibility ramp is never touched** — a test asserts
+no ramp stop appears in the output. `seriesStyle` returns a *fill* pattern name
+because it was written for bars, so each maps to the dash carrying the same
+intent; §1's own argument applies unchanged, since five neutral greys are one
+grey in greyscale print and five dash patterns are five lines.
+
+#### TWO BUGS ONLY A LIVE BROWSER COULD FIND
+
+Both invisible to the 200 design-system tests, because jsdom computes no layout
+and a static render has no text metrics:
+
+1. **Every x-label read "29 Aug".** The three real `plausible.io` scans are
+   01:37, 03:48 and 04:32 on one day, and a day-only axis said nothing about
+   which came first. The label resolution now follows the data — clock when the
+   history fits one UTC day, date otherwise.
+2. **Five rival names stacked into an unreadable block**, and
+   `analytics-alternatives.com` ran off the right edge. `spreadLabels()` pushes
+   labels apart without reordering, and the gutter went 108 → 176 units with
+   `truncateLabel` as a backstop that shortens only the *drawn* label — the data
+   table keeps the full name.
+
+#### Verified live, on non-fixture data
+
+Signed in, opened the real Clients list, **clicked** the Plausible Analytics row
+and then clicked through the local nav. Every URL below is where a click landed:
+
+```
+/clients                                    → row is a real link
+/clients/clnt_01M15JAFPH3HKFHWV8C6A7T65J    Overview, 3 scans
+             …/sources                      6 domains, 01:37 / 03:48 / 04:32
+             …/rankings                     6 series, subject + 5 rivals
+/scans/scan_01M15WAK9CQRFZYN6CBZ9EY9QM/report   ← Report, the existing document
+Help Scout (1 scan) …/rankings              "One scan is not a trend yet"
+```
+
+Zero JS errors and zero failed requests at every step. Six screenshots in
+`docs/screenshots/epic-9-20/`.
+
+The `review@epic7.example` fixture account's password was reset through **the
+product's own flow** to reach that agency's data — `reset-password/request`
+logs the URL when no email provider is configured, which is the development path
+`services/email.py` documents and the Epic 9.13 walkthrough used.
+
+#### Tests
+
+**1644, up from 1542** — api 822 → **835**, design-system 161 → **200**, web 493
+→ **543**. workers 13 and shared-types 53 unchanged. `ruff check src tests`
+clean.
+
+The three cases the brief named are all covered: one scan, several, and a set
+that changed between scans. The last is the one that separates a gap from a
+zero, and it is asserted at three levels — `trendLayout` (the segments break),
+`trends.ts` (the value is `null`, and explicitly `not.toContain(0)`), and the
+rendered view (two `d="M"` commands, not one).
