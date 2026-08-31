@@ -172,3 +172,34 @@ export const SHELF_ROWS: ShelfRowInput[] = [
     engine: 'claude', answered: false, subjectPresent: false, subjectPosition: null, slots: [],
   },
 ];
+
+/**
+ * A client's own scan history — the Trend's fixture.
+ *
+ * Deliberately carries the two shapes that break a naive trend: `Fathom` is
+ * absent from the second scan, and `Seline` only appears in the last. Both must
+ * draw as a break in the line rather than a fall to zero, because a rival that
+ * was not in a scan's competitor set was not measured — which is a different
+ * fact from a rival measured at nothing.
+ */
+export const TREND_POINTS = [
+  { label: '04 Aug', stamp: '2026-08-04T09:00:00Z' },
+  { label: '11 Aug', stamp: '2026-08-11T09:00:00Z' },
+  { label: '18 Aug', stamp: '2026-08-18T09:00:00Z' },
+  { label: '25 Aug', stamp: '2026-08-25T09:00:00Z' },
+];
+
+export const TREND_SERIES = [
+  {
+    key: '__subject__',
+    label: SUBJECT,
+    isSubject: true,
+    values: [31.4, 33.8, 32.1, 36.3],
+  },
+  { key: 'matomo', label: 'Matomo', values: [24.2, 22.6, 23.9, 20.1] },
+  { key: 'simple', label: 'Simple Analytics', values: [18.1, 18.9, 17.4, 18.7] },
+  // Not in the second scan's set — a break, not a dive to the floor.
+  { key: 'fathom', label: 'Fathom Analytics', values: [11.2, null, 10.4, 10.6] },
+  // Detected only in the last scan.
+  { key: 'seline', label: 'Seline', values: [null, null, null, 0.5] },
+];

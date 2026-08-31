@@ -53,3 +53,29 @@ htmlcov/
 # session state, so it is both noise and a (mild) credential leak.
 dump.rdb
 *.rdb
+
+# Agent skill packages installed by `npx skills add` (2026-09-01).
+#
+# These are THIRD-PARTY packages vendored into the working tree by the skills
+# CLI — playwright-cli, accessibility, fastapi and friends, plus a large tree of
+# design skills. They are tooling for whoever is working on this repo, not part
+# of the product, and committing them would put ~200k lines of somebody else's
+# content into a product repo where every reviewer would have to scroll past it.
+#
+# Reinstall them with `npx skills add <owner/repo@skill>`; `skills-lock.json` is
+# ignored for the same reason the packages are.
+.agents/
+.claude/
+skills/
+skills-lock.json
+
+# Written by installed skills, not by this project.
+.impeccable/
+.recordings/
+.mcp.json
+
+# The `impeccable` skill vendors itself into .github. `.github/workflows/` is
+# deliberately NOT ignored — that is this project's own CI.
+.github/agents/
+.github/hooks/
+.github/skills/
