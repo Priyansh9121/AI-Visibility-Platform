@@ -72,6 +72,34 @@ two constraints agree, so I've leaned in hard.
 > nearly the full viewport. Alignment and `--avp-form-width` fixed those in the
 > same pass. **Screenshots before and after in `docs/screenshots/epic-9-19/`.**
 
+> ### Amended — Epic 9.21. A client's own space, and a width that was not the problem.
+>
+> Epic 9.20 added `/clients/{id}` and its Sources and Rankings trends. All three
+> are **Working** and take `--avp-app-max`, like every other screen in that
+> column above: Overview is a six-column scan history that earns it, and the
+> local nav must not change width between siblings.
+>
+> Those two trend screens were reported as reading sparse — *"a lot of space on
+> the left and right… looks like an old newspaper."* **The width was not the
+> cause, and it was measured before anything was changed.** The chart was not a
+> narrow island in a wide column; it filled **96%** of it (1152px of 1200px).
+> What was wrong was the chart's own type: `width: 100%` over a fixed viewBox
+> scales type with the box, so an 11px axis label rendered at **17.6px**,
+> larger than the page's 14px body copy. The smallest type on the screen had
+> become the largest thing on it.
+>
+> Bounding the chart at its drawn width fixed it, and the second candidate —
+> narrowing these two screens' bodies below the Working cap — was **tried and
+> reverted**, because it moved nothing: every child of those sections
+> (`max-w-headline`, `max-w-measure`, the capped figure) already caps itself, so
+> constraining the parent changed no pixel. Verified by toggling each change
+> independently in a live browser.
+>
+> **The rule this leaves behind, worth stating once:** a screen looking sparse
+> is not evidence that its container is too wide. Measure the type before
+> touching the width. See `design-system.md` §5d and
+> `docs/screenshots/epic-9-21/`.
+
 ---
 
 ## 1. Colour — "Lit / Unlit"

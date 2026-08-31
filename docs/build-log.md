@@ -9346,3 +9346,99 @@ that changed between scans. The last is the one that separates a gap from a
 zero, and it is asserted at three levels — `trendLayout` (the segments break),
 `trends.ts` (the value is `null`, and explicitly `not.toContain(0)`), and the
 rendered view (two `d="M"` commands, not one).
+
+### Addendum, 2026-08-31 — Epic 9.21 · The sparse trend screens, and the width that was innocent
+
+Epic 9.20's Sources and Rankings were reported as reading sparse — *"a lot of
+space on the left and right… looks like an old newspaper."* Two causes were
+named to investigate. **One was real and was the whole of it; the other was
+measured, disproved, and the fix for it written and then reverted.**
+
+#### MEASURED BEFORE ANYTHING WAS CHANGED
+
+Plausible Analytics, 3 scans, 1440px viewport, 1200px content column:
+
+| | authored | rendered |
+|---|---|---|
+| SVG | 720 × 340 | **1152 × 544** |
+| scale | 1× | **1.6×** |
+| axis tick label | 11px | **17.6px** |
+| subject stroke | 2.5px | **4.0px** |
+| page body / lead copy | — | 14px |
+
+**The axis labels were rendering 26% larger than the page's own body copy.** A
+tick label is `--avp-text-ui-2xs`, the smallest type in the system; it had
+become the biggest thing on the screen. That is the "old newspaper" feel:
+oversized type, thin content, wide leading.
+
+`.avp-trend__svg` is `width: 100%` over a fixed viewBox, so the chart scales its
+**type and strokes** with its container. This is the same failure Epic 9.19
+found on the `EmptyState` ledger figure and fixed by bounding it — and I shipped
+`TrendChart` the very next epic without the bound.
+
+#### CAUSE A WAS NOT REAL, AND IT WAS DISPROVED TWICE
+
+The brief's Cause A said the wide shell was leaving *"a narrow island of content
+with a lot of empty margin either side."* The measurement says otherwise: the
+chart filled **1152px of the 1200px column — 96%**. It was stretched edge to
+edge, not islanded. The empty margin came from measure-capped prose (heading
+323px, lead 571px, caption 530px) plus **282px of the chart's own right label
+gutter**, itself inflated 1.6×.
+
+The fix for it was written anyway — `max-w-chart` on both trend sections — and
+then **reverted**, for two findings:
+
+1. **It moved nothing.** Toggling it off in a live browser left the section at
+   1152px either way, because every child already caps itself
+   (`max-w-headline`, `max-w-measure`, and now the figure). Constraining the
+   parent of children that all self-cap changes no pixel.
+2. **It did not even compile.** `.max-w-chart` was absent from the served
+   stylesheet — a class that existed only in the markup, under a test that
+   would have passed on the markup alone. Exactly the hollow assertion this
+   project's testing rule exists to prevent.
+
+So the change was backed out along with the `--avp-chart-width` token and the
+preset entry added for it. **One real cause, one real fix.**
+
+#### THE FIX IS DERIVED, NOT DECLARED
+
+`style={{ maxWidth: layout.width }}` on the figure — one viewBox unit is at most
+one CSS pixel, so the chart can never render larger than it was drawn.
+
+Taken from the layout rather than written as a token because the two have to be
+the **same number**. A caller passing `layoutOptions.width` against a fixed CSS
+cap would be squeezed by it instead: scale below 1, type *smaller* than drawn —
+the same bug in the other direction. A constant would need a test to stop it
+drifting; this cannot drift, and the tests assert the invariant rather than the
+number (`width: 1040` ⇒ `max-width: 1040px`).
+
+It is a `max`, so the chart still scales down. Measured across viewports:
+
+```
+viewport 1728 1440 1280 1024  820 | 600  420
+svg       720  720  720  720  720 | 552  372
+scale     1.0  1.0  1.0  1.0  1.0 | 0.77 0.52   overflow: never
+```
+
+1:1 at every desktop width, shrinking only when the column is genuinely narrower
+than the chart.
+
+#### THE OTHER WORKING SCREENS WERE CHECKED, NOT ASSUMED
+
+The brief put Dashboard, Clients and Settings out of scope unless the same cause
+genuinely reached them. It does not: none of the three renders a `TrendChart` or
+a `LuminanceLedger` at all, so there is no viewBox on any of them to scale.
+Their tables are `1152 / 1152 / 1110`px in a 1200px column and are unaffected.
+
+#### Tests
+
+**1649, up from 1644** — design-system 200 → **205**. api 835, web 543, workers
+13 and shared-types 53 unchanged. `ruff check src tests` clean.
+
+The five new ones assert the invariant behaviourally: the cap tracks a custom
+layout width and a custom height, the rule is a `max` and not a `width`, and the
+SVG keeps `width: 100%` so the scale-down direction still works. Before/after
+screenshots at the identical 1440px viewport in `docs/screenshots/epic-9-21/`.
+
+**The rule worth keeping:** a screen looking sparse is not evidence that its
+container is too wide. Measure the type before touching the width.

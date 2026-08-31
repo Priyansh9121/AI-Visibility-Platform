@@ -98,6 +98,29 @@ export function TrendChart({
   return (
     <ChartFrame
       className={cn('avp-trend', className)}
+      /*
+       * THE CAP, AND WHY IT IS DERIVED RATHER THAN DECLARED — Epic 9.21.
+       *
+       * `.avp-trend__svg` is `width: 100%` over a fixed viewBox, so the chart
+       * scales its TYPE and its STROKES with its container. Measured on the
+       * live Rankings screen: a 720-unit chart stretched across a 1200px
+       * Working column ran at 1.6x, rendering its 11px axis labels at 17.6px
+       * against 14px body copy, and its 2.5px subject stroke at 4px. The
+       * smallest type on the page became the largest thing on it, which is
+       * what made the screen read as sparse and oversized.
+       *
+       * Bounding it at `layout.width` makes one viewBox unit at most one CSS
+       * pixel, so the chart can never render larger than it was drawn.
+       *
+       * It is taken from the layout rather than written as a token because the
+       * two must be the SAME number — a caller passing `layoutOptions.width`
+       * would otherwise be squeezed by a cap that had not moved with it. This
+       * cannot drift; a constant would need a test to stop it drifting.
+       *
+       * A MAX, so the chart still scales DOWN to fit a narrow viewport. That
+       * direction has to keep working.
+       */
+      style={{ maxWidth: `${layout.width}px` }}
       {...(title != null ? { title } : {})}
       {...(caption != null ? { caption } : {})}
       ariaLabel={ariaLabel}
