@@ -591,6 +591,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/clients/{clientId}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Client History
+         * @description Every scan of this client that produced a reading, oldest first.
+         *
+         *     **Reads. Collects nothing, writes nothing, computes no new figure.** It
+         *     exists because the two trends a client's space shows are not both available
+         *     as stored columns: cited-domain counts aggregate persisted citation rows,
+         *     while the per-rival comparison is derived on read by design and has no
+         *     column at all (see `services/client_history.py` for the measurements that
+         *     ruled out calling the report endpoint N times instead).
+         *
+         *     Scoped to the caller's agency by `get_client`, which 404s rather than 403s
+         *     on another agency's id — the same rule every other client route follows, so
+         *     the endpoint cannot be used to probe whether an id exists elsewhere.
+         */
+        get: operations["get_client_history_api_v1_clients__clientId__history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/clients/{clientId}/reclassify": {
         parameters: {
             query?: never;
@@ -1475,6 +1506,22 @@ export interface components {
             updatedAt: string;
         };
         /**
+         * ClientHistoryOut
+         * @description Every scan of one client that produced a reading, oldest first.
+         */
+        ClientHistoryOut: {
+            /** Clientid */
+            clientId: string;
+            /** Domain */
+            domain: string;
+            /** Name */
+            name: string;
+            /** Scans */
+            scans: components["schemas"]["HistoryScanOut"][];
+            /** Scanswithoutdata */
+            scansWithoutData: number;
+        };
+        /**
          * ClientKind
          * @description A prospect becomes a client when the deal closes.
          *
@@ -1748,6 +1795,69 @@ export interface components {
             status: string;
             /** Version */
             version: string;
+        };
+        /**
+         * HistoryCitedDomainOut
+         * @description One domain and how often this scan's answers cited it.
+         *
+         *     Not the report's `CitedDomainOut`. That one carries a `sample_url` and is
+         *     ranked and TRUNCATED for display; this is the full per-scan tally a trend
+         *     needs, so borrowing that shape would mean inheriting a display cap into a
+         *     time series.
+         */
+        HistoryCitedDomainOut: {
+            /** Citations */
+            citations: number;
+            /** Citessubject */
+            citesSubject: boolean;
+            /** Competitorname */
+            competitorName?: string | null;
+            /** Domain */
+            domain: string;
+        };
+        /**
+         * HistoryCompetitorOut
+         * @description One rival's comparable figures for one scan.
+         *
+         *     No composite, for the reason `ReportCompetitorOut` gives at length:
+         *     sentiment is classified toward the subject only and technical foundation is
+         *     the subject's own site, so 25% of the weight has no per-competitor input and
+         *     a rival "composite" would not be comparable to the subject's.
+         */
+        HistoryCompetitorOut: {
+            /** Citationstrength */
+            citationStrength?: string | null;
+            /** Competitorid */
+            competitorId: string;
+            /** Mentionrate */
+            mentionRate?: string | null;
+            /** Name */
+            name: string;
+            /** Shareofvoice */
+            shareOfVoice?: string | null;
+        };
+        /**
+         * HistoryScanOut
+         * @description One point on the client's timeline.
+         */
+        HistoryScanOut: {
+            /** Citeddomains */
+            citedDomains: components["schemas"]["HistoryCitedDomainOut"][];
+            /** Competitors */
+            competitors: components["schemas"]["HistoryCompetitorOut"][];
+            /** Composite */
+            composite?: string | null;
+            /** Scanid */
+            scanId: string;
+            /**
+             * Scannedat
+             * Format: date-time
+             */
+            scannedAt: string;
+            /** Shareofvoice */
+            shareOfVoice?: string | null;
+            /** Status */
+            status: string;
         };
         /**
          * InviteSeatRequest
@@ -3286,6 +3396,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CompetitorSetOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_client_history_api_v1_clients__clientId__history_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                clientId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClientHistoryOut"];
                 };
             };
             /** @description Validation Error */

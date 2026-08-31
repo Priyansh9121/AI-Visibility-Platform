@@ -492,6 +492,80 @@ wrap the whole `<PageSection>` in a `<Reveal>`.
 
 ---
 
+## 5d. TrendChart — the first time series, Epic 9.20
+
+`<TrendChart points series ariaLabel title caption unit yMax height />`
+
+### Why neither existing chart could be it
+
+`LuminanceLedger` is a **snapshot**: one stacked column whose segment heights
+are the §6 weights and whose lit fraction is one scan's value. Its correctness
+condition — total lit height *is* the composite — is a statement about a single
+measurement, and there is no axis in it for time. `AnswerShelf` is ordinal
+position within one scan's answers. Neither can carry a second scan, so this is
+a new shape rather than a variant of one.
+
+### The colour rule is §1's, unchanged
+
+The client is always `beacon-600`, solid, 2.5px. Competitors come from
+`seriesStyle('competitor', i)` — the same neutral slate family the Ledger's
+ghost columns and the DataTable use — and **the visibility ramp is never
+touched**. A rival in "good green" reads as an endorsement; one in "bad red"
+reads as a hatchet job.
+
+`seriesStyle` returns a *fill* pattern name, because it was written for bars.
+A line has no fill to hatch, so each name maps to the dash that carries the same
+intent: `solid · 6 3 · 1.5 3 · 9 3 2 3 · 3 3`. The point is §1's own — five
+neutral greys are one grey in greyscale print; five dash patterns are five
+lines.
+
+### A null is a gap, never a zero
+
+The single load-bearing rule. A competitor set is re-detected per scan, so a
+rival can be present, absent, then present again. Joining through zero asserts a
+collapse that was never measured; dropping the series shows fewer rivals than
+the client has, silently. So `trendLayout.segments()` breaks the line into runs
+of consecutive readings, a lone run draws as a dot, and the hidden data table
+prints **"not measured"** rather than a blank cell.
+
+### Two things a live browser found that no test could
+
+- **Label collision.** Five rivals within twelve points of each other stacked
+  their names into an unreadable block. `spreadLabels()` pushes them apart
+  without reordering, so tracing a line to its name never crosses another.
+- **Gutter width.** `analytics-alternatives.com` ran off the right edge at the
+  original 108-unit padding. It is 176 now, with `truncateLabel` as the backstop
+  — and only the *drawn* label is shortened; the data table keeps the full name.
+
+Same accessibility contract as every chart here: `ariaLabel` is required and a
+hidden data table is rendered, both via `ChartFrame`.
+
+---
+
+## 5e. LocalNav — navigation scoped to one record, Epic 9.20
+
+`AppShell`'s sidebar is **agency-wide**: every item in it is about the whole
+account, across every client at once. Depth about ONE client cannot go there
+without either changing what those items mean or inventing a global "selected
+client" this product does not have.
+
+So `LocalNav` is a second level of the same tree, nested inside the first: a
+heading naming the record, a link back to the list it came from, meta figures,
+and a horizontal strip of destinations that are all inside it. An operator can
+always tell whose space they are standing in.
+
+**Deliberately not a tab widget.** These are pages with their own URLs, not
+panels behind a `role="tablist"` — a tab control that swaps `aria-selected` on
+navigation lies to a screen reader about what just happened. Same rule as
+`NavItem`: every item is an `<a>` with a real href, `aria-current="page"` marks
+the active one, and there is no disabled variant.
+
+`external` marks a destination that *leaves* the record's space. The client's
+Report uses it: it is a real path into `/scans/{id}/report`, the document that
+already exists, rather than a second copy rendered inside the record frame.
+
+---
+
 ## 6. Components
 
 | Component | Notes |
@@ -508,6 +582,8 @@ wrap the whole `<PageSection>` in a `<Reveal>`.
 | `LoadingState` / `ErrorState` / `EmptyState` | The three things a screen says when it has no content to show. See §6a. |
 | `Reveal` / `RevealGroup` | Arrival motion. Client-only. See §5c. |
 | `AnswerShelf` | The proof beat's shelf of ordinal slots. See §5a. |
+| `TrendChart` | One line per series across a client's scan history. The first time-series shape here. See §5d. |
+| `LocalNav` / `LocalNavItem` | Navigation scoped to ONE record, nested inside the agency shell. See §5e. |
 | `ReportPage` / `ReportHeader` / `Beat` / `Prose` / `Evidence` / `FixList` | Narrative report primitives. See §7. |
 
 ---

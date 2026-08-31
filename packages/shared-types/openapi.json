@@ -722,6 +722,43 @@
         "title": "ClientDetailOut",
         "type": "object"
       },
+      "ClientHistoryOut": {
+        "description": "Every scan of one client that produced a reading, oldest first.",
+        "properties": {
+          "clientId": {
+            "title": "Clientid",
+            "type": "string"
+          },
+          "domain": {
+            "title": "Domain",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "scans": {
+            "items": {
+              "$ref": "#/components/schemas/HistoryScanOut"
+            },
+            "title": "Scans",
+            "type": "array"
+          },
+          "scansWithoutData": {
+            "title": "Scanswithoutdata",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "clientId",
+          "name",
+          "domain",
+          "scans",
+          "scansWithoutData"
+        ],
+        "title": "ClientHistoryOut",
+        "type": "object"
+      },
       "ClientKind": {
         "description": "A prospect becomes a client when the deal closes.\n\nThe same row transitions rather than being recreated, so the scan history\ngathered while prospecting becomes the \"before\" half of the before/after\nROI report in Epic 11.",
         "enum": [
@@ -1471,6 +1508,161 @@
           "version"
         ],
         "title": "HealthOut",
+        "type": "object"
+      },
+      "HistoryCitedDomainOut": {
+        "description": "One domain and how often this scan's answers cited it.\n\nNot the report's `CitedDomainOut`. That one carries a `sample_url` and is\nranked and TRUNCATED for display; this is the full per-scan tally a trend\nneeds, so borrowing that shape would mean inheriting a display cap into a\ntime series.",
+        "properties": {
+          "citations": {
+            "title": "Citations",
+            "type": "integer"
+          },
+          "citesSubject": {
+            "title": "Citessubject",
+            "type": "boolean"
+          },
+          "competitorName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Competitorname"
+          },
+          "domain": {
+            "title": "Domain",
+            "type": "string"
+          }
+        },
+        "required": [
+          "domain",
+          "citations",
+          "citesSubject"
+        ],
+        "title": "HistoryCitedDomainOut",
+        "type": "object"
+      },
+      "HistoryCompetitorOut": {
+        "description": "One rival's comparable figures for one scan.\n\nNo composite, for the reason `ReportCompetitorOut` gives at length:\nsentiment is classified toward the subject only and technical foundation is\nthe subject's own site, so 25% of the weight has no per-competitor input and\na rival \"composite\" would not be comparable to the subject's.",
+        "properties": {
+          "citationStrength": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Citationstrength"
+          },
+          "competitorId": {
+            "title": "Competitorid",
+            "type": "string"
+          },
+          "mentionRate": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mentionrate"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "shareOfVoice": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shareofvoice"
+          }
+        },
+        "required": [
+          "competitorId",
+          "name"
+        ],
+        "title": "HistoryCompetitorOut",
+        "type": "object"
+      },
+      "HistoryScanOut": {
+        "description": "One point on the client's timeline.",
+        "properties": {
+          "citedDomains": {
+            "items": {
+              "$ref": "#/components/schemas/HistoryCitedDomainOut"
+            },
+            "title": "Citeddomains",
+            "type": "array"
+          },
+          "competitors": {
+            "items": {
+              "$ref": "#/components/schemas/HistoryCompetitorOut"
+            },
+            "title": "Competitors",
+            "type": "array"
+          },
+          "composite": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Composite"
+          },
+          "scanId": {
+            "title": "Scanid",
+            "type": "string"
+          },
+          "scannedAt": {
+            "format": "date-time",
+            "title": "Scannedat",
+            "type": "string"
+          },
+          "shareOfVoice": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shareofvoice"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scanId",
+          "status",
+          "scannedAt",
+          "citedDomains",
+          "competitors"
+        ],
+        "title": "HistoryScanOut",
         "type": "object"
       },
       "InviteSeatRequest": {
@@ -4558,6 +4750,49 @@
         "summary": "Detect Competitors",
         "tags": [
           "competitors"
+        ]
+      }
+    },
+    "/api/v1/clients/{clientId}/history": {
+      "get": {
+        "description": "Every scan of this client that produced a reading, oldest first.\n\n**Reads. Collects nothing, writes nothing, computes no new figure.** It\nexists because the two trends a client's space shows are not both available\nas stored columns: cited-domain counts aggregate persisted citation rows,\nwhile the per-rival comparison is derived on read by design and has no\ncolumn at all (see `services/client_history.py` for the measurements that\nruled out calling the report endpoint N times instead).\n\nScoped to the caller's agency by `get_client`, which 404s rather than 403s\non another agency's id \u2014 the same rule every other client route follows, so\nthe endpoint cannot be used to probe whether an id exists elsewhere.",
+        "operationId": "get_client_history_api_v1_clients__clientId__history_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clientId",
+            "required": true,
+            "schema": {
+              "title": "Clientid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientHistoryOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Client History",
+        "tags": [
+          "clients"
         ]
       }
     },

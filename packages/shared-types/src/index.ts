@@ -111,6 +111,11 @@ export type AcceptInvitationRequest = Schemas['AcceptInvitationRequest'];
 export type ChangePasswordRequest = Schemas['ChangePasswordRequest'];
 export type LoginRequest = Schemas['LoginRequest'];
 export type CreateClientRequest = Schemas['CreateClientRequest'];
+// --- a client's own space (Epic 9.20) ------------------------------------
+export type ClientHistory = Schemas['ClientHistoryOut'];
+export type HistoryScan = Schemas['HistoryScanOut'];
+export type HistoryCitedDomain = Schemas['HistoryCitedDomainOut'];
+export type HistoryCompetitor = Schemas['HistoryCompetitorOut'];
 export type RunScanRequest = Schemas['RunScanRequest'];
 
 // --- enumerations -------------------------------------------------------

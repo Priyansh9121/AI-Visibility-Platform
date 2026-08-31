@@ -11,6 +11,12 @@
  * It is a LIST, not a management screen: no rename, no delete, no bulk action,
  * because none of those endpoints exist. It ends at the boundary of what is
  * real rather than showing a control that would fail.
+ *
+ * **A row now LEADS SOMEWHERE — Epic 9.20.** The sentence above used to be the
+ * whole story, and it was also the problem: every row was inert, so nothing
+ * about one client had anywhere to live and the product had no depth anywhere.
+ * `/clients/{id}` is that place. The list itself is unchanged in what it
+ * manages — still no rename, still no delete — it simply is not a dead end.
  */
 
 import type { JSX } from 'react';
@@ -131,10 +137,21 @@ export function ClientsView({
                 key: 'name',
                 header: 'Business',
                 render: (c: Client) => (
+                  /*
+                    An anchor on the NAME rather than a click handler on the
+                    row. A whole-row handler is not middle-clickable, not
+                    bookmarkable and invisible to a screen reader, which is the
+                    same reasoning `NavItem` gives for being an `<a>`; and a row
+                    that navigates on click also swallows text selection, which
+                    an operator copying a domain would notice immediately.
+                  */
                   <div className="flex flex-col gap-0.5">
-                    <span className="text-ui-base font-medium text-text-primary">
+                    <a
+                      href={`/clients/${c.id}`}
+                      className="text-ui-base font-medium text-text-primary underline decoration-line-strong underline-offset-2 transition-colors duration-hover ease-out hover:text-beacon-700 hover:decoration-beacon-400"
+                    >
                       {c.brandName ?? c.name}
-                    </span>
+                    </a>
                     <span className="font-mono text-ui-xs text-text-tertiary">
                       {c.domain}
                     </span>

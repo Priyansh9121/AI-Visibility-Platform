@@ -18,7 +18,9 @@ from ..schemas.client import (
     CrawlSummaryOut,
     CreateClientRequest,
 )
+from ..schemas.client_history import ClientHistoryOut
 from ..schemas.common import Page
+from ..services import client_history as history_service
 from ..services import intake as intake_service
 from ..services.crawl import CrawlResult
 
@@ -127,6 +129,31 @@ async def get_client(
         db, agency_id=principal.agency_id, client_id=client_id
     )
     return ClientOut.model_validate(client)
+
+
+@router.get("/{clientId}/history", response_model=ClientHistoryOut)
+async def get_client_history(
+    principal: PrincipalDep,
+    db: DbDep,
+    client_id: str = Path(alias="clientId"),
+) -> Any:
+    """Every scan of this client that produced a reading, oldest first.
+
+    **Reads. Collects nothing, writes nothing, computes no new figure.** It
+    exists because the two trends a client's space shows are not both available
+    as stored columns: cited-domain counts aggregate persisted citation rows,
+    while the per-rival comparison is derived on read by design and has no
+    column at all (see `services/client_history.py` for the measurements that
+    ruled out calling the report endpoint N times instead).
+
+    Scoped to the caller's agency by `get_client`, which 404s rather than 403s
+    on another agency's id — the same rule every other client route follows, so
+    the endpoint cannot be used to probe whether an id exists elsewhere.
+    """
+    client = await intake_service.get_client(
+        db, agency_id=principal.agency_id, client_id=client_id
+    )
+    return await history_service.build_history(db, client)
 
 
 @router.post("/{clientId}/reclassify", response_model=ClientDetailOut)

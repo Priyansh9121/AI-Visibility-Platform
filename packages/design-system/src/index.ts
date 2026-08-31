@@ -36,6 +36,20 @@ export { ChartFrame, type ChartFrameProps } from './components/chart/ChartFrame.
 export { ChartPatterns, patternPaint } from './components/chart/ChartPatterns.js';
 export { LuminanceLedger, type LuminanceLedgerProps } from './components/chart/LuminanceLedger.js';
 export { AnswerShelf, type AnswerShelfProps } from './components/chart/AnswerShelf.js';
+export { TrendChart, type TrendChartProps } from './components/chart/TrendChart.js';
+export {
+  layoutTrend,
+  segmentPath,
+  spreadLabels,
+  truncateLabel,
+  LABEL_MAX_CHARS,
+  type TrendPoint,
+  type TrendSeriesInput,
+  type TrendSeriesLayout,
+  type TrendSegment,
+  type TrendLayout,
+  type TrendLayoutOptions,
+} from './components/chart/trendLayout.js';
 export {
   layoutAnswerShelf,
   shelfSummary,
@@ -79,6 +93,13 @@ export {
   type AppShellProps,
   type NavItemProps,
 } from './components/shell/AppShell.js';
+
+export {
+  LocalNav,
+  LocalNavItem,
+  type LocalNavProps,
+  type LocalNavItemProps,
+} from './components/shell/LocalNav.js';
 
 export { LoadingState, type LoadingStateProps } from './components/state/LoadingState.js';
 export { ErrorState, type ErrorStateProps } from './components/state/ErrorState.js';

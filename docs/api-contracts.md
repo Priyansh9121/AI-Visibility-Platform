@@ -864,6 +864,49 @@ pointed at an arbitrary URL.
 belonging to another agency. Confirming that an id exists is itself a leak
 across a tenant boundary, so it is never a `403`.
 
+#### `GET /api/v1/clients/{clientId}/history` — Epic 9.20
+**Auth required.** Every scan of this client that produced a reading, **oldest
+first**. Returns `ClientHistoryOut`.
+
+The read behind a client's own space (`/clients/{id}/sources` and
+`/clients/{id}/rankings`). **It collects nothing, writes nothing, and computes
+no new figure** — every row it reads was written by a scan that already ran.
+
+Ordered oldest-first, the opposite of `GET /clients`, deliberately: a list wants
+the newest thing at the top, a trend wants the earliest at the left.
+
+**Why this exists rather than N calls to `GET /scans/{id}/report`**, measured
+against real rows for a three-scan client:
+
+| | Report path | This |
+|---|---|---|
+| Per scan | ~17.6ms warm | ~6.5ms |
+| Round trips | N | 1 |
+| Cited domains | ranked and **truncated for display** (13 of ~300 citations) | the full per-scan tally, capped at 40 |
+
+The truncation is the decisive one: a Sources trend built from the report's
+lists would silently be a trend over whatever survived a display cap, which
+moves between scans.
+
+**On what is and is not stored.** The cited-domain counts aggregate persisted
+`engine_result_citations` rows. The per-rival figures have **no stored column at
+all** — `CompetitorComparison` is derived on read by design
+(`scoring_runner.score_scan`: *"a pure function of rows already persisted, so
+storing it would create a second copy that can fall out of step with the
+first"*). This endpoint calls that same function, so a figure here cannot
+disagree with the same figure on the report for the same scan.
+
+Scans that produced no reading (queued, running, failed, cancelled) are excluded
+from `scans` and counted in `scansWithoutData`, so a client with four scans and
+one usable one does not look like a client with one scan.
+
+**No per-competitor composite**, and there never will be: sentiment is
+classified toward the subject only and technical foundation is the subject's own
+site, so 25% of the weight has no rival input.
+
+**Errors:** `404 not-found` for an unknown id and for another agency's client —
+the same rule as `GET /clients/{clientId}` above, and for the same reason.
+
 #### `POST /api/v1/clients/{clientId}/reclassify`
 **Auth required.** Re-crawls and re-classifies an existing client, returning
 `ClientDetailOut`. Needed because sites change, and because an `ambiguous`
