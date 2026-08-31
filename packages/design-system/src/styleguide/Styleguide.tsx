@@ -13,6 +13,7 @@ import {
   ScoreDisplay,
   LuminanceLedger,
   AnswerShelf,
+  TrendChart,
   ChartPatterns,
   ReportPage,
   ReportHeader,
@@ -43,6 +44,8 @@ import {
   EVIDENCE,
   FIXES,
   SHELF_ROWS,
+  TREND_POINTS,
+  TREND_SERIES,
   type CompetitorRow,
 } from './fixtures.js';
 import type {
@@ -445,6 +448,41 @@ export function Styleguide(): JSX.Element {
             caption="The band of holes is the finding."
           />
         </div>
+      </Section>
+
+      {/* ============================================================ */}
+      <Section
+        num="09b"
+        title="The Trend — a client across its own scan history"
+        note="The first time-series shape in this system. One line per series, oldest scan on the left. The client is always the beacon; rivals are neutral slate separated by dash rather than hue, exactly as the Ledger's ghost columns are."
+      >
+        <div className="sg-panel">
+          <TrendChart
+            points={TREND_POINTS}
+            series={TREND_SERIES}
+            unit="%"
+            yMax={100}
+            title="Share of voice"
+            caption="A rival's rise is the client's fall — the lines sum across the field."
+            ariaLabel="Share of voice across four scans."
+          />
+        </div>
+
+        <p className="sg-section__note">
+          <strong>A gap is not a zero.</strong> A competitor set is re-detected per scan, so a rival
+          can be present, absent, then present again. Joining through zero would assert a collapse
+          nobody measured; dropping the line would show fewer rivals than the client has, silently.
+          The line breaks instead, and the hidden data table reads <em>&ldquo;not measured&rdquo;</em>.
+          Two rivals above do exactly this.
+        </p>
+        <p className="sg-section__note">
+          <strong>It cannot render larger than it was drawn.</strong> An SVG at{' '}
+          <code>width: 100%</code> over a fixed viewBox scales its <em>type</em> with its box —
+          measured live in Epic 9.21, a 720-unit chart stretched across a 1200px column ran at 1.6x
+          and rendered its 11px axis labels at 17.6px, larger than the body copy beside them. The
+          figure is bounded at <code>layout.width</code>, so one unit is at most one pixel. Widen
+          this window: the chart stops growing, and the labels stay the size they are here.
+        </p>
       </Section>
 
       {/* ============================================================ */}
