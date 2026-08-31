@@ -537,6 +537,32 @@ prints **"not measured"** rather than a blank cell.
   original 108-unit padding. It is 176 now, with `truncateLabel` as the backstop
   — and only the *drawn* label is shortened; the data table keeps the full name.
 
+### It cannot render larger than it was drawn — Epic 9.21
+
+`.avp-trend__svg` is `width: 100%` over a fixed viewBox, so the chart scales its
+**type and its strokes** with its container. Shipped in 9.20 without a bound, and
+measured on the live Rankings screen a day later:
+
+| | authored | rendered in a 1200px Working column |
+|---|---|---|
+| SVG | 720 × 340 | **1152 × 544** (scale **1.6×**) |
+| axis tick | 11px | **17.6px** — against 14px body copy |
+| subject stroke | 2.5px | **4.0px** |
+
+The smallest type on the page had become the largest thing on it, which is what
+made the screen read as sparse and oversized. Exactly the failure §5d's own
+sibling — Epic 9.19's `EmptyState` ledger figure — had already been fixed for.
+
+The fix is `style={{ maxWidth: layout.width }}` on the figure, so one viewBox
+unit is at most one CSS pixel. **Derived from the layout rather than declared as
+a token**, because the two must be the same number: a caller passing
+`layoutOptions.width` would otherwise be squeezed by a cap that had not moved
+with it — the same bug in the other direction, type *smaller* than drawn. A
+constant would need a test to stop it drifting; this cannot drift.
+
+It is a `max-width`, so the chart still scales down: measured 1:1 at every
+column from 784px up, and 0.77× at a 600px viewport without overflowing.
+
 Same accessibility contract as every chart here: `ariaLabel` is required and a
 hidden data table is rendered, both via `ChartFrame`.
 

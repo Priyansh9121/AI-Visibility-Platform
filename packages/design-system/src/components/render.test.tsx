@@ -747,3 +747,67 @@ describe('LocalNav', () => {
     expect(nav()).toContain('avp-localnav__out');
   });
 });
+
+/**
+ * The chart cannot render larger than it was drawn — Epic 9.21.
+ *
+ * An SVG with `width: 100%` over a fixed viewBox scales its TYPE with its box.
+ * Measured on the live Rankings screen before this: a 720-unit chart stretched
+ * across a 1200px Working column ran at 1.6x, so its 11px axis labels rendered
+ * at 17.6px — larger than the 14px body copy above them — and its 2.5px subject
+ * stroke came out at 4px. The page read as sparse and oversized because the
+ * smallest type on it had become the biggest thing on it.
+ *
+ * That is the same failure Epic 9.19 fixed on the EmptyState ledger figure, in
+ * the component built the epic after. These assert the invariant rather than a
+ * number: whatever width the chart is laid out in, it is bounded at that width,
+ * so one viewBox unit is never more than one CSS pixel.
+ */
+describe('TrendChart is bounded by its own viewBox', () => {
+  const POINTS = [
+    { label: 'a', stamp: '2026-08-27T00:00:00Z' },
+    { label: 'b', stamp: '2026-08-28T00:00:00Z' },
+  ];
+  const SERIES = [{ key: 'me', label: 'Subject', isSubject: true, values: [1, 2] }];
+
+  it('caps at the default layout width', () => {
+    const out = html(<TrendChart points={POINTS} series={SERIES} ariaLabel="x" />);
+    // 300 is `DEFAULTS.height`; the client screens pass 340 explicitly.
+    expect(out).toContain('viewBox="0 0 720 300"');
+    expect(out).toContain('max-width:720px');
+  });
+
+  it('the cap MOVES with the layout, so the two can never drift apart', () => {
+    // The reason this is derived rather than declared. A caller widening the
+    // chart with a constant cap in CSS would be squeezed by it instead —
+    // scale < 1, type SMALLER than drawn, the same bug in the other direction.
+    const out = html(
+      <TrendChart points={POINTS} series={SERIES} ariaLabel="x" layoutOptions={{ width: 1040 }} />,
+    );
+    expect(out).toContain('viewBox="0 0 1040 300"');
+    expect(out).toContain('max-width:1040px');
+  });
+
+  it('tracks a custom height too, so the aspect ratio is never forced', () => {
+    const out = html(<TrendChart points={POINTS} series={SERIES} ariaLabel="x" height={260} />);
+    expect(out).toContain('viewBox="0 0 720 260"');
+    expect(out).toContain('max-width:720px');
+  });
+
+  it('is a MAX — the chart must still scale down to a narrow viewport', () => {
+    // A fixed `width` here would break every viewport below the layout width.
+    const out = html(<TrendChart points={POINTS} series={SERIES} ariaLabel="x" />);
+    expect(out).toContain('width="100%"');
+    expect(out).not.toMatch(/style="[^"]*[^-]width:720px/);
+  });
+
+  it('the ledger, which had this fixed in 9.19, is still bounded by its caller', () => {
+    // Not a regression guard on TrendChart — a reminder that the Ledger solves
+    // the same problem at the call site (EmptyState's figure slot) because it
+    // has no single natural width the way a trend does.
+    const out = html(
+      <LuminanceLedger subjectName="x" dimensions={DIMENSIONS} animate={false} />,
+    );
+    expect(out).toContain('width="100%"');
+  });
+});

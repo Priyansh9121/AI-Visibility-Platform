@@ -1,4 +1,4 @@
-import type { JSX, ReactNode } from 'react';
+import type { CSSProperties, JSX, ReactNode } from 'react';
 import { cn } from '../../lib/cn.js';
 
 export interface ChartFrameProps {
@@ -15,6 +15,8 @@ export interface ChartFrameProps {
   dataTable?: ReactNode;
   children: ReactNode;
   className?: string;
+  /** Inline style on the figure. `TrendChart` uses it to bound its own width. */
+  style?: CSSProperties;
 }
 
 /**
@@ -32,9 +34,10 @@ export function ChartFrame({
   dataTable,
   children,
   className,
+  style,
 }: ChartFrameProps): JSX.Element {
   return (
-    <figure className={cn('avp-chart-frame', className)}>
+    <figure className={cn('avp-chart-frame', className)} style={style}>
       {title != null && <figcaption className="avp-chart-frame__title">{title}</figcaption>}
       <div className="avp-chart-frame__plot" role="img" aria-label={ariaLabel}>
         {children}
