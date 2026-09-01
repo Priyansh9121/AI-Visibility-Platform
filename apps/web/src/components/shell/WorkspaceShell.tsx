@@ -14,6 +14,19 @@
  *
  * `/share/{token}` deliberately does NOT use this — a stranger reading a
  * report should not be shown the sending agency's workspace navigation.
+ *
+ * IT IS IN COLOUR NOW — Epic 9.24
+ * -------------------------------
+ * Each destination carries a fixed index into the Working-screen accent layer
+ * (`BENCH_ACCENTS`). The indices are written out below rather than derived from
+ * array position, because they are IDENTITY: Clients has been violet since this
+ * epic and must still be violet after someone reorders the sidebar or inserts a
+ * fifth destination between two existing ones. An operator who has learnt where
+ * the violet icon is should not have to re-learn it because the markup moved.
+ *
+ * This is chrome only. design-direction.md §0 puts every screen behind this
+ * shell in the Working column; the report it links to is Presenting and is
+ * untouched, which `reportIsolation.test.ts` enforces rather than promises.
  */
 
 import type { JSX, ReactNode } from 'react';
@@ -22,6 +35,19 @@ import { BarChart3, Building2, Settings, Telescope } from 'lucide-react';
 import { api } from '@/lib/api';
 
 export type ShellSection = 'dashboard' | 'compare' | 'clients' | 'settings';
+
+/**
+ * A destination's accent, fixed by name.
+ *
+ * Not the array index. See the module note — these are stable identities, and
+ * a lookup keyed by name survives reordering where a position does not.
+ */
+const ACCENT: Record<ShellSection, number> = {
+  dashboard: 0,
+  compare: 1,
+  clients: 2,
+  settings: 3,
+};
 
 export function WorkspaceShell({
   current,
@@ -62,12 +88,14 @@ export function WorkspaceShell({
           <NavItem
             href="/dashboard"
             label="Dashboard"
+            accent={ACCENT.dashboard}
             current={current === 'dashboard'}
             icon={<BarChart3 width={16} height={16} aria-hidden="true" />}
           />
           <NavItem
             href="/"
             label="Compare"
+            accent={ACCENT.compare}
             note="Scan a new business"
             current={current === 'compare'}
             icon={<Telescope width={16} height={16} aria-hidden="true" />}
@@ -75,12 +103,14 @@ export function WorkspaceShell({
           <NavItem
             href="/clients"
             label="Clients"
+            accent={ACCENT.clients}
             current={current === 'clients'}
             icon={<Building2 width={16} height={16} aria-hidden="true" />}
           />
           <NavItem
             href="/settings"
             label="Settings"
+            accent={ACCENT.settings}
             current={current === 'settings'}
             icon={<Settings width={16} height={16} aria-hidden="true" />}
           />

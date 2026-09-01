@@ -35,8 +35,19 @@
  *   ever appeared folded into the report's fix beat; this is the same stored
  *   data read on its own, with the four weighted components its sub-score is
  *   actually made of.
+ * - **Prompts** — Epic 9.24. Ad-hoc prompt testing: type a question, run it
+ *   against this product's own engines on demand, and see who they name. The
+ *   only destination here that CREATES data rather than reading a scan's.
  *
  * Nothing about this frame assumes a fixed number of items.
+ *
+ * ACCENTS — Epic 9.24
+ * -------------------
+ * Each section carries a fixed index into the Working-screen accent layer, and
+ * the indices are written by name for the reason `WorkspaceShell`'s are: they
+ * are identity, not position. Report is deliberately UNACCENTED — it is the one
+ * item here that leaves for a Presenting-context document, and giving it a
+ * Working hue would imply it belongs to the same set as the four that stay.
  */
 
 import type { JSX, ReactNode } from 'react';
@@ -44,7 +55,16 @@ import { LocalNav, LocalNavItem } from '@avp/design-system';
 import type { Client, Me } from '@avp/shared-types';
 import { WorkspaceShell } from '@/components/shell/WorkspaceShell';
 
-export type ClientSection = 'overview' | 'sources' | 'rankings' | 'technical';
+export type ClientSection = 'overview' | 'sources' | 'rankings' | 'technical' | 'prompts';
+
+/** Fixed by name, so reordering the strip does not repaint it. */
+const ACCENT: Record<ClientSection, number> = {
+  overview: 0,
+  sources: 1,
+  rankings: 2,
+  technical: 3,
+  prompts: 4,
+};
 
 export function ClientSpace({
   client,
@@ -57,6 +77,7 @@ export function ClientSpace({
    */
   latestReportScanId,
   meta,
+  figures,
   children,
 }: {
   client: Pick<Client, 'id' | 'name' | 'brandName' | 'domain'>;
@@ -64,6 +85,20 @@ export function ClientSpace({
   current: ClientSection;
   latestReportScanId: string | null;
   meta?: ReactNode;
+  /**
+   * A full-width row of figures, under the nav strip — Epic 9.24.
+   *
+   * NOT `meta`. `meta` sits beside the title inside `LocalNav`'s head, which is
+   * a flex row sized to its content: a row of tiles put there collapses to one
+   * narrow column, stretches the header to its height and leaves the space
+   * beside the title emptier than before. Measured in a live browser on the
+   * Rankings screen, which is exactly the "big empty margins" complaint this
+   * epic set out to close.
+   *
+   * Given its own row it fills the Working column, which is what actually
+   * closes it. `meta` stays for what it was for: a short fact or two.
+   */
+  figures?: ReactNode;
   children: ReactNode;
 }): JSX.Element {
   const base = `/clients/${client.id}`;
@@ -76,7 +111,12 @@ export function ClientSpace({
           back={{ href: '/clients', label: 'All clients' }}
           meta={meta}
         >
-          <LocalNavItem href={base} label="Overview" current={current === 'overview'} />
+          <LocalNavItem
+            href={base}
+            label="Overview"
+            current={current === 'overview'}
+            accent={ACCENT.overview}
+          />
           {latestReportScanId != null && (
             <LocalNavItem
               href={`/scans/${latestReportScanId}/report`}
@@ -88,18 +128,28 @@ export function ClientSpace({
             href={`${base}/sources`}
             label="Sources"
             current={current === 'sources'}
+            accent={ACCENT.sources}
           />
           <LocalNavItem
             href={`${base}/rankings`}
             label="Rankings"
             current={current === 'rankings'}
+            accent={ACCENT.rankings}
           />
           <LocalNavItem
             href={`${base}/technical`}
             label="Technical"
             current={current === 'technical'}
+            accent={ACCENT.technical}
+          />
+          <LocalNavItem
+            href={`${base}/prompts`}
+            label="Prompts"
+            current={current === 'prompts'}
+            accent={ACCENT.prompts}
           />
         </LocalNav>
+        {figures}
         {children}
       </div>
     </WorkspaceShell>

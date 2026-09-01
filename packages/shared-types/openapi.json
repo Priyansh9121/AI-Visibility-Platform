@@ -1979,6 +1979,287 @@
         "title": "PromptOut",
         "type": "object"
       },
+      "PromptRunBrandOut": {
+        "description": "A brand this answer named, and where it appeared.",
+        "properties": {
+          "domain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Domain"
+          },
+          "isSubject": {
+            "title": "Issubject",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "position": {
+            "title": "Position",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "isSubject",
+          "position"
+        ],
+        "title": "PromptRunBrandOut",
+        "type": "object"
+      },
+      "PromptRunCitationOut": {
+        "description": "A source this answer cited. Location, never content.",
+        "properties": {
+          "citesSubject": {
+            "title": "Citessubject",
+            "type": "boolean"
+          },
+          "domain": {
+            "title": "Domain",
+            "type": "string"
+          },
+          "position": {
+            "title": "Position",
+            "type": "integer"
+          },
+          "sourceType": {
+            "$ref": "#/components/schemas/CitationType"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "domain",
+          "sourceType",
+          "position",
+          "citesSubject"
+        ],
+        "title": "PromptRunCitationOut",
+        "type": "object"
+      },
+      "PromptRunHistoryOut": {
+        "description": "A client's runs, newest first, with what the throttle has left.\n\n`runsRemaining` is served rather than left to the browser to infer. The\nceiling is a server-side decision and a client that guessed it would either\nblock a legal run or offer one that 429s \u2014 both worse than being told.",
+        "properties": {
+          "data": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PromptRunOut"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "maxPromptChars": {
+            "title": "Maxpromptchars",
+            "type": "integer"
+          },
+          "runsPerHour": {
+            "title": "Runsperhour",
+            "type": "integer"
+          },
+          "runsRemaining": {
+            "title": "Runsremaining",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "runsRemaining",
+          "runsPerHour",
+          "maxPromptChars"
+        ],
+        "title": "PromptRunHistoryOut",
+        "type": "object"
+      },
+      "PromptRunIn": {
+        "description": "The question. Bounded here as well as in the service.\n\nTwo checks on purpose: this one rejects an oversized body at the edge before\nit is read, and `normalise_prompt` rejects one that only becomes oversized\nafter whitespace is collapsed. Neither subsumes the other.",
+        "properties": {
+          "prompt": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Prompt",
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "title": "PromptRunIn",
+        "type": "object"
+      },
+      "PromptRunOut": {
+        "properties": {
+          "clientId": {
+            "title": "Clientid",
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "promptText": {
+            "title": "Prompttext",
+            "type": "string"
+          },
+          "results": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PromptRunResultOut"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PromptRunStatus"
+          },
+          "subjectDomain": {
+            "title": "Subjectdomain",
+            "type": "string"
+          },
+          "subjectName": {
+            "title": "Subjectname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "clientId",
+          "promptText",
+          "status",
+          "subjectName",
+          "subjectDomain",
+          "createdAt"
+        ],
+        "title": "PromptRunOut",
+        "type": "object"
+      },
+      "PromptRunResultOut": {
+        "description": "What one engine did with the prompt.",
+        "properties": {
+          "brands": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PromptRunBrandOut"
+            },
+            "title": "Brands",
+            "type": "array"
+          },
+          "brandsMentioned": {
+            "title": "Brandsmentioned",
+            "type": "integer"
+          },
+          "citations": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PromptRunCitationOut"
+            },
+            "title": "Citations",
+            "type": "array"
+          },
+          "engine": {
+            "$ref": "#/components/schemas/Engine"
+          },
+          "engineVersion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Engineversion"
+          },
+          "errorCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Errorcode"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "latencyMs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latencyms"
+          },
+          "mentioned": {
+            "title": "Mentioned",
+            "type": "boolean"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position"
+          },
+          "prominence": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prominence"
+          },
+          "status": {
+            "$ref": "#/components/schemas/EngineResultStatus"
+          }
+        },
+        "required": [
+          "id",
+          "engine",
+          "status",
+          "mentioned",
+          "brandsMentioned"
+        ],
+        "title": "PromptRunResultOut",
+        "type": "object"
+      },
+      "PromptRunStatus": {
+        "description": "A run's overall verdict, from its per-engine outcomes.\n\nThe same three-way shape `terminal_status_for` gives a scan, and for the\nsame reason: PARTIAL exists so the screen can say \"one engine was down\"\nrather than presenting a narrower result as if it were the whole picture.",
+        "enum": [
+          "ok",
+          "partial",
+          "failed"
+        ],
+        "title": "PromptRunStatus",
+        "type": "string"
+      },
       "PromptSetOut": {
         "properties": {
           "generatedBy": {
@@ -4809,6 +5090,100 @@
         "summary": "Get Client History",
         "tags": [
           "clients"
+        ]
+      }
+    },
+    "/api/v1/clients/{clientId}/prompt-runs": {
+      "get": {
+        "description": "This client's runs, newest first, with what the throttle has left.",
+        "operationId": "list_prompt_runs_api_v1_clients__clientId__prompt_runs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clientId",
+            "required": true,
+            "schema": {
+              "title": "Clientid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptRunHistoryOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Prompt Runs",
+        "tags": [
+          "prompt-runs"
+        ]
+      },
+      "post": {
+        "description": "Ask one prompt of every engine and persist the facts.",
+        "operationId": "create_prompt_run_api_v1_clients__clientId__prompt_runs_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clientId",
+            "required": true,
+            "schema": {
+              "title": "Clientid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromptRunIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptRunOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Prompt Run",
+        "tags": [
+          "prompt-runs"
         ]
       }
     },

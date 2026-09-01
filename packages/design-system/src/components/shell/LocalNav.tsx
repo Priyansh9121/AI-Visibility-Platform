@@ -1,5 +1,6 @@
 import type { JSX, ReactNode } from 'react';
 import { cn } from '../../lib/cn.js';
+import { benchAccent } from '../../tokens/color.js';
 
 export interface LocalNavItemProps {
   href: string;
@@ -15,6 +16,15 @@ export interface LocalNavItemProps {
    * second copy of it rendered inside the record frame.
    */
   external?: boolean;
+  /**
+   * Which Working-screen accent this section carries — Epic 9.24.
+   *
+   * Same reasoning as `NavItem.accent`, one level down: a client's sections are
+   * a strip of five words an operator moves between constantly, and a stable
+   * hue per section makes the strip readable at a glance. Decoration only —
+   * `aria-current` and weight carry the state.
+   */
+  accent?: number;
 }
 
 /**
@@ -32,12 +42,22 @@ export function LocalNavItem({
   label,
   current,
   external,
+  accent,
 }: LocalNavItemProps): JSX.Element {
+  const key = accent == null ? null : benchAccent(accent).key;
   return (
     <a
       href={href}
       aria-current={current ? 'page' : undefined}
-      className={cn('avp-localnav__item', current && 'is-current')}
+      className={cn('avp-localnav__item', current && 'is-current', key != null && 'has-accent')}
+      style={
+        key == null
+          ? undefined
+          : ({
+              '--avp-localnav-accent': `var(--avp-bench-${key}-600)`,
+              '--avp-localnav-wash': `var(--avp-bench-${key}-050)`,
+            } as Record<string, string>)
+      }
     >
       {label}
       {external === true && (

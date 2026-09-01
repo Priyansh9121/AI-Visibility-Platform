@@ -31,6 +31,13 @@ from .engine_result import (
 )
 from .password_reset import PasswordResetToken
 from .prompt import Prompt, PromptIntent, PromptSet
+from .prompt_run import (
+    PromptRun,
+    PromptRunBrand,
+    PromptRunCitation,
+    PromptRunResult,
+    PromptRunStatus,
+)
 from .scan import Scan, ScanStatus, ScanTrigger
 from .score import DEFAULT_WEIGHTS, DIMENSION_KEYS, Score, ScoreStatus
 from .technical_audit import AuditStatus, CheckStatus, TechnicalAudit, TechnicalAuditCheck
@@ -66,6 +73,11 @@ __all__ = [
     "Prompt",
     "PromptIntent",
     "PromptSet",
+    "PromptRun",
+    "PromptRunBrand",
+    "PromptRunCitation",
+    "PromptRunResult",
+    "PromptRunStatus",
     "Scan",
     "ScanStatus",
     "ScanTrigger",

@@ -31,6 +31,8 @@ import {
   CardBody,
   EmptyState,
   LuminanceLedger,
+  StatRow,
+  StatTile,
   VerdictBar,
 } from '@avp/design-system';
 import type { BadgeTone } from '@avp/design-system';
@@ -103,6 +105,10 @@ export function ClientTechnicalView({
   }
 
   const { client, history, audit } = state;
+  // `checks` is optional on the wire, so the same `?? []` the body uses. One
+  // call, not three: `tally` is pure, but three of them in JSX is three reads
+  // of the same list for one row of figures.
+  const headline = tally(audit?.checks ?? []);
 
   return (
     <ClientSpace
@@ -110,10 +116,22 @@ export function ClientTechnicalView({
       me={me}
       current="technical"
       latestReportScanId={latestScanId(history)}
-      meta={
+      figures={
         audit && audit.status === 'ok' ? (
-          <dl className="flex flex-wrap items-end gap-8">
-            <Stat
+          /*
+            Two figures became four — Epic 9.24. The extra pair is the verdict
+            tally the "Every check" section below already computes and renders
+            as bars; saying it as numbers at the top means an operator does not
+            have to scroll to learn whether this audit needs them. `tally` is
+            the same function on the same checks — no second count.
+
+            `figures` rather than `meta`, and the accent rule follows
+            ClientDetailView's: Technical foundation is a SCORE and takes no
+            categorical hue, because the ramp is already the colour language for
+            a score. The three counts beside it do.
+          */
+          <StatRow min="10rem">
+            <StatTile
               label="Technical foundation"
               value={
                 num(audit.technicalFoundation) === null
@@ -121,8 +139,15 @@ export function ClientTechnicalView({
                   : `${num(audit.technicalFoundation)!.toFixed(0)}`
               }
             />
-            <Stat label="Pages crawled" value={String(audit.pagesCrawled)} />
-          </dl>
+            <StatTile label="Pages crawled" value={String(audit.pagesCrawled)} accent={0} />
+            <StatTile label="Passing" value={String(headline.pass)} accent={1} />
+            <StatTile
+              label="Failing"
+              value={String(headline.fail)}
+              accent={2}
+              emphasis={headline.fail > 0}
+            />
+          </StatRow>
         ) : undefined
       }
     >
@@ -230,7 +255,18 @@ function Audited({ audit }: { audit: TechnicalAudit }): JSX.Element {
                       {g.note}
                     </p>
                   </div>
-                  <div className="w-40">
+                  {/*
+                    This was a width utility at step 40 until Epic 9.24, and
+                    that step does not exist here: the Tailwind preset REPLACES
+                    the spacing scale rather than extending it, so the class
+                    compiled to nothing and this bar has been unconstrained
+                    since Epic 9.22 — through a review and a screenshot pass.
+                    Step 32 is 8rem, the nearest the scale actually defines to
+                    the 10rem intended. The off-scale guard in
+                    reportIsolation.test.ts now catches this class of mistake,
+                    which is why it exists.
+                  */}
+                  <div className="w-32">
                     <VerdictBar
                       counts={{ pass: gc.pass, warn: gc.warn, fail: gc.fail }}
                       showLegend={false}
@@ -292,11 +328,5 @@ function NotAudited(): JSX.Element {
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }): JSX.Element {
-  return (
-    <div className="flex flex-col gap-1">
-      <dt className="text-ui-2xs uppercase tracking-caps text-text-tertiary">{label}</dt>
-      <dd className="text-ui-lg font-medium text-text-primary">{value}</dd>
-    </div>
-  );
-}
+/* The private `Stat` helper is gone — it is `StatTile` in the design system
+   now. See the note in ClientsView.tsx for the condition that was met. */

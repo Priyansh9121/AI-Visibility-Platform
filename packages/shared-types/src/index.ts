@@ -118,6 +118,14 @@ export type HistoryCitedDomain = Schemas['HistoryCitedDomainOut'];
 export type HistoryCompetitor = Schemas['HistoryCompetitorOut'];
 export type RunScanRequest = Schemas['RunScanRequest'];
 
+// --- ad-hoc prompt runs (Epic 9.24) -------------------------------------
+export type PromptRun = Schemas['PromptRunOut'];
+export type PromptRunResult = Schemas['PromptRunResultOut'];
+export type PromptRunBrand = Schemas['PromptRunBrandOut'];
+export type PromptRunCitation = Schemas['PromptRunCitationOut'];
+export type PromptRunHistory = Schemas['PromptRunHistoryOut'];
+export type PromptRunStatus = Schemas['PromptRunStatus'];
+
 // --- enumerations -------------------------------------------------------
 export type UserRole = Schemas['UserRole'];
 export type UserStatus = Schemas['UserStatus'];

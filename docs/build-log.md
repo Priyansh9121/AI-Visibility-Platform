@@ -9442,3 +9442,114 @@ screenshots at the identical 1440px viewport in `docs/screenshots/epic-9-21/`.
 
 **The rule worth keeping:** a screen looking sparse is not evidence that its
 container is too wide. Measure the type before touching the width.
+
+---
+
+# Epic 9.24 — two palettes, because §0 always described two contexts
+
+**2026-09-01.** design-direction.md §0 has split every screen into *Presenting*
+and *Working* since Epic 0. The Report's restraint is argued there and is
+untouched by this epic. What was never argued is why every **Working** screen
+shared it, and for nine epics they did: one teal accent on a warm-grey ground,
+from the dashboard to a client's Rankings. That was caution applied past the
+point the split asks for. A report gets printed, photocopied and read across a
+conference table; a dashboard is an operator's own console. None of the
+Report's three reasons has ever applied to it.
+
+## Part A — the `bench-*` layer
+
+Six categorical accents, hues 258 / 275 / 292 / 309 / 326 / 343, chroma 0.185
+against `beacon-600`'s 0.125. Additive: no existing token changed and the
+Report's token set gained nothing.
+
+**The palette database was used, and its recommendation was declined.**
+`ui-ux-pro-max` returned 192 palettes; converted to OKLCH and bucketed, 446
+chromatic entries survive. Its top pick for "dense analytics dashboard" was
+`#1E40AF` / `#3B82F6` / `#DBEAFE` — the exact cool blue-grey §1 rotated the
+neutral axis away from — so no hex was imported. What was taken is where its
+chromatic mass sits **and** where sRGB still has chroma: hues 235–255 are
+chroma-starved (max C 0.12–0.14 at L 0.55), which is why the arc starts at 258
+rather than at the blue the database kept offering. Its *style* recommendation
+("Data-Dense Dashboard") was taken, and is Part B.
+
+Three claims, each a number a test checks: **85°** of hue against `beacon`'s 0,
+**1.48×** the chroma, and **≥30°** from every ramp stop, `beacon` and all four
+semantics — so a chip cannot be read as a score or as a system state. Every
+light/dark pair clears 4.5:1; dark stops are gamut-clamped per hue because blue
+cannot be both light and saturated in sRGB.
+
+## Part B — applied, and what the browser found that the tests could not
+
+Sidebar and section iconography in colour, six accented stat tiles on the
+dashboard, four on a client, four on Technical, and Working-screen charts
+drawing competitors from the layer via `seriesStyle(role, index, palette)` —
+one component, two contexts, no second chart.
+
+Three things only the live pass caught:
+
+1. **The client's figures were in the wrong slot.** Put in `LocalNav`'s `meta`,
+   a tile row collapsed to one narrow column, stretched the header to its
+   height and left the space beside the title emptier than before — the exact
+   complaint this epic set out to close. `ClientSpace` gained a `figures` slot
+   that gives them their own full-width row.
+2. **Two off-scale Tailwind utilities.** The preset REPLACES the spacing scale,
+   so `h-2.5` and `w-40` compile to nothing. A new legend swatch rendered at
+   zero size; `w-40` on Technical's VerdictBar had been dead **since Epic 9.22**
+   — through a review and a screenshot pass. `reportIsolation.test.ts` now greps
+   every spacing utility against the preset's real scale.
+3. **A score wrapped in a categorical hue.** `Median visibility`, `Latest`,
+   `Best` and `Technical foundation` were accented like their neighbours. They
+   are measurements, and this product already has a colour language for a
+   measurement. All four are unaccented now; the counts beside them are not.
+
+Density was added the way Epic 9.21 said to: by giving the space something to
+hold. `TrendChart`'s 9.21 width bound is untouched — a value table now fills the
+column that bound leaves over, keyed by swatch to the lines.
+
+## Part C — Prompts
+
+`POST/GET /clients/{clientId}/prompt-runs`, four new tables, and a fourth item
+in a client's LocalNav. One question an operator typed, run against the same
+`ask_all` and `extract_facts` a scan uses — not a second extraction pass, which
+could have answered differently from the scan whose score the operator is trying
+to explain. No `Scan` row and no score: a run is a question, not a measurement.
+
+**Throttle: 30 runs per client per hour**, sized against a scan rather than
+picked. A run is 3 engine calls, a scan is 72, so 30/hour is 90 calls — **1.25
+scans**. The worst an unattended loop can spend in an hour is a little over one
+scan, which is spend a single Re-run click already incurs. Lower obstructs real
+use (iterating on phrasing is 5–10 runs in minutes); higher makes the ad-hoc
+path its own cost line, which is a pricing decision. Per client, not per
+agency, so one busy client cannot exhaust everyone else's allowance. Counted
+from the rows — exact, and a Redis counter resets exactly when a runaway loop is
+still running. The test asserts the *ratio*, so raising the number forces the
+argument to be made again.
+
+## Verification
+
+**The Report is unchanged, and this is the evidence.** The document element
+(`article.avp-report`) and the whole of `/share/{token}` were captured before
+and after: **byte-identical**, same SHA-256, 2,833,684 and 2,957,105 bytes. The
+full `/scans/{id}/report` page does differ, and legitimately — the operator
+shell around it is what was recoloured, and `ReportView`'s own note has always
+said that chrome sits above the document rather than inside it.
+`reportIsolation.test.ts` enforces this going forward, and fails in both
+directions: if a report surface ever names a bench token, and if the Working
+screens ever stop using one.
+
+**`verify_chart_scale.py`: 25 offenders before, 25 after.** The style guide went
+from 6 charts to 7 and the new Working-palette `TrendChart` added **zero**. All
+25 are `avp-ledger__svg` and `avp-shelf__svg`, unbounded since before this epic.
+They are **deliberately not fixed here**: the Ledger and the Shelf are the
+*Report's* charts, and bounding them would be a visual change to the Report,
+which this brief puts out of scope. Recorded as an open finding.
+
+**Prompts was verified against the live engines**, not stubs: one real run,
+3/3 engines named the client at position 1, real competitor extraction and real
+citations from the grounded engine. Screenshotted.
+
+Screenshots — every Working screen before and after, plus the two Report
+captures — in `docs/screenshots/epic-9-24/`.
+
+**Suite: 1,842 tests, up from 1,675.** design-system 334 (+113), web 586 (+23), api 869 (+31),
+shared-types 53.

@@ -1,6 +1,6 @@
 import type { JSX } from 'react';
 import { cn } from '../../lib/cn.js';
-import { seriesStyle } from '../../tokens/color.js';
+import { seriesStyle, type SeriesPalette } from '../../tokens/color.js';
 import { ChartFrame } from './ChartFrame.js';
 import {
   layoutTrend,
@@ -27,6 +27,19 @@ export interface TrendChartProps {
   height?: number;
   className?: string;
   layoutOptions?: TrendLayoutOptions;
+  /**
+   * Which context this chart is being drawn in — Epic 9.24.
+   *
+   * Defaults to `'report'`, and that default is the point: this is ONE chart
+   * component with one layout, one accessibility contract and one data table,
+   * rendering its competitor series differently depending on who is looking.
+   * It is not a second chart, and there is no Working variant to keep in sync.
+   *
+   * Omitting it yields the restrained §1 palette, so a chart dropped into the
+   * report by someone who has never read `SeriesPalette` is correct by default.
+   * See tokens/color.ts.
+   */
+  palette?: SeriesPalette;
 }
 
 /**
@@ -78,6 +91,7 @@ export function TrendChart({
   height,
   className,
   layoutOptions,
+  palette = 'report',
 }: TrendChartProps): JSX.Element {
   const layout = layoutTrend(points, series, {
     ...layoutOptions,
@@ -202,7 +216,11 @@ export function TrendChart({
         {[...layout.series]
           .sort((a, b) => Number(a.isSubject) - Number(b.isSubject))
           .map((s) => {
-            const style = seriesStyle(s.isSubject ? 'subject' : 'competitor', s.seriesIndex);
+            const style = seriesStyle(
+              s.isSubject ? 'subject' : 'competitor',
+              s.seriesIndex,
+              palette,
+            );
             const dash = s.isSubject ? undefined : DASH[style.pattern];
             const last = s.plotted[s.plotted.length - 1];
             return (
@@ -247,7 +265,13 @@ export function TrendChart({
                       'avp-trend__label',
                       s.isSubject && 'avp-trend__label--subject',
                     )}
-                    fill={s.isSubject ? style.fill : undefined}
+                    /*
+                      On a Working screen the label takes its own series
+                      colour, so a crowded chart can be read by matching label
+                      to line rather than by tracing it. On the report the
+                      competitor labels stay ink, exactly as before.
+                    */
+                    fill={s.isSubject || palette === 'working' ? style.fill : undefined}
                   >
                     {truncateLabel(s.label)}
                   </text>

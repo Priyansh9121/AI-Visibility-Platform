@@ -24,6 +24,7 @@ from .routers import (
     competitors,
     dashboard,
     health,
+    prompt_runs,
     report,
     scans,
     scores,
@@ -104,6 +105,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(action_items.router, prefix=base)
     app.include_router(report.router, prefix=base)
     app.include_router(dashboard.router, prefix=base)
+    app.include_router(prompt_runs.router, prefix=base)
 
     # Session cookies are only sent cross-origin when the origin is named
     # explicitly and credentials are allowed; a wildcard is rejected by

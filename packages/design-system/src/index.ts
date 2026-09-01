@@ -22,6 +22,12 @@ export {
   type CardElevation,
 } from './components/Card.js';
 export { Badge, VisibilityBadge, type BadgeProps, type BadgeTone } from './components/Badge.js';
+export {
+  StatTile,
+  StatRow,
+  type StatTileProps,
+  type StatRowProps,
+} from './components/StatTile.js';
 export { DataTable, type DataTableProps, type Column } from './components/Table.js';
 export { ScoreDisplay, type ScoreDisplayProps } from './components/ScoreDisplay.js';
 export { ScoreMeter, type ScoreMeterProps, type ScoreAbsence } from './components/ScoreMeter.js';

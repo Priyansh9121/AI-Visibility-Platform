@@ -19,6 +19,9 @@ from avp_api.models import (
     Client,
     Competitor,
     EngineResult,
+    PromptRunBrand,
+    PromptRunCitation,
+    PromptRunResult,
     TechnicalAudit,
     TechnicalAuditCheck,
 )
@@ -37,6 +40,13 @@ FACTS_ONLY_MODELS = [
     # what it stores is the CONCLUSION (industry label, niche, brand name,
     # confidence), never the page copy that led to it.
     Client,
+    # Epic 9.24 — an ad-hoc prompt run is a SECOND path by which an engine
+    # answer enters this process, so it obeys the rule the scan path obeys.
+    # `PromptRun` itself is deliberately not here: it holds the operator's own
+    # question, the same exception `Prompt` is. See the test below.
+    PromptRunResult,
+    PromptRunBrand,
+    PromptRunCitation,
 ]
 
 # Column names that would indicate raw third-party content is being stored.
@@ -114,6 +124,38 @@ def test_technical_audit_stores_structural_signals_only() -> None:
     assert {"schema_types", "h1_count", "word_count"} <= names
     for forbidden in ("meta_description", "page_title", "html", "content"):
         assert forbidden not in names
+
+
+def test_prompt_run_stores_facts_and_never_the_answer() -> None:
+    """Epic 9.24 — the ad-hoc path makes the same trade the scan path makes.
+
+    A run asks the engines a question and keeps a digest, an ordinal, a count,
+    entity names and cited URLs. The answer itself lives only inside the request
+    that produced it, exactly as it does for a scan.
+    """
+    from avp_api.models import PromptRunResult
+
+    names = {c.name for c in PromptRunResult.__table__.columns}
+    assert "response_digest" in names
+    for forbidden in ("text", "answer", "answer_text", "response", "content", "raw"):
+        assert forbidden not in names, (
+            f"prompt_run_results.{forbidden} would retain an engine answer. "
+            f"ip-safety.md #7 permits facts only."
+        )
+
+
+def test_prompt_run_question_may_hold_text_because_the_operator_typed_it() -> None:
+    """The second deliberate exception, asserted so it stays deliberate.
+
+    `prompt_runs.prompt_text` is OUR side of the exchange — an operator wrote
+    it into a box. That is the same reason `prompts.text` is permitted, and it
+    is why `PromptRun` is not in FACTS_ONLY_MODELS while all three of its child
+    tables are.
+    """
+    from avp_api.models import PromptRun
+
+    assert isinstance(PromptRun.__table__.c.prompt_text.type, Text)
+    assert PromptRun.__tablename__ not in {m.__tablename__ for m in FACTS_ONLY_MODELS}
 
 
 def test_prompts_may_hold_text_because_the_text_is_ours() -> None:

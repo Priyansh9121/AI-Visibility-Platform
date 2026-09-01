@@ -54,6 +54,18 @@ const tailwindPreset = {
         600: v('beacon-600'),
         700: v('beacon-700'),
       },
+      /* The Working-screen accent layer. Deliberately a SEPARATE scale from
+         `beacon` and `vis`: a screen can be colourful without the report's
+         token set gaining a single new value. Report surfaces never use these
+         — enforced by tokens.test.ts, not by convention. */
+      bench: {
+        '1': { '050': v('bench-1-050'), 100: v('bench-1-100'), 600: v('bench-1-600'), 700: v('bench-1-700') },
+        '2': { '050': v('bench-2-050'), 100: v('bench-2-100'), 600: v('bench-2-600'), 700: v('bench-2-700') },
+        '3': { '050': v('bench-3-050'), 100: v('bench-3-100'), 600: v('bench-3-600'), 700: v('bench-3-700') },
+        '4': { '050': v('bench-4-050'), 100: v('bench-4-100'), 600: v('bench-4-600'), 700: v('bench-4-700') },
+        '5': { '050': v('bench-5-050'), 100: v('bench-5-100'), 600: v('bench-5-600'), 700: v('bench-5-700') },
+        '6': { '050': v('bench-6-050'), 100: v('bench-6-100'), 600: v('bench-6-600'), 700: v('bench-6-700') },
+      },
       competitor: {
         1: v('competitor-1'),
         2: v('competitor-2'),

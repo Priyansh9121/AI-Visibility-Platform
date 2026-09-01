@@ -21,6 +21,8 @@ import type {
   InviteSeatResponse,
   Me,
   ProblemDetail,
+  PromptRun,
+  PromptRunHistory,
   Report,
   Scan,
   SeatList,
@@ -278,6 +280,32 @@ export const api = {
    * four weighted components the sub-score is actually made of.
    */
   audit: (scanId: string) => request<TechnicalAudit>(`/scans/${scanId}/audit`),
+
+  /**
+   * A client's ad-hoc prompt history — Epic 9.24.
+   *
+   * Newest first, unlike `clientHistory`: this is a LIST of things an operator
+   * did, and the most recent one is the one they are looking for. A trend wants
+   * its earliest point at the left; a log wants its latest entry at the top.
+   *
+   * Carries what the throttle has left, so the screen can say so before a run
+   * is attempted rather than discovering it in a 429.
+   */
+  promptRuns: (clientId: string) =>
+    request<PromptRunHistory>(`/clients/${clientId}/prompt-runs`),
+
+  /**
+   * Run one prompt against every engine, now.
+   *
+   * Synchronous, and slow on purpose — three concurrent engine calls, ~23s
+   * median. The caller must show that it is working; there is no job to poll
+   * because there is no job. See routers/prompt_runs.py.
+   */
+  runPrompt: (clientId: string, prompt: string) =>
+    request<PromptRun>(`/clients/${clientId}/prompt-runs`, {
+      method: 'POST',
+      body: JSON.stringify({ prompt }),
+    }),
 
   createClient: (payload: CreateClientRequest) =>
     request<ClientDetail>('/clients', {

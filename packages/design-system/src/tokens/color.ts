@@ -180,27 +180,191 @@ export const COMPETITOR_PATTERNS: readonly CompetitorPattern[] = [
 ];
 
 /**
+ * Which context a chart is being drawn in.
+ *
+ * `'report'` is the DEFAULT, and that default is the guarantee. The report does
+ * not opt out of the working palette — it never opts in, so a chart added to it
+ * tomorrow by someone who has not read this file is restrained automatically.
+ * Getting the report wrong requires typing `'working'` into it.
+ */
+export type SeriesPalette = 'report' | 'working';
+
+/**
  * Resolve the visual treatment for a series.
  *
  * `subject` is the client/prospect being reported on and always wins the brand
- * accent. Competitors cycle the neutral family. This function is the single
- * place that rule is enforced — components must not pick series colours
- * themselves.
+ * accent — in BOTH contexts. design-direction.md §1's "one brand, one colour,
+ * everywhere in the product" is not what this epic changed, and an operator
+ * who learns that the teal line is their client on the dashboard must find the
+ * same teal line in the document they send.
+ *
+ * WHAT THE CONTEXT CHANGES: COMPETITOR HUE
+ * -----------------------------------------
+ * §1 requires competitors to be non-judgmental — a rival in "good green" reads
+ * as an endorsement, one in "bad red" reads as a hatchet job, and the report
+ * cannot afford either in front of a CMO. On the REPORT that is enforced by
+ * drawing them in neutral slate, separated by lightness and pattern.
+ *
+ * On a WORKING screen the audience is the operator, the artefact is never
+ * printed and never sent, and five neutral greys at 1.5px are genuinely hard
+ * to follow across a crowded trend line. So competitors take the bench hues —
+ * which are categorical, carry no rank, and sit 30 degrees clear of every hue
+ * that means anything. The non-judgmental requirement is met the same way, by
+ * a palette with no good end and no bad end; it is just a palette you can
+ * actually tell apart.
+ *
+ * THE PATTERN IS UNCONDITIONAL.
+ * Both contexts keep the §1 dash/hatch assignment. It is what makes the chart
+ * readable in greyscale and to a colour-blind operator, and neither of those
+ * stops mattering because the screen is a Working one.
+ *
+ * This function is the single place the rule is enforced — components must not
+ * pick series colours themselves.
  */
 export function seriesStyle(
   role: 'subject' | 'competitor',
   index = 0,
+  palette: SeriesPalette = 'report',
 ): { fill: string; pattern: CompetitorPattern; isSubject: boolean } {
   if (role === 'subject') {
     return { fill: oklch(beacon['600']), pattern: 'solid', isSubject: true };
   }
+  const pattern = COMPETITOR_PATTERNS[index % COMPETITOR_PATTERNS.length]!;
+  if (palette === 'working') {
+    return { fill: benchColor(index), pattern, isSubject: false };
+  }
   const keys = ['1', '2', '3', '4', '5'] as const;
-  const key = keys[index % keys.length]!;
-  return {
-    fill: oklch(competitor[key]),
-    pattern: COMPETITOR_PATTERNS[index % COMPETITOR_PATTERNS.length]!,
-    isSubject: false,
-  };
+  return { fill: oklch(competitor[keys[index % keys.length]!]), pattern, isSubject: false };
+}
+
+/* ------------------------------------------------------------------ *
+ * THE WORKING-SCREEN ACCENT LAYER — "the bench"
+ *
+ * design-direction.md §0 has always split screens into PRESENTING (the report,
+ * which gets printed and handed to a prospect's CMO) and WORKING (an
+ * operator's own tools, 20 tabs open, running scans back to back). The report's
+ * restraint is load-bearing for the reasons §1 gives — greyscale survival,
+ * CVD safety, "document not dashboard". None of those reasons apply to the
+ * dashboard, and applying them there anyway is what left every Working screen
+ * monochrome with a single teal highlight.
+ *
+ * So this is a SECOND palette for the second context. `paper`/`ink` is the
+ * document metaphor; `bench` is the operator's bench the document is assembled
+ * on. It is ADDITIVE — nothing above this comment changed to make room for it.
+ *
+ * WHERE THE HUES CAME FROM
+ * ------------------------
+ * Generated from `ui-ux-pro-max`'s palette database (192 palettes, 446
+ * chromatic entries once near-neutrals and unusable lightnesses are dropped),
+ * converted to OKLCH and bucketed by hue. The database's own top
+ * recommendation for "dense analytics dashboard" was the cool-blue/slate
+ * family (#1E40AF, #3B82F6, #DBEAFE) — which is precisely the category default
+ * §1 rotated the neutral axis away from, so the hex values were NOT imported.
+ * What was taken is the hue MASS: the arc 258-343 is where the database's
+ * chromatic entries actually cluster and where sRGB still has chroma to spend.
+ *
+ * THE RULE THAT KEEPS IT FROM MEANING ANYTHING IT SHOULDN'T
+ * ---------------------------------------------------------
+ * Every bench hue sits at least 30 degrees away from every hue that already
+ * carries meaning in this system — the five visibility stops, `beacon`, and the
+ * four semantics. A bench chip therefore cannot be misread as a score value or
+ * as a system state, because it is nowhere near one on the wheel. This is not a
+ * convention; `tokens.test.ts` fails if a hue is ever moved inside the buffer.
+ *
+ * Chroma is 0.185 against `beacon-600`'s 0.125 — 1.48x — and the layer spans
+ * 85 degrees of hue where the old system had a single point. That is the whole
+ * "richer and more saturated" claim, stated as two numbers that can be checked.
+ * ------------------------------------------------------------------ */
+
+/** One categorical accent: a stable key, a human name, and its hue. */
+export interface BenchAccent {
+  readonly key: string;
+  readonly name: string;
+  readonly hue: number;
+}
+
+/**
+ * The six accents, in assignment order.
+ *
+ * Six because that is what the Working screens actually need to tell apart —
+ * four agency destinations and, inside a client, five sections. Ordering is
+ * stable and meaningless: index 3 is not "worse" than index 1, which is the
+ * property the visibility ramp deliberately does NOT have.
+ */
+export const BENCH_ACCENTS: readonly BenchAccent[] = [
+  { key: '1', name: 'cobalt', hue: 258 },
+  { key: '2', name: 'indigo', hue: 275 },
+  { key: '3', name: 'violet', hue: 292 },
+  { key: '4', name: 'orchid', hue: 309 },
+  { key: '5', name: 'magenta', hue: 326 },
+  { key: '6', name: 'rose', hue: 343 },
+];
+
+/** The minimum hue separation from any meaning-bearing colour. Asserted, not assumed. */
+export const BENCH_HUE_BUFFER = 30;
+
+export type BenchStop = '050' | '100' | '600' | '700';
+
+/**
+ * Lightness and chroma per stop, shared by all six hues.
+ *
+ * Held as one table rather than 24 hand-typed triples so that "every accent is
+ * the same weight as every other" is structural. Two accents drifting apart in
+ * lightness would make one of them read as more important, and categorical
+ * colour must not imply rank.
+ *
+ * `700` is DEEPER than `600` in light mode — a press/hover deepening, matching
+ * `beacon-700`.
+ */
+const BENCH_LIGHT: Record<BenchStop, readonly [l: number, c: number]> = {
+  '050': [0.955, 0.035],
+  '100': [0.905, 0.062],
+  '600': [0.55, 0.185],
+  '700': [0.46, 0.158],
+};
+
+function buildBench(): Record<string, Oklch> {
+  const out: Record<string, Oklch> = {};
+  for (const accent of BENCH_ACCENTS) {
+    for (const [stop, [l, c]] of Object.entries(BENCH_LIGHT)) {
+      out[`${accent.key}-${stop}`] = [l, c, accent.hue];
+    }
+  }
+  return out;
+}
+
+/**
+ * The light-mode bench palette, keyed `"{accent}-{stop}"` — e.g. `bench['3-600']`.
+ *
+ * Dark-mode values are NOT here. They cannot be derived by the same table:
+ * blue at hue 258 simply cannot be both light and saturated inside sRGB, so the
+ * dark scale is chroma-clamped per hue at the gamut boundary. They live in
+ * tokens.css's `[data-theme='dark']` block, which is the one place in this
+ * system that has always owned the neutral flip.
+ */
+export const bench: Record<string, Oklch> = buildBench();
+
+/** The accent at a categorical index. Cycles, so any list length is safe. */
+export function benchAccent(index: number): BenchAccent {
+  const n = BENCH_ACCENTS.length;
+  return BENCH_ACCENTS[((index % n) + n) % n]!;
+}
+
+/** CSS colour for a categorical index at a given stop. */
+export function benchColor(index: number, stop: BenchStop = '600', alpha = 1): string {
+  return oklch(bench[`${benchAccent(index).key}-${stop}`]!, alpha);
+}
+
+/**
+ * The custom-property name for a categorical index — for call sites that must
+ * stay theme-reactive.
+ *
+ * `benchColor` returns a LITERAL, which is correct for an SVG fill computed at
+ * render time and wrong for anything that has to follow a theme switch. Chrome
+ * that persists across a theme change should read the variable instead.
+ */
+export function benchVar(index: number, stop: BenchStop = '600'): string {
+  return `var(--avp-bench-${benchAccent(index).key}-${stop})`;
 }
 
 /* ------------------------------------------------------------------ *
