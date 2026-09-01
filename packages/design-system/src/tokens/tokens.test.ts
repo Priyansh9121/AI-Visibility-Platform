@@ -297,6 +297,142 @@ describe('tailwind preset exposes the tokens it claims to', () => {
     expect(frames![1]).toMatch(/100%\s*\{\s*opacity:\s*1;\s*\}/);
   });
 
+  /**
+   * Epic 9.23 — every clickable primitive answers a press.
+   *
+   * Before this, `:active` appeared ZERO times in the whole stylesheet: nothing
+   * in the system gave any feedback that a press had landed. That is the
+   * highest-leverage motion gap the audit found — higher than any arrival
+   * animation, because it is the one moment a user is actively waiting for a
+   * response.
+   *
+   * Asserted at the stylesheet level because that is where it lives, and
+   * because jsdom applies no stylesheet and a static render has no `:active`.
+   */
+  it('gives every interactive primitive a press state', () => {
+    const components = readFileSync(
+      fileURLToPath(new URL('../styles/components.css', import.meta.url)),
+      'utf8',
+    );
+
+    const PRESSABLE = [
+      '.avp-btn:active:not(:disabled)',
+      '.avp-nav__item:active',
+      '.avp-localnav__item:active',
+      '.avp-localnav__back:active',
+    ];
+
+    for (const selector of PRESSABLE) {
+      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const rule = components.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`));
+      expect(rule, `${selector} has no press state`).not.toBeNull();
+      // Subtle, per the press-feedback budget — never scale(0) and never a
+      // shrink big enough to read as a layout change.
+      expect(rule![1]).toMatch(/transform:\s*scale\(0\.9[5-8]\)/);
+    }
+  });
+
+  it('animates the press with the hover duration, not a hand-typed one', () => {
+    const components = readFileSync(
+      fileURLToPath(new URL('../styles/components.css', import.meta.url)),
+      'utf8',
+    );
+    // 120ms sits inside the 100-160ms press-feedback budget. A press that is
+    // not in the transition list would snap instead of easing.
+    for (const base of ['.avp-btn', '.avp-nav__item', '.avp-localnav__item', '.avp-localnav__back']) {
+      const escaped = base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const rule = components.match(new RegExp(`(?:^|\\n)${escaped}\\s*\\{([^}]*)\\}`));
+      expect(rule, `${base} base rule is missing`).not.toBeNull();
+      expect(rule![1]).toMatch(/transition:[^;]*transform[^;]*--avp-duration-hover/);
+    }
+  });
+
+  it('drops the press movement under reduced motion, keeping colour', () => {
+    // The global block in base.css collapses DURATIONS, which would make the
+    // press instant rather than absent — the element would still jump. Reduced
+    // motion asks for less movement, not faster movement.
+    const components = readFileSync(
+      fileURLToPath(new URL('../styles/components.css', import.meta.url)),
+      'utf8',
+    );
+    const blocks = [...components.matchAll(/@media \(prefers-reduced-motion: reduce\)\s*\{([\s\S]*?)\n\}/g)]
+      .map((m) => m[1]!)
+      .join('\n');
+    expect(blocks).toMatch(/\.avp-btn:active/);
+    expect(blocks).toMatch(/transform:\s*none\s*!important/);
+  });
+
+  /**
+   * Epic 9.23 — no hover rule may fire on a touch device.
+   *
+   * A touch device fires `:hover` on tap and leaves it STUCK until the next tap
+   * elsewhere, so the last thing pressed keeps a hover colour that reads as a
+   * selection nothing selected. All nine hover rules in this file were ungated.
+   *
+   * This walks the stylesheet and fails on any `:hover` that is not inside a
+   * `@media (hover: hover)` block — so a hover rule added later is caught the
+   * day it is added, rather than needing this list to be maintained.
+   */
+  it('gates every hover rule behind a real pointer', () => {
+    const components = readFileSync(
+      fileURLToPath(new URL('../styles/components.css', import.meta.url)),
+      'utf8',
+    );
+
+    // Track brace depth, and whether we are inside a hover-gated media block.
+    let depth = 0;
+    const gateDepths: number[] = [];
+    const ungated: string[] = [];
+
+    for (const rawLine of components.split('\n')) {
+      const line = rawLine.trim();
+      // A `:hover` in a comment is prose, not a rule.
+      const isComment = line.startsWith('*') || line.startsWith('/*') || line.startsWith('//');
+
+      if (!isComment && line.includes(':hover') && !line.startsWith('@media')) {
+        if (gateDepths.length === 0) ungated.push(line);
+      }
+
+      if (/^@media[^{]*\(hover:\s*hover\)/.test(line)) gateDepths.push(depth);
+
+      for (const ch of rawLine) {
+        if (ch === '{') depth += 1;
+        if (ch === '}') {
+          depth -= 1;
+          if (gateDepths.length > 0 && depth === gateDepths[gateDepths.length - 1]) {
+            gateDepths.pop();
+          }
+        }
+      }
+    }
+
+    expect(ungated, `ungated hover rules:\n${ungated.join('\n')}`).toEqual([]);
+  });
+
+  it('still HAS hover rules — the gate must not pass by deleting them', () => {
+    // Without this, removing every :hover rule would satisfy the test above.
+    const components = readFileSync(
+      fileURLToPath(new URL('../styles/components.css', import.meta.url)),
+      'utf8',
+    );
+    const hovers = components.match(/^\s*\.[\w-]+[^{\n]*:hover[^{\n]*\{/gm) ?? [];
+    expect(hovers.length).toBeGreaterThanOrEqual(9);
+  });
+
+  it('does NOT gate focus or active — those must work on every input type', () => {
+    // Gating focus would strip a keyboard affordance; gating active would strip
+    // the one piece of feedback a touch device gets right.
+    const components = readFileSync(
+      fileURLToPath(new URL('../styles/components.css', import.meta.url)),
+      'utf8',
+    );
+    const gated = [...components.matchAll(/@media \(hover: hover\)[^{]*\{([\s\S]*?)\n\}/g)]
+      .map((m) => m[1]!)
+      .join('\n');
+    expect(gated).not.toMatch(/:active/);
+    expect(gated).not.toMatch(/:focus/);
+  });
+
   it('the leading tokens are reachable as utilities', async () => {
     const { default: preset } = await import('../tailwind-preset.js');
     const lineHeight = preset.theme.extend.lineHeight as Record<string, string>;
