@@ -1142,6 +1142,86 @@
 .avp-field__hint { font-size: var(--avp-text-ui-sm); color: var(--avp-text-secondary); }
 .avp-field__error { font-size: var(--avp-text-ui-sm); color: var(--avp-danger); font-weight: 500; }
 
+/* =========================== VerdictBar ========================== */
+/*
+ * pass / warn / fail as one proportional strip — Epic 9.22.
+ *
+ * Semantic colour is correct here and nowhere near the visibility ramp: §1
+ * reserves semantics for SYSTEM STATE, and a technical check's verdict is
+ * exactly that. See VerdictBar.tsx.
+ */
+
+.avp-verdict { display: flex; flex-direction: column; gap: var(--avp-space-2); }
+
+.avp-verdict__track {
+  display: flex;
+  height: var(--avp-space-1_5);
+  border-radius: var(--avp-radius-full);
+  overflow: hidden;
+  background: var(--avp-surface-sunken);
+  box-shadow: inset 0 0 0 1px var(--avp-line-hairline);
+}
+
+/* Width is set inline from the counts. The transition is here so a re-audit
+   that moves the proportions eases rather than snapping — and, as with
+   `.avp-meter__lit`, it never fires on first paint, because a transition has no
+   previous value to run from. */
+.avp-verdict__seg {
+  height: 100%;
+  transition: width var(--avp-duration-layout) var(--avp-ease-out);
+}
+
+.avp-verdict__seg--pass { background: var(--avp-success); }
+.avp-verdict__seg--warn { background: var(--avp-warn); }
+.avp-verdict__seg--fail { background: var(--avp-danger); }
+
+/* Nothing measured: an empty track, never a full green one. Same rule
+   `.avp-meter--empty` follows — an absence is drawn as an absence. */
+.avp-verdict__empty { width: 100%; height: 100%; opacity: 0.55; }
+
+.avp-verdict__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--avp-space-5);
+  margin: 0;
+}
+
+.avp-verdict__item { display: flex; align-items: baseline; gap: var(--avp-space-2); }
+
+.avp-verdict__label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--avp-space-1_5);
+  font-size: var(--avp-text-ui-2xs);
+  font-weight: 600;
+  letter-spacing: var(--avp-tracking-caps);
+  text-transform: uppercase;
+  color: var(--avp-text-tertiary);
+}
+
+.avp-verdict__value {
+  margin: 0;
+  font-size: var(--avp-text-ui-md);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--avp-text-primary);
+}
+
+.avp-verdict__dot {
+  width: var(--avp-space-2);
+  height: var(--avp-space-2);
+  border-radius: var(--avp-radius-full);
+  flex: none;
+}
+
+.avp-verdict__dot--pass { background: var(--avp-success); }
+.avp-verdict__dot--warn { background: var(--avp-warn); }
+.avp-verdict__dot--fail { background: var(--avp-danger); }
+.avp-verdict__dot--na {
+  background: var(--avp-surface-sunken);
+  box-shadow: inset 0 0 0 1px var(--avp-line-strong);
+}
+
 /* ============================ Trend ============================== */
 /*
  * The first time-series shape in this system — Epic 9.20. Every value below is

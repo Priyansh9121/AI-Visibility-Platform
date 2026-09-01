@@ -43,6 +43,24 @@ class TechnicalAuditOut(ApiModel):
     technical_foundation: Decimal | None = None
     excluded_components: dict = Field(default_factory=dict)
 
+    # The four weighted parts the sub-score is made of, each 0-100 — Epic 9.22.
+    #
+    # **Derived on read, never stored**, exactly like `CompetitorComparison`
+    # (`scoring_runner.score_scan`: "a pure function of rows already persisted,
+    # so storing it would create a second copy that can fall out of step").
+    # `compute_components` reads only columns this row already carries —
+    # `is_indexable`, `has_sitemap`, `canonical_present`, `schema_types`, the
+    # four schema flags and `content_age_days` — so recomputing costs a
+    # dictionary and re-crawls nothing.
+    #
+    # Exposed because the sub-score is a WEIGHTED SUM of these, which makes it
+    # drawable as a Luminance Ledger whose total lit height IS the Technical
+    # Foundation score. Without them the screen could only show one number.
+    components: dict[str, Decimal] = Field(default_factory=dict)
+    # The weight actually applied to each component after redistribution, so a
+    # reader can see why an excluded component did not simply score zero.
+    component_weights: dict[str, Decimal] = Field(default_factory=dict)
+
     # --- Core Web Vitals -------------------------------------------------
     # LAB measurements from a single cold load, NOT field data. They are
     # reported per §7 but carry no weight in the sub-score: letting a noisy

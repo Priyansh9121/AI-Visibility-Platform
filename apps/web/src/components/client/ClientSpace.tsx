@@ -31,9 +31,12 @@
  *   change the artefact. A real path into it is what the brief asked for and
  *   what this is.
  * - **Sources** / **Rankings** — trends over the client's whole history.
+ * - **Technical** — Epic 9.22. The audit has existed since Epic 6 and only
+ *   ever appeared folded into the report's fix beat; this is the same stored
+ *   data read on its own, with the four weighted components its sub-score is
+ *   actually made of.
  *
- * A fourth item (Prompts) is expected here later. Nothing about this frame
- * assumes three.
+ * Nothing about this frame assumes a fixed number of items.
  */
 
 import type { JSX, ReactNode } from 'react';
@@ -41,7 +44,7 @@ import { LocalNav, LocalNavItem } from '@avp/design-system';
 import type { Client, Me } from '@avp/shared-types';
 import { WorkspaceShell } from '@/components/shell/WorkspaceShell';
 
-export type ClientSection = 'overview' | 'sources' | 'rankings';
+export type ClientSection = 'overview' | 'sources' | 'rankings' | 'technical';
 
 export function ClientSpace({
   client,
@@ -90,6 +93,11 @@ export function ClientSpace({
             href={`${base}/rankings`}
             label="Rankings"
             current={current === 'rankings'}
+          />
+          <LocalNavItem
+            href={`${base}/technical`}
+            label="Technical"
+            current={current === 'technical'}
           />
         </LocalNav>
         {children}

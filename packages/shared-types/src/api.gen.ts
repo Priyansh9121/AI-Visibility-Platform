@@ -2662,6 +2662,14 @@ export interface components {
             checks?: components["schemas"]["AuditCheckOut"][];
             /** Cls */
             cls?: string | null;
+            /** Componentweights */
+            componentWeights?: {
+                [key: string]: string;
+            };
+            /** Components */
+            components?: {
+                [key: string]: string;
+            };
             /** Contentagedays */
             contentAgeDays?: number | null;
             /**

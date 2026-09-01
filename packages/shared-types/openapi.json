@@ -3621,6 +3621,22 @@
             ],
             "title": "Cls"
           },
+          "componentWeights": {
+            "additionalProperties": {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            "title": "Componentweights",
+            "type": "object"
+          },
+          "components": {
+            "additionalProperties": {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            "title": "Components",
+            "type": "object"
+          },
           "contentAgeDays": {
             "anyOf": [
               {

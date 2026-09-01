@@ -25,6 +25,11 @@ export { Badge, VisibilityBadge, type BadgeProps, type BadgeTone } from './compo
 export { DataTable, type DataTableProps, type Column } from './components/Table.js';
 export { ScoreDisplay, type ScoreDisplayProps } from './components/ScoreDisplay.js';
 export { ScoreMeter, type ScoreMeterProps, type ScoreAbsence } from './components/ScoreMeter.js';
+export {
+  VerdictBar,
+  type VerdictBarProps,
+  type VerdictCounts,
+} from './components/VerdictBar.js';
 export { TextField, type TextFieldProps } from './components/TextField.js';
 export {
   SelectField,

@@ -77,6 +77,24 @@ export interface LuminanceLedgerProps {
    * figure slot is not an icon slot.
    */
   unmeasured?: boolean;
+  /**
+   * Bound the figure at its own drawn width — Epic 9.22. **Defaults to false.**
+   *
+   * This chart is `width: 100%` over a viewBox computed from its content, so
+   * like every viewBox chart it scales its TYPE with its box: measured on the
+   * report, a 344-unit ledger in an 832px column runs at 2.09x and renders its
+   * 13px dimension labels at 27.2px against 16px prose. Epic 9.19 hit this on
+   * the EmptyState figure and capped it at the CALL SITE; Epic 9.21 hit it on
+   * `TrendChart` and gave that component a derived self-cap.
+   *
+   * The default is FALSE, and that is the whole reason this is a prop rather
+   * than unconditional: turning it on by default would change the report, whose
+   * width and layout are out of scope by standing instruction. So a new call
+   * site can opt into a correctly-sized chart without silently editing the
+   * document that gets printed. The report's ledger remains uncapped and is
+   * recorded as a known, deliberate exception.
+   */
+  bounded?: boolean;
   className?: string;
 }
 
@@ -117,6 +135,7 @@ export function LuminanceLedger({
   staggerDimensions = false,
   annotateGap = true,
   unmeasured = false,
+  bounded = false,
   className,
 }: LuminanceLedgerProps): JSX.Element {
   const layout = layoutLedger(dimensions, { height, competitors });
@@ -189,6 +208,7 @@ export function LuminanceLedger({
               ? `. Largest recoverable gap: ${layout.biggestGap.label}, worth ${layout.biggestGap.gap.toFixed(1)} points.`
               : '')
       }
+      {...(bounded ? { style: { maxWidth: `${width}px` } } : {})}
       dataTable={
         unmeasured ? (
           <table>

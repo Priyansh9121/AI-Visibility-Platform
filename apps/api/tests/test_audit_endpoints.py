@@ -290,3 +290,71 @@ class TestScoringIntegration:
         body = (await client.post(f"{BASE}/scans/{sid}/score")).json()
         assert body["technicalFoundation"] is None
         assert body["excludedDimensions"]["technical_foundation"] == "NOT_YET_MEASURED"
+
+
+class TestComponentBreakdown:
+    """The four weighted parts of Technical Foundation — Epic 9.22.
+
+    Exposed so a client's Technical screen can draw the sub-score as a Ledger
+    whose lit height IS the score. Derived on read from the stored row, never
+    persisted — the same discipline `CompetitorComparison` follows.
+    """
+
+    async def test_breakdown_resums_to_the_stored_score(
+        self, client: AsyncClient, session, stub_audit
+    ) -> None:  # noqa: ANN001
+        """The property the whole screen rests on.
+
+        If the components and their effective weights do not re-sum to
+        `technicalFoundation`, the Ledger drawn from them is a picture of a
+        number rather than the number.
+        """
+        await _sign_up(client)
+        _, sid = await _make_scan(client, session)
+        stub_audit()
+        assert (await client.post(f"{BASE}/scans/{sid}/audit")).status_code == 201
+
+        body = (await client.get(f"{BASE}/scans/{sid}/audit")).json()
+        assert body["components"], "an ok audit must expose its breakdown"
+
+        weights = body["componentWeights"]
+        resum = sum(
+            Decimal(weights[k]) * Decimal(v) for k, v in body["components"].items()
+        ) / Decimal("100")
+        assert resum.quantize(Decimal("0.01")) == Decimal(body["technicalFoundation"])
+
+    async def test_effective_weights_sum_to_one_hundred(
+        self, client: AsyncClient, session, stub_audit
+    ) -> None:  # noqa: ANN001
+        # Whatever was measurable, the weights across it total 100 — that is
+        # scoring-spec.md rule 2's redistribution, and it is what lets the
+        # Ledger's height mean anything.
+        await _sign_up(client)
+        _, sid = await _make_scan(client, session)
+        stub_audit()
+        assert (await client.post(f"{BASE}/scans/{sid}/audit")).status_code == 201
+        body = (await client.get(f"{BASE}/scans/{sid}/audit")).json()
+        total = sum(Decimal(v) for v in body["componentWeights"].values())
+        assert abs(total - Decimal("100")) <= Decimal("0.05")
+
+    async def test_reading_the_breakdown_writes_nothing(
+        self, client: AsyncClient, stub_audit, session
+    ) -> None:  # noqa: ANN001
+        """Derived on read. Three reads must not create a row."""
+        from sqlalchemy import func, select
+
+        from avp_api.models.technical_audit import TechnicalAudit
+
+        await _sign_up(client)
+        _, sid = await _make_scan(client, session)
+        stub_audit()
+        assert (await client.post(f"{BASE}/scans/{sid}/audit")).status_code == 201
+        before = (
+            await session.execute(select(func.count()).select_from(TechnicalAudit))
+        ).scalar()
+        for _ in range(3):
+            assert (await client.get(f"{BASE}/scans/{sid}/audit")).status_code == 200
+        after = (
+            await session.execute(select(func.count()).select_from(TechnicalAudit))
+        ).scalar()
+        assert before == after
