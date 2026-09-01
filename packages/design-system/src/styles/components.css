@@ -36,7 +36,8 @@
   white-space: nowrap;
   transition: background-color var(--avp-duration-hover) var(--avp-ease-out),
     border-color var(--avp-duration-hover) var(--avp-ease-out),
-    color var(--avp-duration-hover) var(--avp-ease-out);
+    color var(--avp-duration-hover) var(--avp-ease-out),
+    transform var(--avp-duration-hover) var(--avp-ease-out);
 }
 
 .avp-btn:disabled {
@@ -53,26 +54,64 @@
   background: var(--avp-beacon-600);
   color: var(--avp-paper-000);
 }
-.avp-btn--primary:hover:not(:disabled) { background: var(--avp-beacon-700); }
 
 .avp-btn--secondary {
   background: var(--avp-surface-ground);
   border-color: var(--avp-line-strong);
   color: var(--avp-text-primary);
 }
-.avp-btn--secondary:hover:not(:disabled) {
-  background: var(--avp-surface-seated);
-  border-color: var(--avp-beacon-400);
-}
 
 .avp-btn--ghost { background: transparent; color: var(--avp-text-secondary); }
-.avp-btn--ghost:hover:not(:disabled) {
-  background: var(--avp-surface-seated);
-  color: var(--avp-text-primary);
-}
 
 .avp-btn--danger { background: var(--avp-danger); color: var(--avp-paper-000); }
-.avp-btn--danger:hover:not(:disabled) { filter: brightness(0.92); }
+
+/*
+ * HOVER IS GATED — Epic 9.23.
+ *
+ * A touch device fires `:hover` on tap and then LEAVES IT STUCK until the next
+ * tap elsewhere. Every hover rule in this file was ungated, so on a phone or a
+ * tablet the last button pressed kept its hover colour, which reads as a
+ * selected state that nothing selected. `(pointer: fine)` is what distinguishes
+ * a real pointer from a finger.
+ *
+ * Only hover is gated. `:active` and `:focus-visible` are NOT — a press state
+ * is exactly what a touch device gets right, and focus is a keyboard
+ * affordance that must survive on every input type.
+ */
+@media (hover: hover) and (pointer: fine) {
+  .avp-btn--primary:hover:not(:disabled) { background: var(--avp-beacon-700); }
+
+  .avp-btn--secondary:hover:not(:disabled) {
+    background: var(--avp-surface-seated);
+    border-color: var(--avp-beacon-400);
+  }
+
+  .avp-btn--ghost:hover:not(:disabled) {
+    background: var(--avp-surface-seated);
+    color: var(--avp-text-primary);
+  }
+
+  .avp-btn--danger:hover:not(:disabled) { filter: brightness(0.92); }
+}
+
+/*
+ * THE PRESS STATE — Epic 9.23, and the highest-leverage motion finding in the
+ * system: nothing here had one. Zero elements had an `:active` rule at all.
+ *
+ * `scale(0.97)` over `--avp-duration-hover` (120ms), which sits inside the
+ * 100-160ms press-feedback budget. Its purpose is FEEDBACK — confirming the
+ * interface heard the press — which is the one purpose that stays valid at a
+ * button's frequency, because it is near-imperceptible and answers the input
+ * rather than delaying it.
+ *
+ * Deliberately NOT gated behind `(hover: hover)`: a press is precisely what a
+ * touch device gets right, and it is where the feedback matters most.
+ *
+ * Form controls are deliberately excluded. A select or a text field that
+ * shrank on press would be movement in a control the user is aiming at, and
+ * its real feedback is the menu opening or the caret arriving.
+ */
+.avp-btn:active:not(:disabled) { transform: scale(0.97); }
 
 .avp-btn__icon { display: inline-flex; }
 .avp-btn__icon svg { width: 1em; height: 1em; }
@@ -226,7 +265,9 @@
   transition: background-color var(--avp-duration-hover) var(--avp-ease-out);
 }
 
-.avp-table tbody tr:hover td { background: var(--avp-surface-sunken); }
+@media (hover: hover) and (pointer: fine) {
+  .avp-table tbody tr:hover td { background: var(--avp-surface-sunken); }
+}
 .avp-table tbody tr.is-subject td { background: var(--avp-beacon-050); font-weight: 500; }
 .avp-table__cell--end { text-align: right; }
 .avp-table__empty {
@@ -404,10 +445,17 @@
   color: var(--avp-text-secondary);
   text-decoration: none;
   transition: background var(--avp-duration-hover) var(--avp-ease-standard),
-    color var(--avp-duration-hover) var(--avp-ease-standard);
+    color var(--avp-duration-hover) var(--avp-ease-standard),
+    transform var(--avp-duration-hover) var(--avp-ease-out);
 }
 
-.avp-nav__item:hover { background: var(--avp-surface-seated); color: var(--avp-text-primary); }
+@media (hover: hover) and (pointer: fine) {
+  .avp-nav__item:hover { background: var(--avp-surface-seated); color: var(--avp-text-primary); }
+}
+
+/* A nav item is a link, and a link that leads somewhere should answer a press
+   the same way a button does. */
+.avp-nav__item:active { transform: scale(0.97); }
 
 /* Current is marked by weight and a rule, not by colour alone — the same
    reason VisibilityBadge resolves its label colour rather than relying on hue. */
@@ -468,10 +516,15 @@
   font-size: var(--avp-text-ui-sm);
   color: var(--avp-text-secondary);
   text-decoration: none;
-  transition: color var(--avp-duration-hover) var(--avp-ease-out);
+  transition: color var(--avp-duration-hover) var(--avp-ease-out),
+    transform var(--avp-duration-hover) var(--avp-ease-out);
 }
 
-.avp-localnav__back:hover { color: var(--avp-text-primary); }
+@media (hover: hover) and (pointer: fine) {
+  .avp-localnav__back:hover { color: var(--avp-text-primary); }
+}
+
+.avp-localnav__back:active { transform: scale(0.97); }
 
 .avp-localnav__head {
   display: flex;
@@ -525,13 +578,18 @@
   color: var(--avp-text-secondary);
   text-decoration: none;
   transition: background var(--avp-duration-hover) var(--avp-ease-standard),
-    color var(--avp-duration-hover) var(--avp-ease-standard);
+    color var(--avp-duration-hover) var(--avp-ease-standard),
+    transform var(--avp-duration-hover) var(--avp-ease-out);
 }
 
-.avp-localnav__item:hover {
-  background: var(--avp-surface-seated);
-  color: var(--avp-text-primary);
+@media (hover: hover) and (pointer: fine) {
+  .avp-localnav__item:hover {
+    background: var(--avp-surface-seated);
+    color: var(--avp-text-primary);
+  }
 }
+
+.avp-localnav__item:active { transform: scale(0.97); }
 
 /* Current is marked by weight and a rule, not colour alone — the same reason
    `.avp-nav__item.is-current` is. The rule sits UNDER the item here rather than
@@ -1086,7 +1144,9 @@
 .avp-field__control--md { padding: var(--avp-space-2) var(--avp-space-3); }
 .avp-field__control--lg { padding: var(--avp-space-3) var(--avp-space-4); }
 
-.avp-field__control:hover:not(.is-invalid) { border-color: var(--avp-beacon-400); }
+@media (hover: hover) and (pointer: fine) {
+  .avp-field__control:hover:not(.is-invalid) { border-color: var(--avp-beacon-400); }
+}
 
 /* Emphasis is light, not lift — the ring moves to the wrapper so the affix
    and input read as one control. */
@@ -1417,6 +1477,27 @@
  * default. A rule that can no longer fire is a rule the next reader has to
  * reason about for nothing.
  */
+/*
+ * The press state is MOVEMENT, so reduced motion drops it — Epic 9.23.
+ *
+ * The global block in base.css collapses every transition DURATION, which makes
+ * the press instant rather than absent: the element would still jump to 97% and
+ * back. Reduced motion means fewer and gentler animations, not faster ones, and
+ * a scale is exactly the position change it asks to be spared.
+ *
+ * The colour change on `:hover` and the focus ring are deliberately left alone.
+ * They aid comprehension and involve no movement, which is the line this
+ * setting actually draws.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .avp-btn:active:not(:disabled),
+  .avp-nav__item:active,
+  .avp-localnav__item:active,
+  .avp-localnav__back:active {
+    transform: none !important;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .avp-reveal,
   .avp-reveal-group > * {
