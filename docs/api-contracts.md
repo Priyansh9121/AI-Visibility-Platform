@@ -1790,6 +1790,92 @@ deterministic derivation in that case. The report **reads** these rows; it never
 generates them, so loading a report remains a read that costs nothing.
 
 
+---
+
+### `POST /api/v1/clients/{clientId}/prompt-runs` — ad-hoc prompt, Epic 9.24
+
+Ask ONE prompt an operator typed, against every engine, now. Facts persisted.
+
+```jsonc
+// request
+{ "prompt": "best privacy-focused website analytics for a small SaaS" }
+
+// 201
+{
+  "id": "prun_01M1D…", "clientId": "clnt_01M15…",
+  "promptText": "best privacy-focused website analytics for a small SaaS",
+  "status": "ok",                     // ok | partial | failed
+  "subjectName": "Plausible Analytics", "subjectDomain": "plausible.io",
+  "createdAt": "2026-09-01T05:44:00.109593Z",
+  "results": [{
+    "id": "prre_01M1D…", "engine": "claude_search",
+    "engineVersion": "claude-opus-5/web_search_20260209",
+    "status": "ok", "errorCode": null, "latencyMs": 28335,
+    "mentioned": true, "position": 1, "prominence": "0.984", "brandsMentioned": 3,
+    "brands":    [{ "name": "Plausible Analytics", "domain": "plausible.io",
+                    "isSubject": true, "position": 1 }],
+    "citations": [{ "url": "https://…", "domain": "dev.to",
+                    "sourceType": "third_party", "position": 1,
+                    "citesSubject": false }]
+  }]
+}
+```
+
+**Synchronous, and slow on purpose.** Three concurrent engine calls bounded by
+`ENGINE_CALL_CEILING` (122s worst case; 17.9s / 28.3s / 5.4s measured live on
+the three engines). A scan is backgrounded because nobody waits six minutes for
+it; the operator IS waiting for this one, so backgrounding it would mean
+inventing a status to poll for a request that finishes inside the window a
+browser holds open. It is the same work one `PROMPT_CONCURRENCY` slot does
+inside a scan.
+
+**It writes no `Scan` and no `Score`.** A run is a question, not a measurement,
+and must never reach a trend, the dashboard's figures or a client's scan
+history where it would be read as one. Asserted in `test_prompt_runs.py`.
+
+**`status` is the three-way shape a scan uses.** An engine that answered without
+naming the subject is `answered_no_mention` — a finding, not a failure, and the
+single most useful thing this endpoint returns. `partial` means some engine was
+genuinely down.
+
+**Errors.** `422` for a blank or over-long prompt (`PROMPT_EMPTY`,
+`PROMPT_TOO_LONG`; the cap is 500 characters after whitespace collapse). `429`
+for the throttle. `404` for another agency's client — never `403`, which would
+confirm the id exists.
+
+**The throttle: 30 runs per client per hour.** Sized against what a scan
+already costs rather than picked. One run is 3 engine calls; one scan is 24
+prompts × 3 engines = 72. So 30 runs/hour = 90 calls = **1.25 scans**, and the
+worst an unattended loop on one client's screen can spend in an hour is a
+little over one scan — spend this product already absorbs from a single click
+on the dashboard's Re-run button. Lower would obstruct the real work (an
+operator iterating on phrasing legitimately fires 5–10 in minutes); higher and
+the ad-hoc path stops being a rounding error against scan spend and becomes its
+own line item, which is a pricing decision, not a tuning one. **Per client, not
+per agency**, because the abuse vector is a loop on one client's screen and a
+per-agency ceiling would let one busy client exhaust every other client's
+allowance. Counted from the rows, not Redis: the rows are written anyway, the
+count is exact, and a counter that resets on restart is useless exactly when a
+runaway loop is still running. `test_prompt_runs.py` asserts the ratio rather
+than the literal 30, so raising it forces the argument to be made again.
+
+**ip-safety.md #7.** `promptText` is the operator's own words — the same
+deliberate exception `prompts.text` is. No field in `results` can carry an
+engine's answer; a SHA-256 digest is kept so a re-ask can detect the answer
+CHANGED without retaining what it said.
+
+### `GET /api/v1/clients/{clientId}/prompt-runs` — history, Epic 9.24
+
+```jsonc
+{ "data": [ /* PromptRunOut, newest first, 50 max */ ],
+  "runsRemaining": 29, "runsPerHour": 30, "maxPromptChars": 500 }
+```
+
+Newest first, unlike `GET /clients/{id}/history` — that one is a timeline and
+wants its earliest point at the left; this is a log and wants its latest entry
+at the top. The throttle figures are **served rather than inferred**: a browser
+that guessed the ceiling would either block a legal run or offer one that 429s.
+
 ## Planned, not yet built
 
 Recorded so the shape is agreed before it is implemented.
@@ -1858,6 +1944,7 @@ it, the way Finding 2 is.
 | 4 | A competitor override destroys citation and mention attribution | Epic 3.6 | ✅ **fixed in Epic 3.9** |
 | 5 | `verify_competitors.py` verifies a copy of the detection pipeline | Epic 3 | ✅ **fixed in Epic 3.11** |
 | 6 | No verification script covers the five-dimension scoring path | Epic 6 | ✅ **fixed and verified live in Epic 3.11** |
+| 7 | The Ledger and the Answer Shelf render their own type larger than the page's body copy | Epic 9.24 | ⬚ **open** — see below |
 
 Finding 1 is listed as improved rather than closed on the strength of Epic 2.8's
 own "Still imperfect" section: the four `b2b saas` / `venture capital` failures
@@ -2103,3 +2190,22 @@ all active rows fails that projection's tests and only that projection's.
 Surfaced by Epic 3.6's competitor-provenance badge, which is what made a mixed
 set visible in the first place. `scripts/verify_competitor_override.py` prints
 it as a `NOTE` on every run rather than failing, so it stays on the record.
+
+### Finding 7 — the Report's two charts outgrow their own type
+
+`verify_chart_scale.py` reports 25 offenders across five viewports, all of them
+`avp-ledger__svg` or `avp-shelf__svg`. An SVG at `width: 100%` over a fixed
+viewBox scales its TYPE with its box, so the Ledger's 10px dimension labels
+render at up to 28.2px against 14px body copy — the defect Epic 9.19 fixed for
+one figure and Epic 9.21 fixed for `TrendChart`, still present on these two.
+
+**Measured, not assumed: 25 before Epic 9.24 and 25 after.** That epic took the
+style guide from 6 charts to 7 and its new Working-palette `TrendChart` added
+zero, so this pre-dates it entirely and is unrelated to the accent layer.
+
+**Left open deliberately.** The Ledger and the Shelf are the *Report's* charts.
+The fix is `style={{ maxWidth: layout.width }}`, the same one-line bound
+`TrendChart` carries — and applying it would change how the Report renders,
+which Epic 9.24's brief explicitly put out of scope ("the Report gets zero
+visual changes of any kind"). It is a small, well-understood fix waiting for a
+brief that is allowed to touch the document.

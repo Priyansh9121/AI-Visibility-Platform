@@ -18,7 +18,7 @@ import { TrendChart } from './chart/TrendChart.js';
 import { LocalNav, LocalNavItem } from './shell/LocalNav.js';
 import type { ShelfRowInput } from './chart/answerShelfLayout.js';
 import { Beat, Evidence, ReportPage, BEAT_SEQUENCE } from './report/ReportLayout.js';
-import { visibility, beacon, oklch } from '../tokens/color.js';
+import { visibility, beacon, competitor, oklch, benchColor } from '../tokens/color.js';
 import { DIMENSIONS, COMPETITORS, SUBJECT } from '../styleguide/fixtures.js';
 
 const html = (node: Parameters<typeof renderToStaticMarkup>[0]) => renderToStaticMarkup(node);
@@ -690,6 +690,63 @@ describe('TrendChart', () => {
     );
     // Two separate move commands means two separate strokes.
     expect((withGap.match(/ d="M/g) ?? []).length).toBe(2);
+  });
+
+  /*
+   * The per-context palette — Epic 9.24.
+   *
+   * These are the assertions that make "one chart, two contexts" a fact rather
+   * than an intention. The report keeps §1's neutral slate; a Working screen
+   * gets hues an operator can actually tell apart at 1.5px; and everything that
+   * makes the chart honest — the subject's brand colour, the dash patterns, the
+   * hidden data table — is identical either way.
+   */
+  it('defaults to the restrained palette, so the report never opts in', () => {
+    // Rendered WITHOUT a palette prop: exactly how the report calls it.
+    const out = chart();
+    expect(out).toContain(oklch(competitor['1']));
+    for (let i = 0; i < 6; i++) expect(out).not.toContain(benchColor(i));
+  });
+
+  it('draws Working-screen competitors from the accent layer', () => {
+    const out = chart({ palette: 'working' });
+    expect(out).toContain(benchColor(0));
+    expect(out).not.toContain(oklch(competitor['1']));
+  });
+
+  it('keeps the client in the brand accent on a Working screen too', () => {
+    // One brand, one colour: the teal line an operator learns on the dashboard
+    // must be the same teal line in the document they send.
+    expect(chart({ palette: 'working' })).toContain(oklch(beacon['600']));
+  });
+
+  it('still never paints a Working competitor from the visibility ramp', () => {
+    const out = chart({ palette: 'working' });
+    for (const stop of Object.values(visibility)) {
+      expect(out).not.toContain(oklch(stop));
+    }
+  });
+
+  it('keeps the dash patterns, so greyscale and CVD survive the richer palette', () => {
+    expect(chart({ palette: 'working' })).toContain('stroke-dasharray');
+  });
+
+  it('keeps its accessibility contract in the richer palette', () => {
+    const out = chart({ palette: 'working', title: 'Share of voice' });
+    expect(out).toContain('aria-label="Share of voice"');
+    expect(out).toContain('avp-visually-hidden');
+    expect(out).toContain('<table>');
+    expect(out).toContain('not measured');
+  });
+
+  it('changes paint and nothing else — same geometry, same text, same table', () => {
+    // The claim that makes this ONE chart rather than two: remove every paint
+    // attribute and the two renderings must be the same document, character
+    // for character. Geometry, labels, ticks, gaps and the hidden data table
+    // are all produced by the same layout pass either way, so a fix to any of
+    // them lands on both contexts at once and cannot drift between them.
+    const geometry = (markup: string) => markup.replace(/ (?:fill|stroke)="[^"]*"/g, '');
+    expect(geometry(chart({ palette: 'working' }))).toBe(geometry(chart()));
   });
 
   it('renders every series name, so no line is anonymous', () => {

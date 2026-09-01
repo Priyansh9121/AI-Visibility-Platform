@@ -475,6 +475,35 @@ export function Styleguide(): JSX.Element {
           The line breaks instead, and the hidden data table reads <em>&ldquo;not measured&rdquo;</em>.
           Two rivals above do exactly this.
         </p>
+        <p className="sg-sub">The same chart, on a Working screen</p>
+        <div className="sg-panel">
+          <TrendChart
+            points={TREND_POINTS}
+            series={TREND_SERIES}
+            unit="%"
+            yMax={100}
+            palette="working"
+            title="Share of voice — Working palette"
+            caption="Identical layout, identical data table, identical dashes. Only the competitor hues differ."
+            ariaLabel="Share of voice across four scans, drawn in the Working-screen palette."
+          />
+        </div>
+
+        <p className="sg-section__note">
+          <strong>One chart, two contexts.</strong> §0 splits every screen into
+          Presenting and Working, and this is the first component to render
+          differently for each. The report gets the panel above: competitors in
+          neutral slate, because a rival drawn in a hue reads as a judgement in
+          front of a CMO. An operator gets this one, because eight neutral greys
+          at 1.5px are genuinely hard to follow and nobody is being pitched to.
+          The client stays <code>beacon-600</code> in both — one brand, one
+          colour — and the dash patterns are unconditional, so greyscale and
+          colour-blind reading survive the richer palette. It is a{' '}
+          <code>palette</code> prop on one component, defaulting to{' '}
+          <code>report</code>: a chart added to the document tomorrow is
+          restrained by omission rather than by anybody remembering.
+        </p>
+
         <p className="sg-section__note">
           <strong>It cannot render larger than it was drawn.</strong> An SVG at{' '}
           <code>width: 100%</code> over a fixed viewBox scales its <em>type</em> with its box —

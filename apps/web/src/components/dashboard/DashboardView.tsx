@@ -34,6 +34,8 @@ import {
   ErrorState,
   LuminanceLedger,
   ScoreMeter,
+  StatRow,
+  StatTile,
 } from '@avp/design-system';
 import type { BadgeTone, Column, LedgerDimension, ScoreAbsence } from '@avp/design-system';
 import type { Dashboard, ScanStatus, ScanSummary } from '@avp/shared-types';
@@ -220,18 +222,19 @@ export function DashboardView({
 
   return (
     <div className="flex flex-col gap-8">
-      <header className="flex flex-wrap items-end justify-between gap-6 border-b border-line-hairline pb-8">
+      <header className="flex flex-col gap-6 border-b border-line-hairline pb-8">
         <div>
           <p className="text-ui-2xs uppercase tracking-caps text-text-tertiary">Agency</p>
           <h1 className="mt-2 font-editorial text-ed-sm leading-display tracking-display text-text-primary">
             {agency.name}
           </h1>
         </div>
-        <dl className="flex flex-wrap items-end gap-8">
-          <Stat label="Seats" value={`${seats.used} / ${seats.limit}`} />
-          <Stat label="Clients" value={String(clientCount)} />
-          <Stat label="Scans" value={String(scanCount)} />
-        </dl>
+        <DashboardStats
+          seats={seats}
+          clientCount={clientCount}
+          scanCount={scanCount}
+          recentScans={recentScans}
+        />
       </header>
 
       {/*
@@ -274,12 +277,106 @@ export function DashboardView({
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }): JSX.Element {
+/**
+ * The header figures — Epic 9.24.
+ *
+ * WHAT CHANGED, AND WHAT DID NOT
+ * ------------------------------
+ * Three numbers in a caption strip became six tiles carrying the accent layer.
+ * **No new request is made and nothing new is computed from outside this
+ * screen.** Seats, Clients and Scans are the same three fields the endpoint has
+ * always served; the other three count `recentScans`, the array already in hand
+ * and already rendered as a table two hundred pixels below. The header now says
+ * what the table says, at a glance, which is what a Working screen is for.
+ *
+ * This is the answer to "big empty margins" that the brief asked for: the space
+ * is holding something real rather than being narrowed away. Epic 9.21 settled
+ * that narrowing these screens moves nothing.
+ *
+ * HONEST ABSENCE IS PRESERVED. "Running" counts scans whose status is running —
+ * a real state, never inferred. "Needs attention" counts FAILED and PARTIAL,
+ * both of which are outcomes the product already names; it is emphasised only
+ * when it is non-zero, so a healthy agency does not get a red-ish tile shouting
+ * a zero at it. Nothing here invents a measurement.
+ */
+function DashboardStats({
+  seats,
+  clientCount,
+  scanCount,
+  recentScans,
+}: {
+  seats: Dashboard['seats'];
+  clientCount: number;
+  scanCount: number;
+  recentScans: readonly ScanSummary[];
+}): JSX.Element {
+  const running = recentScans.filter((s) => s.status === 'running').length;
+  const attention = recentScans.filter(
+    (s) => s.status === 'failed' || s.status === 'partial',
+  ).length;
+  // Only over scans that HAVE a score. A scan without one is not a zero — the
+  // same rule ScoreCell follows — so it is excluded from the average rather
+  // than dragging it down.
+  const scored = recentScans
+    .map((s) => (s.compositeScore == null ? null : Number(s.compositeScore)))
+    .filter((n): n is number => n != null && !Number.isNaN(n));
+  const median =
+    scored.length === 0
+      ? null
+      : [...scored].sort((a, b) => a - b)[Math.floor((scored.length - 1) / 2)]!;
+
   return (
-    <div className="flex flex-col gap-1">
-      <dt className="text-ui-2xs uppercase tracking-caps text-text-tertiary">{label}</dt>
-      <dd className="text-ui-lg font-medium text-text-primary">{value}</dd>
-    </div>
+    <StatRow>
+      <StatTile label="Seats" value={`${seats.used} / ${seats.limit}`} accent={0} />
+      <StatTile label="Clients" value={String(clientCount)} accent={1} />
+      <StatTile label="Scans" value={String(scanCount)} accent={2} />
+      <StatTile
+        label="Running now"
+        value={String(running)}
+        accent={3}
+        note={running > 0 ? 'This page is updating itself.' : undefined}
+      />
+      <StatTile
+        label="Needs attention"
+        value={String(attention)}
+        accent={4}
+        emphasis={attention > 0}
+        note={attention > 0 ? 'Failed or partial, in the list below.' : undefined}
+      />
+      <StatTile
+        label="Median visibility"
+        /*
+          "No scores yet", not "Not scored" — Epic 9.24. `ScoreMeter`'s
+          vocabulary ("Measuring" / "Not scored") describes ONE SCAN's state,
+          and this is an aggregate that has no scans to average. Reusing the
+          per-scan phrase here would say something false about a scan, and it
+          also collided with a real guarantee: DashboardView.test.tsx asserts a
+          queued row reads "Measuring" and NOT "Not scored" anywhere on the
+          page. Getting the words right kept that assertion at full strength
+          instead of narrowing it to make room for this tile.
+        */
+        value={median == null ? 'No scores yet' : median.toFixed(0)}
+        /*
+          NO ACCENT, unlike the five counts beside it — Epic 9.24.
+
+          This tile's value is a SCORE, and this product already has a colour
+          language for a score: the visibility ramp, where hue means how visible
+          you are. Wrapping a score in a categorical hue puts two colour
+          languages on one tile and invites the reading that the tile's colour
+          says something about the number. The bench hues sit 30 degrees clear
+          of every ramp stop precisely so they cannot be confused with one;
+          spending that separation on decoration around an actual score would
+          give it away. Counts take accents. Measurements do not.
+        */
+        // Says WHAT it is the median of. A bare median across "recent scans"
+        // with no denominator is a number nobody can check.
+        note={
+          median == null
+            ? 'No scan here has produced a score yet.'
+            : `Across ${scored.length} scored ${scored.length === 1 ? 'scan' : 'scans'} below.`
+        }
+      />
+    </StatRow>
   );
 }
 

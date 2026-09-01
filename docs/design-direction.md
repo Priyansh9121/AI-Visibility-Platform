@@ -167,6 +167,79 @@ Three properties this ramp has on purpose:
 is too light to hit 4.5:1 on paper. Labels on a ramp fill are `ink-900` or
 `paper-000`, picked by a luminance threshold at L≈0.62.
 
+> ### BUILT — Epic 9.24, 2026-09-01. A second palette, for the other half of §0.
+>
+> §0 has split every screen into **Presenting** and **Working** since Epic 0.
+> The Report's restraint is argued there and is untouched. What was never
+> argued is why **every Working screen shared it** — and for nine epics they
+> did: one teal accent on a warm-grey ground, from the dashboard to a client's
+> Rankings. That was caution applied past the point the split asks for. The
+> Report gets printed, photocopied and read across a conference table; the
+> dashboard is an operator's own console with twenty tabs open, and none of
+> those three reasons has ever applied to it.
+>
+> So there are two palettes now, and the second is **additive** — no token in
+> this section changed, and the Report's token set gained nothing.
+>
+> **`bench-*` — the operator's bench.** Six categorical accents, hues 258 /
+> 275 / 292 / 309 / 326 / 343, at chroma **0.185** against `beacon-600`'s
+> 0.125. Four stops each (`050` wash, `100` line, `600` solid, `700` press).
+> Used for sidebar iconography, stat tiles, section chips, and competitor
+> series on Working-screen charts.
+>
+> | Claim | Number | Where it is checked |
+> |---|---|---|
+> | Wider hue range than one accent | 85° across six, vs 0° for `beacon` alone | `tokens.test.ts` |
+> | More saturated | C 0.185 vs 0.125 — 1.48× | `tokens.test.ts` |
+> | Cannot be mistaken for a score or a state | ≥30° from every ramp stop, `beacon` and all four semantics | `tokens.test.ts`, per hue per meaning |
+>
+> **Where the hues came from.** Generated from `ui-ux-pro-max`'s palette
+> database — 192 palettes, 446 chromatic entries once near-neutrals and unusable
+> lightnesses are dropped, converted to OKLCH and bucketed by hue. Its own top
+> recommendation for "dense analytics dashboard" was `#1E40AF` / `#3B82F6` /
+> `#DBEAFE`, which is precisely the cool blue-grey this section rotated the
+> neutral axis away from, so **no hex value was imported**. What was taken is
+> where the database's chromatic mass actually sits *and* where sRGB still has
+> chroma to spend: hues 235–255 are chroma-starved (max C 0.12–0.14 at L 0.55),
+> which is why the arc starts at 258.
+>
+> **The rule that keeps the two apart.** The buffer above is not a convention
+> to remember — a bench hue is nowhere near a meaning-bearing hue on the wheel,
+> so a chip cannot be read as a score. And a **score is never wrapped in a
+> categorical hue**: `Median visibility`, `Latest`, `Best` and
+> `Technical foundation` are the four tiles whose value is a measurement, and
+> all four are deliberately unaccented. The ramp is already the colour language
+> for a score; two colour languages on one tile invite the reading that the
+> chrome says something about the number.
+>
+> **One chart, two contexts.** `seriesStyle(role, index, palette)` takes a
+> third argument defaulting to `'report'`. Competitors are neutral slate on the
+> Report and bench hues on a Working screen; the client is `beacon-600` in
+> both, and the §1 dash patterns are unconditional, so greyscale and CVD
+> reading survive the richer palette. It is a rendering decision on ONE
+> component — `render.test.tsx` strips the paint attributes and asserts the two
+> renderings are otherwise identical, character for character.
+>
+> **The default is the guarantee.** The Report never opts out; it never opts
+> in. A chart added to it tomorrow is restrained because someone would have to
+> type `palette="working"` to make it otherwise.
+>
+> **Proven, not promised.** `reportIsolation.test.ts` scans every report
+> surface and fails if one names a bench token, in any of the five forms one
+> can be written; it also fails if the Working screens STOP using the layer, so
+> it cannot go green by the feature being reverted. Live: the report document
+> (`article.avp-report`) and the whole of `/share/{token}` were captured before
+> and after and are **byte-identical** — same SHA-256, 2,833,684 and 2,957,105
+> bytes. `docs/screenshots/epic-9-24/`.
+>
+> **Density, the way 9.21 said to do it.** The empty margins were closed by
+> giving the space something to hold, never by narrowing a container: the
+> dashboard's three header figures became six tiles, a client's two became
+> four, and the Sources and Rankings charts gained a value table beside them.
+> `TrendChart`'s 9.21 width bound is untouched — the table fills the column the
+> bound leaves over, which is the only correct way to use it.
+
+
 ### Client vs competitor — a semantic rule, not a palette
 
 Competitor series must **not** use the visibility ramp. If a competitor renders in

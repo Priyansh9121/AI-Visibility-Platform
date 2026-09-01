@@ -422,3 +422,42 @@ describe('the live dot marks what is actually happening', () => {
     expect(render(unscoredQueuedDashboard)).not.toContain('avp-badge__pulse');
   });
 });
+
+/**
+ * The Working-screen accent layer, on this screen — Epic 9.24.
+ *
+ * The rule worth a test is not "there is colour"; it is WHERE the colour is
+ * allowed to be. This product has one colour language for a score already —
+ * the visibility ramp — and putting a second, categorical one around a score
+ * invites the reading that the tile's hue says something about the number.
+ */
+describe('accents mark categories, never measurements', () => {
+  const html = () => render(scoredDashboard);
+
+  it('gives the counted figures an accent', () => {
+    const out = html();
+    expect(out).toContain('--avp-bench-');
+  });
+
+  it('leaves the median visibility tile unaccented, because it is a score', () => {
+    // Split the row into its tiles and look at the one that carries the score.
+    const tiles = html().split('<div class="avp-tile');
+    const median = tiles.find((t) => t.includes('Median visibility'));
+    expect(median, 'no Median visibility tile rendered').toBeDefined();
+    expect(median!).not.toContain('--avp-bench-');
+    // ...while its neighbours, which are counts, do carry one.
+    expect(tiles.find((t) => t.includes('Clients'))!).toContain('--avp-bench-');
+  });
+
+  it('states what the median is across, so the figure is checkable', () => {
+    // A median over "recent scans" with no denominator is a number nobody can
+    // verify against the table under it.
+    expect(html()).toMatch(/Across \d+ scored scans? below/);
+  });
+
+  it('counts only scans that HAVE a score — a missing score is not a zero', () => {
+    // The same rule ScoreCell follows. A scan without a reading must not drag
+    // the median down as though it had scored zero.
+    expect(html()).not.toContain('No scores yet');
+  });
+});

@@ -1,5 +1,6 @@
 import type { JSX, ReactNode } from 'react';
 import { cn } from '../../lib/cn.js';
+import { benchAccent } from '../../tokens/color.js';
 
 export interface NavItemProps {
   href: string;
@@ -10,6 +11,19 @@ export interface NavItemProps {
   current?: boolean;
   /** Short note under the label — for an item that leads somewhere honest but thin. */
   note?: string;
+  /**
+   * Which Working-screen accent this destination carries — Epic 9.24.
+   *
+   * The sidebar was a column of identical grey glyphs, which is the least
+   * scannable thing a persistent frame can be: an operator reading it had to
+   * read the WORDS to find the place they go twenty times a day. A stable hue
+   * per destination makes it findable by shape and colour together.
+   *
+   * It is decoration and never the only signal. `aria-current` marks the active
+   * item to a screen reader, weight and a rail mark it visually, and every item
+   * still states its name in words — the colour is a fourth cue, not the cue.
+   */
+  accent?: number;
 }
 
 /**
@@ -24,12 +38,22 @@ export interface NavItemProps {
  * destination and goes nowhere is the "button that does nothing" this brief
  * rules out. An item either links somewhere real or is not in the sidebar.
  */
-export function NavItem({ href, label, icon, current, note }: NavItemProps): JSX.Element {
+export function NavItem({ href, label, icon, current, note, accent }: NavItemProps): JSX.Element {
+  const key = accent == null ? null : benchAccent(accent).key;
   return (
     <a
       href={href}
       aria-current={current ? 'page' : undefined}
-      className={cn('avp-nav__item', current && 'is-current')}
+      className={cn('avp-nav__item', current && 'is-current', key != null && 'has-accent')}
+      /* Custom property, not a literal, so the sidebar follows a theme switch. */
+      style={
+        key == null
+          ? undefined
+          : ({
+              '--avp-nav-accent': `var(--avp-bench-${key}-600)`,
+              '--avp-nav-wash': `var(--avp-bench-${key}-050)`,
+            } as Record<string, string>)
+      }
     >
       {icon != null && (
         <span className="avp-nav__icon" aria-hidden="true">

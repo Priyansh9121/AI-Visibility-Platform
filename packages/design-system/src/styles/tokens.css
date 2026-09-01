@@ -38,6 +38,40 @@
   --avp-beacon-600: oklch(0.545 0.125 200);
   --avp-beacon-700: oklch(0.46 0.105 200);
 
+  /* --- the working-screen accent layer (Epic 9.24) -------------- */
+  /* NOT read by the report. See tokens/color.ts and the guard in
+     tokens.test.ts, which fails if a report surface ever references one. */
+  /* cobalt */
+  --avp-bench-1-050: oklch(0.955 0.035 258);
+  --avp-bench-1-100: oklch(0.905 0.062 258);
+  --avp-bench-1-600: oklch(0.55 0.185 258);
+  --avp-bench-1-700: oklch(0.46 0.158 258);
+  /* indigo */
+  --avp-bench-2-050: oklch(0.955 0.035 275);
+  --avp-bench-2-100: oklch(0.905 0.062 275);
+  --avp-bench-2-600: oklch(0.55 0.185 275);
+  --avp-bench-2-700: oklch(0.46 0.158 275);
+  /* violet */
+  --avp-bench-3-050: oklch(0.955 0.035 292);
+  --avp-bench-3-100: oklch(0.905 0.062 292);
+  --avp-bench-3-600: oklch(0.55 0.185 292);
+  --avp-bench-3-700: oklch(0.46 0.158 292);
+  /* orchid */
+  --avp-bench-4-050: oklch(0.955 0.035 309);
+  --avp-bench-4-100: oklch(0.905 0.062 309);
+  --avp-bench-4-600: oklch(0.55 0.185 309);
+  --avp-bench-4-700: oklch(0.46 0.158 309);
+  /* magenta */
+  --avp-bench-5-050: oklch(0.955 0.035 326);
+  --avp-bench-5-100: oklch(0.905 0.062 326);
+  --avp-bench-5-600: oklch(0.55 0.185 326);
+  --avp-bench-5-700: oklch(0.46 0.158 326);
+  /* rose */
+  --avp-bench-6-050: oklch(0.955 0.035 343);
+  --avp-bench-6-100: oklch(0.905 0.062 343);
+  --avp-bench-6-600: oklch(0.55 0.185 343);
+  --avp-bench-6-700: oklch(0.46 0.158 343);
+
   /* --- competitor series: neutral, non-judgmental ----------------- */
   --avp-competitor-1: oklch(0.55 0.02 265);
   --avp-competitor-2: oklch(0.64 0.02 265);
@@ -191,6 +225,37 @@
   /* low end lifted so "absent" reads as dim-but-present, not as a hole */
   --avp-vis-00: oklch(0.46 0.05 35);
   --avp-vis-25: oklch(0.575 0.12 45);
+
+  /* --- bench, chroma-clamped to the sRGB boundary per hue --------
+     Blue cannot be both light and saturated in sRGB, so the dark scale
+     cannot reuse one chroma across six hues the way the light one does.
+     Each stop takes 92% of the gamut ceiling at its own lightness, which
+     is why these numbers are not a single table. Hover DEEPENS in light
+     mode and LIGHTENS here, for the reason the neutral axis flips. */
+  --avp-bench-1-050: oklch(0.245 0.055 258);
+  --avp-bench-1-100: oklch(0.325 0.075 258);
+  --avp-bench-1-600: oklch(0.785 0.101 258);
+  --avp-bench-1-700: oklch(0.855 0.066 258);
+  --avp-bench-2-050: oklch(0.245 0.055 275);
+  --avp-bench-2-100: oklch(0.325 0.075 275);
+  --avp-bench-2-600: oklch(0.785 0.1 275);
+  --avp-bench-2-700: oklch(0.855 0.066 275);
+  --avp-bench-3-050: oklch(0.245 0.055 292);
+  --avp-bench-3-100: oklch(0.325 0.075 292);
+  --avp-bench-3-600: oklch(0.785 0.11 292);
+  --avp-bench-3-700: oklch(0.855 0.072 292);
+  --avp-bench-4-050: oklch(0.245 0.055 309);
+  --avp-bench-4-100: oklch(0.325 0.075 309);
+  --avp-bench-4-600: oklch(0.785 0.133 309);
+  --avp-bench-4-700: oklch(0.855 0.087 309);
+  --avp-bench-5-050: oklch(0.245 0.055 326);
+  --avp-bench-5-100: oklch(0.325 0.075 326);
+  --avp-bench-5-600: oklch(0.785 0.15 326);
+  --avp-bench-5-700: oklch(0.855 0.11 326);
+  --avp-bench-6-050: oklch(0.245 0.055 343);
+  --avp-bench-6-100: oklch(0.325 0.075 343);
+  --avp-bench-6-600: oklch(0.785 0.15 343);
+  --avp-bench-6-700: oklch(0.855 0.094 343);
 
   --avp-elev-raised: 0 1px 0 0 oklch(0 0 0 / 0.4);
   --avp-scrim: oklch(0.1 0.01 265 / 0.6);

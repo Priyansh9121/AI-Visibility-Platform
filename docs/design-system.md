@@ -725,3 +725,84 @@ CI.
 `src/tokens/*.ts` and `src/styles/tokens.css` are two hand-maintained copies of
 the same palette, which would diverge within a month. `src/tokens/tokens.test.ts`
 parses the CSS and fails on any drift.
+
+---
+
+## 6. The Working-screen accent layer — `bench-*`, Epic 9.24
+
+design-direction.md §1's Epic 9.24 note carries the full argument and the
+numbers. This is where the layer lives and how to use it.
+
+### The tokens
+
+Six categorical accents at hues **258 / 275 / 292 / 309 / 326 / 343**, four
+stops each:
+
+| Stop | Light | Dark | Use |
+|---|---|---|---|
+| `050` | L 0.955 C 0.035 | L 0.245, clamped | Chip / tile wash |
+| `100` | L 0.905 C 0.062 | L 0.325, clamped | Hairline on a washed surface |
+| `600` | L 0.55 C 0.185 | L 0.785, clamped | The solid — icon, rail, chart series |
+| `700` | L 0.46 C 0.158 | L 0.855, clamped | Hover / press |
+
+Light stops are one lightness and one chroma across all six hues, built from a
+single table in `tokens/color.ts` so that "every accent is the same weight" is
+structural — two accents differing in lightness would make one read as more
+important, and categorical colour must not imply rank.
+
+**Dark mode cannot reuse that table.** Blue at hue 258 cannot be both light and
+saturated inside sRGB, so every dark stop takes 92% of the gamut ceiling at its
+own lightness. That is why `[data-theme='dark']` carries 24 literal values
+rather than a formula. Every pair clears 4.5:1 in both themes; hover *deepens*
+in light and *lightens* in dark, for the reason the neutral axis flips.
+
+### Using it
+
+```tsx
+<NavItem href="/clients" label="Clients" accent={2} />   // sidebar
+<LocalNavItem href={`${base}/sources`} label="Sources" accent={1} />
+<StatTile label="Clients" value="12" accent={1} />       // a COUNT
+<StatTile label="Median visibility" value="56" />        // a SCORE — no accent
+<TrendChart points={p} series={s} palette="working" />   // competitor hues
+```
+
+Accent indices are **fixed by name, never by array position** —
+`WorkspaceShell`'s `ACCENT` record and `ClientSpace`'s are both keyed by
+section. An operator who has learnt where the violet icon is should not have to
+re-learn it because somebody reordered the markup.
+
+Components read the accent as a **custom property**, not a colour literal
+(`benchVar`, not `benchColor`), so chrome follows a theme switch. `benchColor`
+is for an SVG fill resolved at render time, where a literal is correct.
+
+### Two rules that are not style preferences
+
+1. **A score is never wrapped in a categorical hue.** The visibility ramp is
+   already the colour language for a score. `Median visibility`, `Latest`,
+   `Best` and `Technical foundation` are unaccented for this reason.
+2. **The Report never references these tokens.** Not a convention —
+   `tokens/reportIsolation.test.ts` scans every report surface and fails on any
+   of the five ways a bench token can be written, and separately fails if the
+   Working screens stop using the layer.
+
+### `StatTile` / `StatRow`
+
+`DashboardView` and `ClientsView` each kept a private two-span `Stat` helper,
+and `ClientsView`'s carried the condition for moving it: "two call sites would
+be a component built for a coincidence. If a third screen wants it, that is the
+point to move it." Epic 9.24 was that third screen. `StatRow` is
+`auto-fit`/`minmax` rather than a fixed column count, so the same tiles fill a
+90rem Working column and reflow on a narrow viewport without a breakpoint.
+
+`StatTile` renders `<div><dt/><dd/></div>` inside `StatRow`'s `<dl>` — the
+grouping HTML defines for a description list. Deliberately not an `<a>`.
+
+### The off-scale guard
+
+The Tailwind preset REPLACES the spacing scale, so `w-40` and `h-2.5` do not
+exist and compile to **nothing** — the element silently gets no size, and no
+test catches it because jsdom applies no stylesheet. Two were found by eye in
+one afternoon during this epic, one of them (`w-40` on Technical's VerdictBar)
+shipped in Epic 9.22 and survived a review and a screenshot pass.
+`reportIsolation.test.ts` now greps every spacing utility against the preset's
+actual scale.

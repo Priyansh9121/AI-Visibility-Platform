@@ -172,15 +172,30 @@ describe('no ad hoc styling', () => {
  * badge column already renders, or the header is asserting something the table
  * below it contradicts.
  */
+/**
+ * The figure a header tile shows under a given label.
+ *
+ * Reads the VALUE for a LABEL rather than pinning the markup that carries it.
+ * These three assertions used to contain a literal class list, and Epic 9.24
+ * broke all of them by moving the private `Stat` helper into the design system
+ * as `StatTile` — a change with no bearing on whether the count was right,
+ * which is the only thing these tests are about. Asserting the claim instead of
+ * the markup is what makes them survive the next such move.
+ */
+function figure(html: string, label: string): string | null {
+  const m = html.match(new RegExp(`>${label}</dt><dd[^>]*>([^<]*)</dd>`));
+  return m === null ? null : m[1]!;
+}
+
 describe('the classification split in the header', () => {
   it('counts the states the rows already show', () => {
     // severalClients: one classified, one unclassifiable, one ambiguous, one
     // pending — so identified 1, awaiting review 2 (ambiguous + pending),
     // unreadable 1.
     const html = render(READY);
-    expect(html).toContain('Identified');
-    expect(html).toContain('Awaiting review');
-    expect(html).toContain('Unreadable');
+    expect(figure(html, 'Identified')).toBe('1');
+    expect(figure(html, 'Awaiting review')).toBe('2');
+    expect(figure(html, 'Unreadable')).toBe('1');
   });
 
   it('folds pending in with ambiguous rather than showing a fourth mostly-zero figure', () => {
@@ -189,15 +204,17 @@ describe('the classification split in the header', () => {
     ).length;
     expect(ambiguousAndPending).toBe(2);
     const html = render(READY);
-    // The two are summed into one figure, so `2` appears under that label.
-    expect(html).toContain('>Awaiting review</dt><dd class="text-ui-lg font-medium text-text-primary">2</dd>');
+    // The two are summed into ONE figure, so the header shows 2 under that
+    // label and no separate Pending figure anywhere.
+    expect(figure(html, 'Awaiting review')).toBe(String(ambiguousAndPending));
+    expect(figure(html, 'Pending')).toBeNull();
   });
 
   it('agrees with the badge column rather than counting something else', () => {
     const html = render({ kind: 'ready', clients: [unreadableClient], more: false });
     expect(html).toContain('Could not read');
-    expect(html).toContain('>Unreadable</dt><dd class="text-ui-lg font-medium text-text-primary">1</dd>');
-    expect(html).toContain('>Identified</dt><dd class="text-ui-lg font-medium text-text-primary">0</dd>');
+    expect(figure(html, 'Unreadable')).toBe('1');
+    expect(figure(html, 'Identified')).toBe('0');
   });
 });
 

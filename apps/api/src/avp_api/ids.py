@@ -40,12 +40,18 @@ SCORE: Final = "scor"
 ACTION_ITEM: Final = "acti"
 INVITATION: Final = "invt"
 PASSWORD_RESET: Final = "prst"
+# Epic 9.24 — an operator's ad-hoc prompt, and the facts one engine returned
+# for it. Separate from PROMPT/ENGINE_RESULT because a run is not a scan and
+# must never be mistaken for one in a log line.
+PROMPT_RUN: Final = "prun"
+PROMPT_RUN_RESULT: Final = "prre"
 
 ALL_PREFIXES: Final[frozenset[str]] = frozenset(
     {
         AGENCY, USER, CLIENT, SCAN, COMPETITOR_SET, COMPETITOR, PROMPT_SET,
         PROMPT, ENGINE_RESULT, CITATION, BRAND_MENTION, TECHNICAL_AUDIT,
         AUDIT_CHECK, SCORE, ACTION_ITEM, INVITATION, PASSWORD_RESET,
+        PROMPT_RUN, PROMPT_RUN_RESULT,
     }
 )
 

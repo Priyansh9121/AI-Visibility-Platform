@@ -13,6 +13,13 @@ import {
   visibilityBand,
   onVisibility,
   seriesStyle,
+  bench,
+  benchAccent,
+  benchColor,
+  benchVar,
+  semantic,
+  BENCH_ACCENTS,
+  BENCH_HUE_BUFFER,
 } from './color.js';
 
 const css = readFileSync(fileURLToPath(new URL('../styles/tokens.css', import.meta.url)), 'utf8');
@@ -31,6 +38,7 @@ describe('token parity: TS <-> CSS', () => {
     ['ink', ink],
     ['beacon', beacon],
     ['competitor', competitor],
+    ['bench', bench],
   ];
 
   for (const [prefix, group] of groups) {
@@ -439,6 +447,146 @@ describe('tailwind preset exposes the tokens it claims to', () => {
     expect(Object.keys(lineHeight).sort()).toEqual(['display', 'mono', 'prose', 'ui']);
     for (const value of Object.values(lineHeight)) {
       expect(value).toMatch(/^var\(--avp-leading-/);
+    }
+  });
+});
+
+/* ==================================================================== *
+ * The Working-screen accent layer — Epic 9.24.
+ * ==================================================================== */
+
+describe('bench hues cannot be confused with anything that already means something', () => {
+  /**
+   * Every hue in this system that a viewer has been taught to read: the five
+   * visibility stops, the brand, and the four semantics. A categorical chip
+   * landing near one of these would be read as a score or as a system state.
+   */
+  const MEANING: Record<string, number> = {
+    'vis-00': visibility['00'][2],
+    'vis-25': visibility['25'][2],
+    'vis-50': visibility['50'][2],
+    'vis-75': visibility['75'][2],
+    'vis-100': visibility['100'][2],
+    beacon: beacon['600'][2],
+    success: semantic.success[2],
+    warn: semantic.warn[2],
+    danger: semantic.danger[2],
+  };
+
+  const separation = (a: number, b: number): number => {
+    const d = Math.abs(a - b) % 360;
+    return Math.min(d, 360 - d);
+  };
+
+  for (const accent of BENCH_ACCENTS) {
+    for (const [name, hue] of Object.entries(MEANING)) {
+      it(`${accent.name} (${accent.hue}) stays ${BENCH_HUE_BUFFER}deg clear of ${name}`, () => {
+        expect(separation(accent.hue, hue)).toBeGreaterThanOrEqual(BENCH_HUE_BUFFER);
+      });
+    }
+  }
+
+  it('is genuinely wider in hue than the single accent it supplements', () => {
+    const hues = BENCH_ACCENTS.map((a) => a.hue);
+    // beacon alone spans 0deg. This is the "wider hue range" claim, as a number.
+    expect(Math.max(...hues) - Math.min(...hues)).toBeGreaterThanOrEqual(80);
+    expect(new Set(hues).size).toBe(BENCH_ACCENTS.length);
+  });
+
+  it('is genuinely more saturated than beacon-600', () => {
+    // The "higher saturation" claim, as a number: 0.185 against 0.125.
+    for (const accent of BENCH_ACCENTS) {
+      expect(bench[`${accent.key}-600`]![1]).toBeGreaterThan(beacon['600'][1]);
+    }
+  });
+
+  it('holds every accent at the same weight, so colour implies no rank', () => {
+    // Two accents differing in lightness would make one read as more important,
+    // which is exactly the property the visibility ramp has and this must not.
+    for (const stop of ['050', '100', '600', '700'] as const) {
+      const ls = BENCH_ACCENTS.map((a) => bench[`${a.key}-${stop}`]![0]);
+      expect(new Set(ls).size).toBe(1);
+    }
+  });
+
+  it('deepens rather than lightens from 600 to 700, like beacon does', () => {
+    for (const accent of BENCH_ACCENTS) {
+      expect(bench[`${accent.key}-700`]![0]).toBeLessThan(bench[`${accent.key}-600`]![0]);
+    }
+  });
+});
+
+describe('benchAccent', () => {
+  it('cycles, so any list length is safe', () => {
+    const n = BENCH_ACCENTS.length;
+    expect(benchAccent(0)).toBe(benchAccent(n));
+    expect(benchAccent(1)).toBe(benchAccent(n + 1));
+  });
+
+  it('handles a negative index without returning undefined', () => {
+    expect(benchAccent(-1)).toBe(BENCH_ACCENTS[BENCH_ACCENTS.length - 1]);
+  });
+
+  it('is stable — the same index always yields the same accent', () => {
+    for (const i of [0, 3, 7, 12]) expect(benchColor(i)).toBe(benchColor(i));
+  });
+
+  it('benchVar names the custom property for the same accent benchColor resolves', () => {
+    for (let i = 0; i < 8; i++) {
+      expect(benchVar(i)).toBe(`var(--avp-bench-${benchAccent(i).key}-600)`);
+      expect(benchColor(i)).toBe(oklch(bench[`${benchAccent(i).key}-600`]!));
+    }
+  });
+});
+
+describe('seriesStyle is where the two contexts diverge', () => {
+  it('defaults to the report palette — the report never opts in', () => {
+    expect(seriesStyle('competitor', 0)).toEqual(seriesStyle('competitor', 0, 'report'));
+  });
+
+  it('keeps competitors neutral on the report', () => {
+    for (let i = 0; i < 5; i++) {
+      expect(seriesStyle('competitor', i, 'report').fill).toBe(oklch(competitor[
+        (['1', '2', '3', '4', '5'] as const)[i]!
+      ]));
+    }
+  });
+
+  it('draws competitors from bench on a Working screen', () => {
+    for (let i = 0; i < 6; i++) {
+      expect(seriesStyle('competitor', i, 'working').fill).toBe(benchColor(i));
+    }
+  });
+
+  it('gives the client beacon in BOTH contexts — one brand, one colour', () => {
+    for (const palette of ['report', 'working'] as const) {
+      expect(seriesStyle('subject', 0, palette).fill).toBe(oklch(beacon['600']));
+      expect(seriesStyle('subject', 3, palette).isSubject).toBe(true);
+    }
+  });
+
+  it('never gives a competitor the brand colour, in either context', () => {
+    for (const palette of ['report', 'working'] as const) {
+      for (let i = 0; i < 12; i++) {
+        expect(seriesStyle('competitor', i, palette).fill).not.toBe(oklch(beacon['600']));
+      }
+    }
+  });
+
+  it('keeps the pattern assignment unconditional, so greyscale and CVD still work', () => {
+    for (let i = 0; i < 12; i++) {
+      expect(seriesStyle('competitor', i, 'working').pattern).toBe(
+        seriesStyle('competitor', i, 'report').pattern,
+      );
+    }
+  });
+
+  it('never returns a visibility ramp colour for a competitor, in either context', () => {
+    const ramp = Object.values(visibility).map((c) => oklch(c));
+    for (const palette of ['report', 'working'] as const) {
+      for (let i = 0; i < 12; i++) {
+        expect(ramp).not.toContain(seriesStyle('competitor', i, palette).fill);
+      }
     }
   });
 });

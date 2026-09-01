@@ -17,9 +17,12 @@ import {
   ErrorState,
   LoadingState,
   ScoreMeter,
+  StatRow,
+  StatTile,
   TrendChart,
 } from '@avp/design-system';
-import type { BadgeTone, Column, ScoreAbsence } from '@avp/design-system';
+import type { BadgeTone, Column, ScoreAbsence, TrendSeriesInput } from '@avp/design-system';
+import { seriesStyle } from '@avp/design-system';
 import type { Client, ClientHistory, HistoryScan, Me } from '@avp/shared-types';
 import { ClientSpace, type ClientSection } from '@/components/client/ClientSpace';
 import { formatStamp } from '@/lib/dates';
@@ -122,16 +125,7 @@ function Frame({
       me={me}
       current={current}
       latestReportScanId={latestScanId(history)}
-      meta={
-        // A `dl`, because these are label/value pairs and `Stat` renders
-        // `dt`/`dd` — the same treatment the dashboard and clients headers use.
-        <dl className="flex flex-wrap items-end gap-8">
-          <Stat label="Scans" value={String(history.scans.length)} />
-          {history.scansWithoutData > 0 && (
-            <Stat label="No reading" value={String(history.scansWithoutData)} />
-          )}
-        </dl>
-      }
+      figures={<ClientMeta history={history} />}
     >
       {children?.({ client, history })}
     </ClientSpace>
@@ -277,17 +271,37 @@ export function ClientSourcesView({
               heading="Who gets cited when engines answer"
               lead="Every time an engine answered one of this client's prompts it cited sources. This is how often each domain was cited, scan by scan."
             />
-            <TrendChart
-              points={points}
-              series={series}
-              unit=""
-              height={340}
-              title="Citations per domain"
-              caption="Counted across every answered prompt in each scan. A gap means the domain fell below what that scan recorded, not that it was cited zero times."
-              ariaLabel={`Citations per domain across ${points.length} scans of ${history.name}. ${series
-                .map((s) => `${s.label}: ${s.values.map((v) => (v === null ? 'not measured' : v)).join(', ')}`)
-                .join('. ')}`}
-            />
+            <div className="grid items-start gap-8 lg:grid-cols-[auto_minmax(16rem,1fr)]">
+                <TrendChart
+                  points={points}
+                  series={series}
+                  unit=""
+                  height={340}
+                  title="Citations per domain"
+                  /*
+                    THE PER-CONTEXT PALETTE — Epic 9.24.
+
+                    The same `TrendChart` the report embeds, asked to draw itself
+                    for an operator rather than for a document. Competitor series
+                    take the Working accent hues; the client stays `beacon-600`,
+                    the dash patterns stay, and the hidden data table is unchanged
+                    — render.test.tsx strips the paint attributes and asserts the
+                    two renderings are otherwise identical.
+
+                    Worth the change here specifically: these charts carry up to
+                    eight series, and five neutral greys separated by lightness are
+                    genuinely hard to follow at 1.5px across a wide Working column.
+                    On the report they stay neutral, because there the audience is a
+                    CMO and §1's non-judgmental rule is doing different work.
+                  */
+                  palette="working"
+                  caption="Counted across every answered prompt in each scan. A gap means the domain fell below what that scan recorded, not that it was cited zero times."
+                  ariaLabel={`Citations per domain across ${points.length} scans of ${history.name}. ${series
+                    .map((s) => `${s.label}: ${s.values.map((v) => (v === null ? 'not measured' : v)).join(', ')}`)
+                    .join('. ')}`}
+                />
+              <SeriesLedger series={series} unit={""} />
+            </div>
           </section>
         );
       }}
@@ -317,18 +331,38 @@ export function ClientRankingsView({
               heading="How the field is sharing the answers"
               lead="Share of voice is this client's mentions as a fraction of every brand named in the same answers — so a rival's rise is this client's fall, and the lines sum across the field."
             />
-            <TrendChart
-              points={points}
-              series={series}
-              unit="%"
-              yMax={100}
-              height={340}
-              title="Share of voice"
-              caption="Share of voice, not the composite score: there is no per-competitor composite, because sentiment and technical foundation are measured on this client's site alone."
-              ariaLabel={`Share of voice across ${points.length} scans. ${series
-                .map((s) => `${s.label}: ${s.values.map((v) => (v === null ? 'not measured' : `${v}%`)).join(', ')}`)
-                .join('. ')}`}
-            />
+            <div className="grid items-start gap-8 lg:grid-cols-[auto_minmax(16rem,1fr)]">
+                <TrendChart
+                  points={points}
+                  series={series}
+                  unit="%"
+                  yMax={100}
+                  height={340}
+                  title="Share of voice"
+                  /*
+                    THE PER-CONTEXT PALETTE — Epic 9.24.
+
+                    The same `TrendChart` the report embeds, asked to draw itself
+                    for an operator rather than for a document. Competitor series
+                    take the Working accent hues; the client stays `beacon-600`,
+                    the dash patterns stay, and the hidden data table is unchanged
+                    — render.test.tsx strips the paint attributes and asserts the
+                    two renderings are otherwise identical.
+
+                    Worth the change here specifically: these charts carry up to
+                    eight series, and five neutral greys separated by lightness are
+                    genuinely hard to follow at 1.5px across a wide Working column.
+                    On the report they stay neutral, because there the audience is a
+                    CMO and §1's non-judgmental rule is doing different work.
+                  */
+                  palette="working"
+                  caption="Share of voice, not the composite score: there is no per-competitor composite, because sentiment and technical foundation are measured on this client's site alone."
+                  ariaLabel={`Share of voice across ${points.length} scans. ${series
+                    .map((s) => `${s.label}: ${s.values.map((v) => (v === null ? 'not measured' : `${v}%`)).join(', ')}`)
+                    .join('. ')}`}
+                />
+              <SeriesLedger series={series} unit={"%"} />
+            </div>
             {intermittent.length > 0 && (
               // The gaps in the chart, explained rather than left to be
               // noticed. A rival missing from one scan's set is a real event —
@@ -348,6 +382,119 @@ export function ClientRankingsView({
 }
 
 /* ============================== fragments ============================= */
+
+
+/**
+ * The series, as a table beside the chart — Epic 9.24.
+ *
+ * WHY THIS EXISTS, AND WHY IT IS NOT A WIDER CHART
+ * ------------------------------------------------
+ * Epic 9.21 bounded `TrendChart` at its drawn width, because an SVG at
+ * `width: 100%` over a fixed viewBox scales its TYPE with its box and an 11px
+ * axis label was rendering at 17.6px. That bound is correct and is not being
+ * loosened — the chart fills ~720px of a 1200px Working column and must keep
+ * doing so.
+ *
+ * What 9.21 left behind is the space to the right of it, and this is what fills
+ * it. Not decoration: reading an exact value off a line chart is guesswork, and
+ * an operator comparing "are we ahead of Matomo this month" wants the number.
+ * The swatch is the SAME `seriesStyle(..., 'working')` call the chart makes, so
+ * the ledger keys to the lines rather than restating them in a second palette.
+ *
+ * EVERY VALUE HERE IS ALREADY ON SCREEN. Nothing is fetched and nothing is
+ * computed that the chart's own hidden data table does not already carry — this
+ * is the same series, read as figures.
+ *
+ * A null is a gap, not a zero, exactly as it is on the line: a series measured
+ * once has no direction, and one not measured in the latest scan says so rather
+ * than reporting its last known value as if it were current.
+ */
+function SeriesLedger({
+  series,
+  unit,
+}: {
+  series: readonly TrendSeriesInput[];
+  unit: string;
+}): JSX.Element {
+  const rows = series.map((s) => {
+    const measured = s.values
+      .map((v, i) => ({ v, i }))
+      .filter((p): p is { v: number; i: number } => p.v != null);
+    const last = measured[measured.length - 1];
+    const first = measured[0];
+    return {
+      key: s.key,
+      label: s.label,
+      isSubject: s.isSubject === true,
+      latest: last && last.i === s.values.length - 1 ? last.v : null,
+      // Only a direction when there are two readings to have one between.
+      delta: measured.length >= 2 && last && first ? last.v - first.v : null,
+    };
+  });
+
+  let competitorIndex = -1;
+  return (
+    <div className="flex min-w-0 flex-col gap-2">
+      <p className="text-ui-2xs uppercase tracking-caps text-text-tertiary">
+        Latest reading
+      </p>
+      <table className="w-full">
+        <thead className="sr-only">
+          <tr>
+            <th scope="col">Series</th>
+            <th scope="col">Latest</th>
+            <th scope="col">Change across this history</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => {
+            if (!row.isSubject) competitorIndex += 1;
+            const style = seriesStyle(
+              row.isSubject ? 'subject' : 'competitor',
+              row.isSubject ? 0 : competitorIndex,
+              'working',
+            );
+            return (
+              <tr key={row.key} className="border-b border-line-hairline last:border-0">
+                <td className="py-2 pr-3">
+                  <span className="flex items-center gap-2">
+                    <span
+                      aria-hidden="true"
+                      className="h-2 w-2 flex-none rounded-full"
+                      style={{ background: style.fill }}
+                    />
+                    <span
+                      className={
+                        row.isSubject
+                          ? 'truncate text-ui-sm font-medium text-text-primary'
+                          : 'truncate text-ui-sm text-text-secondary'
+                      }
+                    >
+                      {row.label}
+                    </span>
+                  </span>
+                </td>
+                <td className="py-2 pr-3 text-right text-ui-sm tabular-nums text-text-primary">
+                  {row.latest == null ? (
+                    <span className="text-text-tertiary">Not measured</span>
+                  ) : (
+                    `${row.latest.toFixed(1)}${unit}`
+                  )}
+                </td>
+                <td className="py-2 text-right text-ui-sm tabular-nums text-text-secondary">
+                  {row.delta == null
+                    ? // One reading is not a direction.
+                      <span className="text-text-tertiary">—</span>
+                    : `${row.delta > 0 ? '+' : row.delta < 0 ? '\u2212' : '\u00b1'}${Math.abs(row.delta).toFixed(1)}${unit}`}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
 function Intro({ heading, lead }: { heading: string; lead: string }): JSX.Element {
   return (
@@ -403,11 +550,51 @@ function NoTrendYet({
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }): JSX.Element {
+/**
+ * The figures beside a client's name — Epic 9.24.
+ *
+ * Two became four, and all four are read off `history`, which every screen in
+ * this space already has in hand. Nothing is fetched and nothing is derived
+ * from outside this component.
+ *
+ * `latest` and `best` are the newest and highest composite AMONG SCANS THAT
+ * HAVE ONE. A scan without a reading is not a zero — the rule `ScoreMeter` and
+ * the dashboard both follow — so those scans are excluded from the comparison
+ * rather than dragging it down, and if none has a reading both tiles say so in
+ * words instead of printing a number nobody measured.
+ */
+function ClientMeta({ history }: { history: ClientHistory }): JSX.Element {
+  const scored = history.scans
+    .map((s) => num(s.composite))
+    .filter((n): n is number => n != null);
+  const latest = scored.length > 0 ? scored[scored.length - 1]! : null;
+  const best = scored.length > 0 ? Math.max(...scored) : null;
+
   return (
-    <div className="flex flex-col gap-1">
-      <dt className="text-ui-2xs uppercase tracking-caps text-text-tertiary">{label}</dt>
-      <dd className="text-ui-lg font-medium text-text-primary">{value}</dd>
-    </div>
+    <StatRow min="10rem">
+      <StatTile label="Scans" value={String(history.scans.length)} accent={0} />
+      {/*
+        NO ACCENT ON THESE TWO — Epic 9.24.
+
+        `latest` and `best` are visibility SCORES, and this product already has
+        a colour language for a score: the visibility ramp, where hue means how
+        visible you are. Wrapping a score in a categorical hue puts two colour
+        languages on one tile and invites the reading that the tile's colour
+        says something about the number. The bench hues are 30 degrees clear of
+        every ramp stop precisely so they cannot be confused with one; sitting
+        one directly around a score would give that separation away for
+        decoration. Counts take accents; measurements do not.
+      */}
+      <StatTile label="Latest" value={latest == null ? 'Not scored' : latest.toFixed(0)} />
+      <StatTile label="Best" value={best == null ? 'Not scored' : best.toFixed(0)} />
+      {history.scansWithoutData > 0 && (
+        <StatTile
+          label="No reading"
+          value={String(history.scansWithoutData)}
+          accent={1}
+          emphasis
+        />
+      )}
+    </StatRow>
   );
 }

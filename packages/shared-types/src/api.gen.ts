@@ -622,6 +622,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/clients/{clientId}/prompt-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Prompt Runs
+         * @description This client's runs, newest first, with what the throttle has left.
+         */
+        get: operations["list_prompt_runs_api_v1_clients__clientId__prompt_runs_get"];
+        put?: never;
+        /**
+         * Create Prompt Run
+         * @description Ask one prompt of every engine and persist the facts.
+         */
+        post: operations["create_prompt_run_api_v1_clients__clientId__prompt_runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/clients/{clientId}/reclassify": {
         parameters: {
             query?: never;
@@ -2016,6 +2040,136 @@ export interface components {
             /** Text */
             text: string;
         };
+        /**
+         * PromptRunBrandOut
+         * @description A brand this answer named, and where it appeared.
+         */
+        PromptRunBrandOut: {
+            /** Domain */
+            domain?: string | null;
+            /** Issubject */
+            isSubject: boolean;
+            /** Name */
+            name: string;
+            /** Position */
+            position: number;
+        };
+        /**
+         * PromptRunCitationOut
+         * @description A source this answer cited. Location, never content.
+         */
+        PromptRunCitationOut: {
+            /** Citessubject */
+            citesSubject: boolean;
+            /** Domain */
+            domain: string;
+            /** Position */
+            position: number;
+            sourceType: components["schemas"]["CitationType"];
+            /** Url */
+            url: string;
+        };
+        /**
+         * PromptRunHistoryOut
+         * @description A client's runs, newest first, with what the throttle has left.
+         *
+         *     `runsRemaining` is served rather than left to the browser to infer. The
+         *     ceiling is a server-side decision and a client that guessed it would either
+         *     block a legal run or offer one that 429s — both worse than being told.
+         */
+        PromptRunHistoryOut: {
+            /**
+             * Data
+             * @default []
+             */
+            data: components["schemas"]["PromptRunOut"][];
+            /** Maxpromptchars */
+            maxPromptChars: number;
+            /** Runsperhour */
+            runsPerHour: number;
+            /** Runsremaining */
+            runsRemaining: number;
+        };
+        /**
+         * PromptRunIn
+         * @description The question. Bounded here as well as in the service.
+         *
+         *     Two checks on purpose: this one rejects an oversized body at the edge before
+         *     it is read, and `normalise_prompt` rejects one that only becomes oversized
+         *     after whitespace is collapsed. Neither subsumes the other.
+         */
+        PromptRunIn: {
+            /** Prompt */
+            prompt: string;
+        };
+        /** PromptRunOut */
+        PromptRunOut: {
+            /** Clientid */
+            clientId: string;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /** Id */
+            id: string;
+            /** Prompttext */
+            promptText: string;
+            /**
+             * Results
+             * @default []
+             */
+            results: components["schemas"]["PromptRunResultOut"][];
+            status: components["schemas"]["PromptRunStatus"];
+            /** Subjectdomain */
+            subjectDomain: string;
+            /** Subjectname */
+            subjectName: string;
+        };
+        /**
+         * PromptRunResultOut
+         * @description What one engine did with the prompt.
+         */
+        PromptRunResultOut: {
+            /**
+             * Brands
+             * @default []
+             */
+            brands: components["schemas"]["PromptRunBrandOut"][];
+            /** Brandsmentioned */
+            brandsMentioned: number;
+            /**
+             * Citations
+             * @default []
+             */
+            citations: components["schemas"]["PromptRunCitationOut"][];
+            engine: components["schemas"]["Engine"];
+            /** Engineversion */
+            engineVersion?: string | null;
+            /** Errorcode */
+            errorCode?: string | null;
+            /** Id */
+            id: string;
+            /** Latencyms */
+            latencyMs?: number | null;
+            /** Mentioned */
+            mentioned: boolean;
+            /** Position */
+            position?: number | null;
+            /** Prominence */
+            prominence?: string | null;
+            status: components["schemas"]["EngineResultStatus"];
+        };
+        /**
+         * PromptRunStatus
+         * @description A run's overall verdict, from its per-engine outcomes.
+         *
+         *     The same three-way shape `terminal_status_for` gives a scan, and for the
+         *     same reason: PARTIAL exists so the screen can say "one engine was down"
+         *     rather than presenting a narrower result as if it were the whole picture.
+         * @enum {string}
+         */
+        PromptRunStatus: "ok" | "partial" | "failed";
         /** PromptSetOut */
         PromptSetOut: {
             /** Generatedby */
@@ -3435,6 +3589,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ClientHistoryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_prompt_runs_api_v1_clients__clientId__prompt_runs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                clientId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromptRunHistoryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_prompt_run_api_v1_clients__clientId__prompt_runs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                clientId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PromptRunIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromptRunOut"];
                 };
             };
             /** @description Validation Error */

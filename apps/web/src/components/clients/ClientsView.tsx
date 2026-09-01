@@ -20,7 +20,16 @@
  */
 
 import type { JSX } from 'react';
-import { Badge, Button, DataTable, EmptyState, ErrorState, LoadingState } from '@avp/design-system';
+import {
+  Badge,
+  Button,
+  DataTable,
+  EmptyState,
+  ErrorState,
+  LoadingState,
+  StatRow,
+  StatTile,
+} from '@avp/design-system';
 import type { Client, Me } from '@avp/shared-types';
 import { WorkspaceShell } from '@/components/shell/WorkspaceShell';
 
@@ -48,23 +57,15 @@ function countOf(clients: readonly Client[], status: Client['classificationStatu
   return clients.filter((c) => c.classificationStatus === status).length;
 }
 
-/**
- * One header figure.
+/*
+ * The private `Stat` helper that used to live here is gone — Epic 9.24.
  *
- * Deliberately the same shape as `DashboardView`'s `Stat` rather than a
- * shared import: that one is a private helper inside a screen this file does
- * not otherwise touch, and hoisting it into the design system for two call
- * sites would be a component built for a coincidence. If a third screen wants
- * it, that is the point to move it.
+ * Its own comment set the condition for moving it: "two call sites would be a
+ * component built for a coincidence. If a third screen wants it, that is the
+ * point to move it." A third screen wanted it, so it moved, and it is
+ * `StatTile` in the design system now. Nothing about the decision was revisited
+ * — the condition was simply met.
  */
-function Stat({ label, value }: { label: string; value: number }): JSX.Element {
-  return (
-    <div className="flex flex-col gap-1">
-      <dt className="text-ui-2xs uppercase tracking-caps text-text-tertiary">{label}</dt>
-      <dd className="text-ui-lg font-medium text-text-primary">{value}</dd>
-    </div>
-  );
-}
 
 export function ClientsView({
   state,
@@ -88,7 +89,7 @@ export function ClientsView({
 
       {state.kind === 'ready' && (
         <div className="flex flex-col gap-8">
-          <header className="flex flex-wrap items-end justify-between gap-6 border-b border-line-hairline pb-8">
+          <header className="flex flex-col gap-6 border-b border-line-hairline pb-8">
             <div>
               <p className="text-ui-2xs uppercase tracking-caps text-text-tertiary">
                 Clients
@@ -115,19 +116,43 @@ export function ClientsView({
               that is usually zero.
             */}
             {state.clients.length > 0 && (
-              <dl className="flex flex-wrap items-end gap-8">
-                <Stat label="Identified" value={countOf(state.clients, 'classified')} />
-                <Stat
+              <StatRow>
+                <StatTile
+                  label="Identified"
+                  value={countOf(state.clients, 'classified')}
+                  accent={0}
+                />
+                <StatTile
                   label="Awaiting review"
                   value={
                     countOf(state.clients, 'ambiguous') + countOf(state.clients, 'pending')
                   }
+                  accent={1}
+                  emphasis={
+                    countOf(state.clients, 'ambiguous') + countOf(state.clients, 'pending') > 0
+                  }
                 />
-                <Stat
+                <StatTile
                   label="Unreadable"
                   value={countOf(state.clients, 'unclassifiable')}
+                  accent={2}
+                  emphasis={countOf(state.clients, 'unclassifiable') > 0}
                 />
-              </dl>
+                {/*
+                  A fourth figure the list already knows and never said — Epic
+                  9.24. `industry` is rendered per row and is null for clients
+                  whose classification did not resolve one, so "how many of
+                  these do we not know the industry of" is a question the
+                  screen could always answer and did not.
+
+                  Still nothing fetched: same rows, same fields.
+                */}
+                <StatTile
+                  label="Industry known"
+                  value={`${state.clients.filter((c) => c.industry).length} / ${state.clients.length}`}
+                  accent={3}
+                />
+              </StatRow>
             )}
           </header>
 

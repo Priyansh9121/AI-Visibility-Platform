@@ -437,6 +437,12 @@
 .avp-nav { display: flex; flex-direction: column; gap: var(--avp-space-0_5); }
 
 .avp-nav__item {
+  /* Component-scoped, and DECLARED HERE with a working default rather than
+     only being set inline by NavItem — a stylesheet that reads a property
+     nothing in it defines cannot be understood on its own, and the token test
+     enforces that. `accent` overrides these from the markup. */
+  --avp-nav-accent: currentColor;
+  --avp-nav-wash: var(--avp-surface-seated);
   display: flex;
   align-items: center;
   gap: var(--avp-space-3);
@@ -466,7 +472,30 @@
   box-shadow: inset 2px 0 0 var(--avp-beacon-600);
 }
 
-.avp-nav__icon { display: inline-flex; flex: none; }
+/* THE SIDEBAR IN COLOUR — Epic 9.24.
+   A column of identical grey glyphs is the least scannable thing a persistent
+   frame can be. `--avp-nav-accent` is set per destination by NavItem; without
+   it every rule below is inert, so an un-accented sidebar looks exactly as it
+   did before this epic. */
+.avp-nav__item.has-accent .avp-nav__icon { color: var(--avp-nav-accent); }
+
+/* Current takes the destination's own hue for its rail and wash, rather than
+   the one brand teal every item shared. Weight and `aria-current` still carry
+   the state — this is the fourth cue, not the only one. */
+.avp-nav__item.has-accent.is-current {
+  background: var(--avp-nav-wash);
+  box-shadow: inset 2px 0 0 var(--avp-nav-accent);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .avp-nav__item.has-accent:hover { background: var(--avp-nav-wash); }
+}
+
+.avp-nav__icon {
+  display: inline-flex;
+  flex: none;
+  transition: color var(--avp-duration-hover) var(--avp-ease-standard);
+}
 
 .avp-nav__text { display: flex; flex-direction: column; min-width: 0; }
 
@@ -569,6 +598,8 @@
 }
 
 .avp-localnav__item {
+  --avp-localnav-accent: var(--avp-beacon-600);
+  --avp-localnav-wash: var(--avp-surface-seated);
   display: inline-flex;
   align-items: center;
   gap: var(--avp-space-1_5);
@@ -599,6 +630,35 @@
   color: var(--avp-text-primary);
   font-weight: 600;
   box-shadow: inset 0 -2px 0 var(--avp-beacon-600);
+}
+
+/* The client's own sections, in colour — Epic 9.24. Inert without an accent,
+   exactly like the sidebar above. */
+.avp-localnav__item.has-accent::before {
+  content: '';
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: var(--avp-radius-full);
+  background: var(--avp-localnav-accent);
+  flex: none;
+  /* Dimmed until current, so the strip reads as one object with one item lit
+     rather than as five competing dots. The metaphor the whole palette runs
+     on: emphasis is light. */
+  opacity: 0.45;
+  transition: opacity var(--avp-duration-hover) var(--avp-ease-standard);
+}
+
+.avp-localnav__item.has-accent { display: inline-flex; align-items: center; gap: var(--avp-space-2); }
+
+.avp-localnav__item.has-accent.is-current {
+  background: var(--avp-localnav-wash);
+  box-shadow: inset 0 -2px 0 var(--avp-localnav-accent);
+}
+
+.avp-localnav__item.has-accent.is-current::before { opacity: 1; }
+
+@media (hover: hover) and (pointer: fine) {
+  .avp-localnav__item.has-accent:hover::before { opacity: 0.8; }
 }
 
 .avp-localnav__out { color: var(--avp-text-tertiary); font-size: var(--avp-text-ui-xs); }
@@ -1506,3 +1566,78 @@
     transition: none !important;
   }
 }
+
+/* ============================ StatTile =========================== */
+/*
+ * One figure on a Working screen — Epic 9.24.
+ *
+ * Replaces the two-stacked-spans `Stat` that DashboardView and ClientsView each
+ * kept privately. That shape read as a caption strip; this reads as a figure,
+ * which is what lets a row of them hold the width of a 90rem Working column
+ * instead of leaving it empty. See StatTile.tsx.
+ */
+
+.avp-tile-row {
+  --avp-tile-min: 11rem;
+  display: grid;
+  /* auto-fit + minmax, so the row picks its own column count from the space it
+     is given. A fixed count breaks at one end of the range or the other. */
+  grid-template-columns: repeat(auto-fit, minmax(var(--avp-tile-min), 1fr));
+  gap: var(--avp-space-3);
+  margin: 0;
+}
+
+.avp-tile {
+  /* Declared here for the reason .avp-nav__item's are. Unset, a tile is a
+     plain hairline card; StatTile's `accent` overrides all three. */
+  --avp-tile-accent: var(--avp-line-hairline);
+  --avp-tile-wash: transparent;
+  --avp-tile-line: var(--avp-line-hairline);
+  display: flex;
+  flex-direction: column;
+  gap: var(--avp-space-1);
+  padding: var(--avp-space-4);
+  border: 1px solid var(--avp-line-hairline);
+  border-radius: var(--avp-radius-lg);
+  background: var(--avp-surface-ground);
+  /* The accent rail. Inert at 0 width until `--avp-tile-accent` is set, so an
+     un-accented tile is a plain card rather than a card with a grey stripe. */
+  border-left: 3px solid var(--avp-tile-accent);
+  transition: border-color var(--avp-duration-hover) var(--avp-ease-standard),
+    background var(--avp-duration-hover) var(--avp-ease-standard);
+}
+
+.avp-tile--accented {
+  background: var(--avp-tile-wash);
+  border-color: var(--avp-tile-line);
+  border-left-color: var(--avp-tile-accent);
+}
+
+.avp-tile__label {
+  font-size: var(--avp-text-ui-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--avp-tracking-caps);
+  color: var(--avp-text-tertiary);
+}
+
+.avp-tile__value {
+  margin: 0;
+  font-size: var(--avp-text-ui-xl);
+  font-weight: 600;
+  line-height: var(--avp-leading-display);
+  color: var(--avp-text-primary);
+  /* Mandatory: these are comparison figures in a grid and they must align
+     column to column. design-direction.md §2 is why Plex is the UI face. */
+  font-variant-numeric: tabular-nums;
+}
+
+.avp-tile__note {
+  margin: 0;
+  font-size: var(--avp-text-ui-xs);
+  color: var(--avp-text-secondary);
+}
+
+/* Emphasis changes WEIGHT as well as colour, so it is not carried by hue
+   alone — the rule VisibilityBadge and the nav's current state both follow. */
+.avp-tile.is-emphasis .avp-tile__value { color: var(--avp-tile-accent); }
+.avp-tile.is-emphasis { border-left-width: 5px; }
