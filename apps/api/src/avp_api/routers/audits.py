@@ -13,8 +13,9 @@ from sqlalchemy import select
 from ..deps import DbDep, PrincipalDep
 from ..errors import NotFound
 from ..models import Client, Scan
+from ..models.technical_audit import AuditStatus
 from ..schemas.audit import TechnicalAuditOut
-from ..services import audit_runner
+from ..services import audit_runner, technical_audit
 
 router = APIRouter(tags=["audits"])
 
@@ -43,6 +44,17 @@ def _ordered(audit) -> TechnicalAuditOut:  # noqa: ANN001
     out = TechnicalAuditOut.model_validate(audit)
     index = {key: i for i, key in enumerate(CHECK_ORDER)}
     out.checks.sort(key=lambda c: (index.get(c.check_key, len(CHECK_ORDER)), c.check_key))
+
+    # The four weighted parts of the sub-score, recomputed from the stored row —
+    # Epic 9.22. Same function the score itself was built from, so the two
+    # cannot disagree; nothing is re-crawled and nothing is written. Skipped for
+    # an audit that failed, which has no components to show.
+    if audit.status is AuditStatus.OK:
+        components, _excluded = technical_audit.compute_components(
+            technical_audit.signals_from_row(audit)
+        )
+        out.components = components
+        out.component_weights = technical_audit.effective_weights(components)
     return out
 
 

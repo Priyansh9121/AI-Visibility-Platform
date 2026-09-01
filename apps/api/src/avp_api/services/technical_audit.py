@@ -48,6 +48,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
+from typing import Any
 
 import httpx
 import structlog
@@ -619,6 +620,52 @@ def compute_components(signals: AuditSignals) -> tuple[dict[str, Decimal], dict[
         components["content_freshness"] = value
 
     return components, excluded
+
+
+def signals_from_row(audit: Any) -> AuditSignals:
+    """Rebuild the scoring inputs from a STORED audit row — Epic 9.22.
+
+    `compute_components` needs exactly nine facts, and every one of them is
+    already a column on `technical_audits`: `is_indexable`, `has_sitemap`,
+    `canonical_present`, `schema_types`, the four schema flags, and
+    `content_age_days`. So the four component scores can be recomputed from a
+    row without re-crawling anything and without a migration.
+
+    This is NOT a general-purpose inverse of the crawl. The fields it leaves at
+    their defaults — titles, meta description, Open Graph counts, robots.txt
+    presence — are inputs to `build_checks`, never to `compute_components`, and
+    the stored `TechnicalAuditCheck` rows already carry those verdicts. Calling
+    `build_checks` on the result would produce wrong answers; calling
+    `compute_components` produces the same answers the score was built from.
+    """
+    return AuditSignals(
+        url=audit.url_audited,
+        domain="",
+        ok=True,
+        schema_types=list(audit.schema_types or []),
+        has_organization_schema=bool(audit.has_organization_schema),
+        has_localbusiness_schema=bool(audit.has_localbusiness_schema),
+        has_faq_schema=bool(audit.has_faq_schema),
+        has_product_schema=bool(audit.has_product_schema),
+        canonical_present=bool(audit.canonical_present),
+        has_sitemap=bool(audit.has_sitemap),
+        is_indexable=bool(audit.is_indexable),
+        content_age_days=audit.content_age_days,
+    )
+
+
+def effective_weights(components: dict[str, Decimal]) -> dict[str, Decimal]:
+    """The weight each component actually carried, after redistribution.
+
+    Exposed alongside the components so a reader can see WHY an unmeasurable
+    component did not simply score zero: its weight was shared out across the
+    ones that could be measured, which is scoring-spec.md rule 2.
+    """
+    included = [k for k in COMPONENT_WEIGHTS if k in components]
+    if not included:
+        return {}
+    total = sum((COMPONENT_WEIGHTS[k] for k in included), Decimal("0"))
+    return {k: _round2(COMPONENT_WEIGHTS[k] / total * HUNDRED) for k in included}
 
 
 def score_audit(signals: AuditSignals) -> AuditOutcome:

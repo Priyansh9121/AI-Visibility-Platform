@@ -12,6 +12,7 @@ import type {
   PortalSession,
   Client,
   ClientHistory,
+  TechnicalAudit,
   ClientDetail,
   CompetitorInput,
   CompetitorSet,
@@ -267,6 +268,16 @@ export const api = {
    */
   clientHistory: (clientId: string) =>
     request<ClientHistory>(`/clients/${clientId}/history`),
+
+  /**
+   * A scan's technical audit — Epic 9.22, wiring an endpoint that has existed
+   * since Epic 6 and which nothing in the browser had ever called directly.
+   *
+   * The report already shows this data folded into its fix beat. This is the
+   * same audit read on its own, so a client's Technical screen can draw the
+   * four weighted components the sub-score is actually made of.
+   */
+  audit: (scanId: string) => request<TechnicalAudit>(`/scans/${scanId}/audit`),
 
   createClient: (payload: CreateClientRequest) =>
     request<ClientDetail>('/clients', {

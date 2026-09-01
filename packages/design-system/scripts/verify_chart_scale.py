@@ -53,6 +53,10 @@ USAGE
     # or point it at any page that renders charts
     ... verify_chart_scale.py --url http://localhost:3000/some/page
 
+    # an authenticated page needs a session; the script signs in first
+    ... verify_chart_scale.py --url http://localhost:3000/clients/<id>/technical \
+          --sign-in-at http://localhost:3000/ --email dev@example --password ...
+
 Exits non-zero and prints every offender.
 
 It uses the Playwright already installed in `apps/api/.venv` rather than adding
@@ -116,14 +120,32 @@ PROBE = """() => {
 async def main() -> int:
     ap = argparse.ArgumentParser(description="Verify no chart out-types its page.")
     ap.add_argument("--url", default=DEFAULT_URL, help=f"page to check (default {DEFAULT_URL})")
+    # Charts inside the product live behind a session. Without these the script
+    # would measure the signed-out state and report "no charts found", which
+    # reads like a pass and is not one.
+    ap.add_argument("--sign-in-at", default=None, help="page carrying the Log in control")
+    ap.add_argument("--email", default=None)
+    ap.add_argument("--password", default=None)
     args = ap.parse_args()
 
     failures: list[str] = []
     checked = 0
+    empty_sweeps = 0
 
     async with async_playwright() as p:
         browser = await p.chromium.launch()
         page = await (await browser.new_context()).new_page()
+
+        if args.sign_in_at and args.email and args.password:
+            await page.goto(args.sign_in_at, wait_until="domcontentloaded", timeout=20_000)
+            await page.wait_for_load_state("networkidle")
+            await page.wait_for_timeout(900)
+            await page.get_by_role("button", name="Log in").first.click(timeout=10_000)
+            await page.wait_for_timeout(600)
+            await page.get_by_label("Email").fill(args.email)
+            await page.get_by_label("Password", exact=True).fill(args.password)
+            await page.get_by_role("button", name="Sign in", exact=True).click()
+            await page.wait_for_timeout(3000)
 
         try:
             await page.goto(args.url, wait_until="domcontentloaded", timeout=15_000)
@@ -141,7 +163,11 @@ async def main() -> int:
             await page.wait_for_timeout(350)
             charts = await page.evaluate(PROBE)
             if not charts:
-                print(f"  {width:>5}px  no labelled charts found — is this the right page?")
+                # NOT a pass. A page with no charts on it is either the wrong
+                # page or a signed-out one, and silence here would look
+                # identical to success.
+                print(f"  {width:>5}px  no labelled charts found — wrong page, or not signed in?")
+                empty_sweeps += 1
                 continue
 
             over = [c for c in charts if c["onScreenSmallest"] > c["bodyPx"] * TOLERANCE]
@@ -177,9 +203,18 @@ async def main() -> int:
         )
         return 1
 
+    if checked == 0:
+        print(
+            f"no charts were found at any of the {len(VIEWPORTS)} viewports. "
+            "That is not a pass — check the URL, and sign in with --email/--password "
+            "if the page is behind a session."
+        )
+        return 2
+
     print(
-        f"{checked} chart renders across {len(VIEWPORTS)} viewports: "
-        "every chart's smallest label stays at or below body copy."
+        f"{checked} chart renders across {len(VIEWPORTS)} viewports"
+        + (f" ({empty_sweeps} sweep(s) found nothing)" if empty_sweeps else "")
+        + ": every chart's smallest label stays at or below body copy."
     )
     return 0
 

@@ -6,6 +6,7 @@ import { Badge, VisibilityBadge } from './Badge.js';
 import { DataTable } from './Table.js';
 import { ScoreDisplay } from './ScoreDisplay.js';
 import { ScoreMeter } from './ScoreMeter.js';
+import { VerdictBar } from './VerdictBar.js';
 import { PageSection } from './marketing/PageSection.js';
 import { AppShell, NavItem } from './shell/AppShell.js';
 import { LoadingState } from './state/LoadingState.js';
@@ -809,5 +810,92 @@ describe('TrendChart is bounded by its own viewBox', () => {
       <LuminanceLedger subjectName="x" dimensions={DIMENSIONS} animate={false} />,
     );
     expect(out).toContain('width="100%"');
+  });
+});
+
+/**
+ * VerdictBar — Epic 9.22.
+ *
+ * The two things worth asserting are both about honesty: that it never paints a
+ * verdict from the visibility ramp, and that it never counts a check that does
+ * not apply as one the site passed.
+ */
+describe('VerdictBar', () => {
+  const bar = (counts: Record<string, number>) =>
+    html(<VerdictBar counts={counts as never} ariaLabel="verdicts" />);
+
+  it('paints verdicts from the SEMANTIC palette, never the visibility ramp', () => {
+    // §1 keeps semantics for system state and the ramp for score values. A
+    // check verdict is system state; a ramp colour here would imply it is a
+    // score, which is exactly the confusion §1 exists to prevent.
+    const out = bar({ pass: 3, warn: 1, fail: 2 });
+    for (const stop of Object.values(visibility)) {
+      expect(out).not.toContain(oklch(stop));
+    }
+    expect(out).toContain('avp-verdict__seg--pass');
+    expect(out).toContain('avp-verdict__seg--fail');
+  });
+
+  it('sizes segments over the MEASURED checks only', () => {
+    // 3 pass + 1 warn = 4 measured; `notApplicable` must not enter the
+    // denominator or the bar reads as 3/5 passed when it is 3/4.
+    const out = bar({ pass: 3, warn: 1, fail: 0, notApplicable: 6 });
+    expect(out).toContain('width:75%');
+    expect(out).toContain('width:25%');
+  });
+
+  it('draws an empty track when nothing was measured, never a full one', () => {
+    const out = bar({ pass: 0, warn: 0, fail: 0 });
+    expect(out).toContain('avp-verdict__empty');
+    expect(out).not.toContain('avp-verdict__seg--pass');
+  });
+
+  it('omits a zero segment rather than rendering a hairline of colour', () => {
+    expect(bar({ pass: 4, warn: 0, fail: 0 })).not.toContain('avp-verdict__seg--warn');
+  });
+
+  it('carries an accessible name, and the legend IS its data table', () => {
+    const out = bar({ pass: 1, warn: 2, fail: 3 });
+    expect(out).toContain('aria-label="verdicts"');
+    expect(out).toContain('Passed');
+    expect(out).toContain('Failed');
+  });
+
+  it('shows N/A only when there is one', () => {
+    expect(bar({ pass: 1, warn: 0, fail: 0 })).not.toContain('>N/A<');
+    expect(bar({ pass: 1, warn: 0, fail: 0, notApplicable: 2 })).toContain('>N/A<');
+  });
+});
+
+/**
+ * The Ledger's opt-in bound — Epic 9.22.
+ *
+ * Same failure as 9.19 and 9.21: a viewBox chart magnifies its own type when
+ * its container outgrows it. `bounded` is opt-in precisely so turning it on
+ * cannot change the report, whose layout is out of scope.
+ */
+describe('LuminanceLedger bounding', () => {
+  const ledger = (extra: Record<string, unknown> = {}) =>
+    html(<LuminanceLedger subjectName="x" dimensions={DIMENSIONS} animate={false} {...extra} />);
+
+  it('is UNBOUNDED by default, so the report is untouched', () => {
+    expect(ledger()).not.toContain('max-width');
+  });
+
+  it('bounds at its own drawn width when asked', () => {
+    const out = ledger({ bounded: true });
+    expect(out).toMatch(/max-width:\d+px/);
+  });
+
+  it('the bound matches the viewBox, so one unit is at most one pixel', () => {
+    const out = ledger({ bounded: true });
+    const vb = /viewBox="0 0 (\d+)/.exec(out)?.[1];
+    const cap = /max-width:(\d+)px/.exec(out)?.[1];
+    expect(vb).toBeDefined();
+    expect(cap).toBe(vb);
+  });
+
+  it('still scales down — it is a max, not a width', () => {
+    expect(ledger({ bounded: true })).toContain('width="100%"');
   });
 });
