@@ -48,6 +48,16 @@ export { ChartPatterns, patternPaint } from './components/chart/ChartPatterns.js
 export { LuminanceLedger, type LuminanceLedgerProps } from './components/chart/LuminanceLedger.js';
 export { AnswerShelf, type AnswerShelfProps } from './components/chart/AnswerShelf.js';
 export { TrendChart, type TrendChartProps } from './components/chart/TrendChart.js';
+export { SentimentTide, type SentimentTideProps } from './components/chart/SentimentTide.js';
+export {
+  layoutTide,
+  netByEngine,
+  type TideBuckets,
+  type TidePointInput,
+  type TideLayout,
+  type TideLayoutOptions,
+  type TideBar,
+} from './components/chart/sentimentTideLayout.js';
 export {
   layoutTrend,
   segmentPath,

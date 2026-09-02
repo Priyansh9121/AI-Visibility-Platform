@@ -38,6 +38,9 @@
  * - **Prompts** — Epic 9.24. Ad-hoc prompt testing: type a question, run it
  *   against this product's own engines on demand, and see who they name. The
  *   only destination here that CREATES data rather than reading a scan's.
+ * - **Sentiment** — Epic A. How each engine described the client, scan by
+ *   scan. The labels have been stored since Epic 4 and appeared nowhere except
+ *   folded into the composite; this reads them on their own.
  *
  * Nothing about this frame assumes a fixed number of items.
  *
@@ -55,7 +58,13 @@ import { LocalNav, LocalNavItem } from '@avp/design-system';
 import type { Client, Me } from '@avp/shared-types';
 import { WorkspaceShell } from '@/components/shell/WorkspaceShell';
 
-export type ClientSection = 'overview' | 'sources' | 'rankings' | 'technical' | 'prompts';
+export type ClientSection =
+  | 'overview'
+  | 'sources'
+  | 'rankings'
+  | 'technical'
+  | 'prompts'
+  | 'sentiment';
 
 /** Fixed by name, so reordering the strip does not repaint it. */
 const ACCENT: Record<ClientSection, number> = {
@@ -64,6 +73,7 @@ const ACCENT: Record<ClientSection, number> = {
   rankings: 2,
   technical: 3,
   prompts: 4,
+  sentiment: 5,
 };
 
 export function ClientSpace({
@@ -147,6 +157,12 @@ export function ClientSpace({
             label="Prompts"
             current={current === 'prompts'}
             accent={ACCENT.prompts}
+          />
+          <LocalNavItem
+            href={`${base}/sentiment`}
+            label="Sentiment"
+            current={current === 'sentiment'}
+            accent={ACCENT.sentiment}
           />
         </LocalNav>
         {figures}

@@ -1878,10 +1878,39 @@ export interface components {
              * Format: date-time
              */
             scannedAt: string;
+            /** Sentiment */
+            sentiment: components["schemas"]["HistorySentimentOut"][];
             /** Shareofvoice */
             shareOfVoice?: string | null;
             /** Status */
             status: string;
+        };
+        /**
+         * HistorySentimentOut
+         * @description How one engine described the subject across one scan's answers — Epic A.
+         *
+         *     COUNTS, not a rate, and the four buckets are exhaustive over that engine's
+         *     answers for the scan. A rate would have to pick a denominator, and the only
+         *     honest one here is "answers where the subject was named" — which is exactly
+         *     the number `unclassified` reports separately, so a caller can compute any
+         *     rate it wants and none is baked in.
+         *
+         *     `unclassified` is the state the whole product turns on: the subject was not
+         *     named, so tone toward it was never asked. It is NOT a neutral. Folding the
+         *     two together would report a brand nobody mentioned as having been described
+         *     neutrally, which is a measurement nobody took.
+         */
+        HistorySentimentOut: {
+            /** Engine */
+            engine: string;
+            /** Negative */
+            negative: number;
+            /** Neutral */
+            neutral: number;
+            /** Positive */
+            positive: number;
+            /** Unclassified */
+            unclassified: number;
         };
         /**
          * InviteSeatRequest
@@ -2158,6 +2187,9 @@ export interface components {
             position?: number | null;
             /** Prominence */
             prominence?: string | null;
+            sentiment?: components["schemas"]["Sentiment"] | null;
+            /** Sentimentconfidence */
+            sentimentConfidence?: string | null;
             status: components["schemas"]["EngineResultStatus"];
         };
         /**

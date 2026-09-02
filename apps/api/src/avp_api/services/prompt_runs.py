@@ -245,6 +245,20 @@ async def run_prompt(
             subject_domain=client.domain,
             competitors=competitors,
         )
+        # Tone, on the same terms the scan path spends it — Epic A.
+        #
+        # ONLY when the subject was named. `classify_sentiment`'s docstring is
+        # the authority: tone toward a brand that does not appear is
+        # meaningless, and spending a model call on it would be both wasteful
+        # and misleading. A run where no engine named the client therefore
+        # costs exactly what it cost before this epic.
+        if facts.mentioned:
+            sentiment, confidence = await extraction_service.classify_sentiment(
+                answer, subject_name=subject_name, settings=settings
+            )
+            facts.sentiment = sentiment
+            facts.sentiment_confidence = confidence
+
         result = PromptRunResult(
             id=ids.new_id(ids.PROMPT_RUN_RESULT),
             run_id=run.id,
@@ -258,6 +272,8 @@ async def run_prompt(
             prominence=facts.prominence,
             brands_mentioned=facts.brands_mentioned,
             response_digest=answer.digest(),
+            sentiment=facts.sentiment,
+            sentiment_confidence=facts.sentiment_confidence,
         )
         result.brands = [
             PromptRunBrand(

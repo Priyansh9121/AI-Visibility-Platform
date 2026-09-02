@@ -43,7 +43,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import Client
 from ..models.competitor import Competitor, CompetitorSet
-from ..models.engine_result import Citation, EngineResult
+from ..models.engine_result import (
+    Citation,
+    Engine,
+    EngineResult,
+    EngineResultStatus,
+    Sentiment,
+)
 from ..models.scan import Scan, ScanStatus
 from ..models.score import Score
 from ..schemas.client_history import (
@@ -51,6 +57,7 @@ from ..schemas.client_history import (
     HistoryCitedDomainOut,
     HistoryCompetitorOut,
     HistoryScanOut,
+    HistorySentimentOut,
 )
 from . import scoring_runner
 from .scoring import Dimension
@@ -81,6 +88,39 @@ def _domain_counts(scan_id: str) -> Select[tuple[str, bool, int]]:
         .where(EngineResult.scan_id == scan_id)
         .group_by(Citation.source_domain)
         .order_by(func.count().desc(), Citation.source_domain)
+    )
+
+
+def _sentiment_counts(scan_id: str) -> Select[tuple[Engine, Sentiment | None, int]]:
+    """Per engine, per sentiment label, how many of this scan's answers — Epic A.
+
+    Grouped in the DATABASE rather than by loading rows and counting in Python.
+    A scan is 24 prompts x 3 engines = 72 EngineResult rows, and this module
+    already runs `score_scan` per scan; pulling 72 rows per scan across a
+    client's whole history to compute four integers would be the kind of
+    N+1 the module docstring says was the reason this service exists at all.
+
+    Counts NULL sentiment as its own bucket. That is the answers where the
+    subject was not named — a real state, and the one that must never be folded
+    into `neutral`.
+
+    Engines that FAILED are excluded: an engine that never answered has no tone,
+    and counting its failures as "unclassified" would conflate an outage with a
+    finding. `terminal_status_for` draws the same line.
+    """
+    return (
+        select(
+            EngineResult.engine,
+            EngineResult.sentiment,
+            func.count().label("n"),
+        )
+        .where(
+            EngineResult.scan_id == scan_id,
+            EngineResult.status.in_(
+                (EngineResultStatus.OK, EngineResultStatus.ANSWERED_NO_MENTION)
+            ),
+        )
+        .group_by(EngineResult.engine, EngineResult.sentiment)
     )
 
 
@@ -158,6 +198,15 @@ async def build_history(
             )
         ).scalars().first()
 
+        # Per-engine tone for this scan — Epic A.
+        tallies: dict[str, dict[str, int]] = {}
+        for engine, label, count in (await session.execute(_sentiment_counts(scan.id))).all():
+            bucket = tallies.setdefault(
+                engine.value, {"positive": 0, "neutral": 0, "negative": 0, "unclassified": 0}
+            )
+            # NULL is the fourth bucket, not a neutral. See the schema.
+            bucket["unclassified" if label is None else label.value] += count
+
         out.append(
             HistoryScanOut(
                 scan_id=scan.id,
@@ -175,6 +224,13 @@ async def build_history(
                         citation_strength=c.citation_strength,
                     )
                     for c in comparisons
+                ],
+                sentiment=[
+                    HistorySentimentOut(engine=engine, **counts)
+                    # Sorted so the series order is stable between scans — a
+                    # chart whose engines swapped places between two points
+                    # would be unreadable.
+                    for engine, counts in sorted(tallies.items())
                 ],
             )
         )

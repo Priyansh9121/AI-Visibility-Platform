@@ -36,6 +36,14 @@ function scan(
     sov?: string | null;
     domains?: HistoryCitedDomain[];
     rivals?: [string, string][];
+    /**
+     * Per-engine tone — Epic A. `[engine, positive, neutral, negative,
+     * unclassified]`. Omitted entirely for a scan predating the field, which
+     * is a real state: every scan run before the tab existed has tone stored
+     * (it has been classified since Epic 4) but a fixture is free to model the
+     * empty case too.
+     */
+    tone?: [string, number, number, number, number][];
   } = {},
 ): HistoryScan {
   return {
@@ -52,6 +60,15 @@ function scan(
       shareOfVoice: sov,
       citationStrength: '10.00',
     })),
+    sentiment: (opts.tone ?? []).map(
+      ([engine, positive, neutral, negative, unclassified]) => ({
+        engine,
+        positive,
+        neutral,
+        negative,
+        unclassified,
+      }),
+    ),
   } as HistoryScan;
 }
 
@@ -96,6 +113,11 @@ export const threeScanHistory: ClientHistory = {
     scan('scan_1', '2026-08-27T01:37:00Z', {
       composite: '58.75',
       sov: '36.41',
+      tone: [
+        ['chatgpt', 6, 2, 1, 3],
+        ['claude', 4, 3, 2, 1],
+        ['claude_search', 5, 1, 2, 4],
+      ],
       domains: [
         domain(SUBJECT, 10, true),
         domain('matomo.org', 16, false, 'Matomo'),
@@ -111,6 +133,12 @@ export const threeScanHistory: ClientHistory = {
       status: 'partial',
       composite: '57.82',
       sov: '35.03',
+      // `claude_search` is absent — a PARTIAL scan, one engine down. It must
+      // draw no column rather than four zeros.
+      tone: [
+        ['chatgpt', 2, 1, 7, 2],
+        ['claude', 5, 2, 1, 4],
+      ],
       domains: [
         domain(SUBJECT, 8, true),
         domain('matomo.org', 19, false, 'Matomo'),
@@ -125,6 +153,14 @@ export const threeScanHistory: ClientHistory = {
     scan('scan_3', '2026-08-29T04:32:00Z', {
       composite: '58.50',
       sov: '36.27',
+      // ChatGPT's net across the three scans is exactly 0 — as much praise as
+      // criticism. A deliberate case: zero is a real answer and must never
+      // render the same as "never measured".
+      tone: [
+        ['chatgpt', 1, 2, 1, 1],
+        ['claude', 6, 2, 1, 2],
+        ['claude_search', 4, 3, 1, 3],
+      ],
       domains: [
         domain(SUBJECT, 14, true),
         domain('matomo.org', 13, false, 'Matomo'),
@@ -177,6 +213,40 @@ export const shiftingSetHistory: ClientHistory = {
         ['Fathom Analytics', '10.60'],
         ['Seline', '0.52'],
       ],
+    }),
+  ],
+};
+
+/**
+ * Scanned, and never once named — Epic A.
+ *
+ * Every answer omitted the client, so the classifier was never called and there
+ * is no tone anywhere. The Sentiment tab must read this as the FINDING it is,
+ * not as an empty screen, and must not report it as neutral.
+ */
+export const neverNamedHistory: ClientHistory = {
+  clientId: 'clnt_absent',
+  name: 'Quietbrook',
+  domain: 'quietbrook.io',
+  scansWithoutData: 0,
+  scans: [
+    scan('scan_q1', '2026-08-27T01:00:00Z', {
+      composite: null,
+      sov: null,
+      tone: [
+        ['chatgpt', 0, 0, 0, 8],
+        ['claude', 0, 0, 0, 8],
+      ],
+    }),
+  ],
+};
+
+/** One scan with tone. A single scan IS a readable tide — see `hasSentiment`. */
+export const oneScanTonedHistory: ClientHistory = {
+  ...oneScanHistory,
+  scans: [
+    scan('scan_only', '2026-08-27T01:37:00Z', {
+      tone: [['chatgpt', 5, 2, 1, 2]],
     }),
   ],
 };

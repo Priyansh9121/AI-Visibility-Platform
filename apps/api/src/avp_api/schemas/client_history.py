@@ -46,6 +46,28 @@ class HistoryCompetitorOut(ApiModel):
     citation_strength: Decimal | None = None
 
 
+class HistorySentimentOut(ApiModel):
+    """How one engine described the subject across one scan's answers — Epic A.
+
+    COUNTS, not a rate, and the four buckets are exhaustive over that engine's
+    answers for the scan. A rate would have to pick a denominator, and the only
+    honest one here is "answers where the subject was named" — which is exactly
+    the number `unclassified` reports separately, so a caller can compute any
+    rate it wants and none is baked in.
+
+    `unclassified` is the state the whole product turns on: the subject was not
+    named, so tone toward it was never asked. It is NOT a neutral. Folding the
+    two together would report a brand nobody mentioned as having been described
+    neutrally, which is a measurement nobody took.
+    """
+
+    engine: str
+    positive: int
+    neutral: int
+    negative: int
+    unclassified: int
+
+
 class HistoryScanOut(ApiModel):
     """One point on the client's timeline."""
 
@@ -63,6 +85,9 @@ class HistoryScanOut(ApiModel):
     # which would make every consumer guard a field that is always there.
     cited_domains: list[HistoryCitedDomainOut]
     competitors: list[HistoryCompetitorOut]
+    # One row per engine that answered anything in this scan — Epic A. Required
+    # rather than defaulted, for the reason the two lists above are.
+    sentiment: list[HistorySentimentOut]
 
 
 class ClientHistoryOut(ApiModel):

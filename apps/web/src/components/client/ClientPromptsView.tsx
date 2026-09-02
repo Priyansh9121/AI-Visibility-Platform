@@ -59,36 +59,8 @@ import { api, ApiProblem } from '@/lib/api';
 import { ClientSpace } from '@/components/client/ClientSpace';
 import { latestScanId } from '@/components/client/ClientDetailView';
 import { formatStamp } from '@/lib/dates';
+import { ENGINE_ACCENT, engineLabel } from '@/lib/client/engines';
 import type { ClientDetailState } from '@/components/client/ClientDetailView';
-
-/**
- * A stable accent per engine.
- *
- * Fixed by engine key rather than by array position, for the reason the
- * sidebar's are: an operator who learns that the violet card is ChatGPT should
- * not have to re-learn it because an engine was added above it in a registry.
- * An unknown engine falls through to a neutral card rather than borrowing
- * somebody else's hue.
- */
-const ENGINE_ACCENT: Record<string, number> = {
-  claude: 0,
-  claude_search: 2,
-  chatgpt: 4,
-};
-
-/**
- * Engine display names.
- *
- * `claude` and `claude_search` are ONE vendor in two modes and the labels say
- * so, because the difference between them is the finding: a brand can be absent
- * from grounded answers while present in parametric ones, and an operator
- * reading two rows called "Claude" would have no way to know which was which.
- */
-const ENGINE_LABEL: Record<string, string> = {
-  claude: 'Claude — from memory',
-  claude_search: 'Claude — with web search',
-  chatgpt: 'ChatGPT — from memory',
-};
 
 const RUN_TONE: Record<string, BadgeTone> = {
   ok: 'success',
@@ -417,7 +389,7 @@ function EngineCard({
       }
     >
       <h3 className="text-ui-sm font-medium text-text-primary">
-        {ENGINE_LABEL[result.engine] ?? result.engine}
+        {engineLabel(result.engine)}
       </h3>
 
       {!answered ? (

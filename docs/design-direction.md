@@ -240,6 +240,51 @@ is too light to hit 4.5:1 on paper. Labels on a ramp fill are `ink-900` or
 > bound leaves over, which is the only correct way to use it.
 
 
+> ### BUILT — Epic A, 2026-09-02. Tone, and the colour language it is NOT allowed to borrow.
+>
+> The Sentiment tab draws how each engine described the client. Tone is
+> **ordinal** — positive is better than negative — and this palette already has
+> exactly one ordinal idea, the visibility ramp, which is reserved for score
+> values. So the question was which language tone is allowed to speak.
+>
+> **It speaks position, not hue.** Positive sits above a waterline, negative
+> below, neutral straddles it. That gets the ordinal reading for free in
+> greyscale, under colour-vision deficiency, and on a printer — the same three
+> properties §1 demands of the ramp, achieved by geometry rather than luminance.
+> Negative additionally carries a 45° hatch, which is §1's competitor-series
+> rule applied to a direction instead of a series.
+>
+> **Hue is therefore free to encode the ENGINE**, which is genuinely
+> categorical, and it takes `bench-*` — the same index per engine that the
+> Prompts screen uses, shared from `lib/client/engines.ts` rather than copied.
+> Two screens disagreeing about which hue is ChatGPT would make an operator
+> re-learn the mapping on every tab change.
+>
+> **`success` / `danger` were considered for tone and rejected.** §1 reserves
+> the semantics for SYSTEM STATE precisely so a red chip is never read as a bad
+> score — and sentiment *is* one of the five scored dimensions, at 15%. A red
+> bar on a Working screen beside a visibility figure is the exact confusion that
+> rule exists to prevent.
+>
+> **The waterline is placed by the data, not at the middle.** Centring it was
+> the first design, on the reasoning that all-positive and all-negative should
+> be mirror images. Measured on the real `plausible.io` history that was a bad
+> trade: tone there is overwhelmingly positive, so the lower half held one
+> hatched sliver and 45% of the figure was empty. The two halves are now sized
+> by the largest stack in each direction, which keeps the property that actually
+> matters — **one unit scale**, so five positive and five negative are the same
+> length — and drops the dead space. The mirror-image property survives; only
+> the zero line moves. Found in a live browser, not by a test.
+>
+> **Motion: 320ms, not 600ms.** The bars grow out of the waterline they are
+> measured against, which ties the animation to real data arriving rather than
+> decorating it. It runs at `--avp-duration-layout`, NOT the report's
+> `--avp-duration-reveal`: §4's Epic 9.16 note excludes Working screens from
+> performing on every load, and 600ms on a tab an operator reopens all day is a
+> performance. The roadmap asked for "bars animating from zero on load"; this is
+> that request honoured at a speed the Working context can carry.
+
+
 ### Client vs competitor — a semantic rule, not a palette
 
 Competitor series must **not** use the visibility ramp. If a competitor renders in

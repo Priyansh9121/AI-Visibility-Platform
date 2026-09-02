@@ -1638,6 +1638,13 @@
             "title": "Scannedat",
             "type": "string"
           },
+          "sentiment": {
+            "items": {
+              "$ref": "#/components/schemas/HistorySentimentOut"
+            },
+            "title": "Sentiment",
+            "type": "array"
+          },
           "shareOfVoice": {
             "anyOf": [
               {
@@ -1660,9 +1667,44 @@
           "status",
           "scannedAt",
           "citedDomains",
-          "competitors"
+          "competitors",
+          "sentiment"
         ],
         "title": "HistoryScanOut",
+        "type": "object"
+      },
+      "HistorySentimentOut": {
+        "description": "How one engine described the subject across one scan's answers \u2014 Epic A.\n\nCOUNTS, not a rate, and the four buckets are exhaustive over that engine's\nanswers for the scan. A rate would have to pick a denominator, and the only\nhonest one here is \"answers where the subject was named\" \u2014 which is exactly\nthe number `unclassified` reports separately, so a caller can compute any\nrate it wants and none is baked in.\n\n`unclassified` is the state the whole product turns on: the subject was not\nnamed, so tone toward it was never asked. It is NOT a neutral. Folding the\ntwo together would report a brand nobody mentioned as having been described\nneutrally, which is a measurement nobody took.",
+        "properties": {
+          "engine": {
+            "title": "Engine",
+            "type": "string"
+          },
+          "negative": {
+            "title": "Negative",
+            "type": "integer"
+          },
+          "neutral": {
+            "title": "Neutral",
+            "type": "integer"
+          },
+          "positive": {
+            "title": "Positive",
+            "type": "integer"
+          },
+          "unclassified": {
+            "title": "Unclassified",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "engine",
+          "positive",
+          "neutral",
+          "negative",
+          "unclassified"
+        ],
+        "title": "HistorySentimentOut",
         "type": "object"
       },
       "InviteSeatRequest": {
@@ -2235,6 +2277,28 @@
               }
             ],
             "title": "Prominence"
+          },
+          "sentiment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Sentiment"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sentimentConfidence": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sentimentconfidence"
           },
           "status": {
             "$ref": "#/components/schemas/EngineResultStatus"

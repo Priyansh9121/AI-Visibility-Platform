@@ -1876,6 +1876,61 @@ wants its earliest point at the left; this is a log and wants its latest entry
 at the top. The throttle figures are **served rather than inferred**: a browser
 that guessed the ceiling would either block a legal run or offer one that 429s.
 
+---
+
+### `GET /api/v1/clients/{clientId}/history` — gains `sentiment`, Epic A
+
+Each `HistoryScanOut` now carries one row per engine that answered anything:
+
+```jsonc
+"sentiment": [
+  { "engine": "chatgpt", "positive": 6, "neutral": 2, "negative": 1, "unclassified": 3 },
+  { "engine": "claude",  "positive": 4, "neutral": 3, "negative": 2, "unclassified": 1 }
+]
+```
+
+**Counts, not a rate.** A rate needs a denominator, and the only honest one here
+is "answers where the subject was named" — which is exactly what
+`unclassified` lets a caller compute. Baking one in would pick for them.
+
+**`unclassified` is a fourth bucket, never a neutral.** It is answers in which
+the subject never appeared, so `classify_sentiment` was not called at all —
+tone toward a brand that does not appear is meaningless, and scoring-spec.md
+excludes it rather than scoring it zero. Reporting it as neutral would claim
+the engines described the brand indifferently, which is a measurement nobody
+took.
+
+**An engine that FAILED contributes no row.** Aggregation excludes every status
+outside `OK` / `ANSWERED_NO_MENTION`, so an outage cannot be counted as
+indifference. `terminal_status_for` draws the same line.
+
+Grouped in SQL rather than in Python: a scan is 24 prompts × 3 engines = 72
+`EngineResult` rows, and pulling all of them per scan across a whole history to
+compute four integers is the N+1 this service exists to avoid.
+
+### `POST /api/v1/clients/{clientId}/prompt-runs` — gains tone, Epic A
+
+`PromptRunResultOut` gains `sentiment` and `sentimentConfidence`, matching the
+pair `EngineResult` has carried since Epic 4.
+
+**This is a correction, not a feature.** Epic 9.24 deliberately built ad-hoc
+runs through the same `ask_all` and `extract_facts` a scan uses, so that "does
+this prompt name my client?" could not answer differently on the two paths. It
+then stopped one step short: the scan path classified tone and the ad-hoc path
+did not, so the same question asked two ways produced different depth.
+
+**Cost is unchanged where the client is not named.** `classify_sentiment` is
+called only when `mentioned` is true — a run where no engine named the client
+costs exactly what it cost before Epic A. Asserted, not assumed:
+`test_prompt_runs.py` counts the calls.
+
+**NULL means "never asked", not "neutral".** Every run made before this shipped
+reads as tone-not-measured, and no backfill is possible or wanted: the answers
+those runs were derived from are gone, which is the point of ip-safety.md #7.
+
+**Still facts only.** A label and a confidence. There is no field here capable
+of carrying what was classified.
+
 ## Planned, not yet built
 
 Recorded so the shape is agreed before it is implemented.
