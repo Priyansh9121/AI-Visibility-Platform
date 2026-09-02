@@ -9553,3 +9553,111 @@ captures — in `docs/screenshots/epic-9-24/`.
 
 **Suite: 1,842 tests, up from 1,675.** design-system 334 (+113), web 586 (+23), api 869 (+31),
 shared-types 53.
+
+---
+
+# Epic A — Sentiment, and a premise that had to be corrected first
+
+**2026-09-02.** First epic of the analysis roadmap.
+
+## The brief's premise was wrong, and checking it changed the epic
+
+The brief opened: *"Every scan and prompt-run response is already stored in
+full. Add a sentiment pass … run against that existing text — no new data
+collection."*
+
+**No response text is stored anywhere in this codebase.** ip-safety.md #7
+forbids it, `test_ip_safety.py` asserts no text-bearing column exists on any
+facts-only model, and the only two `Text` columns in the schema hold prompts
+*we* wrote (`prompts.text`, `prompt_runs.prompt_text`). An engine's answer lives
+inside the request that produced it and is discarded with it. Building the epic
+as written would have meant adding the one column this project is most
+deliberately built to refuse.
+
+Two things were true instead, and both were checked before anything was built:
+
+1. **The sentiment pass already exists.** It has run since Epic 4, in-request
+   against the transient text, persisting a LABEL and a confidence on
+   `EngineResult`. 541 classified rows in `avp_dev` — 369 positive, 126
+   neutral, 46 negative, 113 null.
+2. **It was missing from prompt-runs.** Epic 9.24 built the ad-hoc path through
+   the same `ask_all` and `extract_facts` a scan uses, precisely so the two
+   could not disagree, and then stopped one step short of tone.
+
+So the epic became: close that gap, serve the labels, and build the tab. The
+architecture the brief asked for is the architecture that was already here.
+
+**This shapes the rest of the roadmap.** Epics C (contradictory *claims*), D
+(fact-drift against stored responses) and J (re-examining stored responses) all
+assume retained answer text. None of them can read text after the fact. Each
+has to derive its signal *in-request*, while the answer is transient, and
+persist only what it concluded — the way sentiment already does. Worth settling
+before Epic C is specced.
+
+## What shipped
+
+**Backend.** `sentiment` + `sentiment_confidence` on `PromptRunResult`
+(migration `2b8e8aa41f32`, nullable, no backfill possible or wanted).
+`HistoryScanOut.sentiment` — per engine, per scan, four exhaustive buckets,
+grouped in SQL rather than by loading 72 rows per scan.
+
+**The fourth bucket is the epic.** `unclassified` is answers where the client
+was never named, so tone was never asked. It is not a neutral, and it is kept
+apart everywhere: the layout gives it `{ count }` and no geometry so it cannot
+be drawn, the chart's hidden table lists it under its own header, the screen
+counts it in its own tile, and the copy names it. Folding it into `neutral`
+would report a brand nobody mentioned as having been described indifferently.
+
+**`SentimentTide`** — a diverging chart, positive above a waterline, negative
+below and hatched, neutral straddling. Tone is carried by POSITION so the
+ordinal reading survives greyscale and CVD; hue is therefore free to encode the
+ENGINE, and takes the `bench-*` index the Prompts screen already uses, shared
+from `lib/client/engines.ts` rather than copied. `success`/`danger` were
+considered and rejected — §1 reserves the semantics for system state exactly so
+a red chip is never read as a bad score, and sentiment IS a scored dimension.
+
+## Three things the browser caught that the tests could not
+
+1. **The axis labels were clipped.** "POSITIVE" and "NEGATIVE" down the left
+   gutter rendered as "SITIVE" and "ATIVE" — an 8-character caps label does not
+   fit a chart's left margin. They were also redundant with the lead paragraph,
+   which says which way is up in a sentence. Replaced by a single `0` on the
+   waterline, which is the conventional mark and needs no gutter.
+2. **A centred waterline wasted 45% of the figure.** Tone on the real
+   `plausible.io` history is overwhelmingly positive, so the lower half held one
+   hatched sliver. The halves are now sized by the largest stack in each
+   direction — one unit scale preserved, dead space gone, mirror-image property
+   intact.
+3. **The suite started making live model calls.** The moment `run_prompt`
+   classified tone, every `test_prompt_runs.py` test that stubbed only the
+   engines began reaching Anthropic for real: billable, and flaky enough that
+   one test passed alone and failed in the full run. Sentiment is now stubbed in
+   the engine fixture itself, so no test in that file can make a live call by
+   forgetting to. **That file went from 118s to 1.6s.**
+
+## Animation
+
+`find-animation-opportunities` was run on the finished screen, per the
+roadmap's standing instruction. Two suggestions survived the gate and both were
+applied: the bar rise moved from `--avp-duration-reveal` (600ms, the *report's*
+tier) to `--avp-duration-layout` (320ms), because §4's Epic 9.16 note excludes
+Working screens from performing on every load; and a 120ms hover
+de-emphasis was added so one bar of eight can be isolated. Four candidates were
+rejected and are listed in the skill's output — staggered ledger rows and
+revealing stat tiles among them, both on the same Working-screen rule.
+
+**`review-animations` could not be run**: it is marked
+`disable-model-invocation` and is reserved for explicit user invocation. Flagged
+rather than worked around.
+
+## Verification
+
+**The Report is unchanged.** `article.avp-report` and the whole of
+`/share/{token}` captured before and after: byte-identical, 2,833,684 and
+2,957,105 bytes — **the same SHA-256 as Epic 9.24**, so the document has not
+moved across two epics. `reportIsolation.test.ts` continues to pass in both
+directions.
+
+**Suite: 1,909 tests, up from 1,842.** design-system 371 (+37), web 605 (+19),
+api 880 (+10), shared-types 53. Screenshots in
+`docs/screenshots/epic-a-sentiment/`.

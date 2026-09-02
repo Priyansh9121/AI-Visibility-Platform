@@ -125,7 +125,7 @@ function Frame({
       me={me}
       current={current}
       latestReportScanId={latestScanId(history)}
-      figures={<ClientMeta history={history} />}
+      figures={<ClientMetaFigures history={history} />}
     >
       {children?.({ client, history })}
     </ClientSpace>
@@ -562,8 +562,13 @@ function NoTrendYet({
  * the dashboard both follow — so those scans are excluded from the comparison
  * rather than dragging it down, and if none has a reading both tiles say so in
  * words instead of printing a number nobody measured.
+ *
+ * Exported from Epic A, so a screen in this space that is not built on `Frame`
+ * — the Sentiment tab is the first — carries the same four figures rather than
+ * growing its own. Two headers reporting a client's scan count differently
+ * would be two answers to one question.
  */
-function ClientMeta({ history }: { history: ClientHistory }): JSX.Element {
+export function ClientMetaFigures({ history }: { history: ClientHistory }): JSX.Element {
   const scored = history.scans
     .map((s) => num(s.composite))
     .filter((n): n is number => n != null);

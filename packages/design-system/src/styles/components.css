@@ -1641,3 +1641,96 @@
    alone — the rule VisibilityBadge and the nav's current state both follow. */
 .avp-tile.is-emphasis .avp-tile__value { color: var(--avp-tile-accent); }
 .avp-tile.is-emphasis { border-left-width: 5px; }
+
+/* ========================== SentimentTide ========================= */
+/*
+ * How each engine described the client, scan by scan — Epic A.
+ *
+ * Tone is carried by POSITION (above/below the waterline) and by pattern, not
+ * by hue; hue is the engine. See SentimentTide.tsx for why the semantic
+ * success/danger pair was considered and rejected.
+ */
+
+.avp-tide__svg { display: block; width: 100%; }
+
+/* The one rule on the chart, and the only thing that must never be missed. */
+.avp-tide__waterline {
+  stroke: var(--avp-line-strong);
+  stroke-width: 1;
+}
+
+.avp-tide__tick,
+.avp-tide__axis {
+  font-family: var(--avp-font-ui);
+  font-size: var(--avp-text-ui-2xs);
+  fill: var(--avp-text-tertiary);
+}
+
+.avp-tide__axis {
+  text-transform: uppercase;
+  letter-spacing: var(--avp-tracking-caps);
+}
+
+/*
+ * MOTION — the tide rises from the waterline.
+ *
+ * Tied to a real state change, per design-direction.md §4: the bars are the
+ * measurement arriving, and they grow out of the zero line they are measured
+ * against rather than fading in from nowhere. `transform-origin` is the
+ * waterline itself, so positive grows up and negative grows down from the same
+ * place — the geometry animates the metaphor rather than decorating it.
+ *
+ * Opt-in via `animate`, like the Ledger's reveal. Nothing on a Working screen
+ * performs on every load unless something really changed.
+ */
+.avp-tide--animate .avp-tide__seg {
+  transform: scaleY(0);
+  transform-box: fill-box;
+  /*
+    THE LAYOUT TIER, NOT THE REVEAL TIER — and the difference is the point.
+    `--avp-duration-reveal` (600ms) is the REPORT's dim-to-lit dissolve, spent
+    once on a document somebody is presenting. This is a Working screen an
+    operator reopens all day, and design-direction.md §4's Epic 9.16 note is
+    explicit that Working screens are excluded from performing on every load.
+    320ms is fast enough not to be a performance and long enough to show the
+    measurement growing out of the zero line it is measured against.
+  */
+  animation: avp-tide-rise var(--avp-duration-layout) var(--avp-ease-out) forwards;
+}
+
+/* Positive grows UP from its bottom edge, negative DOWN from its top edge —
+   both away from the waterline they share. */
+.avp-tide--animate .avp-tide__seg--positive { transform-origin: bottom; }
+.avp-tide--animate .avp-tide__seg--negative { transform-origin: top; }
+.avp-tide--animate .avp-tide__seg--neutral { transform-origin: center; }
+
+@keyframes avp-tide-rise {
+  to { transform: scaleY(1); }
+}
+
+/*
+  READING AID, NOT DECORATION.
+  Eight bars across three scans is a lot to follow, and the one an operator is
+  pointing at should separate from its neighbours. Opacity only — the data does
+  not move, it is only de-emphasised, so nothing being read changes position.
+  120ms is the hover tier every button and nav item in this product has used
+  since Epic 0. Gated on a real pointer, so a touch device never gets a state
+  it cannot leave — the rule Epic 9.23 established.
+*/
+@media (hover: hover) and (pointer: fine) {
+  .avp-tide__bar {
+    transition: opacity var(--avp-duration-hover) var(--avp-ease-standard);
+  }
+  .avp-tide__svg:hover .avp-tide__bar { opacity: 0.35; }
+  .avp-tide__svg .avp-tide__bar:hover { opacity: 1; }
+}
+
+/*
+ * The global prefers-reduced-motion block in base.css resets every animation
+ * duration AND delay, so the keyframe lands on its end state instantly and the
+ * bars are simply drawn. Stated here because a `scaleY(0)` start state is the
+ * one shape that would leave a chart INVISIBLE if that reset ever regressed.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .avp-tide--animate .avp-tide__seg { transform: scaleY(1); animation: none; }
+}

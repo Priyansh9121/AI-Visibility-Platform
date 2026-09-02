@@ -12,7 +12,7 @@ from decimal import Decimal
 import pytest
 from httpx import AsyncClient
 
-from avp_api.models.engine_result import Engine, EngineResultStatus
+from avp_api.models.engine_result import Engine, EngineResultStatus, Sentiment
 from avp_api.services import engines as engine_service
 from avp_api.services import prompt_runs as service
 from avp_api.services.engines import CitedSource, EngineAnswer
@@ -37,6 +37,27 @@ async def _a_client(client: AsyncClient, url: str = "helpscout.com") -> str:
     resp = await client.post(f"{BASE}/clients", json={"url": url, "classify": False})
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
+
+
+@pytest.fixture
+def stub_sentiment(monkeypatch):  # noqa: ANN001, ANN201
+    """Classify without a model call, and COUNT the calls.
+
+    The count is the point: `classify_sentiment` is a paid call and is only
+    supposed to happen where the subject was named.
+    """
+
+    def _install(label: Sentiment = Sentiment.POSITIVE):
+        calls: list[str] = []
+
+        async def fake(answer, *, subject_name, settings=None):  # noqa: ANN001, ANN003, ARG001
+            calls.append(subject_name)
+            return label, Decimal("0.900")
+
+        monkeypatch.setattr(service.extraction_service, "classify_sentiment", fake)
+        return calls
+
+    return _install
 
 
 @pytest.fixture
@@ -81,7 +102,17 @@ def stub_engines(monkeypatch):  # noqa: ANN001, ANN201
                 )
             return out
 
+        async def fake_sentiment(answer, *, subject_name, settings=None):  # noqa: ANN001, ANN003, ARG001
+            return Sentiment.POSITIVE, Decimal("0.900")
+
         monkeypatch.setattr(service.engine_service, "ask_all", fake_ask_all)
+        # Sentiment is stubbed HERE, in the engine fixture, so that no test in
+        # this file can make a live model call by forgetting to. Epic A made
+        # `run_prompt` classify tone, and the moment it did, every test that
+        # only stubbed the engines started reaching Anthropic for real — slow,
+        # billable, and flaky in exactly the way a suite must not be. A test
+        # that wants to observe the calls re-patches this with `stub_sentiment`.
+        monkeypatch.setattr(service.extraction_service, "classify_sentiment", fake_sentiment)
 
     return _install
 
@@ -449,3 +480,116 @@ async def test_a_run_creates_no_scan_and_no_score(
     dashboard = (await client.get(f"{BASE}/dashboard")).json()
     assert dashboard["recentScans"] == []
     assert dashboard["scanCount"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Tone — Epic A
+# ---------------------------------------------------------------------------
+
+
+async def test_a_named_subject_gets_its_tone_classified(
+    client: AsyncClient, stub_engines, stub_sentiment
+) -> None:
+    """Epic 9.24 shipped runs without this, so the two paths disagreed.
+
+    The same question asked through a scan produced a sentiment and asked
+    ad-hoc did not.
+    """
+    stub_engines()
+    calls = stub_sentiment(Sentiment.POSITIVE)
+    await _sign_up(client)
+    cid = await _a_client(client)
+
+    body = (
+        await client.post(
+            f"{BASE}/clients/{cid}/prompt-runs", json={"prompt": "best help desk"}
+        )
+    ).json()
+
+    assert len(calls) == len(engine_service.DEFAULT_ENGINES)
+    for result in body["results"]:
+        assert result["sentiment"] == "positive"
+        assert Decimal(str(result["sentimentConfidence"])) == Decimal("0.900")
+
+
+async def test_an_unnamed_subject_costs_no_sentiment_call(
+    client: AsyncClient, stub_engines, stub_sentiment
+) -> None:
+    """The cost discipline, asserted rather than trusted.
+
+    Tone toward a brand that does not appear is meaningless, and
+    `classify_sentiment`'s docstring says spending a model call on it would be
+    both wasteful and misleading. A run where nobody named the client must cost
+    exactly what it cost before Epic A.
+    """
+    stub_engines(text="I would look at Front, then Zendesk.")
+    calls = stub_sentiment()
+    await _sign_up(client)
+    cid = await _a_client(client)
+
+    body = (
+        await client.post(
+            f"{BASE}/clients/{cid}/prompt-runs", json={"prompt": "best help desk"}
+        )
+    ).json()
+
+    assert calls == [], "sentiment was classified for an answer that never named the client"
+    for result in body["results"]:
+        # NULL, and NULL here means "never asked" — not neutral.
+        assert result["sentiment"] is None
+        assert result["sentimentConfidence"] is None
+
+
+async def test_a_failed_classification_leaves_the_run_intact(
+    client: AsyncClient, stub_engines, monkeypatch
+) -> None:
+    """A model failure must not take the run down with it.
+
+    `classify_sentiment` returns (None, None) rather than raising, and the run
+    keeps every fact it did extract.
+    """
+    stub_engines()
+
+    async def failing(answer, *, subject_name, settings=None):  # noqa: ANN001, ANN003, ARG001
+        return None, None
+
+    monkeypatch.setattr(service.extraction_service, "classify_sentiment", failing)
+    await _sign_up(client)
+    cid = await _a_client(client)
+
+    resp = await client.post(
+        f"{BASE}/clients/{cid}/prompt-runs", json={"prompt": "best help desk"}
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["results"][0]["mentioned"] is True
+    assert body["results"][0]["sentiment"] is None
+
+
+async def test_tone_survives_into_the_history(
+    client: AsyncClient, stub_engines, stub_sentiment
+) -> None:
+    stub_engines()
+    stub_sentiment(Sentiment.NEGATIVE)
+    await _sign_up(client)
+    cid = await _a_client(client)
+    await client.post(f"{BASE}/clients/{cid}/prompt-runs", json={"prompt": "x"})
+
+    body = (await client.get(f"{BASE}/clients/{cid}/prompt-runs")).json()
+    assert body["data"][0]["results"][0]["sentiment"] == "negative"
+
+
+def test_the_response_schema_carries_a_label_not_the_text_it_came_from() -> None:
+    """ip-safety.md #7, at the boundary Epic A widened.
+
+    Adding sentiment means a second thing derived from an answer is now stored
+    on the ad-hoc path. It is a LABEL and a confidence — no field capable of
+    holding what was classified.
+    """
+    from avp_api.schemas.prompt_run import PromptRunResultOut
+
+    fields = set(PromptRunResultOut.model_fields)
+    assert {"sentiment", "sentiment_confidence"} <= fields
+    for forbidden in ("text", "answer", "response", "content", "rationale", "excerpt"):
+        assert forbidden not in fields

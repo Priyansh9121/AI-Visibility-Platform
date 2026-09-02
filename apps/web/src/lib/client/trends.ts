@@ -25,7 +25,7 @@
  */
 
 import type { ClientHistory, HistoryScan } from '@avp/shared-types';
-import type { TrendPoint, TrendSeriesInput } from '@avp/design-system';
+import type { TidePointInput, TrendPoint, TrendSeriesInput } from '@avp/design-system';
 
 /** How many lines a trend will draw before it stops. */
 export const MAX_SERIES = 6;
@@ -239,3 +239,66 @@ const MONTHS = [
   'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
 ];
+
+/* ============================== Sentiment ============================= */
+
+/**
+ * The tide's x-axis and buckets — Epic A.
+ *
+ * Reuses `trendPoints`' label resolution rather than formatting its own, so the
+ * Sentiment tab's columns read identically to Sources' and Rankings' for the
+ * same three scans. Three tabs with three different date formats for the same
+ * history would be three answers to "when was this".
+ *
+ * An engine absent from a scan's `sentiment` array stays absent here — the
+ * layout draws no column for it and reports it as missing, which is the
+ * difference between "was down" and "described you neutrally".
+ */
+export function tidePoints(history: ClientHistory): TidePointInput[] {
+  const labels = trendPoints(history);
+  return history.scans.map((scan, i) => ({
+    label: labels[i]?.label ?? scan.scannedAt.slice(0, 10),
+    stamp: scan.scannedAt,
+    byEngine: Object.fromEntries(
+      (scan.sentiment ?? []).map((row) => [
+        row.engine,
+        {
+          positive: row.positive,
+          neutral: row.neutral,
+          negative: row.negative,
+          unclassified: row.unclassified,
+        },
+      ]),
+    ),
+  }));
+}
+
+/**
+ * Has any scan classified a tone at all?
+ *
+ * Distinct from `hasTrend`, deliberately. One scan IS a readable tide — a
+ * single scan's split of positive/neutral/negative is a finding, unlike a
+ * single point on a line, which is not a direction. So the Sentiment tab shows
+ * its chart from the first scan onward and only falls back to an empty state
+ * when nothing anywhere has a tone.
+ */
+export function hasSentiment(history: ClientHistory): boolean {
+  return history.scans.some((scan) =>
+    (scan.sentiment ?? []).some((r) => r.positive + r.neutral + r.negative > 0),
+  );
+}
+
+/**
+ * How many answers named the client but were never classified.
+ *
+ * Reported so the screen can say why a tide is thinner than a scan's answer
+ * count, rather than leaving the reader to wonder. `unclassified` is answers
+ * where the client was NOT named, which is a different fact and is reported
+ * separately per engine.
+ */
+export function unclassifiedTotal(history: ClientHistory): number {
+  return history.scans.reduce(
+    (sum, scan) => sum + (scan.sentiment ?? []).reduce((s, r) => s + r.unclassified, 0),
+    0,
+  );
+}

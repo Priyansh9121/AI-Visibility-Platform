@@ -116,6 +116,7 @@ export type ClientHistory = Schemas['ClientHistoryOut'];
 export type HistoryScan = Schemas['HistoryScanOut'];
 export type HistoryCitedDomain = Schemas['HistoryCitedDomainOut'];
 export type HistoryCompetitor = Schemas['HistoryCompetitorOut'];
+export type HistorySentiment = Schemas['HistorySentimentOut'];
 export type RunScanRequest = Schemas['RunScanRequest'];
 
 // --- ad-hoc prompt runs (Epic 9.24) -------------------------------------

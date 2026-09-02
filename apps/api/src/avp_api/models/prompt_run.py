@@ -41,7 +41,7 @@ from sqlalchemy import Boolean, Index, Integer, Numeric, String, Text, UniqueCon
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base, TimestampMixin, enum_column, fk_column, id_column
-from .engine_result import CitationType, Engine, EngineResultStatus
+from .engine_result import CitationType, Engine, EngineResultStatus, Sentiment
 
 
 class PromptRunStatus(str, enum.Enum):
@@ -125,6 +125,26 @@ class PromptRunResult(Base, TimestampMixin):
     # SHA-256 of the answer. Lets a re-ask detect "the answer changed" without
     # retaining what it said — the same trade `EngineResult` makes.
     response_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # --- tone, Epic A -------------------------------------------------------
+    #
+    # A LABEL, never the text it was derived from — the same column pair
+    # `EngineResult` has carried since Epic 4, added here because Epic 9.24
+    # shipped prompt-runs without it and left the two paths inconsistent: the
+    # same question asked through a scan produced a sentiment and asked
+    # ad-hoc did not.
+    #
+    # NULL means the subject was not named, so tone toward it was never asked.
+    # That is a THIRD state, not a neutral — `classify_sentiment` is only
+    # called when `mentioned` is true, because tone toward a brand that does
+    # not appear is meaningless and scoring-spec.md excludes it rather than
+    # scoring it zero.
+    sentiment: Mapped[Sentiment | None] = enum_column(
+        Sentiment, name="prompt_run_sentiment", nullable=True
+    )
+    sentiment_confidence: Mapped[Decimal | None] = mapped_column(
+        Numeric(4, 3), nullable=True
+    )
 
     run: Mapped[PromptRun] = relationship(back_populates="results")
     brands: Mapped[list[PromptRunBrand]] = relationship(

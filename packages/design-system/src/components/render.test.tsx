@@ -15,6 +15,7 @@ import { EmptyState } from './state/EmptyState.js';
 import { LuminanceLedger } from './chart/LuminanceLedger.js';
 import { AnswerShelf } from './chart/AnswerShelf.js';
 import { TrendChart } from './chart/TrendChart.js';
+import { SentimentTide } from './chart/SentimentTide.js';
 import { LocalNav, LocalNavItem } from './shell/LocalNav.js';
 import type { ShelfRowInput } from './chart/answerShelfLayout.js';
 import { Beat, Evidence, ReportPage, BEAT_SEQUENCE } from './report/ReportLayout.js';
@@ -821,6 +822,109 @@ describe('LocalNav', () => {
  * number: whatever width the chart is laid out in, it is bounded at that width,
  * so one viewBox unit is never more than one CSS pixel.
  */
+
+/**
+ * SentimentTide — Epic A.
+ *
+ * The assertions that matter are the ones that are silent failures: an answer
+ * that never named the client rendered as a neutral, an engine outage rendered
+ * as a flat column on the waterline, and tone carried by hue alone.
+ */
+describe('SentimentTide', () => {
+  const POINTS = [
+    {
+      label: '27 Aug',
+      stamp: '2026-08-27T00:00:00Z',
+      byEngine: {
+        chatgpt: { positive: 6, neutral: 2, negative: 1, unclassified: 3 },
+        claude: { positive: 4, neutral: 3, negative: 2, unclassified: 1 },
+      },
+    },
+    {
+      label: '29 Aug',
+      stamp: '2026-08-29T00:00:00Z',
+      byEngine: { chatgpt: { positive: 2, neutral: 1, negative: 7, unclassified: 2 } },
+    },
+  ];
+  const tide = (extra: Record<string, unknown> = {}) =>
+    html(<SentimentTide points={POINTS} ariaLabel="Tone by engine" {...extra} />);
+
+  it('carries the accessibility contract every chart here carries', () => {
+    const out = tide({ title: 'Tone by engine' });
+    expect(out).toContain('aria-label="Tone by engine"');
+    expect(out).toContain('avp-visually-hidden');
+    expect(out).toContain('<table>');
+  });
+
+  it('gives the hidden table all four buckets, so nothing is chart-only', () => {
+    const out = tide();
+    for (const header of ['Positive', 'Neutral', 'Negative', 'Not named']) {
+      expect(out).toContain(header);
+    }
+  });
+
+  it('says an engine "did not answer" in words rather than as zeros', () => {
+    // A row of four zeros would read as "described you neutrally". This is the
+    // difference between an outage and a finding.
+    expect(tide()).toContain('did not answer');
+  });
+
+  it('draws no column for an engine that did not answer', () => {
+    // Two engines at point 0, one at point 1 — three bars, not four.
+    const groups = tide().match(/class="avp-tide__bar"/g) ?? [];
+    expect(groups).toHaveLength(3);
+  });
+
+  it('never draws the "not named" bucket as a segment', () => {
+    // Point 1 has 2 unclassified and 3 tone segments. If unclassified were
+    // drawn there would be 4.
+    const out = html(
+      <SentimentTide
+        points={[POINTS[1]!]}
+        ariaLabel="x"
+      />,
+    );
+    // Counting the MODIFIER class, which appears exactly once per rect —
+    // `avp-tide__seg` alone matches twice per rect, once in the base class and
+    // once inside the modifier.
+    expect((out.match(/avp-tide__seg--/g) ?? []).length).toBe(3);
+  });
+
+  it('takes engine hue from the bench layer, so tone is not carried by colour', () => {
+    const out = tide({ engineAccent: { chatgpt: 4, claude: 0 } });
+    expect(out).toContain('--avp-bench-5-600'); // index 4 -> accent 5
+    expect(out).toContain('--avp-bench-1-600'); // index 0 -> accent 1
+  });
+
+  it('distinguishes negative by pattern as well as by position', () => {
+    // Greyscale and colour-blind readers get direction from geometry and a
+    // hatch, never from hue — the rule §1 sets for competitor series.
+    expect(tide()).toContain('url(#avp-tide-negative)');
+  });
+
+  it('names the engines rather than showing raw keys when given labels', () => {
+    expect(tide({ engineLabel: { chatgpt: 'ChatGPT' } })).toContain('ChatGPT');
+  });
+
+  it('is bounded by its own viewBox, like every chart since Epic 9.21', () => {
+    expect(tide()).toContain('max-width:720px');
+    expect(tide()).toContain('width="100%"');
+  });
+
+  it('does not animate by default', () => {
+    // Nothing on a Working screen performs on every load unless something
+    // really changed.
+    expect(tide()).not.toContain('avp-tide--animate');
+    expect(tide({ animate: true })).toContain('avp-tide--animate');
+  });
+
+  it('renders an empty history without throwing', () => {
+    const out = html(<SentimentTide points={[]} ariaLabel="Nothing yet" />);
+    expect(out).toContain('aria-label="Nothing yet"');
+  });
+});
+
+
 describe('TrendChart is bounded by its own viewBox', () => {
   const POINTS = [
     { label: 'a', stamp: '2026-08-27T00:00:00Z' },

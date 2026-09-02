@@ -16,7 +16,7 @@ from decimal import Decimal
 
 from pydantic import Field
 
-from ..models.engine_result import CitationType, Engine, EngineResultStatus
+from ..models.engine_result import CitationType, Engine, EngineResultStatus, Sentiment
 from ..models.prompt_run import PromptRunStatus
 from ..services.prompt_runs import MAX_PROMPT_CHARS
 from .common import ApiModel
@@ -68,6 +68,10 @@ class PromptRunResultOut(ApiModel):
     position: int | None = None
     prominence: Decimal | None = None
     brands_mentioned: int
+    # NULL means the subject was not named, so tone was never asked — a third
+    # state, not a neutral. See the model.
+    sentiment: Sentiment | None = None
+    sentiment_confidence: Decimal | None = None
 
     brands: list[PromptRunBrandOut] = []
     citations: list[PromptRunCitationOut] = []

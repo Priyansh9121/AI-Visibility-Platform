@@ -806,3 +806,60 @@ one afternoon during this epic, one of them (`w-40` on Technical's VerdictBar)
 shipped in Epic 9.22 and survived a review and a screenshot pass.
 `reportIsolation.test.ts` now greps every spacing utility against the preset's
 actual scale.
+
+---
+
+## 7. SentimentTide — tone, as a diverging tide. Epic A.
+
+design-direction.md §1's Epic A note carries the colour argument. This is the
+component.
+
+### The shape
+
+One group per scan, one bar per engine. Positive above the waterline, negative
+below, neutral straddling it. `sentimentTideLayout.ts` holds the arithmetic and
+is tested without a renderer — the split `ledgerLayout.ts` established.
+
+```tsx
+<SentimentTide
+  points={tidePoints(history)}      // oldest scan first
+  engineAccent={ENGINE_ACCENT}      // shared with the Prompts screen
+  engineLabel={{ claude_search: 'Claude + search' }}
+  animate
+  ariaLabel="Tone toward Plausible Analytics by engine across 3 scans."
+/>
+```
+
+### Four buckets, and only three of them are drawn
+
+| Bucket | Drawn | Why |
+|---|---|---|
+| `positive` | Above the line | — |
+| `neutral` | Straddling the line | Half above, half below, so it implies neither direction |
+| `negative` | Below the line, hatched | Pattern as well as position, for greyscale and CVD |
+| `unclassified` | **No** | The subject was never named, so tone was never asked |
+
+`unclassified` reaches the reader as a count — in the hidden data table and in
+the caller's tiles, in words. A fourth rect on a chart of tones would be read as
+a fourth tone, and folding it into `neutral` would report a brand nobody
+mentioned as having been described indifferently. The layout type gives it
+`{ count }` and no geometry, so it cannot be drawn by accident.
+
+### An engine that failed gets no column
+
+Not four zeros. A flat column on the waterline reads as "described you
+neutrally" rather than "was down". `layout.missing` reports the absence and the
+hidden table says `did not answer` in words.
+
+### The waterline moves
+
+Sized by the largest stack in each direction rather than centred — see the
+design-direction note. One unit scale is preserved; only the zero line moves.
+Found by looking at real data in a browser, after the centred version left 45%
+of the figure empty.
+
+### What it inherits
+
+The Epic 9.21 bound (`maxWidth: layout.width`, derived from the layout, never
+declared), the `ChartFrame` accessibility contract, and the null-vs-zero
+discipline every chart in this system carries.
