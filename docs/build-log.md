@@ -9661,3 +9661,255 @@ directions.
 **Suite: 1,909 tests, up from 1,842.** design-system 371 (+37), web 605 (+19),
 api 880 (+10), shared-types 53. Screenshots in
 `docs/screenshots/epic-a-sentiment/`.
+
+---
+
+# Epic B — Answer gaps, and two premises that did not survive contact
+
+**2026-09-02.** Second epic of the analysis roadmap.
+
+## The sequencing question was settled before anything was built
+
+The brief flagged Epic J's resequencing for confirmation rather than deciding
+it. Confirmed: **A → B → J → C → D → E → F → G → H → I → K**, with one shared
+in-request judgement call that each epic extends rather than one model call per
+epic.
+
+The argument that made it concrete is in `extraction.py:304`. `classify_sentiment`
+is a single structured `messages.parse` per mentioned answer. C, D and J all
+want to judge the same transient answer in the same window, so they either
+extend that one call or add three more. A scan is 72 engine calls; four
+judgement calls per mentioned answer instead of one is roughly 4× the
+classification spend and latency on every scan and every prompt-run. Epic B
+itself is unaffected either way — it touches the extraction pass zero times —
+which is why B went first regardless.
+
+## Two premises in the brief, both wrong, both checked before code
+
+Epic A's lesson was to check the brief's stated premise first. It paid twice.
+
+### 1. "Tracked prompts", recurring between scans
+
+There are none. A `Prompt` belongs to a `PromptSet`, a `PromptSet` belongs to
+ONE scan, and `scan_runner.build_prompt_set` calls `prompts.generate_prompts`
+fresh every time — an LLM writes a new set for every scan.
+
+Measured on `avp_dev`, not assumed:
+
+```
+client                 scans  prompts  distinct texts  repeats
+Plausible Analytics        3       72              71        1
+Notion                     2       48              48        0
+```
+
+**One repeated string across 120 prompts.** So "sortable by how often the gap
+recurs" cannot key on a prompt — there is no prompt identity to recur on.
+
+What does recur is the **engine**: every prompt is asked of every engine, so a
+gap holding on 3 of 3 is categorically stronger than one on 1 of 3. That is
+`absentOn`, and it is the default sort. Across scans the stable axis is the
+**rival**, because competitors persist as rows where prompts do not — that is
+the `rivals` rollup, and it answers "which rival keeps taking answers from us"
+where "which prompt keeps failing" is unanswerable.
+
+### 2. "Where the client has relevant content (per Sources) but no citation"
+
+There is no content inventory anywhere in this schema. `TechnicalAudit` stores
+`pages_crawled` as a COUNT and one `url_audited`, not a page list. "Has relevant
+content" is not readable.
+
+What IS readable: whether the engines ever cited this client's own domain in
+this scan. If they did, the domain is demonstrably citable and a prompt that
+named the client without citing it is a real gap. If they never did, the claim
+is unsupported — so `subjectCitable` is false and **no row is reported as
+`uncited` at all**. The real Notion scan is exactly that case and reports 0
+rather than 22.
+
+## The distinction the whole epic turns on
+
+A prompt where NO engine named ANY brand is **not** a gap. The client is as
+unnamed there as in a row a rival won, but nobody won it — it is a question with
+no commercial answer, not a question being lost.
+
+On the real rows this is not a rounding error:
+
+```
+PSM Digital, latest scan:  9 absent · 0 partial · 4 uncited · 1 covered · 10 no-brands
+```
+
+Folding `no_brands` into `absent` would report **19 of 24 prompts as gaps**
+instead of 9 — more than double. `layoutGapGrid` derives `isGap` from the row
+KIND and never from `absentOn`, because the two states have identical
+`absentOn`, which is exactly how this regression would pass unnoticed.
+
+Epic A drew the same line around `unclassified` tone. That is now twice, and it
+is starting to look like the house rule: **a state where the measurement was
+never taken is never the same as a measurement that came back zero.**
+
+## What shipped
+
+**Backend.** `services/answer_gaps.py` and `schemas/answer_gaps.py`, behind
+`GET /clients/{clientId}/answer-gaps?scanId=`. Reads only — no engine call, no
+model call, no write. Four grouped reads assembled in Python rather than one
+join: a scan carrying 72 results, 1,355 mentions and 2,399 citations would
+return the product, not the grid.
+
+**A claim in my own docstring was wrong and is corrected in place.** The first
+draft said `extract_facts` "records every brand it finds". It does not — its
+loop is `for comp_name, comp_domain in competitors`, so it SEARCHES for the
+brands it is handed and discovers none. A rival outside the scan's
+`CompetitorSet` leaves no `BrandMention` row and cannot be a column however
+often an engine named it. The grid is bounded by competitor detection exactly as
+Rankings is, the module says so, and the screen says so in words rather than
+presenting a short grid as a complete one. Four tests failed on this before it
+was found.
+
+**`GapGrid`** — a real `<table>`, not an SVG. The data has two categorical axes
+and a small integer; a chart would have to invent a continuous dimension, and an
+SVG heatmap would mean drawing a table then hiding a second copy for screen
+readers. Subject in `beacon`, rivals neutral, `absent` in `warn` not `danger`.
+Every cell prints its count, so intensity is a second reading and never the
+only one.
+
+**The seventh bench accent.** A seventh client section would have wrapped
+`benchAccent` back to `cobalt` and put two items in one nav strip in one colour.
+
+## The palette has a wall, and this epic found where it is
+
+Deriving where a seventh accent could go turned up the constraint that ends the
+layer. Two hard bounds:
+
+1. **30° from every meaning-bearing hue** — the buffer that stops a chip reading
+   as a score or a system state.
+2. **The sRGB gamut at the shared chroma table** — `600` needs C 0.185 at
+   L 0.55, `700` needs C 0.158 at L 0.46.
+
+Solving both across the wheel leaves **one arc: 256.5° to 355°, 98.5° wide.**
+Blue is the binding half — at hue 241 the ceiling is **0.128** against the
+required 0.185, so an accent there renders clamped and duller than its
+neighbours, which reads as rank. My first candidate was 241 and the gamut check
+killed it.
+
+`crimson` at **355** is the arc's last seat, 30° from `danger` exactly. The
+method was verified before use by reproducing all six shipped dark stops from
+0.92 × the gamut ceiling; contrast is 9.66:1 light and 6.14:1 dark.
+
+**Alerts, Crawler activity and Prompt discovery will hit this wall.** Ten
+accents in 98.5° is ~11° apart, below what hue alone separates at fixed
+lightness and chroma. The choice then is relax the buffer, let chroma vary, or
+group the nav — a design decision, not a token edit, and deliberately not
+pre-empted here. `tokens.test.ts` holds the arithmetic, including a gamut check
+that fails if any accent's `600` or `700` leaves sRGB.
+
+**The pressure showed up on the first screen to use seven at once.** Four stat
+tiles at crimson 355 and magenta 326 — 29° apart at one lightness and chroma —
+read as the same pink, and on a client where both figures were `0` they were
+indistinguishable. Fixed by unaccenting the tile that is not a finding, which
+matches how its rows are already drawn.
+
+## Three things the live pass caught that the tests could not
+
+1. **A control that vanished under the pointer.** Switching scans reset the body
+   to a loading state, unmounting the scan picker that had just been used; it
+   reappeared elsewhere once the fetch returned. The grid now dims to 0.45 with
+   `aria-busy` and holds its controls. Only visible at all once the fetch was
+   held artificially — locally it returns faster than the eye.
+2. **The stagger broke the rule its own comment cited.** Cells arrived 28ms
+   apart, capped at 12 rows: **656ms**, on a screen an operator reopens all day.
+   `find-animation-opportunities` killed it three ways — 656ms is performing on
+   every load, a cascade depicts progressive arrival that did not happen, and
+   `28ms` was hand-typed when the only stagger token is reveal-tier and belongs
+   to the Report. Now one 320ms fill, together. `tokens.test.ts` asserts the
+   rule carries no `animation-delay`.
+3. **Component-scoped custom properties need declared defaults.** `--avp-gapgrid-*`
+   failed the "every `var()` is defined" guard until declared on `.avp-gapgrid`
+   the way `.avp-tile`'s are, and `--avp-semantic-warn` did not exist — the
+   token is `--avp-warn`.
+
+## Animation
+
+Both runnable animation skills were run on the finished screen, per the
+roadmap's standing instruction, and **both found real defects.**
+
+`find-animation-opportunities`: one suggestion survived (the pending-swap dim,
+built); five were rejected, including the row-reorder-on-sort FLIP — 24 rows of
+dense data the operator is reading, where the sort exists to put the worst on
+top and the eye goes there anyway. Two of the rejections were my own
+already-written code, the 656ms stagger among them.
+
+`improve-animations` then caught three more, all mine:
+
+1. **Row hover was an instant repaint** — the exact defect Epic 9.19 named and
+   fixed for `.avp-table`, whose comment reads "the default-browser feel this
+   product avoids everywhere else". The cell's own transition did not cover it:
+   a row paints on the `<tr>`, underneath the cells' fills. Now eased over
+   `--avp-duration-hover`.
+2. **The cell transitioned at hover-tier for a data change.** Nothing about
+   hover moves a cell's background — hover draws an outline, deliberately, so
+   the fill encoding the value never shifts under the reader. The only repaint
+   is a scan swap, which is a state change; it now takes
+   `--avp-duration-state`, alongside the container's dim.
+3. **The scroll container could not take focus.** Not motion, but a defect the
+   audit surfaced and one I had introduced: a horizontally scrollable region
+   that cannot be focused cannot be scrolled by keyboard, so on a narrow
+   viewport the rival columns were unreachable without a pointer. Now
+   `tabIndex={0}` with `role="region"` and the caption as its name. Verified in
+   a browser at 420px: focus the grid, press ArrowRight, `scrollLeft` goes
+   **0 → 480**.
+
+All three are asserted — the two token choices in `tokens.test.ts`'s
+Working-screen motion test, the focusability in the screen's own suite.
+
+**`review-animations` could not be run**: it is marked
+`disable-model-invocation` and is reserved for explicit user invocation. Same
+flag Epic A hit. My first draft of this entry claimed `improve-animations`
+carried it too; it does not, and running it is what produced the three findings
+above.
+
+## Verification
+
+**Against real data, not stubs.** `build_answer_gaps` was run over all seven
+scanned clients in `avp_dev`; totals sum to the prompt count on every one. The
+screen was then driven in a browser for three of them — PSM Digital
+(9/0/4/1/10), Plausible (0/2/18/0) and Notion, whose citation tile correctly
+reads **`—`** with "No answer in this scan cited this client's domain, so this
+cannot be measured" rather than a fabricated 0.
+
+**The Report is unchanged.** `article.avp-report` on `/share/{token}` captured
+before and after: **byte-identical, 72,750 bytes, SHA-256 `cbb44e55…`**, with no
+normalisation of any kind. Re-checked after the motion audit's second round of
+`components.css` edits — same hash again.
+
+The whole-page comparison needed one correction to be meaningful, and it is
+worth recording. Two captures **at the same commit** produced different page
+hashes: Next's dev server stamps a cache-busting `?v=` nonce and an RSC render
+timestamp (`:N1788326808946.8438`), and the timestamp's varying length shifts
+every following script-chunk boundary. With both normalised, before, a
+same-commit control, and after are **identical at 76,248 bytes** — the control
+is what proves the normalisation is not hiding a real difference. A raw
+page-level hash is not a stable invariant check in dev mode; the article
+element is.
+
+**At 420px the page does not scroll sideways and the grid scrolls inside its own
+container** — Epic 9.21's rule, verified rather than assumed.
+
+**IP-safety check passed:** the response carries counts, booleans, ordinals,
+entity names and OUR OWN prompt text (Epic 4 generated it) — no field can hold
+an engine answer; `test_answer_gaps.py::TestIpSafety` asserts the response
+echoes no phrase from a stubbed answer while confirming our prompt text IS
+present; no new dependency was added, so constraint 6 is untouched; the new
+screen imports only from `@avp/design-system`, no ad hoc Tailwind defaults
+(constraint 2); the grid was derived from the data model and the user goal, and
+resembles no competitor screen (constraint 1); `test_ip_safety.py` 84 passed.
+
+**Suite: 1,998 tests, up from 1,909.** design-system 405 (+34), web 631 (+26),
+api 896 (+16), shared-types 53, workers 13. `ruff` clean, `tsc` clean across all
+three TypeScript packages. Screenshots — light, dark and 420px — in
+`docs/screenshots/epic-b-answer-gaps/`.
+
+**A dev-DB convenience, written down rather than done quietly:** the
+`review@epic7.example` fixture account's password was reset to
+`epic-b-answer-gaps-review` through the product's own `reset-password` flow,
+which logs the URL when no email provider is configured — the same path Epic
+9.20 used to reach that agency's data.
+

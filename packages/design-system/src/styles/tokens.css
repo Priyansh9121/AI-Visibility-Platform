@@ -72,6 +72,13 @@
   --avp-bench-6-600: oklch(0.55 0.185 343);
   --avp-bench-6-700: oklch(0.46 0.158 343);
 
+  /* crimson — Epic B. The last seat in the feasible arc: 30deg exactly from
+     `danger`, which is BENCH_HUE_BUFFER's stated threshold. See color.ts. */
+  --avp-bench-7-050: oklch(0.955 0.035 355);
+  --avp-bench-7-100: oklch(0.905 0.062 355);
+  --avp-bench-7-600: oklch(0.55 0.185 355);
+  --avp-bench-7-700: oklch(0.46 0.158 355);
+
   /* --- competitor series: neutral, non-judgmental ----------------- */
   --avp-competitor-1: oklch(0.55 0.02 265);
   --avp-competitor-2: oklch(0.64 0.02 265);
@@ -256,6 +263,10 @@
   --avp-bench-6-100: oklch(0.325 0.075 343);
   --avp-bench-6-600: oklch(0.785 0.15 343);
   --avp-bench-6-700: oklch(0.855 0.094 343);
+  --avp-bench-7-050: oklch(0.245 0.055 355);
+  --avp-bench-7-100: oklch(0.325 0.075 355);
+  --avp-bench-7-600: oklch(0.785 0.131 355);
+  --avp-bench-7-700: oklch(0.855 0.082 355);
 
   --avp-elev-raised: 0 1px 0 0 oklch(0 0 0 / 0.4);
   --avp-scrim: oklch(0.1 0.01 265 / 0.6);

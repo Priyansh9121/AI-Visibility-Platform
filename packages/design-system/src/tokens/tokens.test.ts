@@ -20,6 +20,7 @@ import {
   semantic,
   BENCH_ACCENTS,
   BENCH_HUE_BUFFER,
+  BENCH_FEASIBLE_ARC,
 } from './color.js';
 
 const css = readFileSync(fileURLToPath(new URL('../styles/tokens.css', import.meta.url)), 'utf8');
@@ -293,6 +294,32 @@ describe('tailwind preset exposes the tokens it claims to', () => {
     expect(ruleFor('.avp-meter__lit')).toMatch(/transition:[^;]*--avp-duration-layout/);
     expect(ruleFor('.avp-meter__track')).toMatch(/transition:[^;]*--avp-duration-state/);
 
+    // Epic B's grid. The cells fill in at the LAYOUT tier and carry no
+    // stagger: a hand-typed per-row delay is exactly what this test exists to
+    // catch, and the only stagger token the system defines is reveal-tier and
+    // belongs to the Report. See the note above the rule in components.css.
+    const gapCells = ruleFor('.avp-gapgrid--animate .avp-gapgrid__cell');
+    expect(gapCells).toMatch(/animation:[^;]*--avp-duration-layout/);
+    expect(gapCells).not.toMatch(/animation-delay/);
+    expect(ruleFor('.avp-gapgrid--pending')).toMatch(
+      /transition:[^;]*--avp-duration-state/,
+    );
+
+    // Row hover EASES. An instant repaint is the default-browser feel Epic
+    // 9.19 removed from `.avp-table`, and this grid reintroduced it until the
+    // motion audit caught it — the cell's own transition does not cover the
+    // row, which paints underneath the cells.
+    expect(ruleFor('.avp-gapgrid__row')).toMatch(
+      /transition:[^;]*--avp-duration-hover/,
+    );
+
+    // The CELL's transition is a data change, not a hover: hover draws an
+    // outline and never moves the fill, so the only repaint is a scan swap.
+    expect(ruleFor('.avp-gapgrid__cell')).toMatch(
+      /transition:[^;]*--avp-duration-state/,
+    );
+
+
     // The live dot is a LOOP, which nothing else in this system is, so its
     // period is derived from the reveal rather than being a fourth number.
     const pulse = ruleFor('.avp-badge__pulse');
@@ -512,6 +539,82 @@ describe('bench hues cannot be confused with anything that already means somethi
   it('deepens rather than lightens from 600 to 700, like beacon does', () => {
     for (const accent of BENCH_ACCENTS) {
       expect(bench[`${accent.key}-700`]![0]).toBeLessThan(bench[`${accent.key}-600`]![0]);
+    }
+  });
+});
+
+/* --------------------------------------------------------------------- *
+ * Epic B — why the layer stops at seven.
+ *
+ * Epic 9.24 argued the bench hues from where a palette database's chromatic
+ * mass sits. That says where colour is AVAILABLE; it does not say where colour
+ * is USABLE, and the difference is what caps this layer. These tests hold the
+ * two constraints that decide it, so a later epic that wants an eighth accent
+ * has to confront the arithmetic rather than append a row and watch a chip
+ * render duller than its neighbours.
+ * --------------------------------------------------------------------- */
+
+/** OKLCH -> linear sRGB. Enough to answer "is this colour representable". */
+function toSrgb(l: number, c: number, hDeg: number): [number, number, number] {
+  const h = (hDeg * Math.PI) / 180;
+  const a = c * Math.cos(h);
+  const b = c * Math.sin(h);
+  const l_ = l + 0.3963377774 * a + 0.2158037573 * b;
+  const m_ = l - 0.1055613458 * a - 0.0638541728 * b;
+  const s_ = l - 0.0894841775 * a - 1.291485548 * b;
+  const [L3, M3, S3] = [l_ ** 3, m_ ** 3, s_ ** 3];
+  return [
+    4.0767416621 * L3 - 3.3077115913 * M3 + 0.2309699292 * S3,
+    -1.2684380046 * L3 + 2.6097574011 * M3 - 0.3413193965 * S3,
+    -0.0041960863 * L3 - 0.7034186147 * M3 + 1.707614701 * S3,
+  ];
+}
+
+const inGamut = (l: number, c: number, h: number): boolean =>
+  toSrgb(l, c, h).every((v) => v >= -1e-6 && v <= 1 + 1e-6);
+
+describe('the bench layer is full, and the cap is arithmetic', () => {
+  it('renders every accent at the chroma the shared table claims', () => {
+    // The equal-weight property is only real if sRGB can actually SHOW it.
+    // An accent whose 600 stop is out of gamut gets clamped by the browser and
+    // renders duller than its neighbours — which reads as rank, the one thing
+    // categorical colour must not imply. Hue 241 fails this by a wide margin
+    // (ceiling 0.128 against the required 0.185), which is why the arc does
+    // not extend into blue however much room the 30deg buffer leaves there.
+    for (const accent of BENCH_ACCENTS) {
+      for (const stop of ['600', '700'] as const) {
+        const [l, c] = [bench[`${accent.key}-${stop}`]![0], bench[`${accent.key}-${stop}`]![1]];
+        expect(
+          inGamut(l, c, accent.hue),
+          `${accent.name} ${stop} is outside sRGB and will render clamped`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  it('places every accent inside the one arc that satisfies both constraints', () => {
+    for (const accent of BENCH_ACCENTS) {
+      expect(accent.hue).toBeGreaterThanOrEqual(BENCH_FEASIBLE_ARC.from);
+      expect(accent.hue).toBeLessThanOrEqual(BENCH_FEASIBLE_ARC.to);
+    }
+  });
+
+  it('has no room left: the arc cannot seat an eighth accent', () => {
+    // 98.5deg of arc. Seven accents sit ~16deg apart; an eighth would force
+    // them to ~14 and a tenth to ~11, below what hue alone separates at fixed
+    // lightness and chroma. A later epic needing more must change the SYSTEM
+    // — group the nav, or let chroma vary — not this array. If that decision
+    // is taken deliberately, this test is the one to rewrite.
+    const span = BENCH_FEASIBLE_ARC.to - BENCH_FEASIBLE_ARC.from;
+    const spacing = span / BENCH_ACCENTS.length;
+    expect(spacing).toBeGreaterThanOrEqual(14);
+    expect(BENCH_ACCENTS.length).toBe(7);
+  });
+
+  it('keeps enough separation between neighbouring accents to tell them apart', () => {
+    const sorted = [...BENCH_ACCENTS].map((a) => a.hue).sort((x, y) => x - y);
+    for (let i = 1; i < sorted.length; i++) {
+      expect(sorted[i]! - sorted[i - 1]!).toBeGreaterThanOrEqual(12);
     }
   });
 });

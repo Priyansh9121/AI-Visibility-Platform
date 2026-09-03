@@ -107,7 +107,7 @@ function filesUnder(rel: string): string[] {
  * a guard that knew only one of them would be trivially bypassed by accident:
  * the custom property, the Tailwind utility, and the two TypeScript helpers.
  */
-const BENCH_REFERENCE = /--avp-bench-|\bbench-[1-6]\b|\bbenchColor\b|\bbenchVar\b|\bBENCH_ACCENTS\b/;
+const BENCH_REFERENCE = /--avp-bench-|\bbench-[1-7]\b|\bbenchColor\b|\bbenchVar\b|\bBENCH_ACCENTS\b/;
 
 describe('the report is isolated from the Working-screen accent layer', () => {
   const reportFiles = REPORT_SURFACES.flatMap(filesUnder);

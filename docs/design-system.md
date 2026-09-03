@@ -590,8 +590,6 @@ the active one, and there is no disabled variant.
 Report uses it: it is a real path into `/scans/{id}/report`, the document that
 already exists, rather than a second copy rendered inside the record frame.
 
----
-
 ## 6. Components
 
 | Component | Notes |
@@ -735,8 +733,20 @@ numbers. This is where the layer lives and how to use it.
 
 ### The tokens
 
-Six categorical accents at hues **258 / 275 / 292 / 309 / 326 / 343**, four
-stops each:
+**Seven** categorical accents at hues **258 / 275 / 292 / 309 / 326 / 343 /
+355**, four stops each. Six shipped in Epic 9.24; `crimson` at 355 was added by
+Epic B, and is the last one the arc can hold — see "The layer is full" below.
+
+| Index | Key | Name | Hue |
+|---|---|---|---|
+| 0 | `1` | cobalt | 258 |
+| 1 | `2` | indigo | 275 |
+| 2 | `3` | violet | 292 |
+| 3 | `4` | orchid | 309 |
+| 4 | `5` | magenta | 326 |
+| 5 | `6` | rose | 343 |
+| 6 | `7` | crimson | 355 |
+
 
 | Stop | Light | Dark | Use |
 |---|---|---|---|
@@ -755,6 +765,30 @@ saturated inside sRGB, so every dark stop takes 92% of the gamut ceiling at its
 own lightness. That is why `[data-theme='dark']` carries 24 literal values
 rather than a formula. Every pair clears 4.5:1 in both themes; hover *deepens*
 in light and *lightens* in dark, for the reason the neutral axis flips.
+
+### The layer is full at seven — Epic B
+
+Two hard constraints bound where an accent may sit, and solving both across the
+wheel leaves exactly **one arc, 256.5° to 355° — 98.5° wide**:
+
+1. **`BENCH_HUE_BUFFER`** — at least 30° from every meaning-bearing hue (the
+   five visibility stops, `beacon`, and the four semantics), so a chip cannot
+   be read as a score or as a system state.
+2. **The sRGB gamut at the shared chroma table.** `600` needs C 0.185 at
+   L 0.55 and `700` needs C 0.158 at L 0.46. Blue cannot hold that: at hue 241
+   the ceiling is **0.128**, so an accent placed there renders clamped and
+   visibly duller than its neighbours — which reads as rank, the one thing
+   categorical colour must not imply. This is why the arc does not extend into
+   blue however much room the 30° buffer leaves there.
+
+Seven accents sit ~16° apart in that arc. `crimson` at 355 is its last seat,
+exactly 30° from `danger` — the buffer's stated threshold, met rather than
+exceeded.
+
+**An eighth cannot be added without giving something up.** Ten accents in 98.5°
+is ~11° apart, below what hue alone separates at fixed lightness and chroma.
+`tokens.test.ts` holds the arithmetic — including a gamut check that fails if
+any accent's `600` or `700` stop leaves sRGB.
 
 ### Using it
 
@@ -863,3 +897,79 @@ of the figure empty.
 The Epic 9.21 bound (`maxWidth: layout.width`, derived from the layout, never
 declared), the `ChartFrame` accessibility contract, and the null-vs-zero
 discipline every chart in this system carries.
+
+## 8. GapGrid — the answer-gap grid. Epic B.
+
+Prompts down, brands across, one small integer per cell: how many of that
+prompt's engines named that brand.
+
+```tsx
+<GapGrid
+  rows={gaps.rows}
+  brands={gaps.brands}
+  sort="recurrence"
+  accent={6}
+  animate
+  pending={pending}
+  caption="24 prompts across 3 engines…"
+/>
+```
+
+### It is a real `<table>`, and that is the point
+
+Every other chart in this system is an SVG inside `ChartFrame`, which gives it
+`role="img"`, an `aria-label` and a visually-hidden table equivalent. This one
+is not, because it does not need to be: the data IS tabular, so the accessible
+representation and the visible one can be the same object. An SVG heatmap here
+would mean drawing a table and then hiding a second copy of it for screen
+readers — two things to keep in step instead of one. `<th scope>` on both axes,
+so a cell is announced with its prompt and its brand rather than as a bare
+number.
+
+### Colour is never the only carrier
+
+Every cell prints its count; intensity is a second reading of the same number.
+Every row prints its verdict as a word, not a colour. That is what keeps the
+grid legible in greyscale and under CVD — the rule `VisibilityBadge` and the
+nav's current state both follow.
+
+### The subject is `beacon`; rivals stay neutral
+
+design-direction.md §1: one brand, one colour, everywhere. The client under
+analysis is `beacon` here exactly as on every trend. Rivals do **not** take
+bench hues — on this screen a rival is not a category to be told apart from
+other rivals, it is the thing that took an answer, and colouring six of them
+six ways would say otherwise. The screen's own bench accent belongs to the
+SCREEN: the header rule and nothing else.
+
+`absent` takes `warn`, not `danger`. A rival owning an answer is a finding to
+act on, not a system fault, and §1 reserves `danger` for state. A table where
+nine of twenty-four rows were red would read as an outage.
+
+### `no_brands` is drawn as neither a gap nor a win
+
+Its chip is dashed and grey, its row recedes, and it sorts below every real
+verdict. `layoutGapGrid` derives `isGap` from the row KIND, never from
+`absentOn` — the two states have identical `absentOn`, which is exactly how a
+regression here would go unnoticed.
+
+### Motion: one fill, no stagger
+
+Cells fill from transparent to their intensity at `--avp-duration-layout`
+(320ms), once, together. The first draft staggered them 28ms per row capped at
+12, putting arrival at 656ms — which is performing on every load, the thing
+§4's Epic 9.16 note excludes Working screens from. It also depicted something
+that did not happen: the grid arrives whole, from one response, so a cascade
+was decoration. `tokens.test.ts` now asserts the rule carries no
+`animation-delay`.
+
+`pending` dims to 0.45 and sets `aria-busy` while a different scan is fetched,
+rather than the screen unmounting to a loading state — which in the first draft
+took the scan picker down with it, so the control an operator had just used
+vanished from under their pointer.
+
+### It scrolls inside itself
+
+`overflow-x: auto` on the container. A grid of 24 prompts × 8 brands is wider
+than a narrow viewport and the PAGE must never scroll sideways — the rule Epic
+9.21 set for the charts. Verified at 420px: page `false`, grid `true`.

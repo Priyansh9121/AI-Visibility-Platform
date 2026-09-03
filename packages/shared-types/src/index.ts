@@ -119,6 +119,14 @@ export type HistoryCompetitor = Schemas['HistoryCompetitorOut'];
 export type HistorySentiment = Schemas['HistorySentimentOut'];
 export type RunScanRequest = Schemas['RunScanRequest'];
 
+// --- answer gaps (Epic B) ------------------------------------------------
+export type AnswerGaps = Schemas['AnswerGapsOut'];
+export type AnswerGapRow = Schemas['AnswerGapRowOut'];
+export type AnswerGapBrand = Schemas['AnswerGapBrandOut'];
+export type AnswerGapCell = Schemas['AnswerGapCellOut'];
+export type AnswerGapRival = Schemas['AnswerGapRivalOut'];
+export type GapKind = Schemas['GapKind'];
+
 // --- ad-hoc prompt runs (Epic 9.24) -------------------------------------
 export type PromptRun = Schemas['PromptRunOut'];
 export type PromptRunResult = Schemas['PromptRunResultOut'];

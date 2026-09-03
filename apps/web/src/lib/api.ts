@@ -7,19 +7,19 @@
  */
 
 import type {
+  AnswerGaps,
   BillingStatus,
   CheckoutSession,
-  PortalSession,
   Client,
-  ClientHistory,
-  TechnicalAudit,
   ClientDetail,
+  ClientHistory,
   CompetitorInput,
   CompetitorSet,
   CreateClientRequest,
   Dashboard,
   InviteSeatResponse,
   Me,
+  PortalSession,
   ProblemDetail,
   PromptRun,
   PromptRunHistory,
@@ -28,6 +28,7 @@ import type {
   SeatList,
   ShareLink,
   SignUpRequest,
+  TechnicalAudit,
   UserRole,
   ValidationProblemDetail,
 } from '@avp/shared-types';
@@ -270,6 +271,22 @@ export const api = {
    */
   clientHistory: (clientId: string) =>
     request<ClientHistory>(`/clients/${clientId}/history`),
+
+  /**
+   * Prompts where a rival was named and this client was not — Epic B.
+   *
+   * `null` rather than a 404 when the client has never produced a scan
+   * carrying a grid, which is why the return type is nullable: a client with
+   * no scans is a normal state the screen has an empty view for, not a
+   * missing resource.
+   *
+   * `scanId` picks one scan; omitted, the newest is used and the response
+   * lists the rest, so the picker costs no second request.
+   */
+  answerGaps: (clientId: string, scanId?: string) =>
+    request<AnswerGaps | null>(
+      `/clients/${clientId}/answer-gaps${scanId ? `?scanId=${encodeURIComponent(scanId)}` : ''}`,
+    ),
 
   /**
    * A scan's technical audit — Epic 9.22, wiring an endpoint that has existed

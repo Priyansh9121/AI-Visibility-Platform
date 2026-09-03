@@ -1734,3 +1734,324 @@
 @media (prefers-reduced-motion: reduce) {
   .avp-tide--animate .avp-tide__seg { transform: scaleY(1); animation: none; }
 }
+
+/* ============================== GapGrid ============================== */
+/*
+ * Prompts down, brands across — Epic B.
+ *
+ * A real <table>, not an SVG heatmap: the data is tabular, so the visible
+ * representation and the accessible one are the same object rather than two
+ * copies to keep in step. See GapGrid.tsx.
+ *
+ * COLOUR NEVER CARRIES A VALUE ALONE HERE. Every cell prints its count and
+ * every row prints its verdict as a word; intensity and hue are a second
+ * reading of both. That is what keeps the grid legible in greyscale and under
+ * CVD, and it is the same rule VisibilityBadge follows.
+ */
+
+/*
+ * A focus ring on the scroll container.
+ *
+ * The grid is wider than a narrow viewport and scrolls horizontally, and a
+ * scrollable region that cannot take focus cannot be scrolled by keyboard at
+ * all — so on a phone-width screen the rival columns were unreachable without
+ * a pointer. `tabIndex={0}` in GapGrid.tsx makes it focusable; this makes the
+ * focus visible.
+ */
+.avp-gapgrid:focus-visible {
+  outline: 2px solid var(--avp-gapgrid-accent);
+  outline-offset: 2px;
+}
+
+.avp-gapgrid {
+  /* Declared here for the reason .avp-tile's are: unset, the grid must still
+     be a legible neutral table rather than one with invisible rules. GapGrid
+     overrides both from the screen's own bench accent. */
+  --avp-gapgrid-accent: var(--avp-line-strong);
+  --avp-gapgrid-wash: transparent;
+  /* Per-cell, set inline from the layout's 0-1 intensity. Zero here so a cell
+     that never receives one renders empty rather than fully filled. */
+  --avp-gapgrid-fill: 0;
+  /* Its own scroll container. A grid of 24 prompts x 8 brands is wider than a
+     narrow viewport, and the PAGE must never scroll sideways to accommodate
+     it — the rule Epic 9.21 set for the charts. */
+  overflow-x: auto;
+  border: 1px solid var(--avp-line-hairline);
+  border-radius: var(--avp-radius-lg);
+  background: var(--avp-surface-ground);
+}
+
+.avp-gapgrid__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.avp-gapgrid__caption {
+  padding: var(--avp-space-3) var(--avp-space-4);
+  text-align: left;
+  font-size: var(--avp-text-ui-xs);
+  color: var(--avp-text-secondary);
+  border-bottom: 1px solid var(--avp-line-hairline);
+}
+
+.avp-gapgrid__table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--avp-surface-ground);
+  /* The screen's own accent, on the header rule only. The columns below carry
+     brand identity instead, and two accent systems in one table would fight. */
+  border-bottom: 2px solid var(--avp-gapgrid-accent);
+  padding: var(--avp-space-2) var(--avp-space-3);
+  text-align: left;
+  font-size: var(--avp-text-ui-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--avp-tracking-caps);
+  color: var(--avp-text-tertiary);
+  font-weight: 600;
+}
+
+.avp-gapgrid__corner { min-width: 18rem; }
+.avp-gapgrid__verdict-head { min-width: 7rem; }
+
+.avp-gapgrid__brand {
+  min-width: 5.5rem;
+  text-align: center !important;
+}
+
+.avp-gapgrid__brand-name {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 8rem;
+}
+
+.avp-gapgrid__brand-count {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--avp-text-ui-2xs);
+  color: var(--avp-text-tertiary);
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+/* §1: one brand, one colour. The client is `beacon` here as everywhere. */
+.avp-gapgrid__brand--subject {
+  color: var(--avp-beacon-600);
+}
+
+.avp-gapgrid__row {
+  border-top: 1px solid var(--avp-line-hairline);
+  /* Eased, not an instant repaint. `.avp-table tbody td` carries the argument
+     in full from Epic 9.19: an instant hover repaint is the default-browser
+     feel this product avoids everywhere else, and buttons, fields and nav
+     items have all eased over this token since Epic 0. The cell's own
+     transition does NOT cover this — the row paints on the <tr>, underneath
+     the cells' fills. */
+  transition: background var(--avp-duration-hover) var(--avp-ease-standard);
+}
+
+/* Hover isolates one row of twenty-four. A grid this dense is hard to read
+   across, and the row under the pointer is the one being read. */
+@media (hover: hover) {
+  .avp-gapgrid__row:hover {
+    background: var(--avp-surface-sunken);
+  }
+}
+
+.avp-gapgrid__prompt {
+  padding: var(--avp-space-2) var(--avp-space-3);
+  text-align: left;
+  font-weight: 400;
+  max-width: 24rem;
+}
+
+.avp-gapgrid__prompt-text {
+  display: block;
+  font-size: var(--avp-text-ui-sm);
+  color: var(--avp-text-primary);
+  /* Two lines, then ellipsis. A generated prompt runs to 300 characters and a
+     row that tall would let four prompts fill the viewport. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.avp-gapgrid__prompt-meta {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--avp-text-ui-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--avp-tracking-caps);
+  color: var(--avp-text-tertiary);
+}
+
+.avp-gapgrid__cited { color: var(--avp-beacon-600); }
+
+.avp-gapgrid__verdict {
+  padding: var(--avp-space-2) var(--avp-space-3);
+  white-space: nowrap;
+}
+
+.avp-gapgrid__chip {
+  display: inline-block;
+  padding: 2px var(--avp-space-2);
+  border-radius: var(--avp-radius-sm);
+  font-size: var(--avp-text-ui-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--avp-tracking-caps);
+  border: 1px solid var(--avp-line-hairline);
+  color: var(--avp-text-secondary);
+}
+
+/*
+ * The verdict chips.
+ *
+ * `absent` is the only one that takes a semantic colour, and it takes `warn`
+ * rather than `danger`: a rival owning an answer is a finding to act on, not a
+ * system fault, and design-direction.md §1 reserves danger for state. The
+ * others are weight and hairline only — a table where six of twenty-four rows
+ * are red reads as an outage.
+ */
+.avp-gapgrid__chip--absent {
+  border-color: var(--avp-warn);
+  color: var(--avp-warn);
+  font-weight: 600;
+}
+
+.avp-gapgrid__chip--partial { font-weight: 600; }
+
+.avp-gapgrid__chip--covered {
+  border-color: var(--avp-beacon-100);
+  color: var(--avp-beacon-600);
+}
+
+/* Not a gap and not a win. Deliberately the quietest thing in the table. */
+.avp-gapgrid__chip--no_brands,
+.avp-gapgrid__chip--unanswered {
+  color: var(--avp-text-tertiary);
+  border-style: dashed;
+}
+
+.avp-gapgrid__recurrence {
+  margin-left: var(--avp-space-2);
+  font-size: var(--avp-text-ui-2xs);
+  color: var(--avp-text-tertiary);
+}
+
+.avp-gapgrid__cell {
+  padding: var(--avp-space-2);
+  text-align: center;
+  font-size: var(--avp-text-ui-sm);
+  color: var(--avp-text-primary);
+  /* `--avp-gapgrid-fill` is 0-1: the share of this prompt's engines that named
+     this brand. Carried into alpha so a brand named by one engine of three is
+     visibly weaker than one named by all three. */
+  background: color-mix(
+    in oklch,
+    var(--avp-ink-400) calc(var(--avp-gapgrid-fill, 0) * 18%),
+    transparent
+  );
+  /* `--avp-duration-state`, not `--avp-duration-hover`. Nothing about hover
+     changes a cell's background — hover draws an OUTLINE, deliberately, so the
+     fill that encodes the value never moves under the reader. The only thing
+     that repaints a cell is a scan being swapped underneath it, which is a
+     state change and takes the state token, alongside the container's dim. */
+  transition: background var(--avp-duration-state) var(--avp-ease-standard);
+}
+
+/* The subject's own column, in the brand colour it carries product-wide. */
+.avp-gapgrid__cell--subject {
+  background: color-mix(
+    in oklch,
+    var(--avp-beacon-600) calc(var(--avp-gapgrid-fill, 0) * 28%),
+    transparent
+  );
+  border-left: 1px solid var(--avp-line-hairline);
+  border-right: 1px solid var(--avp-line-hairline);
+  font-weight: 600;
+}
+
+/* A rival that won a row the subject did not. The cell worth looking at. */
+.avp-gapgrid__cell--took {
+  background: color-mix(
+    in oklch,
+    var(--avp-warn) calc(var(--avp-gapgrid-fill, 0) * 26%),
+    transparent
+  );
+}
+
+.avp-gapgrid__cell--none { color: var(--avp-text-tertiary); }
+
+/* Rows where nobody was named recede — they are context, not findings. */
+.avp-gapgrid__row--inert .avp-gapgrid__prompt-text { color: var(--avp-text-secondary); }
+
+/*
+ * Cell hover, per the brief's "heatmap highlighting on hover per cell".
+ *
+ * Ring rather than a fill change: the fill already encodes the value, and
+ * changing it on hover would make the reader doubt the number they just read.
+ */
+@media (hover: hover) {
+  .avp-gapgrid__cell:hover {
+    outline: 2px solid var(--avp-gapgrid-accent);
+    outline-offset: -2px;
+  }
+}
+
+/*
+ * Arrival — Epic B.
+ *
+ * `--avp-duration-layout` (320ms), NOT `--avp-duration-reveal` (600ms): §4's
+ * Epic 9.16 note excludes Working screens from performing on every load, and
+ * Epic A moved SentimentTide down to the same tier for the same reason.
+ *
+ * NO STAGGER, and the first draft had one — 28ms per row, capped at 12, which
+ * put the grid's arrival at 656ms. Running the animation gate over it killed
+ * it on three counts and all three are worth keeping written down:
+ *
+ *   1. 656ms IS performing on every load. The rule was cited in this very
+ *      comment while the rule below broke it.
+ *   2. The stagger was decoration. A cascade says data is arriving
+ *      progressively; this grid arrives whole, from one response, so the
+ *      cascade depicts something that did not happen.
+ *   3. `28ms` was hand-typed. The only stagger this system defines is
+ *      `--avp-stagger-reveal` (70ms), which is reveal-tier and belongs to the
+ *      Report — so there was no honest token to spell it in, which is usually
+ *      the sign that the motion itself does not belong.
+ *
+ * What survives is the part tied to data: the cells fill from transparent to
+ * their intensity, once, together. The fill IS the value, so watching it
+ * arrive is watching the measurement land.
+ */
+@keyframes avp-gapgrid-fill-in {
+  from { background-color: transparent; }
+}
+
+.avp-gapgrid--animate .avp-gapgrid__cell {
+  animation: avp-gapgrid-fill-in var(--avp-duration-layout) var(--avp-ease-out) backwards;
+}
+
+/*
+ * A scan being swapped underneath the grid.
+ *
+ * The picker that triggers it stays mounted — the first draft unmounted the
+ * whole body to a loading state, so the control an operator had just used
+ * disappeared from under their pointer and came back somewhere else. The grid
+ * dims instead, which says "these numbers are stale" without taking the
+ * controls away, and `aria-busy` says the same thing to a screen reader.
+ */
+.avp-gapgrid--pending {
+  opacity: 0.45;
+  transition: opacity var(--avp-duration-state) var(--avp-ease-standard);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .avp-gapgrid--animate .avp-gapgrid__cell {
+    animation: none;
+  }
+  .avp-gapgrid__cell { transition: none; }
+}

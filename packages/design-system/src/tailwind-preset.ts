@@ -65,6 +65,7 @@ const tailwindPreset = {
         '4': { '050': v('bench-4-050'), 100: v('bench-4-100'), 600: v('bench-4-600'), 700: v('bench-4-700') },
         '5': { '050': v('bench-5-050'), 100: v('bench-5-100'), 600: v('bench-5-600'), 700: v('bench-5-700') },
         '6': { '050': v('bench-6-050'), 100: v('bench-6-100'), 600: v('bench-6-600'), 700: v('bench-6-700') },
+        '7': { '050': v('bench-7-050'), 100: v('bench-7-100'), 600: v('bench-7-600'), 700: v('bench-7-700') },
       },
       competitor: {
         1: v('competitor-1'),

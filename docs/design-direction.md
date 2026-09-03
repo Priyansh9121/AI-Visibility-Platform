@@ -285,6 +285,73 @@ is too light to hit 4.5:1 on paper. Labels on a ramp fill are `ink-900` or
 > that request honoured at a speed the Working context can carry.
 
 
+> ### BUILT — Epic B, 2026-09-02. Answer gaps, and the seventh accent that filled the layer.
+>
+> The Answer gaps tab draws which questions somebody else owns: prompts down,
+> brands across, a count per cell. It is a **table**, not a chart, and that is
+> the decision worth recording — the data has two categorical axes and a small
+> integer, with no continuous dimension anywhere in it. A chart would have had
+> to invent one. An SVG heatmap would also have meant drawing a table and then
+> hiding a second copy of it for screen readers; a real `<table>` makes the
+> visible representation and the accessible one the same object.
+>
+> **The subject is `beacon`, rivals stay neutral, and `absent` takes `warn`.**
+> §1's "one brand, one colour" holds here as on every trend. Rivals do not take
+> bench hues: on this screen a rival is not a category to be told apart from
+> other rivals, it is the thing that took an answer, and six rivals in six hues
+> would say otherwise. `absent` takes `warn` rather than `danger` because a
+> rival owning an answer is a finding to act on, not a system fault — and a
+> table where nine of twenty-four rows were red would read as an outage.
+>
+> **The state that is not a gap gets drawn as neither.** A prompt where no
+> engine named ANY brand is not a question this client lost; it is a question
+> with no commercial answer. Its chip is dashed and grey, its row recedes, and
+> it sorts below every real verdict. This is not a nicety: on the worst real
+> client measured it is **10 prompts beside 9 genuine absences**, so folding
+> them would have reported 19 of 24 as gaps. Epic A drew the same line around
+> `unclassified` tone, and the layout derives "is a gap" from the row KIND
+> rather than from the absence count precisely because the two states have
+> identical counts.
+>
+> **The seventh accent, and the wall behind it.** A seventh client section would
+> have wrapped `benchAccent` back to `cobalt` and given two items in the same
+> strip one colour, so the layer grew to `crimson` at hue 355. Deriving where it
+> could go turned up the constraint that ends the layer: the 30° meaning buffer
+> and the sRGB gamut at the shared chroma table together leave **one arc, 256.5°
+> to 355°**, and 355 is its last seat. Blue is the binding half — at hue 241 the
+> chroma ceiling is 0.128 against the 0.185 the table requires, so an accent
+> there would render clamped and duller than its neighbours, which reads as
+> rank. design-system.md §6 carries the arithmetic. **Alerts, Crawler activity
+> and Prompt discovery will hit this wall**, and the choice then is between
+> relaxing the buffer, letting chroma vary, or grouping the nav — a design
+> decision this epic deliberately does not pre-empt.
+>
+> **The pressure showed up immediately.** Four stat tiles at crimson 355 and
+> magenta 326 — 29° apart at one lightness and chroma — read as the same pink in
+> two small chips at opposite ends of a row, and on a client where both figures
+> were `0` they were indistinguishable. Fixed by unaccenting the tile that is
+> not a finding, which matches how its rows are already drawn and is the more
+> correct answer regardless.
+>
+> **Motion: one fill, no stagger — a rule broken and then kept.** The first
+> draft staggered the cells 28ms per row capped at 12, putting arrival at
+> **656ms**, and cited §4's Working-screen rule in the comment directly above
+> the rule that broke it. Running the animation gate over it killed it three
+> ways: 656ms is performing on every load; a cascade depicts data arriving
+> progressively when this grid arrives whole from one response; and `28ms` was
+> hand-typed, the only stagger token being reveal-tier and belonging to the
+> Report. What survives is the part tied to data — cells fill from transparent
+> to their intensity, once, together, at `--avp-duration-layout`. The fill IS
+> the value, so watching it arrive is watching the measurement land.
+>
+> **A control that vanished under the pointer.** Switching scans reset the whole
+> body to a loading state, which unmounted the picker that had just been used.
+> The grid now dims to 0.45 with `aria-busy` and keeps its controls in place.
+> Found by driving the real screen, not by a test — and only visible at all once
+> the fetch was held artificially, because locally it returns faster than the
+> eye.
+
+
 ### Client vs competitor — a semantic rule, not a palette
 
 Competitor series must **not** use the visibility ramp. If a competitor renders in
