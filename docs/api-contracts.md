@@ -1931,6 +1931,88 @@ those runs were derived from are gone, which is the point of ip-safety.md #7.
 **Still facts only.** A label and a confidence. There is no field here capable
 of carrying what was classified.
 
+### `GET /api/v1/clients/{clientId}/answer-gaps` — Epic B
+
+Prompts where a rival was named and this client was not, for one scan, plus a
+cross-scan rival rollup. Optional `?scanId=`; without it the newest griddable
+scan is used and `availableScanIds` lists the rest so a picker needs no second
+request.
+
+**Reads only.** No engine call, no model call, no write. Every figure is an
+aggregation over `engine_result_brand_mentions` and `engine_result_citations`
+rows some earlier scan already persisted.
+
+```jsonc
+{
+  "scanId": "scan_01…", "scannedAt": "2026-08-30T10:00:00Z",
+  "availableScanIds": ["scan_02", "scan_01"],
+  "engines": ["chatgpt", "claude", "claude_search"],
+  "brands": [
+    { "name": "PSM Digital", "isSubject": true,  "answersNamed": 4, "promptsNamed": 2 },
+    { "name": "WebFX",       "isSubject": false, "answersNamed": 9, "promptsNamed": 3 }
+  ],
+  "rows": [{
+    "promptId": "prmt_01…", "text": "how do i find a good seo agency…",
+    "intent": "awareness", "kind": "absent",
+    "enginesAnswered": 3, "subjectNamedOn": 0, "rivalsNamedOn": 3, "noBrandOn": 0,
+    "subjectCited": false, "absentOn": 3,
+    "cells": [{ "brand": "PSM Digital", "namedOn": 0 }, { "brand": "WebFX", "namedOn": 3 }]
+  }],
+  "rivals": [{ "name": "WebFX", "answersWon": 9, "scansPresent": 2 }],
+  "prompts": 24, "absent": 9, "partial": 0, "uncited": 4,
+  "covered": 1, "noBrands": 10, "unanswered": 0,
+  "subjectCitable": true
+}
+```
+
+**`no_brands` is a sixth kind, never folded into `absent`.** A prompt where NO
+engine named ANY brand is not a question this client lost — it is a question
+with no commercial answer, so there was nothing to be absent from. On the real
+`avp_dev` rows this is not a rounding error: the worst client measured carries
+**9 genuine absences beside 10 no-brand prompts**, so conflating them would
+report 19 of 24 as gaps and roughly double the finding. The same discipline
+Epic A applied to `unclassified` sentiment.
+
+**`absentOn` counts ENGINES, and that is a correction to the brief.** The brief
+asked for gaps "sortable by how often the gap recurs", which assumed prompts
+persist between scans. They do not: `scan_runner.build_prompt_set` calls
+`prompts.generate_prompts` fresh every scan, so prompt text is newly written
+each time. Measured — **Plausible's three scans hold 72 prompts with 71
+distinct texts; Notion's two hold 48 with 48 distinct.** There is no prompt
+identity to recur on. What does recur is the engine (a gap holding on 3 of 3
+is a stronger finding than 1 of 3) and the rival, which is what `rivals`
+counts across the client's whole history.
+
+**`uncited` is claimed only when `subjectCitable` is true.** There is no content
+inventory anywhere in this schema — `TechnicalAudit` stores `pages_crawled` as
+a COUNT and one `url_audited`, not a page list — so the brief's "the client has
+relevant content (per Sources) but no citation" cannot be read as written. What
+CAN be read is whether the engines ever cited this client's own domain in this
+scan. If they did, the domain is demonstrably citable and a prompt that named
+the client without citing it is a real gap. If they never did, the claim is
+unsupported and **no row is reported as `uncited` at all** — the real Notion
+scan is exactly this case, and reports 0 rather than 22.
+
+**The grid is bounded by competitor detection.** `extract_facts` SEARCHES for
+the brands it is handed and discovers none, so a rival absent from the scan's
+`CompetitorSet` leaves no `BrandMention` row and cannot appear as a column
+however often an engine named it. The screen says so in words rather than
+presenting a short grid as a complete one.
+
+**`null`, not 404, when the client has no griddable scan** — a normal state the
+screen has an empty view for, not a missing resource. A `scanId` belonging to
+another client also returns `null`, for the reason `get_client` 404s rather
+than 403s: neither may confirm that an id exists in another agency.
+
+**Four grouped reads, assembled in Python.** Joining mentions to citations to
+results in one statement returns the product, not the grid — a scan carrying 72
+results, 1,355 mentions and 2,399 citations would multiply out. Each read is
+grouped in the database and returns at most a few hundred rows.
+
+**Facts only.** Counts, booleans, ordinals, entity names, and OUR OWN prompt
+text (Epic 4 generated it). `test_answer_gaps.py::TestIpSafety` asserts the
+response echoes no phrase from an engine answer.
+
 ## Planned, not yet built
 
 Recorded so the shape is agreed before it is implemented.

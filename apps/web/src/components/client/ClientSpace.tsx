@@ -41,6 +41,10 @@
  * - **Sentiment** — Epic A. How each engine described the client, scan by
  *   scan. The labels have been stored since Epic 4 and appeared nowhere except
  *   folded into the composite; this reads them on their own.
+ * - **Answer gaps** — Epic B. Which questions a rival owns and this client does
+ *   not, per scan. Sits beside Rankings because both read the same competitive
+ *   picture: Rankings says who is ahead overall, this says on WHICH questions.
+ *   Reads only rows a scan already wrote; it runs nothing.
  *
  * Nothing about this frame assumes a fixed number of items.
  *
@@ -62,6 +66,7 @@ export type ClientSection =
   | 'overview'
   | 'sources'
   | 'rankings'
+  | 'gaps'
   | 'technical'
   | 'prompts'
   | 'sentiment';
@@ -74,6 +79,11 @@ const ACCENT: Record<ClientSection, number> = {
   technical: 3,
   prompts: 4,
   sentiment: 5,
+  // Epic B. Index 6 is `crimson`, the seventh and LAST accent the bench layer
+  // can hold — see BENCH_ACCENTS for why the arc has no eighth seat. Without
+  // it this item would have wrapped `benchAccent` back to 0 and worn
+  // Overview's hue in the same strip.
+  gaps: 6,
 };
 
 export function ClientSpace({
@@ -145,6 +155,12 @@ export function ClientSpace({
             label="Rankings"
             current={current === 'rankings'}
             accent={ACCENT.rankings}
+          />
+          <LocalNavItem
+            href={`${base}/gaps`}
+            label="Answer gaps"
+            current={current === 'gaps'}
+            accent={ACCENT.gaps}
           />
           <LocalNavItem
             href={`${base}/technical`}

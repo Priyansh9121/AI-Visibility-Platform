@@ -49,6 +49,21 @@ export { LuminanceLedger, type LuminanceLedgerProps } from './components/chart/L
 export { AnswerShelf, type AnswerShelfProps } from './components/chart/AnswerShelf.js';
 export { TrendChart, type TrendChartProps } from './components/chart/TrendChart.js';
 export { SentimentTide, type SentimentTideProps } from './components/chart/SentimentTide.js';
+export { GapGrid, type GapGridProps } from './components/chart/GapGrid.js';
+export {
+  layoutGapGrid,
+  gapSeverity,
+  GAP_KIND_LABEL,
+  GAP_KIND_SHORT,
+  type GapRowKind,
+  type GapRowInput,
+  type GapBrandInput,
+  type GapCellInput,
+  type GapSort,
+  type GapGridLayout,
+  type GapRowLayout,
+  type GapCellLayout,
+} from './components/chart/gapGridLayout.js';
 export {
   layoutTide,
   netByEngine,

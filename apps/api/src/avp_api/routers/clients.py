@@ -12,6 +12,7 @@ from sqlalchemy import select
 
 from ..deps import DbDep, PrincipalDep, SettingsDep
 from ..models import Client
+from ..schemas.answer_gaps import AnswerGapsOut
 from ..schemas.client import (
     ClientDetailOut,
     ClientOut,
@@ -20,6 +21,7 @@ from ..schemas.client import (
 )
 from ..schemas.client_history import ClientHistoryOut
 from ..schemas.common import Page
+from ..services import answer_gaps as answer_gaps_service
 from ..services import client_history as history_service
 from ..services import intake as intake_service
 from ..services.crawl import CrawlResult
@@ -154,6 +156,36 @@ async def get_client_history(
         db, agency_id=principal.agency_id, client_id=client_id
     )
     return await history_service.build_history(db, client)
+
+
+@router.get("/{clientId}/answer-gaps", response_model=AnswerGapsOut | None)
+async def get_client_answer_gaps(
+    principal: PrincipalDep,
+    db: DbDep,
+    client_id: str = Path(alias="clientId"),
+    scan_id: str | None = Query(None, alias="scanId"),
+) -> Any:
+    """Prompts where a rival was named and this client was not — Epic B.
+
+    **Reads. Collects nothing, calls no engine and no model, writes nothing.**
+    Every figure is an aggregation over `engine_result_brand_mentions` and
+    `engine_result_citations` rows some earlier scan already persisted.
+
+    `scanId` selects one scan; without it the newest griddable scan is used.
+    The response carries `availableScanIds` so a picker needs no second call.
+
+    Returns `null` — not 404 — when the client has never produced a scan
+    carrying a grid. A client with no scans is a normal state on a screen that
+    has an empty view for it, not a missing resource. A `scanId` belonging to
+    another client returns `null` for the same reason `get_client` 404s rather
+    than 403s: neither may reveal that an id exists in another agency.
+
+    Scoped to the caller's agency by `get_client`.
+    """
+    client = await intake_service.get_client(
+        db, agency_id=principal.agency_id, client_id=client_id
+    )
+    return await answer_gaps_service.build_answer_gaps(db, client, scan_id=scan_id)
 
 
 @router.post("/{clientId}/reclassify", response_model=ClientDetailOut)

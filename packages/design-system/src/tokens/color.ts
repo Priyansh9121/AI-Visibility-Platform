@@ -284,12 +284,43 @@ export interface BenchAccent {
 }
 
 /**
- * The six accents, in assignment order.
+ * The seven accents, in assignment order.
  *
- * Six because that is what the Working screens actually need to tell apart —
- * four agency destinations and, inside a client, five sections. Ordering is
- * stable and meaningless: index 3 is not "worse" than index 1, which is the
- * property the visibility ramp deliberately does NOT have.
+ * Ordering is stable and meaningless: index 3 is not "worse" than index 1,
+ * which is the property the visibility ramp deliberately does NOT have.
+ *
+ * `crimson` was added in Epic B, when a seventh client section (Answer gaps)
+ * would otherwise have wrapped `benchAccent` back to `cobalt` and given two
+ * items in the SAME nav strip one colour.
+ *
+ * ---------------------------------------------------------------------------
+ * THE LAYER IS NOW FULL, AND THAT IS ARITHMETIC RATHER THAN A PREFERENCE
+ * ---------------------------------------------------------------------------
+ * Two hard constraints bound where an accent may sit, and together they leave
+ * exactly one usable arc:
+ *
+ *   1. `BENCH_HUE_BUFFER` — at least 30 degrees from every meaning-bearing hue
+ *      (the five visibility stops, `beacon`, and the four semantics), so a chip
+ *      cannot be read as a score or as a system state.
+ *   2. The sRGB gamut at the SHARED chroma table below. `600` needs C 0.185 at
+ *      L 0.55 and `700` needs C 0.158 at L 0.46. Blue cannot hold that: at hue
+ *      241 the ceiling is 0.128, so an accent placed there would render
+ *      visibly duller than its neighbours and break the equal-weight property
+ *      that keeps categorical colour from implying rank.
+ *
+ * Solving both across the wheel yields ONE arc, 256.5 to 355 — 98.5 degrees.
+ * The seven accents below occupy it at roughly 16 degrees apart, and `crimson`
+ * at 355 is its last seat: 30 degrees exactly from `danger`, which is the
+ * buffer's stated threshold.
+ *
+ * **An eighth accent cannot be added without giving something up.** The
+ * roadmap's later screens (Alerts, Crawler activity, Prompt discovery) will
+ * reach this wall. Fitting ten accents in 98.5 degrees means ~11 degrees
+ * apart, which is below what hue alone separates at fixed lightness and
+ * chroma. The choice at that point is between relaxing the buffer, letting
+ * accents differ in chroma, or grouping the nav so that hue distinguishes
+ * WITHIN a group rather than across all of it. That is a design decision, not
+ * a token edit, and it is deliberately not pre-empted here.
  */
 export const BENCH_ACCENTS: readonly BenchAccent[] = [
   { key: '1', name: 'cobalt', hue: 258 },
@@ -298,7 +329,11 @@ export const BENCH_ACCENTS: readonly BenchAccent[] = [
   { key: '4', name: 'orchid', hue: 309 },
   { key: '5', name: 'magenta', hue: 326 },
   { key: '6', name: 'rose', hue: 343 },
+  { key: '7', name: 'crimson', hue: 355 },
 ];
+
+/** The one arc that clears both the meaning buffer and the sRGB gamut. */
+export const BENCH_FEASIBLE_ARC = { from: 256.5, to: 355 } as const;
 
 /** The minimum hue separation from any meaning-bearing colour. Asserted, not assumed. */
 export const BENCH_HUE_BUFFER = 30;

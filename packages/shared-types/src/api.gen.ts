@@ -527,6 +527,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/clients/{clientId}/answer-gaps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Client Answer Gaps
+         * @description Prompts where a rival was named and this client was not — Epic B.
+         *
+         *     **Reads. Collects nothing, calls no engine and no model, writes nothing.**
+         *     Every figure is an aggregation over `engine_result_brand_mentions` and
+         *     `engine_result_citations` rows some earlier scan already persisted.
+         *
+         *     `scanId` selects one scan; without it the newest griddable scan is used.
+         *     The response carries `availableScanIds` so a picker needs no second call.
+         *
+         *     Returns `null` — not 404 — when the client has never produced a scan
+         *     carrying a grid. A client with no scans is a normal state on a screen that
+         *     has an empty view for it, not a missing resource. A `scanId` belonging to
+         *     another client returns `null` for the same reason `get_client` 404s rather
+         *     than 403s: neither may reveal that an id exists in another agency.
+         *
+         *     Scoped to the caller's agency by `get_client`.
+         */
+        get: operations["get_client_answer_gaps_api_v1_clients__clientId__answer_gaps_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/clients/{clientId}/competitors": {
         parameters: {
             query?: never;
@@ -1337,6 +1372,128 @@ export interface components {
             slug: string;
         };
         /**
+         * AnswerGapBrandOut
+         * @description One column of the grid: a brand, and how much of this scan it won.
+         */
+        AnswerGapBrandOut: {
+            /** Answersnamed */
+            answersNamed: number;
+            /** Domain */
+            domain?: string | null;
+            /** Issubject */
+            isSubject: boolean;
+            /** Name */
+            name: string;
+            /** Promptsnamed */
+            promptsNamed: number;
+        };
+        /**
+         * AnswerGapCellOut
+         * @description One cell: how many of this prompt's engines named this brand.
+         *
+         *     `named_on` is a count and not a boolean because the engines disagree, and
+         *     that disagreement is the finding — a rival named by one engine of three is
+         *     a different competitive position from one named by all three.
+         */
+        AnswerGapCellOut: {
+            /** Brand */
+            brand: string;
+            /** Namedon */
+            namedOn: number;
+        };
+        /**
+         * AnswerGapRivalOut
+         * @description A rival, counted across the client's WHOLE history.
+         *
+         *     The cross-scan half of "how often does this recur". Competitors persist
+         *     between scans where prompts do not, so this is the only axis on which a
+         *     recurring gap can honestly be counted over time.
+         */
+        AnswerGapRivalOut: {
+            /** Answerswon */
+            answersWon: number;
+            /** Domain */
+            domain?: string | null;
+            /** Name */
+            name: string;
+            /** Scanspresent */
+            scansPresent: number;
+        };
+        /**
+         * AnswerGapRowOut
+         * @description One prompt, across every engine that answered it.
+         */
+        AnswerGapRowOut: {
+            /** Absenton */
+            absentOn: number;
+            /** Cells */
+            cells: components["schemas"]["AnswerGapCellOut"][];
+            /** Enginesanswered */
+            enginesAnswered: number;
+            /** Intent */
+            intent: string;
+            kind: components["schemas"]["GapKind"];
+            /** Nobrandon */
+            noBrandOn: number;
+            /** Position */
+            position: number;
+            /** Promptid */
+            promptId: string;
+            /** Rivalsnamedon */
+            rivalsNamedOn: number;
+            /** Subjectcited */
+            subjectCited: boolean;
+            /** Subjectnamedon */
+            subjectNamedOn: number;
+            /** Text */
+            text: string;
+        };
+        /**
+         * AnswerGapsOut
+         * @description The Answer gaps read for one scan, plus the cross-scan rival rollup.
+         */
+        AnswerGapsOut: {
+            /** Absent */
+            absent: number;
+            /** Availablescanids */
+            availableScanIds: string[];
+            /** Brands */
+            brands: components["schemas"]["AnswerGapBrandOut"][];
+            /** Clientid */
+            clientId: string;
+            /** Covered */
+            covered: number;
+            /** Domain */
+            domain: string;
+            /** Engines */
+            engines: string[];
+            /** Name */
+            name: string;
+            /** Nobrands */
+            noBrands: number;
+            /** Partial */
+            partial: number;
+            /** Prompts */
+            prompts: number;
+            /** Rivals */
+            rivals: components["schemas"]["AnswerGapRivalOut"][];
+            /** Rows */
+            rows: components["schemas"]["AnswerGapRowOut"][];
+            /** Scanid */
+            scanId: string;
+            /**
+             * Scannedat
+             * Format: date-time
+             */
+            scannedAt: string;
+            /** Subjectcitable */
+            subjectCitable: boolean;
+            /** Unanswered */
+            unanswered: number;
+            /** Uncited */
+            uncited: number;
+        };
+        /**
          * AuditCheckOut
          * @description One check's verdict — §7's "pass/fail + detail for each check".
          */
@@ -1808,6 +1965,16 @@ export interface components {
          * @enum {string}
          */
         EngineResultStatus: "ok" | "answered_no_mention" | "rate_limited" | "error" | "timeout";
+        /**
+         * GapKind
+         * @description One prompt's verdict for this client. Ordered by how bad it is.
+         *
+         *     Precedence when several could apply is the declaration order below, worst
+         *     first — a prompt that is both absent AND uncited is reported as `absent`,
+         *     because being named at all comes before being cited.
+         * @enum {string}
+         */
+        GapKind: "absent" | "partial" | "uncited" | "covered" | "no_brands" | "unanswered";
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -3493,6 +3660,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ClientOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_client_answer_gaps_api_v1_clients__clientId__answer_gaps_get: {
+        parameters: {
+            query?: {
+                scanId?: string | null;
+            };
+            header?: never;
+            path: {
+                clientId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnswerGapsOut"] | null;
                 };
             };
             /** @description Validation Error */

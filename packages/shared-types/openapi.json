@@ -239,6 +239,286 @@
         "title": "AgencyOut",
         "type": "object"
       },
+      "AnswerGapBrandOut": {
+        "description": "One column of the grid: a brand, and how much of this scan it won.",
+        "properties": {
+          "answersNamed": {
+            "title": "Answersnamed",
+            "type": "integer"
+          },
+          "domain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Domain"
+          },
+          "isSubject": {
+            "title": "Issubject",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "promptsNamed": {
+            "title": "Promptsnamed",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "isSubject",
+          "answersNamed",
+          "promptsNamed"
+        ],
+        "title": "AnswerGapBrandOut",
+        "type": "object"
+      },
+      "AnswerGapCellOut": {
+        "description": "One cell: how many of this prompt's engines named this brand.\n\n`named_on` is a count and not a boolean because the engines disagree, and\nthat disagreement is the finding \u2014 a rival named by one engine of three is\na different competitive position from one named by all three.",
+        "properties": {
+          "brand": {
+            "title": "Brand",
+            "type": "string"
+          },
+          "namedOn": {
+            "title": "Namedon",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "brand",
+          "namedOn"
+        ],
+        "title": "AnswerGapCellOut",
+        "type": "object"
+      },
+      "AnswerGapRivalOut": {
+        "description": "A rival, counted across the client's WHOLE history.\n\nThe cross-scan half of \"how often does this recur\". Competitors persist\nbetween scans where prompts do not, so this is the only axis on which a\nrecurring gap can honestly be counted over time.",
+        "properties": {
+          "answersWon": {
+            "title": "Answerswon",
+            "type": "integer"
+          },
+          "domain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Domain"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "scansPresent": {
+            "title": "Scanspresent",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "answersWon",
+          "scansPresent"
+        ],
+        "title": "AnswerGapRivalOut",
+        "type": "object"
+      },
+      "AnswerGapRowOut": {
+        "description": "One prompt, across every engine that answered it.",
+        "properties": {
+          "absentOn": {
+            "title": "Absenton",
+            "type": "integer"
+          },
+          "cells": {
+            "items": {
+              "$ref": "#/components/schemas/AnswerGapCellOut"
+            },
+            "title": "Cells",
+            "type": "array"
+          },
+          "enginesAnswered": {
+            "title": "Enginesanswered",
+            "type": "integer"
+          },
+          "intent": {
+            "title": "Intent",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/GapKind"
+          },
+          "noBrandOn": {
+            "title": "Nobrandon",
+            "type": "integer"
+          },
+          "position": {
+            "title": "Position",
+            "type": "integer"
+          },
+          "promptId": {
+            "title": "Promptid",
+            "type": "string"
+          },
+          "rivalsNamedOn": {
+            "title": "Rivalsnamedon",
+            "type": "integer"
+          },
+          "subjectCited": {
+            "title": "Subjectcited",
+            "type": "boolean"
+          },
+          "subjectNamedOn": {
+            "title": "Subjectnamedon",
+            "type": "integer"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "promptId",
+          "text",
+          "intent",
+          "position",
+          "enginesAnswered",
+          "subjectNamedOn",
+          "rivalsNamedOn",
+          "noBrandOn",
+          "subjectCited",
+          "kind",
+          "absentOn",
+          "cells"
+        ],
+        "title": "AnswerGapRowOut",
+        "type": "object"
+      },
+      "AnswerGapsOut": {
+        "description": "The Answer gaps read for one scan, plus the cross-scan rival rollup.",
+        "properties": {
+          "absent": {
+            "title": "Absent",
+            "type": "integer"
+          },
+          "availableScanIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Availablescanids",
+            "type": "array"
+          },
+          "brands": {
+            "items": {
+              "$ref": "#/components/schemas/AnswerGapBrandOut"
+            },
+            "title": "Brands",
+            "type": "array"
+          },
+          "clientId": {
+            "title": "Clientid",
+            "type": "string"
+          },
+          "covered": {
+            "title": "Covered",
+            "type": "integer"
+          },
+          "domain": {
+            "title": "Domain",
+            "type": "string"
+          },
+          "engines": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Engines",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "noBrands": {
+            "title": "Nobrands",
+            "type": "integer"
+          },
+          "partial": {
+            "title": "Partial",
+            "type": "integer"
+          },
+          "prompts": {
+            "title": "Prompts",
+            "type": "integer"
+          },
+          "rivals": {
+            "items": {
+              "$ref": "#/components/schemas/AnswerGapRivalOut"
+            },
+            "title": "Rivals",
+            "type": "array"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/AnswerGapRowOut"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "scanId": {
+            "title": "Scanid",
+            "type": "string"
+          },
+          "scannedAt": {
+            "format": "date-time",
+            "title": "Scannedat",
+            "type": "string"
+          },
+          "subjectCitable": {
+            "title": "Subjectcitable",
+            "type": "boolean"
+          },
+          "unanswered": {
+            "title": "Unanswered",
+            "type": "integer"
+          },
+          "uncited": {
+            "title": "Uncited",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "clientId",
+          "name",
+          "domain",
+          "scanId",
+          "scannedAt",
+          "availableScanIds",
+          "engines",
+          "brands",
+          "rows",
+          "rivals",
+          "prompts",
+          "absent",
+          "partial",
+          "uncited",
+          "covered",
+          "noBrands",
+          "unanswered",
+          "subjectCitable"
+        ],
+        "title": "AnswerGapsOut",
+        "type": "object"
+      },
       "AuditCheckOut": {
         "description": "One check's verdict \u2014 \u00a77's \"pass/fail + detail for each check\".",
         "properties": {
@@ -1477,6 +1757,19 @@
           "timeout"
         ],
         "title": "EngineResultStatus",
+        "type": "string"
+      },
+      "GapKind": {
+        "description": "One prompt's verdict for this client. Ordered by how bad it is.\n\nPrecedence when several could apply is the declaration order below, worst\nfirst \u2014 a prompt that is both absent AND uncited is reported as `absent`,\nbecause being named at all comes before being cited.",
+        "enum": [
+          "absent",
+          "partial",
+          "uncited",
+          "covered",
+          "no_brands",
+          "unanswered"
+        ],
+        "title": "GapKind",
         "type": "string"
       },
       "HTTPValidationError": {
@@ -4972,6 +5265,73 @@
           }
         },
         "summary": "Get Client",
+        "tags": [
+          "clients"
+        ]
+      }
+    },
+    "/api/v1/clients/{clientId}/answer-gaps": {
+      "get": {
+        "description": "Prompts where a rival was named and this client was not \u2014 Epic B.\n\n**Reads. Collects nothing, calls no engine and no model, writes nothing.**\nEvery figure is an aggregation over `engine_result_brand_mentions` and\n`engine_result_citations` rows some earlier scan already persisted.\n\n`scanId` selects one scan; without it the newest griddable scan is used.\nThe response carries `availableScanIds` so a picker needs no second call.\n\nReturns `null` \u2014 not 404 \u2014 when the client has never produced a scan\ncarrying a grid. A client with no scans is a normal state on a screen that\nhas an empty view for it, not a missing resource. A `scanId` belonging to\nanother client returns `null` for the same reason `get_client` 404s rather\nthan 403s: neither may reveal that an id exists in another agency.\n\nScoped to the caller's agency by `get_client`.",
+        "operationId": "get_client_answer_gaps_api_v1_clients__clientId__answer_gaps_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clientId",
+            "required": true,
+            "schema": {
+              "title": "Clientid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scanId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scanid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AnswerGapsOut"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Get Client Answer Gaps Api V1 Clients  Clientid  Answer Gaps Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Client Answer Gaps",
         "tags": [
           "clients"
         ]
