@@ -10267,3 +10267,109 @@ reports no drift. Screenshots in `docs/screenshots/epic-e-alerts/`.
 seat in that cluster; `clientNav.test.ts` asserts it fits. Worth knowing before
 it starts: crawler data is a second measurement stream with no baseline problem
 of this kind, because server logs are continuous rather than sampled.
+
+---
+
+# Design review follow-up — the sparse-data states
+
+**2026-09-03.** Not an epic. Four defects a visual inventory found by driving
+the finished screens against a one-scan client, `PSM Digital` — the state nine
+of eleven clients in `avp_dev` are actually in. Inventory and captures in
+`docs/screenshots/design-review-2026-09-02/`; the after-captures are in
+`docs/screenshots/design-review-fixes-2026-09-03/`.
+
+**The core finding: nothing distinguished "not enough data yet" from "broken
+UI", and a one-scan client hit that gap on both new screens.** The fix is not
+decoration — a B2B data tool carrying stock imagery would read as a template.
+It is four specific things.
+
+## 1. A zero does not look like a finding
+
+"PARTLY HELD 0" carried a full `bench-*` wash and a coloured rail, giving an
+empty measure the same visual weight as "RIVALS TOOK 9" beside it. A count tile
+now drops its accent when the count is zero.
+
+`countAccent` lives in the SCREEN, not in `StatTile`. The primitive cannot know
+what zero means for a given caller: on the Alerts feed "OUTSTANDING 0" is a
+genuine all-clear worth showing plainly. It is the counterpart to
+`StatTile.emphasis` — that adds weight to a loud number, this removes it from
+an empty one.
+
+**Two zeros, and only one dims.** "Named, not cited" shows an em dash when
+`subjectCitable` is false, and that refusal to claim a number is itself the
+finding, so it keeps its accent. A measured zero on the same tile dims like any
+other. Filing "cannot be measured" alongside "measured, and it was zero" is the
+exact conflation the rest of that screen exists to prevent.
+
+## 2. The negative hatch now carries the engine's colour
+
+A single shared `<pattern>` filled with `currentColor` rendered perfectly and
+was wrong: a paint server resolves `currentColor` against the element that
+DEFINES it — `<defs>` — which inherits nothing from the `<g>` that sets `color`
+per engine. Every negative block came out the same `ink-800` grey while every
+positive and neutral segment beside it was engine-coloured.
+
+**The test suite could not see it.** It asserted a pattern was REFERENCED, never
+what that reference resolved to, so it passed throughout. The new one reads the
+resolved fill from two engines' patterns and asserts they differ; the old
+assertion's hard-coded id is now resolved through the exported
+`negativePatternId` for the same reason.
+
+Verified live: Notion's tide emits three patterns with three distinct resolved
+colours (hues 326, 292, 258) where all three were previously one grey.
+
+## 3. A truncated column header keeps its full name
+
+`Growthmarketingpro` rendered as `Growthmarketin…` with the full string
+reachable only by scrolling to the rivals table. The header carries `title`,
+extending the affordance `.avp-gapgrid__chip` already used.
+
+## 4. Sentiment says when it is a first reading, not a trend
+
+The one genuine UX gap rather than a bug. At one scan the tide is three wide
+bars against a single x-tick, and the inventory's read was that it looks like
+the chart is malfunctioning rather than correctly reporting that this is all the
+data there is.
+
+**`hasSentiment`'s argument stands and was not reverted:** one scan IS a
+readable tide. So the chart's rendering is untouched — no forced narrower bars,
+no fake second column. Disguising an n of 1 would be the dishonest version of
+this fix. What was added is a sentence, under the existing lead:
+
+> One scan so far, so this is a first reading rather than a trend. Tone will
+> show as a direction once a second scan runs.
+
+Distinct from `NoToneYet`, which handles zero scans or zero named answers —
+those are an absence of data, this is data with no trend yet, and they need
+different words.
+
+## Deliberately NOT changed
+
+**The Answer-gaps grid's 121 empty cells.** They are the actual finding for this
+client — real prompts where nobody named any brand, which is Epic B's whole
+premise. Padding or disguising that density would undo the epic. The only
+changes on that screen are #1 and #3.
+
+## A guard that had to be re-aimed
+
+The Epic B.1 tile-collision test asserted "at least three accented tiles, all
+distinct hues". With zero-valued tiles correctly dropping their accent,
+`gapHeavy` renders two — which would have left the guard passing while
+exercising less than it was written to. It now runs against a fixture whose
+counts are all non-zero, so it still tests three.
+
+## Verification
+
+**Driven live against both clients**: PSM Digital (1 scan — the review's own
+client) and Notion (2 scans, so the n>1 path and the note's ABSENCE are both
+checked). Read out of the live CSSOM rather than the markup: `Partly held 0`
+resolves to the neutral hairline rail while `Rivals took 9` keeps its bench
+rail; `Growthmarketingpro` reports `scrollWidth > clientWidth` and carries its
+full `title`; the first-reading note is present at one scan and absent at two.
+
+**The Report is unchanged** — checked rather than assumed, though nothing here
+touches a shared stylesheet: `article.avp-report` is byte-identical at 72,750
+bytes, sha256 `cbb44e55`.
+
+**Suite: 2,072, up from 2,062.** api 917, web 674 (+7), design-system 415 (+3),
+shared-types 53, workers 13. `ruff` and `tsc` clean.

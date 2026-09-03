@@ -71,7 +71,11 @@ describe('the tab exists and says whose space it is', () => {
      * row became the same blue. Asserted as a PROPERTY, so it holds wherever
      * the nav table puts this screen next.
      */
-    const html = render(withData(gapHeavy));
+    // Every count non-zero, so all three accented tiles actually render one.
+    // `gapHeavy` has `uncited: 0`, and since the design review a zero-valued
+    // tile deliberately drops its accent — which would leave this guard
+    // exercising two tiles and quietly weaken it.
+    const html = render(withData({ ...gapHeavy, uncited: 3 }));
     const hues = [...html.matchAll(/--avp-tile-accent:\s*var\(--avp-bench-(\d)-600\)/g)].map(
       (m) => m[1],
     );
@@ -85,6 +89,41 @@ describe('the tab exists and says whose space it is', () => {
     // The cluster is a real list, not a heading that happens to sit above
     // some links — so a screen reader reports the grouping.
     expect(html).toMatch(/<ul[^>]*aria-label="Investigation"/);
+  });
+});
+
+describe('a zero does not look like a finding — design review 2026-09-02', () => {
+  it('drops the accent from a count tile whose value is zero', () => {
+    // "PARTLY HELD 0" carried a full wash and coloured rail, giving an empty
+    // measure the same visual weight as "RIVALS TOOK 9" beside it.
+    const html = render(withData(gapHeavy));
+    const tile = (label: string) => {
+      const i = html.indexOf(label);
+      return html.slice(Math.max(0, html.lastIndexOf('<div', i)), i);
+    };
+    // gapHeavy: absent 2 (a real number), partial 1, uncited 0.
+    expect(tile('Named, not cited')).not.toContain('--avp-tile-accent');
+    expect(tile('Rivals took')).toContain('--avp-tile-accent');
+  });
+
+  it('keeps the accent on the em dash, because that refusal IS the finding', () => {
+    // `subjectCitable: false` shows "—", not a measured zero. Dimming it would
+    // file "cannot be measured" alongside "measured, and it was zero".
+    const html = render(withData(notCitable));
+    const i = html.indexOf('Named, not cited');
+    const tile = html.slice(Math.max(0, html.lastIndexOf('<div', i)), i);
+    expect(tile).toContain('--avp-tile-accent');
+    expect(html).toContain('cannot be measured');
+  });
+});
+
+describe('a truncated column header keeps its full name — design review 2026-09-02', () => {
+  it('carries the whole brand name in a title', () => {
+    // "Growthmarketingpro" rendered as "Growthmarketin…", and the full string
+    // was reachable only by scrolling to the rivals table at the bottom.
+    const html = render(withData(gapHeavy));
+    expect(html).toContain('title="WebFX"');
+    expect(html).toContain('title="PSM Digital"');
   });
 });
 

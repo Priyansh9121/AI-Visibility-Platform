@@ -87,6 +87,27 @@ const ACCENT = accentFor('gaps') ?? 0;
  */
 const TILE = [ACCENT, ACCENT + 1, ACCENT + 2] as const;
 
+/**
+ * The accent a COUNT tile should carry — `undefined` when the count is zero.
+ *
+ * A zero is not a finding, and a tile rendering `0` with a full wash and a
+ * coloured rail gives an empty measure the same visual weight as a real one.
+ * The design review put it plainly: "PARTLY HELD 0" was indistinguishable at a
+ * glance from "RIVALS TOOK 9", which is a real, actionable number.
+ *
+ * This lives HERE and not on `StatTile` deliberately. The primitive cannot know
+ * what zero means for a given caller — on the Alerts feed "OUTSTANDING 0" is a
+ * genuine all-clear worth showing plainly, and on this screen the em dash for
+ * an unmeasurable citation gap is already handled and must NOT be dimmed,
+ * because there the absence of a number IS the finding.
+ *
+ * `StatTile.emphasis` is the other half of the same idea, one step up: this
+ * removes weight from an empty measure, `emphasis` adds it to a loud one.
+ */
+function countAccent(value: number, accent: number): { accent?: number } {
+  return value > 0 ? { accent } : {};
+}
+
 export type AnswerGapsState =
   | { kind: 'loading' }
   /**
@@ -192,20 +213,32 @@ function Grid({
         <StatTile
           label="Rivals took"
           value={String(gaps.absent)}
-          accent={TILE[0]}
+          {...countAccent(gaps.absent, TILE[0])}
           emphasis={gaps.absent > 0}
           note="Answered by a rival, with this client named on no engine."
         />
         <StatTile
           label="Partly held"
           value={String(gaps.partial)}
-          accent={TILE[1]}
+          {...countAccent(gaps.partial, TILE[1])}
           note="Named by some engines and not others."
         />
         <StatTile
           label="Named, not cited"
           value={gaps.subjectCitable ? String(gaps.uncited) : '—'}
-          accent={TILE[2]}
+          /*
+            Two different zeros, and only one of them dims.
+            
+            When `subjectCitable` is false this shows an em dash: the refusal to
+            claim a number is itself the finding, so it keeps its accent. When
+            the domain IS citable and the count is genuinely 0, that is a
+            measured empty and dims like any other — filing "we cannot measure
+            this" alongside "we measured this and it was zero" is the exact
+            conflation the rest of this screen exists to prevent.
+          */
+          {...(gaps.subjectCitable
+            ? countAccent(gaps.uncited, TILE[2])
+            : { accent: TILE[2] })}
           // The limit, stated on the tile rather than left to be inferred from
           // a zero that would otherwise read as "no citation gaps".
           note={

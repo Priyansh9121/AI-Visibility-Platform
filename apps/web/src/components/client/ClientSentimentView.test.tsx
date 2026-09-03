@@ -56,6 +56,36 @@ describe('the tab exists and says whose space it is', () => {
   });
 });
 
+describe('one scan is a first reading, and says so — design review 2026-09-02', () => {
+  it('names the n of 1 rather than leaving the chart looking broken', () => {
+    // At one scan the tide is three wide bars against a single x-tick. The
+    // review's read was that it looks like the chart is malfunctioning rather
+    // than correctly reporting that this is all the data there is.
+    const html = render(oneScanTonedHistory);
+    expect(html).toContain('One scan so far');
+    expect(html).toContain('once a second scan runs');
+  });
+
+  it('does not say it once there IS a trend', () => {
+    expect(render(threeScanHistory)).not.toContain('One scan so far');
+  });
+
+  it('still draws the tide — the note explains it, it does not replace it', () => {
+    // `hasSentiment` argues correctly that one scan IS a readable tide. That
+    // reasoning is not reverted here; the fix is copy, not a redesign.
+    const html = render(oneScanTonedHistory);
+    expect(html).toContain('avp-tide__svg');
+    expect(html).not.toContain('Nothing measured yet');
+  });
+
+  it('is distinct from the empty state, which answers a different question', () => {
+    // Zero scans is an absence of data; one scan is data with no trend yet.
+    const empty = render(noScanHistory);
+    expect(empty).not.toContain('One scan so far');
+    expect(empty).toContain('Nothing measured yet');
+  });
+});
+
 describe('“named no one” is never a neutral', () => {
   it('counts it as its own figure and says what it means', () => {
     const html = render(threeScanHistory);

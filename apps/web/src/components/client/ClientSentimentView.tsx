@@ -107,6 +107,30 @@ function SentimentBody({ history }: { history: ClientHistory }): JSX.Element {
           so a column mostly under the line is bad news before you read a
           number. Sentiment is 15% of the composite score.
         </p>
+        {/*
+          THE FIRST-READING NOTE — copy, not a redesign.
+
+          At one scan the tide is three wide bars against a single x-tick, and
+          the design review's read was that it looks like the chart is
+          malfunctioning rather than correctly reporting that this is all the
+          data there is. `hasSentiment`'s own argument stands and is not
+          reverted: one scan IS a readable tide, and the honest fix is telling
+          the reader what they are looking at.
+
+          So nothing about the chart's rendering changes — no forced narrower
+          bars, no fake second column. Disguising an n of 1 would be the
+          dishonest version of this fix.
+
+          Distinct from `NoToneYet`, which handles zero scans or zero named
+          answers. Those are an absence of data; this is data with no trend
+          yet, and the two need different words.
+        */}
+        {points.length === 1 && (
+          <p className="max-w-measure text-ui-sm leading-prose text-text-tertiary">
+            One scan so far, so this is a first reading rather than a trend.
+            Tone will show as a direction once a second scan runs.
+          </p>
+        )}
       </div>
 
       <div className="grid items-start gap-8 lg:grid-cols-[auto_minmax(16rem,1fr)]">
