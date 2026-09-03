@@ -36,6 +36,11 @@ export interface LocalNavItemProps {
  *
  * **No disabled variant, same as `NavItem`.** An item either goes somewhere
  * real or is not in the nav.
+ *
+ * Rendered as an `<li>`, because every item now sits inside a
+ * `LocalNavGroup`'s `<ul>` — the grouping is real structure a screen reader
+ * can report ("Measurement, list, 6 items"), not a heading that happens to sit
+ * above some links.
  */
 export function LocalNavItem({
   href,
@@ -46,6 +51,7 @@ export function LocalNavItem({
 }: LocalNavItemProps): JSX.Element {
   const key = accent == null ? null : benchAccent(accent).key;
   return (
+    <li className="avp-localnav__slot">
     <a
       href={href}
       aria-current={current ? 'page' : undefined}
@@ -66,6 +72,66 @@ export function LocalNavItem({
         </span>
       )}
     </a>
+    </li>
+  );
+}
+
+export interface LocalNavGroupProps {
+  /** The cluster's name. Short — it is a label, not a description. */
+  label: string;
+  children: ReactNode;
+  className?: string;
+}
+
+/**
+ * A labelled cluster of destinations inside a `LocalNav`.
+ *
+ * WHY THE NAV GROWS GROUPS RATHER THAN MORE HUES
+ * ----------------------------------------------
+ * The `bench-*` layer holds seven accents and no more: the 30-degree meaning
+ * buffer and the sRGB gamut at the shared chroma table together leave one
+ * usable arc, 256.5 to 355 degrees, and seven fill it (see `BENCH_ACCENTS`).
+ * A client's space is heading for ten sections, so a flat strip would have run
+ * out — and the ways out of that without groups all cost something real:
+ * shrinking the buffer lets a chip be misread as a score or a system state,
+ * and letting chroma vary makes one accent read as more important than another.
+ *
+ * Grouping costs neither. **A hue only has to be told apart from the others in
+ * its OWN cluster**, so each cluster restarts at the first accent and a cluster
+ * of five never approaches the ceiling.
+ *
+ * **This is not a new idea in this product — it is an existing one written
+ * down.** `WorkspaceShell`'s sidebar and `ClientSpace`'s strip are on screen
+ * together and have shared hues 0-3 since Epic 9.24: Dashboard and Overview
+ * are both cobalt, Clients and Rankings are both violet. Nobody has read that
+ * as a collision, because the two navs are different places doing different
+ * jobs. A hue was already scoped to its nav rather than to the product; this
+ * scopes it one level further, to its cluster.
+ *
+ * **The cost, stated plainly:** two items in the SAME strip can now share a
+ * hue, separated by a group label rather than by being in a different region
+ * of the screen. That is weaker separation than the sidebar/strip precedent,
+ * and it is the deliberate trade — repetition across clusters is the mechanism
+ * that buys the seats. Partitioning the arc between clusters instead would
+ * keep every hue unique and buy nothing at all.
+ *
+ * Renders a `<ul>` with an accessible name, so the grouping is structure rather
+ * than a heading that happens to sit above some links.
+ */
+export function LocalNavGroup({
+  label,
+  children,
+  className,
+}: LocalNavGroupProps): JSX.Element {
+  return (
+    <div className={cn('avp-localnav__group', className)}>
+      <span className="avp-localnav__grouplabel" aria-hidden="true">
+        {label}
+      </span>
+      <ul className="avp-localnav__grouplist" aria-label={label}>
+        {children}
+      </ul>
+    </div>
   );
 }
 

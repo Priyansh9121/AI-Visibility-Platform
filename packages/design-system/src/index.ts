@@ -133,8 +133,10 @@ export {
 export {
   LocalNav,
   LocalNavItem,
+  LocalNavGroup,
   type LocalNavProps,
   type LocalNavItemProps,
+  type LocalNavGroupProps,
 } from './components/shell/LocalNav.js';
 
 export { LoadingState, type LoadingStateProps } from './components/state/LoadingState.js';

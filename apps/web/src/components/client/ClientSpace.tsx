@@ -52,39 +52,24 @@
  * -------------------
  * Each section carries a fixed index into the Working-screen accent layer, and
  * the indices are written by name for the reason `WorkspaceShell`'s are: they
- * are identity, not position. Report is deliberately UNACCENTED — it is the one
- * item here that leaves for a Presenting-context document, and giving it a
- * Working hue would imply it belongs to the same set as the four that stay.
+ * are identity, not position.
+ *
+ * What Epic B.1 changed is the SCOPE. Epic B filled the seventh and last seat
+ * in the layer, and this space is heading for ten sections, so the strip is
+ * now CLUSTERED and an accent is cluster-relative — each cluster restarts at
+ * 0. The whole table lives in `clientNav.ts`, which is where the reasoning and
+ * the tests for it are. Report is deliberately UNACCENTED: it is the one item
+ * that leaves for a Presenting-context document, and a Working hue would imply
+ * it belongs to the same set as the sections that stay.
  */
 
 import type { JSX, ReactNode } from 'react';
-import { LocalNav, LocalNavItem } from '@avp/design-system';
+import { LocalNav, LocalNavGroup, LocalNavItem } from '@avp/design-system';
 import type { Client, Me } from '@avp/shared-types';
 import { WorkspaceShell } from '@/components/shell/WorkspaceShell';
+import { CLIENT_NAV, type ClientSection } from '@/components/client/clientNav';
 
-export type ClientSection =
-  | 'overview'
-  | 'sources'
-  | 'rankings'
-  | 'gaps'
-  | 'technical'
-  | 'prompts'
-  | 'sentiment';
-
-/** Fixed by name, so reordering the strip does not repaint it. */
-const ACCENT: Record<ClientSection, number> = {
-  overview: 0,
-  sources: 1,
-  rankings: 2,
-  technical: 3,
-  prompts: 4,
-  sentiment: 5,
-  // Epic B. Index 6 is `crimson`, the seventh and LAST accent the bench layer
-  // can hold — see BENCH_ACCENTS for why the arc has no eighth seat. Without
-  // it this item would have wrapped `benchAccent` back to 0 and worn
-  // Overview's hue in the same strip.
-  gaps: 6,
-};
+export type { ClientSection };
 
 export function ClientSpace({
   client,
@@ -131,55 +116,37 @@ export function ClientSpace({
           back={{ href: '/clients', label: 'All clients' }}
           meta={meta}
         >
-          <LocalNavItem
-            href={base}
-            label="Overview"
-            current={current === 'overview'}
-            accent={ACCENT.overview}
-          />
-          {latestReportScanId != null && (
-            <LocalNavItem
-              href={`/scans/${latestReportScanId}/report`}
-              label="Report"
-              external
-            />
-          )}
-          <LocalNavItem
-            href={`${base}/sources`}
-            label="Sources"
-            current={current === 'sources'}
-            accent={ACCENT.sources}
-          />
-          <LocalNavItem
-            href={`${base}/rankings`}
-            label="Rankings"
-            current={current === 'rankings'}
-            accent={ACCENT.rankings}
-          />
-          <LocalNavItem
-            href={`${base}/gaps`}
-            label="Answer gaps"
-            current={current === 'gaps'}
-            accent={ACCENT.gaps}
-          />
-          <LocalNavItem
-            href={`${base}/technical`}
-            label="Technical"
-            current={current === 'technical'}
-            accent={ACCENT.technical}
-          />
-          <LocalNavItem
-            href={`${base}/prompts`}
-            label="Prompts"
-            current={current === 'prompts'}
-            accent={ACCENT.prompts}
-          />
-          <LocalNavItem
-            href={`${base}/sentiment`}
-            label="Sentiment"
-            current={current === 'sentiment'}
-            accent={ACCENT.sentiment}
-          />
+          {CLIENT_NAV.map((cluster) => (
+            <LocalNavGroup key={cluster.key} label={cluster.label}>
+              {cluster.items.map((item) => {
+                /*
+                 * The Report resolves to a SCAN, not to a path under the
+                 * client, and when there is no scan it is not rendered at all
+                 * rather than rendered dead — `NavItem`'s rule, which has held
+                 * here since Epic 9.20.
+                 */
+                if (item.section === null) {
+                  return latestReportScanId == null ? null : (
+                    <LocalNavItem
+                      key="report"
+                      href={`/scans/${latestReportScanId}/report`}
+                      label={item.label}
+                      external
+                    />
+                  );
+                }
+                return (
+                  <LocalNavItem
+                    key={item.section}
+                    href={`${base}${item.path ?? ''}`}
+                    label={item.label}
+                    current={current === item.section}
+                    {...(item.accent != null ? { accent: item.accent } : {})}
+                  />
+                );
+              })}
+            </LocalNavGroup>
+          ))}
         </LocalNav>
         {figures}
         {children}

@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ClientAnswerGapsView, type AnswerGapsState } from './ClientAnswerGapsView';
+import { accentFor } from './clientNav';
 import type { ClientDetailState } from './ClientDetailView';
 import type { Client, ClientHistory } from '@avp/shared-types';
 import { clientsMe, identifiedClient } from '@/lib/clients/__fixtures__/clients';
@@ -49,15 +50,42 @@ describe('the tab exists and says whose space it is', () => {
     expect(html).toContain('aria-current="page"');
   });
 
-  it('carries the seventh bench accent rather than wrapping to the first', () => {
-    // Seven client sections, seven hues. Before Epic B `benchAccent` cycled at
-    // six, so this item would have worn Overview's cobalt in the same strip.
+  it('wears the hue its own nav item wears', () => {
+    // Asserted against the nav table rather than against a hue literal. The
+    // literal was `--avp-bench-7-600` for exactly as long as accents were
+    // global; Epic B.1 made them cluster-relative and this became cobalt. A
+    // test pinned to the number would have had to be rewritten to stay green
+    // and would have proved nothing either time — what must hold is that the
+    // screen's figures and its nav item agree.
     const html = render(withData(gapHeavy));
-    expect(html).toContain('--avp-bench-7-600');
+    const accent = accentFor('gaps');
+    expect(accent).not.toBeNull();
+    expect(html).toContain(`--avp-bench-${accent! + 1}-600`);
   });
 
+  it('gives every accented tile a different hue', () => {
+    /*
+     * The regression this exists for reached a browser screenshot. The tiles
+     * carried literal accents (6, 0, 2), which only held while the screen's
+     * own accent happened to be 6; Epic B.1 moved it to 0 and two tiles in one
+     * row became the same blue. Asserted as a PROPERTY, so it holds wherever
+     * the nav table puts this screen next.
+     */
+    const html = render(withData(gapHeavy));
+    const hues = [...html.matchAll(/--avp-tile-accent:\s*var\(--avp-bench-(\d)-600\)/g)].map(
+      (m) => m[1],
+    );
+    expect(hues.length).toBeGreaterThanOrEqual(3);
+    expect(new Set(hues).size).toBe(hues.length);
+  });
 
-
+  it('sits in the Investigation cluster, under its label', () => {
+    const html = render(withData(gapHeavy));
+    expect(html).toContain('Investigation');
+    // The cluster is a real list, not a heading that happens to sit above
+    // some links — so a screen reader reports the grouping.
+    expect(html).toMatch(/<ul[^>]*aria-label="Investigation"/);
+  });
 });
 
 describe('a prompt nobody answered with a brand is not a gap', () => {

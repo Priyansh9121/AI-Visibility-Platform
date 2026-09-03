@@ -590,6 +590,61 @@ the active one, and there is no disabled variant.
 Report uses it: it is a real path into `/scans/{id}/report`, the document that
 already exists, rather than a second copy rendered inside the record frame.
 
+### `LocalNavGroup` — clusters, Epic B.1
+
+The strip is now **clustered**, and every item lives in a group:
+
+```tsx
+<LocalNav title={…}>
+  <LocalNavGroup label="Measurement">
+    <LocalNavItem … accent={0} />
+  </LocalNavGroup>
+  <LocalNavGroup label="Investigation">
+    <LocalNavItem … accent={0} />   {/* restarts — see §6 */}
+  </LocalNavGroup>
+</LocalNav>
+```
+
+**Why groups rather than more hues** is §6's argument: the bench arc holds seven
+accents and a client's space is heading for ten sections, and grouping is the
+only way out that costs nothing the palette was built to guarantee. An accent
+is therefore **cluster-relative** — each cluster restarts at 0.
+
+**The clusters are `Measurement` and `Investigation`**, and membership follows
+the data model rather than shipping order. Sentiment is Measurement: its labels
+have been stored since Epic 4 and it is 15% of the composite, which makes it a
+measured dimension, not a derivation. Crawler activity will join it for the same
+reason — a second data *source*, not an analysis of the first. Investigation
+holds what an operator does with the record: Answer gaps derives over measured
+rows, Prompts creates new ones.
+
+**Structure, not decoration.** A group renders a `<ul>` with an accessible name
+and each item is an `<li>`, so a screen reader reports "Measurement, list, 6
+items" rather than encountering ten undifferentiated links. The label is
+quieter than the items it names — it is a wayfinding aid, not a destination.
+
+**The `<li>` is a plain flex item, never `display: contents`.** That property
+would remove its box and let the `<a>` be the flex child directly, which is
+tidier CSS and a real hazard: several browsers have shipped bugs where it
+strips `<li>` from the accessibility tree, taking the list semantics this
+grouping exists to provide with it. Epic 9.16 refused the same property on
+`.avp-reveal-group` for a related reason.
+
+**Clusters are separated by space before they are separated by label** —
+`--avp-space-6` between groups against `--avp-space-1` between items. A
+grouping that only reads once you have read its labels is not doing the work.
+Measured across viewports: the strip is one row at 1440px and stacks cleanly at
+420px, where the labels earn their place most.
+
+The table lives in `apps/web/src/components/client/clientNav.ts` as data rather
+than JSX, which is what makes `clientNav.test.ts` able to assert that no cluster
+repeats an accent, none outgrows the layer, and the roadmap's three remaining
+sections still fit. Ten `accent={…}` props scattered through markup have
+nowhere to be checked — which is how Epic B's crimson/magenta collision reached
+a live browser.
+
+---
+
 ## 6. Components
 
 | Component | Notes |
@@ -842,6 +897,38 @@ shipped in Epic 9.22 and survived a review and a screenshot pass.
 actual scale.
 
 ---
+
+**Resolved by Epic B.1: the nav grew groups, not the layer.** Three options were
+weighed — relax the buffer, let chroma vary, or cluster the nav — and only the
+third costs nothing real. Shrinking the buffer lets a chip be misread as a
+score or a system state; varying chroma makes one accent read as more important
+than another, which is the property this table exists to guarantee. Clustering
+touches neither: **a hue only has to be told apart from the others in its own
+cluster**, so each cluster restarts at accent 0 and none approaches seven.
+
+That is not a new idea in this product, it is an existing one written down.
+`WorkspaceShell`'s sidebar and `ClientSpace`'s strip are on screen together and
+have shared hues 0–3 since Epic 9.24 — Dashboard and Overview are both cobalt,
+Clients and Rankings both violet — and nobody has read it as a collision,
+because the two navs are different places doing different jobs. A hue was
+already scoped to its nav; B.1 scopes it one level further, to its cluster.
+
+**The cost, stated plainly:** two items in the SAME strip can now share a hue,
+separated by a group label rather than by sitting in a different region of the
+screen. That is weaker separation than the sidebar/strip precedent, and it is
+the deliberate trade — repetition across clusters is the mechanism that buys
+the seats. Partitioning the arc between clusters instead would keep every hue
+unique and buy nothing at all.
+
+See `LocalNavGroup` in §5e and `apps/web/src/components/client/clientNav.ts`,
+where the cluster table and its invariants live.
+
+**The pressure is already visible.** Epic B's first draft put four stat tiles
+at accents 6 (crimson 355), 0, 2 and 4 (magenta 326). Twenty-nine degrees apart
+at the same lightness and chroma, in two small chips at opposite ends of a row,
+crimson and magenta read as the same pink — and on a client where both figures
+were `0` the tiles were indistinguishable. The fix was to unaccent the tile
+that is not a finding, which was the more correct answer anyway.
 
 ## 7. SentimentTide — tone, as a diverging tide. Epic A.
 
