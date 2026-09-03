@@ -12,6 +12,7 @@ from .action_item import (
     Effort,
     Priority,
 )
+from .alert import Alert, AlertKind
 from .base import Base
 from .client import ClassificationStatus, Client, ClientKind
 from .competitor import (
@@ -65,6 +66,8 @@ __all__ = [
     "DetectionSource",
     "DetectionStatus",
     "Effort",
+    "Alert",
+    "AlertKind",
     "Engine",
     "EngineResult",
     "EngineResultStatus",

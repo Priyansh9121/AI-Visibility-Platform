@@ -23,10 +23,17 @@ import {
 } from '@avp/design-system';
 import type { BadgeTone, Column, ScoreAbsence, TrendSeriesInput } from '@avp/design-system';
 import { seriesStyle } from '@avp/design-system';
-import type { Client, ClientHistory, HistoryScan, Me } from '@avp/shared-types';
+import type {
+  AlertFeed,
+  Client,
+  ClientHistory,
+  HistoryScan,
+  Me,
+} from '@avp/shared-types';
 import { ClientSpace, type ClientSection } from '@/components/client/ClientSpace';
 import { formatStamp } from '@/lib/dates';
 import {
+  alertAnnotations,
   hasTrend,
   intermittentRivals,
   rankingSeries,
@@ -255,9 +262,16 @@ export function ClientOverviewView({
 export function ClientSourcesView({
   state,
   me,
+  alerts,
 }: {
   state: ClientDetailState;
   me: Me | null;
+  /**
+   * Alerts for this client, so a scan that produced one is marked on the
+   * trend — Epic E. Optional: the chart is complete without it, and a failed
+   * alert request must not cost the trend.
+   */
+  alerts?: AlertFeed | null;
 }): JSX.Element {
   return (
     <Frame state={state} me={me} current="sources">
@@ -278,6 +292,7 @@ export function ClientSourcesView({
                   unit=""
                   height={340}
                   title="Citations per domain"
+                  annotations={alertAnnotations(alerts ?? null)}
                   /*
                     THE PER-CONTEXT PALETTE — Epic 9.24.
 
@@ -314,9 +329,16 @@ export function ClientSourcesView({
 export function ClientRankingsView({
   state,
   me,
+  alerts,
 }: {
   state: ClientDetailState;
   me: Me | null;
+  /**
+   * Alerts for this client, so a scan that produced one is marked on the
+   * trend — Epic E. Optional: the chart is complete without it, and a failed
+   * alert request must not cost the trend.
+   */
+  alerts?: AlertFeed | null;
 }): JSX.Element {
   return (
     <Frame state={state} me={me} current="rankings">
@@ -339,6 +361,7 @@ export function ClientRankingsView({
                   yMax={100}
                   height={340}
                   title="Share of voice"
+                  annotations={alertAnnotations(alerts ?? null)}
                   /*
                     THE PER-CONTEXT PALETTE — Epic 9.24.
 

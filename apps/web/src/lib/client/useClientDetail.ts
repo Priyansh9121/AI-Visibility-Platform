@@ -10,16 +10,32 @@
  */
 
 import { useEffect, useState } from 'react';
-import type { Client, ClientHistory, Me } from '@avp/shared-types';
+import type { AlertFeed, Client, ClientHistory, Me } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
 import type { ClientDetailState } from '@/components/client/ClientDetailView';
 
 export function useClientDetail(clientId: string): {
   state: ClientDetailState;
   me: Me | null;
+  /**
+   * This client's alerts — Epic E.
+   *
+   * Returned ALONGSIDE `state` rather than folded into it, so the four screens
+   * that do not care about alerts are untouched and `ClientDetailState` keeps
+   * meaning "the client and its history". The trends use it to annotate; the
+   * Alerts tab fetches its own, because it needs the feed even when the client
+   * record fails to load.
+   *
+   * `null` while loading AND on failure, deliberately. An annotation is an
+   * enhancement to a chart that is already correct without it — a trend that
+   * refused to draw because a secondary request failed would be a worse screen
+   * than one drawn without markers.
+   */
+  alerts: AlertFeed | null;
 } {
   const [state, setState] = useState<ClientDetailState>({ kind: 'loading' });
   const [me, setMe] = useState<Me | null>(null);
+  const [alerts, setAlerts] = useState<AlertFeed | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -32,6 +48,19 @@ export function useClientDetail(clientId: string): {
         ]);
         if (cancelled) return;
         setMe(identity);
+        /*
+         * Alerts are fetched SEPARATELY and their failure is swallowed.
+         *
+         * They annotate charts that are complete without them, so putting this
+         * in the `Promise.all` above would let a failed alert request blank the
+         * whole client screen — trading a missing marker for a missing page.
+         */
+        void api
+          .clientAlerts(clientId)
+          .then((feed) => {
+            if (!cancelled) setAlerts(feed as AlertFeed);
+          })
+          .catch(() => undefined);
         setState({
           kind: 'ready',
           client: client as Client,
@@ -63,5 +92,5 @@ export function useClientDetail(clientId: string): {
     };
   }, [clientId]);
 
-  return { state, me };
+  return { state, me, alerts };
 }

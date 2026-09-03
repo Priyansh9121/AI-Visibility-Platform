@@ -319,6 +319,21 @@ describe('tailwind preset exposes the tokens it claims to', () => {
       /transition:[^;]*--avp-duration-state/,
     );
 
+    // Epic E. The alert row's opacity transition serves BOTH the settling of
+    // an acknowledged row and the hover that lifts it back — and the hover is
+    // the frequent trigger, so it takes the hover tier. The mirror image of
+    // the GapGrid finding above.
+    expect(ruleFor('.avp-alert')).toMatch(/transition:[^;]*--avp-duration-hover/);
+    // And it transitions ONLY opacity: `border-color` was in the list while
+    // the acknowledged state set the value `.avp-card` already had, so that
+    // half animated nothing. Asserted on the DECLARATION, not the rule body —
+    // the body also carries the comment explaining the removal.
+    const alertTransition = ruleFor('.avp-alert').match(/transition:[^;]*/)![0];
+    expect(alertTransition).not.toMatch(/border-color/);
+    expect(alertTransition).toMatch(/opacity/);
+    expect(ruleFor('.avp-alert__failure')).toMatch(
+      /transition:[^;]*--avp-duration-state/,
+    );
 
     // The live dot is a LOOP, which nothing else in this system is, so its
     // period is derived from the reveal rather than being a fourth number.
@@ -691,5 +706,34 @@ describe('seriesStyle is where the two contexts diverge', () => {
         expect(ramp).not.toContain(seriesStyle('competitor', i, palette).fill);
       }
     }
+  });
+});
+
+/*
+ * Epic E. `.avp-alert` and `.avp-alert.is-acknowledged` were class names on a
+ * component before they were rules in this stylesheet — they rendered fine and
+ * styled nothing, which is the silent no-op the `var()` guard above exists for
+ * in its other form. Found by a craft review rather than by a test, so this is
+ * the test.
+ */
+describe('an acknowledged alert row looks settled', () => {
+  const components = readFileSync(
+    fileURLToPath(new URL('../styles/components.css', import.meta.url)),
+    'utf8',
+  );
+
+  it('defines the classes the alert feed actually uses', () => {
+    expect(components).toMatch(/\.avp-alert\s*\{/);
+    expect(components).toMatch(/\.avp-alert\.is-acknowledged\s*\{/);
+  });
+
+  it('recedes by opacity rather than by greying its words', () => {
+    // Every word in the row is still true after somebody has read it. Greying
+    // the text would say the finding had expired rather than been seen.
+    const rule = components.match(/\.avp-alert\.is-acknowledged\s*\{([^}]*)\}/);
+    expect(rule).not.toBeNull();
+    expect(rule![1]).toMatch(/opacity/);
+    // `[^-]` so `border-color` does not count as recolouring the text.
+    expect(rule![1]).not.toMatch(/[^-]color:/);
   });
 });

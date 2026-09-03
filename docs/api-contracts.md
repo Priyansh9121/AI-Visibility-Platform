@@ -2013,6 +2013,93 @@ grouped in the database and returns at most a few hundred rows.
 text (Epic 4 generated it). `test_answer_gaps.py::TestIpSafety` asserts the
 response echoes no phrase from an engine answer.
 
+### `GET /api/v1/clients/{clientId}/alerts` — Epic E
+
+What changed between a scan and the scan it was compared against, newest first.
+**Newest first**, unlike `/history` — that is a trend and reads from its
+earliest point; this is a log, and the entry an operator wants is the most
+recent. `/prompt-runs` orders itself the same way.
+
+**Reads only.** Alerts are generated once at the end of a scan (phase 7b of the
+chain, after scoring) and never recomputed on read: an alert that re-derived on
+every request could appear and disappear between two page loads of the same
+data, and an acknowledgement would have nothing stable to attach to.
+
+```jsonc
+{
+  "clientId": "clnt_01…",
+  "alerts": [{
+    "id": "alrt_01…", "kind": "sentiment_decline",
+    "detail": "Net tone fell 60%, from +10 to +4.",
+    "engine": "claude_search",
+    "scanId": "scan_02", "baselineScanId": "scan_01",
+    "scannedAt": "2026-08-31T02:39:36Z", "baselineScannedAt": "2026-08-29T04:55:26Z",
+    "createdAt": "2026-09-02T08:34:31Z", "acknowledgedAt": null
+  }],
+  "unacknowledged": 3,
+  "scansTotal": 2, "scansCompared": 1, "minBaselineHours": 20
+}
+```
+
+**The baseline is not "the previous scan", and this is the epic's correction.**
+An alert compares against the most recent scan at least `minBaselineHours`
+older. Measured on the real `avp_dev` rows, comparing adjacent scans would have
+been wrong: of three consecutive-scan pairs, **two are re-runs 43 minutes and
+2h11m apart** and only one spans a real interval. On those re-runs, with nothing
+having happened, the composite moved −0.93 and +0.68, net tone moved up to 6
+points, and competitor citations swung by 26. Adjacent-scan comparison reports
+engine nondeterminism as a business event — most often for the operator who
+re-runs a scan to check something.
+
+**`scansTotal` / `scansCompared` are returned because an empty feed is
+ambiguous.** Most clients have one scan and can therefore never produce an
+alert; nine of eleven in `avp_dev` are in exactly that state. Reporting "0
+alerts" alone would read as an all-clear the data cannot support.
+
+**`scannedAt` is `COALESCE(finished_at, created_at)` — the same expression
+`HistoryScanOut.scanned_at` uses, and it must be identical.** The trend charts
+annotate a point by matching this against the point's `stamp`, and that stamp IS
+the history's `scanned_at`. The first draft selected `created_at`; the two
+differed by the scan's duration, no key ever matched, and every marker silently
+failed to draw. Guarded by a test that reads both endpoints, because the defect
+lives in the gap between them.
+
+**Two of the three kinds are not what the brief asked for**, and the enum names
+say so:
+
+* `sentiment_decline`, not `sentiment_negative`. "Net tone crossing to negative"
+  fires **zero times** across every scan on record — the minimum net tone ever
+  measured is **+4**. It would also have said nothing about the clearest tone
+  event in the data: Notion's net falling 13→6, 12→5 and 10→4 across all three
+  engines at once. The rule is a relative decline, with a sign change retained
+  as an additional trigger for when it eventually happens.
+* `owned_citation_lost`, not "a rival took the citation". That is **structurally
+  impossible**: `classify_citation` returns `cites_subject` as
+  `domain == subject_domain`, a pure function of the domain string, so a source
+  the client owned in one scan is its own in every scan. Confirmed in the data —
+  no domain in any client's history carries two different `cites_subject`
+  values. What is measurable is the client's own domain going from cited to
+  uncited.
+
+**Thresholds are set from measured re-run variance**, and `test_alerts.py`
+asserts them as relationships rather than literals — so raising one forces the
+argument to be made again, the way Epic 9.24's prompt-run throttle does. The
+sample behind them is two re-run pairs and one real interval: enough to show the
+re-run problem is real, nowhere near a variance estimate.
+
+### `POST /api/v1/alerts/{alertId}/acknowledge` — Epic E
+
+Marks an alert as seen. **Idempotent** — acknowledging twice returns the
+original timestamp rather than moving it, so a double click cannot rewrite when
+somebody first looked.
+
+**No un-acknowledge, deliberately.** Dismissing is a record that a person
+looked, and a log an operator can quietly un-read is not a log.
+
+Scoped by the denormalised `agency_id` on the row — one predicate, no join —
+and 404s rather than 403s on another agency's id, like every other
+agency-scoped route here.
+
 ## Planned, not yet built
 
 Recorded so the shape is agreed before it is implemented.

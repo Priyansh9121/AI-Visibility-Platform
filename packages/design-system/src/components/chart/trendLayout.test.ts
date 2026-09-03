@@ -201,3 +201,38 @@ describe('truncateLabel', () => {
     expect(truncateLabel('x'.repeat(40)) === 'x'.repeat(40)).toBe(false);
   });
 });
+
+describe('TrendChart annotations use the layout that already exists — Epic E', () => {
+  it('exposes an x position per point, which is all an axis marker needs', () => {
+    // The reason no extension point was added to this module for annotations:
+    // `columns` already is one. A marker is a rendering concern on top of the
+    // layout, not a second thing the layout has to know about.
+    const layout = layoutTrend(
+      [
+        { label: '29 Aug', stamp: '2026-08-29T00:00:00.000Z' },
+        { label: '31 Aug', stamp: '2026-08-31T00:00:00.000Z' },
+      ],
+      [{ key: 'a', label: 'A', values: [1, 2] }],
+    );
+    expect(layout.columns).toHaveLength(layout.points.length);
+    for (const x of layout.columns) {
+      expect(x).toBeGreaterThanOrEqual(layout.plot.x);
+      expect(x).toBeLessThanOrEqual(layout.plot.x + layout.plot.width);
+    }
+  });
+
+  it('keeps stamps unique, so an annotation key cannot be ambiguous', () => {
+    // Annotations are keyed by stamp rather than by index precisely so they
+    // survive a series changing length. That only holds if stamps are unique.
+    const layout = layoutTrend(
+      [
+        { label: 'a', stamp: '2026-08-29T00:00:00.000Z' },
+        { label: 'b', stamp: '2026-08-30T00:00:00.000Z' },
+        { label: 'c', stamp: '2026-08-31T00:00:00.000Z' },
+      ],
+      [{ key: 'a', label: 'A', values: [1, 2, 3] }],
+    );
+    const stamps = layout.points.map((p) => p.stamp);
+    expect(new Set(stamps).size).toBe(stamps.length);
+  });
+});

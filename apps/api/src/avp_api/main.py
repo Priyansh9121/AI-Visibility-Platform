@@ -17,6 +17,7 @@ from .redis_client import close_redis
 from .routers import (
     action_items,
     agencies,
+    alerts,
     audits,
     auth,
     billing,
@@ -106,6 +107,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(report.router, prefix=base)
     app.include_router(dashboard.router, prefix=base)
     app.include_router(prompt_runs.router, prefix=base)
+    app.include_router(alerts.router, prefix=base)
 
     # Session cookies are only sent cross-origin when the origin is named
     # explicitly and credentials are allowed; a wildcard is rejected by

@@ -10046,3 +10046,224 @@ anywhere in this pass (constraint 7).
 **Open for Epic E:** Alerts adds a section to Investigation at accent 2, and
 Crawler activity adds one to Measurement at accent 5. Both seats are free and
 `clientNav.test.ts` already asserts they fit.
+
+---
+
+# Epic E — Alerts, and three rules that fired zero times as written
+
+**2026-09-02.** Fifth epic of the analysis roadmap.
+
+## HEAD was not where the brief said it was
+
+The brief opened "confirm HEAD is at Epic B.1 and the tree is clean". It is at
+Epic A — **B and B.1 were never committed**, and are 33 files in the working
+tree. Flagged at the end of both epics and never actioned, so this is expected,
+but the work below builds on the tree rather than on HEAD.
+
+## Every alert kind needed correcting, and the data said so before any code
+
+Epic A's brief assumed stored answer text; Epic B's assumed recurring prompts.
+Both were wrong and both were caught by measuring first. Three for three now.
+
+### 1. "Consecutive scans" is not a time series
+
+Every alert kind compares two scans. The database holds **three consecutive
+pairs in total**, and two of them are re-runs:
+
+```
+Plausible   11:32 → 13:43 → 14:27    gaps of 2h11m and 43m, one afternoon
+Notion      Aug 29 → Aug 31          1d 21h — the only real interval
+```
+
+On those re-runs, with nothing whatsoever having happened, the composite moved
+**−0.93 and +0.68**, net tone moved as much as **6 points**, and competitor
+citation counts swung by **26**. An alert comparing a scan with whatever ran
+before it reports engine nondeterminism as a business event — reliably, and
+most often for the operator who re-runs a scan to check something.
+
+So a baseline must be at least `MIN_BASELINE_HOURS` older, and a scan without
+one produces nothing. The number is bounded on both sides and both bounds are
+asserted: above the longest observed re-run gap (2h11m), below a daily cadence
+(24h), because a guard raised past 24h would silently stop a daily-scanning
+client ever producing an alert.
+
+### 2. "Sentiment turning negative" fires zero times, ever
+
+Across every engine of every scan on record, **the minimum net tone is +4**:
+
+```
+Notion  Aug 29:  chatgpt +13   claude +12   claude_search +10
+Notion  Aug 31:  chatgpt  +6   claude  +5   claude_search  +4
+```
+
+A rule watching for a sign change would report nothing — including nothing about
+that table, which is a 54–60% collapse across all three engines simultaneously
+and the clearest tone event in the data. `SENTIMENT_DECLINE` measures the
+decline; the sign change is kept as an additional trigger for when it eventually
+happens.
+
+### 3. "A rival taking a citation the client just lost" is impossible
+
+Not rare — impossible. `classify_citation` returns `cites_subject` as
+`domain == subject_domain`, a pure function of the domain string, so a source
+the client owned in one scan is its own in every scan forever. Confirmed against
+the data too: **no domain in any client's history carries two different
+`cites_subject` values.** `OWNED_CITATION_LOST` measures the thing that can
+happen — the client's own domain going from cited to uncited.
+
+## What the corrected logic says about the real database
+
+Run over all twelve scans before any UI existed:
+
+```
+12 scans · 1 had a usable baseline · 3 alerts
+  Notion  sentiment_decline  claude         Net tone fell 58%, from +12 to +5.
+  Notion  sentiment_decline  claude_search  Net tone fell 60%, from +10 to +4.
+  Notion  sentiment_decline  chatgpt        Net tone fell 54%, from +13 to +6.
+```
+
+Both Plausible re-runs produced **nothing** — the guard excluded them, which is
+the whole point. The one genuine interval produced three alerts, all of them
+real.
+
+**Stated plainly rather than buried: this feature is barely exercised by the
+current data.** One client of eleven has ever had a comparable baseline. The
+thresholds are set from two re-run pairs and one real interval — enough to show
+the re-run problem is real, nowhere near a variance estimate. They are asserted
+as RELATIONSHIPS in `test_alerts.py` rather than as literals, so revisiting them
+against a client with a genuine history is a deliberate act rather than a silent
+edit. `visibility_drop` in particular fires on nothing today: Notion's composite
+fell 4.56% against a 5% threshold. That event was not missed — it produced three
+tone alerts — but the near-miss is on the record rather than tuned away, because
+tuning a threshold to fire on your only example is fitting to n=1.
+
+## What shipped
+
+**Backend.** `Alert` model + migration `31524aae82f6`, `services/alerts.py`,
+and phase **7b** of the scan chain — after scoring, because a visibility alert
+reads the STORED composite that phase 7 writes. Ordered before it, every
+visibility alert would compare against `None` and produce nothing, with no error
+and no log line, so the order is asserted rather than trusted.
+
+`GET /clients/{id}/alerts` and `POST /alerts/{id}/acknowledge`. Acknowledgement
+is idempotent and there is no un-acknowledge: dismissing is a record that a
+person looked, and a log an operator can quietly un-read is not a log.
+
+**Frontend.** The Alerts tab took the seat Epic B.1 reserved — Investigation
+cluster, accent 2 — **without touching any hue above it**, which is the property
+the cluster model was built for. `clientNav.test.ts` had already asserted it
+would fit.
+
+**`TrendChart` annotations, with no new extension point.** `trendLayout` already
+exposed `columns`, the x position of every point, which is exactly what an axis
+marker needs. The marker is a triangle under the axis: under, because a mark
+among the lines reads as a data point; a triangle, because every other mark in
+the chart is a dot or a line, so shape carries it without spending a colour.
+
+## An empty feed is two findings, not one
+
+Nine of eleven clients have a single scan and can never produce an alert.
+Reporting "0 alerts" for them would read as an all-clear. The screen separates
+*"Nothing has been checked, which is not the same as nothing being wrong"* from
+*"This is an all-clear, not an absence of data"*, and carries
+`scansCompared / scansTotal` as a tile. Same discipline as Epic B's
+`subjectCitable`, and the third epic running where the honest answer was to
+refuse a claim the data cannot support.
+
+## The three-skill pass, which is now standard — and all three found something
+
+**`emil-design-eng`** (run for the first time, as the brief required) found four:
+
+1. **Acknowledging removed the row instantly** — it dropped out of the filtered
+   list and the rows below jumped under the cursor. With three alerts on one
+   scan that happens twice in a row. The row now stays put, visibly settled, and
+   filters out on the next load. The fix was not to animate the exit but to not
+   have one.
+2. **`.avp-alert` and `.avp-alert.is-acknowledged` were class names on the
+   component and rules nowhere** — they rendered fine and styled nothing, the
+   silent no-op Epic 7.1's stylesheet guard exists for.
+3. **The engine label was the least prominent text in the row** when it is the
+   only thing distinguishing three otherwise identical "Tone declined" entries.
+4. **A failed acknowledgement was swallowed** — the button re-enabled with
+   nothing else changed, which reads as "the click did not register".
+
+**`find-animation-opportunities`** produced one accept and, more usefully, a
+rejection of the brief's own request. The brief asked for "alert entries
+transitioning into the feed rather than popping in"; the entries do not arrive,
+they **are** the page's content at first paint, so animating them is performing
+on every load — which §4/Epic 9.16 excludes and which A and B both already
+refused. It also surfaced two non-motion defects: the acknowledge button was
+narrower than its own "Acknowledging…" label so it grew on click, and a dead
+Tailwind class.
+
+**`improve-animations`** found three more, all the classes prior audits hit: the
+row's opacity transition ran at the state tier while also serving the frequent
+hover trigger (hover tier now — Epic B's token-tier mismatch, mirrored);
+`border-color` was in the transition list while the acknowledged state set the
+value `.avp-card` already carries, so that half animated nothing; and a
+reduced-motion override redundant with `base.css`'s global reset that, unlike
+`GapGrid`'s, guarded no invisible-content risk.
+
+**`review-animations` could not be run**: `disable-model-invocation`, reserved
+for explicit user invocation. Third epic running, flagged rather than worked
+around.
+
+## `text-semantic-danger`, and a guard one axis over
+
+The failure message was written with `text-semantic-danger`. **That utility does
+not exist** — the preset flattens the semantics to top level, so it is
+`text-danger` — and it compiled to nothing, leaving an error message rendering
+in body ink. Visible, but not marked as an error, which is the one thing it had
+to be. It is the exact failure Epic 9.24's off-scale spacing guard was written
+for, on an axis that guard did not cover; `reportIsolation.test.ts` now checks
+colour utilities too. The mistake is the natural one: the TypeScript export is
+`semantic.danger` and the utility is `text-danger`.
+
+## The bug only a browser could find
+
+**Annotation markers: 0.** The feed reported `scannedAt` as `Scan.created_at`
+while `client_history` reports `finished_at or created_at`. The two differ by
+the scan's duration, so no annotation key ever matched a trend point and **every
+marker silently failed to draw** — no error, no log line, and invisible to unit
+tests whose fixtures had matching stamps by construction.
+
+Found by counting `.avp-trend__annotation` nodes in a live browser. Fixed by
+using the identical `COALESCE` expression, and guarded by a test that reads
+BOTH endpoints and asserts every alert's stamp appears among the history's —
+because the defect lives in the gap between them and neither alone can catch it.
+**Negative-controlled**: reintroducing `created_at` fails that test, restoring
+the coalesce passes it.
+
+## Verification
+
+**Driven in a browser against real `avp_dev` data**, not stubs. Notion's feed
+shows its three real tone alerts; acknowledging one leaves `rows 3 → 3`, the
+same rows in the same order, one settled at `opacity 0.6`, the button width
+unchanged at 152px, and the tiles moving 3/0 → 2/1. PSM Digital shows the
+never-compared empty state. Rankings draws 1 annotation marker and 1 `Notes`
+row.
+
+**The Report is unchanged.** `article.avp-report` on `/share/{token}`:
+**byte-identical, 72,750 bytes, SHA-256 `cbb44e55…`** — the same hash as before
+Epic B, now across four rounds of shared-stylesheet edits. The whole page
+matches its own same-commit control at 76,248 bytes once the dev server's nonce
+and RSC render timestamp are normalised.
+
+**IP-safety check passed:** `Alert.detail` is OUR sentence assembled from OUR
+numbers and there is no column on the table capable of holding an engine's
+answer; `test_alerts.py::TestIpSafety` asserts the feed echoes no phrase from a
+stubbed answer (constraint 7). No dependency added (6). The screen imports only
+from `@avp/design-system`, and the one ad hoc utility it did carry was a dead
+class now removed and guarded (2). The alert kinds were derived from this
+product's own scoring dimensions and citation model, not from any competitor's
+alerting feature (1, 5). `test_ip_safety.py` 84 passed.
+
+**Suite: 2,062 tests, up from 2,009.** api 917 (+21), web 667 (+25),
+design-system 412 (+7), shared-types 53, workers 13. `ruff` clean, `tsc` clean
+across all three TypeScript packages. Migration applied and `alembic check`
+reports no drift. Screenshots in `docs/screenshots/epic-e-alerts/`.
+
+**Open for Epic F:** Crawler activity takes Measurement accent 5, the last free
+seat in that cluster; `clientNav.test.ts` asserts it fits. Worth knowing before
+it starts: crawler data is a second measurement stream with no baseline problem
+of this kind, because server logs are continuous rather than sampled.

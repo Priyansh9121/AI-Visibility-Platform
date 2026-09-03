@@ -251,3 +251,42 @@ describe('spacing utilities exist in the preset that replaced Tailwind’s scale
     });
   }
 });
+
+/**
+ * OFF-PALETTE COLOUR UTILITIES — Epic E, the same failure one axis over.
+ *
+ * The spacing guard above was written after two dead `w-*` classes shipped. A
+ * dead COLOUR class fails identically and was not covered: `text-semantic-danger`
+ * was written on the Alerts screen's failure message, compiled to nothing, and
+ * left an error message rendering in body ink — visible, but not marked as an
+ * error, which is the one thing it had to be.
+ *
+ * The preset flattens the semantics to top level (`danger`, not
+ * `semantic.danger`), so the `semantic-` prefix is exactly the mistake a
+ * developer reading `tokens/color.ts` makes: the TS export is `semantic.danger`
+ * and the utility is `text-danger`.
+ */
+describe('colour utilities exist in the preset', () => {
+  /** Prefixes whose suffix is resolved from `theme.colors`. */
+  const COLOUR_PREFIXES = 'text|bg|border|fill|stroke|ring|outline|decoration';
+  // The mistake this catches: reaching for the TypeScript export's shape.
+  const NESTED = new RegExp(`\\b(?:${COLOUR_PREFIXES})-semantic-[a-z]+\\b`, 'g');
+
+  const SURFACES = [
+    'apps/web/src',
+    'packages/design-system/src/components',
+    'packages/design-system/src/styleguide',
+  ];
+
+  for (const surface of SURFACES) {
+    it(`${surface} names no colour the preset does not expose`, () => {
+      const offenders: string[] = [];
+      for (const file of filesUnder(surface)) {
+        for (const [full] of readFileSync(file, 'utf8').matchAll(NESTED)) {
+          offenders.push(`${relative(ROOT, file)}: ${full}`);
+        }
+      }
+      expect([...new Set(offenders)]).toEqual([]);
+    });
+  }
+});
