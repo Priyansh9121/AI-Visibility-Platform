@@ -322,9 +322,9 @@ is too light to hit 4.5:1 on paper. Labels on a ramp fill are `ink-900` or
 > chroma ceiling is 0.128 against the 0.185 the table requires, so an accent
 > there would render clamped and duller than its neighbours, which reads as
 > rank. design-system.md §6 carries the arithmetic. **Alerts, Crawler activity
-> and Prompt discovery will hit this wall**, and the choice then is between
-> relaxing the buffer, letting chroma vary, or grouping the nav — a design
-> decision this epic deliberately does not pre-empt.
+> and Prompt discovery would have hit this wall**, and the choice was between
+> relaxing the buffer, letting chroma vary, or grouping the nav — decided
+> separately in Epic B.1 below, deliberately not inside this epic.
 >
 > **The pressure showed up immediately.** Four stat tiles at crimson 355 and
 > magenta 326 — 29° apart at one lightness and chroma — read as the same pink in
@@ -450,6 +450,7 @@ is too light to hit 4.5:1 on paper. Labels on a ramp fill are `ink-900` or
 > also caught a class name that styled nothing, an engine label styled as the
 > least important text in a row when it is the only discriminator between three
 > otherwise identical entries, and a silently swallowed failure.
+
 
 ### Client vs competitor — a semantic rule, not a palette
 

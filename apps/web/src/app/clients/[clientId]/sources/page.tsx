@@ -12,6 +12,6 @@ export default function ClientSourcesRoute({
   params: Promise<{ clientId: string }>;
 }): JSX.Element {
   const { clientId } = use(params);
-  const { state, me } = useClientDetail(clientId);
-  return <ClientSourcesView state={state} me={me} />;
+  const { state, me, alerts } = useClientDetail(clientId);
+  return <ClientSourcesView state={state} me={me} alerts={alerts} />;
 }

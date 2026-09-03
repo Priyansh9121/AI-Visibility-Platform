@@ -31,6 +31,32 @@
         "title": "AcceptInvitationRequest",
         "type": "object"
       },
+      "AcknowledgeAlertOut": {
+        "description": "The alert after acknowledgement.",
+        "properties": {
+          "acknowledgedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acknowledgedat"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "AcknowledgeAlertOut",
+        "type": "object"
+      },
       "ActionItemListOut": {
         "description": "The scan's fix list, plus what happened the last time it was generated.",
         "properties": {
@@ -237,6 +263,123 @@
           "createdAt"
         ],
         "title": "AgencyOut",
+        "type": "object"
+      },
+      "AlertFeedOut": {
+        "description": "A client's alerts, newest first.",
+        "properties": {
+          "alerts": {
+            "items": {
+              "$ref": "#/components/schemas/AlertOut"
+            },
+            "title": "Alerts",
+            "type": "array"
+          },
+          "clientId": {
+            "title": "Clientid",
+            "type": "string"
+          },
+          "minBaselineHours": {
+            "title": "Minbaselinehours",
+            "type": "integer"
+          },
+          "scansCompared": {
+            "title": "Scanscompared",
+            "type": "integer"
+          },
+          "scansTotal": {
+            "title": "Scanstotal",
+            "type": "integer"
+          },
+          "unacknowledged": {
+            "title": "Unacknowledged",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "clientId",
+          "alerts",
+          "unacknowledged",
+          "scansTotal",
+          "scansCompared",
+          "minBaselineHours"
+        ],
+        "title": "AlertFeedOut",
+        "type": "object"
+      },
+      "AlertOut": {
+        "description": "One detected change, with both scans it sits between.",
+        "properties": {
+          "acknowledgedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acknowledgedat"
+          },
+          "baselineScanId": {
+            "title": "Baselinescanid",
+            "type": "string"
+          },
+          "baselineScannedAt": {
+            "format": "date-time",
+            "title": "Baselinescannedat",
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "engine": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Engine"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "scanId": {
+            "title": "Scanid",
+            "type": "string"
+          },
+          "scannedAt": {
+            "format": "date-time",
+            "title": "Scannedat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "detail",
+          "scanId",
+          "baselineScanId",
+          "scannedAt",
+          "baselineScannedAt",
+          "createdAt"
+        ],
+        "title": "AlertOut",
         "type": "object"
       },
       "AnswerGapBrandOut": {
@@ -4765,6 +4908,49 @@
         ]
       }
     },
+    "/api/v1/alerts/{alertId}/acknowledge": {
+      "post": {
+        "description": "Mark an alert as seen.\n\n**Idempotent**: acknowledging an already-acknowledged alert returns the\noriginal timestamp rather than moving it. An operator double-clicking must\nnot rewrite when they first saw something.\n\nThere is deliberately no un-acknowledge. Dismissing is a record that a\nperson looked, and a log an operator can quietly un-read is not a log.\n\nScoped by `agency_id` on the row itself \u2014 the denormalised column exists so\nthis is one predicate rather than a join through the client.",
+        "operationId": "acknowledge_alert_api_v1_alerts__alertId__acknowledge_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "alertId",
+            "required": true,
+            "schema": {
+              "title": "Alertid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcknowledgeAlertOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Acknowledge Alert",
+        "tags": [
+          "alerts"
+        ]
+      }
+    },
     "/api/v1/auth/change-password": {
       "post": {
         "description": "Change your own password while signed in. **Auth required.**\n\nThe current password is re-verified server-side. A session proves somebody\ngot in once; it does not prove they are still the account holder, and an\nunlocked laptop or a stolen cookie presents a perfectly valid one.\n\nEVERY OTHER SESSION IS REVOKED. THIS ONE IS NOT.\n------------------------------------------------\n**This is not the reset flow's answer copied over.** `reset-password/confirm`\nrevokes everything and leaves the caller signed OUT, because the person\nholding a reset link proved control of an inbox rather than knowledge of a\npassword \u2014 they may be recovering from a compromise, they might not be the\naccount holder at all, and making them sign in once with the new password\nconfirms they hold it.\n\nNeither of those applies here. The caller just demonstrated knowledge of the\ncurrent password, so the caller is not the suspect and signing them out of\nthe session they are actively using would be friction with no security\nvalue \u2014 the same argument api-contracts.md already makes for signing a user\nin at sign-up.\n\nThe OTHER sessions are a different question, and the answer is still revoke.\nThe commonest reason someone changes a password while signed in is that they\nthink somebody else has it; a change that left every other device alive\nwould fail at the one job the user believed they were doing. `logout-all`\nexists for the explicit version, but requiring two deliberate actions to\naccomplish the obvious intent of one is a trap.\n\nSo: `revoke_all_for_user`, then a FRESH session for this caller and a new\ncookie. Every other device is signed out; this one keeps working. The new\ntoken is minted rather than the old one spared, because \"spare this digest\"\nis a special case in the revocation path and a bulk revoke with an exception\nin it is the kind of code that later fails to revoke.\n\n**Errors:** `401 authentication-required` (no session), `401\ninvalid-credentials` (wrong current password \u2014 no \"no such user\" branch\nexists, because the caller is authenticated), `422 validation-failed` for a\nnew password that fails the SIGN-UP rules or that is the current one.",
@@ -5267,6 +5453,49 @@
         "summary": "Get Client",
         "tags": [
           "clients"
+        ]
+      }
+    },
+    "/api/v1/clients/{clientId}/alerts": {
+      "get": {
+        "description": "This client's alerts, newest first.\n\n**Newest first**, unlike `GET /clients/{id}/history`. That one is a trend\nand a trend reads left to right from its earliest point; this is a LOG an\noperator checks, and the thing they are looking for is the most recent\nentry. `prompt-runs` orders itself the same way for the same reason.\n\n**Reads only.** Alerts are generated once at the end of a scan (see\n`services/alerts.py`), never recomputed here \u2014 an alert that re-derived on\nevery request could appear and disappear between two page loads of the same\ndata, and an acknowledgement would have nothing stable to attach to.\n\n`scansTotal` and `scansCompared` are returned because an empty feed is\nambiguous on its own: most clients have one scan and can never have an\nalert. Reporting only \"0 alerts\" would read as an all-clear the data cannot\nsupport.\n\nScoped to the caller's agency by `get_client`, which 404s rather than 403s\non another agency's id.",
+        "operationId": "list_client_alerts_api_v1_clients__clientId__alerts_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clientId",
+            "required": true,
+            "schema": {
+              "title": "Clientid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertFeedOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Client Alerts",
+        "tags": [
+          "alerts"
         ]
       }
     },

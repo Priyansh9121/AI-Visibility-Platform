@@ -40,6 +40,24 @@ export interface TrendChartProps {
    * See tokens/color.ts.
    */
   palette?: SeriesPalette;
+  /**
+   * Points that carry something worth marking — Epic E.
+   *
+   * Keyed by the point's `stamp`, so an annotation cannot drift onto the wrong
+   * column when the series changes length. The value is what a reader is told
+   * on hover and in the data table; the marker itself is drawn on the axis.
+   *
+   * **Working screens only.** The Report never passes this: an annotated
+   * document is a different artefact from the one design-direction.md §0
+   * argues for, and `palette` already defaults to `'report'` so a chart
+   * dropped into it stays unannotated by omission rather than by discipline.
+   *
+   * NO EXTENSION POINT WAS ADDED TO `trendLayout` FOR THIS. It already exposes
+   * `columns` — the x position of every point — which is exactly and only what
+   * an axis marker needs. Annotation is a rendering concern sitting on top of
+   * the existing layout, not a second thing the layout has to know about.
+   */
+  annotations?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -92,6 +110,7 @@ export function TrendChart({
   className,
   layoutOptions,
   palette = 'report',
+  annotations,
 }: TrendChartProps): JSX.Element {
   const layout = layoutTrend(points, series, {
     ...layoutOptions,
@@ -163,6 +182,24 @@ export function TrendChart({
                 })}
               </tr>
             ))}
+            {/*
+              Annotations as a table row — Epic E.
+
+              The marker on the axis carries a `<title>`, which a pointer can
+              reach and a screen reader mostly cannot: the SVG is `aria-hidden`
+              precisely because this table is its accessible equivalent. An
+              annotation that existed only as a `<title>` inside a hidden SVG
+              would be visible to nobody who needs the table.
+            */}
+            {annotations != null &&
+              layout.points.some((p) => annotations[p.stamp] != null) && (
+                <tr>
+                  <th scope="row">Notes</th>
+                  {layout.points.map((p) => (
+                    <td key={p.stamp}>{annotations[p.stamp] ?? '—'}</td>
+                  ))}
+                </tr>
+              )}
           </tbody>
         </table>
       }
@@ -202,11 +239,40 @@ export function TrendChart({
             x={layout.columns[i]}
             y={layout.plot.y + layout.plot.height + 20}
             textAnchor="middle"
-            className="avp-trend__tick"
+            className={cn(
+              'avp-trend__tick',
+              annotations?.[p.stamp] != null && 'avp-trend__tick--annotated',
+            )}
           >
             {p.label}
           </text>
         ))}
+
+        {/*
+          Annotation markers — Epic E.
+
+          Drawn ON THE AXIS rather than on the plot, deliberately. A marker
+          floating among the lines would be read as a data point, and this is
+          not a measurement — it is a note that something happened at this
+          scan. Sitting under the axis it reads as annotation, which is what
+          it is.
+
+          A triangle, not a dot: every plotted value in this system is a dot or
+          a line, so a fourth kind of dot would have to be told apart by colour
+          alone. Shape carries it here, and `<title>` carries the detail to a
+          pointer and to a screen reader.
+        */}
+        {layout.points.map((p, i) =>
+          annotations?.[p.stamp] == null ? null : (
+            <g key={`ann-${p.stamp}`} className="avp-trend__annotation">
+              <title>{annotations[p.stamp]}</title>
+              <path
+                d={`M ${layout.columns[i]} ${layout.plot.y + layout.plot.height + 3}
+                    l 4 6 l -8 0 Z`}
+              />
+            </g>
+          ),
+        )}
 
         {/*
           Competitors first, subject last, so the client's line is never

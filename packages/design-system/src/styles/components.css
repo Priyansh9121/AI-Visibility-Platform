@@ -647,7 +647,6 @@
   min-width: 0;
 }
 
-
 .avp-localnav__item {
   --avp-localnav-accent: var(--avp-beacon-600);
   --avp-localnav-wash: var(--avp-surface-seated);
@@ -2106,3 +2105,112 @@
   }
   .avp-gapgrid__cell { transition: none; }
 }
+
+/* --- TrendChart annotations, Epic E ---------------------------------------
+ * A scan that produced an alert gets a marker UNDER the axis, never on the
+ * plot. A mark among the lines reads as a data point, and an annotation is not
+ * a measurement — it is a note that something happened at this reading.
+ *
+ * Shape, not colour, is what tells it from a plotted value: every other mark
+ * in this chart is a dot or a line, so a triangle is unambiguous even in
+ * greyscale and under CVD. `warn` for the same reason GapGrid's `absent` chip
+ * takes it — a finding to act on is not a system fault, and §1 reserves
+ * `danger` for state.
+ */
+.avp-trend__annotation { fill: var(--avp-warn); }
+
+/* The date under an annotated column is emphasised too, so the mark is not the
+   only thing carrying it. Weight, not hue — the rule VisibilityBadge follows. */
+.avp-trend__tick--annotated {
+  fill: var(--avp-text-primary);
+  font-weight: 600;
+}
+
+/* ============================== Alert row ============================== */
+/*
+ * One entry in a client's alert feed — Epic E.
+ *
+ * These two rules existed as class names on the component before they existed
+ * here, which rendered fine and did nothing — the silent no-op Epic 7.1's
+ * stylesheet guard was written for, found by a craft review rather than by a
+ * test. An acknowledged row has to LOOK settled or acknowledging it appears to
+ * do nothing at all.
+ */
+.avp-alert {
+  /*
+   * HOVER tier, not state tier, and the audit is why.
+   *
+   * This one transition serves two triggers: the row settling when it is
+   * acknowledged (a state change, occasional) and the row lifting back to full
+   * opacity on hover (frequent, as an operator reads down the list). 200ms is
+   * right for the first and sluggish on the second, and the frequent trigger
+   * wins — a large opacity delta still reads at 120ms.
+   *
+   * `border-color` was in this list and is gone: `.avp-card` already carries
+   * `border: 1px solid var(--avp-line-hairline)` and the acknowledged state
+   * set the same value, so that half of the transition animated nothing, ever.
+   */
+  transition: opacity var(--avp-duration-hover) var(--avp-ease-standard);
+}
+
+/*
+ * Settled, not gone. The row keeps its place in the list — see the note in
+ * ClientAlertsView about why acknowledging must not remove it under the
+ * cursor — so it has to recede without vanishing.
+ *
+ * Opacity, not a colour swap: every word in the row is still true after
+ * somebody has read it, and greying the text would say the finding had expired
+ * rather than been seen.
+ */
+.avp-alert.is-acknowledged {
+  opacity: 0.6;
+}
+
+@media (hover: hover) {
+  .avp-alert.is-acknowledged:hover { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .avp-alert { transition: none; }
+}
+
+/*
+ * The failure line on an alert row — Epic E.
+ *
+ * The ONE animation that survived this screen's gate. It is tied to a real
+ * state change (a request failed), it is rare enough to sit in the delight
+ * tier, and an error that appears unannounced is easy to miss — which is the
+ * one thing an error message cannot be.
+ *
+ * `@starting-style` rather than a keyframe: the entry animates without a
+ * mount flag, and a transition retargets smoothly if the operator retries
+ * before it settles. Opacity only — nothing moves.
+ */
+.avp-alert__failure {
+  opacity: 1;
+  transition: opacity var(--avp-duration-state) var(--avp-ease-out);
+}
+
+@starting-style {
+  .avp-alert__failure { opacity: 0; }
+}
+
+/*
+ * NO reduced-motion override here, deliberately.
+ *
+ * `base.css` already collapses every transition duration globally with
+ * `!important`, so a second rule would be redundant — and unlike
+ * `SentimentTide`'s and `GapGrid`'s explicit blocks, this one would guard
+ * nothing: those exist because a keyframe's start state could leave content
+ * invisible if the global reset ever regressed. `opacity: 1` is this rule's
+ * base value, so the worst case is the message simply appearing.
+ */
+
+/*
+ * The acknowledge button holds its widest label's width.
+ *
+ * "Acknowledging…" is wider than "Acknowledge", so without this the button
+ * grows the moment it is clicked and the row's right edge jumps. A layout fix,
+ * not a motion one — animating a jump is worse than not jumping.
+ */
+.avp-alert__ack { min-width: 9.5rem; }

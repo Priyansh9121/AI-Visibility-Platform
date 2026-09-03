@@ -24,7 +24,11 @@
  * `TrendChart` breaks the line rather than joining through it.
  */
 
-import type { ClientHistory, HistoryScan } from '@avp/shared-types';
+import type {
+  AlertFeed,
+  ClientHistory,
+  HistoryScan,
+} from '@avp/shared-types';
 import type { TidePointInput, TrendPoint, TrendSeriesInput } from '@avp/design-system';
 
 /** How many lines a trend will draw before it stops. */
@@ -301,4 +305,37 @@ export function unclassifiedTotal(history: ClientHistory): number {
     (sum, scan) => sum + (scan.sentiment ?? []).reduce((s, r) => s + r.unclassified, 0),
     0,
   );
+}
+
+/**
+ * Alert markers for a trend, keyed by the point stamp — Epic E.
+ *
+ * Keyed on `scannedAt` because that is exactly what `trendPoints` uses as its
+ * `stamp`, so an annotation cannot land on the wrong column. Both come from
+ * the same field of the same scan.
+ *
+ * Several alerts can share one scan — Notion's real event produced three, one
+ * per engine — so they are collapsed into one marker per point with a count.
+ * Three triangles stacked on one date would read as three separate events.
+ *
+ * Acknowledged alerts still annotate. The mark says "something happened at
+ * this scan", which stays true after somebody has looked at it; hiding it
+ * would make the trend quietly disagree with the feed.
+ */
+export function alertAnnotations(feed: AlertFeed | null): Record<string, string> {
+  if (feed == null) return {};
+  const byStamp = new Map<string, string[]>();
+  for (const alert of feed.alerts) {
+    const list = byStamp.get(alert.scannedAt) ?? [];
+    list.push(alert.detail);
+    byStamp.set(alert.scannedAt, list);
+  }
+  const out: Record<string, string> = {};
+  for (const [stamp, details] of byStamp) {
+    out[stamp] =
+      details.length === 1
+        ? details[0]!
+        : `${details.length} alerts: ${details.join(' ')}`;
+  }
+  return out;
 }

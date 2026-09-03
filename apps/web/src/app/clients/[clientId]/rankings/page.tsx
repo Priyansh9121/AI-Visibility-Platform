@@ -12,6 +12,6 @@ export default function ClientRankingsRoute({
   params: Promise<{ clientId: string }>;
 }): JSX.Element {
   const { clientId } = use(params);
-  const { state, me } = useClientDetail(clientId);
-  return <ClientRankingsView state={state} me={me} />;
+  const { state, me, alerts } = useClientDetail(clientId);
+  return <ClientRankingsView state={state} me={me} alerts={alerts} />;
 }

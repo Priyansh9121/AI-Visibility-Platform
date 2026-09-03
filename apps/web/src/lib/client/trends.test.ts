@@ -10,12 +10,13 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  MAX_SERIES,
+  alertAnnotations,
   hasTrend,
   intermittentRivals,
   rankingSeries,
   sourceSeries,
   trendPoints,
-  MAX_SERIES,
 } from './trends';
 import type { ClientHistory } from '@avp/shared-types';
 import {
@@ -205,5 +206,65 @@ describe('the axis says which scan is which', () => {
 
   it('a single scan keeps the day label — there is no order to disambiguate', () => {
     expect(trendPoints(oneScanHistory)[0]!.label).toBe('29 Aug');
+  });
+});
+
+describe('alertAnnotations — Epic E', () => {
+  const at = (stamp: string, id: string, detail: string) => ({
+    id,
+    kind: 'sentiment_decline',
+    detail,
+    engine: 'claude',
+    scanId: 's',
+    baselineScanId: 'b',
+    scannedAt: stamp,
+    baselineScannedAt: '2026-08-29T00:00:00.000Z',
+    createdAt: stamp,
+    acknowledgedAt: null as string | null,
+  });
+  const feedOf = (alerts: ReturnType<typeof at>[]) =>
+    ({
+      clientId: 'c',
+      alerts,
+      unacknowledged: alerts.length,
+      scansTotal: 2,
+      scansCompared: 1,
+      minBaselineHours: 20,
+    }) as never;
+
+  it('keys on the stamp trendPoints uses, so a marker cannot land on the wrong column', () => {
+    const stamp = '2026-08-31T02:39:36.000Z';
+    const out = alertAnnotations(feedOf([at(stamp, 'a', 'Tone fell.')]));
+    expect(Object.keys(out)).toEqual([stamp]);
+  });
+
+  it('collapses several alerts on one scan into a single marker', () => {
+    // The real Notion event: three engines, three alerts, one scan. Three
+    // triangles stacked on one date would read as three separate events.
+    const stamp = '2026-08-31T02:39:36.000Z';
+    const out = alertAnnotations(
+      feedOf([
+        at(stamp, 'a', 'Tone fell 60%.'),
+        at(stamp, 'b', 'Tone fell 58%.'),
+        at(stamp, 'c', 'Tone fell 54%.'),
+      ]),
+    );
+    expect(Object.keys(out)).toHaveLength(1);
+    expect(out[stamp]).toContain('3 alerts');
+    expect(out[stamp]).toContain('60%');
+  });
+
+  it('still annotates an acknowledged alert', () => {
+    // The mark says something happened at this scan, which stays true after
+    // someone has looked at it. Hiding it would make the trend disagree with
+    // the feed.
+    const stamp = '2026-08-31T02:39:36.000Z';
+    const seen = { ...at(stamp, 'a', 'Tone fell.'), acknowledgedAt: '2026-09-01T00:00:00Z' };
+    expect(Object.keys(alertAnnotations(feedOf([seen])))).toEqual([stamp]);
+  });
+
+  it('is empty rather than throwing when the feed never loaded', () => {
+    // A failed alert request must cost the markers, never the chart.
+    expect(alertAnnotations(null)).toEqual({});
   });
 });

@@ -36,7 +36,8 @@ export type ClientSection =
   | 'sentiment'
   | 'technical'
   | 'gaps'
-  | 'prompts';
+  | 'prompts'
+  | 'alerts';
 
 export interface ClientNavItem {
   /** `null` for the Report, which is a link out rather than a section. */
@@ -99,6 +100,10 @@ export const CLIENT_NAV: readonly ClientNavCluster[] = [
     items: [
       { section: 'gaps', label: 'Answer gaps', path: '/gaps', accent: 0 },
       { section: 'prompts', label: 'Prompts', path: '/prompts', accent: 1 },
+      // Epic E. The seat B.1 reserved and `clientNav.test.ts` asserted would
+      // fit — taken without touching any hue above it, which is the property
+      // the cluster model was built for.
+      { section: 'alerts', label: 'Alerts', path: '/alerts', accent: 2 },
     ],
   },
 ];

@@ -45,13 +45,15 @@ PASSWORD_RESET: Final = "prst"
 # must never be mistaken for one in a log line.
 PROMPT_RUN: Final = "prun"
 PROMPT_RUN_RESULT: Final = "prre"
+# Epic E — a detected change between a scan and its baseline.
+ALERT: Final = "alrt"
 
 ALL_PREFIXES: Final[frozenset[str]] = frozenset(
     {
         AGENCY, USER, CLIENT, SCAN, COMPETITOR_SET, COMPETITOR, PROMPT_SET,
         PROMPT, ENGINE_RESULT, CITATION, BRAND_MENTION, TECHNICAL_AUDIT,
         AUDIT_CHECK, SCORE, ACTION_ITEM, INVITATION, PASSWORD_RESET,
-        PROMPT_RUN, PROMPT_RUN_RESULT,
+        PROMPT_RUN, PROMPT_RUN_RESULT, ALERT,
     }
 )
 

@@ -53,6 +53,7 @@ from ..config import Settings
 from ..db import get_sessionmaker
 from ..models import Client, Scan, ScanStatus
 from ..models.engine_result import Engine
+from . import alerts as alerts_service
 from . import audit_runner, fix_runner, scan_runner, scoring_runner
 from . import competitors as detection
 
@@ -251,6 +252,18 @@ async def execute_scan(job: ScanJob, *, settings: Settings) -> None:
             await _attempt(
                 session, scan, client, "scoring",
                 lambda: scoring_runner.score_scan(session, scan),
+            )
+
+            # -- phase 7b: alerts, AFTER scoring because they read its score --
+            #
+            # Ordered here and not earlier for a reason the phase list makes
+            # easy to get wrong: `generate_for_scan` compares this scan's
+            # STORED composite against its baseline's, and phase 7 is what
+            # writes it. Run before scoring, every visibility alert would
+            # compare `None` and silently produce nothing.
+            await _attempt(
+                session, scan, client, "alerts",
+                lambda: alerts_service.generate_for_scan(session, scan, client),
             )
 
             # -- phase 8: the fix list ---------------------------------------

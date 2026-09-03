@@ -119,6 +119,11 @@ export type HistoryCompetitor = Schemas['HistoryCompetitorOut'];
 export type HistorySentiment = Schemas['HistorySentimentOut'];
 export type RunScanRequest = Schemas['RunScanRequest'];
 
+// --- alerts (Epic E) -----------------------------------------------------
+export type AlertFeed = Schemas['AlertFeedOut'];
+export type Alert = Schemas['AlertOut'];
+export type AcknowledgeAlert = Schemas['AcknowledgeAlertOut'];
+
 // --- answer gaps (Epic B) ------------------------------------------------
 export type AnswerGaps = Schemas['AnswerGapsOut'];
 export type AnswerGapRow = Schemas['AnswerGapRowOut'];

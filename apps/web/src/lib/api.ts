@@ -7,6 +7,8 @@
  */
 
 import type {
+  AcknowledgeAlert,
+  AlertFeed,
   AnswerGaps,
   BillingStatus,
   CheckoutSession,
@@ -283,6 +285,24 @@ export const api = {
    * `scanId` picks one scan; omitted, the newest is used and the response
    * lists the rest, so the picker costs no second request.
    */
+  /**
+   * This client's alerts, newest first — Epic E.
+   *
+   * Carries `scansTotal` and `scansCompared` alongside the rows because an
+   * empty feed is ambiguous on its own: most clients have one scan and can
+   * therefore never produce an alert. "No alerts" and "nothing was comparable"
+   * are different answers and the screen says which it is.
+   */
+  clientAlerts: (clientId: string) =>
+    request<AlertFeed>(`/clients/${clientId}/alerts`),
+
+  /**
+   * Mark an alert as seen. Idempotent — a double click does not move the
+   * timestamp, and there is deliberately no un-acknowledge.
+   */
+  acknowledgeAlert: (alertId: string) =>
+    request<AcknowledgeAlert>(`/alerts/${alertId}/acknowledge`, { method: 'POST' }),
+
   answerGaps: (clientId: string, scanId?: string) =>
     request<AnswerGaps | null>(
       `/clients/${clientId}/answer-gaps${scanId ? `?scanId=${encodeURIComponent(scanId)}` : ''}`,

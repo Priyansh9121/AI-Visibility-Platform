@@ -64,7 +64,9 @@ describe('a hue is scoped to its cluster', () => {
      * than an analysis of one. This asserts the end state fits — the whole
      * point of doing this before Epic E rather than during it.
      */
-    const planned: Record<string, number> = { measurement: 1, investigation: 2 };
+    // Alerts landed in Epic E; Crawler activity (F) is still to come in
+    // Measurement, Prompt discovery (G) in Investigation.
+    const planned: Record<string, number> = { measurement: 1, investigation: 1 };
     for (const cluster of CLIENT_NAV) {
       const projected = cluster.items.length + (planned[cluster.key] ?? 0);
       expect(projected, `${cluster.label} will outgrow the layer`).toBeLessThanOrEqual(
@@ -97,6 +99,7 @@ describe('sections and clusters', () => {
       'technical',
       'gaps',
       'prompts',
+      'alerts',
     ];
     for (const section of sections) {
       expect(accentFor(section), `${section} has no accent`).not.toBeNull();

@@ -169,6 +169,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/alerts/{alertId}/acknowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Acknowledge Alert
+         * @description Mark an alert as seen.
+         *
+         *     **Idempotent**: acknowledging an already-acknowledged alert returns the
+         *     original timestamp rather than moving it. An operator double-clicking must
+         *     not rewrite when they first saw something.
+         *
+         *     There is deliberately no un-acknowledge. Dismissing is a record that a
+         *     person looked, and a log an operator can quietly un-read is not a log.
+         *
+         *     Scoped by `agency_id` on the row itself — the denormalised column exists so
+         *     this is one predicate rather than a join through the client.
+         */
+        post: operations["acknowledge_alert_api_v1_alerts__alertId__acknowledge_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/change-password": {
         parameters: {
             query?: never;
@@ -519,6 +549,44 @@ export interface paths {
         };
         /** Get Client */
         get: operations["get_client_api_v1_clients__clientId__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/clients/{clientId}/alerts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Client Alerts
+         * @description This client's alerts, newest first.
+         *
+         *     **Newest first**, unlike `GET /clients/{id}/history`. That one is a trend
+         *     and a trend reads left to right from its earliest point; this is a LOG an
+         *     operator checks, and the thing they are looking for is the most recent
+         *     entry. `prompt-runs` orders itself the same way for the same reason.
+         *
+         *     **Reads only.** Alerts are generated once at the end of a scan (see
+         *     `services/alerts.py`), never recomputed here — an alert that re-derived on
+         *     every request could appear and disappear between two page loads of the same
+         *     data, and an acknowledgement would have nothing stable to attach to.
+         *
+         *     `scansTotal` and `scansCompared` are returned because an empty feed is
+         *     ambiguous on its own: most clients have one scan and can never have an
+         *     alert. Reporting only "0 alerts" would read as an all-clear the data cannot
+         *     support.
+         *
+         *     Scoped to the caller's agency by `get_client`, which 404s rather than 403s
+         *     on another agency's id.
+         */
+        get: operations["list_client_alerts_api_v1_clients__clientId__alerts_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1286,6 +1354,16 @@ export interface components {
             token: string;
         };
         /**
+         * AcknowledgeAlertOut
+         * @description The alert after acknowledgement.
+         */
+        AcknowledgeAlertOut: {
+            /** Acknowledgedat */
+            acknowledgedAt?: string | null;
+            /** Id */
+            id: string;
+        };
+        /**
          * ActionItemListOut
          * @description The scan's fix list, plus what happened the last time it was generated.
          */
@@ -1370,6 +1448,59 @@ export interface components {
             seatLimit: number;
             /** Slug */
             slug: string;
+        };
+        /**
+         * AlertFeedOut
+         * @description A client's alerts, newest first.
+         */
+        AlertFeedOut: {
+            /** Alerts */
+            alerts: components["schemas"]["AlertOut"][];
+            /** Clientid */
+            clientId: string;
+            /** Minbaselinehours */
+            minBaselineHours: number;
+            /** Scanscompared */
+            scansCompared: number;
+            /** Scanstotal */
+            scansTotal: number;
+            /** Unacknowledged */
+            unacknowledged: number;
+        };
+        /**
+         * AlertOut
+         * @description One detected change, with both scans it sits between.
+         */
+        AlertOut: {
+            /** Acknowledgedat */
+            acknowledgedAt?: string | null;
+            /** Baselinescanid */
+            baselineScanId: string;
+            /**
+             * Baselinescannedat
+             * Format: date-time
+             */
+            baselineScannedAt: string;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /** Detail */
+            detail: string;
+            /** Engine */
+            engine?: string | null;
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Scanid */
+            scanId: string;
+            /**
+             * Scannedat
+             * Format: date-time
+             */
+            scannedAt: string;
         };
         /**
          * AnswerGapBrandOut
@@ -3286,6 +3417,37 @@ export interface operations {
             };
         };
     };
+    acknowledge_alert_api_v1_alerts__alertId__acknowledge_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                alertId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AcknowledgeAlertOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     change_password_api_v1_auth_change_password_post: {
         parameters: {
             query?: never;
@@ -3660,6 +3822,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ClientOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_client_alerts_api_v1_clients__clientId__alerts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                clientId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertFeedOut"];
                 };
             };
             /** @description Validation Error */

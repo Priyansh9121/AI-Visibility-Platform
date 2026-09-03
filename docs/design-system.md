@@ -845,6 +845,38 @@ is ~11° apart, below what hue alone separates at fixed lightness and chroma.
 `tokens.test.ts` holds the arithmetic — including a gamut check that fails if
 any accent's `600` or `700` stop leaves sRGB.
 
+**Resolved by Epic B.1: the nav grew groups, not the layer.** Three options were
+weighed — relax the buffer, let chroma vary, or cluster the nav — and only the
+third costs nothing real. Shrinking the buffer lets a chip be misread as a
+score or a system state; varying chroma makes one accent read as more important
+than another, which is the property this table exists to guarantee. Clustering
+touches neither: **a hue only has to be told apart from the others in its own
+cluster**, so each cluster restarts at accent 0 and none approaches seven.
+
+That is not a new idea in this product, it is an existing one written down.
+`WorkspaceShell`'s sidebar and `ClientSpace`'s strip are on screen together and
+have shared hues 0–3 since Epic 9.24 — Dashboard and Overview are both cobalt,
+Clients and Rankings both violet — and nobody has read it as a collision,
+because the two navs are different places doing different jobs. A hue was
+already scoped to its nav; B.1 scopes it one level further, to its cluster.
+
+**The cost, stated plainly:** two items in the SAME strip can now share a hue,
+separated by a group label rather than by sitting in a different region of the
+screen. That is weaker separation than the sidebar/strip precedent, and it is
+the deliberate trade — repetition across clusters is the mechanism that buys
+the seats. Partitioning the arc between clusters instead would keep every hue
+unique and buy nothing at all.
+
+See `LocalNavGroup` in §5e and `apps/web/src/components/client/clientNav.ts`,
+where the cluster table and its invariants live.
+
+**The pressure is already visible.** Epic B's first draft put four stat tiles
+at accents 6 (crimson 355), 0, 2 and 4 (magenta 326). Twenty-nine degrees apart
+at the same lightness and chroma, in two small chips at opposite ends of a row,
+crimson and magenta read as the same pink — and on a client where both figures
+were `0` the tiles were indistinguishable. The fix was to unaccent the tile
+that is not a finding, which was the more correct answer anyway.
+
 ### Using it
 
 ```tsx
@@ -897,38 +929,6 @@ shipped in Epic 9.22 and survived a review and a screenshot pass.
 actual scale.
 
 ---
-
-**Resolved by Epic B.1: the nav grew groups, not the layer.** Three options were
-weighed — relax the buffer, let chroma vary, or cluster the nav — and only the
-third costs nothing real. Shrinking the buffer lets a chip be misread as a
-score or a system state; varying chroma makes one accent read as more important
-than another, which is the property this table exists to guarantee. Clustering
-touches neither: **a hue only has to be told apart from the others in its own
-cluster**, so each cluster restarts at accent 0 and none approaches seven.
-
-That is not a new idea in this product, it is an existing one written down.
-`WorkspaceShell`'s sidebar and `ClientSpace`'s strip are on screen together and
-have shared hues 0–3 since Epic 9.24 — Dashboard and Overview are both cobalt,
-Clients and Rankings both violet — and nobody has read it as a collision,
-because the two navs are different places doing different jobs. A hue was
-already scoped to its nav; B.1 scopes it one level further, to its cluster.
-
-**The cost, stated plainly:** two items in the SAME strip can now share a hue,
-separated by a group label rather than by sitting in a different region of the
-screen. That is weaker separation than the sidebar/strip precedent, and it is
-the deliberate trade — repetition across clusters is the mechanism that buys
-the seats. Partitioning the arc between clusters instead would keep every hue
-unique and buy nothing at all.
-
-See `LocalNavGroup` in §5e and `apps/web/src/components/client/clientNav.ts`,
-where the cluster table and its invariants live.
-
-**The pressure is already visible.** Epic B's first draft put four stat tiles
-at accents 6 (crimson 355), 0, 2 and 4 (magenta 326). Twenty-nine degrees apart
-at the same lightness and chroma, in two small chips at opposite ends of a row,
-crimson and magenta read as the same pink — and on a client where both figures
-were `0` the tiles were indistinguishable. The fix was to unaccent the tile
-that is not a finding, which was the more correct answer anyway.
 
 ## 7. SentimentTide — tone, as a diverging tide. Epic A.
 
@@ -1060,3 +1060,85 @@ vanished from under their pointer.
 `overflow-x: auto` on the container. A grid of 24 prompts × 8 brands is wider
 than a narrow viewport and the PAGE must never scroll sideways — the rule Epic
 9.21 set for the charts. Verified at 420px: page `false`, grid `true`.
+
+## 9. TrendChart annotations — Epic E
+
+A scan that produced an alert gets a marker on the trend it appears in.
+
+```tsx
+<TrendChart points={points} series={series}
+  annotations={alertAnnotations(alerts)} />   // { [stamp]: 'what happened' }
+```
+
+### No extension point was added to `trendLayout` for this
+
+It already had one. `TrendLayout.columns` is the x position of every point,
+which is exactly and only what an axis marker needs — so annotation is a
+rendering concern sitting on top of the existing layout, not a second thing the
+layout has to know about. `trendLayout.test.ts` asserts `columns` stays aligned
+with `points` and that stamps are unique, which is what makes keying by stamp
+safe.
+
+### Keyed by stamp, never by index
+
+A series can change length between renders; an index cannot survive that. The
+stamp is `HistoryScanOut.scanned_at`, and the alert feed returns the **same**
+`COALESCE(finished_at, created_at)` expression so the two key together. They did
+not in the first draft — the feed used `created_at`, the two differed by the
+scan's duration, and every marker silently failed to draw. Found by counting
+markers in a live browser, now guarded by a cross-endpoint test.
+
+### Drawn under the axis, as a triangle
+
+**Under the axis, not on the plot.** A mark among the lines reads as a data
+point, and an annotation is not a measurement — it is a note that something
+happened at this reading.
+
+**A triangle, because every other mark in this chart is a dot or a line.** Shape
+carries the distinction, so it survives greyscale and CVD without spending a
+colour. It takes `warn` for the reason `GapGrid`'s `absent` chip does: a finding
+to act on is not a system fault, and §1 reserves `danger` for state. The date
+under an annotated column is emphasised too, so the marker is not the only thing
+carrying it — weight, not hue.
+
+**Several alerts on one scan collapse to one marker with a count.** Notion's
+real event produced three, one per engine; three triangles stacked on one date
+would read as three separate events.
+
+**The annotation also becomes a `Notes` row in the hidden data table.** The
+marker's `<title>` is reachable by a pointer and not by a screen reader — the
+SVG is `aria-hidden` precisely because that table is its accessible equivalent,
+so an annotation living only in the SVG would be visible to nobody who needs
+the table.
+
+**Working screens only.** The Report never passes `annotations`: an annotated
+document is a different artefact from the one design-direction.md §0 argues for,
+and `palette` already defaults to `'report'` so a chart dropped into it stays
+unannotated by omission rather than by discipline.
+
+## 10. Alert row — Epic E
+
+One entry in a client's alert feed, built from `Card` + `Badge` + `Button`.
+
+**An acknowledged row recedes; it does not disappear.** `.avp-alert.is-acknowledged`
+drops to `opacity: 0.6` and returns to 1 on hover. The first draft removed the
+row from the list the moment it was acknowledged — and the real data puts three
+alerts on one scan, so acknowledging the first made the other two jump under the
+cursor. The fix was not to animate the exit but to not have one.
+
+**Opacity, not a colour swap.** Every word in the row is still true after
+somebody has read it; greying the text would say the finding had expired rather
+than been seen. `tokens.test.ts` asserts the rule carries `opacity` and no
+`color`.
+
+**The transition runs at the HOVER tier**, not the state tier, because the same
+declaration serves both the settling of an acknowledged row (occasional) and the
+hover that lifts it back (frequent). The frequent trigger wins; a large opacity
+delta still reads at 120ms. `border-color` was in that transition list until the
+motion audit found `.avp-card` already carries the same hairline, so that half
+animated nothing.
+
+**The acknowledge button holds its widest label's width** (`.avp-alert__ack`).
+"Acknowledging…" is wider than "Acknowledge", so without it the button grows on
+click and the row's right edge jumps — a layout fix, not a motion one, because
+animating a jump is worse than not jumping.
