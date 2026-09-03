@@ -15,7 +15,7 @@ import { EmptyState } from './state/EmptyState.js';
 import { LuminanceLedger } from './chart/LuminanceLedger.js';
 import { AnswerShelf } from './chart/AnswerShelf.js';
 import { TrendChart } from './chart/TrendChart.js';
-import { SentimentTide } from './chart/SentimentTide.js';
+import { SentimentTide, negativePatternId } from './chart/SentimentTide.js';
 import { LocalNav, LocalNavItem } from './shell/LocalNav.js';
 import type { ShelfRowInput } from './chart/answerShelfLayout.js';
 import { Beat, Evidence, ReportPage, BEAT_SEQUENCE } from './report/ReportLayout.js';
@@ -863,6 +863,46 @@ describe('SentimentTide', () => {
     }
   });
 
+  it('paints each engine’s negative hatch in that engine’s own colour', () => {
+    /*
+     * The defect this exists for rendered perfectly and was wrong: a single
+     * shared `<pattern>` painted with `currentColor` resolves against the
+     * `<defs>` that defines it, not against the `<g>` that references it — so
+     * every engine's negative block came out the same `ink-800` grey while
+     * every positive and neutral segment beside it was engine-coloured.
+     *
+     * The old test suite could not see it: it only checked that a pattern was
+     * REFERENCED, never what colour the pattern resolved to. This asserts the
+     * resolved fill, and asserts two engines differ.
+     */
+    const out = tide();
+    const chatgpt = negativePatternId('chatgpt');
+    const claude = negativePatternId('claude');
+    expect(out).toContain(`id="${chatgpt}"`);
+    expect(out).toContain(`id="${claude}"`);
+
+    const colourOf = (id: string) => {
+      const block = out.slice(out.indexOf(`id="${id}"`));
+      return block.slice(0, block.indexOf('</pattern>')).match(/fill="([^"]+)"/)?.[1];
+    };
+    const a = colourOf(chatgpt);
+    const b = colourOf(claude);
+    expect(a).toBeTruthy();
+    expect(a).not.toBe('currentColor');
+    expect(a).not.toBe(b);
+
+    // And each bar references its OWN engine's pattern, not a shared one.
+    expect(out).toContain(`url(#${chatgpt})`);
+    expect(out).toContain(`url(#${claude})`);
+  });
+
+  it('emits one pattern per engine, not one per bar', () => {
+    // chatgpt appears in both scans; two patterns for it would be dead defs.
+    const out = tide();
+    const count = (needle: string) => out.split(needle).length - 1;
+    expect(count(`id="${negativePatternId('chatgpt')}"`)).toBe(1);
+  });
+
   it('says an engine "did not answer" in words rather than as zeros', () => {
     // A row of four zeros would read as "described you neutrally". This is the
     // difference between an outage and a finding.
@@ -899,7 +939,12 @@ describe('SentimentTide', () => {
   it('distinguishes negative by pattern as well as by position', () => {
     // Greyscale and colour-blind readers get direction from geometry and a
     // hatch, never from hue — the rule §1 sets for competitor series.
-    expect(tide()).toContain('url(#avp-tide-negative)');
+    //
+    // Resolved through `negativePatternId` rather than against a literal: this
+    // assertion was written as `url(#avp-tide-negative)` and would have kept
+    // passing while the hatch rendered in the wrong colour, because a
+    // reference existing says nothing about what it resolves to.
+    expect(tide()).toContain(`url(#${negativePatternId('chatgpt')})`);
   });
 
   it('names the engines rather than showing raw keys when given labels', () => {

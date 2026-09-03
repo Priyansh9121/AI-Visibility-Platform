@@ -211,3 +211,18 @@ describe('totals', () => {
     expect(layout.engines).toBe(0);
   });
 });
+
+describe('a truncated column header keeps its full name reachable', () => {
+  it('is what the layout carries, so the renderer has something to put in a title', () => {
+    // The grid truncates a brand name at 8rem. `layoutGapGrid` must pass the
+    // WHOLE name through — a layout that shortened it would leave the header's
+    // `title` as truncated as the text it explains, and the full string was
+    // otherwise reachable only by scrolling to the rivals table.
+    const long = 'Growthmarketingpro Digital Performance Group';
+    const layout = layoutGapGrid(
+      [],
+      [{ name: long, isSubject: false, promptsNamed: 3 }],
+    );
+    expect(layout.brands[0]!.name).toBe(long);
+  });
+});

@@ -979,6 +979,29 @@ design-direction note. One unit scale is preserved; only the zero line moves.
 Found by looking at real data in a browser, after the centred version left 45%
 of the figure empty.
 
+### The negative hatch is painted per engine — design review, 2026-09-02
+
+A single shared `<pattern>` filled with `currentColor` rendered perfectly and
+was wrong. A paint server resolves `currentColor` against the element that
+DEFINES it — `<defs>`, which inherits nothing from the `<g class="avp-tide__bar">`
+that sets `color` per engine. So every negative block came out the same
+`ink-800` grey while every positive and neutral segment beside it was
+engine-coloured, and two engines' negative tone were indistinguishable.
+
+The chart now emits one `<pattern>` per engine, with the colour baked in at
+definition time. The other obvious fix does not work: a `<rect fill="url(#id)">`
+cannot reach inside a pattern to recolour it. Bounded by the engine registry —
+three today, six at most — so it is a handful of extra defs, not a per-bar cost.
+
+`negativePatternId(engine)` is exported so a test resolves the same id the chart
+emits. The old assertion checked only that a pattern was REFERENCED, which is
+why it kept passing while the colour was wrong; the new one reads the resolved
+fill out of two engines' patterns and asserts they differ.
+
+**Latent, and stated rather than fixed:** the ids assume ONE tide per document.
+That assumption predates this change — the single shared pattern had it too —
+and holds while the chart appears once on its own screen.
+
 ### What it inherits
 
 The Epic 9.21 bound (`maxWidth: layout.width`, derived from the layout, never
@@ -1039,6 +1062,14 @@ Its chip is dashed and grey, its row recedes, and it sorts below every real
 verdict. `layoutGapGrid` derives `isGap` from the row KIND, never from
 `absentOn` — the two states have identical `absentOn`, which is exactly how a
 regression here would go unnoticed.
+
+### A truncated header keeps its full name
+
+`.avp-gapgrid__brand-name` truncates at 8rem, so "Growthmarketingpro" renders as
+"Growthmarketin…". The header carries `title={brand.name}`, extending the
+affordance `.avp-gapgrid__chip` already uses for its verdict rather than
+inventing one — before it, the full string was reachable only by scrolling to
+the rivals table at the bottom of the page.
 
 ### Motion: one fill, no stagger
 

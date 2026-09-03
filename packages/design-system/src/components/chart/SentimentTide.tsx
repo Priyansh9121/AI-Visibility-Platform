@@ -76,6 +76,21 @@ export interface SentimentTideProps {
  *
  * Pure and hook-free, so it stays server-renderable like the rest of the set.
  */
+/**
+ * The hatch-pattern id for one engine's negative segments.
+ *
+ * Exported so a test can resolve the same id the chart emits rather than
+ * hard-coding a string that would silently stop matching.
+ *
+ * The engine key is sanitised because it becomes an id and a `url(#...)`
+ * reference: engine keys are `[a-z_]` today, and a future key with a character
+ * that is not id-safe would produce a reference that resolves to nothing and a
+ * segment that renders with no fill at all.
+ */
+export function negativePatternId(engine: string): string {
+  return `avp-tide-negative-${engine.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+}
+
 export function SentimentTide({
   points,
   ariaLabel,
@@ -96,6 +111,29 @@ export function SentimentTide({
   const name = (engine: string): string => engineLabel[engine] ?? engine;
   const hue = (engine: string, index: number): string =>
     benchVar(engineAccent[engine] ?? index);
+
+  /**
+   * The hatch pattern each engine's negative block is painted with.
+   *
+   * Keyed by engine rather than by bar: an engine appears once per scan, and
+   * every one of its bars wants the same hatch. Distinct engines only, so the
+   * count is bounded by the engine registry and not by the history length.
+   *
+   * The id embeds the engine key, which assumes ONE tide per document. That
+   * assumption is pre-existing — the single shared pattern this replaced had
+   * it too — and holds while the chart appears once on its own screen. A
+   * second instance on one page would need an instance-scoped prefix.
+   */
+  const negativePatterns = [
+    ...new Map(
+      layout.bars
+        .filter((bar) => bar.negative.height > 0)
+        .map((bar) => [
+          bar.engine,
+          { id: negativePatternId(bar.engine), colour: hue(bar.engine, bar.engineIndex) },
+        ]),
+    ).values(),
+  ];
 
   return (
     <ChartFrame
@@ -168,17 +206,38 @@ export function SentimentTide({
             competitor series applied to tone: one direction distinguished by
             pattern survives greyscale and colour-blind reading, where a hue
             difference alone would not.
+
+            ONE PATTERN PER ENGINE, and that is a fix rather than a flourish.
+
+            A single shared pattern painted with `currentColor` looks right and
+            is not: a paint server resolves `currentColor` against the element
+            that DEFINES it — here `<defs>`, which inherits nothing from the
+            `<g class="avp-tide__bar">` that sets `color` per engine. So every
+            negative block rendered the same `ink-800` grey while every positive
+            and neutral segment beside it was engine-coloured, and two engines'
+            negative tone were indistinguishable from each other. Found by
+            reading resolved fills out of the live CSSOM, not from the markup.
+
+            The other obvious fix does not work: a `<rect fill="url(#id)">`
+            cannot reach inside the pattern to recolour it, so the colour has to
+            be baked into the pattern at definition time.
+
+            Bounded by the engine count — three today, six at most — so this is
+            a handful of extra defs, not a per-bar cost.
           */}
-          <pattern
-            id="avp-tide-negative"
-            width="4"
-            height="4"
-            patternUnits="userSpaceOnUse"
-            patternTransform="rotate(45)"
-          >
-            <rect width="4" height="4" fill="currentColor" opacity="0.28" />
-            <line x1="0" y1="0" x2="0" y2="4" stroke="currentColor" strokeWidth="2" />
-          </pattern>
+          {negativePatterns.map(({ id, colour }) => (
+            <pattern
+              key={id}
+              id={id}
+              width="4"
+              height="4"
+              patternUnits="userSpaceOnUse"
+              patternTransform="rotate(45)"
+            >
+              <rect width="4" height="4" fill={colour} opacity="0.28" />
+              <line x1="0" y1="0" x2="0" y2="4" stroke={colour} strokeWidth="2" />
+            </pattern>
+          ))}
         </defs>
 
         {/* The waterline itself — the only rule that matters on this chart. */}
@@ -225,7 +284,7 @@ export function SentimentTide({
                   y={bar.negative.y}
                   width={bar.width}
                   height={bar.negative.height}
-                  fill="url(#avp-tide-negative)"
+                  fill={`url(#${negativePatternId(bar.engine)})`}
                   className="avp-tide__seg avp-tide__seg--negative"
                 />
               )}

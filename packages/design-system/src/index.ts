@@ -48,7 +48,11 @@ export { ChartPatterns, patternPaint } from './components/chart/ChartPatterns.js
 export { LuminanceLedger, type LuminanceLedgerProps } from './components/chart/LuminanceLedger.js';
 export { AnswerShelf, type AnswerShelfProps } from './components/chart/AnswerShelf.js';
 export { TrendChart, type TrendChartProps } from './components/chart/TrendChart.js';
-export { SentimentTide, type SentimentTideProps } from './components/chart/SentimentTide.js';
+export {
+  SentimentTide,
+  negativePatternId,
+  type SentimentTideProps,
+} from './components/chart/SentimentTide.js';
 export { GapGrid, type GapGridProps } from './components/chart/GapGrid.js';
 export {
   layoutGapGrid,

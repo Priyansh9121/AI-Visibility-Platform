@@ -121,7 +121,17 @@ export function GapGrid({
                   brand.isSubject && 'avp-gapgrid__brand--subject',
                 )}
               >
-                <span className="avp-gapgrid__brand-name">{brand.name}</span>
+                {/*
+                  `title` because the name is TRUNCATED at 8rem — "Growthmarketingpro"
+                  renders as "Growthmarketin…" and the full string was otherwise
+                  reachable only by scrolling to the rivals table at the bottom
+                  of the page. The same affordance `.avp-gapgrid__chip` already
+                  uses for its verdict, so this extends a convention rather than
+                  inventing one.
+                */}
+                <span className="avp-gapgrid__brand-name" title={brand.name}>
+                  {brand.name}
+                </span>
                 <span className="avp-gapgrid__brand-count">
                   {brand.promptsNamed}
                   <span className="avp-visually-hidden"> prompts named this brand</span>
