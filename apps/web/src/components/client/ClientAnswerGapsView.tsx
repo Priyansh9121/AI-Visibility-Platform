@@ -53,13 +53,39 @@ import {
 } from '@avp/design-system';
 import type { AnswerGaps, Me } from '@avp/shared-types';
 import { ClientSpace } from '@/components/client/ClientSpace';
+import { accentFor } from '@/components/client/clientNav';
 import {
   latestScanId,
   type ClientDetailState,
 } from '@/components/client/ClientDetailView';
 
-/** The screen's own accent — `crimson`, index 6. Matches its nav item. */
-const ACCENT = 6;
+/**
+ * The screen's own accent, read from the nav table rather than typed here.
+ *
+ * It was a literal `6` (crimson) for exactly as long as accents were global.
+ * Epic B.1 made them cluster-relative, so this screen is now the FIRST item of
+ * the Investigation cluster and wears `cobalt` — the same hue Overview wears in
+ * the Measurement cluster, which is the trade that grouping buys.
+ *
+ * Reading it from `clientNav` rather than restating it is the point: a screen
+ * whose figure accent disagreed with its own nav item would be worse than
+ * either choice, and a second hand-typed copy is how that happens.
+ */
+const ACCENT = accentFor('gaps') ?? 0;
+
+/**
+ * The accented tiles, derived FROM the screen's accent rather than typed.
+ *
+ * They were literals — `6`, `0`, `2` — and that survived only while `ACCENT`
+ * happened to be 6. Epic B.1 moved this screen to the first seat of its
+ * cluster, `ACCENT` became 0, and "Rivals took" and "Partly held" silently
+ * became the same blue. It reached a browser screenshot.
+ *
+ * `benchAccent` cycles, so offsetting from `ACCENT` keeps these distinct from
+ * it and from each other no matter where the nav table moves this screen —
+ * which is the property that was missing, not the particular hues.
+ */
+const TILE = [ACCENT, ACCENT + 1, ACCENT + 2] as const;
 
 export type AnswerGapsState =
   | { kind: 'loading' }
@@ -166,20 +192,20 @@ function Grid({
         <StatTile
           label="Rivals took"
           value={String(gaps.absent)}
-          accent={ACCENT}
+          accent={TILE[0]}
           emphasis={gaps.absent > 0}
           note="Answered by a rival, with this client named on no engine."
         />
         <StatTile
           label="Partly held"
           value={String(gaps.partial)}
-          accent={0}
+          accent={TILE[1]}
           note="Named by some engines and not others."
         />
         <StatTile
           label="Named, not cited"
           value={gaps.subjectCitable ? String(gaps.uncited) : '—'}
-          accent={2}
+          accent={TILE[2]}
           // The limit, stated on the tile rather than left to be inferred from
           // a zero that would otherwise read as "no citation gaps".
           note={

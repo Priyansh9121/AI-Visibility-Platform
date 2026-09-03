@@ -9913,3 +9913,136 @@ three TypeScript packages. Screenshots — light, dark and 420px — in
 which logs the URL when no email provider is configured — the same path Epic
 9.20 used to reach that agency's data.
 
+---
+
+# Epic B.1 — the nav grew groups so the palette would not have to
+
+**2026-09-02.** A decision taken on its own, deliberately before Epic E rather
+than inside it.
+
+## Why it was worth its own pass
+
+Epic B filled the seventh and last seat in the `bench-*` layer, with Alerts,
+Crawler activity and Prompt discovery still to come — three sections, zero
+seats. Left to surface mid-epic, the pressure to ship Alerts would have
+produced a shortcut: reuse a hue, loosen the buffer a few degrees, or eyeball a
+"close enough" chroma. Any of those is a silent degradation of the property the
+layer exists for, landing inside an unrelated diff where nobody is looking.
+
+**Decision: group the nav.** Two alternatives were on the table and both cost
+something real — shrinking the 30° meaning buffer lets a Working chip be
+misread as a score or a system state, and letting chroma vary makes one accent
+read as more important than another, which is the equal-weight property
+`design-system.md` §6 states structurally. Grouping costs neither: a hue only
+has to be told apart from the others in its own cluster.
+
+## The finding that made the decision easy
+
+**The product already did this and had not written it down.**
+`WorkspaceShell.ACCENT` is `dashboard:0, compare:1, clients:2, settings:3` and
+`ClientSpace.ACCENT` started at 0 too — so Dashboard and Overview have both
+been cobalt, and Clients and Rankings both violet, **on screen together, since
+Epic 9.24**. Every Epic B screenshot shows it. Nobody has read it as a
+collision, because the two navs are different places doing different jobs.
+
+A hue was already scoped to its nav rather than to the product. This scopes it
+one level further, to its cluster — an extension of working practice, not a new
+concept.
+
+**The trade, stated rather than buried:** two items in the SAME strip can now
+share a hue, separated by a group label rather than by sitting in a different
+region of the screen. That is weaker separation than the sidebar/strip
+precedent. It is also the mechanism — partitioning the arc between clusters
+would keep every hue unique and buy no seats at all, which is the version of
+this idea that does nothing.
+
+## The taxonomy was corrected before it was built
+
+The proposed split filed Sentiment, Crawler activity and Prompts under
+`Analysis` on the strength of when they shipped. Three corrections, from the
+data model rather than the changelog:
+
+- **Sentiment is a measurement.** Its labels have been stored since Epic 4 and
+  it is one of the five scored dimensions at 15% of the composite.
+- **Crawler activity is a data source**, not an analysis of one. Filing it under
+  Analysis would have quietly undercut the roadmap's most carefully-argued
+  honesty constraint — that it answers "is AI touching our site", not "did it
+  convert".
+- **Prompts creates data.** `ClientSpace`'s own docstring: "The only destination
+  here that CREATES data rather than reading a scan's."
+
+Final: **Measurement** (Overview, Report, Sources, Rankings, Sentiment,
+Technical, + Crawler activity) and **Investigation** (Answer gaps, Prompts, +
+Alerts, Prompt discovery). 6 + 4 at the end state, so neither cluster ever
+reaches the seven-seat ceiling. `clientNav.test.ts` asserts that projection
+directly, which is the whole point of doing this before Epic E.
+
+## What shipped
+
+**`LocalNavGroup`** — a labelled cluster rendering a `<ul>` with an accessible
+name, each item an `<li>`, so a screen reader reports "Measurement, list, 6
+items" rather than ten undifferentiated links. Clusters are separated by
+`--avp-space-6` against `--avp-space-1` between items: **a grouping that only
+reads once you have read its labels is not doing the work.**
+
+**The `<li>` is a plain flex item, never `display: contents`.** That would
+remove its box and let the `<a>` be the flex child directly — tidier CSS and a
+real hazard, since several browsers have shipped bugs where it strips `<li>`
+from the accessibility tree, taking the semantics this grouping exists to
+provide. Epic 9.16 refused the same property on `.avp-reveal-group`.
+
+**`clientNav.ts`** — the nav as DATA, not JSX. Accents are still written out
+rather than derived from position, because Epic 9.24's rule holds: they are
+identities, and inserting Alerts above Prompts must not repaint Prompts. What
+data buys is that `clientNav.test.ts` can assert no cluster repeats an accent,
+none outgrows the layer, every section has exactly one home, and the three
+sections still to come all fit.
+
+## The refactor caught itself, in a browser, again
+
+Moving Answer gaps from crimson (global 6) to its cluster's first seat made
+`ACCENT` 0 — which collided with a hardcoded `accent={0}` on the next stat
+tile. **"Rivals took" and "Partly held" both went blue**, and it reached a
+screenshot before anything caught it.
+
+That is the same failure as Epic B's crimson/magenta collision, from the same
+cause: accent literals scattered through JSX have nowhere to be checked. Fixed
+twice over — the tile accents are now derived from the screen's own accent
+(`benchAccent` cycles, so offsets stay distinct wherever the nav table moves
+this screen), and a test asserts the property rather than the hues.
+
+**Two tests were rewritten rather than repointed.** `ClientAnswerGapsView` and
+`ClientSentimentView` each asserted a hue literal — `bench-7-600`, `bench-6-600`
+— which held only while accents were global. Both now assert against
+`accentFor(section)`: what must be true is that a screen's figures and its nav
+item agree, not that either wears a particular number. A test edited to a new
+literal would have gone green and proved nothing, twice.
+
+## Verification
+
+**Measured across four viewports**, not assumed: `Measurement [1, —, 2, 3, 4, 5]`
+(the dash is the unaccented Report) and `Investigation [1, 2]` at every width;
+nav height 58px at 1440 and 164px at 420; **no sideways page scroll anywhere**.
+Stat tile rails confirmed distinct in the browser: `258 / 275 / 292` plus the
+unaccented hairline, 4 of 4.
+
+**The Report is unchanged.** `article.avp-report` on `/share/{token}`:
+**byte-identical, 72,750 bytes, SHA-256 `cbb44e55…`** — the same hash as before
+Epic B, now across three separate rounds of `components.css` edits. The whole
+page matches its own same-commit control at 76,248 bytes once the dev server's
+nonce and RSC render timestamp are normalised.
+
+**IP-safety check passed:** no new dependency (constraint 6 untouched); the new
+component lives in `@avp/design-system` with no ad hoc Tailwind on a
+customer-facing screen (constraint 2); the grouping was derived from this
+product's own data model and nav structure, not from any competitor's
+navigation (constraint 1); no scraped or model-returned content is involved
+anywhere in this pass (constraint 7).
+
+**Suite: 2,009 tests, up from 1,998.** web 642 (+11), design-system 405, api
+896, shared-types 53, workers 13. Screenshots at 1440/820/420 and dark in
+`docs/screenshots/epic-b1-nav-clusters/`.
+
+**Open for Epic E:** Alerts adds a section to Investigation at accent 2, and
+Crawler activity adds one to Measurement at accent 5. Both seats are free and
+`clientNav.test.ts` already asserts they fit.

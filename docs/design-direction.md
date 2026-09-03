@@ -352,6 +352,105 @@ is too light to hit 4.5:1 on paper. Labels on a ramp fill are `ink-900` or
 > eye.
 
 
+> ### BUILT — Epic B.1, 2026-09-02. The nav grew groups so the palette would not have to.
+>
+> Epic B filled the seventh and last seat in the `bench-*` layer with three
+> sections still to come. Three ways out were weighed and two of them cost
+> something the palette was built to guarantee: **shrinking the 30° meaning
+> buffer** lets a Working chip be misread as a score or a system state — the
+> confusion §1 exists to prevent and the one Epic A steered around when it
+> rejected `success`/`danger` for tone — and **letting chroma vary per accent**
+> makes one accent read as more important than another, which is the equal-
+> weight property §6 states structurally.
+>
+> **Grouping the nav costs neither.** A hue only has to be told apart from the
+> others in its own cluster, so each cluster restarts at the first accent and
+> none approaches seven. `Measurement` and `Investigation`, with membership
+> from the data model rather than from shipping order.
+>
+> **This was already how the product worked; it just was not written down.**
+> `WorkspaceShell`'s sidebar and `ClientSpace`'s strip are on screen together
+> and have shared hues 0–3 since Epic 9.24 — Dashboard and Overview are both
+> cobalt, Clients and Rankings both violet — and no one has read it as a
+> collision, because the two navs are different places doing different jobs.
+> A hue was already scoped to its nav. This scopes it to its cluster.
+>
+> **The trade, said plainly:** two items in the SAME strip can now share a hue,
+> separated by a label rather than by being in a different region of the
+> screen. That is weaker separation than the existing precedent, and it is the
+> mechanism — partitioning the arc between clusters instead would keep every
+> hue unique and buy no seats at all.
+>
+> **Sentiment moved, and that is the interesting part of the taxonomy.** The
+> first cut filed it under Analysis on the strength of when it shipped. It is a
+> measurement: the labels have been stored since Epic 4 and it is 15% of the
+> composite. Crawler activity moved for the same reason — a second data SOURCE
+> is not an analysis of the first, and filing it under Analysis would have
+> quietly undercut the roadmap's most carefully-argued honesty constraint.
+>
+> **The refactor immediately caught itself.** Moving Answer gaps from crimson
+> to its cluster's first seat collided it with a hardcoded `accent={0}` on the
+> next stat tile, and two figures in one row went blue. It reached a browser
+> screenshot before a test caught it — because ten accent literals scattered
+> through JSX have nowhere to be checked. That is why the nav is now a table in
+> `clientNav.ts` with its invariants asserted, and why the tile accents are
+> derived from the screen's own rather than typed.
+>
+> **The labels earn their place at 420px.** At 1440 the strip is one row and
+> the grouping is a nicety; narrow, the ten items stack into a block that the
+> two labels are the only thing organising. Measured, not assumed.
+
+
+> ### BUILT — Epic E, 2026-09-02. Alerts, and three rules that had to be redefined to fire at all.
+>
+> The Alerts tab reports what changed between a scan and the scan it was
+> compared against. Three things about it were decided by measuring the real
+> data rather than by the brief, and each changed the feature.
+>
+> **A baseline is not "the previous scan".** Of the three consecutive-scan pairs
+> in the whole database, two are re-runs 43 minutes and 2h11m apart. Comparing
+> across those measures the engines answering nondeterministically, not the
+> picture changing — the composite moved −0.93 and +0.68 and net tone moved up
+> to 6 points with nothing having happened. So a baseline must be at least 20
+> hours older, and a scan without one produces NO alerts rather than alerts
+> against whatever ran before it. That guard is the single most important line
+> in the feature, and it is stated on the screen rather than buried: the lead
+> paragraph tells the operator why close-together scans are not compared.
+>
+> **"Tone turning negative" never happens.** Across every engine of every scan
+> on record the minimum net tone is **+4**, so a rule watching for a sign change
+> fires zero times — and would have said nothing about the clearest tone event
+> in the data, Notion's net falling 13→6, 12→5 and 10→4 across all three engines
+> at once. The rule became a relative decline, and that event is the one thing
+> the whole alert surface currently reports.
+>
+> **"A rival took the citation you lost" cannot occur.** `cites_subject` is
+> `domain == subject_domain`, a pure function of the domain string, so a source
+> the client owned in one scan is its own in every scan. What is measurable is
+> the client's own domain going from cited to uncited.
+>
+> **An empty feed is two different findings, and the screen refuses to conflate
+> them.** Nine of eleven clients have one scan and can never produce an alert;
+> "0 alerts" would read as an all-clear for them. The screen reports which
+> situation it is — *"Nothing has been checked, which is not the same as nothing
+> being wrong"* against *"This is an all-clear, not an absence of data"* — and
+> carries `scansCompared / scansTotal` as a tile. The same discipline Epic B's
+> `subjectCitable` applies to a claim about citations.
+>
+> **Annotations mark the trend UNDER the axis, as a triangle.** A mark among the
+> lines reads as a data point, and this is not a measurement — it is a note that
+> something happened at this reading. Shape rather than colour carries the
+> distinction, since every other mark in the chart is a dot or a line, and
+> `warn` rather than `danger` for the reason `GapGrid`'s `absent` chip takes it.
+>
+> **The craft pass found the interaction defect.** Acknowledging removed the row
+> from the list instantly, so the rows below jumped under the cursor — and with
+> three alerts on one scan that happens twice in a row. The row now stays where
+> it is, visibly settled, and filters out on the next load. `emil-design-eng`
+> also caught a class name that styled nothing, an engine label styled as the
+> least important text in a row when it is the only discriminator between three
+> otherwise identical entries, and a silently swallowed failure.
+
 ### Client vs competitor — a semantic rule, not a palette
 
 Competitor series must **not** use the visibility ramp. If a competitor renders in

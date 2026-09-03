@@ -9,6 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ClientSentimentView } from './ClientSentimentView';
+import { accentFor } from './clientNav';
 import type { ClientDetailState } from './ClientDetailView';
 import type { Client, ClientHistory } from '@avp/shared-types';
 import { clientsMe, identifiedClient } from '@/lib/clients/__fixtures__/clients';
@@ -38,9 +39,20 @@ describe('the tab exists and says whose space it is', () => {
   });
 
   it('carries a distinct bench accent, so the strip stays legible as it grows', () => {
-    // Sixth section, sixth hue. The sidebar flattening into sameness is the
-    // failure this layer exists to prevent.
-    expect(render(threeScanHistory)).toContain('--avp-bench-6-600');
+    // Read from the nav table, not typed here. This asserted `bench-6` while
+    // accents were global; Epic B.1 scoped them to clusters and Sentiment moved
+    // into Measurement, which changed the hue without changing the property
+    // being tested — the strip does not flatten into sameness.
+    const accent = accentFor('sentiment');
+    expect(accent).not.toBeNull();
+    expect(render(threeScanHistory)).toContain(`--avp-bench-${accent! + 1}-600`);
+  });
+
+  it('sits in the Measurement cluster — tone is a scored dimension, not an analysis', () => {
+    // 15% of the composite, stored since Epic 4. It reads what a scan recorded,
+    // which is what the cluster means.
+    const html = render(threeScanHistory);
+    expect(html).toMatch(/<ul[^>]*aria-label="Measurement"/);
   });
 });
 

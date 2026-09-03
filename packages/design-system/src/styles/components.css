@@ -593,9 +593,60 @@
 .avp-localnav__items {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--avp-space-1);
+  /* Between CLUSTERS, not between items. Wider than the intra-group gap so the
+     split is legible before the labels are read — a group that only separates
+     by a label makes the reader parse text to see structure. */
+  gap: var(--avp-space-2) var(--avp-space-6);
   margin-top: var(--avp-space-2);
 }
+
+/* ---- clusters, Epic B.1 -------------------------------------------------
+   The nav grows GROUPS rather than hues: the bench arc holds seven accents and
+   a client's space is heading for ten sections. See LocalNav.tsx for why
+   grouping costs nothing that shrinking the buffer or varying chroma would. */
+
+.avp-localnav__group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--avp-space-1);
+  min-width: 0;
+}
+
+.avp-localnav__grouplabel {
+  /* The label is quieter than the items it names. It is a wayfinding aid, not
+     a destination, and a label competing with its own links would invert that.
+     Same treatment `.avp-tile__label` gives a figure's caption. */
+  padding-inline: var(--avp-space-3);
+  font-size: var(--avp-text-ui-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--avp-tracking-caps);
+  color: var(--avp-text-tertiary);
+}
+
+.avp-localnav__grouplist {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--avp-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/*
+ * The list item is a plain flex item, NOT `display: contents`.
+ *
+ * `display: contents` would remove its box and let the `<a>` be the flex child
+ * directly, which is tidier CSS and a real accessibility hazard: several
+ * browsers have shipped bugs where it strips `<li>` from the accessibility
+ * tree, which would take the list semantics this grouping exists to provide
+ * with it. Epic 9.16 refused the same property on `.avp-reveal-group` for a
+ * related reason and `tokens.test.ts` guards it there; the lesson generalises.
+ */
+.avp-localnav__slot {
+  display: inline-flex;
+  min-width: 0;
+}
+
 
 .avp-localnav__item {
   --avp-localnav-accent: var(--avp-beacon-600);
