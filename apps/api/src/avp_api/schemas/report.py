@@ -77,17 +77,29 @@ class ShareLinkOut(ApiModel):
 
 
 class ReportAgencyOut(ApiModel):
-    """The white-label surface.
+    """The white-label surface — Epic 9.22.
 
-    Name and slug only. Logo, custom domain and brand colours are §7 line 2 and
-    are deferred to Epic 7.1 — they need new columns AND a written policy on
-    which tokens an agency may override, because the visibility ramp is
-    load-bearing: an agency free to recolour it changes what the score means.
+    The written policy this docstring used to be waiting for now exists, and it
+    is short: an agency may change a logo and ONE colour, and that colour is
+    confined to chrome. `--avp-vis-*`, `--avp-beacon-*`,
+    `--avp-competitor-{1..5}` and the semantic four are not overridable by any
+    code path, because the report's palette is notation rather than decoration
+    and an agency free to recolour it changes what the score means.
+
+    **There is no field here that can reach an encoded token**, which is the
+    guarantee — a type, not a convention. `accentColor` is chrome only, and
+    `AgencyBranding.test.tsx` asserts it never renders adjacent to one.
+
+    No `customDomain`: deferred, and `schemas/agency.py` says why.
     """
 
     id: str
     name: str
     slug: str
+    # Null is the correct and expected state — an unbranded report is what
+    # every agency has until it says otherwise.
+    logo_url: str | None = None
+    accent_color: str | None = None
 
 
 class ReportSubjectOut(ApiModel):

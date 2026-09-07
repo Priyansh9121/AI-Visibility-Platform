@@ -103,6 +103,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agencies/{agencyId}/branding": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Branding
+         * @description Set this agency's logo and accent colour — Epic 9.22.
+         *
+         *     **What may be changed is a logo and ONE colour, and the colour only reaches
+         *     chrome.** The report's palette is notation rather than decoration: the
+         *     visibility ramp encodes the score, the competitor series is neutral by
+         *     design, the beacon marks the subject being scanned, and the semantic four
+         *     say a scan failed. `BrandingRequest` has no field that can reach any of
+         *     them — the guarantee is the type, not this docstring.
+         *
+         *     **Admin or owner, not any member.** How every report an agency sends is
+         *     branded is an agency-level decision with an external audience, which is the
+         *     same bar `PATCH`-ing seats sits behind.
+         *
+         *     **PATCH, and null means remove.** An agency that set the wrong logo needs a
+         *     way back to unbranded; a route that can only ever set is a one-way door.
+         *     Both fields are independent, so sending one does not clear the other —
+         *     which is why the body is read field by field rather than assigned wholesale.
+         *
+         *     **`404` for another agency's id**, never `403`: answering "you may not
+         *     touch that agency" confirms it exists.
+         *
+         *     **Errors:** `401`, `403` (member seat), `404` (another agency's id), `422`
+         *     (a logo URL that is not `https://`, or a colour that is not `#rrggbb`).
+         */
+        patch: operations["update_branding_api_v1_agencies__agencyId__branding_patch"];
+        trace?: never;
+    };
     "/api/v1/agencies/{agencyId}/invitations": {
         parameters: {
             query?: never;
@@ -1787,6 +1829,49 @@ export interface components {
             position?: number | null;
         };
         /**
+         * BrandingOut
+         * @description An agency's branding as stored. Null on both fields is unbranded.
+         */
+        BrandingOut: {
+            /** Accentcolor */
+            accentColor?: string | null;
+            /** Agencyid */
+            agencyId: string;
+            /** Logourl */
+            logoUrl?: string | null;
+        };
+        /**
+         * BrandingRequest
+         * @description What an agency may change about how its reports look — Epic 9.22.
+         *
+         *     **The shortness of this model is the decision, not an omission.** §7 line 2
+         *     asked for "logo, custom domain, colours"; what an agency may actually
+         *     change is a logo and ONE colour used only on chrome.
+         *
+         *     The report's palette is notation. `--avp-vis-*` encodes the score on a
+         *     monotonic lightness ramp that survives greyscale and colour-vision
+         *     deficiency; `--avp-competitor-{1..5}` is neutral so no rival reads as
+         *     endorsed or attacked; `--avp-beacon-*` marks the subject being scanned, who
+         *     is the prospect and not the agency; the semantic four say a scan failed or
+         *     a quota is low. There is no field here that can reach any of them, which is
+         *     the guarantee — enforced by the type rather than by a reviewer noticing,
+         *     the same way `FixFacts` has no field able to hold page copy.
+         *
+         *     **No `custom_domain`.** Deferred rather than forgotten: it needs DNS
+         *     verification, certificate issuance and routing before it does anything, and
+         *     a field that stores a value nothing honours is a field that looks built.
+         *
+         *     **Both values are explicitly nullable, and null means "remove it".** An
+         *     agency that uploaded the wrong logo needs a way back to unbranded, and a
+         *     PATCH that can only ever set is a one-way door.
+         */
+        BrandingRequest: {
+            /** Accentcolor */
+            accentColor?: string | null;
+            /** Logourl */
+            logoUrl?: string | null;
+        };
+        /**
          * ChangePasswordRequest
          * @description Change your own password while signed in — Epic 9.14.
          *
@@ -2745,16 +2830,28 @@ export interface components {
         };
         /**
          * ReportAgencyOut
-         * @description The white-label surface.
+         * @description The white-label surface — Epic 9.22.
          *
-         *     Name and slug only. Logo, custom domain and brand colours are §7 line 2 and
-         *     are deferred to Epic 7.1 — they need new columns AND a written policy on
-         *     which tokens an agency may override, because the visibility ramp is
-         *     load-bearing: an agency free to recolour it changes what the score means.
+         *     The written policy this docstring used to be waiting for now exists, and it
+         *     is short: an agency may change a logo and ONE colour, and that colour is
+         *     confined to chrome. `--avp-vis-*`, `--avp-beacon-*`,
+         *     `--avp-competitor-{1..5}` and the semantic four are not overridable by any
+         *     code path, because the report's palette is notation rather than decoration
+         *     and an agency free to recolour it changes what the score means.
+         *
+         *     **There is no field here that can reach an encoded token**, which is the
+         *     guarantee — a type, not a convention. `accentColor` is chrome only, and
+         *     `AgencyBranding.test.tsx` asserts it never renders adjacent to one.
+         *
+         *     No `customDomain`: deferred, and `schemas/agency.py` says why.
          */
         ReportAgencyOut: {
+            /** Accentcolor */
+            accentColor?: string | null;
             /** Id */
             id: string;
+            /** Logourl */
+            logoUrl?: string | null;
             /** Name */
             name: string;
             /** Slug */
@@ -3523,6 +3620,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PortalSessionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_branding_api_v1_agencies__agencyId__branding_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agencyId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BrandingRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrandingOut"];
                 };
             };
             /** @description Validation Error */

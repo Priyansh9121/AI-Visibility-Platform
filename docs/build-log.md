@@ -11474,3 +11474,122 @@ tokens an agency may override: the visibility ramp is load-bearing, and an
 agency free to recolour it changes what the score means. That is a design
 decision rather than a build task, so it is put back rather than picked
 silently.
+
+# Epic 9.22 — white-label branding, and the policy that had to be written first
+
+`ReportAgencyOut`'s docstring had been waiting for this since Epic 7: *"Logo,
+custom domain and brand colours are §7 line 2 and are deferred to Epic 7.1 —
+they need new columns AND a written policy on which tokens an agency may
+override, because the visibility ramp is load-bearing: an agency free to
+recolour it changes what the score means."* The columns were the easy half.
+
+**Layer 5 (Distribution/Action), Activation phase.** The fork below was put
+back to the founder rather than picked, per north-star.md §8.1: a brief whose
+premise has no clearly-better default is a design decision, and ticking the
+checkbox silently is the wrong trade.
+
+## The policy, and it is short
+
+**An agency may set a logo and ONE colour, and that colour reaches chrome
+only.** Everything else in the report's palette is notation rather than
+decoration:
+
+| Token family | What it encodes | Overridable |
+|---|---|---|
+| `--avp-vis-*` | The score itself, on a monotonic lightness ramp that survives greyscale and colour-vision deficiency | **No** |
+| `--avp-beacon-*` | The subject **being scanned** — the prospect, not the agency | No |
+| `--avp-competitor-{1..5}` | The rival series, neutral so none reads as endorsed or attacked | No |
+| `--avp-success/warn/danger/info` | System state | No |
+| Masthead mark, letterhead rule | The agency's own identity on the document | **Yes** |
+
+The beacon row is the one worth naming out loud. "The brand on this report" and
+"the brand this report is about" are different brands, and a branding feature is
+exactly where they get confused.
+
+**The guarantee is a type, not a convention.** `BrandingRequest` has two fields
+and no field capable of naming an encoded token — the same discipline
+`FixFacts` uses to make page copy unrepresentable rather than merely
+discouraged. A test asserts the model has exactly two fields, so adding a third
+is a policy change somebody has to make deliberately.
+
+**And the isolation is structural.** `--avp-agency-accent` is set inline on the
+masthead element and nowhere above it, so the variable is not in scope for a
+single beat of the report; an encoded token could not read it even if a future
+stylesheet asked. `AgencyBranding.test.tsx` asserts the colour never appears
+after the first beat, never shares an element with an encoded token, and is
+never defined on the page root. Both properties were checked by mutation: adding
+`avp-vis-high` to the letterhead rule fails the second, and hoisting the
+variable to `ReportPage` fails the third.
+
+## Two smaller forks, both decided the conservative way
+
+**The PDF does not get the logo.** `report_pdf.py` was built at zero
+dependencies behind an explicit licensing survey — WeasyPrint's required
+`Pyphen` is GPL/LGPL/MPL, which ip-safety.md #6 blocks, and React-PDF is a Node
+library in a Python process. A logo is the first image the document has ever
+needed, and adding one would reopen that survey for a letterhead mark. It would
+also mean the server FETCHING an agency-supplied URL to embed it, which is a
+different security question from an `<img src>` the reader's own browser
+resolves. So the web report carries a logo and the PDF does not, the gap is
+named on the route and in `api-contracts.md`, and a test asserts the PDF writer
+never learns about either field — so reversing this is a deliberate act rather
+than a quiet drift.
+
+**No `custom_domain` column.** A custom domain needs DNS verification,
+certificate issuance and request routing before it does anything at all. A
+nullable column with none of that behind it is a field that looks built and is
+not, and the API would be accepting a value nothing honours.
+
+## The logo is a URL, because there is no asset store
+
+Checked before inventing one: there is no `UploadFile`, no S3 client, no
+presigned-URL helper anywhere in the repo. Building the first asset-storage
+pattern in the product in order to hold a letterhead mark would be the larger
+decision smuggled inside the smaller, so `logo_url` is an absolute `https://`
+URL the agency already hosts.
+
+## Validated twice, and neither check is redundant
+
+Both values are agency-supplied and both land on the product's only
+**unauthenticated** page. `javascript:` in an `<img src>` is script execution
+against every reader of a shared report; `data:` is the same carrying its own
+payload; an unanchored colour string in a CSS custom property closes the
+declaration and opens another. `schemas/agency.py` rejects a bad value with a
+readable message, and CHECK constraints on `agencies` mean one cannot be stored
+however it arrived — a script, a fixture, a future endpoint that forgets. They
+fail at different times for different audiences, and a test drives the second
+directly with raw SQL.
+
+`var(--avp-vis-high)` is in the rejected-colour table for a reason that is not
+injection: it is an agency quietly adopting the visibility ramp as its brand
+colour, which is the exact confusion the disjointness rule exists to prevent.
+
+**IP-safety check passed:** the visibility, beacon, competitor and semantic
+token families are not overridable by any code path — `BrandingRequest` has no
+field that can name one (asserted), and the accent variable is scoped to the
+masthead subtree so it is out of scope for every beat (asserted, and both
+properties mutation-checked). **No new dependency was added** (constraint 6
+untouched), which is precisely why the PDF does not carry the logo — the
+alternative was reopening `report_pdf.py`'s licensing survey. The logo URL is
+**not** a stored-XSS vector: `https://` only, enforced at the schema and by a
+CHECK, rendered as an `<img src>` the reader's browser resolves. It is **not**
+an SSRF vector either, because nothing server-side fetches it — a property of
+the PDF decision, and recorded on the validator so that the day the PDF changes,
+whoever changes it knows the validator alone is not enough.
+
+## Verification
+
+**api 1,102, up from 1,065** — 37 new in `test_branding.py`. **web 712, up from
+703** — 9 new in `AgencyBranding.test.tsx`. design-system 418 and shared-types
+unchanged. `ruff check src tests` clean; `tsc` clean on all three packages with
+`api.gen.ts` regenerated. Migration `59c47a7a44f6` applied, downgraded and
+re-applied on `avp_dev`, `alembic check` clean either side.
+
+## Open
+
+**Outreach content generation** is untouched and remains §7 Epic 10 — Layer 5's
+third piece, and the only one still unstarted.
+
+**The custom domain** and **the PDF logo**, both deferred above with their
+reasons. Neither is blocked on a decision now; both are blocked on work whose
+size is the argument for not doing it here.

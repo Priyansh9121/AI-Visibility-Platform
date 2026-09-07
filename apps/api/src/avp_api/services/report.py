@@ -131,7 +131,13 @@ async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:
         scan_status=scan.status.value,
         generated_at=datetime.now(UTC),
         scanned_at=scan.finished_at or scan.started_at,
-        agency=ReportAgencyOut(id=agency.id, name=agency.name, slug=agency.slug),
+        agency=ReportAgencyOut(
+            id=agency.id,
+            name=agency.name,
+            slug=agency.slug,
+            logo_url=agency.logo_url,
+            accent_color=agency.accent_color,
+        ),
         subject=ReportSubjectOut(
             client_id=client.id,
             name=client.name,

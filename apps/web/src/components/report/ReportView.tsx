@@ -40,6 +40,7 @@ import {
   ScoreDisplay,
   VisibilityBadge,
 } from '@avp/design-system';
+import type { CSSProperties } from 'react';
 import type { ReactNode } from 'react';
 import type { Report, ReportCompetitorSet } from '@avp/shared-types';
 import { ArrowRight } from 'lucide-react';
@@ -95,7 +96,7 @@ export function ReportView({
   const scanned = report.scannedAt ?? report.generatedAt;
 
   return (
-    <ReportPage brand={<Brand agencyName={report.agency.name} slug={report.agency.slug} />}>
+    <ReportPage brand={<Brand agency={report.agency} />}>
       <ReportHeader
         subject={subjectName}
         subtitle={`How ${subjectName} appears when buyers ask AI assistants for a recommendation.`}
@@ -132,21 +133,68 @@ export function ReportView({
 type Narrative = ReturnType<typeof deriveNarrative>;
 
 /**
- * The white-label surface.
+ * The white-label surface — Epic 9.22.
  *
- * Agency identity, never ours — this document is put in front of the agency's
- * prospect under the agency's name. Logo, custom domain and brand colours are
- * §7's second checklist line and land in Epic 7.1; name and slug are what the
- * data model holds today, so they are what is shown today rather than a
- * placeholder for something unbuilt.
+ * Agency identity, never ours: this document is put in front of the agency's
+ * prospect under the agency's name.
+ *
+ * WHAT AN AGENCY MAY CHANGE, AND WHY IT IS THIS LITTLE
+ * ----------------------------------------------------
+ * A logo and ONE colour, and the colour reaches chrome only — the rule below
+ * the masthead, and nothing else. The report's palette is notation rather than
+ * decoration: `--avp-vis-*` encodes the score on a monotonic lightness ramp
+ * that survives greyscale and colour-vision deficiency, `--avp-competitor-*`
+ * is neutral so no rival reads as endorsed or attacked, `--avp-beacon-*` marks
+ * the subject being scanned (the prospect, not the agency), and the semantic
+ * four say a scan failed. An agency free to recolour any of those changes what
+ * the document MEANS.
+ *
+ * THE ISOLATION IS STRUCTURAL, NOT A CONVENTION. `--avp-agency-accent` is set
+ * inline on this element and nowhere above it, so the variable is not in scope
+ * for a single beat of the report — an encoded token could not read it even if
+ * some future stylesheet asked. If a footer ever wants the accent, scope it to
+ * that element too; do NOT hoist this to the page root, which would trade a
+ * guarantee for a convenience. `AgencyBranding.test.tsx` asserts it.
+ *
+ * The logo is an `<img src>` and is never fetched by us. It is agency-supplied
+ * and this page is unauthenticated, so the API accepts `https://` only — see
+ * `schemas/agency.py`. The PDF deliberately does not carry it (Epic 9.22): the
+ * writer has no image support by design, and adding one would reopen a
+ * dependency survey that was closed at zero.
  */
-function Brand({ agencyName, slug }: { agencyName: string; slug: string }) {
+function Brand({ agency }: { agency: Report['agency'] }) {
+  const accent = agency.accentColor ?? undefined;
+
   return (
-    <div className="flex items-baseline justify-between gap-4">
-      <span className="text-ui-md font-medium text-text-primary">{agencyName}</span>
-      <span className="text-ui-2xs uppercase tracking-caps text-text-tertiary">
-        {`${slug} · AI visibility report`}
-      </span>
+    <div
+      className="flex flex-col gap-3"
+      style={accent ? ({ '--avp-agency-accent': accent } as CSSProperties) : undefined}
+    >
+      <div className="flex items-baseline justify-between gap-4">
+        {agency.logoUrl ? (
+          <img
+            src={agency.logoUrl}
+            alt={agency.name}
+            className="max-h-8 w-auto max-w-[200px] object-contain"
+          />
+        ) : (
+          <span className="text-ui-md font-medium text-text-primary">{agency.name}</span>
+        )}
+        <span className="text-ui-2xs uppercase tracking-caps text-text-tertiary">
+          {`${agency.slug} · AI visibility report`}
+        </span>
+      </div>
+      {/*
+        The letterhead rule. The ONLY thing the agency's colour touches, and it
+        carries no data — it is a horizontal line under a masthead. Falls back
+        to the hairline every unbranded report already draws, so an agency that
+        set no colour sees no change at all.
+      */}
+      <div
+        aria-hidden="true"
+        className="h-px w-full bg-line-hairline"
+        style={accent ? { backgroundColor: 'var(--avp-agency-accent)' } : undefined}
+      />
     </div>
   );
 }

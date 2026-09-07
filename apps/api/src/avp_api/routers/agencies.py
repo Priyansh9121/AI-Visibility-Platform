@@ -34,8 +34,10 @@ from sqlalchemy import select
 
 from ..deps import DbDep, RequireAdmin, SessionStoreDep, SettingsDep, assert_own_agency
 from ..errors import Conflict, NotFound, PermissionDenied
-from ..models import User
+from ..models import Agency, User
 from ..schemas.agency import (
+    BrandingOut,
+    BrandingRequest,
     InviteSeatRequest,
     InviteSeatResponse,
     PendingInvitationOut,
@@ -229,3 +231,60 @@ async def release_seat(
     await store.revoke_all_for_user(user.id)
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.patch("/agencies/{agencyId}/branding", response_model=BrandingOut)
+async def update_branding(
+    principal: RequireAdmin,
+    db: DbDep,
+    payload: BrandingRequest,
+    agency_id: str = Path(alias="agencyId"),
+) -> Any:
+    """Set this agency's logo and accent colour — Epic 9.22.
+
+    **What may be changed is a logo and ONE colour, and the colour only reaches
+    chrome.** The report's palette is notation rather than decoration: the
+    visibility ramp encodes the score, the competitor series is neutral by
+    design, the beacon marks the subject being scanned, and the semantic four
+    say a scan failed. `BrandingRequest` has no field that can reach any of
+    them — the guarantee is the type, not this docstring.
+
+    **Admin or owner, not any member.** How every report an agency sends is
+    branded is an agency-level decision with an external audience, which is the
+    same bar `PATCH`-ing seats sits behind.
+
+    **PATCH, and null means remove.** An agency that set the wrong logo needs a
+    way back to unbranded; a route that can only ever set is a one-way door.
+    Both fields are independent, so sending one does not clear the other —
+    which is why the body is read field by field rather than assigned wholesale.
+
+    **`404` for another agency's id**, never `403`: answering "you may not
+    touch that agency" confirms it exists.
+
+    **Errors:** `401`, `403` (member seat), `404` (another agency's id), `422`
+    (a logo URL that is not `https://`, or a colour that is not `#rrggbb`).
+    """
+    assert_own_agency(principal.agency_id, agency_id)
+
+    agency = (
+        await db.execute(select(Agency).where(Agency.id == agency_id))
+    ).scalar_one_or_none()
+    if agency is None:
+        raise NotFound(detail="No agency with that identifier.")
+
+    # Field by field, and only what was sent. `model_fields_set` is what makes
+    # "clear the logo" (an explicit null) different from "leave the logo alone"
+    # (absent) — assigning the whole model would collapse those into one, and
+    # an agency updating only its colour would silently lose its logo.
+    sent = payload.model_fields_set
+    if "logo_url" in sent:
+        agency.logo_url = payload.logo_url
+    if "accent_color" in sent:
+        agency.accent_color = payload.accent_color
+    await db.commit()
+
+    return BrandingOut(
+        agency_id=agency.id,
+        logo_url=agency.logo_url,
+        accent_color=agency.accent_color,
+    )

@@ -386,11 +386,19 @@ made them wrong.
 What exists: the public share link (`POST /scans/{scanId}/share`,
 `GET /reports/{token}`, Epic 9.8), PDF export on both the authenticated and the
 public path (Epic 9.14), and expiry plus revocation on the link (Epic 9.21).
-What does not: white-label branding — logo, custom domain, an agency accent
-colour — which needs new `Agency` columns AND a written policy on which design
-tokens an agency may override, because the visibility ramp is load-bearing and
-an agency free to recolour it changes what the score means. Outreach content
-generation is untouched and remains §7 Epic 10.
+White-label branding shipped in Epic 9.22 with the token-override policy
+written rather than assumed: an agency may set a logo and ONE accent colour,
+and the accent reaches chrome only. The visibility ramp, beacon, competitor and
+semantic token families are not overridable by any code path, because the
+report's palette is notation and an agency free to recolour it changes what the
+score means.
+
+What does not exist: a custom domain (deferred — it needs DNS verification,
+certificate issuance and routing before it does anything, and a column with
+none of that behind it is a field that looks built), an agency logo in the PDF
+(the writer has no image support by design, and adding it reopens a closed
+dependency survey), and outreach content generation, which is untouched and
+remains §7 Epic 10.
 
 - All seven `product-spec.md` §7 Epic 10 items are `[ ]`.
 - **`PDF export + shareable web link` is `[ ]`** — Epic 7's own deferred item,
