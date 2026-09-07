@@ -30,6 +30,38 @@ questions.
 Neither reaches a copy already downloaded. A PDF on someone's disk cannot be
 recalled by anything this module does, and `routers/report.py` says so on the
 route that serves it.
+
+THIS MODULE AND THE LEASE WRITE THE SAME ROW — checked 2026-09-08
+-----------------------------------------------------------------
+Both functions below take `SELECT ... FOR UPDATE` on a `Scan`. The lease
+(`services/scan_executor.py`) writes `lease_expires_at` and `status` on that
+same row from three places, one of them on a 30-second clock. Raised as a
+lock-ordering question when branding shipped, and the premise turned out to be
+true rather than hypothetical: **the share routes have no status guard, so a
+RUNNING scan can be shared and revoked while its executor is still working.**
+That is deliberate — an operator watching a scan run may send the link before
+it finishes — so the two really do contend.
+
+The overlap is benign, and ONE INVARIANT IS WHAT MAKES IT SO:
+
+    every writer of the `scans` row takes exactly that one row, and holds it
+    across a flush and a commit with no network call in between.
+
+Both halves matter. One resource means a deadlock has no second lock to form a
+cycle with, however the two interleave. No network call in the critical section
+means the worst case is serialisation measured in milliseconds — nowhere near
+`LEASE`, which is six heartbeat intervals precisely so a renewal can be delayed
+and lose nothing. `scan_runner.run_scan` had to commit before its engine loop
+to keep the second half true (build-log, "the row lock that every version of
+its design was resting on"), which is the same invariant arrived at from the
+other side.
+
+**So the thing to preserve is the invariant, not a lock order.** If a future
+share path ever needs to call out to something — an email send, an audit log,
+a link shortener — do it after the commit, not inside the lock. The tests in
+`test_share_link.py::TestSharingAndTheLeaseShareOneRow` run a share and a
+renewal concurrently against one row and would not catch that on their own;
+this comment is the part that has to be read.
 """
 
 from __future__ import annotations

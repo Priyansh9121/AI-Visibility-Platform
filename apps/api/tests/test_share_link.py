@@ -628,3 +628,151 @@ class TestExpiry:
                     )
                 )
                 await s.commit()
+
+
+class TestSharingAndTheLeaseShareOneRow:
+    """Share/revoke and the lease both write `scans`, and both take the row.
+
+    `get_or_create_share_token` and `revoke_share_token` hold
+    `SELECT ... FOR UPDATE` on the scan row; the lease's claim, heartbeat and
+    reaper all UPDATE the same row on their own sessions, on a clock. Raised as
+    a lock-ordering question when Epic 9.22 shipped and answered here rather
+    than assumed away, because the premise turned out to be true: **nothing
+    stops a RUNNING scan from being shared.** The share routes have no status
+    guard, deliberately — an operator watching a scan run can send the link
+    before it finishes.
+
+    What makes the overlap benign is that every writer takes exactly ONE
+    resource and holds it across a flush and a commit with no network call in
+    between, so the worst case is serialisation measured in milliseconds and a
+    deadlock has no second resource to form a cycle with. `services/share.py`
+    states the invariant that keeps it that way.
+    """
+
+    async def _running_scan(self, client: AsyncClient, stub_engines) -> str:  # noqa: ANN001
+        """A scan left RUNNING with a live lease, as an executor would hold it."""
+        from datetime import timedelta
+
+        from sqlalchemy import update as sa_update
+
+        from avp_api.db import get_sessionmaker
+        from avp_api.models import Scan, ScanStatus
+
+        sid = await _scored_scan(client, stub_engines)
+        async with get_sessionmaker()() as s:
+            await s.execute(
+                sa_update(Scan)
+                .where(Scan.id == sid)
+                .values(
+                    status=ScanStatus.RUNNING,
+                    lease_expires_at=datetime.now(UTC) + timedelta(seconds=180),
+                )
+            )
+            await s.commit()
+        return sid
+
+    async def test_a_running_scan_can_be_shared_while_its_lease_is_renewed(
+        self, client: AsyncClient, stub_engines, settings
+    ) -> None:  # noqa: ANN001
+        """Both writers touch the row at once. Both must finish.
+
+        Genuinely concurrent rather than sequential: a test that ran them one
+        after the other would pass against a design that deadlocks.
+        """
+        import asyncio
+
+        from avp_api.db import get_sessionmaker
+        from avp_api.models import Scan
+        from avp_api.services.scan_executor import renew_lease
+
+        await _sign_up(client, "Lease Share Agency", "leaseshare1@test.example")
+        sid = await self._running_scan(client, stub_engines)
+
+        share, renewed = await asyncio.gather(
+            client.post(f"{BASE}/scans/{sid}/share"),
+            renew_lease(sid, settings=settings),
+        )
+
+        assert share.status_code == 200, share.text
+        assert renewed is True, "the heartbeat could not renew past the share lock"
+
+        # Both writes landed: they touch different column families on one row.
+        async with get_sessionmaker()() as s:
+            scan = await s.get(Scan, sid)
+            assert scan.share_token == share.json()["token"]
+            assert scan.lease_expires_at is not None
+
+    async def test_revoking_and_renewing_at_once_deadlocks_neither(
+        self, client: AsyncClient, stub_engines, settings
+    ) -> None:  # noqa: ANN001
+        """The other lock site, and the one an agency reaches under pressure.
+
+        Revocation is what somebody does the moment they realise a link went to
+        the wrong address, which is exactly when the scan behind it may still
+        be running.
+        """
+        import asyncio
+
+        from avp_api.db import get_sessionmaker
+        from avp_api.models import Scan
+        from avp_api.services.scan_executor import renew_lease
+
+        await _sign_up(client, "Lease Share Agency", "leaseshare2@test.example")
+        sid = await self._running_scan(client, stub_engines)
+        await client.post(f"{BASE}/scans/{sid}/share")
+
+        revoke, renewed = await asyncio.gather(
+            client.delete(f"{BASE}/scans/{sid}/share"),
+            renew_lease(sid, settings=settings),
+        )
+
+        assert revoke.status_code == 204
+        assert renewed is True
+
+        async with get_sessionmaker()() as s:
+            scan = await s.get(Scan, sid)
+            assert scan.share_token is None
+            assert scan.share_expires_at is None
+            # The lease is untouched by revocation: different column family,
+            # and an executor must not lose its claim because somebody
+            # un-shared the report it is still producing.
+            assert scan.lease_expires_at is not None
+
+    async def test_the_reaper_can_still_take_a_scan_that_is_being_shared(
+        self, client: AsyncClient, stub_engines
+    ) -> None:  # noqa: ANN001
+        """A shared link does not pin a scan against the reaper.
+
+        Sharing writes `share_token`; reaping reads `lease_expires_at` and
+        writes `status`. Neither predicate mentions the other's columns, so a
+        report can be shared and its executor still be found dead.
+        """
+        from datetime import timedelta
+
+        from sqlalchemy import update as sa_update
+
+        from avp_api.db import get_sessionmaker
+        from avp_api.models import Scan, ScanStatus
+        from avp_api.services.scan_executor import EXECUTOR_LOST, reap_stale_scans
+
+        await _sign_up(client, "Lease Share Agency", "leaseshare3@test.example")
+        sid = await self._running_scan(client, stub_engines)
+        token = (await client.post(f"{BASE}/scans/{sid}/share")).json()["token"]
+
+        async with get_sessionmaker()() as s:
+            await s.execute(
+                sa_update(Scan)
+                .where(Scan.id == sid)
+                .values(lease_expires_at=datetime.now(UTC) - timedelta(seconds=1))
+            )
+            await s.commit()
+            assert await reap_stale_scans(s) == 1
+            await s.commit()
+
+            scan = await s.get(Scan, sid)
+            await s.refresh(scan)
+            assert scan.status is ScanStatus.FAILED
+            assert scan.error_code == EXECUTOR_LOST
+            # And the link still works: reaping is a statement about the
+            # executor, not about whether the report may be read.
+            assert scan.share_token == token

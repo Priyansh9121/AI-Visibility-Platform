@@ -11593,3 +11593,112 @@ third piece, and the only one still unstarted.
 **The custom domain** and **the PDF logo**, both deferred above with their
 reasons. Neither is blocked on a decision now; both are blocked on work whose
 size is the argument for not doing it here.
+
+# Two loose ends, and neither was the thing it was written down as
+
+Both items came into this session as known work: a lock-ordering question to
+resolve, and an open defect to fix. One turned out to be real but benign; the
+other had been fixed three epics earlier and the document saying otherwise was
+stale. Recorded together because the pattern is the same one Layer 5's status
+had, and this is now the third time a document has been found describing a
+state the code left behind.
+
+## 1 — Sharing and the lease do contend, and the reason it is safe is not the one that was guessed
+
+The question was whether `share.py`'s two `SELECT ... FOR UPDATE` sites could
+interact with the lease's claim, heartbeat and reaper, all of which write the
+same `scans` row. The suggested answer to check for was *"no realistic overlap
+— a scan being shared is already terminal"*.
+
+**That answer is wrong, and checking is what showed it.** The share routes have
+no status guard at all: a RUNNING scan can be shared and revoked while its
+executor is still working. That is deliberate rather than an oversight — an
+operator watching a scan run may want to send the link before it finishes — so
+the two paths genuinely contend on one row, on a 30-second clock.
+
+The overlap is benign, and **one invariant is what makes it so**:
+
+> every writer of the `scans` row takes exactly that one row, and holds it
+> across a flush and a commit with no network call in between.
+
+Both halves carry weight. One resource means a deadlock has no second lock to
+form a cycle with, however the two interleave — so no lock ORDER needs
+defining, which is why the question does not become its own brief. No network
+call in the critical section means the worst case is serialisation in
+milliseconds, against a `LEASE` of six heartbeat intervals sized precisely so a
+delayed renewal loses nothing.
+
+That second half is not free, and it was nearly not true: `run_scan` used to
+hold this row across its whole engine phase, which the lease work had to fix
+before a heartbeat could renew at all. So the invariant has now been arrived at
+twice from opposite directions, which is the argument for writing it down as an
+invariant rather than as a fact about today's call sites. It is on
+`services/share.py`, with the thing that would break it named — a future share
+path that calls out to an email sender or a link shortener *inside* the lock.
+
+Three tests run a share, a revoke and a reap concurrently against one row and
+assert both effects land. They would not catch a network call added inside the
+lock, which is why the comment is the part that has to be read.
+
+**Also settled by the same reading:** revocation leaves `lease_expires_at`
+alone, and reaping leaves `share_token` alone. Different column families on one
+row, and neither predicate mentions the other's columns — so un-sharing a
+report does not cost an executor its claim, and finding an executor dead does
+not take a working link away from a prospect.
+
+## 2 — The Epic 8 defect was fixed in Epic 9.18; `product-spec.md` had not noticed
+
+`product-spec.md` §7 Epic 8 carried this as an open defect, deliberately not
+fixed, needing its own brief: `messages.parse` validates inside the SDK, so a
+`pydantic.ValidationError` bypassed the whole `anthropic.*` ladder and the fix
+phase raised.
+
+`fix_generator.py` has caught it since `22a3134` ("Epic 9.18: an overlong title
+no longer loses the whole fix list"), mapping it to `PROVIDER_SCHEMA_VIOLATION`
+— deliberately distinct from a provider error, because the provider answered
+and our own schema is what rejected the answer. The test reproduces the
+`plausible.io` failure the way it happened, by letting the real validator
+reject a real 240-character title rather than raising a hand-built error, on the
+stated grounds that a test which raises the exception itself proves only that
+the `except` clause is spelled correctly.
+
+So the fix, the distinct outcome code and the faithful reproduction the brief
+asked for all already existed, to the letter. **Nothing was built here.** The
+checkbox was corrected, with the commit that fixed it named so the next reader
+can go and look.
+
+## 3 — Layer 2 is two vendors, not one, and three documents said otherwise
+
+Checked because the next fork depends on it. `ChatGptAdapter` exists, runs
+`gpt-5.5` over raw `httpx`, is registered in `ENGINE_REGISTRY`, and is in
+`DEFAULT_ENGINES` — so **every scan already runs three engines across two
+vendors**. A live call was made against the real API two sessions ago while
+verifying `reasoning_effort`, so this is not a paper adapter.
+
+`north-star.md` said the opposite in three places, all now corrected:
+
+* **"SHIPPED for one vendor. This is the layer's defining limitation."** Now
+  two vendors and three engines, with Perplexity and Google named as the ones
+  that really do remain unbuilt — they are enum members with no adapter, and
+  the router refuses them at the request before a scan row exists.
+* **"OpenAI, Perplexity and Google keys are provisioned but empty. No adapter
+  exists for any of them."** Two thirds still true; the OpenAI third is three
+  epics out of date.
+* **"Cross-LLM sentiment comparison: NOT BUILT, and currently impossible...
+  blocked by Layer 2"** — and this is the correction that matters most, because
+  §3.8 leans on it to argue that a table-stakes gap holds the differentiator
+  hostage. Sentiment is computed per engine result and `chatgpt` runs beside
+  `claude` in the same parametric mode by design, so **the cross-vendor axis is
+  in the data today**: `engine_results` carries a sentiment and a confidence per
+  prompt × engine, and nothing reads them comparatively. The comparison is
+  unbuilt Layer 3 work, not a Layer 2 dependency.
+
+That last one changes what the next brief can be. The clearest differentiator
+in the document is not blocked; it is simply not built.
+
+## Verification
+
+**api 1,105, up from 1,102** — three new in `test_share_link.py`, all
+concurrency tests against one row. web 712, design-system 418 and shared-types
+unchanged; nothing here touches the contract. `ruff check src tests` clean. No
+migration.
