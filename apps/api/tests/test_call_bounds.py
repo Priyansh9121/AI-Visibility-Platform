@@ -33,8 +33,9 @@ import pytest
 
 from avp_api.config import Settings
 from avp_api.models.engine_result import Engine
-from avp_api.services import call_bounds, engines, extraction
+from avp_api.services import call_bounds, classify, engines, extraction
 from avp_api.services.call_bounds import CallBound
+from avp_api.services.crawl import CrawlResult, CrawlSignals
 from avp_api.services.engines import EngineAnswer
 
 # Epic 9.1's outlier, in seconds — the number every ceiling here must beat.
@@ -89,7 +90,35 @@ def _sentiment_timed_out(result: object) -> None:
     assert result == (None, None)
 
 
+def _classifiable_crawl() -> CrawlResult:
+    text = "word " * 200
+    signals = CrawlSignals(
+        final_url="https://northaven-dental.example",
+        registrable_domain="northaven-dental.example",
+        word_count=len(text.split()),
+    )
+    return CrawlResult(signals=signals, text_extract=text, ok=True)
+
+
+def _classification_timed_out(result: object) -> None:
+    # An unclassifiable outcome with a reason a reader can act on. TIMEOUT,
+    # not PROVIDER_UNREACHABLE: the ladder checks APITimeoutError before the
+    # APIConnectionError it subclasses.
+    assert isinstance(result, classify.ClassificationOutcome)
+    assert result.status == "unclassifiable"
+    assert result.reason_code == "TIMEOUT"
+    assert result.industry is None
+
+
 SITES = [
+    Site(
+        name="classify",
+        module=classify,
+        bound_attr="CLASSIFIER_BOUND",
+        ceiling=26.0,
+        call=lambda s: classify.classify(_classifiable_crawl(), settings=s),
+        assert_timed_out=_classification_timed_out,
+    ),
     Site(
         name="classify_sentiment",
         module=extraction,
@@ -240,3 +269,16 @@ class TestAllAttemptsTimeOut:
         )
         assert transport.attempts == 1
         site.assert_timed_out(result)
+
+
+class TestEachSiteKeepsItsOwnConstraint:
+    """A bound is not one number for everyone. Two sites carry a constraint
+    of their own, and each is pinned here so a retune cannot quietly break it."""
+
+    def test_classification_keeps_its_thirty_second_promise(self) -> None:
+        """`classify.py` promises a result inside thirty seconds, crawl included.
+
+        What has to fit is the CEILING — every attempt plus backoff — and not
+        the per-attempt bound, which is the mistake the engine adapters made.
+        """
+        assert classify.CLASSIFIER_BOUND.ceiling <= 30.0

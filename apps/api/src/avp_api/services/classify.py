@@ -37,6 +37,7 @@ import structlog
 from pydantic import BaseModel, Field
 
 from ..config import Settings, get_settings
+from .call_bounds import CallBound
 from .crawl import CrawlResult
 
 logger = structlog.get_logger(__name__)
@@ -54,6 +55,19 @@ CLASSIFIER_EFFORT = "low"
 # for thinking tokens, which count toward max_tokens — the structured payload
 # itself is a few hundred tokens.
 CLASSIFIER_MAX_TOKENS = 4_000
+
+# --- The call's bound (API key discipline audit, 2026-09-07) -----------------
+# Inherited both SDK defaults until this audit — a 600s read timeout across
+# three attempts — in a request path whose own docstring promises a result
+# within thirty seconds. The measurement is the whole endpoint: `POST /clients`,
+# crawl AND classify, at 8.3s (build log, Epic 9.4's latency table), so twelve
+# seconds per attempt is headroom over both together, not just this call. One
+# retry, because a 529 or a dropped connection in the first second is far more
+# common than a slow-but-alive classification, and without it each of those
+# becomes an `unclassifiable` client. Two attempts plus the SDK's backoff must
+# still fit inside the promise: 12 x 2 + 2 = 26s, the largest ceiling that
+# does. `test_call_bounds.py` asserts it stays under 30.
+CLASSIFIER_BOUND = CallBound(timeout=12.0, max_retries=1)  # ceiling: 26.0s
 
 # Below this, the result is recorded as AMBIGUOUS with industry = NULL.
 # Tunable in one place; deliberately not a per-call argument.
@@ -171,10 +185,6 @@ class ClassificationOutcome(BaseModel):
     model: str = CLASSIFIER_MODEL
 
 
-def _client(settings: Settings) -> anthropic.AsyncAnthropic:
-    return anthropic.AsyncAnthropic(api_key=settings.provider_key("anthropic_api_key"))
-
-
 def build_prompt(crawl: CrawlResult) -> str:
     """Assemble the classification input from crawl output."""
     parts = [
@@ -218,14 +228,15 @@ async def classify(
         )
 
     try:
-        response = await _client(settings).messages.parse(
-            model=CLASSIFIER_MODEL,
-            max_tokens=CLASSIFIER_MAX_TOKENS,
-            output_config={"effort": CLASSIFIER_EFFORT},
-            system=system_prompt or SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": build_prompt(crawl)}],
-            output_format=IndustryClassification,
-        )
+        async with CLASSIFIER_BOUND.deadline():
+            response = await CLASSIFIER_BOUND.client(settings).messages.parse(
+                model=CLASSIFIER_MODEL,
+                max_tokens=CLASSIFIER_MAX_TOKENS,
+                output_config={"effort": CLASSIFIER_EFFORT},
+                system=system_prompt or SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": build_prompt(crawl)}],
+                output_format=IndustryClassification,
+            )
     except anthropic.AuthenticationError:
         logger.error("classify.auth_failed")
         return ClassificationOutcome(status="unclassifiable", reason_code="PROVIDER_AUTH_FAILED")
@@ -246,6 +257,12 @@ async def classify(
             )
         logger.error("classify.bad_request", error=message[:200])
         return ClassificationOutcome(status="unclassifiable", reason_code="PROVIDER_BAD_REQUEST")
+    except (anthropic.APITimeoutError, TimeoutError):
+        # BEFORE APIConnectionError, which APITimeoutError subclasses — the
+        # other order reports every timeout as an unreachable provider. The
+        # builtin TimeoutError is the outer deadline (`CallBound.deadline`).
+        logger.warning("classify.timeout")
+        return ClassificationOutcome(status="unclassifiable", reason_code="TIMEOUT")
     except anthropic.APIConnectionError:
         logger.warning("classify.connection_error")
         return ClassificationOutcome(status="unclassifiable", reason_code="PROVIDER_UNREACHABLE")
