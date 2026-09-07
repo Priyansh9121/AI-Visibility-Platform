@@ -2209,7 +2209,7 @@ export interface components {
          * EngineResultStatus
          * @enum {string}
          */
-        EngineResultStatus: "ok" | "answered_no_mention" | "rate_limited" | "error" | "timeout";
+        EngineResultStatus: "ok" | "answered_no_mention" | "rate_limited" | "error" | "timeout" | "truncated" | "paused";
         /**
          * GapKind
          * @description One prompt's verdict for this client. Ordered by how bad it is.

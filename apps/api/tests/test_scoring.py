@@ -86,8 +86,12 @@ class TestMentionRate:
             res(2, status=EngineResultStatus.TIMEOUT),
             res(3, status=EngineResultStatus.RATE_LIMITED),
             res(4, status=EngineResultStatus.ERROR),
+            # An answer the engine did not finish is missing data too — the
+            # brand may well be named in the part that was never generated.
+            res(5, status=EngineResultStatus.TRUNCATED),
+            res(6, status=EngineResultStatus.PAUSED),
         ]
-        assert mention_rate(results) == Decimal("100"), "1 of 1 answered, not 1 of 4"
+        assert mention_rate(results) == Decimal("100"), "1 of 1 answered, not 1 of 6"
 
     def test_answered_no_mention_counts_in_the_denominator(self) -> None:
         """An engine that answered and did not name you IS evidence of absence."""

@@ -1184,7 +1184,16 @@ answer changed" without retaining it.
 |---|---|
 | `ok` | Answered, subject mentioned |
 | `answered_no_mention` | Answered, subject absent — **a finding, not a failure** |
+| `truncated` | The engine ran out of room before finishing (Claude `max_tokens`, OpenAI `length`) — **not an answer, and not an absence**. `errorCode: ANSWER_TRUNCATED` |
+| `paused` | The engine stopped to hand control back and nothing resumed it (a paused tool turn). `errorCode: ANSWER_PAUSED` |
 | `rate_limited` / `timeout` / `error` | The call did not produce an answer |
+
+A complete answer is an **allowlist** of the vendor's stop reasons, not a
+blocklist: a stop reason the API has never seen lands on `error` with
+`errorCode: STOP_REASON_UNKNOWN` rather than being read as an answer. Every
+incomplete status counts as a failed call for the scan-level `partial` /
+`failed` verdict below, and is excluded from the mention-rate denominator
+exactly as `timeout` is.
 
 **Scan-level `status`:** `succeeded` (no failed calls), `partial` (some engines
 failed), `failed` (all failed, with `errorCode: ALL_ENGINE_CALLS_FAILED`).

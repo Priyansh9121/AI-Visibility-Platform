@@ -26,7 +26,14 @@ import pytest
 from avp_api.config import Settings
 from avp_api.models.engine_result import Engine, EngineResultStatus
 from avp_api.services import engines
-from avp_api.services.engines import ChatGptAdapter, _map_error, _map_openai_error
+from avp_api.services.engines import (
+    CLAUDE_STOPS,
+    OPENAI_STOPS,
+    ChatGptAdapter,
+    _map_error,
+    _map_openai_error,
+    classify_stop,
+)
 
 
 @pytest.fixture
@@ -79,6 +86,13 @@ class TestErrorMappingMirrorsClaude:
         }
         # PROVIDER_REFUSED is set outside the mapper, on both paths.
         claude_codes.add("PROVIDER_REFUSED")
+        # So are the stop-reason codes — by `classify_stop`, which both paths
+        # share. Derived from the Claude vocabulary here and the OpenAI one
+        # below, so the assertion still catches a vocabulary that drifts.
+        claude_codes |= {
+            classify_stop(reason, CLAUDE_STOPS)[1]
+            for reason in ("max_tokens", "pause_turn", "never-seen")
+        }
 
         openai_codes = {
             _map_openai_error(exc)[1]
@@ -94,6 +108,10 @@ class TestErrorMappingMirrorsClaude:
                 httpx.ConnectError("c", request=None),
                 RuntimeError("unmapped"),
             )
+        }
+        openai_codes |= {
+            classify_stop(reason, OPENAI_STOPS)[1]
+            for reason in ("length", "tool_calls", "function_call", "never-seen")
         }
 
         assert openai_codes <= claude_codes, (

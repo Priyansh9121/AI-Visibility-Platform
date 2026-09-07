@@ -254,6 +254,48 @@ class TestRunScan:
         assert body["errorCode"] == "ALL_ENGINE_CALLS_FAILED"
         assert all(r["status"] == "timeout" for r in body["results"])
 
+    async def test_a_truncated_answer_is_a_missing_cell_not_an_absence(
+        self, client: AsyncClient, stub_engines, monkeypatch
+    ) -> None:  # noqa: ANN001
+        """The audit's data-correctness bug, asserted where a caller would see it.
+
+        One engine's answers come back cut off by the token budget. Before the
+        `truncated` status existed that cell was recorded `answered_no_mention`
+        and the scan read `succeeded`: a billed non-answer, counted against the
+        mention rate as if the engine had chosen not to name the subject. Now
+        the cell is a failure the scan-level status admits to.
+        """
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_engines(n_prompts=2)
+
+        stubbed = scan_runner.engine_service.ask_all
+
+        async def one_engine_truncates(prompt, *, engines, settings):  # noqa: ANN001
+            answers = await stubbed(prompt, engines=engines, settings=settings)
+            for a in answers:
+                if a.engine is Engine.CHATGPT:
+                    a.text = ""
+                    a.status = EngineResultStatus.TRUNCATED
+                    a.error_code = "ANSWER_TRUNCATED"
+            return answers
+
+        monkeypatch.setattr(scan_runner.engine_service, "ask_all", one_engine_truncates)
+
+        body = await _run_scan(client, cid)
+
+        assert body["status"] == "partial"
+        cells = [r for r in body["results"] if r["engine"] == "chatgpt"]
+        assert len(cells) == 2
+        for cell in cells:
+            assert cell["status"] == "truncated"
+            assert cell["errorCode"] == "ANSWER_TRUNCATED"
+            assert cell["mentioned"] is False
+            assert cell["responseDigest"] is None
+        # The other engines are untouched, and none of them was demoted.
+        others = [r for r in body["results"] if r["engine"] != "chatgpt"]
+        assert others and all(r["status"] == "ok" for r in others)
+
     async def test_unmentioned_subject_is_recorded_not_dropped(
         self, client: AsyncClient, stub_engines
     ) -> None:  # noqa: ANN001

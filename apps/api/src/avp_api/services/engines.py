@@ -20,6 +20,9 @@ Adding an engine
 Implement `EngineAdapter` and register it in `ENGINE_REGISTRY`. Nothing in the
 runner, extraction or persistence layer knows which engines exist. Adding
 ChatGPT or Perplexity is a new class plus a provider key — no pipeline change.
+The one thing every adapter must ALSO say is how its vendor reports "I
+stopped": a `StopVocabulary`, so a response the engine did not finish is never
+read as an answer (see "Incomplete answers" below).
 
 Why two Claude modes rather than two vendors
 --------------------------------------------
@@ -124,6 +127,91 @@ ENGINE_CALL_CEILING = DEFAULT_TIMEOUT * (MAX_RETRIES + 1) + RETRY_BACKOFF_ALLOWA
 OPENAI_BASE_URL = "https://api.openai.com/v1"
 OPENAI_ANSWER_MODEL = "gpt-5.5"
 OPENAI_MAX_TOKENS = 4_000
+
+# --- Incomplete answers (API key discipline audit, 2026-09-07) ---------------
+# An engine reports WHY it stopped, and until this audit the adapters read that
+# field for one value — "refusal" — and treated everything else as a finished
+# answer. A response cut off by `max_tokens` therefore reached `extract_facts`
+# as OK: the brand was absent from the truncated prefix, the row was recorded
+# ANSWERED_NO_MENTION, and scoring counted a billed non-answer against the
+# mention rate. Nothing anywhere said a cell of the grid was empty.
+#
+# The vocabularies below are ALLOWLISTS of complete answers, not blocklists of
+# incomplete ones. A stop reason this module has never seen defaults to "not
+# an answer" (STOP_REASON_UNKNOWN), so an SDK or API upgrade that introduces a
+# new value fails visibly as a status rather than silently as a finding.
+# `tests/test_engine_stop_reasons.py` reads the pinned SDK's own `StopReason`
+# literal and asserts every member is sorted into a bucket, which is what turns
+# an SDK bump into a decision rather than a surprise.
+#
+# Claude, from anthropic 0.125.0's `types/stop_reason.py`:
+#   end_turn, max_tokens, stop_sequence, tool_use, pause_turn, refusal,
+#   model_context_window_exceeded
+# OpenAI, from the Chat Completions `finish_reason` contract (read from
+# openai-python's `types/chat/chat_completion.py` on 2026-09-07 — no SDK is
+# pinned here, see the module docstring):
+#   stop, length, tool_calls, content_filter, function_call
+#
+# "refusal" and "content_filter" are absent from every set on purpose: both
+# adapters map them to PROVIDER_REFUSED before classification runs, and were
+# that check ever removed they would land on STOP_REASON_UNKNOWN — still not an
+# answer — rather than quietly becoming one.
+#
+# `max_uses_exceeded` is NOT here and must not be added. It is a
+# WebSearchToolResultErrorCode inside a tool-result content block, not a stop
+# reason: hitting SEARCH_MAX_USES produces a complete, less-grounded answer
+# with `stop_reason == "end_turn"`. That `_extract_citations` skips the error
+# block without a log line is a separate, smaller observability gap.
+#
+# The `tool_use` / `tool_calls` / `function_call` members are unreachable
+# today and must stay: `models/engine_result.py` records the trigger for each
+# vendor and why that is not the same kind of unreachable as a dead guard.
+
+
+@dataclass(frozen=True, slots=True)
+class StopVocabulary:
+    """How one vendor says "I stopped", sorted into what it means for us."""
+
+    complete: frozenset[str]
+    truncated: frozenset[str]
+    paused: frozenset[str]
+
+
+CLAUDE_STOPS = StopVocabulary(
+    complete=frozenset({"end_turn", "stop_sequence"}),
+    truncated=frozenset({"max_tokens", "model_context_window_exceeded"}),
+    paused=frozenset({"pause_turn", "tool_use"}),
+)
+OPENAI_STOPS = StopVocabulary(
+    complete=frozenset({"stop"}),
+    truncated=frozenset({"length"}),
+    paused=frozenset({"tool_calls", "function_call"}),
+)
+
+# Our own diagnostic codes, shared by both vendors exactly as the error codes
+# in `_map_openai_error` are — one vocabulary, read by one scoring path.
+ANSWER_TRUNCATED = "ANSWER_TRUNCATED"
+ANSWER_PAUSED = "ANSWER_PAUSED"
+STOP_REASON_UNKNOWN = "STOP_REASON_UNKNOWN"
+
+
+def classify_stop(
+    reason: str | None, vocabulary: StopVocabulary
+) -> tuple[EngineResultStatus, str] | None:
+    """Why the engine stopped, as a status — or None for a complete answer.
+
+    Pure, and shared by both adapters so the two vendors cannot drift into
+    different codes for the same event. Anything outside the vocabulary,
+    including a missing value, is incomplete by default: that is the allowlist
+    property argued for above, and it is the whole point.
+    """
+    if reason in vocabulary.complete:
+        return None
+    if reason in vocabulary.truncated:
+        return EngineResultStatus.TRUNCATED, ANSWER_TRUNCATED
+    if reason in vocabulary.paused:
+        return EngineResultStatus.PAUSED, ANSWER_PAUSED
+    return EngineResultStatus.ERROR, STOP_REASON_UNKNOWN
 
 
 @dataclass(slots=True)
@@ -255,6 +343,14 @@ class _ClaudeBase:
         if response.stop_reason == "refusal":
             answer.status = EngineResultStatus.ERROR
             answer.error_code = "PROVIDER_REFUSED"
+            return answer
+
+        # An answer the engine did not finish is not an answer. `text` stays
+        # empty on purpose: a digest of a truncated prefix would let a re-scan
+        # report "the answer changed" about an answer nobody read.
+        incomplete = classify_stop(response.stop_reason, CLAUDE_STOPS)
+        if incomplete is not None:
+            answer.status, answer.error_code = incomplete
             return answer
 
         answer.text = "".join(b.text for b in response.content if b.type == "text")
@@ -409,18 +505,29 @@ class ChatGptAdapter:
 
         answer.latency_ms = int((time.perf_counter() - started) * 1000)
 
-        choice = (payload.get("choices") or [{}])[0]
+        choices = payload.get("choices") or []
+        choice = choices[0] if choices else {}
+        message = choice.get("message") or {}
         # `content_filter` is OpenAI's refusal signal, and `refusal` is the
         # typed field on the message. Either maps to the SAME PROVIDER_REFUSED
         # code `_ClaudeBase` sets on `stop_reason == "refusal"`.
-        if choice.get("finish_reason") == "content_filter" or (
-            choice.get("message") or {}
-        ).get("refusal"):
+        if choice.get("finish_reason") == "content_filter" or message.get("refusal"):
             answer.status = EngineResultStatus.ERROR
             answer.error_code = "PROVIDER_REFUSED"
             return answer
 
-        answer.text = (choice.get("message") or {}).get("content") or ""
+        # The same rule as the Claude path, through the same classifier. An
+        # empty `choices` list leaves `finish_reason` absent, which lands on
+        # STOP_REASON_UNKNOWN: a malformed response is not an answer either.
+        # This is the branch that used to let `finish_reason == "length"` with
+        # an empty body through as OK, to be recorded as "answered, no
+        # mention" one call later.
+        incomplete = classify_stop(choice.get("finish_reason"), OPENAI_STOPS)
+        if incomplete is not None:
+            answer.status, answer.error_code = incomplete
+            return answer
+
+        answer.text = message.get("content") or ""
         # No citations by construction: this adapter sends no tools, so there is
         # nothing retrieved to cite. An empty list, never a fabricated one.
         return answer
