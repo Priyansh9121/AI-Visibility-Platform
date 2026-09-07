@@ -10985,3 +10985,37 @@ and a real operability gap: `LOG_LEVEL` does nothing.
 **The verifier prompts for two dimensions never ran.** Nothing in this entry
 claims machine verification for the OpenAI-and-SerpApi or repeated-calls
 findings. What is marked confirmed above was confirmed by reading.
+
+## Follow-up, 2026-09-07 (later session): fix 2 checked against the live API
+
+Fix 2 above was the one piece of this audit that rested on a documentation
+page rather than on code or a test, and it was flagged as such. It has now
+been checked the way everything else was: by doing it.
+
+Four calls to gpt-5.5 (served as `gpt-5.5-2026-04-23`), all on the same
+one-sentence prompt, all low-cost:
+
+* **The adapter's exact body, sent raw with `reasoning_effort: "low"`** —
+  200, `finish_reason: stop`, 30 completion tokens, 0 of them reasoning.
+* **`ChatGptAdapter().ask(...)` end to end** — status `ok`, 143 characters,
+  2.9s, no error code. The shipped code path succeeds with the field in the
+  body. It does not come back `PROVIDER_BAD_REQUEST`.
+* **The same body with an invalid value** — 400, `invalid_request_error`,
+  code `unsupported_value`, `param: reasoning_effort`, and a message listing
+  the supported values: `none`, `low`, `medium`, `high`, `xhigh`. That is the
+  same five the model page listed, confirmed by the API's own validator. It
+  is also the proof a success alone could not give: the parameter is parsed,
+  not silently ignored, so the 200 above means "accepted" and not "unread".
+* **The pre-fix body, with no `reasoning_effort` at all** — also 200, also
+  30 completion tokens, also 0 reasoning. On a one-sentence question the
+  default effort did not reason either.
+
+So the parameter name, the value, and the code path are verified. What the
+last call did NOT show is the mechanism fix 2 was argued from: that the
+unset default spends reasoning tokens inside `max_completion_tokens` and is
+how an empty `length`-terminated body arises. A trivial prompt is not the
+prompt that triggers it, so that remains a reading of the documentation
+rather than a live observation — neither confirmed nor refuted here, and
+recorded as such rather than promoted. The fix stands on what is verified:
+an explicit effort, accepted by the API, pinned equal to the Claude side so
+the two parametric engines are compared on the same footing (Epic 9.13).
