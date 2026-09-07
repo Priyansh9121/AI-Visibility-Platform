@@ -15,8 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from .. import ids
-from ..models import Client, Scan, TechnicalAudit, TechnicalAuditCheck
+from ..models import AiCrawlerAccess, Client, Scan, TechnicalAudit, TechnicalAuditCheck
 from ..models.technical_audit import AuditStatus, CheckStatus
+from .ai_crawlers import AccessVerdict
 from .technical_audit import AuditOutcome, AuditSignals, audit_site, score_audit
 
 logger = structlog.get_logger(__name__)
@@ -93,12 +94,20 @@ async def run_audit(
         await session.execute(
             select(TechnicalAudit)
             .where(TechnicalAudit.scan_id == scan.id)
-            .options(selectinload(TechnicalAudit.checks))
+            .options(
+                selectinload(TechnicalAudit.checks),
+                selectinload(TechnicalAudit.ai_crawler_access),
+            )
         )
     ).scalar_one_or_none()
 
     if row is None:
-        row = TechnicalAudit(id=ids.new_id(ids.TECHNICAL_AUDIT), scan_id=scan.id, checks=[])
+        row = TechnicalAudit(
+            id=ids.new_id(ids.TECHNICAL_AUDIT),
+            scan_id=scan.id,
+            checks=[],
+            ai_crawler_access=[],
+        )
         # _apply BEFORE the first flush: url_audited is NOT NULL, so flushing a
         # bare row fails the constraint. `checks=[]` at construction also marks
         # the collection loaded, avoiding a lazy load under the async session.
@@ -109,6 +118,13 @@ async def run_audit(
         for existing in list(row.checks):
             await session.delete(existing)
         row.checks = []
+        # Same replace-don't-merge treatment as the checks, and for the same
+        # reason the unique constraint spells out: a re-audit is a CORRECTION
+        # of this scan's claim, so last run's verdicts must not survive
+        # alongside this one's.
+        for stale in list(row.ai_crawler_access):
+            await session.delete(stale)
+        row.ai_crawler_access = []
         await session.flush()
         _apply(row, signals, outcome)
 
@@ -128,9 +144,34 @@ async def run_audit(
             )
         )
 
+    for access in signals.ai_crawler_access:
+        # Appended through the relationship for the same delete-orphan reason
+        # the checks are, above.
+        row.ai_crawler_access.append(
+            AiCrawlerAccess(
+                id=ids.new_id(ids.AI_CRAWLER_ACCESS),
+                audit_id=row.id,
+                agent_token=access.agent.token,
+                # Vendor and purpose are COPIED, not looked up on read. The
+                # roster is expected to change; this scan's claim is not.
+                # `models/ai_crawler_access.py` carries the argument.
+                vendor=access.agent.vendor,
+                purpose=access.agent.purpose,
+                verdict=access.verdict,
+                rule_source=access.source,
+                matched_token=access.matched_token,
+                disallow_rules=access.disallow_rules,
+            )
+        )
+
     await session.flush()
+    blocked = sum(
+        1 for a in signals.ai_crawler_access if a.verdict is AccessVerdict.BLOCKED
+    )
     logger.info(
         "audit.completed",
+        ai_crawlers_measured=len(signals.ai_crawler_access),
+        ai_crawlers_blocked=blocked,
         scan_id=scan.id,
         domain=client.domain,
         status=row.status.value,

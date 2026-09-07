@@ -12,6 +12,7 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     ARRAY,
@@ -28,6 +29,12 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base, TimestampMixin, enum_column, fk_column, id_column
+
+if TYPE_CHECKING:
+    # Import-time only. `ai_crawler_access` names TechnicalAudit as a string in
+    # its own relationship, so importing it here at runtime would be a cycle
+    # for no gain — SQLAlchemy resolves both ends from the registry.
+    from .ai_crawler_access import AiCrawlerAccess
 
 
 class AuditStatus(str, enum.Enum):
@@ -115,6 +122,13 @@ class TechnicalAudit(Base, TimestampMixin):
     content_age_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     checks: Mapped[list[TechnicalAuditCheck]] = relationship(
+        back_populates="audit", cascade="all, delete-orphan"
+    )
+    # Epic F. One verdict per AI crawler in `services/ai_crawlers.AGENTS`,
+    # read from the same robots.txt fetch that produced `robots_allows_crawl`.
+    # Deliberately NOT an input to `technical_foundation` — see the audit
+    # service's note on why the scored path was left alone.
+    ai_crawler_access: Mapped[list[AiCrawlerAccess]] = relationship(
         back_populates="audit", cascade="all, delete-orphan"
     )
 

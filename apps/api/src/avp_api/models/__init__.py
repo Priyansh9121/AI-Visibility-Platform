@@ -12,6 +12,7 @@ from .action_item import (
     Effort,
     Priority,
 )
+from .ai_crawler_access import AiCrawlerAccess
 from .alert import Alert, AlertKind
 from .base import Base
 from .client import ClassificationStatus, Client, ClientKind
@@ -66,6 +67,7 @@ __all__ = [
     "DetectionSource",
     "DetectionStatus",
     "Effort",
+    "AiCrawlerAccess",
     "Alert",
     "AlertKind",
     "Engine",

@@ -21,8 +21,10 @@ from ..schemas.client import (
 )
 from ..schemas.client_history import ClientHistoryOut
 from ..schemas.common import Page
+from ..schemas.crawler_access import CrawlerAccessOut
 from ..services import answer_gaps as answer_gaps_service
 from ..services import client_history as history_service
+from ..services import crawler_access as crawler_access_service
 from ..services import intake as intake_service
 from ..services.crawl import CrawlResult
 
@@ -186,6 +188,44 @@ async def get_client_answer_gaps(
         db, agency_id=principal.agency_id, client_id=client_id
     )
     return await answer_gaps_service.build_answer_gaps(db, client, scan_id=scan_id)
+
+
+@router.get("/{clientId}/ai-crawler-access", response_model=CrawlerAccessOut | None)
+async def get_client_ai_crawler_access(
+    principal: PrincipalDep,
+    db: DbDep,
+    client_id: str = Path(alias="clientId"),
+    scan_id: str | None = Query(None, alias="scanId"),
+) -> Any:
+    """What this client's robots.txt asks each AI crawler to do — Epic F.
+
+    **Reads. Fetches nothing.** The verdicts were parsed during the scan's
+    technical audit, from the robots.txt it already fetched, and persisted
+    then. Re-fetching here would make the same URL answer differently between
+    two page loads and would mean this endpoint could be used to make the API
+    issue outbound requests on demand.
+
+    **This answers "can an AI crawler read this site", not "is one reading
+    it".** Server logs would answer the second and nothing in this system
+    ingests them; `services/ai_crawlers.py` records the correction in full.
+    No field in the response can be rendered as activity.
+
+    `scanId` selects one scan; without it the newest scan carrying a policy is
+    used. The response carries `availableScanIds` so a picker needs no second
+    call — the same contract `answer-gaps` uses.
+
+    Returns `null` — not 404 — when no scan of this client has ever recorded a
+    policy, which is every scan predating this feature. A client with nothing
+    to show is a normal state on a screen that has an empty view for it, not a
+    missing resource.
+
+    Scoped to the caller's agency by `get_client`, which 404s rather than 403s
+    on another agency's id.
+    """
+    client = await intake_service.get_client(
+        db, agency_id=principal.agency_id, client_id=client_id
+    )
+    return await crawler_access_service.build_crawler_access(db, client, scan_id=scan_id)
 
 
 @router.post("/{clientId}/reclassify", response_model=ClientDetailOut)

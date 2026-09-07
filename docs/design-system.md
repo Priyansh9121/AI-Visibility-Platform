@@ -613,10 +613,28 @@ is therefore **cluster-relative** — each cluster restarts at 0.
 **The clusters are `Measurement` and `Investigation`**, and membership follows
 the data model rather than shipping order. Sentiment is Measurement: its labels
 have been stored since Epic 4 and it is 15% of the composite, which makes it a
-measured dimension, not a derivation. Crawler activity will join it for the same
-reason — a second data *source*, not an analysis of the first. Investigation
-holds what an operator does with the record: Answer gaps derives over measured
-rows, Prompts creates new ones.
+measured dimension, not a derivation. Investigation holds what an operator does
+with the record: Answer gaps derives over measured rows, Prompts creates new
+ones.
+
+> **Epic F — the seat is taken, and the section is not called what B.1 expected.**
+> B.1 held Measurement's last seat (accent 5) for "Crawler activity" and
+> described it as "a second data *source* — first-party server logs". The
+> reasoning held; the data source did not exist. Epic F found this product
+> ingests no server logs at all, and built the section against the one
+> first-party source that IS readable — the site's own `robots.txt`, already
+> fetched by every technical audit.
+>
+> So the section shipped as **AI crawlers**, not Crawler activity, and the
+> label change is load-bearing rather than cosmetic: it answers what a crawler
+> *may* do, and a nav item promising activity would be a claim the screen
+> behind it cannot honour. The cluster filing is unchanged and was right for
+> the reason B.1 gave — it reads a source, it does not analyse one.
+>
+> **Measurement is now full**: six items, no free seat. A seventh section there
+> is a palette decision, not a nav edit, and `clientNav.test.ts`'s projection
+> — now `measurement: 0` — is where that will surface. Investigation still has
+> four free seats, one of them earmarked for Prompt discovery (G).
 
 **Structure, not decoration.** A group renders a `<ul>` with an accessible name
 and each item is an `<li>`, so a screen reader reports "Measurement, list, 6

@@ -10373,3 +10373,346 @@ bytes, sha256 `cbb44e55`.
 
 **Suite: 2,072, up from 2,062.** api 917, web 674 (+7), design-system 415 (+3),
 shared-types 53, workers 13. `ruff` and `tsc` clean.
+
+---
+
+# Epic F — AI crawlers, and a data source that does not exist
+
+**2026-09-07.** Sixth epic of the analysis roadmap, and the first built after a
+sequencing decision that had to be made before anything else.
+
+## The sequence was put back to the founder rather than assumed
+
+The confirmed order after Epic A was **A → B → J → C → D → E → F → G → H → I →
+K**, with J moved early so C and D could read its consistency signal before
+trusting an answer. Epic E was then built directly at the founder's request,
+jumping J, C and D.
+
+That left a real choice, and it was asked rather than guessed: go back for
+J/C/D, or continue into F. **The answer was F.** J, C and D remain open and
+unbuilt, and this entry says so rather than letting them quietly disappear from
+the roadmap.
+
+One finding surfaced while framing that question, and it belongs on the record
+because it changes what J costs. `engine_results` carries
+`UniqueConstraint("prompt_id", "engine")` — **one row per prompt × engine**. J
+is "ask the same prompt of the same engine repeatedly and compare", which that
+constraint cannot store. So J is not the read-side extension Epic B's entry
+implied when it argued for one shared in-request judgement call; it needs a
+migration and it multiplies a scan's 72 engine calls by its repetition count,
+forever, on every scan. `response_digest` exists ("change detection without
+retention") but a digest says two answers differ, never how — so consistency
+would have to be measured on the stored facts, not on text.
+
+## The premise was not wrong in detail. It was wrong about the data existing
+
+Epics A, B and E each found a brief's premise false and corrected it. This one
+went further: **Crawler activity, as the roadmap defined it, has no data source
+in this system at all.**
+
+The roadmap's line — and B.1's reserved nav seat — described first-party server
+logs showing AI bots hitting the client's site. There is no log drain, no CDN
+integration, no collector endpoint, and no column anywhere capable of holding a
+bot hit. The only `USER_AGENT` in the codebase is `crawl.py`'s, which is **this
+product crawling the client**, not a crawler visiting them. Getting the real
+thing means building a log-ingestion product, not a screen.
+
+Put to the founder as a scope decision rather than resolved unilaterally, since
+it changes what F *is*. **The choice was to build the honest, narrower
+version**: what the site's `robots.txt` ASKS AI crawlers to do, read from the
+file `technical_audit._fetch_side_files` already fetches on every scan.
+
+**That is a weaker claim and the whole epic is built to keep it visible.** It
+answers *can* an AI crawler read this site, never *is* one reading it. The
+module docstring says so, the endpoint docstring says so, the screen's lead
+paragraph says so, and `ClientCrawlerView.test.tsx` asserts the vocabulary —
+"activity", "traffic", "visits", "is crawling" and five more phrases must not
+appear in the rendered screen, in any state. A constraint like this erodes one
+reasonable copy edit at a time, and a test holds it better than a comment.
+
+The nav label changed with it: **AI crawlers**, not Crawler activity. B.1
+reserved the seat under the old name, and a nav item promising activity is a
+claim the screen behind it cannot honour.
+
+## `PARTIAL` fired on seven of nine real domains, and was cut
+
+The first draft had five verdicts. `PARTIAL` meant "root permitted, but some
+paths disallowed", and it looked obviously useful.
+
+Measured against the live `robots.txt` of nine real client domains in
+`avp_dev`, it fired on **seven of them** — on Linear's `/api/` and `/cdn-cgi/`,
+Basecamp's `/demos/` and `/humans.txt`, Ghost's six housekeeping rules. Almost
+every site disallows something, and none of it says anything about AI
+visibility.
+
+This is Epic E's lesson inverted. There, three alert kinds fired zero times as
+written. Here a verdict fired almost always, and **a signal that is nearly
+always true carries as little information as one that never fires.** Making it
+mean something would need to separate `/blog/` from `/wp-admin/`, and Epic B
+already established there is no content inventory in this schema to do that
+with. So path restriction survives as `disallowRules`, a COUNT that qualifies
+an `allowed` verdict, and the verdict axis stays the question that can actually
+be answered.
+
+After the cut, the same nine domains read: seven all-allowed, one all-
+unspecified pair, and Notion with a single explicit block. That is a signal.
+
+## Silence is an answer here, which is NOT the house rule being broken
+
+Epics A, B and E each ended by refusing a claim the data could not support, and
+the rule they converged on is that a measurement never taken is never the same
+as one that came back empty. This epic looks like it breaks that rule and does
+not, so the distinction is worth stating.
+
+A **fetched** `robots.txt` is a complete document. An agent it never mentions is
+permitted, by the file's own semantics (RFC 9309 §2.2.1). That is a real
+verdict about a real policy, not a gap — so `UNSPECIFIED` is reported as a
+finding, and it is deliberately not folded into `ALLOWED`, because a site that
+named GPTBot and let it in decided something and a site that never mentions it
+did not. On the real domains the second is overwhelmingly the common case, and
+it is what an agency is being paid to notice.
+
+The genuine unknown is narrower and kept separate: `robots.txt` could not be
+FETCHED. That is `UNKNOWN`, it is never merged with an allow, and the screen
+draws it as its own state rather than as a permissive grid. `unknown_access()`
+is a separate constructor rather than `evaluate_robots("")` for exactly this
+reason — an empty string is a valid file that allows everything; an unreachable
+one is not a statement at all.
+
+## What shipped
+
+**`services/ai_crawlers.py`** — a pure, database-free RFC 9309 parser and a
+roster of 14 crawlers across nine vendors, each classified by PURPOSE
+(`training` / `search` / `user_action`). That classification is the epic's
+product argument: blocking a training crawler is a rights decision with no
+citation cost, while blocking a search crawler removes the site from the
+retrieval index engines cite from — which is this product's entire subject. An
+agency that blanket-blocked "AI bots" to protect its content has usually bought
+the second by accident.
+
+**`AiCrawlerAccess` + migration `33b576c694d0`**, hanging off `technical_audits`
+rather than `scans` — the rows are a product of the audit's own robots.txt
+fetch, and the cascade then behaves correctly for free. Vendor and purpose are
+COPIED onto the row rather than joined from the roster: the roster will change,
+and a historical scan must keep saying what was claimed when it was measured.
+Asserted by mutating a stored row and reading it back through the endpoint, so
+a drift back to a live lookup fails rather than silently rewriting the past.
+
+**`robots.txt` is now read twice per audit, on purpose.** The blanket
+`Disallow: /` check that feeds `robots_allows_crawl` → `is_indexable` → the §6
+Technical Foundation sub-score was deliberately NOT reimplemented on top of the
+new parser, though the new one is strictly more correct. It is a SCORED input:
+re-deriving it would move Technical Foundation for every client whose file the
+old reader got wrong, inside a diff about crawler policy, with no way to tell a
+fixed score from a regressed one. Recorded here rather than left to be
+rediscovered as duplication.
+
+**`GET /clients/{clientId}/ai-crawler-access`** — reads, fetches nothing. A
+read that re-fetched would let the same URL answer differently between two page
+loads and would turn the endpoint into a way to make the API issue outbound
+requests on demand; a test asserts the read path never calls `audit_site`.
+
+The scan picker filters on **scans that carry a policy**, not on `ScanStatus`.
+Those differ in both directions: a scan can succeed on every engine while its
+audit failed, and because the audit's side fetch runs before the page render, a
+scan whose audit is FAILED can still carry a full set of verdicts. What the
+picker offers is what can be displayed.
+
+**The screen groups by purpose, not by vendor.** A vendor grouping is the
+obvious one and reads as a directory — it tells an operator who the crawlers
+belong to, which is what they least need help with. The decision an agency is
+paid for is what a block COSTS, and that is a property of purpose. Grouping by
+it gives each cost a place to be stated in one line above the rows it governs,
+rather than as a legend the reader holds in their head.
+
+**A badge means a rule applies; its absence means none does.** That is the
+literal difference between `allowed` and `unspecified`, drawn structurally so
+the two stay apart without ranking one above the other. `allowed` is `neutral`
+and deliberately not `success`: green would read as "you are doing this right",
+and for a training crawler that is a rights decision this product takes no
+position on.
+
+## The three-skill pass, and a browser finding none of them could have made
+
+**`emil-design-eng`** found two, one substantive. The screen never printed the
+DATE the policy was read. Every figure on it is a point-in-time claim about a
+file that can be edited any day, and the scan picker offers "2 scans ago"
+without ever saying when that was — so a reading from this morning and one from
+two months ago were presented identically. It also caught the loading message,
+"Reading crawler policy…", which on this screen of all screens implies the
+product is fetching robots.txt right now. Both fixed.
+
+**`find-animation-opportunities` found nothing, and that is the correct
+result.** Every candidate failed the gate, and they failed it for reasons this
+project has already settled rather than for new ones:
+
+- Rows animating in on first paint — they ARE the page's content at first
+  paint, so animating them performs on every load. Epic E rejected the same
+  thing for the alert feed; §4/Epic 9.16 excludes Working screens from
+  arrival motion.
+- Staggering the fourteen rows — the same rejection, plus Epic B killed a
+  656ms stagger on a screen an operator reopens all day.
+- Row hover — these rows are static data with nothing to click. Epic B's fix
+  was to make an EXISTING hover eased; it was not an argument for adding one.
+- Press feedback — already there. `.avp-btn:active` carries `scale(0.97)`.
+
+**`improve-animations`** found one real thing: the pending dim's `0.45` was
+written out in the screen, and `.avp-gapgrid--pending` had its own `0.45` in
+`components.css`. Same meaning, two literals, free to drift. It is now
+`--avp-dim-pending`, and both use it — the same defect class Epic B's audit
+caught with a hand-typed `28ms`. The audit also confirmed what was already
+right: no redundant reduced-motion override (`base.css`'s global reset covers
+it, and Epic E's audit removed exactly such a duplicate), state tier for a
+state change, and a CSS transition rather than keyframes so a fast second scan
+swap retargets instead of restarting.
+
+**`review-animations` could not be run**: `disable-model-invocation`, reserved
+for explicit user invocation. Fourth epic running, flagged rather than worked
+around.
+
+## What only the browser caught
+
+**Two tiles, one colour.** The tile accents were `[ACCENT, ACCENT+1,
+ACCENT+2]`, copied from the shape the other screens use. This section's accent
+is 5, so those resolved to bench-6 and bench-7 — **hue 343 and hue 355, twelve
+degrees apart**, the tightest neighbouring pair in the layer. On Notion, the
+one client with a real finding, "Blocked 1" and "Costing citations 1" sat side
+by side, showing the same number, in visibly the same red-pink.
+
+This is Epic B's crimson/magenta collision for the third time, and worse: that
+one was 29 degrees and `color.ts` already recorded 29 as reading "as the same
+pink". Adjacent offsets are not safe on a 97-degree arc and are least safe at
+its crowded end — which is exactly where the last free nav seat sits, so the
+screen most likely to hit this was always going to be the one taking that seat.
+
+Fixed two ways. The stride is now 3, which keeps the two accents at least 46
+degrees apart **for every possible value of `ACCENT`**, and only two tiles are
+accented at all — the two that are findings, with the other two drawn as the
+context that explains them. `ClientCrawlerView.test.tsx` asserts the separation
+as a property across all seven seats rather than against this screen's current
+accent, because the failure came from a nav position and would return the
+moment the nav table moved.
+
+**Rows a metre wide.** At 1440px the agent name sat hard left and its badge
+hard right, so the eye crossed about 1,100px of nothing to connect "Amazonbot"
+to "Blocked" — fourteen times. The row lists are now capped at
+`max-w-report`; the stat tiles keep the full width, because four figures use
+it and a two-item row does not.
+
+**Thirteen rows of wallpaper.** Every row printed the rule that decided it, so
+"via User-agent: *" appeared thirteen times — the default, restated until it
+was noise, loud enough to bury the one row that read "named as amazonbot". It
+now prints only where it says something: an agent the site named itself, or a
+block, where inheriting a blanket rule IS the finding.
+
+**A dark-mode capture that was the light one.** The first screenshot pass used
+Playwright's `color_scheme="dark"`; this product themes on `[data-theme]`, not
+`prefers-color-scheme`, so the "dark" capture came back byte-identical to the
+light one. Caught by comparing the files rather than by looking at them, which
+is the only way that particular no-op is visible.
+
+## Two guards were strengthened, and one was attempted and abandoned
+
+**Dead colour and radius utilities.** `border-line-subtle` and `rounded-card`
+were both written on this screen and both compile to NOTHING — the line colours
+are `hairline` and `strong`, and the radii are `sm|md|lg|xl|full`. The existing
+guard from Epic E only caught one specific wrong prefix and would not have seen
+either. It now RESOLVES the suffix for the nested colour groups and for
+`rounded-`, and is negative-controlled: reintroducing `border-line-subtle`
+fails it, restoring passes.
+
+**A generic dead-class guard was tried and rejected.** `avp-crawler-row` was a
+class name on this screen with no rule anywhere — the exact defect Epic E fixed
+for `.avp-alert`, which was fixed by asserting that ONE class exists rather than
+generically. A general version was prototyped: it flags about twenty
+pre-existing tokens, and nearly all are legitimate — SVG pattern ids
+(`avp-hatch-45`, `avp-dot`), generated id prefixes (`avp-select-`,
+`avp-field-`), and deliberate structural hooks (`avp-btn__label`,
+`avp-shelf__row`). A guard that is mostly allowlist stops catching anything, so
+it was not shipped. The dead class itself was simply removed: these rows are
+static and non-interactive, so a component class would have existed only to
+carry a hover they have no reason to have.
+
+## Verification
+
+**Driven in a browser against real `avp_dev` data**, not stubs, for all four
+states. Notion shows its one real finding (Amazonbot blocked by name, thirteen
+allowed through `*`, `searchBlocked` 1). Plausible shows fourteen
+`unspecified` with the no-policy sentence. Linear shows fourteen allowed with
+every tile correctly dimmed. And `epic7-degraded.example` — a domain that does
+not resolve — was audited live to produce the fourth: **zero stat tiles**, a
+"Not readable" card, and fourteen `unknown` rows. That state had never been
+reachable from real data before, and reaching it is what surfaced the lead
+paragraph contradicting itself.
+
+Tile rails were read out of the **live CSSOM** rather than the markup, which is
+how the twelve-degree collision was measurable at all: `oklch(… 343)` beside
+`oklch(… 275)` after the fix, against `343` beside `355` before it. No sideways
+page scroll at 1440 or 420. No console errors in any state.
+
+**The Report is unchanged.** `article.avp-report` on `/share/{token}`:
+**byte-identical, 72,750 bytes, SHA-256 `cbb44e55…`** — the same hash as before
+Epic B, now across a fifth and sixth round of shared-stylesheet edits
+(`tokens.css` gained `--avp-dim-pending`, `components.css` now reads it).
+Checked rather than assumed, precisely because this epic touched both.
+
+**A test suite that was making real network calls, found by its own slowness.**
+`test_crawler_access.py` first ran in **12 minutes 27 seconds for 17 tests**,
+and one run wedged completely — two sessions idle in transaction, the process
+at zero CPU, and `pg_blocking_pids` reporting no database contention at all,
+which is what pointed at Python rather than Postgres. The cause was a missing
+stub: `conftest`'s autouse `stub_chain_externals` covers competitor discovery,
+the audit and the model, but NOT the engine phase, which `test_answer_gaps.py`
+stubs itself and this file did not. Every scan was making real outbound calls
+and sitting on their timeouts. With `prompt_service.generate_prompts` and
+`engine_service.ask_all` stubbed the same file runs in **1.81 seconds**. Worth
+recording as a rule rather than a fix: a new API test file that runs a scan
+needs its own engine stub, and a suite that is mysteriously slow is making a
+network call it should not be.
+
+**IP-safety check passed:** every field is a verdict enum, a count, an agent
+product token, a vendor name, or OUR OWN classification of that agent's purpose
+— `ai_crawler_access` has no column capable of holding a path or a rule body,
+and `TestIpSafety` asserts both the behaviour (a distinctive `Disallow` path
+never appears in the response) and the column set itself, so the guarantee
+cannot regress by someone adding a field (7). No dependency was added — the
+parser is ~200 lines of stdlib `re` rather than a robots library, which also
+keeps constraint 6 untouched. The roster was assembled from the crawler
+operators' own published user-agent documentation, and the purpose split was
+derived from this product's own citation model, not from any competitor's
+feature (1, 5). The screen imports only from `@avp/design-system` (2).
+
+**Suite: 2,150 tests, up from 2,072.** api 963 (+46), web 703 (+29),
+design-system 418 (+3), shared-types 53, workers 13. `ruff check src tests`
+clean, `tsc` clean across all three TypeScript packages. Migration applied and
+`alembic check` reports no drift. Screenshots — 1440, 420, dark, and all four
+data states — in `docs/screenshots/epic-f-ai-crawlers/`.
+
+Three of api's forty-six were written by nobody: `test_enum_constraints.py`
+parametrises over `Base.metadata`, so `AgentPurpose`, `AccessVerdict` and
+`RuleSource` each gained a case asserting the database accepts every member the
+Python enum can produce, the moment the table was registered. Worth noting
+because it is the guard working exactly as intended — a new VARCHAR-plus-CHECK
+enum cannot be added to this schema without its CHECK being verified against
+its Python definition.
+
+**The api suite did not get slower**: 98.9s against a 101s baseline, with
+forty-six more tests in it. That is the engine-stub fix above, not luck.
+
+## Open, and deliberately not closed here
+
+**J, C and D remain unbuilt**, and the sequencing that put J before C and D is
+still the confirmed one. Building F ahead of them was a decision taken with the
+founder rather than a drift, and it is recorded here so the roadmap does not
+quietly lose three Tier-1 epics. The `UniqueConstraint("prompt_id", "engine")`
+finding above is the thing to read before J is planned: it is a bigger epic
+than its brief implies.
+
+**Measurement has no free seat left.** Six items, and the palette's arc holds
+seven accents with no eighth available. A seventh section in that cluster is a
+palette decision, not a nav edit; `clientNav.test.ts`'s projection is now
+`measurement: 0` and is where that will surface.
+
+**Prompt discovery (G) is still blocked** on the classification Findings #1 and
+#2 in `api-contracts.md`, both still open. Re-flagged rather than resolved,
+because nothing this epic touched bears on them.

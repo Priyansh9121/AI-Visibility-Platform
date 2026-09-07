@@ -47,13 +47,15 @@ PROMPT_RUN: Final = "prun"
 PROMPT_RUN_RESULT: Final = "prre"
 # Epic E — a detected change between a scan and its baseline.
 ALERT: Final = "alrt"
+# Epic F — one AI crawler's access verdict, read from a site's robots.txt.
+AI_CRAWLER_ACCESS: Final = "acra"
 
 ALL_PREFIXES: Final[frozenset[str]] = frozenset(
     {
         AGENCY, USER, CLIENT, SCAN, COMPETITOR_SET, COMPETITOR, PROMPT_SET,
         PROMPT, ENGINE_RESULT, CITATION, BRAND_MENTION, TECHNICAL_AUDIT,
         AUDIT_CHECK, SCORE, ACTION_ITEM, INVITATION, PASSWORD_RESET,
-        PROMPT_RUN, PROMPT_RUN_RESULT, ALERT,
+        PROMPT_RUN, PROMPT_RUN_RESULT, ALERT, AI_CRAWLER_ACCESS,
     }
 )
 
