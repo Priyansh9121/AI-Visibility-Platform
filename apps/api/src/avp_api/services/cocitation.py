@@ -34,6 +34,7 @@ import structlog
 from pydantic import BaseModel, Field
 
 from ..config import Settings, get_settings
+from .call_bounds import CallBound
 from .crawl import registrable_domain
 
 logger = structlog.get_logger(__name__)
@@ -43,6 +44,17 @@ CO_CITATION_MODEL = "claude-opus-5"
 CO_CITATION_EFFORT = "low"
 CO_CITATION_MAX_TOKENS = 3_000
 MAX_BRANDS_PER_PROMPT = 10
+
+# --- The call's bound (API key discipline audit, 2026-09-07) -----------------
+# Inherited both SDK defaults until this audit — a 600s read timeout across
+# three attempts — while fanned four seed prompts wide at concurrency three,
+# so one hung call held a slot for thirty minutes inside the competitor phase
+# that the engine loop waits on. The measurement is the whole endpoint:
+# `POST /clients/{id}/competitors`, six SerpApi searches AND these four calls,
+# at 20.9s (build log, Epic 9.4's latency table). Thirty seconds per attempt
+# is headroom over the endpoint itself, not just this call; the one retry is
+# `engines.py`'s, kept for its reason.
+CO_CITATION_BOUND = CallBound(timeout=30.0, max_retries=1)  # ceiling: 62.0s
 
 
 class CoCitedBrand(BaseModel):
@@ -161,22 +173,23 @@ async def run_seed_prompt(
 ) -> CoCitationResult:
     """Ask one seed prompt and extract the brands named. Never raises."""
     settings = settings or get_settings()
-    client = anthropic.AsyncAnthropic(api_key=settings.provider_key("anthropic_api_key"))
+    client = CO_CITATION_BOUND.client(settings)
 
     try:
-        response = await client.messages.parse(
-            model=CO_CITATION_MODEL,
-            max_tokens=CO_CITATION_MAX_TOKENS,
-            output_config={"effort": CO_CITATION_EFFORT},
-            system=SYSTEM_PROMPT,
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"Subject brand: {subject_brand}\n\nQuestion: {prompt}",
-                }
-            ],
-            output_format=CoCitationAnswer,
-        )
+        async with CO_CITATION_BOUND.deadline():
+            response = await client.messages.parse(
+                model=CO_CITATION_MODEL,
+                max_tokens=CO_CITATION_MAX_TOKENS,
+                output_config={"effort": CO_CITATION_EFFORT},
+                system=SYSTEM_PROMPT,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": f"Subject brand: {subject_brand}\n\nQuestion: {prompt}",
+                    }
+                ],
+                output_format=CoCitationAnswer,
+            )
     except anthropic.AuthenticationError:
         return CoCitationResult(prompt=prompt, ok=False, error_code="PROVIDER_AUTH_FAILED")
     except anthropic.RateLimitError:
@@ -185,6 +198,10 @@ async def run_seed_prompt(
         if "credit balance" in str(exc).lower():
             return CoCitationResult(prompt=prompt, ok=False, error_code="PROVIDER_QUOTA_EXHAUSTED")
         return CoCitationResult(prompt=prompt, ok=False, error_code="PROVIDER_BAD_REQUEST")
+    except (anthropic.APITimeoutError, TimeoutError):
+        # Before APIConnectionError, which APITimeoutError subclasses; the
+        # builtin TimeoutError is the outer deadline (`CallBound.deadline`).
+        return CoCitationResult(prompt=prompt, ok=False, error_code="TIMEOUT")
     except anthropic.APIConnectionError:
         return CoCitationResult(prompt=prompt, ok=False, error_code="PROVIDER_UNREACHABLE")
     except anthropic.APIError:
