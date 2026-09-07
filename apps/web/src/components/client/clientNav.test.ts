@@ -59,14 +59,18 @@ describe('a hue is scoped to its cluster', () => {
 
   it('leaves room for the sections still to be built', () => {
     /*
-     * Alerts (E) and Prompt discovery (G) land in Investigation; Crawler
-     * activity (F) lands in Measurement, because it is a data SOURCE rather
-     * than an analysis of one. This asserts the end state fits — the whole
-     * point of doing this before Epic E rather than during it.
+     * The projection tracks REALITY, not the original prediction. Alerts
+     * landed in Epic E and AI crawlers in Epic F, so both have been taken out
+     * of `planned` — a number left standing after its section shipped would
+     * quietly assert room for a seat that is already occupied.
+     *
+     * Measurement is now FULL: six items and no free seat. Any seventh
+     * section there needs a palette decision, not a nav edit, and this test is
+     * where that will surface.
+     *
+     * Prompt discovery (G) is the one section still to come, in Investigation.
      */
-    // Alerts landed in Epic E; Crawler activity (F) is still to come in
-    // Measurement, Prompt discovery (G) in Investigation.
-    const planned: Record<string, number> = { measurement: 1, investigation: 1 };
+    const planned: Record<string, number> = { measurement: 0, investigation: 1 };
     for (const cluster of CLIENT_NAV) {
       const projected = cluster.items.length + (planned[cluster.key] ?? 0);
       expect(projected, `${cluster.label} will outgrow the layer`).toBeLessThanOrEqual(
@@ -100,6 +104,7 @@ describe('sections and clusters', () => {
       'gaps',
       'prompts',
       'alerts',
+      'crawler',
     ];
     for (const section of sections) {
       expect(accentFor(section), `${section} has no accent`).not.toBeNull();
@@ -111,6 +116,34 @@ describe('sections and clusters', () => {
     expect(report).toBeDefined();
     expect(report!.accent).toBeNull();
     expect(report!.external).toBe(true);
+  });
+
+  it('files AI crawlers as Measurement, and takes the seat B.1 reserved', () => {
+    // Epic F. It reads a first-party SOURCE — the site's own robots.txt — the
+    // same reason Sentiment is filed here rather than under Investigation.
+    // Accent 5 is the seat B.1 held open and asserted would fit, and taking it
+    // must not have repainted anything above it.
+    const measurement = CLIENT_NAV.find((c) => c.key === 'measurement');
+    const crawler = measurement!.items.find((i) => i.section === 'crawler');
+    expect(crawler, 'AI crawlers is not in Measurement').toBeDefined();
+    expect(crawler!.accent).toBe(5);
+    expect(accentFor('technical')).toBe(4);
+    expect(accentFor('sentiment')).toBe(3);
+  });
+
+  it('names the section for what it measures, not for what F was called', () => {
+    /*
+     * The roadmap called this "Crawler activity" and meant server-log evidence
+     * of bots hitting the site. Nothing in this product ingests server logs,
+     * so the section reads the site's stated POLICY instead — and the label
+     * has to say so, because a nav item promising activity is a claim the
+     * screen behind it cannot honour.
+     */
+    const crawler = CLIENT_NAV.flatMap((c) => c.items).find(
+      (i) => i.section === 'crawler',
+    );
+    expect(crawler!.label).toBe('AI crawlers');
+    expect(crawler!.label.toLowerCase()).not.toContain('activity');
   });
 
   it('files Sentiment as Measurement, not as an analysis', () => {

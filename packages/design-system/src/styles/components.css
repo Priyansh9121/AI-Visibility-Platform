@@ -2095,7 +2095,7 @@
  * controls away, and `aria-busy` says the same thing to a screen reader.
  */
 .avp-gapgrid--pending {
-  opacity: 0.45;
+  opacity: var(--avp-dim-pending);
   transition: opacity var(--avp-duration-state) var(--avp-ease-standard);
 }
 

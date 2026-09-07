@@ -10,6 +10,7 @@ import type {
   AcknowledgeAlert,
   AlertFeed,
   AnswerGaps,
+  CrawlerAccess,
   BillingStatus,
   CheckoutSession,
   Client,
@@ -306,6 +307,22 @@ export const api = {
   answerGaps: (clientId: string, scanId?: string) =>
     request<AnswerGaps | null>(
       `/clients/${clientId}/answer-gaps${scanId ? `?scanId=${encodeURIComponent(scanId)}` : ''}`,
+    ),
+
+  /**
+   * What this client's robots.txt asks each AI crawler to do — Epic F.
+   *
+   * A READ of what a scan's technical audit already parsed. It does not fetch
+   * robots.txt, which is why the same client can answer differently for
+   * different scans and why an old scan keeps saying what was true then.
+   *
+   * Returns null when no scan has ever recorded a policy — every scan
+   * predating the feature, which is a normal state with an empty view, not a
+   * missing resource.
+   */
+  aiCrawlerAccess: (clientId: string, scanId?: string) =>
+    request<CrawlerAccess | null>(
+      `/clients/${clientId}/ai-crawler-access${scanId ? `?scanId=${encodeURIComponent(scanId)}` : ''}`,
     ),
 
   /**

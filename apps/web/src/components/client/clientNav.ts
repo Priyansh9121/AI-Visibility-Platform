@@ -37,7 +37,8 @@ export type ClientSection =
   | 'technical'
   | 'gaps'
   | 'prompts'
-  | 'alerts';
+  | 'alerts'
+  | 'crawler';
 
 export interface ClientNavItem {
   /** `null` for the Report, which is a link out rather than a section. */
@@ -68,8 +69,11 @@ export interface ClientNavCluster {
  * already wrote. Sentiment belongs here rather than with the analyses: its
  * labels have been stored since Epic 4 and it is one of the five scored
  * dimensions at 15% of the composite, which makes it a measurement, not a
- * derivation. Crawler activity will join it for the same reason — it is a
- * second data SOURCE (first-party server logs), not an analysis of the first.
+ * derivation. AI crawlers joined it in Epic F for the same reason — it reads a
+ * second first-party SOURCE (the site's own robots.txt), not an analysis of
+ * the first. B.1 predicted that seat would hold "first-party server logs";
+ * Epic F found this product ingests none, and the section reads the policy
+ * those logs would have shown compliance with instead.
  *
  * **Investigation — what an operator does with it.** Answer gaps derives over
  * measured rows; Prompts creates new ones. Grouping "derive" and "probe"
@@ -92,6 +96,16 @@ export const CLIENT_NAV: readonly ClientNavCluster[] = [
       { section: 'rankings', label: 'Rankings', path: '/rankings', accent: 2 },
       { section: 'sentiment', label: 'Sentiment', path: '/sentiment', accent: 3 },
       { section: 'technical', label: 'Technical', path: '/technical', accent: 4 },
+      // Epic F. The last free seat in this cluster, reserved by B.1 and
+      // asserted by `clientNav.test.ts` before it existed.
+      //
+      // "AI crawlers", not "Crawler activity", and the difference is the
+      // epic. The roadmap's name promised server-log activity — bots actually
+      // hitting the site — and nothing in this system ingests server logs.
+      // What is readable is the site's stated POLICY, from robots.txt. The
+      // label says access, so the nav cannot promise what the screen does not
+      // deliver.
+      { section: 'crawler', label: 'AI crawlers', path: '/crawler', accent: 5 },
     ],
   },
   {

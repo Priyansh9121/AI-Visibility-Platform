@@ -1609,6 +1609,161 @@
         "title": "CrawlSummaryOut",
         "type": "object"
       },
+      "CrawlerAccessOut": {
+        "description": "The AI crawler access policy read during one scan's technical audit.",
+        "properties": {
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/CrawlerAgentOut"
+            },
+            "title": "Agents",
+            "type": "array"
+          },
+          "availableScanIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Availablescanids",
+            "type": "array"
+          },
+          "clientId": {
+            "title": "Clientid",
+            "type": "string"
+          },
+          "robotsReadable": {
+            "title": "Robotsreadable",
+            "type": "boolean"
+          },
+          "scanId": {
+            "title": "Scanid",
+            "type": "string"
+          },
+          "scannedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scannedat"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/CrawlerAccessSummaryOut"
+          },
+          "urlAudited": {
+            "title": "Urlaudited",
+            "type": "string"
+          }
+        },
+        "required": [
+          "clientId",
+          "scanId",
+          "urlAudited",
+          "robotsReadable",
+          "agents",
+          "summary",
+          "availableScanIds"
+        ],
+        "title": "CrawlerAccessOut",
+        "type": "object"
+      },
+      "CrawlerAccessSummaryOut": {
+        "description": "Counts across the roster, for the screen's stat row.\n\n`searchBlocked` is separated from `blocked` because it is the finding with\na cost attached. Blocking a TRAINING crawler is a rights decision that\ncosts no citations. Blocking a SEARCH crawler removes the site from the\nretrieval index an engine cites from \u2014 which is this product's whole\nsubject \u2014 and an agency that blanket-blocked \"AI bots\" to protect its\ncontent has usually bought that by accident.",
+        "properties": {
+          "allowed": {
+            "title": "Allowed",
+            "type": "integer"
+          },
+          "blocked": {
+            "title": "Blocked",
+            "type": "integer"
+          },
+          "explicit": {
+            "title": "Explicit",
+            "type": "integer"
+          },
+          "searchBlocked": {
+            "title": "Searchblocked",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "unknown": {
+            "title": "Unknown",
+            "type": "integer"
+          },
+          "unspecified": {
+            "title": "Unspecified",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "allowed",
+          "blocked",
+          "unspecified",
+          "unknown",
+          "searchBlocked",
+          "explicit"
+        ],
+        "title": "CrawlerAccessSummaryOut",
+        "type": "object"
+      },
+      "CrawlerAgentOut": {
+        "description": "One AI crawler's verdict for one scan.",
+        "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "disallowRules": {
+            "default": 0,
+            "title": "Disallowrules",
+            "type": "integer"
+          },
+          "matchedToken": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Matchedtoken"
+          },
+          "purpose": {
+            "title": "Purpose",
+            "type": "string"
+          },
+          "ruleSource": {
+            "title": "Rulesource",
+            "type": "string"
+          },
+          "vendor": {
+            "title": "Vendor",
+            "type": "string"
+          },
+          "verdict": {
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent",
+          "vendor",
+          "purpose",
+          "verdict",
+          "ruleSource"
+        ],
+        "title": "CrawlerAgentOut",
+        "type": "object"
+      },
       "CreateClientRequest": {
         "description": "Intake payload.\n\n`url` is intentionally permissive \u2014 an operator pastes whatever they have,\nincluding a bare domain. Normalisation and validation happen server-side in\nservices/intake.py:parse_domain so the browser and the API cannot disagree\nabout what counts as a valid address.",
         "properties": {
@@ -5451,6 +5606,73 @@
           }
         },
         "summary": "Get Client",
+        "tags": [
+          "clients"
+        ]
+      }
+    },
+    "/api/v1/clients/{clientId}/ai-crawler-access": {
+      "get": {
+        "description": "What this client's robots.txt asks each AI crawler to do \u2014 Epic F.\n\n**Reads. Fetches nothing.** The verdicts were parsed during the scan's\ntechnical audit, from the robots.txt it already fetched, and persisted\nthen. Re-fetching here would make the same URL answer differently between\ntwo page loads and would mean this endpoint could be used to make the API\nissue outbound requests on demand.\n\n**This answers \"can an AI crawler read this site\", not \"is one reading\nit\".** Server logs would answer the second and nothing in this system\ningests them; `services/ai_crawlers.py` records the correction in full.\nNo field in the response can be rendered as activity.\n\n`scanId` selects one scan; without it the newest scan carrying a policy is\nused. The response carries `availableScanIds` so a picker needs no second\ncall \u2014 the same contract `answer-gaps` uses.\n\nReturns `null` \u2014 not 404 \u2014 when no scan of this client has ever recorded a\npolicy, which is every scan predating this feature. A client with nothing\nto show is a normal state on a screen that has an empty view for it, not a\nmissing resource.\n\nScoped to the caller's agency by `get_client`, which 404s rather than 403s\non another agency's id.",
+        "operationId": "get_client_ai_crawler_access_api_v1_clients__clientId__ai_crawler_access_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clientId",
+            "required": true,
+            "schema": {
+              "title": "Clientid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scanId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scanid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/CrawlerAccessOut"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Get Client Ai Crawler Access Api V1 Clients  Clientid  Ai Crawler Access Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Client Ai Crawler Access",
         "tags": [
           "clients"
         ]

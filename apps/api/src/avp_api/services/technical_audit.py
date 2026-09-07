@@ -55,6 +55,7 @@ import structlog
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import async_playwright
 
+from .ai_crawlers import AgentAccess, evaluate_robots, unknown_access
 from .crawl import USER_AGENT, normalise_url, registrable_domain
 
 logger = structlog.get_logger(__name__)
@@ -108,6 +109,13 @@ class AuditSignals:
     robots_allows_crawl: bool = True
     has_sitemap: bool = False
     is_indexable: bool = True
+
+    # --- AI crawler policy (Epic F) ---
+    # One verdict per agent in `ai_crawlers.AGENTS`. Empty ONLY before the side
+    # fetch has run; an unreadable robots.txt yields a full list of UNKNOWN
+    # rather than an empty one, so "not measured yet" and "measured, and the
+    # file was unreachable" never collapse into the same value.
+    ai_crawler_access: list[AgentAccess] = field(default_factory=list)
 
     # --- content structure ---
     h1_count: int = 0
@@ -170,16 +178,43 @@ def _extract_structured_date(json_ld: str) -> datetime | None:
     return max(dates) if dates else None
 
 
-async def _fetch_side_files(base: str) -> tuple[bool, bool, bool]:
-    """(robots_present, robots_allows_crawl, sitemap_present).
+@dataclass(slots=True)
+class _SideFiles:
+    """What the two side fetches found.
 
-    robots.txt is parsed only for a blanket `Disallow: /` under `User-agent: *`.
-    A full robots parser is out of scope; the check that matters to a visibility
-    report is "is this site telling crawlers to stay out entirely".
+    A dataclass rather than the tuple this used to return: Epic F added a
+    fourth and a fifth value, and a five-tuple unpacked at the call site is
+    where an ordering mistake goes unnoticed.
     """
-    robots_present = False
-    robots_allows = True
-    sitemap_present = False
+
+    robots_present: bool = False
+    robots_allows_crawl: bool = True
+    sitemap_present: bool = False
+    # Epic F. Per-agent AI crawler policy. Empty only if never evaluated.
+    ai_access: list[AgentAccess] = field(default_factory=list)
+
+
+async def _fetch_side_files(base: str) -> _SideFiles:
+    """Fetch robots.txt and sitemap.xml, and read both policies out of robots.
+
+    **robots.txt is now read twice, on purpose.**
+
+    1. The blanket `Disallow: /` under `User-agent: *` check, unchanged since
+       Epic 6, feeding `robots_allows_crawl` -> `is_indexable` -> the §6
+       Technical Foundation sub-score.
+    2. Epic F's full RFC 9309 parse in `services/ai_crawlers.py`, feeding the
+       AI crawler access screen and NOTHING else.
+
+    The first is deliberately NOT reimplemented on top of the second, even
+    though the second is strictly more correct. `robots_allows_crawl` is a
+    SCORED input: re-deriving it would move Technical Foundation for every
+    client whose robots.txt the old reader got wrong, inside a diff about
+    crawler policy, with no way to tell a fixed score from a regressed one.
+    Epic 6's number stays Epic 6's number until something deliberately
+    revisits it. Recorded in `build-log.md` Epic F rather than left to be
+    rediscovered as duplication.
+    """
+    found = _SideFiles()
 
     async with httpx.AsyncClient(
         timeout=SIDE_FETCH_TIMEOUT, follow_redirects=True,
@@ -188,8 +223,9 @@ async def _fetch_side_files(base: str) -> tuple[bool, bool, bool]:
         try:
             resp = await client.get(f"{base}/robots.txt")
             if resp.status_code == 200 and "text" in resp.headers.get("content-type", ""):
-                robots_present = True
+                found.robots_present = True
                 body = resp.text[:20_000]
+                found.ai_access = evaluate_robots(body)
                 star_block = False
                 for raw in body.splitlines():
                     line = raw.split("#", 1)[0].strip().lower()
@@ -200,23 +236,30 @@ async def _fetch_side_files(base: str) -> tuple[bool, bool, bool]:
                         and line.startswith("disallow:")
                         and line.split(":", 1)[1].strip() == "/"
                     ):
-                        robots_allows = False
+                        found.robots_allows_crawl = False
                     if "sitemap:" in line:
-                        sitemap_present = True
+                        found.sitemap_present = True
         except httpx.HTTPError:
             pass
 
-        if not sitemap_present:
+        if not found.ai_access:
+            # Non-200, wrong content type, or a transport error. The file was
+            # not read, so the policy is UNKNOWN — never an allow. The
+            # distinction is the whole point of `unknown_access()`; see
+            # `ai_crawlers.py`.
+            found.ai_access = unknown_access()
+
+        if not found.sitemap_present:
             try:
                 resp = await client.get(f"{base}/sitemap.xml")
-                sitemap_present = resp.status_code == 200 and (
+                found.sitemap_present = resp.status_code == 200 and (
                     "xml" in resp.headers.get("content-type", "")
                     or resp.text.lstrip().startswith("<?xml")
                 )
             except httpx.HTTPError:
                 pass
 
-    return robots_present, robots_allows, sitemap_present
+    return found
 
 
 async def audit_site(url: str, *, timeout_ms: int = PAGE_TIMEOUT_MS) -> AuditSignals:
@@ -229,12 +272,17 @@ async def audit_site(url: str, *, timeout_ms: int = PAGE_TIMEOUT_MS) -> AuditSig
     origin = origin_match.group(1) if origin_match else start_url
 
     try:
-        robots_present, robots_allows, sitemap = await _fetch_side_files(origin)
-        signals.robots_txt_present = robots_present
-        signals.robots_allows_crawl = robots_allows
-        signals.has_sitemap = sitemap
+        side = await _fetch_side_files(origin)
+        signals.robots_txt_present = side.robots_present
+        signals.robots_allows_crawl = side.robots_allows_crawl
+        signals.has_sitemap = side.sitemap_present
+        signals.ai_crawler_access = side.ai_access
     except Exception:  # noqa: BLE001 - side files must never fail the audit
         logger.warning("audit.side_fetch_failed", domain=domain)
+        # The fetch raised outside its own handlers, so nothing about the
+        # policy is known. Say so explicitly rather than leaving the list
+        # empty, which downstream would read as "no agents to report".
+        signals.ai_crawler_access = unknown_access()
 
     try:
         async with async_playwright() as pw:

@@ -289,4 +289,52 @@ describe('colour utilities exist in the preset', () => {
       expect([...new Set(offenders)]).toEqual([]);
     });
   }
+
+  /**
+   * The `-semantic-` check above catches ONE wrong prefix. It does not check
+   * that a suffix resolves, and Epic F wrote two classes that prove the gap:
+   * `border-line-subtle` (the group has `hairline` and `strong`, never
+   * `subtle`) and `rounded-card` (the radii are `sm|md|lg|xl|full|none`).
+   *
+   * Both compiled to nothing. `border-line-subtle` left a row separator that
+   * simply was not drawn, on a screen whose rows are only distinguishable by
+   * it — the same silent-no-op failure as `h-2.5` and `text-semantic-danger`,
+   * on the third axis in a row. So this resolves the suffix instead of
+   * pattern-matching one known mistake.
+   *
+   * Scoped to the NESTED colour groups and to `rounded-`, because those have
+   * closed key sets. `text-` and `bg-` at top level are deliberately not
+   * checked here: `text-` is shared with the font-size scale (`text-ui-base`),
+   * so a general check there produces false positives rather than findings.
+   */
+  const GROUPS: Record<string, readonly string[]> = {
+    line: ['hairline', 'strong'],
+    surface: ['ground', 'sunken', 'seated'],
+    text: ['primary', 'body', 'secondary', 'tertiary'],
+  };
+  const RADII = ['none', 'sm', 'md', 'lg', 'xl', 'full'];
+
+  const GROUPED = new RegExp(
+    `\\b(?:${COLOUR_PREFIXES})-(${Object.keys(GROUPS).join('|')})-([a-z][a-z0-9]*)\\b`,
+    'g',
+  );
+  const ROUNDED = /\brounded(?:-[trbl][lr]?)?-([a-z][a-z0-9]*)\b/g;
+
+  for (const surface of SURFACES) {
+    it(`${surface} resolves every grouped colour and radius suffix`, () => {
+      const offenders: string[] = [];
+      for (const file of filesUnder(surface)) {
+        const source = readFileSync(file, 'utf8');
+        for (const [full, group, key] of source.matchAll(GROUPED)) {
+          if (!GROUPS[group!]!.includes(key!)) {
+            offenders.push(`${relative(ROOT, file)}: ${full}`);
+          }
+        }
+        for (const [full, key] of source.matchAll(ROUNDED)) {
+          if (!RADII.includes(key!)) offenders.push(`${relative(ROOT, file)}: ${full}`);
+        }
+      }
+      expect([...new Set(offenders)]).toEqual([]);
+    });
+  }
 });

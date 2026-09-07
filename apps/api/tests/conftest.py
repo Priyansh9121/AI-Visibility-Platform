@@ -326,6 +326,7 @@ def stub_chain_externals(monkeypatch):  # noqa: ANN001, ANN201
     never starts a scan.
     """
     from avp_api.models.action_item import Effort, Priority
+    from avp_api.services.ai_crawlers import evaluate_robots
     from avp_api.services.technical_audit import AuditSignals
 
     # --- Epic 3: detection, without SerpApi or the co-citation model calls ---
@@ -381,6 +382,20 @@ def stub_chain_externals(monkeypatch):  # noqa: ANN001, ANN201
             h1_count=1,
             word_count=900,
             content_age_days=10,
+            # Epic F. A realistic robots.txt rather than an empty policy: it
+            # names ONE AI crawler and lets the rest through `*`, which is the
+            # shape of the only real finding in `avp_dev` (Notion blocks
+            # Amazonbot and nothing else). Parsed by the real parser, so the
+            # chain persists rows the crawler-access endpoint can be tested
+            # against end to end.
+            #
+            # Left EMPTY the stub would have made every scan-chain test assert
+            # against a client with no policy at all, which is the one state
+            # that reveals nothing.
+            ai_crawler_access=evaluate_robots(
+                "User-agent: *\nAllow: /\nDisallow: /admin/\n\n"
+                "User-agent: CCBot\nDisallow: /\n"
+            ),
         )
 
     monkeypatch.setattr(audit_runner, "audit_site", fake_audit_site)

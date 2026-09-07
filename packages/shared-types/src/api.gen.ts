@@ -557,6 +557,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/clients/{clientId}/ai-crawler-access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Client Ai Crawler Access
+         * @description What this client's robots.txt asks each AI crawler to do — Epic F.
+         *
+         *     **Reads. Fetches nothing.** The verdicts were parsed during the scan's
+         *     technical audit, from the robots.txt it already fetched, and persisted
+         *     then. Re-fetching here would make the same URL answer differently between
+         *     two page loads and would mean this endpoint could be used to make the API
+         *     issue outbound requests on demand.
+         *
+         *     **This answers "can an AI crawler read this site", not "is one reading
+         *     it".** Server logs would answer the second and nothing in this system
+         *     ingests them; `services/ai_crawlers.py` records the correction in full.
+         *     No field in the response can be rendered as activity.
+         *
+         *     `scanId` selects one scan; without it the newest scan carrying a policy is
+         *     used. The response carries `availableScanIds` so a picker needs no second
+         *     call — the same contract `answer-gaps` uses.
+         *
+         *     Returns `null` — not 404 — when no scan of this client has ever recorded a
+         *     policy, which is every scan predating this feature. A client with nothing
+         *     to show is a normal state on a screen that has an empty view for it, not a
+         *     missing resource.
+         *
+         *     Scoped to the caller's agency by `get_client`, which 404s rather than 403s
+         *     on another agency's id.
+         */
+        get: operations["get_client_ai_crawler_access_api_v1_clients__clientId__ai_crawler_access_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/clients/{clientId}/alerts": {
         parameters: {
             query?: never;
@@ -1986,6 +2029,77 @@ export interface components {
             urlsFetched: string[];
             /** Wordcount */
             wordCount: number;
+        };
+        /**
+         * CrawlerAccessOut
+         * @description The AI crawler access policy read during one scan's technical audit.
+         */
+        CrawlerAccessOut: {
+            /** Agents */
+            agents: components["schemas"]["CrawlerAgentOut"][];
+            /** Availablescanids */
+            availableScanIds: string[];
+            /** Clientid */
+            clientId: string;
+            /** Robotsreadable */
+            robotsReadable: boolean;
+            /** Scanid */
+            scanId: string;
+            /** Scannedat */
+            scannedAt?: string | null;
+            summary: components["schemas"]["CrawlerAccessSummaryOut"];
+            /** Urlaudited */
+            urlAudited: string;
+        };
+        /**
+         * CrawlerAccessSummaryOut
+         * @description Counts across the roster, for the screen's stat row.
+         *
+         *     `searchBlocked` is separated from `blocked` because it is the finding with
+         *     a cost attached. Blocking a TRAINING crawler is a rights decision that
+         *     costs no citations. Blocking a SEARCH crawler removes the site from the
+         *     retrieval index an engine cites from — which is this product's whole
+         *     subject — and an agency that blanket-blocked "AI bots" to protect its
+         *     content has usually bought that by accident.
+         */
+        CrawlerAccessSummaryOut: {
+            /** Allowed */
+            allowed: number;
+            /** Blocked */
+            blocked: number;
+            /** Explicit */
+            explicit: number;
+            /** Searchblocked */
+            searchBlocked: number;
+            /** Total */
+            total: number;
+            /** Unknown */
+            unknown: number;
+            /** Unspecified */
+            unspecified: number;
+        };
+        /**
+         * CrawlerAgentOut
+         * @description One AI crawler's verdict for one scan.
+         */
+        CrawlerAgentOut: {
+            /** Agent */
+            agent: string;
+            /**
+             * Disallowrules
+             * @default 0
+             */
+            disallowRules: number;
+            /** Matchedtoken */
+            matchedToken?: string | null;
+            /** Purpose */
+            purpose: string;
+            /** Rulesource */
+            ruleSource: string;
+            /** Vendor */
+            vendor: string;
+            /** Verdict */
+            verdict: string;
         };
         /**
          * CreateClientRequest
@@ -3822,6 +3936,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ClientOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_client_ai_crawler_access_api_v1_clients__clientId__ai_crawler_access_get: {
+        parameters: {
+            query?: {
+                scanId?: string | null;
+            };
+            header?: never;
+            path: {
+                clientId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CrawlerAccessOut"] | null;
                 };
             };
             /** @description Validation Error */

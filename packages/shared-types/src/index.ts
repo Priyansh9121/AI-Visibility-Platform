@@ -124,6 +124,14 @@ export type AlertFeed = Schemas['AlertFeedOut'];
 export type Alert = Schemas['AlertOut'];
 export type AcknowledgeAlert = Schemas['AcknowledgeAlertOut'];
 
+// --- AI crawler access (Epic F) ------------------------------------------
+// The site's stated robots.txt policy toward AI crawlers. Names deliberately
+// carry "access", never "activity": nothing here reports a crawler having
+// visited, only what the site asks one to do.
+export type CrawlerAccess = Schemas['CrawlerAccessOut'];
+export type CrawlerAgent = Schemas['CrawlerAgentOut'];
+export type CrawlerAccessSummary = Schemas['CrawlerAccessSummaryOut'];
+
 // --- answer gaps (Epic B) ------------------------------------------------
 export type AnswerGaps = Schemas['AnswerGapsOut'];
 export type AnswerGapRow = Schemas['AnswerGapRowOut'];

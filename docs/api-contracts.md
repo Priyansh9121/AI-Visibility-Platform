@@ -2100,6 +2100,106 @@ Scoped by the denormalised `agency_id` on the row — one predicate, no join —
 and 404s rather than 403s on another agency's id, like every other
 agency-scoped route here.
 
+### `GET /api/v1/clients/{clientId}/ai-crawler-access` — Epic F
+
+What this client's `robots.txt` **asks** each known AI crawler to do, as read
+during one scan's technical audit.
+
+```jsonc
+{
+  "clientId": "clnt_01J...",
+  "scanId": "scan_01J...",
+  "scannedAt": "2026-09-03T10:26:08Z",
+  "urlAudited": "https://notion.so",
+  "robotsReadable": true,
+  "agents": [
+    {
+      "agent": "Amazonbot",
+      "vendor": "Amazon",
+      "purpose": "search",          // training | search | user_action
+      "verdict": "blocked",         // allowed | blocked | unspecified | unknown
+      "ruleSource": "explicit",     // explicit | wildcard | none | unreadable
+      "matchedToken": "amazonbot",  // the group that decided it, or "*"
+      "disallowRules": 1
+    }
+  ],
+  "summary": {
+    "total": 14, "allowed": 13, "blocked": 1,
+    "unspecified": 0, "unknown": 0,
+    "searchBlocked": 1, "explicit": 1
+  },
+  "availableScanIds": ["scan_01J..."]
+}
+```
+
+**It answers "CAN an AI crawler read this site", not "IS one reading it".** The
+roadmap's "Crawler activity" line asked for the second; that is a fact about
+the client's own server logs and nothing in this system ingests them — there is
+no log drain, no collector endpoint, and no column anywhere capable of holding
+a bot hit. No field above can be rendered as activity, and none is named as
+though it could be.
+
+**A stated policy is not proof of compliance.** `robots.txt` is advisory; a
+crawler may ignore it, and a block applied at a CDN or WAF is invisible here.
+
+**Reads. Fetches nothing.** The verdicts were parsed during the scan's audit,
+from the `robots.txt` it already fetched, and persisted then. Re-fetching on
+read would let the same URL answer differently between two page loads and would
+turn this endpoint into a way to make the API issue outbound requests on
+demand; `test_crawler_access.py::TestTheEndpointDoesNotFetchAnything` asserts
+it does not.
+
+`scanId` selects one scan; without it the newest scan **carrying a policy** is
+used. That filter is the audit's rows and deliberately not `ScanStatus`: a scan
+can succeed on every engine while its audit failed, and — because the audit's
+side fetch runs before the page render — a scan whose audit is `FAILED` can
+still carry a full set of verdicts. What the picker offers is what can be
+displayed.
+
+Returns `null`, not 404, when no scan has ever recorded a policy — which is
+every scan predating this feature. A `scanId` belonging to another client also
+returns `null`, for the same reason `get_client` 404s rather than 403s.
+
+**The four verdicts, and why there is no fifth.** A `partial` verdict was
+drafted for "root permitted, some paths disallowed" and cut after measurement:
+it fired on **seven of the nine** live client domains, on housekeeping rules
+like `/api/`, `/cdn-cgi/` and `/humans.txt`. A verdict that is almost always
+true carries as little information as Epic E's rules that fired never, and
+making it mean something would need to separate `/blog/` from `/wp-admin/` —
+which Epic B established there is no content inventory to do. Path-level
+restriction survives as `disallowRules`, a count that qualifies `allowed`
+rather than a verdict of its own.
+
+`unspecified` is deliberately not folded into `allowed` even though their
+practical effect is identical. A fetched `robots.txt` is a COMPLETE document,
+so an agent nobody named is permitted by the file's own semantics (RFC 9309
+§2.2.1) — but a site that named GPTBot and let it in decided something, and one
+that never mentions it did not. On the live client domains the second is
+overwhelmingly the common case, and it is the finding the screen exists to
+surface. `unknown` is the genuinely absent measurement — `robots.txt` could not
+be fetched — and is never merged with an allow.
+
+**`searchBlocked` is separated from `blocked`** because only one of them has a
+cost attached. Blocking a TRAINING crawler is a rights decision that costs no
+citations; blocking a SEARCH crawler removes the site from the retrieval index
+an engine cites from, which is this product's whole subject. A single count
+cannot tell those apart, and they are different conversations with a client.
+
+**IP-safety (#7).** Every field is a verdict, a count, an agent product token, a
+vendor name, or OUR OWN classification of that agent's purpose. `matchedToken`
+is a user-agent token — a product name or the literal `*` — never a URL. No
+path or rule body is carried, and `ai_crawler_access` has no column one could
+be stored in; `TestIpSafety` asserts both the behaviour and the column set.
+
+**Not an input to any score.** `robots_allows_crawl` continues to feed Technical
+Foundation exactly as it did in Epic 6, read by the older and weaker blanket
+check that has always produced it. That check was deliberately NOT reimplemented
+on top of this epic's RFC 9309 parser: it is a scored input, and re-deriving it
+would move Technical Foundation for every client whose file the old reader got
+wrong, inside a diff about crawler policy, with no way to tell a fixed score
+from a regressed one. `robots.txt` is therefore read twice per audit, on
+purpose, in one fetch.
+
 ## Planned, not yet built
 
 Recorded so the shape is agreed before it is implemented.

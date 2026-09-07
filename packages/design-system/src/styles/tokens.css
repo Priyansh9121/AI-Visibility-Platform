@@ -197,6 +197,21 @@
   --avp-ease-out: cubic-bezier(0, 0, 0.2, 1);
   --avp-ease-reveal: cubic-bezier(0.22, 1, 0.36, 1);
 
+  /* How far a panel recedes while the figures in it are being replaced —
+     Epic F, promoted from a literal once a second screen needed it.
+
+     Epic B introduced the pattern on the answer-gaps grid: when an operator
+     picks another scan, the body must NOT reset to a loading state, because
+     that unmounts the picker they just used. It dims instead, which says
+     "these numbers are stale" while keeping the controls where they were.
+
+     It is a token rather than two 0.45s because it is a MEANING — "shown, but
+     no longer current" — and a screen reaching for that meaning must not have
+     to guess the number. It is deliberately not a duration or an easing: the
+     motion tier is already `--avp-duration-state`, since a scan swap is a
+     state change. */
+  --avp-dim-pending: 0.45;
+
   /* Gap between siblings arriving in sequence — Epic 9.16.
      The only motion value this project has added since Epic 0, and it is a
      DELAY rather than a duration on purpose: the reveal itself already has a
