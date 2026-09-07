@@ -40,6 +40,7 @@ purpose is superseded.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -64,22 +65,141 @@ TERMINAL: frozenset[ScanStatus] = frozenset(
     {ScanStatus.SUCCEEDED, ScanStatus.PARTIAL, ScanStatus.FAILED, ScanStatus.CANCELLED}
 )
 
-# --- the stale-scan threshold ------------------------------------------------
-# Derived from measurement, not rounded to taste. Epic 9.2 timed this endpoint's
-# share of the pipeline at ~303s (prompt generation 14.6s + scan loop 288.5s) on
-# a 24-prompt run, against a 361.3s full-pipeline total. 900s is roughly 3x that
-# measured duration, and also clears the 600s `task_soft_time_limit` the repo
-# already treats as "stuck, not slow" (apps/workers/celery_app.py).
+# --- the lease ---------------------------------------------------------------
+# `STALE_AFTER = 900s` off `started_at` used to stand here, and its failure was
+# the audit's diagnosis: duration and identity treated as one signal. Nothing
+# told "still genuinely working" from "gone" except elapsed time, and the
+# arithmetic did not fit — a maximal scan's engine phase alone can legitimately
+# run 976s, so the constant reaped scans that were still running and still
+# billing, and the next POST started a second full run beside the first.
 #
-# A scan still legitimately running at 15 minutes is not slow; something that
-# was holding it has gone away.
-STALE_AFTER = timedelta(seconds=900)
+# A lease asks a different question. The executor says "still here" on a clock;
+# the reaper acts on silence. Duration stops being evidence of anything.
+#
+# WHY THESE TWO NUMBERS, AND WHY NOT A SUM OF CALL CEILINGS
+# ---------------------------------------------------------
+# The obvious derivation — LEASE = the longest gap between two renewals, where
+# renewals sit next to the paid calls — makes LEASE a sum of ceilings living in
+# five other modules, so a phase added later silently outgrows it with nothing
+# but a hand-maintained test to notice. A clock does not have that property:
+# the interval is the interval whatever the chain grows into, which is the
+# whole reason this shape was chosen over renewing per phase or per prompt.
+#
+# LEASE is SIX intervals, not the conventional three. Five consecutive missed
+# renewals are tolerated, and the fifth is not slack for its own sake:
+# `database_pool_size` is 10 with 5 overflow (config.py) and nothing bounds how
+# many executors run at once, so a saturated pool can park a renewal on
+# SQLAlchemy's unconfigured 30-second `pool_timeout` — one whole interval, on a
+# machine that is entirely healthy. At three intervals two such waits would
+# expire a live executor's lease. At six they cannot.
+#
+# What it buys: a dead executor's scan is reapable within 180s rather than
+# 900s. What it costs: one UPDATE per running scan every 30s.
+HEARTBEAT_INTERVAL = timedelta(seconds=30)
+LEASE = timedelta(seconds=180)
 
 # Distinct from ALL_ENGINE_CALLS_FAILED (the pipeline ran and every engine
 # failed) and from EXECUTION_FAILED (the pipeline raised). This one means the
 # process that was running the scan disappeared without saying anything.
 EXECUTOR_LOST = "EXECUTOR_LOST"
 EXECUTION_FAILED = "EXECUTION_FAILED"
+
+
+async def renew_lease(scan_id: str, *, settings: Settings) -> bool:
+    """Push this scan's lease out. **False means the lease is no longer ours.**
+
+    On its OWN short-lived session, never the chain's. Three reasons, and the
+    first two are not style:
+
+    * The chain's session is mid-transaction for minutes at a time. A renewal
+      issued on it would not be visible to the reaper or to anything else until
+      that transaction committed, which is exactly when the renewal stops
+      mattering.
+    * Committing on the chain's session would commit whatever it has flushed
+      and not yet committed, which is not this function's business.
+    * Inside `run_scan` the chain's session is shared by `PROMPT_CONCURRENCY`
+      gathered coroutines, and `AsyncSession` is not safe for concurrent use.
+
+    Zero matched rows is a definite answer from the database: this row is not
+    RUNNING any more, so somebody else owns its fate — the reaper failed it, or
+    it has already been finalised. An EXCEPTION is not an answer, and the
+    caller treats the two differently.
+    """
+    factory = get_sessionmaker(settings)
+    async with factory() as session:
+        renewed = (
+            await session.execute(
+                update(Scan)
+                .where(Scan.id == scan_id, Scan.status == ScanStatus.RUNNING)
+                .values(lease_expires_at=datetime.now(UTC) + LEASE)
+                .returning(Scan.id)
+                .execution_options(synchronize_session=False)
+            )
+        ).scalar_one_or_none()
+        await session.commit()
+    return renewed is not None
+
+
+async def _heartbeat(scan_id: str, *, settings: Settings, owner: asyncio.Task, state: dict) -> None:
+    """Renew on a clock until the lease is lost, then cancel the work.
+
+    **A renewal that matches zero rows stops the executor.** Not a log line and
+    onwards: this is the half a reaper alone never had — today it stamps the
+    row and the work carries on, billing against a scan somebody else has
+    already written off. Cancelling `owner` is what makes the stamp mean
+    something.
+
+    A renewal that RAISES is a different thing and is not treated as loss. The
+    database being briefly unreachable says nothing about who owns the row, and
+    `LEASE` is six intervals precisely so a few of these cost nothing. If the
+    outage outlasts the lease the row is reaped, and the first renewal that
+    completes afterwards returns False through the branch above.
+    """
+    interval = HEARTBEAT_INTERVAL.total_seconds()
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            held = await renew_lease(scan_id, settings=settings)
+        except Exception:  # noqa: BLE001 - not an answer about ownership
+            logger.warning("scan.lease.renewal_failed", scan_id=scan_id, exc_info=True)
+            continue
+        if not held:
+            state["lost"] = True
+            owner.cancel()
+            return
+
+
+async def run_under_lease(
+    chain: Awaitable[None], *, scan_id: str, settings: Settings
+) -> bool:
+    """Run `chain` while holding the scan's lease. False means the lease went.
+
+    The chain runs as its OWN task so that losing the lease cancels the work
+    and nothing else. Cancelling `asyncio.current_task()` instead would reach
+    whatever is above us — under `InlineScanExecutor` that is the request
+    handler, which has done nothing wrong.
+
+    Cancellation is what stops the billing, and it reaches the chain wherever
+    it is waiting: `_attempt` catches `Exception`, and `CancelledError` is a
+    `BaseException`, so no phase can swallow it on the way out.
+
+    A cancellation this function did not cause is re-raised rather than
+    reported as a lost lease — `state["lost"]` is how the two are told apart.
+    """
+    state: dict = {}
+    work = asyncio.create_task(chain)
+    beat = asyncio.create_task(
+        _heartbeat(scan_id, settings=settings, owner=work, state=state)
+    )
+    try:
+        await work
+    except asyncio.CancelledError:
+        if not state.get("lost"):
+            raise
+        return False
+    finally:
+        beat.cancel()
+    return True
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,31 +333,37 @@ async def execute_scan(job: ScanJob, *, settings: Settings) -> None:
     The claim comes before competitor detection, not just before the loop,
     because detection is the first phase that spends money.
 
-    This is the first half of a lease. What it does not yet do is renew: a
-    RUNNING scan whose executor has died still waits on `reap_stale_scans` and
-    its static STALE_AFTER, because nothing distinguishes "still working" from
-    "gone" except elapsed time. The second half is designed in the build log
-    (API key discipline audit, "The spend ceiling") and not built. Its exact
-    mechanism, so a skim of this file cannot simplify it away:
+    THE LEASE — built 2026-09-08
+    ----------------------------
+    The claim stamps `lease_expires_at`; a heartbeat on its own session pushes
+    it out every `HEARTBEAT_INTERVAL` while the chain runs; `reap_stale_scans`
+    fails RUNNING scans whose lease has expired. Duration is no longer evidence
+    of anything — `STALE_AFTER` is gone, and a scan is reaped for going quiet.
 
-    * A column, `scans.lease_expires_at`, stamped by this claim as
-      `now() + LEASE`. STALE_AFTER retires.
-    * This statement's WHERE grows rather than being replaced:
-      `status = 'queued' OR (status = 'running' AND lease_expires_at < now())`.
-      A dead executor's scan is then re-claimable directly, without a reaper
-      pass first.
-    * Renewal, in `_attempt` before each phase and in `run_scan` as each
-      prompt completes, is one statement:
-      `UPDATE scans SET lease_expires_at = now() + LEASE
-       WHERE id = :id AND status = 'running'`.
-      **A renewal that matches zero rows means the lease is gone** — reaped,
-      or re-claimed by another executor — and the executor STOPS rather than
-      keeps billing. That is the half the reaper has never had: today it
-      stamps the row and the work carries on regardless.
-    * `reap_stale_scans` keys off `lease_expires_at < now()`, not `started_at`.
-    * LEASE is derived, not chosen: the longest gap between two renewals plus
-      a margin. That gap is a sum of call ceilings, which is why every paid
-      call inside a phase has to be bounded before a length can be chosen.
+    **A renewal that matches zero rows means the lease is gone, and the
+    executor stops.** That is the half a reaper alone never had: it stamped the
+    row and the work carried on, billing against a scan already written off.
+    Zero rows cancels the chain task, `run_under_lease` returns False, and this
+    function returns without writing a status — the row belongs to whoever
+    took it.
+
+    The renewal is deliberately NOT next to each paid call. That shape makes
+    the lease length a sum of ceilings living in five other modules, so a phase
+    added later silently outgrows it. A clock does not care what the chain
+    grows into. See the constants above for both numbers and for why the lease
+    is six intervals rather than three.
+
+    The claim stays QUEUED-only. Re-claiming an expired RUNNING scan was in the
+    design and is not built, because `run_scan` is not resumable:
+    `build_prompt_set` always inserts a new `prompt_sets` row, so a re-claim
+    would pay for competitor detection and a 122s-ceiling prompt generation and
+    then die on `uq_prompt_sets_scan_id`, landing FAILED / EXECUTION_FAILED —
+    strictly worse than the reaper's FAILED / EXECUTOR_LOST at no spend, after
+    which the next POST opens a clean row. It also has no caller: the router
+    reaps before adopting and never submits a job for a RUNNING scan. Widening
+    the WHERE is worth revisiting only alongside a resumable chain and a
+    fencing token, because after a re-claim the row is still RUNNING and the
+    old executor's renewal would match it and renew somebody else's lease.
     """
     factory = get_sessionmaker(settings)
     try:
@@ -267,7 +393,11 @@ async def execute_scan(job: ScanJob, *, settings: Settings) -> None:
                 await session.execute(
                     update(Scan)
                     .where(Scan.id == scan.id, Scan.status == ScanStatus.QUEUED)
-                    .values(status=ScanStatus.RUNNING, started_at=datetime.now(UTC))
+                    .values(
+                        status=ScanStatus.RUNNING,
+                        started_at=datetime.now(UTC),
+                        lease_expires_at=datetime.now(UTC) + LEASE,
+                    )
                     .returning(Scan.id)
                     .execution_options(synchronize_session=False)
                 )
@@ -283,72 +413,105 @@ async def execute_scan(job: ScanJob, *, settings: Settings) -> None:
                 )
                 return
 
-            # -- phase 3: the competitor set, BEFORE the loop that reads it --
+            # -- the work, for as long as the lease holds -----------------
             #
-            # Attempted like every other phase rather than allowed to abort the
-            # scan: a scan with no rivals is degraded, and the report says so,
-            # but it still measures whether the subject is mentioned at all,
-            # which is most of what a first scan is for.
-            await _attempt(
-                session, scan, client, "competitors",
-                lambda: detection.ensure_set_for_scan(
-                    session, scan, client, settings=settings
-                ),
+            # Cancelled from under us the moment a renewal matches zero
+            # rows. Everything the chain would have gone on to spend is
+            # what that cancellation saves.
+            held = await run_under_lease(
+                _run_chain(session, scan, client, job, settings=settings),
+                scan_id=scan.id,
+                settings=settings,
             )
-
-            # -- phases 4-5: prompt generation and the engine loop -----------
-            #
-            # Not wrapped in `_attempt`. This one IS the scan: it commits its
-            # own progress, and if it raises there is nothing downstream worth
-            # running, so the outer handler marks the scan FAILED as it always
-            # has. `defer_terminal_status` leaves it RUNNING so the dashboard
-            # keeps polling while the phases below finish.
-            await scan_runner.run_scan(
-                session, scan, client,
-                settings=settings, engines=job.engines, prompt_limit=job.prompt_limit,
-                defer_terminal_status=True,
-            )
-
-            # -- phase 6: the technical audit --------------------------------
-            await _attempt(
-                session, scan, client, "audit",
-                lambda: audit_runner.run_audit(session, scan, client),
-            )
-
-            # -- phase 7: scoring --------------------------------------------
-            await _attempt(
-                session, scan, client, "scoring",
-                lambda: scoring_runner.score_scan(session, scan),
-            )
-
-            # -- phase 7b: alerts, AFTER scoring because they read its score --
-            #
-            # Ordered here and not earlier for a reason the phase list makes
-            # easy to get wrong: `generate_for_scan` compares this scan's
-            # STORED composite against its baseline's, and phase 7 is what
-            # writes it. Run before scoring, every visibility alert would
-            # compare `None` and silently produce nothing.
-            await _attempt(
-                session, scan, client, "alerts",
-                lambda: alerts_service.generate_for_scan(session, scan, client),
-            )
-
-            # -- phase 8: the fix list ---------------------------------------
-            await _attempt(
-                session, scan, client, "fixes",
-                lambda: fix_runner.generate_for_scan(
-                    session, scan, client, settings=settings
-                ),
-            )
-
-            # Only now is the scan finished. Stamped from the persisted engine
-            # results, so it says what the ENGINE phase achieved — the chained
-            # phases each record their own outcome on their own rows, and a
-            # failed audit is not a failed scan.
-            await scan_runner.finalize_scan(session, scan)
+            if not held:
+                # The row is not ours. Somebody else — the reaper, or a
+                # finalise that beat us — owns its status now, and writing
+                # one here would be this executor's last act of trespass.
+                logger.warning("scan.execute.lease_lost", scan_id=scan.id)
+                return
     except Exception as exc:  # noqa: BLE001 - recorded on the row, never re-raised
         logger.exception("scan.execute.failed", scan_id=job.scan_id)
         await _mark_failed(job.scan_id, exc, settings=settings)
+
+
+async def _run_chain(
+    session: AsyncSession,
+    scan: Scan,
+    client: Client,
+    job: ScanJob,
+    *,
+    settings: Settings,
+) -> None:
+    """Every phase, in order, on the claimed scan.
+
+    Extracted from `execute_scan` so it can run as its own task under
+    `run_under_lease` — losing the lease has to cancel THIS and nothing
+    above it. The order and the reasoning for it are unchanged and are
+    documented on `execute_scan`.
+    """
+    # -- phase 3: the competitor set, BEFORE the loop that reads it --
+    #
+    # Attempted like every other phase rather than allowed to abort the
+    # scan: a scan with no rivals is degraded, and the report says so,
+    # but it still measures whether the subject is mentioned at all,
+    # which is most of what a first scan is for.
+    await _attempt(
+        session, scan, client, "competitors",
+        lambda: detection.ensure_set_for_scan(
+            session, scan, client, settings=settings
+        ),
+    )
+
+    # -- phases 4-5: prompt generation and the engine loop -----------
+    #
+    # Not wrapped in `_attempt`. This one IS the scan: it commits its
+    # own progress, and if it raises there is nothing downstream worth
+    # running, so the outer handler marks the scan FAILED as it always
+    # has. `defer_terminal_status` leaves it RUNNING so the dashboard
+    # keeps polling while the phases below finish.
+    await scan_runner.run_scan(
+        session, scan, client,
+        settings=settings, engines=job.engines, prompt_limit=job.prompt_limit,
+        defer_terminal_status=True,
+    )
+
+    # -- phase 6: the technical audit --------------------------------
+    await _attempt(
+        session, scan, client, "audit",
+        lambda: audit_runner.run_audit(session, scan, client),
+    )
+
+    # -- phase 7: scoring --------------------------------------------
+    await _attempt(
+        session, scan, client, "scoring",
+        lambda: scoring_runner.score_scan(session, scan),
+    )
+
+    # -- phase 7b: alerts, AFTER scoring because they read its score --
+    #
+    # Ordered here and not earlier for a reason the phase list makes
+    # easy to get wrong: `generate_for_scan` compares this scan's
+    # STORED composite against its baseline's, and phase 7 is what
+    # writes it. Run before scoring, every visibility alert would
+    # compare `None` and silently produce nothing.
+    await _attempt(
+        session, scan, client, "alerts",
+        lambda: alerts_service.generate_for_scan(session, scan, client),
+    )
+
+    # -- phase 8: the fix list ---------------------------------------
+    await _attempt(
+        session, scan, client, "fixes",
+        lambda: fix_runner.generate_for_scan(
+            session, scan, client, settings=settings
+        ),
+    )
+
+    # Only now is the scan finished. Stamped from the persisted engine
+    # results, so it says what the ENGINE phase achieved — the chained
+    # phases each record their own outcome on their own rows, and a
+    # failed audit is not a failed scan.
+    await scan_runner.finalize_scan(session, scan)
 
 
 async def _mark_failed(scan_id: str, exc: Exception, *, settings: Settings) -> None:
@@ -423,26 +586,41 @@ async def reap_stale_scans(session: AsyncSession, *, now: datetime | None = None
     A QUEUED row stranded by a crash is harmless anyway — `get_or_create_scan`
     reuses it on the next request.
 
-    RUNNING means an executor claimed it and started work. If that has been true
-    for longer than `STALE_AFTER`, the executor is gone, and without this the row
-    stays RUNNING forever: the dashboard shows "Running…", re-run stays disabled,
-    and the next POST reuses the row and dies on `prompt_sets`' unique
-    constraint. Nothing else in the system corrects it.
+    RUNNING means an executor claimed it and started work. Without this the row
+    stays RUNNING forever when that executor goes away: the dashboard shows
+    "Running…", re-run stays disabled, and the next POST reuses the row and
+    dies on `prompt_sets`' unique constraint. Nothing else corrects it.
+
+    **KEYED ON THE LEASE, NOT ON DURATION.** `started_at < now() - STALE_AFTER`
+    used to stand here and asked the wrong question: it reaped a scan for
+    taking long, and a maximal scan legitimately takes longer than the constant
+    allowed. The predicate now reads "this executor has not said anything for
+    `LEASE`", which is the thing the reaper was always trying to detect.
+
+    NULL IS NOT EXPIRED, and the strictness is deliberate. A scan driven
+    straight through `scan_runner.run_scan` — `scripts/verify_e2e.py`,
+    `scripts/verify_scoring.py`, `tests/conftest.py` — sets RUNNING itself and
+    holds no lease, and reaping those mid-flight would fail work that is
+    perfectly alive. The cost is the other half of the same coin: one of those
+    scripts dying mid-run leaves a RUNNING row nothing will ever reap, where
+    `STALE_AFTER` would have caught it fifteen minutes later. Accepted, because
+    it strands only the scratch clients those scripts create, and the fix for
+    it is for them to hold a lease rather than for the reaper to guess.
 
     A single UPDATE, covered by `ix_scans_status`. The caller commits.
     """
-    cutoff = (now or datetime.now(UTC)) - STALE_AFTER
+    moment = now or datetime.now(UTC)
     result = await session.execute(
         update(Scan)
         .where(
             Scan.status == ScanStatus.RUNNING,
-            Scan.started_at.is_not(None),
-            Scan.started_at < cutoff,
+            Scan.lease_expires_at.is_not(None),
+            Scan.lease_expires_at < moment,
         )
         .values(
             status=ScanStatus.FAILED,
             error_code=EXECUTOR_LOST,
-            error_detail="No executor reported on this scan before the deadline.",
+            error_detail="No executor renewed this scan's lease before it expired.",
             finished_at=datetime.now(UTC),
         )
         # RETURNING rather than rowcount: it is portably typed, and it names
@@ -455,6 +633,6 @@ async def reap_stale_scans(session: AsyncSession, *, now: datetime | None = None
             "scan.reaped",
             count=len(reaped),
             scan_ids=reaped,
-            stale_after_s=STALE_AFTER.total_seconds(),
+            lease_s=LEASE.total_seconds(),
         )
     return len(reaped)

@@ -20,6 +20,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import update as sa_update
 
 from avp_api import ids
 from avp_api.deps import scan_executor
@@ -30,10 +31,11 @@ from avp_api.services.engines import DEFAULT_ENGINES
 from avp_api.services.scan_executor import (
     EXECUTION_FAILED,
     EXECUTOR_LOST,
-    STALE_AFTER,
+    LEASE,
     ScanJob,
     execute_scan,
     reap_stale_scans,
+    renew_lease,
 )
 
 BASE = "/api/v1"
@@ -71,7 +73,9 @@ def _defer(client: AsyncClient) -> list:
     return jobs
 
 
-async def _add_scan(session, cid: str, *, status: ScanStatus, started_at) -> Scan:  # noqa: ANN001
+async def _add_scan(  # noqa: ANN001
+    session, cid: str, *, status: ScanStatus, started_at, lease_expires_at=None
+) -> Scan:
     row = await session.get(Client, cid)
     scan = Scan(
         id=ids.new_id(ids.SCAN),
@@ -79,6 +83,7 @@ async def _add_scan(session, cid: str, *, status: ScanStatus, started_at) -> Sca
         agency_id=row.agency_id,
         status=status,
         started_at=started_at,
+        lease_expires_at=lease_expires_at,
     )
     session.add(scan)
     await session.commit()
@@ -311,18 +316,153 @@ class TestTheEngineLoopDoesNotHoldTheScanRow:
         )
 
 
+class TestTheLeaseStopsAnExecutorThatLostIt:
+    """The property the whole lease exists for — 2026-09-08.
+
+    A reaper alone stamps the row and the work carries on, billing against a
+    scan somebody has already written off. A renewal that matches zero rows is
+    what tells the executor to stop, and these tests are the proof it does,
+    because nothing else in the system would notice if it did not.
+    """
+
+    async def test_a_renewal_pushes_the_lease_out(
+        self, client: AsyncClient, session, settings
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        cid = await _make_client(client)
+        before = datetime.now(UTC) + timedelta(seconds=5)
+        scan = await _add_scan(
+            session, cid, status=ScanStatus.RUNNING,
+            started_at=datetime.now(UTC), lease_expires_at=before,
+        )
+
+        assert await renew_lease(scan.id, settings=settings) is True
+
+        await session.refresh(scan)
+        assert scan.lease_expires_at > before
+
+    @pytest.mark.parametrize(
+        "status", [ScanStatus.FAILED, ScanStatus.SUCCEEDED, ScanStatus.QUEUED]
+    )
+    async def test_a_renewal_against_a_row_that_is_not_running_matches_nothing(
+        self, client: AsyncClient, session, settings, status: ScanStatus
+    ) -> None:  # noqa: ANN001
+        """Zero rows is a definite answer: this row is not ours any more.
+
+        FAILED is the reaper having taken it; SUCCEEDED is a finalise that beat
+        us; QUEUED is a state no executor should be renewing from at all.
+        """
+        await _sign_up(client)
+        cid = await _make_client(client)
+        scan = await _add_scan(
+            session, cid, status=status, started_at=datetime.now(UTC),
+            lease_expires_at=datetime.now(UTC) + LEASE,
+        )
+
+        assert await renew_lease(scan.id, settings=settings) is False
+
+    async def test_the_chain_stops_mid_phase_when_the_lease_is_taken_away(
+        self, client: AsyncClient, session, settings, monkeypatch
+    ) -> None:  # noqa: ANN001
+        """The billing question, asked directly.
+
+        The chain is held inside its first phase. The lease is then reaped out
+        from under it on another connection, exactly as `reap_stale_scans`
+        would. The next heartbeat matches zero rows, and the phases after this
+        one must never run — each of them spends money.
+        """
+        await _sign_up(client)
+        cid = await _make_client(client)
+        jobs = _defer(client)
+        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+
+        monkeypatch.setattr(
+            executor_module, "HEARTBEAT_INTERVAL", timedelta(milliseconds=20)
+        )
+        reached: list[str] = []
+        in_first_phase = asyncio.Event()
+
+        async def blocking_competitors(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202, ARG001
+            reached.append("competitors")
+            in_first_phase.set()
+            await asyncio.sleep(30)  # cancelled long before this returns
+
+        async def later_phase(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202, ARG001
+            reached.append("run_scan")
+
+        monkeypatch.setattr(
+            executor_module.detection, "ensure_set_for_scan", blocking_competitors
+        )
+        monkeypatch.setattr(scan_runner, "run_scan", later_phase)
+
+        async def take_the_lease() -> None:
+            await in_first_phase.wait()
+            await session.execute(
+                sa_update(Scan)
+                .where(Scan.id == sid)
+                .values(status=ScanStatus.FAILED, error_code=EXECUTOR_LOST)
+            )
+            await session.commit()
+
+        await asyncio.gather(
+            execute_scan(jobs[0], settings=settings), take_the_lease()
+        )
+
+        assert reached == ["competitors"], "the chain kept spending after the lease went"
+        scan = await session.get(Scan, sid)
+        await session.refresh(scan)
+        # Untouched by the executor on its way out: the reaper's verdict stands.
+        assert scan.status is ScanStatus.FAILED
+        assert scan.error_code == EXECUTOR_LOST
+
+    async def test_a_claim_stamps_a_lease_the_reaper_will_not_take(
+        self, client: AsyncClient, session, settings, monkeypatch
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        cid = await _make_client(client)
+        jobs = _defer(client)
+        await client.post(f"{BASE}/clients/{cid}/scans", json={})
+
+        seen: dict = {}
+
+        async def observing(session_, scan, client_, **kwargs):  # noqa: ANN001, ANN003, ANN202, ARG001
+            seen["lease"] = scan.lease_expires_at
+
+        async def noop(session_, scan, client_, **kwargs):  # noqa: ANN001, ANN003, ANN202, ARG001
+            return scan
+
+        monkeypatch.setattr(executor_module.detection, "ensure_set_for_scan", observing)
+        monkeypatch.setattr(scan_runner, "run_scan", noop)
+
+        await execute_scan(jobs[0], settings=settings)
+
+        assert seen["lease"] is not None, "the claim did not stamp a lease"
+        assert seen["lease"] > datetime.now(UTC)
+        assert await reap_stale_scans(session) == 0
+
+
 class TestStaleScanReaper:
+    """Reaped for going quiet, not for taking long — the lease, 2026-09-08.
+
+    Every test here used to stamp `started_at` far enough in the past to clear
+    `STALE_AFTER`. They now stamp an EXPIRED LEASE, which is the same
+    situation asked about correctly: a maximal scan legitimately runs longer
+    than the old constant allowed, so duration never distinguished a working
+    executor from a dead one.
+    """
+
     @staticmethod
     def _long_ago() -> datetime:
-        return datetime.now(UTC) - STALE_AFTER - timedelta(seconds=60)
+        return datetime.now(UTC) - LEASE - timedelta(seconds=60)
 
-    async def test_a_running_scan_past_the_deadline_is_failed(
+    async def test_a_running_scan_whose_lease_expired_is_failed(
         self, client: AsyncClient, session
     ) -> None:  # noqa: ANN001
         await _sign_up(client)
         cid = await _make_client(client)
         scan = await _add_scan(
-            session, cid, status=ScanStatus.RUNNING, started_at=self._long_ago()
+            session, cid, status=ScanStatus.RUNNING, started_at=self._long_ago(),
+            lease_expires_at=datetime.now(UTC) - timedelta(seconds=1),
         )
 
         assert await reap_stale_scans(session) == 1
@@ -333,16 +473,44 @@ class TestStaleScanReaper:
         assert scan.error_code == EXECUTOR_LOST
         assert scan.finished_at is not None
 
-    async def test_a_running_scan_inside_the_deadline_is_left_alone(
+    async def test_a_long_running_scan_with_a_live_lease_is_left_alone(
         self, client: AsyncClient, session
     ) -> None:  # noqa: ANN001
-        """A slow scan is not a lost one. Epic 9.2 measured ~303s for this
-        endpoint's share; the deadline is 900s precisely so real work survives."""
+        """The case the old predicate got wrong.
+
+        Started 40 minutes ago — well past the retired 900s STALE_AFTER — and
+        still renewing. Under duration it was reaped while running and still
+        billing; under a lease it is obviously alive.
+        """
         await _sign_up(client)
         cid = await _make_client(client)
         scan = await _add_scan(
             session, cid, status=ScanStatus.RUNNING,
-            started_at=datetime.now(UTC) - timedelta(seconds=300),
+            started_at=datetime.now(UTC) - timedelta(seconds=2_400),
+            lease_expires_at=datetime.now(UTC) + LEASE,
+        )
+
+        assert await reap_stale_scans(session) == 0
+        await session.commit()
+
+        await session.refresh(scan)
+        assert scan.status is ScanStatus.RUNNING
+
+    async def test_a_running_scan_with_no_lease_is_left_alone(
+        self, client: AsyncClient, session
+    ) -> None:  # noqa: ANN001
+        """NULL is not expired.
+
+        `scripts/verify_e2e.py`, `scripts/verify_scoring.py` and this suite's
+        own fixtures drive `run_scan` directly: it sets RUNNING itself and
+        holds no lease. Reaping those mid-flight would fail live work. The
+        accepted cost is on the reaper's docstring.
+        """
+        await _sign_up(client)
+        cid = await _make_client(client)
+        scan = await _add_scan(
+            session, cid, status=ScanStatus.RUNNING, started_at=self._long_ago(),
+            lease_expires_at=None,
         )
 
         assert await reap_stale_scans(session) == 0
@@ -363,7 +531,8 @@ class TestStaleScanReaper:
         await _sign_up(client)
         cid = await _make_client(client)
         scan = await _add_scan(
-            session, cid, status=ScanStatus.QUEUED, started_at=None
+            session, cid, status=ScanStatus.QUEUED, started_at=None,
+            lease_expires_at=datetime.now(UTC) - timedelta(seconds=1),
         )
 
         assert await reap_stale_scans(session) == 0
@@ -380,7 +549,10 @@ class TestStaleScanReaper:
     ) -> None:  # noqa: ANN001
         await _sign_up(client)
         cid = await _make_client(client)
-        scan = await _add_scan(session, cid, status=status, started_at=self._long_ago())
+        scan = await _add_scan(
+            session, cid, status=status, started_at=self._long_ago(),
+            lease_expires_at=datetime.now(UTC) - timedelta(seconds=1),
+        )
 
         assert await reap_stale_scans(session) == 0
         await session.commit()
@@ -403,7 +575,8 @@ class TestTheReaperRunsWhereItMatters:
         cid = await _make_client(client)
         scan = await _add_scan(
             session, cid, status=ScanStatus.RUNNING,
-            started_at=datetime.now(UTC) - STALE_AFTER - timedelta(seconds=60),
+            started_at=datetime.now(UTC) - LEASE - timedelta(seconds=60),
+            lease_expires_at=datetime.now(UTC) - timedelta(seconds=1),
         )
 
         board = (await client.get(f"{BASE}/dashboard")).json()
@@ -427,7 +600,8 @@ class TestTheReaperRunsWhereItMatters:
         cid = await _make_client(client)
         stranded = await _add_scan(
             session, cid, status=ScanStatus.RUNNING,
-            started_at=datetime.now(UTC) - STALE_AFTER - timedelta(seconds=60),
+            started_at=datetime.now(UTC) - LEASE - timedelta(seconds=60),
+            lease_expires_at=datetime.now(UTC) - timedelta(seconds=1),
         )
         _defer(client)
 
