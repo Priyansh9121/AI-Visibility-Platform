@@ -216,10 +216,28 @@ async def execute_scan(job: ScanJob, *, settings: Settings) -> None:
     This is the first half of a lease. What it does not yet do is renew: a
     RUNNING scan whose executor has died still waits on `reap_stale_scans` and
     its static STALE_AFTER, because nothing distinguishes "still working" from
-    "gone" except elapsed time. A heartbeat renewed by `_attempt` between
-    phases, with the reaper keyed off lease expiry rather than `started_at`,
-    is the second half — recorded in the build log — and it extends this
-    statement's WHERE clause rather than replacing it.
+    "gone" except elapsed time. The second half is designed in the build log
+    (API key discipline audit, "The spend ceiling") and not built. Its exact
+    mechanism, so a skim of this file cannot simplify it away:
+
+    * A column, `scans.lease_expires_at`, stamped by this claim as
+      `now() + LEASE`. STALE_AFTER retires.
+    * This statement's WHERE grows rather than being replaced:
+      `status = 'queued' OR (status = 'running' AND lease_expires_at < now())`.
+      A dead executor's scan is then re-claimable directly, without a reaper
+      pass first.
+    * Renewal, in `_attempt` before each phase and in `run_scan` as each
+      prompt completes, is one statement:
+      `UPDATE scans SET lease_expires_at = now() + LEASE
+       WHERE id = :id AND status = 'running'`.
+      **A renewal that matches zero rows means the lease is gone** — reaped,
+      or re-claimed by another executor — and the executor STOPS rather than
+      keeps billing. That is the half the reaper has never had: today it
+      stamps the row and the work carries on regardless.
+    * `reap_stale_scans` keys off `lease_expires_at < now()`, not `started_at`.
+    * LEASE is derived, not chosen: the longest gap between two renewals plus
+      a margin. That gap is a sum of call ceilings, which is why every paid
+      call inside a phase has to be bounded before a length can be chosen.
     """
     factory = get_sessionmaker(settings)
     try:
