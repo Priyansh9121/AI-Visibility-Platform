@@ -269,29 +269,41 @@ this.
 
 **Its job:** collect real data from multiple AI answer engines.
 
-**Build status: SHIPPED for one vendor. This is the layer's defining limitation.**
+**Build status: SHIPPED for TWO vendors and three engines.** This heading read
+"SHIPPED for one vendor" until 2026-09-08 and was stale — corrected here on the
+day it was found wrong, the way Layer 5's status was.
 
-- `EngineAdapter` is a `Protocol` (`services/engines.py:151`). Two adapters
-  implement it: `ClaudeParametricAdapter` (line 273) and `ClaudeSearchAdapter`
-  (line 281). Nothing in the runner, extraction or persistence layer knows which
-  engines exist — adding one is a new class plus a key.
-- **Epic 4.2 states the limitation in its own words, and it still holds:**
-  > *"Limitation, stated plainly: this is one vendor and one model, so it does
-  > not test cross-vendor variance, which is part of the product's eventual
-  > value. That is credential-bound, not design-bound."*
-- **OpenAI, Perplexity and Google keys are provisioned but empty.** No adapter
-  exists for any of them. `product-spec.md` §5.1's mention of "direct API calls
-  to ChatGPT/Perplexity/Gemini" is aspirational, not shipped.
+- `EngineAdapter` is a `Protocol` (`services/engines.py`). THREE adapters
+  implement it and all three are in `DEFAULT_ENGINES`, so every scan runs all
+  of them: `ClaudeParametricAdapter`, `ClaudeSearchAdapter`, and
+  `ChatGptAdapter` (`gpt-5.5`, over raw `httpx` — no `openai` SDK, because its
+  current major requires a second HTTP stack alongside the pinned `httpx`).
+  Nothing in the runner, extraction or persistence layer knows which engines
+  exist; adding one is a new class plus a key.
+- **Epic 4.2's limitation is now PARTLY closed, and Epic 9.13 says which part.**
+  Its words were: *"this is one vendor and one model, so it does not test
+  cross-vendor variance... That is credential-bound, not design-bound."* An
+  `OPENAI_API_KEY` was provisioned and `chatgpt` joined as the PARAMETRIC
+  analogue of `claude` — deliberately not of `claude_search`, because holding
+  the mode constant is what makes "Claude names you, ChatGPT does not" a
+  statement about the vendors rather than about browsing.
+- **Perplexity and Google remain unbuilt.** `Engine.PERPLEXITY`,
+  `Engine.GEMINI` and `Engine.GOOGLE_AI_OVERVIEW` exist in the enum and have no
+  adapter behind them; the router refuses any engine absent from
+  `ENGINE_REGISTRY` at the request, before a scan row exists. A grounded OpenAI
+  engine is a fourth adapter for a later brief, not a variant of this one.
 - **AI Overviews via SerpApi: MEASURED AND DECLINED, not pending.** Two
   investigations on 2026-08-25 (`d39f70b`, `d2d5f40`): usable content was **0 of
   4** on this product's real prompt shapes, retrieval costs two SerpApi searches
   per prompt, and the quota is 250/month against ~48 searches per scan. Marked
   `[—]` in `product-spec.md` §7 for exactly this reason.
 
-**Differentiator or table stakes?** **Table stakes, and currently below par.**
-A visibility product measuring one vendor's two modes cannot honestly claim
-cross-engine coverage. Multi-engine is catch-up work, not a moat — but its
-absence undercuts Layer 3's best claims (see below).
+**Differentiator or table stakes?** **Table stakes, and now at par rather than
+below it.** Two vendors in the same parametric mode, plus one grounded engine,
+is enough to make a cross-vendor claim honestly — which is what Layer 3's
+cross-LLM sentiment comparison was blocked on. Multi-engine remains catch-up
+work rather than a moat; the difference is that its absence no longer undercuts
+Layer 3's best claims.
 
 ---
 
@@ -328,11 +340,17 @@ not look like a bug. It looks like a clean report."*
   for `fanout`/`fan-out`/`paraphrase` finds only that checkbox, two incidental
   prose mentions in `build-log.md`, and a comment in `scan_runner.py:41` about
   concurrency fan-out — an unrelated use of the word.
-- **Cross-LLM sentiment comparison: NOT BUILT, and currently impossible.**
-  Sentiment is computed per engine result, but with one vendor there is no
-  cross-vendor axis to compare along. **This is blocked by Layer 2, not by Layer
-  3.** It is the clearest case in this document of a differentiator that a
-  table-stakes gap is holding hostage.
+- **Cross-LLM sentiment comparison: NOT BUILT — but no longer impossible.**
+  This bullet read "currently impossible... blocked by Layer 2" until
+  2026-09-08, on the strength of the one-vendor claim corrected above. Sentiment
+  is computed per engine result and `chatgpt` now runs on every scan beside
+  `claude`, deliberately in the same parametric mode, so **the cross-vendor axis
+  exists in the data today** — `engine_results` already carries a sentiment and
+  a confidence per (prompt × engine), and nothing reads them comparatively.
+  What is missing is the comparison and its presentation, which is Layer 3 work
+  rather than a Layer 2 dependency. It has stopped being the clearest case of a
+  differentiator held hostage and become the clearest case of one that is simply
+  unbuilt.
 
 **Differentiator or table stakes?** **The intended differentiator.** See §3.8.
 

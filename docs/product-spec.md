@@ -192,16 +192,20 @@ Each sub-score normalized 0-100, weighted sum = final score. Tune weights per-in
 - [x] **Run automatically after every scan — Epic 9.17**, last in the chain,
       because it reads the score, the audit and the competitor set. Before that
       the action list existed and was empty on every scan a user started.
-- [ ] **OPEN DEFECT, found by Epic 9.17's baseline run and deliberately NOT fixed
-      there.** `generate_fixes` catches a careful ladder of `anthropic.*` errors
-      and maps each to a `FixOutcome`, but the SDK validates the model's JSON
-      against `GeneratedFixSet` *inside* `messages.parse` — so a
-      `pydantic.ValidationError` bypasses every one of them and propagates. A
-      live run against `plausible.io` hit it: the model returned a `title` longer
-      than `MAX_TITLE_CHARS` and the whole phase raised. It is Epic 8's bug, not
-      the chain's; the chain contains it, because each phase is attempted
-      independently, so the scan still produces a score and an audit and only the
-      fix list is missing. Needs its own brief.
+- [x] **The validation bypass — FIXED in Epic 9.18 (`22a3134`).** This line read
+      "OPEN DEFECT... needs its own brief" until 2026-09-08 and was stale:
+      `generate_fixes` catches a ladder of `anthropic.*` errors, but the SDK
+      validates the model's JSON against `GeneratedFixSet` *inside*
+      `messages.parse`, so a `pydantic.ValidationError` bypassed every clause
+      and propagated — a live run against `plausible.io` returned a `title`
+      longer than `MAX_TITLE_CHARS` and the whole phase raised. The ladder now
+      has a sixth clause mapping it to `PROVIDER_SCHEMA_VIOLATION`, which is
+      deliberately distinct from a provider failure: the provider answered, and
+      our own schema is what rejected the answer. `test_fix_generator.py`
+      reproduces it the way it happened, by letting the REAL validator reject a
+      real 240-character title rather than raising a hand-built error — a test
+      that raises the exception itself would prove only that the `except` is
+      spelled correctly.
 - **Acceptance:** for a test scan with known gaps, the generated fix list correctly names those gaps with actionable language
 
 ### Epic 9 — MVP Launch Readiness (Phase 1 complete)
