@@ -11193,3 +11193,152 @@ live, and the failure mode it guards against demonstrated — and fix 1's
 
 Decision recorded: the gap is closed by reproduction, not by accepting the
 documentation. Nothing changes in the code.
+
+# The lease — and the row lock that every version of its design was resting on
+
+The call bounds made a lease length computable, and this is the lease. It did
+not get built the way it was designed, and the reason is worth more than the
+feature: an adversarial review of the design found a lock that made every
+candidate shape — including the one in the build log — unable to work at all.
+
+## What was actually asked, and what came back
+
+Eight claims about the code behind the design, two adversarial lenses each,
+plus three judges scoring four candidate renewal shapes and a completeness
+critic. **It did not finish.** Two sessions in a row ended on a rate limit
+mid-run; the first lost all twenty agents with nothing recoverable, the second
+returned **14 of 16 refutation verdicts and 1 of 3 judges**, and the critic
+never ran. What follows leans on what came back, and every decisive fact in it
+was re-checked by hand or by experiment before anything was built. That is
+stated because the alternative — presenting a two-thirds-finished review as a
+verdict — is exactly the failure the audit entry above already had to correct
+once.
+
+## The finding that changed the design: a row lock, not a renewal shape
+
+`run_scan` sets `prompt_count` and flushes it before the engine loop. That
+flush is an `UPDATE scans`, which takes a row lock held until the transaction
+ends — and the next statement on that session was the commit **after** the
+gather. So for the whole engine phase, minutes and up to ~2,460s on a maximal
+scan, nothing else could write that scan row.
+
+Which means: a heartbeat on its own session would have **blocked on the lock
+instead of renewing**, and the lease would have expired during ordinary work.
+So would `reap_stale_scans` from a dashboard read. Every candidate shape — the
+build log's two insertion points, renew-after-every-call, a clock heartbeat —
+assumed a renewal could reach the row. None of them could.
+
+Verified rather than believed, with two connections against `avp_dev`: the
+second `UPDATE` blocked until the first transaction ended, and committing
+released it. `run_scan` now commits after that flush (`a63cd3f`), which is
+independently right for the reason its own earlier commit gives — the prompt
+set is finished work, and committing makes `prompt_count` pollable while the
+loop runs. The regression test asserts it from inside the loop on a second
+session, because that is the only moment the lock was ever held; removing the
+commit makes it fail by timing out.
+
+## The decision: a clock, not a set of insertion points
+
+The build log framed this as choosing where to put one or two renewal calls,
+and that framing is **replaced rather than extended**. It was derived by
+extending the audit's design instead of re-deriving from the call graph, and
+re-deriving is what showed the frame itself to be the problem:
+
+* **It makes the lease length a sum of ceilings living in five other modules.**
+  A phase added later silently outgrows it, with nothing but a hand-maintained
+  test to notice. A clock does not care what the chain grows into.
+* **The per-prompt renewal lands inside `asyncio.gather` at four-way
+  concurrency**, on a session `AsyncSession` forbids using concurrently.
+* **`gather` does not cancel its siblings**, so a lost lease in one slot leaves
+  three engine calls billing for up to 308s. "Stop, don't keep billing" would
+  have been only approximately true.
+* **`_attempt` swallows every `Exception`**, so the loss would have needed
+  carving out of the swallow at six call sites.
+
+The judge that landed ranked the clock designs 7 and 8 against 4 and 3 for the
+insertion-point ones, on exactly these grounds. The clock also makes the stop
+property testable without wall-clock arithmetic, which is how it is tested.
+
+**Built: a heartbeat every 30s, a lease of 180s**, six intervals rather than
+the conventional three. The fifth and sixth are not slack for its own sake:
+`database_pool_size` is 10 with 5 overflow and nothing bounds how many
+executors run at once, so a saturated pool can park a renewal on SQLAlchemy's
+unconfigured 30-second `pool_timeout` — one whole interval on a machine that is
+entirely healthy. At three intervals two such waits expire a live executor's
+lease. Dead-executor detection drops from 900s to 180s, at one `UPDATE` per
+running scan every 30s.
+
+**A renewal that matches zero rows cancels the chain.** This is the half a
+reaper alone never had, and it is the one property checked by mutation: with
+the cancel removed, the chain runs on to the next paid phase and the test
+fails. The chain runs as its own task so cancellation reaches it and nothing
+above it — cancelling the current task would reach the request handler under
+`InlineScanExecutor`. A renewal that *raises* is deliberately not loss: the
+database being briefly unreachable says nothing about who owns the row.
+
+## Two places the design as written was not followed
+
+**The claim stays QUEUED-only.** The design widened it to re-claim RUNNING
+scans with an expired lease. Both lenses agreed it should not be, and reading
+confirms why: `run_scan` is not resumable — `build_prompt_set` always inserts
+a new `prompt_sets` row — so a re-claim would pay for competitor detection and
+a 122s-ceiling prompt generation and then die on `uq_prompt_sets_scan_id`,
+landing FAILED / EXECUTION_FAILED where the reaper gives FAILED /
+EXECUTOR_LOST at no spend. It also has no caller: the router reaps before
+adopting and never submits a job for a RUNNING scan. And it would break the
+zero-rows rule it was meant to complement — after a re-claim the row is still
+RUNNING, so the old executor's renewal matches it and renews the *new* owner's
+lease. Revisiting it needs a resumable chain and a fencing token, and the
+`execute_scan` docstring says so.
+
+**A deadline came back, in the executor rather than the reaper.** Retiring
+`STALE_AFTER` gave up a case it caught by accident: an executor that is alive,
+renewing, and getting nowhere. The heartbeat is its own task, so an await that
+never returns renews forever — and there is one today, `page.evaluate` in
+`technical_audit.py`, which takes no timeout and sits outside
+`set_default_timeout`'s reach. Putting the backstop in the reaper would have
+restored the exact inference the lease exists to remove, "long, therefore
+dead"; putting it in the executor makes it a ceiling on its own work, the
+`CallBound` shape one level up, and it *stops* the work rather than relabelling
+the row while the spending carries on. `MAX_SCAN_DURATION` is 3,600s and the
+test recomputes a maximal scan from the constants that own each term — 3,040s,
+560s of headroom — so raising any ceiling fails a test instead of eating the
+margin. Checked by raising `FIX_BOUND` to 600s, which fails it with the new
+total. A scan stopped this way gets its own code, `SCAN_DEADLINE_EXCEEDED`.
+
+## Verification
+
+**api 1,053, up from 1,043** across four commits, each verified on the full
+suite before the next began: `a63cd3f` the row lock, `bbec5be` the column and
+backfill, `6341063` the lease itself, `413ef63` the deadline. `ruff check src
+tests` clean. `alembic check` reports no drift; the migration was applied,
+downgraded and re-applied on `avp_dev`. The OpenAPI export was regenerated to
+prove the lease does not surface in any response schema — it does not, and the
+only diff regenerating produced was audit fix 3's, which had never been
+regenerated and is committed separately as `05a8630`.
+
+Three properties are checked by mutation rather than by assertion alone,
+because each is the kind that passes vacuously: the row lock (remove the
+commit, the test times out), the stop rule (remove the cancel, the chain
+reaches the next phase), and the derived deadline (raise a ceiling, the sum
+exceeds it).
+
+## Open
+
+**The review never finished**: two refutation verdicts, two judges and the
+completeness critic did not run. What they might have found is unknown, and no
+claim here rests on machine verification alone.
+
+Found by the review and **not** built: `page.evaluate` has no timeout of its
+own (the deadline covers it at a whole-scan granularity, not a phase one);
+nothing bounds concurrent executors per instance, so ~14 running scans exhaust
+the 15-connection pool (the six-interval lease absorbs the consequence rather
+than fixing the cause); and a verification script dying mid-run leaves a
+RUNNING row with a NULL lease that nothing reaps, since NULL is deliberately
+not expired.
+
+Everything in the audit's own open list is unchanged: the three unthrottled
+paid endpoints, a fresh client per call never closed, an unset
+`OPENAI_API_KEY` degrading silently, the skipped `web_search_tool_result_error`
+block, the SerpApi semaphores, the `SERPAPI_KEY_MISSING` deletion candidate,
+and `structlog` still unconfigured.
