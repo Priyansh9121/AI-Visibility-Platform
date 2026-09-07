@@ -11342,3 +11342,135 @@ paid endpoints, a fresh client per call never closed, an unset
 `OPENAI_API_KEY` degrading silently, the skipped `web_search_tool_result_error`
 block, the SerpApi semaphores, the `SERPAPI_KEY_MISSING` deletion candidate,
 and `structlog` still unconfigured.
+
+# Epic 9.21 — a share link can be taken back, and stops working on its own
+
+`models/scan.py` had carried this gap in capital letters since Epic 9.8, which
+is the only reason it was easy to close: *"DELIBERATELY NOT BUILT, and this is
+a known gap rather than an oversight: there is NO EXPIRY and NO REVOCATION.
+Once minted, the link works until the row is deleted... the first agency that
+shares a report with the wrong prospect has no way to take it back."*
+
+**Layer 5 (Distribution/Action), Activation phase.** It also touches Layer 0:
+this is a security control on the product's only unauthenticated read surface,
+not a UI nicety, which is why it is its own slice rather than half of the
+branding one.
+
+## Two mechanisms, because they answer different questions
+
+They are independent and both were built.
+
+**Revocation** is deliberate and immediate: `DELETE /scans/{scanId}/share`,
+`204`, no body. On the same path as the mint, because the thing being removed
+is the resource that path names — a `POST .../share/revoke` would invent a
+second noun for one capability, and a `PATCH` with a null token would make
+"unshare" reachable from an endpoint whose job is to describe a scan. It is
+idempotent: revoking twice, or revoking a scan that was never shared, is `204`.
+The caller asked for it not to be readable and it is not, so a `404` would
+report on something they did not ask about and a `409` would invite a retry
+loop over a state that is already correct.
+
+**Expiry** is automatic, and it is for the larger population: the link nobody
+remembers sending. Revocation needs somebody to decide; forgetting is precisely
+the failure mode no UI will ever catch.
+
+## The TTL is thirty days, and the number is argued rather than picked
+
+There was no prior number in this product to anchor to, so the reasoning stands
+in for the precedent:
+
+* **It must outlive the conversation it was sent for.** A prospect report is
+  read, forwarded to a colleague, and put in front of whoever holds the budget.
+  That runs days to a couple of weeks. A link dying mid-thread is the agency's
+  embarrassment rather than the prospect's, so the floor is the worst realistic
+  sales cycle, not the median one.
+* **It must not outlive the data.** The report is a snapshot of one scan. A
+  month on, a re-scan would show different numbers, and a link still serving the
+  old ones is quietly making a stale claim about a live business.
+* **It is the blunt instrument.** Revocation handles "sent to the wrong person,
+  now", so expiry only has to bound the forgotten link and can afford to be
+  generous where a security control alone could not.
+
+Those bounds are close together, which is why the range worth arguing over was
+narrow. Thirty days sits where they meet and matches the month the rest of the
+product already thinks in.
+
+## A re-mint refreshes the expiry, and one asymmetry decided it
+
+Both readings of "idempotent" were defensible until the alternative was
+followed through: **without a refresh there is no way to extend a link at all
+without changing its URL.** The only other route is revoke-and-mint, which
+issues a new token and kills every copy already sent — so an agency re-sharing
+on day 29 would have to break the link they were re-sending. Idempotence is
+about the token's identity, which is what Epic 9.8's test asserts and what
+still passes unchanged; the clock is not part of that promise. Re-sharing is
+the agency restating the decision to share, which is exactly the signal an
+expiry should listen to.
+
+## Revoked and expired are not new kinds of wrong
+
+Epic 9.8's rule was that *"a malformed token, an unknown token and a well-formed
+miss are indistinguishable in both status and body... never 401 — that would
+confirm the token is real"*. A revoked token is not a special case of that rule;
+it is the same rule. Both filters therefore live in `scan_for_share_token` — one
+query, both read routes — rather than in either route, so neither can drift into
+answering "expired" to a holder who would learn from hearing it. Tests assert
+the revoked and expired responses match an unknown token's field for field,
+minus `instance`, which echoes the request path back and so tells a caller only
+what they sent.
+
+**NULL is not "never expires".** The comparison is strict, so a token that
+reached the table without an expiry serves nothing — fail-closed, for a
+credential. A CHECK constraint,
+`(share_token IS NULL) = (share_expires_at IS NULL)`, makes that state
+unwritable rather than merely unserved, and a test drops the constraint to prove
+the read path holds on its own. Two independent guards, checked independently.
+
+## The PDF revisit that Epic 9.14 asked for
+
+That epic accepted a real cost with a note attached: *"a downloaded PDF outlives
+any future revocation... When revocation ships, this is the route to revisit."*
+This is that revisit, and the decision is recorded rather than inherited. A
+revoked or expired link stops serving files immediately, on the same lookup as
+the JSON route. What revocation cannot do is recall a copy already on someone's
+disk — nothing can, short of a watermarked or phone-home document, which is a
+different product with different privacy properties. So the residual gap is
+real, bounded and named on both PDF routes and in `api-contracts.md`: revocation
+governs the **link** from the moment it is invoked, never a file already
+downloaded.
+
+## A stale document, corrected where it was found
+
+`north-star.md`'s Layer 5 heading read **NOT STARTED** and was stale by three
+epics — the share link (9.8), PDF export (9.14) and now this. It now reads
+PARTIALLY BUILT and says what exists and what does not. Corrected in the commit
+that closed the gap it was wrong about, the way Epic 7.1 corrected
+`design-direction.md` and `design-system.md`, rather than left for someone to
+find five epics later.
+
+**IP-safety check passed:** no new dependency (constraint 6 untouched — this
+slice adds one column, one route and one constant). No third-party content
+enters or leaves: the only new value on the wire is `expiresAt`, a timestamp we
+generate. The public payload is unchanged apart from that field, so
+`test_ip_safety.py`'s recursive sweep over `ReportOut` still covers the share
+route unmodified, and the byte-identical-to-authenticated test still passes.
+The share token is still never logged (constraint 7's reasoning applied to a
+credential) — `share.token.revoked` and `share.token.refreshed` log the scan id
+and nothing else, matching `share.token.minted`.
+
+## Verification
+
+**api 1,065, up from 1,053** — 12 new, all in `test_share_link.py`. web 703,
+design-system 418 and shared-types unchanged. `ruff check src tests` clean;
+`tsc` clean on all three packages with `api.gen.ts` regenerated for the new
+`expiresAt` field. Migration `a6a32760b418` applied, downgraded and re-applied
+on `avp_dev`, with `alembic check` clean either side.
+
+## Open, and deliberately not built here
+
+**White-label branding** — the other half of Layer 5, and §7 line 2. It needs
+new `Agency` columns and, more importantly, a written policy on which design
+tokens an agency may override: the visibility ramp is load-bearing, and an
+agency free to recolour it changes what the score means. That is a design
+decision rather than a build task, so it is put back rather than picked
+silently.
