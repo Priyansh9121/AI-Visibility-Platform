@@ -63,11 +63,17 @@ class ShareLinkOut(ApiModel):
     `token` is exposed alongside it deliberately: it is the operator's OWN
     capability for their OWN scan, already implied by the URL beside it, and
     tests assert on it without having to parse a URL apart.
+
+    `expiresAt` is returned because the operator is about to paste this URL
+    into an email and the one thing they cannot see from the URL is when it
+    stops working — Epic 9.21. A re-mint pushes it out, so the value is also
+    how a caller confirms a refresh actually happened.
     """
 
     scan_id: str
     token: str
     url: str
+    expires_at: datetime
 
 
 class ReportAgencyOut(ApiModel):

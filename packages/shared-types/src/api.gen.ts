@@ -1002,14 +1002,21 @@ export interface paths {
          *        budget holder, and a link that dies when they change jobs is worse for
          *        the agency than a PDF that does not.
          *
-         *     **What it costs, said plainly:** a downloaded PDF outlives any future
-         *     revocation of the link. That cost is currently zero, because share links
-         *     have no expiry and no revocation at all — recorded as known debt in
-         *     api-contracts.md and explicitly out of scope for this epic. The PDF
-         *     therefore takes away nothing the link does not already give away
-         *     permanently. **When revocation ships, this is the route to revisit**, and
-         *     that is the moment to decide whether a revoked link should stop serving
-         *     files — not now, by pre-emptively refusing something that costs nothing yet.
+         *     **What it costs, said plainly: a downloaded PDF outlives revocation.**
+         *     Epic 9.14 accepted that cost when it was zero — links had no expiry and no
+         *     revocation, so the file took away nothing the link did not already give
+         *     away permanently — and marked this "the route to revisit when revocation
+         *     ships". Epic 9.21 shipped it, so this is that revisit, and the decision is
+         *     recorded rather than inherited.
+         *
+         *     **A revoked or expired link stops serving files immediately**, on the same
+         *     lookup as the JSON route: `scan_for_share_token` returns nothing and this
+         *     route 404s like any other miss. What revocation cannot do is recall a copy
+         *     already on someone's disk, and nothing can — the alternative would be
+         *     serving a watermarked or phone-home document, which is a different product
+         *     with different privacy properties. So the residual gap is real, bounded,
+         *     and named: revocation governs the LINK from the moment it is invoked, never
+         *     a file already downloaded.
          *
          *     Every rule the JSON share route states holds here unchanged, because it is
          *     the same lookup: read-only, one code path, `404` for every rejection with no
@@ -1321,14 +1328,49 @@ export interface paths {
          *     that decision for them. This is the moment they make it.
          *
          *     **`200`, not `201`, and idempotent.** Calling twice returns the same token
-         *     rather than minting a second live link to the same report — there is no
-         *     revocation, so every extra token would be a URL nobody is tracking. The
-         *     second call creates nothing, so it does not claim to.
+         *     rather than minting a second live link to the same report: every extra
+         *     token would be a URL nobody is tracking. The second call creates nothing,
+         *     so it does not claim to.
+         *
+         *     **A second call DOES push the expiry out** — Epic 9.21. Idempotence is
+         *     about the token's identity, not its lifetime, and the alternative reading
+         *     leaves no way to extend a link without changing its URL: revoke-and-mint
+         *     issues a new token and kills every copy already sent. Re-sharing is the
+         *     agency restating the decision to share, which is the signal an expiry
+         *     should listen to. `services/share.py` carries the argument in full.
          *
          *     **Errors:** `401`, `404` (unknown scan, or another agency's).
          */
         post: operations["create_share_link_api_v1_scans__scanId__share_post"];
-        delete?: never;
+        /**
+         * Revoke Share Link
+         * @description Take the public link down — Epic 9.21. The inverse of the POST above.
+         *
+         *     **`DELETE` on the same path the mint uses**, because the thing being
+         *     removed is the resource that path names. The alternative shapes — a
+         *     `POST .../share/revoke`, or a `PATCH` with a null token — either invent a
+         *     second noun for one capability or make "unshare" reachable from an endpoint
+         *     whose job is to describe a scan.
+         *
+         *     **`204`, and idempotent.** Revoking a scan that was never shared is not an
+         *     error: the caller asked for it not to be readable, and it is not. Answering
+         *     `404` there would report on something they did not ask about, and `409`
+         *     would invite a retry loop over a state that is already correct. Nothing is
+         *     returned because there is nothing left to describe.
+         *
+         *     **After this, the token is gone for both read routes**, JSON and PDF, on
+         *     the same code path as a token that never existed — `scan_for_share_token`
+         *     is where the rule lives, so neither route can drift into treating a revoked
+         *     link as its own kind of wrong. A stranger holding the old URL gets exactly
+         *     the 404 an enumerator gets.
+         *
+         *     **What it does not reach: a PDF already downloaded.** Nothing can. The link
+         *     stops serving; a file on someone's disk is theirs. Said here and on the PDF
+         *     route rather than left for a reader to wonder about.
+         *
+         *     **Errors:** `401`, `404` (unknown scan, or another agency's).
+         */
+        delete: operations["revoke_share_link_api_v1_scans__scanId__share_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -3220,8 +3262,18 @@ export interface components {
          *     `token` is exposed alongside it deliberately: it is the operator's OWN
          *     capability for their OWN scan, already implied by the URL beside it, and
          *     tests assert on it without having to parse a URL apart.
+         *
+         *     `expiresAt` is returned because the operator is about to paste this URL
+         *     into an email and the one thing they cannot see from the URL is when it
+         *     stops working — Epic 9.21. A re-mint pushes it out, so the value is also
+         *     how a caller confirms a refresh actually happened.
          */
         ShareLinkOut: {
+            /**
+             * Expiresat
+             * Format: date-time
+             */
+            expiresAt: string;
             /** Scanid */
             scanId: string;
             /** Token */
@@ -4886,6 +4938,35 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ShareLinkOut"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_share_link_api_v1_scans__scanId__share_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scanId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
