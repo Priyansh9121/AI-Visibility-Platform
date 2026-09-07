@@ -98,11 +98,44 @@ TERMINAL: frozenset[ScanStatus] = frozenset(
 HEARTBEAT_INTERVAL = timedelta(seconds=30)
 LEASE = timedelta(seconds=180)
 
+# --- the deadline, which is the one thing a lease cannot see ------------------
+# A lease detects an executor that has STOPPED SPEAKING. It cannot detect one
+# that is alive, speaking, and getting nowhere: the heartbeat is its own task,
+# so an await inside the chain that never returns leaves it renewing happily
+# forever. `STALE_AFTER` did catch that, by accident, and retiring it gave the
+# case up. There is at least one such await today — `page.evaluate` in
+# `technical_audit.py` takes no timeout and is outside `set_default_timeout`'s
+# reach — so this is a live gap rather than a hypothetical one.
+#
+# THE BACKSTOP IS HERE AND NOT IN THE REAPER, deliberately. The reaper judges
+# other processes, and giving it a duration rule would put back exactly the
+# inference the lease exists to remove: "long, therefore dead". This is an
+# executor's ceiling on its own work — the same shape as `CallBound`, one
+# level up — and unlike a reaper it actually STOPS the work rather than
+# relabelling the row while the spending carries on.
+#
+# 3,600s clears a maximal scan computed from the ceilings themselves: two
+# co-citation waves and two SerpApi waves for detection, one prompt
+# generation, ceil(MAX_PROMPTS / PROMPT_CONCURRENCY) engine slots each costing
+# one engine ceiling plus one sentiment ceiling per engine, an audit page, and
+# fix generation — about 3,042s if every single call times out, which no real
+# scan does. `test_scan_executor.py` recomputes that sum from the constants, so
+# raising a ceiling anywhere fails a test here instead of quietly eating the
+# margin.
+MAX_SCAN_DURATION = timedelta(seconds=3_600)
+
+
+class ScanDeadlineError(Exception):
+    """The chain ran past `MAX_SCAN_DURATION` while its lease was still live."""
+
 # Distinct from ALL_ENGINE_CALLS_FAILED (the pipeline ran and every engine
 # failed) and from EXECUTION_FAILED (the pipeline raised). This one means the
 # process that was running the scan disappeared without saying anything.
 EXECUTOR_LOST = "EXECUTOR_LOST"
 EXECUTION_FAILED = "EXECUTION_FAILED"
+# The chain was alive and renewing, and still did not finish in time. Distinct
+# from EXECUTOR_LOST (it went silent) and EXECUTION_FAILED (it raised).
+SCAN_DEADLINE_EXCEEDED = "SCAN_DEADLINE_EXCEEDED"
 
 
 async def renew_lease(scan_id: str, *, settings: Settings) -> bool:
@@ -138,6 +171,22 @@ async def renew_lease(scan_id: str, *, settings: Settings) -> bool:
         ).scalar_one_or_none()
         await session.commit()
     return renewed is not None
+
+
+async def _until_deadline(chain: Awaitable[None]) -> None:
+    """`chain`, with `MAX_SCAN_DURATION` as a hard ceiling on the whole thing.
+
+    Wrapped INSIDE the task rather than around the await of it, so the deadline
+    cancels the chain itself and there is no ambiguity about whose cancellation
+    it was. An external cancellation — the heartbeat taking the lease away —
+    passes through untouched, because `asyncio.timeout` only converts the one
+    it caused.
+    """
+    try:
+        async with asyncio.timeout(MAX_SCAN_DURATION.total_seconds()):
+            await chain
+    except TimeoutError:
+        raise ScanDeadlineError from None
 
 
 async def _heartbeat(scan_id: str, *, settings: Settings, owner: asyncio.Task, state: dict) -> None:
@@ -187,7 +236,7 @@ async def run_under_lease(
     reported as a lost lease — `state["lost"]` is how the two are told apart.
     """
     state: dict = {}
-    work = asyncio.create_task(chain)
+    work = asyncio.create_task(_until_deadline(chain))
     beat = asyncio.create_task(
         _heartbeat(scan_id, settings=settings, owner=work, state=state)
     )
@@ -530,7 +579,11 @@ async def _mark_failed(scan_id: str, exc: Exception, *, settings: Settings) -> N
             if scan is None or scan.status in TERMINAL:
                 return
             scan.status = ScanStatus.FAILED
-            scan.error_code = EXECUTION_FAILED
+            scan.error_code = (
+                SCAN_DEADLINE_EXCEEDED
+                if isinstance(exc, ScanDeadlineError)
+                else EXECUTION_FAILED
+            )
             # The exception TYPE only. `error_detail` carries our own
             # diagnostics and never a vendor response body, which could hold
             # third-party content (ip-safety.md #7).

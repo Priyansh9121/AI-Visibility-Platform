@@ -16,6 +16,7 @@ the happy path is exactly the case that never exercises them.
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -32,6 +33,8 @@ from avp_api.services.scan_executor import (
     EXECUTION_FAILED,
     EXECUTOR_LOST,
     LEASE,
+    MAX_SCAN_DURATION,
+    SCAN_DEADLINE_EXCEEDED,
     ScanJob,
     execute_scan,
     reap_stale_scans,
@@ -439,6 +442,106 @@ class TestTheLeaseStopsAnExecutorThatLostIt:
         assert seen["lease"] is not None, "the claim did not stamp a lease"
         assert seen["lease"] > datetime.now(UTC)
         assert await reap_stale_scans(session) == 0
+
+
+class TestTheDeadlineCatchesWhatALeaseCannot:
+    """A live executor getting nowhere — 2026-09-08.
+
+    The heartbeat is its own task, so an await inside the chain that never
+    returns leaves the lease renewing forever and the reaper with nothing to
+    act on. `STALE_AFTER` caught that case by accident; retiring it gave the
+    case up, and `MAX_SCAN_DURATION` takes it back deliberately — in the
+    executor, which can actually stop the work, rather than in the reaper,
+    which would only relabel the row.
+    """
+
+    async def test_a_chain_that_never_finishes_is_stopped_and_recorded(
+        self, client: AsyncClient, session, settings, monkeypatch
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        cid = await _make_client(client)
+        jobs = _defer(client)
+        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+
+        # Scaled down so the test is fast; the mechanism is the one that
+        # bounds the production 3,600s, and the test below pins that value.
+        monkeypatch.setattr(executor_module, "MAX_SCAN_DURATION", timedelta(seconds=0.3))
+        reached: list[str] = []
+
+        async def never_returns(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202, ARG001
+            reached.append("competitors")
+            await asyncio.sleep(30)
+
+        async def later_phase(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202, ARG001
+            reached.append("run_scan")
+
+        monkeypatch.setattr(
+            executor_module.detection, "ensure_set_for_scan", never_returns
+        )
+        monkeypatch.setattr(scan_runner, "run_scan", later_phase)
+
+        started = time.perf_counter()
+        await execute_scan(jobs[0], settings=settings)
+        elapsed = time.perf_counter() - started
+
+        assert elapsed < 5, f"the deadline did not stop the chain ({elapsed:.1f}s)"
+        assert reached == ["competitors"], "the chain kept spending past the deadline"
+
+        scan = await session.get(Scan, sid)
+        await session.refresh(scan)
+        assert scan.status is ScanStatus.FAILED
+        # Its own code: alive and renewing, and still did not finish.
+        assert scan.error_code == SCAN_DEADLINE_EXCEEDED
+        assert scan.error_code != EXECUTOR_LOST
+
+    def test_the_deadline_clears_a_maximal_scan_recomputed_from_the_ceilings(
+        self,
+    ) -> None:
+        """The number is derived, so a raised ceiling fails HERE.
+
+        Every term is read from the module that owns it. If a call bound grows
+        or a phase is added without revisiting this sum, the margin is eaten
+        silently — this test is what makes that a failure instead.
+        """
+        import math
+
+        from avp_api.services import (
+            cocitation,
+            engines,
+            extraction,
+            fix_generator,
+            prompts,
+            serp,
+            technical_audit,
+        )
+        from avp_api.services import (
+            scan_runner as runner,
+        )
+
+        # One prompt slot: three engines concurrently, then one sentiment call
+        # per engine, serially (scan_runner.run_prompt).
+        slot = engines.ENGINE_CALL_CEILING + len(engines.DEFAULT_ENGINES) * (
+            extraction.SENTIMENT_BOUND.ceiling
+        )
+        waves = math.ceil(prompts.MAX_PROMPTS / runner.PROMPT_CONCURRENCY)
+        worst_case = (
+            # detection: 4 seed prompts at concurrency 3, 6 SERP queries at 3
+            2 * cocitation.CO_CITATION_BOUND.ceiling
+            + 2 * serp.DEFAULT_TIMEOUT
+            + prompts.GENERATOR_BOUND.ceiling
+            + waves * slot
+            + technical_audit.PAGE_TIMEOUT_MS / 1000
+            + technical_audit.SIDE_FETCH_TIMEOUT
+            + technical_audit.SETTLE_MS / 1000
+            + fix_generator.FIX_BOUND.ceiling
+        )
+
+        assert MAX_SCAN_DURATION.total_seconds() > worst_case, (
+            f"a maximal scan can now take {worst_case:.0f}s, past the "
+            f"{MAX_SCAN_DURATION.total_seconds():.0f}s deadline"
+        )
+        # And not so generous that it stops being a backstop.
+        assert MAX_SCAN_DURATION.total_seconds() < 2 * worst_case
 
 
 class TestStaleScanReaper:
