@@ -11162,3 +11162,34 @@ never closed, the unset `OPENAI_API_KEY` degrading silently, the skipped
 `web_search_tool_result_error` block, the SerpApi semaphores and the
 `SERPAPI_KEY_MISSING` deletion candidate, and `structlog` unconfigured. The
 lease itself is next, and its prerequisite is met.
+
+## Follow-up, 2026-09-07 (third session): the mechanism behind fix 2, reproduced
+
+The first follow-up verified the parameter and left the mechanism open:
+that the unset default spends reasoning tokens inside
+`max_completion_tokens`, and that this is how an empty `finish_reason:
+"length"` body arises. A one-sentence prompt could not show it. A
+scan-shaped one can. Four more calls to gpt-5.5, the same prompt each time
+— a 40-person SaaS company asking for a ranked comparison of help-desk
+tools — at the production budget and at one small enough to exhaust:
+
+| effort | `max_completion_tokens` | `finish_reason` | reasoning tokens | body |
+|---|---|---|---|---|
+| unset (default) | 4,000 | `stop` | 512 | 13,250 chars |
+| `low` | 4,000 | `stop` | 92 | 11,066 chars |
+| unset (default) | 300 | `length` | 300 | **empty** |
+| `low` | 300 | `length` | 300 | **empty** |
+
+The mechanism is real and reproduced, not read off a documentation page:
+at a budget the reasoning can exhaust, every completion token goes to
+reasoning and the body comes back empty under `length` — exactly the shape
+fix 1 found being recorded as "ChatGPT answered and did not name you". It
+happens at `low` as well as at the default, so the effort setting is a
+margin, not an immunity: at the production budget the default spent 512
+reasoning tokens and `low` spent 92, a five-and-a-half-fold reduction on
+the same answer. Fix 2 stands on both legs now — the parameter verified
+live, and the failure mode it guards against demonstrated — and fix 1's
+`truncated` status is what catches the case the margin does not.
+
+Decision recorded: the gap is closed by reproduction, not by accepting the
+documentation. Nothing changes in the code.
