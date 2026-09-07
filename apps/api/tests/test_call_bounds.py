@@ -33,7 +33,7 @@ import pytest
 
 from avp_api.config import Settings
 from avp_api.models.engine_result import Engine
-from avp_api.services import call_bounds, classify, engines, extraction
+from avp_api.services import call_bounds, classify, cocitation, engines, extraction
 from avp_api.services.call_bounds import CallBound
 from avp_api.services.crawl import CrawlResult, CrawlSignals
 from avp_api.services.engines import EngineAnswer
@@ -84,6 +84,14 @@ def _mentioning_answer() -> EngineAnswer:
     )
 
 
+def _co_citation_timed_out(result: object) -> None:
+    # "Never raises": a not-ok result with a code, and no hits invented.
+    assert isinstance(result, cocitation.CoCitationResult)
+    assert result.ok is False
+    assert result.error_code == "TIMEOUT"
+    assert result.hits == []
+
+
 def _sentiment_timed_out(result: object) -> None:
     # "Returns (None, None) on failure" — the docstring's contract, and the
     # one `run_scan` relies on to leave sentiment unset rather than crash.
@@ -128,6 +136,18 @@ SITES = [
             _mentioning_answer(), subject_name="Help Scout", settings=s
         ),
         assert_timed_out=_sentiment_timed_out,
+    ),
+    Site(
+        name="run_seed_prompt",
+        module=cocitation,
+        bound_attr="CO_CITATION_BOUND",
+        ceiling=62.0,
+        call=lambda s: cocitation.run_seed_prompt(
+            "What are the best alternatives to Help Scout?",
+            subject_brand="Help Scout",
+            settings=s,
+        ),
+        assert_timed_out=_co_citation_timed_out,
     ),
 ]
 
