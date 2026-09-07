@@ -32,12 +32,25 @@ from pydantic import BaseModel, Field
 
 from ..config import Settings, get_settings
 from ..models.prompt import PromptIntent
+from .call_bounds import CallBound
 
 logger = structlog.get_logger(__name__)
 
 GENERATOR_MODEL = "claude-opus-5"
 GENERATOR_EFFORT = "medium"
 GENERATOR_MAX_TOKENS = 8_000
+
+# --- The call's bound (API key discipline audit, 2026-09-07) -----------------
+# Inherited both SDK defaults until this audit — a 600s read timeout across
+# three attempts — and this call sits in front of the ENTIRE engine loop, so
+# a hung generation was thirty minutes before the first engine call, with the
+# scan reading "running" throughout. Measured at 14.6s on a 24-prompt run
+# (build log, Epic 9.2); sixty seconds per attempt is four times that one
+# measurement, and medium effort with an 8,000-token budget is what earns the
+# headroom over the low-effort calls elsewhere. One retry, `engines.py`'s.
+# A timeout here is not a failed scan: `fallback_prompts` is the deterministic
+# floor, which is what lets the ceiling be this tight.
+GENERATOR_BOUND = CallBound(timeout=60.0, max_retries=1)  # ceiling: 122.0s
 
 # §7: "20-30 prompts per scan".
 MIN_PROMPTS = 20
@@ -254,29 +267,32 @@ async def generate_prompts(
     be explained after the fact.
     """
     settings = settings or get_settings()
-    client = anthropic.AsyncAnthropic(api_key=settings.provider_key("anthropic_api_key"))
+    client = GENERATOR_BOUND.client(settings)
 
     try:
-        response = await client.messages.parse(
-            model=GENERATOR_MODEL,
-            max_tokens=GENERATOR_MAX_TOKENS,
-            output_config={"effort": GENERATOR_EFFORT},
-            system=SYSTEM_PROMPT,
-            messages=[
-                {
-                    "role": "user",
-                    "content": build_generation_input(
-                        brand_name=brand_name,
-                        domain=domain,
-                        industry=industry,
-                        niche=niche,
-                        competitors=competitors,
-                    ),
-                }
-            ],
-            output_format=GeneratedPromptSet,
-        )
-    except anthropic.APIError as exc:
+        # The outer deadline is what makes the ceiling a guarantee. Its
+        # TimeoutError is not an APIError, hence the second clause below.
+        async with GENERATOR_BOUND.deadline():
+            response = await client.messages.parse(
+                model=GENERATOR_MODEL,
+                max_tokens=GENERATOR_MAX_TOKENS,
+                output_config={"effort": GENERATOR_EFFORT},
+                system=SYSTEM_PROMPT,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": build_generation_input(
+                            brand_name=brand_name,
+                            domain=domain,
+                            industry=industry,
+                            niche=niche,
+                            competitors=competitors,
+                        ),
+                    }
+                ],
+                output_format=GeneratedPromptSet,
+            )
+    except (anthropic.APIError, TimeoutError) as exc:
         logger.warning("prompts.generation_failed", error=type(exc).__name__)
         return fallback_prompts(
             brand_name=brand_name, domain=domain, industry=industry

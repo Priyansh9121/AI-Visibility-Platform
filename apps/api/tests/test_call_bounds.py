@@ -33,7 +33,7 @@ import pytest
 
 from avp_api.config import Settings
 from avp_api.models.engine_result import Engine
-from avp_api.services import call_bounds, classify, cocitation, engines, extraction
+from avp_api.services import call_bounds, classify, cocitation, engines, extraction, prompts
 from avp_api.services.call_bounds import CallBound
 from avp_api.services.crawl import CrawlResult, CrawlSignals
 from avp_api.services.engines import EngineAnswer
@@ -92,6 +92,17 @@ def _co_citation_timed_out(result: object) -> None:
     assert result.hits == []
 
 
+def _generation_timed_out(result: object) -> None:
+    # "Never raises: a provider failure falls back to the deterministic set,
+    # and `generated_by` records which path produced the result."
+    assert isinstance(result, tuple)
+    generated, generated_by = result
+    assert generated_by == "fallback"
+    assert generated == prompts.fallback_prompts(
+        brand_name="Help Scout", domain="helpscout.com", industry="customer support software"
+    )
+
+
 def _sentiment_timed_out(result: object) -> None:
     # "Returns (None, None) on failure" — the docstring's contract, and the
     # one `run_scan` relies on to leave sentiment unset rather than crash.
@@ -148,6 +159,20 @@ SITES = [
             settings=s,
         ),
         assert_timed_out=_co_citation_timed_out,
+    ),
+    Site(
+        name="generate_prompts",
+        module=prompts,
+        bound_attr="GENERATOR_BOUND",
+        ceiling=122.0,
+        call=lambda s: prompts.generate_prompts(
+            brand_name="Help Scout",
+            domain="helpscout.com",
+            industry="customer support software",
+            niche=None,
+            settings=s,
+        ),
+        assert_timed_out=_generation_timed_out,
     ),
 ]
 
