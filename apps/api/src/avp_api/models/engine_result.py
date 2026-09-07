@@ -85,6 +85,41 @@ class EngineResultStatus(str, enum.Enum):
     RATE_LIMITED = "rate_limited"
     ERROR = "error"
     TIMEOUT = "timeout"
+    # --- Incomplete answers (API key discipline audit, 2026-09-07) ----------
+    #
+    # Neither of these is an answer, and neither is a provider failure. Before
+    # they existed an engine that stopped early was read as if it had finished:
+    # the adapters checked `stop_reason` for "refusal" and nothing else, so a
+    # response cut off by the token budget flowed into `extract_facts` as OK,
+    # and a brand absent from the truncated prefix was recorded as
+    # ANSWERED_NO_MENTION — "the engine answered and did not name you" — which
+    # scoring then counted against the mention rate. A billed call producing a
+    # fabricated negative measurement, on a scan that still read SUCCEEDED.
+    #
+    # Kept as TWO members rather than one "incomplete", because they have
+    # different futures. TRUNCATED has no fix but a bigger budget or a shorter
+    # prompt. PAUSED could one day be fixed by actually resuming the call.
+    # Collapsing them would hide that behind an `error_code` string nothing
+    # queries.
+    #
+    # TRUNCATED — the engine ran out of room. Claude `max_tokens` and
+    # `model_context_window_exceeded`; OpenAI `finish_reason == "length"`.
+    TRUNCATED = "truncated"
+    # PAUSED — the engine stopped to hand control back and nothing resumed it.
+    # Claude `pause_turn` (a server-side tool turn the API paused) and
+    # `tool_use`; OpenAI `finish_reason` `tool_calls` or `function_call`.
+    #
+    # Today only Claude's `pause_turn` can occur, on the grounded engine's
+    # web_search. The other three are unreachable, and unreachable for a
+    # reason that must not be confused with a dead guard: each fires the day a
+    # client-side tool is added — on the Claude side, an entry in
+    # `kwargs["tools"]` in `services/engines.py` that is not a server tool; on
+    # the OpenAI side, a `tools` or `functions` entry in the ChatGPT adapter's
+    # request payload. `serp.py`'s SERPAPI_KEY_MISSING is unreachable because
+    # a guard elsewhere makes it redundant — a deletion candidate. These are
+    # unreachable because a feature does not exist yet, and they are the
+    # status that feature will need on its first day.
+    PAUSED = "paused"
 
 
 class CitationType(str, enum.Enum):

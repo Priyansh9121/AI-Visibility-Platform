@@ -2052,7 +2052,9 @@
           "answered_no_mention",
           "rate_limited",
           "error",
-          "timeout"
+          "timeout",
+          "truncated",
+          "paused"
         ],
         "title": "EngineResultStatus",
         "type": "string"

@@ -265,6 +265,25 @@ class TestExtraction:
         assert not facts.mentioned
         assert facts.brands_mentioned == 0
 
+    @pytest.mark.parametrize(
+        "status", [EngineResultStatus.TRUNCATED, EngineResultStatus.PAUSED]
+    )
+    def test_an_incomplete_answer_yields_no_facts_even_when_text_is_present(
+        self, status: EngineResultStatus
+    ) -> None:
+        """The adapters blank the text of an incomplete answer, but extraction
+        must not depend on that: `ok` is False, so it stops at the door. The
+        text here names a competitor and not the subject — exactly the shape
+        that used to be recorded as ANSWERED_NO_MENTION."""
+        facts = extract_facts(
+            answer("Zendesk is popular for larger teams, while Help Sc", status=status),
+            competitors=self.COMPS, **self.SUBJECT,
+        )
+        assert facts.status is status
+        assert not facts.mentioned
+        assert facts.brands_mentioned == 0
+        assert facts.citations == []
+
     def test_sentiment_is_not_set_by_pure_extraction(self) -> None:
         """Sentiment needs a model call and is applied by the runner, only when
         the subject was actually mentioned."""
