@@ -163,9 +163,16 @@ async def create_share_link(
     that decision for them. This is the moment they make it.
 
     **`200`, not `201`, and idempotent.** Calling twice returns the same token
-    rather than minting a second live link to the same report — there is no
-    revocation, so every extra token would be a URL nobody is tracking. The
-    second call creates nothing, so it does not claim to.
+    rather than minting a second live link to the same report: every extra
+    token would be a URL nobody is tracking. The second call creates nothing,
+    so it does not claim to.
+
+    **A second call DOES push the expiry out** — Epic 9.21. Idempotence is
+    about the token's identity, not its lifetime, and the alternative reading
+    leaves no way to extend a link without changing its URL: revoke-and-mint
+    issues a new token and kills every copy already sent. Re-sharing is the
+    agency restating the decision to share, which is the signal an expiry
+    should listen to. `services/share.py` carries the argument in full.
 
     **Errors:** `401`, `404` (unknown scan, or another agency's).
     """
@@ -177,7 +184,7 @@ async def create_share_link(
     if scan is None:
         raise NotFound(detail="No scan with that identifier.")
 
-    token = await share_service.get_or_create_share_token(db, scan)
+    token, expires_at = await share_service.get_or_create_share_token(db, scan)
     # Commit before returning the URL. The operator's next action is to paste
     # this link somewhere it cannot be un-pasted, so the token must be durable
     # before it is handed out — returning a URL backed by an uncommitted row
@@ -187,7 +194,58 @@ async def create_share_link(
         scan_id=scan.id,
         token=token,
         url=_share_url(settings.public_web_base_url, token),
+        expires_at=expires_at,
     )
+
+
+@router.delete(
+    "/scans/{scanId}/share",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def revoke_share_link(
+    principal: PrincipalDep,
+    db: DbDep,
+    scan_id: str = Path(alias="scanId"),
+) -> Response:
+    """Take the public link down — Epic 9.21. The inverse of the POST above.
+
+    **`DELETE` on the same path the mint uses**, because the thing being
+    removed is the resource that path names. The alternative shapes — a
+    `POST .../share/revoke`, or a `PATCH` with a null token — either invent a
+    second noun for one capability or make "unshare" reachable from an endpoint
+    whose job is to describe a scan.
+
+    **`204`, and idempotent.** Revoking a scan that was never shared is not an
+    error: the caller asked for it not to be readable, and it is not. Answering
+    `404` there would report on something they did not ask about, and `409`
+    would invite a retry loop over a state that is already correct. Nothing is
+    returned because there is nothing left to describe.
+
+    **After this, the token is gone for both read routes**, JSON and PDF, on
+    the same code path as a token that never existed — `scan_for_share_token`
+    is where the rule lives, so neither route can drift into treating a revoked
+    link as its own kind of wrong. A stranger holding the old URL gets exactly
+    the 404 an enumerator gets.
+
+    **What it does not reach: a PDF already downloaded.** Nothing can. The link
+    stops serving; a file on someone's disk is theirs. Said here and on the PDF
+    route rather than left for a reader to wonder about.
+
+    **Errors:** `401`, `404` (unknown scan, or another agency's).
+    """
+    scan = (
+        await db.execute(
+            select(Scan).where(Scan.id == scan_id, Scan.agency_id == principal.agency_id)
+        )
+    ).scalar_one_or_none()
+    if scan is None:
+        # 404, never 403 — the same cross-tenant rule as every sibling route.
+        raise NotFound(detail="No scan with that identifier.")
+
+    await share_service.revoke_share_token(db, scan)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # The `.pdf` route MUST be registered before `/reports/{token}`.
@@ -229,14 +287,21 @@ async def get_public_report_pdf(
        budget holder, and a link that dies when they change jobs is worse for
        the agency than a PDF that does not.
 
-    **What it costs, said plainly:** a downloaded PDF outlives any future
-    revocation of the link. That cost is currently zero, because share links
-    have no expiry and no revocation at all — recorded as known debt in
-    api-contracts.md and explicitly out of scope for this epic. The PDF
-    therefore takes away nothing the link does not already give away
-    permanently. **When revocation ships, this is the route to revisit**, and
-    that is the moment to decide whether a revoked link should stop serving
-    files — not now, by pre-emptively refusing something that costs nothing yet.
+    **What it costs, said plainly: a downloaded PDF outlives revocation.**
+    Epic 9.14 accepted that cost when it was zero — links had no expiry and no
+    revocation, so the file took away nothing the link did not already give
+    away permanently — and marked this "the route to revisit when revocation
+    ships". Epic 9.21 shipped it, so this is that revisit, and the decision is
+    recorded rather than inherited.
+
+    **A revoked or expired link stops serving files immediately**, on the same
+    lookup as the JSON route: `scan_for_share_token` returns nothing and this
+    route 404s like any other miss. What revocation cannot do is recall a copy
+    already on someone's disk, and nothing can — the alternative would be
+    serving a watermarked or phone-home document, which is a different product
+    with different privacy properties. So the residual gap is real, bounded,
+    and named: revocation governs the LINK from the moment it is invoked, never
+    a file already downloaded.
 
     Every rule the JSON share route states holds here unchanged, because it is
     the same lookup: read-only, one code path, `404` for every rejection with no

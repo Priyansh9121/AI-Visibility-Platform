@@ -1595,6 +1595,11 @@ and the disagreement would reach a client.
 own name and reduced to `[A-Za-z0-9._-]`, because a client name is
 caller-supplied data and a `Content-Disposition` header is a header.
 
+**A downloaded file outlives revocation of the share link** (Epic 9.21), and
+nothing can change that. This route is agency-authenticated, so the holder is
+the agency itself rather than a prospect, but the property is the same one the
+public PDF route states at length.
+
 **It degrades exactly as the web report does**, because it is derived from the
 same payload: a null composite prints **"Not scored"** and never a zero,
 `insufficient_data` gets its own sentence distinct from never-scored, an
@@ -1632,10 +1637,15 @@ prospect a report is about has no account, and must not need one to read it".
 Granting the harder-to-forward form (a live URL) while withholding the easy one
 (a file they can keep) is backwards for a mechanism whose job is *send*.
 
-**What it costs, said plainly:** a downloaded PDF outlives any future revocation
-of the link. That cost is currently zero, because share links have no expiry and
-no revocation at all — known debt recorded below. **When revocation ships, this
-is the route to revisit.**
+**What it costs, said plainly: a downloaded PDF outlives revocation.** Epic 9.14
+accepted that when the cost was zero — links had no expiry and no revocation, so
+the file gave away nothing the link did not already give away permanently — and
+marked this "the route to revisit when revocation ships". **Epic 9.21 shipped it,
+and this is that revisit.** A revoked or expired link stops serving files
+immediately, on the same lookup as the JSON route. What revocation cannot do is
+recall a copy already on someone's disk, and nothing can. That residual gap is
+real, bounded and named: **revocation governs the link from the moment it is
+invoked, never a file already downloaded.**
 
 Every rule the JSON share route states holds unchanged, because it is the same
 lookup: read-only, one code path, `404` for every rejection with no shape
@@ -1657,9 +1667,9 @@ measurement until an agency decides otherwise; minting a token for every scan
 and relying on the URL being unknown would make that decision for them.
 
 **`200`, not `201`, and idempotent.** Calling twice returns the *same* token
-rather than a second live link to the same report — there is no revocation, so
-every extra token would be a URL nobody is tracking. The second call creates
-nothing, so it does not claim to. Serialised with `SELECT … FOR UPDATE`: two
+rather than a second live link to the same report: every extra token would be a
+URL nobody is tracking. The second call creates nothing, so it does not claim
+to. Serialised with `SELECT … FOR UPDATE`: two
 concurrent calls would otherwise generate two different tokens and issue two
 UPDATEs against the same row, and the loser would walk away holding a URL that
 404s. There is no unique violation to catch in that race, so the lock is
@@ -1670,14 +1680,56 @@ load-bearing rather than defensive.
 {
   "scanId": "scan_01J...",
   "token": "uG6-k3CTaiAyPY0-OAOiezBwUerycAGiepPbgMwWlMk",
-  "url": "http://localhost:3000/share/uG6-k3CTaiAyPY0-OAOiezBwUerycAGiepPbgMwWlMk"
+  "url": "http://localhost:3000/share/uG6-k3CTaiAyPY0-OAOiezBwUerycAGiepPbgMwWlMk",
+  "expiresAt": "2026-10-08T09:22:00Z"
 }
 ```
+
+**A second call pushes `expiresAt` out — Epic 9.21.** Idempotence is about the
+token's identity, not its lifetime. The alternative reading leaves no way to
+extend a link without changing its URL, because the only other route is
+revoke-and-mint, which issues a new token and kills every copy already sent —
+so an agency re-sharing on day 29 would have to break the link they are
+re-sending. Re-sharing is the agency restating the decision to share, which is
+exactly the signal an expiry should listen to.
+
+**Links live 30 days** (`share.SHARE_TTL`). It must outlive the conversation it
+was sent for — a report is read, forwarded, and put in front of a budget holder
+over days to a couple of weeks — and must not outlive the data, since a month on
+a re-scan would show different numbers and the link would be making a stale
+claim about a live business. Expiry is the blunt instrument for a link nobody
+remembers sending; revocation below is the sharp one.
 
 `url` is built from `PUBLIC_WEB_BASE_URL`, **never** from the request's `Host`
 or `Origin` header. Those are attacker-controlled, and a share link built from a
 spoofed Host is a phishing URL carrying a real token. Configuration, not
 reflection.
+
+**Errors:** `401`, `404` (unknown scan, or another agency's).
+
+#### `DELETE /api/v1/scans/{scanId}/share`
+**Auth required.** Takes the public link down. `204`, no body — Epic 9.21.
+
+The inverse of the `POST` above, on the same path, because the thing being
+removed is the resource that path names. Clears **both** `share_token` and
+`share_expires_at`, which the `ck_scans_share_token_and_expiry_together` CHECK
+requires and which is also the honest state: a token with no expiry is not a
+link, and an expiry with no token is a date about nothing.
+
+**Idempotent.** Revoking a scan that was never shared, or revoking twice, is
+`204` and not an error: the caller asked for it not to be readable, and it is
+not. A `404` there would report on something they did not ask about, and a
+`409` would invite a retry loop over a state that is already correct.
+
+**After this, both read routes 404 for the old token** — JSON and PDF — on the
+same code path as a token that never existed. A revoked token is not a special
+case of the indistinguishable-rejection rule below; it is the same rule, which
+is why the check lives in one lookup (`share.scan_for_share_token`) rather than
+in either route. A test asserts the two responses match field for field, minus
+`instance`, which echoes the request path.
+
+**It does not reach a PDF already downloaded.** Nothing can — see the PDF route
+above.
 
 **Errors:** `401`, `404` (unknown scan, or another agency's).
 
@@ -1696,6 +1748,12 @@ the point — a prospect must not need one. It is `secrets.token_urlsafe(32)`:
 **256 bits from the OS CSPRNG**, the same generator and entropy as a session
 token (`security.new_share_token`, beside `new_session_token`). It is never the
 scan's ULID, which is already in the authenticated URL and in logs.
+
+**Revoked and expired tokens 404 identically** — Epic 9.21. Both are filtered in
+`share.scan_for_share_token`, so neither route can drift into treating them as
+their own kind of wrong. A missing `share_expires_at` is **not** "never
+expires": the comparison is strict, so a token that somehow reached the table
+without one serves nothing. Fail-closed, for a credential.
 
 **`404` for every rejection, on one code path.** A malformed token, an unknown
 token and a well-formed miss are indistinguishable in both status and body.
@@ -2227,6 +2285,7 @@ Recorded so the shape is agreed before it is implemented.
 | Endpoint | Epic |
 |---|---|
 | `PATCH /api/v1/agencies/{agencyId}/branding` — logo, domain, colours | 9 (send path, slice 3) |
+| ~~share-link expiry and revocation~~ — **shipped in Epic 9.21**, see `DELETE /api/v1/scans/{scanId}/share` above | — |
 
 §7's Epic 7 checklist also lists white-label branding injection, PDF export and
 shareable links. Epic 7 shipped the narrative report and white-labelling limited
@@ -2247,6 +2306,13 @@ see *Public share link* above. Epic 9's acceptance is that a pilot agency can
 "generate and **send**" a report; `GET /api/v1/reports/{token}` is now the
 endpoint that allows it, and it was chosen over PDF export as the cheaper of the
 two mechanisms that satisfy the word *send* (north-star.md §5.4 and §6).
+
+**Expiry and revocation shipped in Epic 9.21.** `models/scan.py` and
+`services/share.py` both carried the gap as a named one — "the first agency that
+shares a report with the wrong prospect has no way to take it back" — and both
+halves now exist: `DELETE /scans/{scanId}/share` for a link sent to the wrong
+address, and a 30-day TTL for the link nobody remembers sending. Neither reaches
+a copy already downloaded, which is stated on both PDF routes.
 
 **PDF export shipped in Epic 9.14** — see `GET /scans/{scanId}/report.pdf` and
 `GET /reports/{token}.pdf` above. Branding remains unbuilt, and the send path is

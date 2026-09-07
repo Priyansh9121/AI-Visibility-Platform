@@ -4414,8 +4414,13 @@
         "type": "string"
       },
       "ShareLinkOut": {
-        "description": "The public link for a report \u2014 Epic 9.8.\n\nCarries the complete URL, not just the token, because the operator's next\naction is to paste it into an email. Returning a bare token would force\nevery caller to rebuild the same string, which is how a frontend and a\nbackend end up disagreeing about a path.\n\n`token` is exposed alongside it deliberately: it is the operator's OWN\ncapability for their OWN scan, already implied by the URL beside it, and\ntests assert on it without having to parse a URL apart.",
+        "description": "The public link for a report \u2014 Epic 9.8.\n\nCarries the complete URL, not just the token, because the operator's next\naction is to paste it into an email. Returning a bare token would force\nevery caller to rebuild the same string, which is how a frontend and a\nbackend end up disagreeing about a path.\n\n`token` is exposed alongside it deliberately: it is the operator's OWN\ncapability for their OWN scan, already implied by the URL beside it, and\ntests assert on it without having to parse a URL apart.\n\n`expiresAt` is returned because the operator is about to paste this URL\ninto an email and the one thing they cannot see from the URL is when it\nstops working \u2014 Epic 9.21. A re-mint pushes it out, so the value is also\nhow a caller confirms a refresh actually happened.",
         "properties": {
+          "expiresAt": {
+            "format": "date-time",
+            "title": "Expiresat",
+            "type": "string"
+          },
           "scanId": {
             "title": "Scanid",
             "type": "string"
@@ -4432,7 +4437,8 @@
         "required": [
           "scanId",
           "token",
-          "url"
+          "url",
+          "expiresAt"
         ],
         "title": "ShareLinkOut",
         "type": "object"
@@ -6364,7 +6370,7 @@
     },
     "/api/v1/reports/{token}.pdf": {
       "get": {
-        "description": "A report PDF, by share token. **No session required** \u2014 Epic 9.14.\n\nTHE DECISION, STATED RATHER THAN DEFAULTED\n------------------------------------------\nA stranger holding a share token CAN download the PDF, and the share page\noffers it. Three reasons, in order of weight:\n\n1. **It exposes nothing new.** The PDF carries strictly the facts\n   `GET /reports/{token}` already serves to the same holder, rendered\n   differently. Withholding it would not protect a single datum.\n2. **The send path is the point.** Epic 9.8 built this token because \"the\n   prospect a report is about has no account, and must not need one to read\n   it\". Granting the harder-to-forward form (a live URL) while withholding\n   the easy one (a file they can keep) is backwards for a mechanism whose\n   whole job is *send*.\n3. **A prospect wants a file.** The realistic next step for someone sent a\n   report is forwarding it to a colleague or putting it in front of a\n   budget holder, and a link that dies when they change jobs is worse for\n   the agency than a PDF that does not.\n\n**What it costs, said plainly:** a downloaded PDF outlives any future\nrevocation of the link. That cost is currently zero, because share links\nhave no expiry and no revocation at all \u2014 recorded as known debt in\napi-contracts.md and explicitly out of scope for this epic. The PDF\ntherefore takes away nothing the link does not already give away\npermanently. **When revocation ships, this is the route to revisit**, and\nthat is the moment to decide whether a revoked link should stop serving\nfiles \u2014 not now, by pre-emptively refusing something that costs nothing yet.\n\nEvery rule the JSON share route states holds here unchanged, because it is\nthe same lookup: read-only, one code path, `404` for every rejection with no\nshape pre-check, and never a `401` \u2014 which would say \"this token is real,\nauthenticate to use it\".\n\n**Errors:** `404` only.",
+        "description": "A report PDF, by share token. **No session required** \u2014 Epic 9.14.\n\nTHE DECISION, STATED RATHER THAN DEFAULTED\n------------------------------------------\nA stranger holding a share token CAN download the PDF, and the share page\noffers it. Three reasons, in order of weight:\n\n1. **It exposes nothing new.** The PDF carries strictly the facts\n   `GET /reports/{token}` already serves to the same holder, rendered\n   differently. Withholding it would not protect a single datum.\n2. **The send path is the point.** Epic 9.8 built this token because \"the\n   prospect a report is about has no account, and must not need one to read\n   it\". Granting the harder-to-forward form (a live URL) while withholding\n   the easy one (a file they can keep) is backwards for a mechanism whose\n   whole job is *send*.\n3. **A prospect wants a file.** The realistic next step for someone sent a\n   report is forwarding it to a colleague or putting it in front of a\n   budget holder, and a link that dies when they change jobs is worse for\n   the agency than a PDF that does not.\n\n**What it costs, said plainly: a downloaded PDF outlives revocation.**\nEpic 9.14 accepted that cost when it was zero \u2014 links had no expiry and no\nrevocation, so the file took away nothing the link did not already give\naway permanently \u2014 and marked this \"the route to revisit when revocation\nships\". Epic 9.21 shipped it, so this is that revisit, and the decision is\nrecorded rather than inherited.\n\n**A revoked or expired link stops serving files immediately**, on the same\nlookup as the JSON route: `scan_for_share_token` returns nothing and this\nroute 404s like any other miss. What revocation cannot do is recall a copy\nalready on someone's disk, and nothing can \u2014 the alternative would be\nserving a watermarked or phone-home document, which is a different product\nwith different privacy properties. So the residual gap is real, bounded,\nand named: revocation governs the LINK from the moment it is invoked, never\na file already downloaded.\n\nEvery rule the JSON share route states holds here unchanged, because it is\nthe same lookup: read-only, one code path, `404` for every rejection with no\nshape pre-check, and never a `401` \u2014 which would say \"this token is real,\nauthenticate to use it\".\n\n**Errors:** `404` only.",
         "operationId": "get_public_report_pdf_api_v1_reports__token__pdf_get",
         "parameters": [
           {
@@ -6940,8 +6946,42 @@
       }
     },
     "/api/v1/scans/{scanId}/share": {
+      "delete": {
+        "description": "Take the public link down \u2014 Epic 9.21. The inverse of the POST above.\n\n**`DELETE` on the same path the mint uses**, because the thing being\nremoved is the resource that path names. The alternative shapes \u2014 a\n`POST .../share/revoke`, or a `PATCH` with a null token \u2014 either invent a\nsecond noun for one capability or make \"unshare\" reachable from an endpoint\nwhose job is to describe a scan.\n\n**`204`, and idempotent.** Revoking a scan that was never shared is not an\nerror: the caller asked for it not to be readable, and it is not. Answering\n`404` there would report on something they did not ask about, and `409`\nwould invite a retry loop over a state that is already correct. Nothing is\nreturned because there is nothing left to describe.\n\n**After this, the token is gone for both read routes**, JSON and PDF, on\nthe same code path as a token that never existed \u2014 `scan_for_share_token`\nis where the rule lives, so neither route can drift into treating a revoked\nlink as its own kind of wrong. A stranger holding the old URL gets exactly\nthe 404 an enumerator gets.\n\n**What it does not reach: a PDF already downloaded.** Nothing can. The link\nstops serving; a file on someone's disk is theirs. Said here and on the PDF\nroute rather than left for a reader to wonder about.\n\n**Errors:** `401`, `404` (unknown scan, or another agency's).",
+        "operationId": "revoke_share_link_api_v1_scans__scanId__share_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scanId",
+            "required": true,
+            "schema": {
+              "title": "Scanid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Share Link",
+        "tags": [
+          "reports"
+        ]
+      },
       "post": {
-        "description": "Mint (or return) the public link for this scan's report \u2014 Epic 9.8.\n\n**An explicit action, not a side effect of running a scan.** A scan is a\nprivate measurement until an agency decides otherwise; publishing every\nreport at creation time and relying on the URL being unknown would make\nthat decision for them. This is the moment they make it.\n\n**`200`, not `201`, and idempotent.** Calling twice returns the same token\nrather than minting a second live link to the same report \u2014 there is no\nrevocation, so every extra token would be a URL nobody is tracking. The\nsecond call creates nothing, so it does not claim to.\n\n**Errors:** `401`, `404` (unknown scan, or another agency's).",
+        "description": "Mint (or return) the public link for this scan's report \u2014 Epic 9.8.\n\n**An explicit action, not a side effect of running a scan.** A scan is a\nprivate measurement until an agency decides otherwise; publishing every\nreport at creation time and relying on the URL being unknown would make\nthat decision for them. This is the moment they make it.\n\n**`200`, not `201`, and idempotent.** Calling twice returns the same token\nrather than minting a second live link to the same report: every extra\ntoken would be a URL nobody is tracking. The second call creates nothing,\nso it does not claim to.\n\n**A second call DOES push the expiry out** \u2014 Epic 9.21. Idempotence is\nabout the token's identity, not its lifetime, and the alternative reading\nleaves no way to extend a link without changing its URL: revoke-and-mint\nissues a new token and kills every copy already sent. Re-sharing is the\nagency restating the decision to share, which is the signal an expiry\nshould listen to. `services/share.py` carries the argument in full.\n\n**Errors:** `401`, `404` (unknown scan, or another agency's).",
         "operationId": "create_share_link_api_v1_scans__scanId__share_post",
         "parameters": [
           {

@@ -372,12 +372,25 @@ materially different artifact from raw data with a chart on it.
 
 ---
 
-### Layer 5 — Distribution / Action — [DECIDED] · **NOT STARTED**
+### Layer 5 — Distribution / Action — [DECIDED] · **PARTIALLY BUILT**
 
 **Its job:** content generation, outreach, and getting the artifact in front of
 the human who decides.
 
-**Build status: NOT STARTED, and it blocks Epic 9's acceptance criterion.**
+**Build status: PARTIALLY BUILT, and it no longer blocks Epic 9's acceptance
+criterion.** This heading read NOT STARTED until Epic 9.21 and was stale by
+three epics — corrected here rather than left for a later reader, the way Epic
+7.1 corrected `design-direction.md` and `design-system.md` in the commit that
+made them wrong.
+
+What exists: the public share link (`POST /scans/{scanId}/share`,
+`GET /reports/{token}`, Epic 9.8), PDF export on both the authenticated and the
+public path (Epic 9.14), and expiry plus revocation on the link (Epic 9.21).
+What does not: white-label branding — logo, custom domain, an agency accent
+colour — which needs new `Agency` columns AND a written policy on which design
+tokens an agency may override, because the visibility ramp is load-bearing and
+an agency free to recolour it changes what the score means. Outreach content
+generation is untouched and remains §7 Epic 10.
 
 - All seven `product-spec.md` §7 Epic 10 items are `[ ]`.
 - **`PDF export + shareable web link` is `[ ]`** — Epic 7's own deferred item,

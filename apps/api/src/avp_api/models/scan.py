@@ -6,7 +6,7 @@ import enum
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import DateTime, Index, Integer, String, Text, text
+from sqlalchemy import CheckConstraint, DateTime, Index, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -102,18 +102,38 @@ class Scan(Base, TimestampMixin):
     # 256-bit secret (`security.new_share_token`, the same generator and the
     # same entropy as a session token).
     #
-    # DELIBERATELY NOT BUILT, and this is a known gap rather than an oversight:
-    # there is NO EXPIRY and NO REVOCATION. Once minted, the link works until
-    # the row is deleted. That is an accepted risk for a pilot conversation and
-    # is NOT acceptable as a permanent design — the first agency that shares a
-    # report with the wrong prospect has no way to take it back. Revocation
-    # (clearing the column) and expiry (a `share_expires_at`) are the next two
-    # columns this table should grow. See build-log Epic 9.8.
+    # EXPIRY AND REVOCATION — Epic 9.21, and the gap this comment used to
+    # describe. Until then a minted link worked until the row was deleted:
+    # "the first agency that shares a report with the wrong prospect has no way
+    # to take it back". Both halves now exist and they are independent.
+    # `DELETE /scans/{scanId}/share` clears BOTH columns below — that is
+    # revocation, the sharp instrument for a link sent to the wrong address.
+    # `share_expires_at` is the blunt one, and it is what bounds a link
+    # somebody simply forgot about.
     share_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Set at mint time, pushed out by a re-mint, cleared by revocation. NULL is
+    # NOT "never expires" — `share.scan_for_share_token` requires a live value,
+    # so a token with no expiry serves nothing. That is fail-closed on purpose
+    # for a credential, and the CHECK constraint below makes the state
+    # unrepresentable rather than merely unserved.
+    share_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     client: Mapped[Client] = relationship(back_populates="scans")
 
     __table_args__ = (
+        # A SHARE TOKEN ALWAYS HAS AN EXPIRY — Epic 9.21.
+        #
+        # The read path already refuses a token whose expiry is missing, so a
+        # half-set pair would produce a link that mints successfully and then
+        # 404s, which is a support ticket rather than a security hole. This
+        # makes it an error at write time instead: mint sets both, revocation
+        # clears both, and there is no third shape.
+        CheckConstraint(
+            "(share_token IS NULL) = (share_expires_at IS NULL)",
+            name="share_token_and_expiry_together",
+        ),
         # The dashboard list: this agency's scans, newest first. `id` is a
         # ULID, so it sorts by creation time and doubles as the cursor.
         Index("ix_scans_agency_created", "agency_id", "id"),
