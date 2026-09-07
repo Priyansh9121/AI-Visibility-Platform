@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from ..models.engine_result import (
     CitationType,
@@ -29,10 +29,35 @@ class RunScanRequest(ApiModel):
     `promptLimit` caps the generated set. It exists for cost control during
     verification — a full run is 20-30 prompts across every engine, and the
     grounded engine can take 100s per prompt. Omit it for a real scan.
+
+    `engines` is de-duplicated BEFORE validation and bounded by the enum's own
+    size — API key discipline audit, 2026-09-07. Neither alone bounds spend: a
+    bare `max_length` still lets `["claude", "claude", "claude"]` through as
+    three billed calls per prompt that then die on
+    `uq_engine_results_prompt_engine` after the money is spent, and
+    de-duplication is a ceiling only because the enum is finite. Together they
+    make "one call per engine per prompt" true by construction. Whether each
+    engine has an ADAPTER is the router's check, against `ENGINE_REGISTRY`:
+    the enum names what this product might ever measure, the registry what it
+    can measure today.
     """
 
     prompt_limit: int | None = Field(default=None, ge=1, le=30)
-    engines: list[Engine] | None = None
+    engines: list[Engine] | None = Field(default=None, max_length=len(Engine))
+
+    @field_validator("engines", mode="before")
+    @classmethod
+    def _collapse_duplicates(cls, value: object) -> object:
+        # On the raw values, before enum validation, so `max_length` above
+        # bounds DISTINCT engines: eight copies of "claude" is one engine, not
+        # a rejected request and not eight billed calls. Order is kept — it is
+        # the order `ask_all` gathers in and `engine_versions` records.
+        if isinstance(value, list):
+            try:
+                return list(dict.fromkeys(value))
+            except TypeError:
+                return value  # unhashable junk; enum validation rejects it
+        return value
 
 
 class PromptOut(ApiModel):

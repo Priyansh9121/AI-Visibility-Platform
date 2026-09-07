@@ -13,6 +13,7 @@ from httpx import AsyncClient
 from avp_api.deps import scan_executor
 from avp_api.models.engine_result import Engine, EngineResultStatus, Sentiment
 from avp_api.models.prompt import PromptIntent
+from avp_api.schemas.scan import RunScanRequest
 from avp_api.services import scan_runner
 from avp_api.services.engines import DEFAULT_ENGINES, CitedSource, EngineAnswer
 from avp_api.services.prompts import GeneratedPrompt
@@ -108,6 +109,36 @@ def stub_engines(monkeypatch):  # noqa: ANN001, ANN201
         )
 
     return _install
+
+
+class TestRunScanRequest:
+    """The schema half of the engines bound — pure, no request needed."""
+
+    def test_duplicates_collapse_to_distinct_engines_in_order(self) -> None:
+        req = RunScanRequest.model_validate(
+            {"engines": ["claude", "chatgpt", "claude", "claude_search", "chatgpt"]}
+        )
+        assert req.engines == [Engine.CLAUDE, Engine.CHATGPT, Engine.CLAUDE_SEARCH]
+
+    def test_duplicates_cannot_fill_the_ceiling(self) -> None:
+        # Eight copies of one engine: a bare max_length would reject this and
+        # an unbounded list would bill it eight times. It is one engine.
+        req = RunScanRequest.model_validate({"engines": ["claude"] * 8})
+        assert req.engines == [Engine.CLAUDE]
+        # The ceiling itself is the enum: naming every engine once is the most
+        # a request can ask for, and it is accepted.
+        everything = RunScanRequest.model_validate({"engines": [e.value for e in Engine]})
+        assert len(everything.engines) == len(Engine)
+
+    def test_an_unknown_engine_is_rejected_by_the_enum(self) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            RunScanRequest.model_validate({"engines": ["bing"]})
+
+    def test_an_absent_or_empty_list_is_left_for_the_router_default(self) -> None:
+        assert RunScanRequest.model_validate({}).engines is None
+        assert RunScanRequest.model_validate({"engines": []}).engines == []
 
 
 class TestRunScan:
@@ -518,6 +549,64 @@ class TestScanIsQueued:
         assert job.client_id == cid
         assert job.prompt_limit == 3
         assert job.engines == (Engine.CLAUDE,)
+
+    async def test_duplicate_engines_are_collapsed_before_they_are_billed(
+        self, client: AsyncClient, stub_engines
+    ) -> None:  # noqa: ANN001
+        """The audit's spend-ceiling finding at the request boundary.
+
+        Unbounded, `["claude", "claude", "chatgpt", "claude"]` was four billed
+        calls per prompt, three of them identical, which then collided on
+        `uq_engine_results_prompt_engine` — after the money was spent.
+        """
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_engines(n_prompts=2)
+        jobs = self._defer(client)
+
+        resp = await client.post(
+            f"{BASE}/clients/{cid}/scans",
+            json={"engines": ["claude", "claude", "chatgpt", "claude"]},
+        )
+
+        assert resp.status_code == 202, resp.text
+        assert jobs[0].engines == (Engine.CLAUDE, Engine.CHATGPT)
+
+    async def test_an_engine_without_an_adapter_is_refused_before_anything_exists(
+        self, client: AsyncClient, stub_engines
+    ) -> None:  # noqa: ANN001
+        """`perplexity` is in the Engine enum — the product may measure it one
+        day — and has no adapter. Before this check it reached the executor,
+        which paid for competitor detection and then hit a KeyError inside
+        `ask_all`, landing the scan at FAILED / EXECUTION_FAILED. Now: a 422,
+        no job, and no scan row to strand.
+        """
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_engines(n_prompts=2)
+        jobs = self._defer(client)
+
+        resp = await client.post(
+            f"{BASE}/clients/{cid}/scans", json={"engines": ["claude", "perplexity"]}
+        )
+
+        assert resp.status_code == 422, resp.text
+        assert "perplexity" in resp.text
+        assert jobs == []
+        assert (await client.get(f"{BASE}/clients/{cid}/scans")).json()["data"] == []
+
+    async def test_an_engine_the_enum_has_never_heard_of_is_a_422(
+        self, client: AsyncClient, stub_engines
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_engines(n_prompts=2)
+        jobs = self._defer(client)
+
+        resp = await client.post(f"{BASE}/clients/{cid}/scans", json={"engines": ["bing"]})
+
+        assert resp.status_code == 422, resp.text
+        assert jobs == []
 
     async def test_queueing_twice_reuses_the_open_scan(
         self, client: AsyncClient, stub_engines

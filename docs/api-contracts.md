@@ -1103,7 +1103,12 @@ a sentiment call per mention.
 ```
 
 Both fields optional. `promptLimit` (1–30) caps the generated set for cost
-control; omit for a real scan. `engines` defaults to both.
+control; omit for a real scan. `engines` defaults to every engine that has an
+adapter (`claude`, `claude_search`, `chatgpt`). Duplicates are collapsed
+before anything is billed — `["claude", "claude"]` is one engine — and an
+engine the enum knows but no adapter backs (`perplexity`, `gemini`,
+`google_ai_overview`, `copilot`) is a `422` before any scan row exists, not a
+failed scan after competitor detection has been paid for.
 
 **Response `202`** — `ScanOut`. Identity and status only.
 
