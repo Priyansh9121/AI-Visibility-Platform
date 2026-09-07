@@ -34,6 +34,7 @@ from pydantic import BaseModel, Field
 
 from ..config import Settings, get_settings
 from ..models.engine_result import CitationType, EngineResultStatus, Sentiment
+from .call_bounds import CallBound
 from .competitors import slugify
 from .engines import EngineAnswer
 from .serp import NON_COMPETITOR_DOMAINS
@@ -43,6 +44,22 @@ logger = structlog.get_logger(__name__)
 SENTIMENT_MODEL = "claude-opus-5"
 SENTIMENT_EFFORT = "low"
 SENTIMENT_MAX_TOKENS = 1_500
+# --- The call's bound (API key discipline audit, 2026-09-07) -----------------
+# Inherited both SDK defaults until this audit — a 600s read timeout across
+# three attempts — and is awaited serially inside a PROMPT_CONCURRENCY slot
+# AFTER the engine calls, so one hung sentiment call was thirty minutes and
+# three billed generations on top of the slot's engine ceiling. No latency
+# column records this call, so the numbers are shape rather than data: the
+# same model and effort as the parametric engine with a shorter output budget
+# (1,500 tokens against 4,000), given half its per-attempt bound and the same
+# single retry, kept for the reason `engines.py` gives.
+#
+# It matters more than its size suggests. `run_scan` awaits one of these per
+# ENGINE whose answer named the subject, serially, inside the prompt slot, so
+# the slot's un-renewable duration is ENGINE_CALL_CEILING plus up to
+# len(engines) x this ceiling — and that sum is what the lease length is
+# derived from.
+SENTIMENT_BOUND = CallBound(timeout=30.0, max_retries=1)  # ceiling: 62.0s
 
 # Brand names shorter than this are matched case-sensitively. "On" (the running
 # brand) and "Front" would otherwise match "on" and "front" in ordinary prose
@@ -312,22 +329,25 @@ async def classify_sentiment(
     it would be both wasteful and misleading.
     """
     settings = settings or get_settings()
-    client = anthropic.AsyncAnthropic(api_key=settings.provider_key("anthropic_api_key"))
+    client = SENTIMENT_BOUND.client(settings)
     try:
-        response = await client.messages.parse(
-            model=SENTIMENT_MODEL,
-            max_tokens=SENTIMENT_MAX_TOKENS,
-            output_config={"effort": SENTIMENT_EFFORT},
-            system=SENTIMENT_SYSTEM,
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"Subject brand: {subject_name}\n\nAnswer:\n{answer.text}",
-                }
-            ],
-            output_format=SentimentJudgement,
-        )
-    except anthropic.APIError as exc:
+        # The outer deadline is what makes the ceiling a guarantee. Its
+        # TimeoutError is not an APIError, hence the second clause below.
+        async with SENTIMENT_BOUND.deadline():
+            response = await client.messages.parse(
+                model=SENTIMENT_MODEL,
+                max_tokens=SENTIMENT_MAX_TOKENS,
+                output_config={"effort": SENTIMENT_EFFORT},
+                system=SENTIMENT_SYSTEM,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": f"Subject brand: {subject_name}\n\nAnswer:\n{answer.text}",
+                    }
+                ],
+                output_format=SentimentJudgement,
+            )
+    except (anthropic.APIError, TimeoutError) as exc:
         logger.warning("extraction.sentiment_failed", error=type(exc).__name__)
         return None, None
 
