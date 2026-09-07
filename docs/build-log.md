@@ -11019,3 +11019,146 @@ rather than a live observation — neither confirmed nor refuted here, and
 recorded as such rather than promoted. The fix stands on what is verified:
 an explicit effort, accepted by the API, pinned equal to the Claude side so
 the two parametric engines are compared on the same footing (Epic 9.13).
+
+# Call bounds — five paid calls get a ceiling, and the lease gets its arithmetic
+
+The audit above closed with one item it called a prerequisite rather than a
+nice-to-have: five Anthropic call sites outside `engines.py` inherited the
+SDK's defaults — a 600-second read timeout across three attempts — so a hung
+call at any of them was thirty minutes and three billed generations, and no
+lease length could be chosen while that was true. This entry builds them.
+Two smaller things first, because both were flagged as loose ends and both
+bear on whether the audit's own claims can be trusted.
+
+## The two loose ends
+
+**Fix 2, checked live.** Recorded as a follow-up under the audit entry
+above: four short calls to gpt-5.5 confirm `reasoning_effort: "low"` is
+accepted, that `ChatGptAdapter().ask` returns `ok` end to end, and — the
+part a success alone could not show — that an invalid value is rejected with
+a 400 naming the parameter and listing exactly the five values the model
+page did. What was not shown is the mechanism the fix was argued from: the
+same one-sentence prompt with no effort at all also spent zero reasoning
+tokens. Inconclusive on a trivial prompt, and recorded as inconclusive.
+
+**The lease, written down three times.** The build-log entry, the
+`execute_scan` docstring, and the previous session's handoff were read side
+by side. The entry and the handoff agree. The docstring had drifted: it
+described renewal as something `_attempt` does between phases and stopped —
+no column, no re-claim of an expired RUNNING row, no per-prompt renewal in
+`run_scan`, and no mention of the rule that matters most, that **a renewal
+matching zero rows means the lease is gone and the executor stops**. That is
+precisely the detail a skim simplifies away, so the docstring now carries the
+whole mechanism, copied from the entry rather than the reverse (`acd7565`).
+
+## The shape: one value, five declarations
+
+`engines.py` documents the pattern at length and `test_engine_timeout.py`
+proves it. Rather than copy three constants and their arithmetic into five
+more modules, `services/call_bounds.py` makes the shape a value:
+
+    CallBound(timeout=30.0, max_retries=1)   # .ceiling == 62.0
+
+`timeout` and `max_retries` go to the client verbatim, `ceiling` is
+`timeout × (max_retries + 1) + backoff_allowance`, and `deadline()` is an
+outer `asyncio.timeout(ceiling)` — the thing that makes the number a
+guarantee even if the SDK's retry internals move under the version range
+pyproject allows. Each site declares one bound next to its model and effort
+constants, with the reasoning for its numbers in the comment beside it.
+
+`engines.py` deliberately does **not** become a `CallBound`. Its constants
+are pinned by name and swapped by value in a verified test, and rewriting a
+verified fix for symmetry is how a verified fix stops being one. A test
+asserts the two arithmetics agree instead.
+
+## The five, and why each number is what it is
+
+| Site | Per attempt | Retries | Ceiling | The number comes from |
+|---|---|---|---|---|
+| `classify` | 12s | 1 | **26s** | Its docstring promises 30s end to end, crawl included; the whole endpoint measured 8.3s (Epic 9.4). 26s is the largest ceiling that fits the promise. |
+| `classify_sentiment` | 30s | 1 | **62s** | Unmeasured — no latency column records it. Half the parametric engine's attempt bound for a call with a 1,500-token budget against 4,000. |
+| `run_seed_prompt` | 30s | 1 | **62s** | The whole detection endpoint, six SerpApi searches and four of these calls, measured 20.9s (Epic 9.4). |
+| `generate_prompts` | 60s | 1 | **122s** | Measured 14.6s (Epic 9.2); medium effort and 8k tokens earn 4× headroom. A timeout falls back to the deterministic set. |
+| `generate_fixes` | 120s | 1 | **242s** | The 120s it already had, six times the measured 20.3s (Epic 9.4). It bounded the attempt and, by its own comment, not the retries. |
+
+One retry everywhere, for the reason `engines.py` gives: Epic 9.1's
+distribution had two calls whose first attempt timed out and whose retry
+succeeded in under thirty seconds, and a 529 in the first second is far
+commoner than a slow-but-alive generation.
+
+**A defect found along the way, in three places.** `classify`,
+`run_seed_prompt` and `generate_fixes` each catch `APIConnectionError` and
+report `PROVIDER_UNREACHABLE`. `APITimeoutError` subclasses it. So a
+per-attempt timeout at any of the three was recorded as an unreachable
+provider — the same misordering Epic 9.2 fixed in `_map_error`, present in
+three more ladders. Each now catches `(APITimeoutError, TimeoutError)` first
+and reports `TIMEOUT`; the builtin `TimeoutError` is the outer deadline, which
+is not an `APIError` and would otherwise have escaped every ladder. The two
+sites without ladders, sentiment and prompt generation, widen their catch and
+degrade as before. `TIMEOUT` is already the vocabulary of `engines.py`,
+`crawl.py` and `technical_audit.py`, and the web renders reason codes as
+opaque strings, so the contract is unchanged.
+
+## What the lease can now compute
+
+The design says LEASE is the longest gap between two renewals plus a margin.
+With renewal before each `_attempt` phase and after each prompt completes,
+the gaps are now numbers:
+
+* **One prompt slot is not 122s plus "the sentiment call".** `run_scan`
+  awaits one sentiment call per ENGINE whose answer named the subject,
+  serially, after the concurrent engine calls. Worst case:
+  `ENGINE_CALL_CEILING + 3 × 62 = 308s`. The audit entry's arithmetic
+  understated this, and it is corrected at the site.
+* **Prompt generation runs inside `run_scan`, before the loop, and nothing
+  renews between it and the first prompt.** As designed, the first gap is
+  `122 + 308 = 430s`. One extra renewal — after `generate_prompts`, before
+  the loop — brings the longest gap to 308s.
+* **A renewal inside the slot**, between `ask_all` and the sentiment calls,
+  brings it to `max(122, 186) = 186s`. Recommended; not yet designed in.
+* Competitor detection is two waves of three co-citation calls plus SerpApi:
+  `2 × 62` plus SerpApi's own bound. Fix generation is 242s. The technical
+  audit is Playwright, bounded by its own timeouts, and not this entry's.
+
+So LEASE is 308s plus margin with one added renewal, or 186s plus margin
+with two — against the 900s static `STALE_AFTER` it replaces. The choice
+belongs to the lease build; the point of this entry is that it is now a
+choice between numbers rather than a constant standing in for a signal.
+
+## The test, and one seam it needed
+
+`test_call_bounds.py` holds every site to the engine test's strong property
+— the real client, only its transport faked, every attempt hangs, and the
+call still fails inside the ceiling — parametrised over the five, with each
+site's failure shape asserted as its own docstring promises it: `(None,
+None)`, a `fallback` set, an outcome carrying `TIMEOUT`. It pins each
+ceiling by value, reads the SDK's own backoff constants to prove the 2.0s
+allowance covers the schedule, and pins the two site-specific constraints:
+classification under 30s, fix generation's 120s attempt bound preserved.
+
+The seam: conftest's autouse `stub_chain_externals` replaces
+`AsyncMessages.parse` for fix sets with a canned response, one level ABOVE
+the transport these tests fake, so the fixes site would never have reached
+it. A registered marker, `real_parse`, opts a test module out of that one
+patch. A stub that kept intercepting would have reported zero attempts, and
+the tests would have said so.
+
+## Verification
+
+**api 1,043 passed, up from 1,015** — 28 new, all in `test_call_bounds.py`.
+Each of the five bounds landed as its own commit, each verified on the full
+suite with nothing else in the tree (`0e4fe72`, `eeabfb4`, `da93f48`,
+`6a0c7ed`, `8e9198d`). `ruff check src tests` clean; `ruff check .` reports
+eight pre-existing findings in `scripts/`, outside the configured scope and
+untouched. `alembic check` reports no drift; no migration this session.
+`tsc` clean on all three packages at session start and nothing since touched
+the contract. **Suite 2,230, up from 2,202.**
+
+## Open, carried forward unchanged
+
+Everything in the audit's "Open" list that this entry did not build is
+still open: the three unthrottled paid endpoints, the fresh client per call
+never closed, the unset `OPENAI_API_KEY` degrading silently, the skipped
+`web_search_tool_result_error` block, the SerpApi semaphores and the
+`SERPAPI_KEY_MISSING` deletion candidate, and `structlog` unconfigured. The
+lease itself is next, and its prerequisite is met.
