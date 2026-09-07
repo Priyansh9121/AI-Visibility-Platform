@@ -55,6 +55,19 @@ class Scan(Base, TimestampMixin):
 
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # THE LEASE — API key discipline audit, 2026-09-07.
+    #
+    # When the executor holding this scan is presumed gone unless it has since
+    # said otherwise. Stamped by the claim, renewed by the executor while it
+    # works, read by the reaper — which keys off this column and not off
+    # `started_at`, so a scan is reaped for going quiet rather than for taking
+    # long. NULL means "not held under a lease": QUEUED, finished, or driven
+    # directly through `scan_runner.run_scan`, which holds none. The reaper's
+    # predicate is strict, so NULL is never "expired". `services/scan_executor.py`
+    # has the mechanism in full.
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # Machine-readable code plus a SAFE detail string. `error_detail` carries
     # our own diagnostics only — never a vendor response body, which could
