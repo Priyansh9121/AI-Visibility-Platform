@@ -13,7 +13,7 @@ from sqlalchemy.orm import selectinload
 
 from ..deps import DbDep, PrincipalDep, ScanExecutorDep, SettingsDep
 from ..errors import NotFound, ValidationProblem
-from ..models import EngineResult, Prompt, PromptSet, Scan
+from ..models import EngineResult, Prompt, PromptSet, Scan, ScanStatus
 from ..schemas.common import Page
 from ..schemas.scan import (
     EngineResultOut,
@@ -115,6 +115,14 @@ async def run_scan(
 
     Reuses the scan Epic 3's competitor detection created, if one is open, so a
     detect-then-scan flow does not strand an empty scan.
+
+    **A scan already RUNNING is returned as it is, and no second executor is
+    started** — API key discipline audit, 2026-09-07. `executor.submit` used
+    to be unconditional, so re-running while a scan was in flight handed the
+    same row to a second executor, which re-paid for the chain up to a unique
+    violation. The executor now refuses a scan it cannot claim (see
+    `execute_scan`); this check simply declines to start a task that would be
+    refused. The `202` reports the scan in flight, which is what was asked for.
     """
     client = await get_client(db, agency_id=principal.agency_id, client_id=client_id)
 
@@ -149,6 +157,9 @@ async def run_scan(
     # and would not find it otherwise.
     await db.commit()
     await db.refresh(scan)
+
+    if scan.status is ScanStatus.RUNNING:
+        return scan
 
     await executor.submit(
         ScanJob(

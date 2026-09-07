@@ -15,6 +15,7 @@ the happy path is exactly the case that never exercises them.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -23,11 +24,15 @@ from httpx import AsyncClient
 from avp_api import ids
 from avp_api.deps import scan_executor
 from avp_api.models import Client, Scan, ScanStatus
+from avp_api.services import scan_executor as executor_module
 from avp_api.services import scan_runner
+from avp_api.services.engines import DEFAULT_ENGINES
 from avp_api.services.scan_executor import (
     EXECUTION_FAILED,
     EXECUTOR_LOST,
     STALE_AFTER,
+    ScanJob,
+    execute_scan,
     reap_stale_scans,
 )
 
@@ -143,6 +148,97 @@ class TestAPipelineThatRaises:
 
         resp = await client.post(f"{BASE}/clients/{cid}/scans", json={})
         assert resp.status_code == 202, resp.text
+
+
+class TestTheExecutorClaimsBeforeItRuns:
+    """The TERMINAL-only guard gap — API key discipline audit, 2026-09-07.
+
+    `execute_scan` refused only finished scans, and QUEUED / RUNNING are
+    deliberately outside TERMINAL so the first executor can run at all. Two
+    POSTs adopting one open scan therefore produced two executors, and the
+    second re-ran the paid chain until `prompt_sets`' unique constraint
+    stopped it. `uq_scans_one_open_per_client` bounds rows, not executors.
+    """
+
+    async def test_two_executors_handed_one_queued_scan_run_it_once(
+        self, client: AsyncClient, session, settings, monkeypatch
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        cid = await _make_client(client)
+        jobs = _defer(client)
+        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+        assert len(jobs) == 1
+
+        runs: list[str] = []
+
+        async def counting_run_scan(session_, scan, client_, **kwargs):  # noqa: ANN001, ANN003, ANN202, ARG001
+            runs.append(scan.id)
+            await asyncio.sleep(0.05)  # hold the slot so the two genuinely overlap
+            return scan
+
+        monkeypatch.setattr(scan_runner, "run_scan", counting_run_scan)
+
+        await asyncio.gather(
+            execute_scan(jobs[0], settings=settings),
+            execute_scan(jobs[0], settings=settings),
+        )
+
+        assert runs == [sid], "the loser must exit before the chain, not after it"
+        detail = (await client.get(f"{BASE}/scans/{sid}")).json()
+        # The loser did not mark the winner's scan failed on its way out.
+        assert detail["status"] == "succeeded"
+        assert detail["errorCode"] is None
+
+    async def test_the_claim_precedes_the_first_paid_phase(
+        self, client: AsyncClient, session, settings, monkeypatch
+    ) -> None:  # noqa: ANN001
+        """Competitor detection runs before the engine loop and is the first
+        phase that spends money. A claim taken any later would let a duplicate
+        executor pay for detection before discovering it had lost."""
+        await _sign_up(client)
+        cid = await _make_client(client)
+        jobs = _defer(client)
+        await client.post(f"{BASE}/clients/{cid}/scans", json={})
+
+        seen: dict = {}
+
+        async def observing(session_, scan, client_, **kwargs):  # noqa: ANN001, ANN003, ANN202, ARG001
+            seen["status"] = scan.status
+            seen["started_at"] = scan.started_at
+
+        async def noop_run_scan(session_, scan, client_, **kwargs):  # noqa: ANN001, ANN003, ANN202, ARG001
+            return scan
+
+        monkeypatch.setattr(executor_module.detection, "ensure_set_for_scan", observing)
+        monkeypatch.setattr(scan_runner, "run_scan", noop_run_scan)
+
+        await execute_scan(jobs[0], settings=settings)
+
+        assert seen["status"] is ScanStatus.RUNNING
+        assert seen["started_at"] is not None
+
+    async def test_a_scan_already_running_is_left_to_its_executor(
+        self, client: AsyncClient, session, settings, monkeypatch
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        cid = await _make_client(client)
+        scan = await _add_scan(
+            session, cid, status=ScanStatus.RUNNING, started_at=datetime.now(UTC)
+        )
+
+        async def must_not_run(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202, ARG001
+            raise AssertionError("a running scan was run again")
+
+        monkeypatch.setattr(scan_runner, "run_scan", must_not_run)
+
+        await execute_scan(
+            ScanJob(scan_id=scan.id, client_id=cid, engines=DEFAULT_ENGINES),
+            settings=settings,
+        )
+
+        await session.refresh(scan)
+        assert scan.status is ScanStatus.RUNNING
+        assert scan.error_code is None
 
 
 class TestStaleScanReaper:
