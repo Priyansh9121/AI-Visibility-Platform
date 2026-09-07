@@ -10716,3 +10716,272 @@ palette decision, not a nav edit; `clientNav.test.ts`'s projection is now
 **Prompt discovery (G) is still blocked** on the classification Findings #1 and
 #2 in `api-contracts.md`, both still open. Re-flagged rather than resolved,
 because nothing this epic touched bears on them.
+
+# API key discipline audit — five fixes, seven refutations, and a workflow that did not finish
+
+An audit of every paid call this system makes: timeout and retry bounds on the
+Anthropic sites, code-enforced ceilings on spend, test isolation, cost
+observability, credential exposure, repeated calls, and the OpenAI and SerpApi
+paths. Seven dimensions, one auditor agent each, and two adversarial verifier
+agents per finding — one for correctness, one for consequence — with the
+verifier's default set to refute.
+
+It produced **37 raw findings**, and it did not finish. The session that ran it
+ended on a rate limit with the workflow's own synthesis step never reached: 59
+agents started, 50 recorded a result, and the final confirmed/rejected split at
+the bottom of the script never ran. What follows was recovered from the run's
+journal on disk — every recorded verdict and its reasoning, read directly —
+rather than re-run, which would have re-spent roughly the same sixty-odd agent
+calls for a marginal gain over what was already there.
+
+## The coverage the workflow actually achieved, counted from the journal
+
+Twenty-one findings have both verifier lenses recorded. One has one lens. The
+remaining fifteen have none: the dispatcher never reached them. That is not
+spread evenly — the **entire OpenAI-and-SerpApi dimension and the entire
+repeated-calls dimension have zero recorded verdicts**, because they were
+dispatched last. The truncation bug, the reasoning-effort gap, and the
+executor's guard were all in those two dimensions, and all three were
+confirmed here by reading the code rather than by the machinery.
+
+The handoff document written as that session ended labelled several of those
+fifteen as verified by both lenses. It was wrong about that, and it was also
+silent about something the journal makes plain: of the twenty-one findings
+with two verdicts, **seven were refuted by both lenses**. The handoff carried
+them forward as open findings. They are not.
+
+## Seven findings were literally true and wrong — the cost-observability dimension
+
+All seven refutations landed on one dimension, and they share one shape. The
+auditor searched for log lines and metering and found none: no call site reads
+`response.usage`; `engines.py` and `cocitation.py` define a logger and never
+call it; there is no aggregate spend view; SerpApi queries are "never
+recorded"; `classify_sentiment` logs only failures; `engine_result_count` is "a
+product, not a count". Every one of those sentences is accurate. Every one of
+them misses that the fact it wants is **already a column**.
+
+`persist_result` writes one `engine_results` row per prompt × engine, failures
+included, with `status`, `error_code` and `latency_ms` on each — queryable,
+joinable, retained, and served on `GET /scans/{scanId}/results`. That is
+strictly more than a log line, and it is why the "cannot distinguish
+rate-limited from refused from timed out" claim fails: `_map_error` writes
+exactly those distinctions onto every row. The sentiment call count is the
+number of rows with `mentioned = true`, under a dedicated index. SerpApi
+queries are `CompetitorSet.serp_queries_run`, persisted and published as
+`serpQueriesRun`. And `engine_result_count` is the row count by construction,
+because every adapter maps every exception to a status and never raises, so
+`ask_all` returns exactly one answer per engine — the verifier proved that
+from the code, and it is the fact the spend-ceiling design below leans on.
+
+The one survivor in that dimension is split: `structlog` is genuinely never
+configured, so `LOG_LEVEL` is a dead knob and events render as console text
+rather than JSON — verified on correctness, refuted on consequence, because
+nothing in the log stream spends money, hangs, or carries a credential. The
+LOW duplicate of the same root cause, about `logger.debug` sites "annotated
+debug-only", was refuted outright: "debug-only" is a defined term in this
+project (build-log Epic 8, north-star §5) meaning *never persisted, never
+returned*, a data-flow property, not a log level.
+
+Worth recording because it is the audit's own lesson about auditing: a grep
+for observability that does not also grep the schema will report a system
+that measures everything as a system that measures nothing.
+
+## One finding was cleared, and the clearing is the point
+
+`email.py:111` logs live password-reset and invitation tokens at info level.
+Both verifier lenses confirmed the code reads as claimed, and it is not a
+finding: the line fires only when `RESEND_API_KEY` is unset, and the
+function's own docstring states that the logged URL "is the recoverable
+credential in development, and that log line is how it is recovered". Epic
+9.20 and Epic B both relied on that path on purpose. Reported here rather than
+silently dropped because it is the evidence that the audit was reading
+comments and not pattern-matching "logs a URL" to "bad".
+
+## What shipped — five fixes, five commits
+
+Each landed as its own commit as it was finished, because the previous two
+sessions both ended mid-task, and a batch of uncommitted fixes from a session
+that ends on a rate limit is the thing that had to be untangled once already.
+
+**1. An answer the engine did not finish is not an answer** (`c956aa1`). Both
+adapters read the vendor's stop reason for one value, "refusal", and treated
+everything else as a finished answer. A response cut off by the token budget
+reached `extract_facts` as OK; the brand was absent from the truncated
+prefix; the row was recorded `answered_no_mention`; scoring counted a billed
+non-answer against the mention rate; the scan read `succeeded`. Two new
+statuses, `truncated` and `paused`, kept apart because one has a possible fix
+(resume the call) and the other does not. The complete-answer set is an
+allowlist — `{end_turn, stop_sequence}` and `{stop}` — and a test reads the
+pinned SDK's own `StopReason` literal to assert every member is sorted, so an
+SDK bump that adds a value fails as a test. `max_uses_exceeded` is
+deliberately not truncation: it is a tool-result error code, and hitting
+`SEARCH_MAX_USES` yields a complete, less-grounded `end_turn` answer. None of
+the ten downstream consumers changed; all read a positive allowlist. Migration
+`4e7d2c91ab05` widens both status CHECK constraints and its downgrade maps to
+`error` rather than deleting rows.
+
+**2. The ChatGPT engine says how hard to think** (`c9af859`). gpt-5.5's model
+page lists `none / low / medium / high / xhigh` with medium the default, and
+Chat Completions counts reasoning tokens against `max_completion_tokens`. The
+adapter sent no effort, so every call spent medium-effort reasoning inside a
+4,000-token budget sized for a low-effort answer — and reasoning that eats the
+whole budget is exactly how `finish_reason: "length"` arrives with an empty
+body, the shape fix 1 found being recorded as an absence. `reasoning_effort:
+"low"`, pinned equal to `ANSWER_EFFORT` so the two parametric engines Epic
+9.13 compares stay on equal footing. Verified against the published model
+page, not a live call; a rejection would surface as `PROVIDER_BAD_REQUEST` on
+every chatgpt cell rather than silently.
+
+**3. `engines` is bounded at the request, not after the bill** (`f3c58ad`).
+`["claude", "claude", "claude"]` was three billed calls per prompt that then
+died on `uq_engine_results_prompt_engine`. The schema de-duplicates before
+enum validation and caps at the enum's size; the router checks each engine
+against `ENGINE_REGISTRY` before the reaper runs and before any scan row
+exists, because `ask_all` subscripts the registry bare and an enum-only engine
+used to fail *inside* the executor, after competitor detection was paid for.
+
+**4. The executor claims a scan before it runs it** (`15b7b77`). `execute_scan`
+refused only TERMINAL scans, and QUEUED and RUNNING are deliberately outside
+that set, so two POSTs adopting one open scan produced two executors and the
+second re-ran the paid chain up to a unique violation on `prompt_sets` — which
+then marked the scan FAILED while the first executor was still running it.
+**`uq_scans_one_open_per_client` never prevented this**: it bounds rows, and
+both executors held the same row. The earlier session's first draft of the
+finding blamed the constraint, and reading it was what corrected that. The
+claim is one conditional `UPDATE`, queued → running, committed before the
+first paid phase; a concurrent executor blocks on the row, matches nothing,
+and exits. The router additionally returns a RUNNING scan as it is and starts
+nothing. Proven with two `execute_scan` calls gathered on one job.
+
+**5. The chain tests stop crawling helpscout.com** (`74140ce`).
+`test_scan_chain.py` created its client without `classify: False`, so intake
+ran a real Chromium crawl and a real claude-opus-5 classification, nine times
+per suite run. `Settings` reads `.env` for anything not passed explicitly, so
+the test settings inherited the real key and those calls were **billed**, not
+refused. Nine tests at ~50s now take 1.6s, and the whole api suite dropped
+from 98.9s to 48.5s — the same shape Epic F recorded for
+`test_crawler_access.py`, from the other side of intake.
+
+## Four assumptions that reading corrected
+
+The audit's method was "check before trusting", and it caught its own
+machinery four times. `uq_scans_one_open_per_client` does not prevent double
+execution (above). `pause_turn` is a real stop reason the grounded engine can
+produce today, not a hypothetical. `max_uses_exceeded` is not a stop reason
+at all. And, this session, the handoff's coverage labels: seven "both lenses"
+findings were both-lenses *refuted*, and two whole dimensions had no lens at
+all. The first three changed what was built; the fourth changed what this
+entry says was found.
+
+## The spend ceiling — one problem, not three patches
+
+The shared root cause behind the executor guard, the static `STALE_AFTER`,
+and the unbounded `engines` list is that the executor treats **duration and
+identity as the same signal**. Nothing distinguishes "still genuinely working"
+from "should be treated as dead" except elapsed time, so a constant stands in
+for a signal the system does not have. The audit's arithmetic makes the
+constant's failure concrete: `ceil(30 / 4) × 122s = 976s` of engine phase
+against a 900s `STALE_AFTER`, before a single sentiment call — so a maximal
+scan is reaped while still running and still billing, `finalize_scan` then
+no-ops because the row is terminal, and the next POST starts a *second* full
+run beside the first. Fix 4 does not stop that: it is a different row.
+
+Two pieces, separable, and they interact. The `engines` bound (built) makes a
+prompt slot's duration the max over at most three ceilinged adapters instead
+of over whatever a caller sent; that is what makes the gap between renewals
+below knowable at all. The lease (half built) is what makes duration stop
+mattering.
+
+**The second half of the lease, as designed and not built:**
+
+* A column: `scans.lease_expires_at TIMESTAMPTZ NULL`. `STALE_AFTER` retires.
+* The claim's `WHERE` grows, rather than being replaced:
+  `status = 'queued' OR (status = 'running' AND lease_expires_at < now())`,
+  setting `lease_expires_at = now() + LEASE`. A dead executor's scan is then
+  re-claimable directly, without a reaper pass first.
+* Renewal: `_attempt` renews before each phase, and `run_scan` renews as each
+  prompt completes, with one statement —
+  `UPDATE scans SET lease_expires_at = now() + LEASE WHERE id = :id AND status = 'running'`.
+  **A renewal that matches zero rows means the lease is gone**, reaped or
+  re-claimed, and the executor stops rather than keeps billing. That is the
+  half the reaper has never had: today it stamps the row and the work carries
+  on.
+* The reaper keys off `lease_expires_at < now()`, not `started_at`.
+* `LEASE` is derived, not chosen: the longest un-renewable gap plus margin.
+  One prompt slot is `ENGINE_CALL_CEILING` (122s) plus the sentiment call —
+  and **the sentiment call is unbounded today**, inheriting the SDK's 600s ×
+  3 attempts, as are `generate_prompts` and `classify`. A lease length cannot
+  be chosen while any single un-renewable call is unbounded, which is why the
+  Anthropic call-site bounds below are the prerequisite for this work and not
+  a separate item.
+
+**Where the hard ceiling should live — a recommendation, not a build.** At the
+claim. It is the one statement every execution passes through, it already runs
+before the first paid phase, and refusing there costs nothing. The ledger it
+needs already exists and this audit proved it: `engine_results` rows are the
+engine-call count by construction, each joins to an agency through its scan,
+and `prompt_run_results` is the same for ad-hoc runs. A per-agency monthly
+call count is one `COUNT`, and sentiment, prompt-generation and fix-generation
+calls are derivable from the same rows. So: a `PROVIDER_CALLS_PER_AGENCY_PER_MONTH`
+setting, checked at claim time, and a claim that fails on budget lands the
+scan `failed` with a new `error_code` of `BUDGET_EXHAUSTED` — no new table, no
+enum change, and QUEUED rows left by detect-only runs stay adoptable because
+the check is at execution, not at POST. It is not a paywall (`billing.py`
+says so and still does) and it is not `UsageRecord` (north-star §5.4 row 2):
+when that exists it replaces the `COUNT`, not the enforcement point. The three
+other unthrottled paid endpoints — competitor detection, fix generation, and
+client creation and reclassification — need either the same ledger check or a
+request throttle in the shape `prompt_runs.check_throttle` already has; the
+ceiling at the claim covers scans only. A freshness check on re-run is a
+product decision the Re-run button was built against, and is not recommended
+until the ceiling exists.
+
+## Verification
+
+**api 1,015 passed, up from 963**, in 48.5s against Epic F's 98.9s. `ruff
+check src tests` clean. `tsc` clean across shared-types, design-system and
+web, with `api.gen.ts` regenerated so `EngineResultStatus` carries the two new
+members. Migration applied to `avp_dev`, `alembic check` reports no drift, and
+the downgrade was run and re-upgraded to prove the mapping to `error` holds.
+web 703, design-system 418 and shared-types 53 unchanged; workers 13
+untouched. **Suite 2,202, up from 2,150.**
+
+`test_enum_constraints.py` did its job unasked: both `truncated` and `paused`
+gained a database-acceptance case for both tables the moment the enum grew,
+which is the guard Epic 4 built for exactly this migration shape.
+
+## Open, and deliberately not closed here
+
+**The Anthropic call-site bounds — the audit's first dimension, verified by
+both lenses on every item, none built.** `classify_sentiment`
+(`extraction.py:315`) inherits both SDK defaults and is awaited serially
+inside the `PROMPT_CONCURRENCY` slot: one hung call is 30 minutes and three
+billed generations. `classify` (`classify.py:175`) is the same, in a request
+path whose docstring promises 30 seconds. `run_seed_prompt`
+(`cocitation.py:164`) is fanned four-wide at concurrency three. `generate_prompts`
+(`prompts.py:257`) sits in front of the whole engine loop. `generate_fixes`
+(`fix_generator.py:623`) bounds the attempt and not `max_retries`, and its own
+comment says so. The recipe is the one `engines.py` already documents at
+length — `timeout=DEFAULT_TIMEOUT, max_retries=MAX_RETRIES`, explicit and
+never inherited — and it is the prerequisite for the lease length above, so
+it is the next thing to build, not a nice-to-have.
+
+**Verified and not built:** the three unthrottled endpoints above, and
+`classify_sentiment` as one un-batched call per mentioned answer (one lens
+recorded, the other in flight). **Confirmed by reading `engines.py` in full,
+never verified by the workflow:** a fresh `AsyncAnthropic` and a fresh
+`httpx.AsyncClient` per call, never closed; an unset `OPENAI_API_KEY`
+degrading to thirty `PROVIDER_ERROR` cells with no line naming the variable;
+and `_extract_citations` skipping a `web_search_tool_result_error` block with
+no log. **Unverified and unread this session:** per-invocation SerpApi
+semaphores (`serp.py:229`), `SERPAPI_KEY_MISSING` unreachable behind
+`provider_key` (`serp.py:167`, a genuine deletion candidate — unlike `paused`'s
+unreachable triggers, which wait on a feature), and the re-crawl on every
+`reclassify` and the six identical SerpApi searches on every detect.
+
+**`structlog` is still unconfigured.** Split verdict, no spend consequence,
+and a real operability gap: `LOG_LEVEL` does nothing.
+
+**The verifier prompts for two dimensions never ran.** Nothing in this entry
+claims machine verification for the OpenAI-and-SerpApi or repeated-calls
+findings. What is marked confirmed above was confirmed by reading.
