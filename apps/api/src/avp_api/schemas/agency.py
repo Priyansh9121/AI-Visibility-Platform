@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import EmailStr
+from pydantic import EmailStr, Field, field_validator
 
 from ..models import UserRole
 from .auth import SeatUsageOut, UserOut
@@ -74,3 +74,73 @@ class SeatListOut(ApiModel):
     members: list[UserOut]
     invitations: list[PendingInvitationOut]
     seats: SeatUsageOut
+
+
+# --- white-label branding (Epic 9.22) ----------------------------------------
+# `#rrggbb`, lower or upper case. Anchored at both ends, because an unanchored
+# pattern accepts `#abcdef; } body { display:none` and this value is written
+# into a CSS custom property.
+HEX_COLOR = r"^#[0-9a-fA-F]{6}$"
+
+
+class BrandingRequest(ApiModel):
+    """What an agency may change about how its reports look — Epic 9.22.
+
+    **The shortness of this model is the decision, not an omission.** §7 line 2
+    asked for "logo, custom domain, colours"; what an agency may actually
+    change is a logo and ONE colour used only on chrome.
+
+    The report's palette is notation. `--avp-vis-*` encodes the score on a
+    monotonic lightness ramp that survives greyscale and colour-vision
+    deficiency; `--avp-competitor-{1..5}` is neutral so no rival reads as
+    endorsed or attacked; `--avp-beacon-*` marks the subject being scanned, who
+    is the prospect and not the agency; the semantic four say a scan failed or
+    a quota is low. There is no field here that can reach any of them, which is
+    the guarantee — enforced by the type rather than by a reviewer noticing,
+    the same way `FixFacts` has no field able to hold page copy.
+
+    **No `custom_domain`.** Deferred rather than forgotten: it needs DNS
+    verification, certificate issuance and routing before it does anything, and
+    a field that stores a value nothing honours is a field that looks built.
+
+    **Both values are explicitly nullable, and null means "remove it".** An
+    agency that uploaded the wrong logo needs a way back to unbranded, and a
+    PATCH that can only ever set is a one-way door.
+    """
+
+    logo_url: str | None = Field(default=None, max_length=2048)
+    accent_color: str | None = Field(default=None, pattern=HEX_COLOR)
+
+    @field_validator("logo_url")
+    @classmethod
+    def _https_only(cls, value: str | None) -> str | None:
+        """**`https://` and nothing else**, and the reason is the share page.
+
+        This URL is rendered as an `<img src>` on an UNAUTHENTICATED page that
+        anyone with a link can open. `javascript:` in that position is script
+        execution against every reader; `data:` is the same problem carrying
+        its own payload. `http://` is not an attack but it is a mixed-content
+        block, so the logo silently fails to render — a support ticket rather
+        than a hole, and still not worth allowing.
+
+        The URL is never fetched server-side, which is what keeps it from being
+        an SSRF vector as well. That is a property of the PDF decision (the PDF
+        does not carry a logo) and is recorded here because the day that
+        changes, this validator is not enough on its own.
+        """
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        if not cleaned.startswith("https://"):
+            raise ValueError("logoUrl must be an absolute https:// URL.")
+        return cleaned
+
+
+class BrandingOut(ApiModel):
+    """An agency's branding as stored. Null on both fields is unbranded."""
+
+    agency_id: str
+    logo_url: str | None = None
+    accent_color: str | None = None

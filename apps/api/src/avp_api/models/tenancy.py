@@ -125,12 +125,68 @@ class Agency(Base, TimestampMixin, SoftDeleteMixin):
         DateTime(timezone=True), nullable=True
     )
 
+    # --- white-label branding (Epic 9.22) -----------------------------------
+    #
+    # Two columns, and the SHORTNESS of that list is the decision. §7 line 2
+    # asked for "logo, custom domain, colours"; what an agency may actually
+    # change is a logo and ONE colour, used only on chrome.
+    #
+    # WHY NOT MORE COLOUR. The report's palette is not decoration, it is
+    # notation. `--avp-vis-*` encodes the score itself on a monotonic lightness
+    # ramp that survives greyscale and colour-vision deficiency;
+    # `--avp-competitor-{1..5}` is deliberately neutral so no rival reads as
+    # endorsed or attacked; `--avp-beacon-*` marks the subject BEING scanned,
+    # which is the prospect and not the agency; and the semantic four say a
+    # scan failed or a quota is low. An agency free to recolour any of those
+    # changes what the document MEANS, not how it looks. So the agency's colour
+    # and the report's encoded colour are kept in disjoint sets, the same
+    # disjointness the semantics/visibility split already enforces for a
+    # different reason, and a test asserts the accent never renders adjacent to
+    # an encoded token.
+    #
+    # NO `custom_domain`, and that is deferred rather than forgotten. A custom
+    # domain needs DNS verification, certificate issuance and request routing
+    # before it does anything at all; a nullable column with none of that
+    # behind it is a field that looks built and is not.
+
+    # An absolute https:// URL, never an upload — there is no asset store in
+    # this product and inventing one for a logo would be the larger decision
+    # smuggled inside the smaller. Rendered as an `<img src>` by the browser
+    # and NEVER fetched server-side, which is what keeps an agency-supplied URL
+    # from being an SSRF vector; `schemas/agency.py` rejects every scheme but
+    # https for the matching reason on the other side (`javascript:` and
+    # `data:` in an `src` are script execution on an unauthenticated page).
+    logo_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+
+    # `#rrggbb`, validated at the schema and constrained again here. It reaches
+    # the browser as a CSS custom property value, and an unvalidated string in
+    # that position closes the declaration and opens another — so the format is
+    # narrow on purpose and checked in both places rather than trusted from one.
+    accent_color: Mapped[str | None] = mapped_column(String(7), nullable=True)
+
     users: Mapped[list[User]] = relationship(back_populates="agency")
     clients: Mapped[list[Client]] = relationship(back_populates="agency")
 
     __table_args__ = (
         CheckConstraint("seat_limit >= 1", name="seat_limit_positive"),
         CheckConstraint("length(slug) >= 2", name="slug_min_length"),
+        # BRANDING IS VALIDATED TWICE, AT THE SCHEMA AND HERE — Epic 9.22.
+        #
+        # Both values are agency-supplied and both end up on an
+        # UNAUTHENTICATED page: the logo as an `<img src>`, the accent as a CSS
+        # custom property value. `schemas/agency.py` is where a bad one is
+        # rejected with a readable message; these are where a bad one cannot be
+        # stored at all, however it arrived — a script, a fixture, a future
+        # endpoint that forgets. Neither is redundant with the other, because
+        # they fail at different times for different audiences.
+        CheckConstraint(
+            "accent_color IS NULL OR accent_color ~ '^#[0-9a-fA-F]{6}$'",
+            name="accent_color_is_hex",
+        ),
+        CheckConstraint(
+            "logo_url IS NULL OR logo_url LIKE 'https://%'",
+            name="logo_url_is_https",
+        ),
     )
 
 

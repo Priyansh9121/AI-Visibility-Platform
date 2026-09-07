@@ -1707,6 +1707,58 @@ reflection.
 
 **Errors:** `401`, `404` (unknown scan, or another agency's).
 
+#### `PATCH /api/v1/agencies/{agencyId}/branding`
+**Auth required, admin or owner.** An agency's logo and accent colour. `200` —
+`BrandingOut` — Epic 9.22.
+
+**What may be changed is a logo and ONE colour, and the shortness of that list
+is the decision.** §7 line 2 asked for "logo, custom domain, colours". The
+report's palette is *notation*, not decoration: `--avp-vis-*` encodes the score
+on a monotonic lightness ramp that survives greyscale and colour-vision
+deficiency, `--avp-competitor-{1..5}` is neutral so no rival reads as endorsed
+or attacked, `--avp-beacon-*` marks the subject **being scanned** (the prospect,
+not the agency — a confusion worth naming), and the semantic four say a scan
+failed or a quota is low. An agency free to recolour any of those changes what
+the document *means*. `BrandingRequest` therefore has no field capable of
+naming one; the guarantee is the type, and a test asserts the model has exactly
+two fields.
+
+**The accent reaches chrome only** — the letterhead rule under the masthead.
+`--avp-agency-accent` is set inline on that element and nowhere above it, so it
+is not in scope for a single beat of the report. `AgencyBranding.test.tsx`
+asserts the colour never appears after the first beat, never shares an element
+with an encoded token, and is never defined on the page root.
+
+**No `customDomain`.** Deferred, not forgotten: it needs DNS verification,
+certificate issuance and request routing before it does anything, and a column
+storing a value nothing honours is a field that looks built.
+
+**Request** — both fields optional, and **null means remove**. An absent field
+is left alone; an agency that set the wrong logo needs a way back to unbranded.
+
+```json
+{ "logoUrl": "https://cdn.example/acme.png", "accentColor": "#1f6feb" }
+```
+
+`logoUrl` must be an absolute `https://` URL, and `accentColor` must match
+`^#[0-9a-fA-F]{6}$`. Both land on the **unauthenticated** share page — the logo
+as an `<img src>`, the accent as a CSS custom property value — so `javascript:`
+and `data:` are script execution and an unanchored colour string closes the
+declaration and opens another. Validated at the schema for a readable message
+**and** by CHECK constraints on `agencies`, so a bad value cannot be stored
+however it arrived. The logo is **never fetched server-side**, which is what
+keeps an agency-supplied URL from being an SSRF vector.
+
+**The PDF does not carry the logo, and that is deliberate.** `report_pdf.py`
+was built at zero dependencies behind an explicit licensing survey; a logo is
+the first image the document has ever needed, and adding one would reopen that
+survey *and* require a server-side fetch of a customer-chosen URL. A test
+asserts the PDF writer never learns about either field.
+
+**Errors:** `401`, `403` (member seat — how every report an agency sends is
+branded is an agency-level decision), `404` (another agency's id, never `403`),
+`422`.
+
 #### `DELETE /api/v1/scans/{scanId}/share`
 **Auth required.** Takes the public link down. `204`, no body — Epic 9.21.
 
@@ -2284,7 +2336,7 @@ Recorded so the shape is agreed before it is implemented.
 
 | Endpoint | Epic |
 |---|---|
-| `PATCH /api/v1/agencies/{agencyId}/branding` — logo, domain, colours | 9 (send path, slice 3) |
+| ~~`PATCH /api/v1/agencies/{agencyId}/branding`~~ — **shipped in Epic 9.22** (logo + one chrome accent; custom domain deferred), see above | — |
 | ~~share-link expiry and revocation~~ — **shipped in Epic 9.21**, see `DELETE /api/v1/scans/{scanId}/share` above | — |
 
 §7's Epic 7 checklist also lists white-label branding injection, PDF export and

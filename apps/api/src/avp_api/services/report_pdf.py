@@ -75,11 +75,22 @@ def render_report_pdf(report: ReportOut) -> bytes:
 def _cover(doc: PdfDocument, data: dict[str, Any], subject_name: str) -> None:
     """The white-label surface. The AGENCY's identity, never ours.
 
-    Name and slug only, which is what the data model holds today — Epic 7 shipped
-    white-labelling limited to those two fields and logo/domain/colour injection
-    is still blocked on a written token-override policy. So the PDF carries
-    exactly what the web report carries, and nothing is invented to fill a
-    letterhead.
+    **Name and slug only, and the PDF deliberately does NOT carry the logo the
+    web report now does** — Epic 9.22, decided rather than overlooked.
+
+    A logo would be the first image this document has ever needed, and this
+    module was built at zero dependencies behind an explicit licensing survey:
+    WeasyPrint's required `Pyphen` is GPL/LGPL/MPL, which ip-safety.md #6
+    blocks, and React-PDF is a Node library in a Python process. Adding image
+    support would reopen that survey for a letterhead mark, and it would also
+    mean the server FETCHING an agency-supplied URL to embed it — a
+    server-side request to an address a customer chose, which is a different
+    security question from an `<img src>` the reader's own browser resolves.
+
+    So the gap is named rather than silently missing: an agency's logo appears
+    on the web report and not in the PDF. The accent colour is absent for the
+    same reason plus a simpler one — it exists to tint a letterhead rule, and a
+    rule in a colour nobody asked about is not worth a dependency.
     """
     agency = data["agency"]
     doc.text(agency["name"], font=BOLD, size=11, leading=15)
