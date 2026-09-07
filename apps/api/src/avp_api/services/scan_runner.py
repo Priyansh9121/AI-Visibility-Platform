@@ -375,6 +375,31 @@ async def run_scan(
     ordered = sorted(prompt_set.prompts, key=lambda p: p.position)
     scan.prompt_count = len(ordered)
     await session.flush()
+    # COMMIT BEFORE THE LOOP, AND THE REASON IS A ROW LOCK — the scan lease,
+    # 2026-09-08.
+    #
+    # The flush above issues `UPDATE scans SET prompt_count = ...`, which takes
+    # a row lock on this scan's row and holds it until the transaction ends.
+    # The next statement on this session is the commit AFTER the gather below,
+    # so without this commit that lock is held across the entire engine phase —
+    # minutes, and up to ~2,460s on a maximal scan.
+    #
+    # Everything that wants to write this row then blocks instead of running:
+    # a lease renewal on its own session (which is how the executor says "still
+    # alive"), and `reap_stale_scans` from the dashboard or a POST. A heartbeat
+    # that cannot renew is a lease that expires during ordinary work, so this
+    # commit is the precondition for the lease rather than a tidy-up beside it.
+    # Measured on `avp_dev` with two connections before it was written: the
+    # second UPDATE blocked until the first transaction ended.
+    #
+    # It is also correct on its own terms, for the reason the commit at the top
+    # of this function gives. The prompt set is finished work: committing it
+    # makes `prompt_count` pollable while the loop runs, and a crash mid-loop
+    # keeps the generated set rather than discarding a paid generation call.
+    # What it costs is that a crashed scan leaves a committed prompt set with
+    # no results — inert, because that scan is marked FAILED and the next POST
+    # opens a new row rather than reusing it.
+    await session.commit()
 
     semaphore = asyncio.Semaphore(PROMPT_CONCURRENCY)
 

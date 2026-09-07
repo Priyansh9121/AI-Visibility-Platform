@@ -241,6 +241,76 @@ class TestTheExecutorClaimsBeforeItRuns:
         assert scan.error_code is None
 
 
+class TestTheEngineLoopDoesNotHoldTheScanRow:
+    """The lease's precondition, and it is a row lock — 2026-09-08.
+
+    `run_scan` sets `prompt_count` and flushes it. That flush is an `UPDATE
+    scans`, which takes a row lock held until the transaction ends — and the
+    next statement on that session used to be the commit AFTER the engine
+    loop. So for the whole engine phase, minutes long, nothing else could
+    write the scan row: not a lease renewal on its own session, not
+    `reap_stale_scans` from a dashboard read.
+
+    A heartbeat that blocks is a lease that expires during ordinary work, so
+    this is tested before the lease depends on it. Asserted from INSIDE the
+    loop, on a second session, because that is the only moment the lock was
+    ever held.
+    """
+
+    async def test_another_session_can_write_the_scan_row_mid_loop(
+        self, client: AsyncClient, session, engine, settings, monkeypatch
+    ) -> None:  # noqa: ANN001
+        from sqlalchemy import update as sa_update
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+
+        from avp_api.models.prompt import PromptIntent
+        from avp_api.services.engines import EngineAnswer
+        from avp_api.services.prompts import GeneratedPrompt
+
+        await _sign_up(client)
+        cid = await _make_client(client)
+        scan = await _add_scan(session, cid, status=ScanStatus.QUEUED, started_at=None)
+        row = await session.get(Client, cid)
+        await session.commit()
+
+        outcome: dict = {}
+        factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+
+        async def fake_generate(**kwargs):  # noqa: ANN003, ARG001
+            return [GeneratedPrompt(text="q1", intent=PromptIntent.AWARENESS)], "stub"
+
+        async def fake_ask_all(prompt, *, engines, settings):  # noqa: ANN001, ARG001
+            # Mid-loop: the executor's transaction is open and has already
+            # flushed prompt_count. Renew the lease from somewhere else.
+            async with factory() as other:
+                try:
+                    await asyncio.wait_for(
+                        other.execute(
+                            sa_update(Scan)
+                            .where(Scan.id == scan.id)
+                            .values(lease_expires_at=datetime.now(UTC))
+                        ),
+                        timeout=5.0,
+                    )
+                    await other.commit()
+                    outcome["renewed"] = True
+                except TimeoutError:
+                    outcome["renewed"] = False
+            return [
+                EngineAnswer(engine=e, engine_version="stub", prompt_text=prompt, text="hi")
+                for e in engines
+            ]
+
+        monkeypatch.setattr(scan_runner.prompt_service, "generate_prompts", fake_generate)
+        monkeypatch.setattr(scan_runner.engine_service, "ask_all", fake_ask_all)
+
+        await scan_runner.run_scan(session, scan, row, settings=settings)
+
+        assert outcome.get("renewed") is True, (
+            "the engine loop still holds the scans row lock; a heartbeat would block on it"
+        )
+
+
 class TestStaleScanReaper:
     @staticmethod
     def _long_ago() -> datetime:
