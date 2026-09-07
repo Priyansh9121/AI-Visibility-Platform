@@ -60,6 +60,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from ..config import Settings, get_settings
 from ..models.action_item import ActionItemSource, Effort, Priority
+from .call_bounds import CallBound
 
 logger = structlog.get_logger(__name__)
 
@@ -71,6 +72,20 @@ FIX_EFFORT = "medium"
 # Headroom is for thinking tokens, which count toward max_tokens. Opus 5 has
 # thinking on by default.
 FIX_MAX_TOKENS = 8_000
+
+# --- The call's bound (API key discipline audit, 2026-09-07) -----------------
+# This was the one site outside `engines.py` that bounded anything: 120s per
+# attempt, with a comment naming what it did not bound — `max_retries`, so the
+# SDK's default two retries made the real ceiling 3 x 120s plus backoff. The
+# 120s is kept. It is six times the measured call (20.3s on
+# `POST /scans/{id}/fixes` in Epic 9.4's table; a 21s phase in Epic 9.17's
+# chained run), and medium effort over an 8,000-token budget is the most
+# expensive single generation the pipeline makes. One retry, `engines.py`'s,
+# and 242s enforced by the outer deadline. The largest single ceiling of the
+# five, deliberately: this is the last phase, nothing waits behind it but
+# `finalize_scan`, and a timeout degrades to Epic 7's deterministic fix list
+# rather than failing the scan.
+FIX_BOUND = CallBound(timeout=120.0, max_retries=1)  # ceiling: 242.0s
 
 # --------------------------------------------------------------------------
 # Epic 7's selection rules, mirrored. Same names, same values, same reasons —
@@ -620,22 +635,18 @@ async def generate_fixes(
     if not candidates:
         return FixOutcome(status="empty", reason_code="NO_CANDIDATES")
 
-    client = anthropic.AsyncAnthropic(
-        api_key=settings.provider_key("anthropic_api_key"),
-        # engines.py is the only other call site that bounds this. Without it
-        # the SDK default is a 10-minute per-attempt ceiling times 2 retries.
-        timeout=120.0,
-    )
+    client = FIX_BOUND.client(settings)
 
     try:
-        response = await client.messages.parse(
-            model=FIX_MODEL,
-            max_tokens=FIX_MAX_TOKENS,
-            output_config={"effort": FIX_EFFORT},
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": build_fix_prompt(facts, candidates)}],
-            output_format=GeneratedFixSet,
-        )
+        async with FIX_BOUND.deadline():
+            response = await client.messages.parse(
+                model=FIX_MODEL,
+                max_tokens=FIX_MAX_TOKENS,
+                output_config={"effort": FIX_EFFORT},
+                system=SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": build_fix_prompt(facts, candidates)}],
+                output_format=GeneratedFixSet,
+            )
     except anthropic.AuthenticationError:
         logger.error("fixes.auth_failed")
         return FixOutcome(status="failed", reason_code="PROVIDER_AUTH_FAILED")
@@ -652,6 +663,11 @@ async def generate_fixes(
             return FixOutcome(status="failed", reason_code="PROVIDER_QUOTA_EXHAUSTED")
         logger.error("fixes.bad_request", error=message[:200])
         return FixOutcome(status="failed", reason_code="PROVIDER_BAD_REQUEST")
+    except (anthropic.APITimeoutError, TimeoutError):
+        # Before APIConnectionError, which APITimeoutError subclasses; the
+        # builtin TimeoutError is the outer deadline (`CallBound.deadline`).
+        logger.warning("fixes.timeout")
+        return FixOutcome(status="failed", reason_code="TIMEOUT")
     except anthropic.APIConnectionError:
         logger.warning("fixes.connection_error")
         return FixOutcome(status="failed", reason_code="PROVIDER_UNREACHABLE")

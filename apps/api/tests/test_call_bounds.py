@@ -25,6 +25,7 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from decimal import Decimal
 from types import ModuleType
 
 import anthropic
@@ -33,7 +34,15 @@ import pytest
 
 from avp_api.config import Settings
 from avp_api.models.engine_result import Engine
-from avp_api.services import call_bounds, classify, cocitation, engines, extraction, prompts
+from avp_api.services import (
+    call_bounds,
+    classify,
+    cocitation,
+    engines,
+    extraction,
+    fix_generator,
+    prompts,
+)
 from avp_api.services.call_bounds import CallBound
 from avp_api.services.crawl import CrawlResult, CrawlSignals
 from avp_api.services.engines import EngineAnswer
@@ -43,6 +52,13 @@ MEASURED_OUTLIER_SECONDS = 271.6
 # What every site inherited before it declared a bound: the pinned SDK's 600s
 # read timeout across DEFAULT_MAX_RETRIES + 1 attempts, before backoff.
 INHERITED_CEILING_SECONDS = 600.0 * (anthropic._constants.DEFAULT_MAX_RETRIES + 1)
+
+# conftest's autouse `stub_chain_externals` replaces `AsyncMessages.parse` for
+# fix sets with a canned response, one level ABOVE the transport these tests
+# fake. Opted out here so the fixes site reaches the transport like the rest;
+# a stub that never reached it would report zero attempts, and the tests
+# below would say so.
+pytestmark = pytest.mark.real_parse
 
 
 @pytest.fixture
@@ -90,6 +106,31 @@ def _co_citation_timed_out(result: object) -> None:
     assert result.ok is False
     assert result.error_code == "TIMEOUT"
     assert result.hits == []
+
+
+def _fix_inputs() -> tuple[fix_generator.FixFacts, list[fix_generator.FixCandidate]]:
+    # One dimension with a gap above MIN_GAP_POINTS is one candidate, and one
+    # candidate is what it takes to reach the call: none returns "empty".
+    weight, subscore = Decimal("25"), Decimal("30")
+    dimension = fix_generator.DimensionFact(
+        key="share_of_voice",
+        weight=weight,
+        subscore=subscore,
+        gap=(weight * (Decimal(100) - subscore) / Decimal(100)).quantize(Decimal("0.01")),
+    )
+    facts = fix_generator.FixFacts(
+        domain="helpscout.com", brand_name="Help Scout", dimensions=[dimension]
+    )
+    return facts, fix_generator.build_candidates([dimension], [])
+
+
+def _fixes_timed_out(result: object) -> None:
+    # "Never raises — a provider outage degrades the report": failed, with a
+    # code, and nothing to persist. The report renders Epic 7's list instead.
+    assert isinstance(result, fix_generator.FixOutcome)
+    assert result.status == "failed"
+    assert result.reason_code == "TIMEOUT"
+    assert result.fixes == []
 
 
 def _generation_timed_out(result: object) -> None:
@@ -173,6 +214,14 @@ SITES = [
             settings=s,
         ),
         assert_timed_out=_generation_timed_out,
+    ),
+    Site(
+        name="generate_fixes",
+        module=fix_generator,
+        bound_attr="FIX_BOUND",
+        ceiling=242.0,
+        call=lambda s: fix_generator.generate_fixes(*_fix_inputs(), settings=s),
+        assert_timed_out=_fixes_timed_out,
     ),
 ]
 
@@ -327,3 +376,11 @@ class TestEachSiteKeepsItsOwnConstraint:
         the per-attempt bound, which is the mistake the engine adapters made.
         """
         assert classify.CLASSIFIER_BOUND.ceiling <= 30.0
+
+    def test_fix_generation_keeps_its_attempt_bound_and_gains_the_one_it_lacked(self) -> None:
+        """The one site that already bounded the attempt, at 120s — and, by its
+        own comment, not the retries. The attempt bound is preserved; the retry
+        count is what changed, and it is what makes the ceiling a ceiling.
+        """
+        assert fix_generator.FIX_BOUND.timeout == 120.0
+        assert fix_generator.FIX_BOUND.max_retries < anthropic._constants.DEFAULT_MAX_RETRIES
