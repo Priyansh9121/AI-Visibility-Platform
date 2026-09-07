@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from ..deps import DbDep, PrincipalDep, ScanExecutorDep, SettingsDep
-from ..errors import NotFound
+from ..errors import NotFound, ValidationProblem
 from ..models import EngineResult, Prompt, PromptSet, Scan
 from ..schemas.common import Page
 from ..schemas.scan import (
@@ -23,7 +23,7 @@ from ..schemas.scan import (
     ScanOut,
 )
 from ..services import competitors as detection
-from ..services.engines import DEFAULT_ENGINES
+from ..services.engines import DEFAULT_ENGINES, ENGINE_REGISTRY
 from ..services.intake import get_client
 from ..services.scan_executor import ScanJob, reap_stale_scans
 
@@ -118,6 +118,24 @@ async def run_scan(
     """
     client = await get_client(db, agency_id=principal.agency_id, client_id=client_id)
 
+    # Checked BEFORE the reaper runs and before a scan row is created or
+    # adopted: a request that cannot run should leave nothing behind. The
+    # schema has already collapsed duplicates and validated each value against
+    # the Engine enum; this is the second check, against the engines that have
+    # an adapter and a key. `ask_all` subscripts ENGINE_REGISTRY bare, so an
+    # enum-only engine such as `perplexity` used to fail INSIDE the executor —
+    # after competitor detection had been paid for — and land the scan at
+    # FAILED / EXECUTION_FAILED. Now it is a 422 and no scan exists.
+    engines = tuple(payload.engines) if payload.engines else DEFAULT_ENGINES
+    unsupported = [e.value for e in engines if e not in ENGINE_REGISTRY]
+    if unsupported:
+        raise ValidationProblem(
+            detail=(
+                f"No adapter for engine(s): {', '.join(unsupported)}. "
+                f"Supported: {', '.join(e.value for e in ENGINE_REGISTRY)}."
+            )
+        )
+
     # Reap before reusing. A scan stranded at RUNNING by a lost executor would
     # otherwise be picked up by `get_or_create_scan` and re-run, which dies on
     # `prompt_sets`' unique constraint as a 500. This is the path where a
@@ -126,7 +144,6 @@ async def run_scan(
         await db.commit()
 
     scan = await detection.get_or_create_scan(db, client, user_id=principal.user_id)
-    engines = tuple(payload.engines) if payload.engines else DEFAULT_ENGINES
 
     # Commit BEFORE handing off. The executor loads the scan on its own session
     # and would not find it otherwise.
