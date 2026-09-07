@@ -247,6 +247,34 @@ class TestTheAdapterItself:
         assert answer.citations == []
         assert answer.digest() is not None
 
+    async def test_every_budget_is_sent_not_inherited(
+        self, engine_settings: Settings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The Claude-side lesson (test_engine_timeout.py) applied to this vendor:
+        a dropped kwarg silently restores a provider default, so guard the
+        request body itself. gpt-5.5 defaults to MEDIUM reasoning effort and
+        bills reasoning tokens against `max_completion_tokens`; unpinned, that
+        is a 4,000-token budget spent thinking before a visible token exists,
+        which is how an empty `finish_reason: length` answer is produced."""
+        import json
+
+        sent: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            sent.update(json.loads(request.content))
+            return httpx.Response(
+                200, json={"choices": [{"finish_reason": "stop", "message": {"content": "x"}}]}
+            )
+
+        _install(monkeypatch, httpx.MockTransport(handler))
+        await ChatGptAdapter().ask("q", settings=engine_settings)
+
+        assert sent["model"] == engines.OPENAI_ANSWER_MODEL
+        assert sent["max_completion_tokens"] == engines.OPENAI_MAX_TOKENS
+        assert sent["reasoning_effort"] == engines.OPENAI_REASONING_EFFORT == "low"
+        # Same footing as the Claude parametric engine it is compared against.
+        assert engines.OPENAI_REASONING_EFFORT == engines.ANSWER_EFFORT
+
     async def test_a_refusal_maps_to_the_shared_refused_code(
         self, engine_settings: Settings, monkeypatch: pytest.MonkeyPatch
     ) -> None:
