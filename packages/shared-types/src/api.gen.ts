@@ -853,6 +853,14 @@ export interface paths {
          *
          *     Reuses the scan Epic 3's competitor detection created, if one is open, so a
          *     detect-then-scan flow does not strand an empty scan.
+         *
+         *     **A scan already RUNNING is returned as it is, and no second executor is
+         *     started** — API key discipline audit, 2026-09-07. `executor.submit` used
+         *     to be unconditional, so re-running while a scan was in flight handed the
+         *     same row to a second executor, which re-paid for the chain up to a unique
+         *     violation. The executor now refuses a scan it cannot claim (see
+         *     `execute_scan`); this check simply declines to start a task that would be
+         *     refused. The `202` reports the scan in flight, which is what was asked for.
          */
         post: operations["run_scan_api_v1_clients__clientId__scans_post"];
         delete?: never;
@@ -2942,6 +2950,17 @@ export interface components {
          *     `promptLimit` caps the generated set. It exists for cost control during
          *     verification — a full run is 20-30 prompts across every engine, and the
          *     grounded engine can take 100s per prompt. Omit it for a real scan.
+         *
+         *     `engines` is de-duplicated BEFORE validation and bounded by the enum's own
+         *     size — API key discipline audit, 2026-09-07. Neither alone bounds spend: a
+         *     bare `max_length` still lets `["claude", "claude", "claude"]` through as
+         *     three billed calls per prompt that then die on
+         *     `uq_engine_results_prompt_engine` after the money is spent, and
+         *     de-duplication is a ceiling only because the enum is finite. Together they
+         *     make "one call per engine per prompt" true by construction. Whether each
+         *     engine has an ADAPTER is the router's check, against `ENGINE_REGISTRY`:
+         *     the enum names what this product might ever measure, the registry what it
+         *     can measure today.
          */
         RunScanRequest: {
             /** Engines */
