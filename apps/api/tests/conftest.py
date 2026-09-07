@@ -301,7 +301,7 @@ def signup_payload() -> dict[str, str]:
 
 
 @pytest.fixture(autouse=True)
-def stub_chain_externals(monkeypatch):  # noqa: ANN001, ANN201
+def stub_chain_externals(monkeypatch, request):  # noqa: ANN001, ANN201
     """Keep the chained scan phases off the network. **Autouse, deliberately.**
 
     Epic 9.17 made `POST /clients/{clientId}/scans` run the whole pipeline
@@ -462,6 +462,12 @@ def stub_chain_externals(monkeypatch):  # noqa: ANN001, ANN201
 
         return _FakeResponse()
 
-    monkeypatch.setattr(
-        anthropic.resources.messages.AsyncMessages, "parse", dispatching_parse
-    )
+    # `test_call_bounds.py` needs the REAL parse: it proves a timeout bound by
+    # faking the HTTP transport underneath the real client, and a response
+    # stubbed in above the transport would never reach it. Opted out by a
+    # marker rather than by file name, so the opt-out is visible where it is
+    # used and registered in pyproject where it is defined.
+    if request.node.get_closest_marker("real_parse") is None:
+        monkeypatch.setattr(
+            anthropic.resources.messages.AsyncMessages, "parse", dispatching_parse
+        )

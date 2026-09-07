@@ -54,6 +54,12 @@ asyncio_mode = "auto"
 # "another operation is in progress" / "attached to a different loop" errors.
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
+markers = [
+    # Leaves anthropic's AsyncMessages.parse unpatched by conftest's autouse
+    # `stub_chain_externals`, for tests that fake the HTTP transport under the
+    # real client and need the call to reach it.
+    "real_parse: do not stub AsyncMessages.parse (test_call_bounds.py)",
+]
 filterwarnings = [
     # Our own deprecation warnings are errors — they are ours to fix.
     "error::DeprecationWarning:avp_api.*",
