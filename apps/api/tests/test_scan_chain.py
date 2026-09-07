@@ -111,7 +111,15 @@ async def _sign_up(client: AsyncClient) -> None:
 
 
 async def _make_client(client: AsyncClient, domain: str = "helpscout.com") -> str:
-    resp = await client.post(f"{BASE}/clients", json={"url": f"https://{domain}"})
+    # `classify: False`, as every other scan test in the suite. Without it
+    # intake crawls the real domain in a real Chromium and calls the
+    # classification model — a live network call and a paid call per test,
+    # in a file that otherwise stubs every external boundary. Found by the
+    # API key discipline audit (2026-09-07) and by this file's own clock:
+    # nine tests at ~50s, against ~5s once nothing left the machine.
+    resp = await client.post(
+        f"{BASE}/clients", json={"url": f"https://{domain}", "classify": False}
+    )
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
 
