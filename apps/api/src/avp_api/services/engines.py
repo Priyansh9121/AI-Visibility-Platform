@@ -127,6 +127,18 @@ ENGINE_CALL_CEILING = DEFAULT_TIMEOUT * (MAX_RETRIES + 1) + RETRY_BACKOFF_ALLOWA
 OPENAI_BASE_URL = "https://api.openai.com/v1"
 OPENAI_ANSWER_MODEL = "gpt-5.5"
 OPENAI_MAX_TOKENS = 4_000
+# The OpenAI analogue of ANSWER_EFFORT, and pinned for the same reason the
+# Anthropic knobs above are: a provider default is not ours to assume. gpt-5.5
+# is a reasoning model whose effort DEFAULTS TO MEDIUM (its model page lists
+# none / low / medium / high / xhigh), and Chat Completions counts reasoning
+# tokens against `max_completion_tokens`. Left unset, every call spent
+# medium-effort reasoning inside a 4,000-token budget this module sized for a
+# low-effort answer — and reasoning that eats the whole budget is precisely
+# how a response comes back `finish_reason: "length"` with an EMPTY body,
+# which the audit found being recorded as "ChatGPT answered and did not name
+# you". Low here, low on the Claude side: the two parametric engines are
+# compared on equal footing (Epic 9.13), and that footing includes effort.
+OPENAI_REASONING_EFFORT = "low"
 
 # --- Incomplete answers (API key discipline audit, 2026-09-07) ---------------
 # An engine reports WHY it stopped, and until this audit the adapters read that
@@ -493,6 +505,7 @@ class ChatGptAdapter:
                         json={
                             "model": OPENAI_ANSWER_MODEL,
                             "max_completion_tokens": OPENAI_MAX_TOKENS,
+                            "reasoning_effort": OPENAI_REASONING_EFFORT,
                             "messages": [{"role": "user", "content": prompt}],
                         },
                     )
