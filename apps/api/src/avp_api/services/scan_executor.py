@@ -196,6 +196,30 @@ async def execute_scan(job: ScanJob, *, settings: Settings) -> None:
     Audit before scoring, because `scoring_runner.load_technical_foundation`
     reads the audit row and excludes the dimension as `NOT_YET_MEASURED` when
     there is none. Fixes last, because they read all three.
+
+    THE CLAIM — API key discipline audit, 2026-09-07
+    -------------------------------------------------
+    A scan is claimed before it is run, with one conditional UPDATE: QUEUED
+    becomes RUNNING for exactly the executor whose statement finds it QUEUED.
+    Until this existed the only guard was `scan.status in TERMINAL`, which
+    QUEUED and RUNNING are deliberately outside of — the first executor has to
+    be let through — so two POSTs that adopted the same open scan produced two
+    executors, and the second re-ran the paid chain: competitor detection, an
+    8k-token prompt-generation call, and only then a unique violation on
+    `prompt_sets` that marked the scan FAILED while the first executor was
+    still legitimately running it. `uq_scans_one_open_per_client` never
+    prevented this. It bounds ROWS, and both executors held the same row.
+
+    The claim comes before competitor detection, not just before the loop,
+    because detection is the first phase that spends money.
+
+    This is the first half of a lease. What it does not yet do is renew: a
+    RUNNING scan whose executor has died still waits on `reap_stale_scans` and
+    its static STALE_AFTER, because nothing distinguishes "still working" from
+    "gone" except elapsed time. A heartbeat renewed by `_attempt` between
+    phases, with the reaper keyed off lease expiry rather than `started_at`,
+    is the second half — recorded in the build log — and it extends this
+    statement's WHERE clause rather than replacing it.
     """
     factory = get_sessionmaker(settings)
     try:
@@ -212,6 +236,31 @@ async def execute_scan(job: ScanJob, *, settings: Settings) -> None:
                 # here first. Re-running would duplicate the spend.
                 logger.info(
                     "scan.execute.already_terminal",
+                    scan_id=scan.id, status=scan.status.value,
+                )
+                return
+
+            # -- the claim: QUEUED -> RUNNING, for exactly one executor -------
+            #
+            # A concurrent executor's own claim blocks on this row until the
+            # commit below, then matches nothing. Committed at once for that
+            # reason: an uncommitted claim is no claim.
+            claimed = (
+                await session.execute(
+                    update(Scan)
+                    .where(Scan.id == scan.id, Scan.status == ScanStatus.QUEUED)
+                    .values(status=ScanStatus.RUNNING, started_at=datetime.now(UTC))
+                    .returning(Scan.id)
+                    .execution_options(synchronize_session=False)
+                )
+            ).scalar_one_or_none()
+            await session.commit()
+            await session.refresh(scan)
+            if claimed is None:
+                # RUNNING, and not ours. Somebody else's executor has it, and
+                # the reaper is the only thing entitled to take it back.
+                logger.info(
+                    "scan.execute.not_claimed",
                     scan_id=scan.id, status=scan.status.value,
                 )
                 return

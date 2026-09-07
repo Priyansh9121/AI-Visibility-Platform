@@ -1097,6 +1097,12 @@ vocabulary changed, and the terminal value still describes the **engine** phase
 Still **costs real money** once it runs: 20–30 prompts across every engine, plus
 a sentiment call per mention.
 
+**One execution per scan.** A scan already `running` is returned as it is —
+`202`, the same `id` — and no second executor is started. A `queued` scan
+handed to two executors is run once: the executor claims it with a single
+conditional `UPDATE` (queued → running) before its first paid phase, and the
+one that loses the claim exits without touching the row.
+
 **Request**
 ```json
 { "promptLimit": 6, "engines": ["claude", "claude_search"] }

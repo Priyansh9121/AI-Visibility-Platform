@@ -608,6 +608,37 @@ class TestScanIsQueued:
         assert resp.status_code == 422, resp.text
         assert jobs == []
 
+    async def test_a_scan_already_running_gets_no_second_executor(
+        self, client: AsyncClient, session, stub_engines
+    ) -> None:  # noqa: ANN001
+        """`executor.submit` used to be unconditional. Re-running while a scan
+        was in flight handed the same row to a second executor, which re-paid
+        for the chain up to a unique violation on `prompt_sets`. The 202 now
+        reports the scan in flight, and nothing is started."""
+        from datetime import UTC, datetime
+
+        from avp_api import ids
+        from avp_api.models import Client, Scan, ScanStatus
+
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_engines(n_prompts=2)
+        row = await session.get(Client, cid)
+        running = Scan(
+            id=ids.new_id(ids.SCAN), client_id=cid, agency_id=row.agency_id,
+            status=ScanStatus.RUNNING, started_at=datetime.now(UTC),
+        )
+        session.add(running)
+        await session.commit()
+        jobs = self._defer(client)
+
+        resp = await client.post(f"{BASE}/clients/{cid}/scans", json={})
+
+        assert resp.status_code == 202, resp.text
+        assert resp.json()["id"] == running.id
+        assert resp.json()["status"] == "running"
+        assert jobs == []
+
     async def test_queueing_twice_reuses_the_open_scan(
         self, client: AsyncClient, stub_engines
     ) -> None:  # noqa: ANN001
