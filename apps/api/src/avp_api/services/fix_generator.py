@@ -465,7 +465,15 @@ def build_fix_prompt(facts: FixFacts, candidates: list[FixCandidate]) -> str:
         structure.append(f"sitemap: {'yes' if facts.has_sitemap else 'no'}")
     if structure:
         lines.append("")
-        lines.append("Site structure signals: " + "; ".join(structure))
+        # Scoped, because the model will otherwise scope it for you: the third
+        # dry run's regenerated copy read "1,221 words of indexable content
+        # overall" about a figure the audit measured on one page — the number
+        # was right, and the reader's own site would have shown "overall" to
+        # be wrong in one click (build-log, third pilot dry run, 2026-09-08).
+        lines.append(
+            "Audited page signals (the home page, one URL, not the whole site): "
+            + "; ".join(structure)
+        )
 
     lines.append("")
     lines.append(f"Write one fix for each of these {len(candidates)} candidates, and no others.")
