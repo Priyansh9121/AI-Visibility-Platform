@@ -12573,3 +12573,122 @@ v1.1 scores** (product, waiting on the founder), **whether Sentiment should be
 scoped too** (it would raise scores by up to 26 points), and **the "answerable
 but not discoverable" secondary fact**. The third-engine / Epic 12 fork stays
 paused.
+
+# The three open items from scoring v2, closed
+
+One entry rather than three, because the items only make sense against each
+other: item 1 is what to do about the scores v2 changed, item 2 is what v2
+deliberately did not change, and item 3 is the fact v2's single number cannot
+carry. Three commits, because they share no files and no logic.
+
+## 1 — Re-scoring: the route already existed; the disclosure did not
+
+**`POST /scans/{scanId}/score` already re-scored and inserted rather than
+overwrote.** Rule 5's `(scan_id, formula_version)` unique constraint was
+designed for exactly this, and the endpoint's docstring said so. Checked before
+building, and nothing was built — the item was not "add re-scoring", it was
+"decide whether to use it and make the result legible".
+
+The half rule 5 does not cover on its own is the reader. A client who saw 28.89
+last week and 16.84 today has one reading available without being told, and it
+is a claim about their business. The true one is a claim about our formula. So
+`ScoreDetailOut` gained `previousFormulaVersions` — the other versions this
+scan carries, empty for the scans scored once, which is most of them —
+populated on all three surfaces that show a score so the note cannot appear on
+one and not another. The score beat renders it only when a re-score happened,
+names the earlier version, and says the measurement changed rather than the
+site.
+
+**The 14 scans were re-scored through `scoring_runner.score_scan`**, the same
+call the endpoint makes, rather than by writing rows. All 15 pre-existing rows
+unchanged, 14 new ones inserted, asserted rather than assumed.
+
+    psmdigitalagency.com.au   29.10 -> 15.31   -13.79
+    zammad.com                53.25 -> 41.19   -12.06
+    psmdigitalagency.com      28.89 -> 16.84   -12.05
+    basecamp.com              53.28 -> 47.82    -5.46
+    front.com                 55.29 -> 53.61    -1.68
+    ghost.org                 66.57 -> 67.22    +0.65
+
+**Every figure matches the sizing session's offline recomputation to the cent**
+(missiveapp.com differs by 0.01, rounding). Two independent computations of the
+same correction agreeing is the evidence the diagnostic was right — and it is
+the reason to trust the numbers a client will now be shown.
+
+## 2 — Sentiment: closed, and the reasoning is why rather than the decision
+
+Nothing implemented; nothing needed implementing. `scoring-spec.md` read
+*"Recorded as open"* for a question that had in fact been reasoned through, and
+a spec that leaves a settled decision looking pending invites it to be
+re-litigated by the next reader.
+
+The distinction is what closes it. Mention Rate and Share of Voice answer *"was
+this discovered"* — a claim a brand-named question cannot evidence, which is
+what made the tautology a defect. Sentiment asks how an answer PORTRAYS the
+brand, and that does not depend on who raised the subject. Same artefact, no
+defect, because the two dimensions are asking different kinds of question.
+
+The measurement points the other way from the fix, which is the part worth
+keeping: awareness-only sentiment is **higher** on every scan with a
+population, +1.03 to +25.86 points, because engines recommend a brand they
+surface unprompted and hedge about one they are made to discuss. Scoping it
+would RAISE scores rather than correct them — the signature of a change that
+flatters. Reopening needs a reason of its own, not consistency with a fix aimed
+at a different defect.
+
+## 3 — Named only when prompted
+
+`psmdigitalagency.com` scores 0% Mention Rate and appears in almost every
+answer to a question that named it. The composite correctly reports the first;
+this is the other half, derived on read with no migration and no effect on any
+score.
+
+**It is not called "answerable", and that is the whole design.** The obvious
+framing — *"not discovered, but recognised when asked directly"* — claims
+something the stored facts cannot support. A mention is a text match, and the
+Zorblex test showed an engine answering *"I don't have any knowledge of a
+product called Zorblex Inbox"* is recorded as naming it. A mention on a
+brand-named question is evidence the engine echoed the question, **not** that it
+knows the brand. A flag claiming recognition would invent a positive out of the
+exact artefact scoring v2 exists to discount — false comfort assembled from the
+bug we just finished removing.
+
+So the copy says only where the mentions came from, and then says outright that
+being named back by a question that supplied the name is not evidence of
+knowledge. A test asserts the words "answerable" and "recognised" appear in no
+visibility copy, so the flattering framing cannot be reintroduced by someone
+tidying the sentence.
+
+**Its own field, not a degradation flag.** Those say why a NUMBER is rougher
+than it would otherwise be; this says what a scan found. Folding them together
+would repeat the category error this codebase refused when it kept
+`NOT_YET_MEASURED` apart from `NO_POPULATION`. Same SHAPE — a code with a
+client-facing string — so `copyCoverage.test.ts` extends to it unchanged.
+
+**The thresholds are asymmetric on purpose.** Zero on the awareness side,
+because "never discovered" is the claim and one discovery falsifies it. At
+least one on the prompted side and **no rate threshold there**, because
+prompted mentions run at 99.61% for everyone measured: a threshold would add no
+discrimination while implying the prompted figure means more than it does. A
+brand invisible everywhere gets no flag — a different finding that must not
+borrow these words — and an engine that did not answer is not a missed
+discovery, so an outage cannot manufacture it.
+
+## Verification
+
+**api 1,143** (1,133 → 1,137 → 1,143) and **web 746** (741 → 746) across the
+three commits, each run green before the next started. design-system 418 and
+shared-types 53 unchanged. `ruff check src tests` clean, `tsc` clean on all
+three packages, `alembic check` clean with no migration, contract regenerated
+twice for the two new fields.
+
+## Open
+
+**Nothing from scoring v2 remains.** All four items on that entry's list are
+now closed: the population disclosure in `994bb04`, and these three.
+
+Still paused and unchanged: **the third-engine / Epic 12 fork**, with the
+corrected split denominator from the sizing entry applying to it when it
+resumes. And the standing caveat on `copyCoverage.test.ts` — its list mirrors
+`scoring.py` by hand, so it guards against forgetting the copy, not against
+forgetting the file.
