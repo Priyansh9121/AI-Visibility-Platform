@@ -13119,3 +13119,265 @@ against a forced reproduction, not yet against another full operator walk.
 
 Unchanged: the third-engine / Epic 12 fork stays paused, and Epic 12's "why"
 engine remains recommended-against until the pilot runs.
+
+# Second pilot dry run — the fixes hold, and the report still says things it cannot back
+
+`a398da5` closed the first dry run's list and said the fixes were verified in
+isolation and against a forced reproduction, **not against another full
+operator walk**. This is that walk. Governance line, per north-star.md §8.1:
+this touches no architectural layer and builds nothing; it serves the pilot
+phase by verifying Epic 9's acceptance criterion. No code was changed.
+
+**The four fixes hold on live output.** Nothing false about either site
+appeared anywhere. **The report still contains checkable wrong numbers**, in a
+different place: the fix list's own sentences and the PDF's verdict word. And
+reading the rivals table skeptically found that one of the five scored
+dimensions has never been earned by anyone.
+
+## What was walked, and what it cost
+
+A fresh agency (`Harbourline Digital`), a fresh prospect (`pirsch.io` — a real
+two-person analytics company, a different category from Helpwise, and a brand
+token that is not an English word so a mention is a clean text match), and
+`helpwise.io` a second and third time. Driven through the HTTP API with a cookie
+jar as before, then through a real headless browser with no session as the
+prospect.
+
+**The subject was screened, not guessed**, with Epic 9.26's four-awareness-
+prompt check on one engine. None of six candidates scored 0 of 4 today —
+savvycal 4, bannerbear 4, tidycal 4, richpanel 3, pirsch 3, fathom 2 — and
+Richpanel, 0 of 4 in 9.26, scored 3 of 4 on four different sentences. The
+screen is prompt-sensitive; noted under the observations.
+
+    sign-up                          0.14s  owner seat, 1 of 3
+    intake pirsch.io                 10.6s  "web analytics software", niche "privacy-friendly,
+                                            cookieless analytics as a Google Analytics
+                                            alternative", brand "Pirsch Analytics", 0.960
+    scan pirsch (24 prompts × 3)     348s   partial: 1 claude_search timeout; 72 results,
+                                            71 answered, 30 naming the subject
+    audit pirsch                            17 checks, load event reached, LCP 4,448ms,
+                                            CLS 0.288, Technical Foundation 40.00
+    score                                   composite 27.28, v2
+    fix generation                          5 accepted, 0 rejected
+    report                           68ms   53,732 bytes
+    share link                              minted, expires in 30 days
+    read as a stranger               200    no cookies; same 53,732 bytes
+    PDF as a stranger                200    6,855 bytes, valid 4-page PDF; the button on
+                                            the share page downloads a byte-identical file
+    revoke                           204    then 404 on BOTH read routes, 204 again, and
+                                            the share page shows its withdrawn state
+    scan helpwise.io, run 1 (12 × 3) 165s   audit ok on the first attempt, LCP 2,984ms, 93.75
+    scan helpwise.io, run 2 (12 × 3)  49s   audit ok on the first attempt, LCP 3,140ms, 93.75
+
+**Everything in the send column works, for the second time.** Sign-up, intake,
+scan, score, share, read as a stranger in a browser, download the PDF from the
+button, revoke — and revocation kills the JSON route, the PDF route and the
+web page on the same lookup.
+
+**The Anthropic credit balance ran out at 14:33**, three minutes after the
+pirsch scan finished cleanly. Both helpwise runs lost their Claude engine
+calls, their sentiment calls and their fix generation to
+`PROVIDER_QUOTA_EXHAUSTED`. That is the operator's account, not the product,
+and the product degraded exactly as designed: `partial` with a code on every
+failed result, `fixes.not_generated` with a reason, Sentiment excluded as
+`NO_POPULATION`, `NO_CITATIONS_IN_SCAN` flagged. The audit needs no model
+call, so both runs still answered the question they were for.
+
+## The two things this session existed to check
+
+**The audit's fallback was not exercised live.** Three audits ran against real
+sites this session and all three reached `load` on the first attempt: zero
+`audit.load_timeout_fell_back` lines, zero `LCP_NOT_OBSERVED` rows. With the
+fix session's six standalone passes, `helpwise.io` has now completed the audit
+nine times in nine attempts since the one timeout that started this. The
+fallback remains proven only by last session's forced reproduction, which is
+fine to say plainly: the real world did not reproduce the original problem.
+
+**No tool failure became a finding, on either kind of fix list.** On pirsch the
+list was generated; on helpwise run 1 generation failed and the page fell back
+to the deterministic derivation. Neither contains anything about a crawl, a
+browser, or a timeout. No audit failed, so `audit_findings` was not exercised
+by a live failure — but the deterministic path was read for the same defect,
+and it is safe by omission: `deriveFixes` and `derive_fixes` would still rank
+an `error` finding as high priority, and their copy tables have no entry for
+`BROWSER_ERROR`, `TIMEOUT`, `FETCH_FAILED` or `HTTP_*`, so the candidate is
+skipped. Worth one test in the audit brief, not a change.
+
+## The copy fixes, on a live payload
+
+**Landing page.** *"A scan usually takes about ten minutes — twenty-four
+questions, put to three AI engines, one at a time."* renders under the call to
+action at 1280px and at 390px with no horizontal overflow; "six minutes" is
+gone.
+
+**Shelf headline and caption.** On the 24 × 3 scan the title reads *"Pirsch
+Analytics is missing from 41 of the 71 answers this scan measured"* — the
+scan-wide figures — and the caption says *"The first 60 of 72 answers are
+shown; the count above is the whole scan."* On the 12 × 3 and 11 × 3 scans,
+where nothing is capped, the caption carries no sample sentence. Both branches
+confirmed on real rows rather than fixtures.
+
+## FIX BEFORE PILOT
+
+### 1. The fix list quotes figures computed over the wrong population
+
+The pirsch report's second fix opens: *"All 30 of 30 answers named Pirsch, but
+mention rate still scored 30.56, indicating the brand appears with less depth
+than the gap allows."* The scan had **71 answers and 30 named Pirsch**, and the
+shelf title one beat earlier says so. The third fix says *"Only 3 of the 123
+citations behind these answers pointed at pirsch.io"*; the proof beat on the
+same page — and in the same PDF — says **323**.
+
+The model did not invent these. The facts bundle it was handed said
+`answers_analysed=30, answers_naming_subject=30, citations_total=123`, because
+`fix_runner.collect_facts` filters results on `status is OK` — which means
+*answered and mentioned* — and drops `ANSWERED_NO_MENTION`, the status the API
+contract labels in bold as *"a finding, not a failure"*. So the generator only
+ever sees the answers that named the brand: the naming count always equals the
+total, citations are tallied inside that subset, and the top-cited-domain list
+it reasons from is wrong too — it named `analytics-compare.com` (4 citations)
+and never saw `analytics-alternatives.com` (15), which the same page lists as
+the top unclaimed source.
+
+This is finding 3 from the first dry run — a denominator the sentence does not
+have — one beat further down and in the list the product sells with. It has
+been there since Epic 8: the first run's praised *"Only 6 of 91 citations"* on
+helpwise was the same arithmetic (that scan had 142 citations across its 36
+answered results; 91 in the 16 that named the brand). Fix: count over
+`ANSWERED_STATUSES` and mirror the proof beat's population, with a test at the
+`collect_facts` boundary. Its own brief.
+
+### 2. The page and the PDF give the same score two different verdict words
+
+`report_pdf._band` says it *"mirrors VisibilityBadge's thresholds"*. It does
+not. The design system's `visibilityBand` cuts at 20/40/60/80 and says *Absent
+· Barely visible · Emerging · Established · Highly visible*; the PDF cuts at
+15/35/60/80 and says *Absent · Marginal · Emerging · Established · Dominant*.
+
+Live: pirsch at 27.28 is **"Barely visible"** on the share page and
+**"Marginal"** in the PDF downloaded from it. Helpwise at 17.46 is
+**"Absent"** on the page and **"Marginal"** in the PDF. The contract's own
+warning — *"a PDF assembled independently would eventually disagree with the
+page it was downloaded from, and the disagreement would reach a client"* —
+came true in the headline verdict. One function.
+
+### 3. Citation Strength cannot be earned, and the pitch promises its points
+
+Reading the rivals table skeptically: every brand on the pirsch report shows
+Citation Strength **0.66** — Pirsch with 3 citations, Plausible with 13,
+Simple Analytics with 16. `scoring.citation_strength` divides *distinct
+domains citing the subject* (the subject's own domain, so 0 or 1) by *every
+distinct third-party domain the engines cited* (152 on this scan). A brand
+owns one domain, so the most any brand can score is 1/N, and the comparison
+mirrors it exactly. **Across all 33 stored scores the maximum is 3.70.** The
+dimension carries 20% of every composite.
+
+What the prospect reads: *"Citation Strength 0.66 / 100 · 19.9 points left"*,
+a fix *"worth 19.9 points"*, and the pitch beat's *"27 today. 91 with the fixes
+above."* About 20 of those 63 points are unreachable by construction, and the
+disclosure sentence — *"measured against the best-cited brand in this scan"* —
+describes a formula the code does not implement; it normalises against the
+whole field. The docstring records the shortcut ("attribute non-subject
+citations to the scan as a whole"); its consequence was never written down.
+
+**Layer 5, and the one item here that is not an afternoon.** Which figure
+replaces it — citation share against the best-cited single brand, or the rate
+of answers citing the subject — is a scoring-spec decision with its own brief.
+It sits above the line because the pitch beat's headline number depends on it;
+the cheap interim is to exclude or label the dimension, not to redesign it.
+
+## NOTE AND MOVE ON
+
+* **The rendered fix list is not the stored one.** `enrich` overlays generated
+  wording onto the client's derived candidates by key and *"a miss is silent by
+  design"*. The generator's two Core Web Vitals fixes had no derived
+  counterpart (no copy for `LAB_MEASUREMENT_NOT_FIELD_DATA`) and never
+  rendered; two canned schema fixes and a canned citation fix rendered instead.
+  Six on the page, five in `action_items`, and both surfaces agree with each
+  other. The outcome was fine; the generator spent two of five items on
+  candidates nothing shows.
+* **Phone width.** The share page pans 51px sideways at 390px (cause not
+  isolated), and the rivals table's three numeric columns and half its caption
+  sit off-screen inside a scroll wrapper with no visible affordance. Readable,
+  but a prospect on a phone sees Brand and Domain and has to discover the
+  swipe. The first run left responsive unverified; it is now measured.
+* **A partial scan says so only in numbers.** Helpwise run 1 lost 13 of 36
+  calls. The page shows *"Answered 6 of 12"* per engine and no sentence says
+  calls failed or why. The contract says `partial` exists *"so a report can say
+  'one engine was down'"*; the page implies it rather than saying it.
+* **A 24-prompt scan took 348s.** The first post-9.17 measurement of the
+  default scan: 5.8 minutes, under the *"about ten"* the landing now says. One
+  point, and the copy errs in the safe direction. Left alone.
+* **Every report read re-scores.** Eight `scoring.completed` lines for the
+  pirsch scan in ten minutes, one per `GET`. Same digest, no provider calls,
+  so harmless — recorded because it is a surprising cost on the hot path.
+* **The awareness screen is four sentences.** Six candidates, none at 0 of 4;
+  the 9.26 subject that scored 0 of 4 scored 3 of 4 on different prompts.
+  "Chosen by measurement" is chosen by the prompts, which is worth knowing
+  before the screen decides a fork.
+* **No in-product warning before the balance runs out.** The first sign an
+  operator gets is a `partial` scan with quota codes. A pilot agency will hit
+  this the same way.
+
+## The subjective pass — reading it as an operator, not an engineer
+
+**The narrative still holds together, and this subject is a better test of it
+than the last.** *"Pirsch Analytics is close to invisible when buyers ask"*,
+**27/100 · Barely visible**, *"Share of Voice is costing the most — 22.5
+points"*, *"3 rivals are named more often than Pirsch Analytics in the same
+answers"*. The five rivals — Plausible, Matomo, Simple Analytics, Usermaven,
+Fathom — are the right five, and the unclaimed sources
+(`analytics-alternatives.com` 15, `g2.com` 12, `capterra.com` 9) are exactly
+where an agency would start.
+
+**Two of the three generated fixes read like a person wrote them**, and name
+the directories and rivals that the proof beat shows. The third is finding 1:
+its first sentence is false on its face, under a headline that contradicts it.
+Nobody asked the model to be wrong; it was handed the wrong count.
+
+**Nothing leaked.** Both share pages: no `undefined`, no bare `null`, no `NaN`,
+no `[object Object]`, no raw code in prose (the capitalised words in the sweep
+are section eyebrows), no console errors. `NAMED_ONLY_WHEN_PROMPTED` fired
+naturally on helpwise run 2 and rendered as a sentence.
+
+## Harness notes, so the next walk does not repeat them
+
+The share page silently showed its withdrawn state when Playwright opened it at
+`127.0.0.1:3000`: `CORS_ALLOW_ORIGINS` is `localhost:3000`, so every API fetch
+failed and the page's single error state hid it — which also made an earlier
+"bad token" check at that origin meaningless until it was rerun. And the shelf
+title was reported missing for one turn because it renders through
+`text-transform` and a case-sensitive grep did not find it in capitals.
+
+## Is Epic 9's acceptance criterion ready to attempt?
+
+**Not yet — and this time the answer has two parts.**
+
+The mechanism is ready, verified twice now on the real system: a pilot agency
+can sign up, scan a prospect, get a report, send a link, watch a stranger open
+it in a browser and download the PDF, and take the link back. The four fixes
+from the first run hold on live output, and nothing false about either site
+appeared.
+
+**I would not send the pirsch report as generated to Pirsch on an agency's
+behalf.** Its second fix says *"All 30 of 30 answers named Pirsch"* under a
+headline that says 41 of 71 did not, its third fix cites 123 citations where
+the same page counts 323, and the PDF a prospect downloads calls the score
+"Marginal" where the page says "Barely visible". Findings 1 and 2 are one
+afternoon, the same size as last time's copy items.
+
+Finding 3 is the reason the answer is "not yet" rather than "after lunch": a
+fifth of every score comes from a dimension no site has ever scored above 3.70
+on, and the sales beat promises those points back. That is a scoring decision,
+not a fix, and it should be made before the first report goes out with *"91
+with the fixes above"* on it.
+
+## Open
+
+**New, from this session:** the fix-facts population (1) and the PDF band (2),
+each for its own small brief; Citation Strength (3), for a Layer 5 brief that
+may choose to exclude and label it before it redesigns it. The notes above go
+into whichever brief touches them.
+
+Unchanged: the third-engine / Epic 12 fork stays paused, and Epic 12's "why"
+engine remains recommended-against until the pilot runs.
