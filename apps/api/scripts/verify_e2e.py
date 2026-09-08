@@ -253,8 +253,13 @@ def rate_for(model: str) -> tuple[float, float] | None:
     if not matches:
         return None
     return RATES[max(matches, key=len)]
-# Anthropic bills the server-side web_search tool per request, separately from
-# tokens. Recorded as a count for the same reason: the rate is not in this repo.
+# Anthropic bills the server-side web_search tool PER REQUEST, on top of tokens.
+# $10 per 1,000 searches — platform.claude.com/docs/en/agents-and-tools/tool-use/
+# web-search-tool, read 2026-09-08. The retrieved pages are billed again as
+# input tokens, which is already counted above and is the larger half by far.
+# A search that ERRORS is not billed, and this counts what the API reported
+# rather than what was attempted, so the two agree.
+WEB_SEARCH_PER_1K = 10.00
 
 
 @dataclass
@@ -609,13 +614,17 @@ async def main() -> int:  # noqa: C901
         print(f"  {model:22} {u.calls:6} {u.input_tokens:10,} {u.output_tokens:10,}"
               f" {u.cache_read:9,} {cost_cell}")
     searches = sum(u.web_searches for u in TOKENS.values())
-    print(f"\n  priced model spend  : ${priced:.4f}")
+    search_cost = searches * WEB_SEARCH_PER_1K / 1000
+    print(f"\n  model spend         : ${priced:.4f}")
     if unpriced:
-        print(f"  unpriced, tokens only: {', '.join(unpriced)}"
-              "  (rate is not recorded in this repo; not guessed)")
-    print(f"  web_search requests : {searches}"
-          "  (billed per request, rate not recorded here)")
-    print(f"  SerpApi searches    : {by_provider['serpapi']} of a 250/month quota")
+        print(f"  UNPRICED, tokens only: {', '.join(unpriced)}"
+              "  (no published rate recorded here; not guessed)")
+    print(f"  web_search requests : {searches:4}  ${search_cost:.4f}"
+          f"   at ${WEB_SEARCH_PER_1K:.2f}/1k")
+    print("  ---------------------------------")
+    print(f"  TOTAL PROVIDER SPEND: ${priced + search_cost:.4f}")
+    print(f"\n  SerpApi searches    : {by_provider['serpapi']} of a 250/month quota"
+          "  (prepaid, no marginal charge)")
 
     # ------------------------------------------------------------------
     rule("CROSS-ENGINE READING (Epic 9.23)")
