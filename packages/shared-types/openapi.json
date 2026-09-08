@@ -3662,6 +3662,14 @@
           },
           "subject": {
             "$ref": "#/components/schemas/ReportSubjectOut"
+          },
+          "visibilityFlags": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Visibilityflags",
+            "type": "array"
           }
         },
         "required": [

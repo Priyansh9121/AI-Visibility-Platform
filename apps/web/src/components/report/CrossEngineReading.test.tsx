@@ -220,3 +220,27 @@ describe('a score that moved because the formula moved says so', () => {
     expect(html).not.toContain('also been scored under an earlier definition');
   });
 });
+
+describe('named only when prompted is a finding, not reassurance', () => {
+  const flagged: Report = { ...helpscoutReport, visibilityFlags: ['NAMED_ONLY_WHEN_PROMPTED'] };
+
+  it('says where the mentions came from', () => {
+    const html = render(flagged);
+    expect(html).toContain('answering a question that named it first');
+    expect(html).toContain('No question asked without the name produced a mention');
+  });
+
+  it('does not claim the engine knows the brand', () => {
+    // A mention is a text match. An engine answering "I have no knowledge of
+    // this brand" is recorded as naming it, so being named back by a question
+    // that supplied the name is not recognition — and the copy says so rather
+    // than leaving a reader to infer the flattering reading.
+    const html = render(flagged);
+    expect(html).toContain('not evidence an engine knows it');
+    expect(html.toLowerCase()).not.toContain('answerable');
+  });
+
+  it('appears only when the finding applies', () => {
+    expect(render(helpscoutReport)).not.toContain('answering a question that named it first');
+  });
+});

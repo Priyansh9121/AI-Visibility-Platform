@@ -3044,6 +3044,11 @@ export interface components {
             scannedAt?: string | null;
             score: components["schemas"]["ScoreDetailOut"] | null;
             subject: components["schemas"]["ReportSubjectOut"];
+            /**
+             * Visibilityflags
+             * @default []
+             */
+            visibilityFlags: string[];
         };
         /**
          * ReportProofOut

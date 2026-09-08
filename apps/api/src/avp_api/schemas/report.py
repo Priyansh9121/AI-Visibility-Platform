@@ -414,6 +414,16 @@ class ReportOut(ApiModel):
     # Null when the scan has never been scored. Distinct from a score whose
     # STATUS is insufficient_data — "never run" and "ran, unscoreable" are
     # different things to tell a viewer.
+    # Findings about the SUBJECT that do not move the composite — distinct from
+    # `score.degradationFlags`, which say why a NUMBER is rougher than it would
+    # otherwise be. Conflating them would repeat the category error this
+    # codebase already refused once, when `NOT_YET_MEASURED` was kept apart from
+    # `NO_POPULATION`: "we did not measure this" and "we measured it and this is
+    # what is true" must not render in one list. Same shape as those flags — a
+    # code with a client-facing string — so the copy-coverage guard extends to
+    # it unchanged. Derived on read, never stored, exactly like
+    # `CompetitorComparison`.
+    visibility_flags: list[str] = []
     score: ScoreDetailOut | None
     # Ordered heaviest-weight first, matching the ledger's bottom-up stacking.
     dimensions: list[ReportDimensionOut]

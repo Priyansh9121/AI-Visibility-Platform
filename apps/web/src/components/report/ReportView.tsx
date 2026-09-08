@@ -49,6 +49,7 @@ import {
   DEGRADATION_FLAG,
   DETECTION_STATUS,
   EXCLUSION_REASON,
+  VISIBILITY_FLAG,
   checkLabel,
   dimensionLabel,
   engineLabel,
@@ -409,6 +410,16 @@ function ScoreBeat({
               Both scores are kept.
             </p>
           )}
+          {/*
+            What the composite says in one number, said in words — and the one
+            case where a single number genuinely cannot carry it. Above the
+            degradation flags because it is a finding rather than a caveat.
+          */}
+          {report.visibilityFlags?.map((flag) => (
+            <p key={flag} className="mt-4 text-ui-sm leading-prose text-text-secondary">
+              {VISIBILITY_FLAG[flag] ?? flag}
+            </p>
+          ))}
           {narrative.exclusions.length > 0 && <ExclusionNote narrative={narrative} />}
           {flags.length > 0 && (
             <ul className="mt-4 flex flex-col gap-2 text-ui-sm text-text-tertiary">

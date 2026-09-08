@@ -1015,3 +1015,153 @@ class TestTheCrossEngineReading:
         public = (await client.get(f"{BASE}/reports/{token}")).json()
 
         assert public["proof"]["crossEngine"] == private["proof"]["crossEngine"]
+
+
+class TestVisibilityFindings:
+    """Facts about the subject that no single score number carries.
+
+    `psmdigitalagency.com` is the shape: never named in answer to a question
+    that did not name it, named in almost every answer to one that did. The
+    composite correctly reports 0% Mention Rate; this is the other half.
+    """
+
+    def test_a_brand_named_only_where_the_question_named_it(self) -> None:
+        from avp_api.models.prompt import PromptIntent
+        from avp_api.services.report import NAMED_ONLY_WHEN_PROMPTED, _visibility_flags
+
+        results, prompts = _rows([
+            (PromptIntent.AWARENESS, False),
+            (PromptIntent.AWARENESS, False),
+            (PromptIntent.COMPARISON, True),
+            (PromptIntent.BOTTOM_FUNNEL, True),
+        ])
+
+        assert _visibility_flags(results, prompts) == [NAMED_ONLY_WHEN_PROMPTED]
+
+    def test_one_unprompted_mention_falsifies_it(self) -> None:
+        """"Never discovered" is the claim, so a single discovery ends it."""
+        from avp_api.models.prompt import PromptIntent
+        from avp_api.services.report import _visibility_flags
+
+        results, prompts = _rows([
+            (PromptIntent.AWARENESS, False),
+            (PromptIntent.AWARENESS, True),
+            (PromptIntent.COMPARISON, True),
+        ])
+
+        assert _visibility_flags(results, prompts) == []
+
+    def test_a_brand_invisible_everywhere_gets_no_flag(self) -> None:
+        """Not the same finding, and must not borrow its words.
+
+        A brand named nowhere is not "named only when prompted" — there is no
+        second half to report, and saying there is would invent one.
+        """
+        from avp_api.models.prompt import PromptIntent
+        from avp_api.services.report import _visibility_flags
+
+        results, prompts = _rows([
+            (PromptIntent.AWARENESS, False),
+            (PromptIntent.COMPARISON, False),
+        ])
+
+        assert _visibility_flags(results, prompts) == []
+
+    def test_no_awareness_prompts_makes_no_claim_either_way(self) -> None:
+        """Mention Rate is already excluded as NO_AWARENESS_POPULATION there."""
+        from avp_api.models.prompt import PromptIntent
+        from avp_api.services.report import _visibility_flags
+
+        results, prompts = _rows([
+            (PromptIntent.COMPARISON, True),
+            (PromptIntent.BOTTOM_FUNNEL, True),
+        ])
+
+        assert _visibility_flags(results, prompts) == []
+
+    def test_an_engine_that_did_not_answer_is_not_a_missed_discovery(self) -> None:
+        """A timed-out awareness call is missing data, not an absence.
+
+        Counting it would let a provider outage manufacture this finding.
+        """
+        from avp_api.models.engine_result import EngineResultStatus
+        from avp_api.models.prompt import PromptIntent
+        from avp_api.services.report import _visibility_flags
+
+        results, prompts = _rows([
+            (PromptIntent.AWARENESS, False, EngineResultStatus.TIMEOUT),
+            (PromptIntent.COMPARISON, True),
+        ])
+
+        assert _visibility_flags(results, prompts) == []
+
+    async def test_it_reaches_the_report_payload(
+        self, client: AsyncClient, monkeypatch
+    ) -> None:  # noqa: ANN001
+        """End to end, on a scan where only the prompted questions name them."""
+        from avp_api.services.prompts import GeneratedPrompt
+
+        await _sign_up(client, "vis@test.example")
+
+        generated = [
+            GeneratedPrompt(
+                text="who are the best agencies for this",
+                intent=PromptIntent.AWARENESS,
+            ),
+            GeneratedPrompt(text="is helpscout worth it", intent=PromptIntent.BOTTOM_FUNNEL),
+        ]
+
+        async def fake_generate(**kwargs):  # noqa: ANN003, ARG001
+            return generated, "stub"
+
+        async def fake_ask_all(prompt, *, engines, settings):  # noqa: ANN001, ARG001
+            named = "helpscout" in prompt
+            return [
+                EngineAnswer(
+                    engine=e, engine_version="stub", prompt_text=prompt,
+                    text=("Help Scout is worth a look." if named
+                          else "Zendesk and Intercom are the usual choices."),
+                    latency_ms=5)
+                for e in engines
+            ]
+
+        async def fake_sentiment(answer, *, subject_name, settings=None):  # noqa: ANN001, ARG001
+            return Sentiment.NEUTRAL, Decimal("0.800")
+
+        monkeypatch.setattr(scan_runner.prompt_service, "generate_prompts", fake_generate)
+        monkeypatch.setattr(scan_runner.engine_service, "ask_all", fake_ask_all)
+        monkeypatch.setattr(
+            scan_runner.extraction_service, "classify_sentiment", fake_sentiment
+        )
+
+        cid = (await client.post(
+            f"{BASE}/clients", json={"url": "helpscout.com", "classify": False}
+        )).json()["id"]
+        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+        await client.post(f"{BASE}/scans/{sid}/score")
+
+        report = (await client.get(f"{BASE}/scans/{sid}/report")).json()
+
+        assert report["visibilityFlags"] == ["NAMED_ONLY_WHEN_PROMPTED"]
+        # The composite says the same thing in its own vocabulary.
+        assert report["score"]["mentionRate"] == "0.00"
+
+
+def _rows(spec):  # noqa: ANN001, ANN202
+    """(intent, mentioned[, status]) tuples as EngineResult rows plus their prompts."""
+    from avp_api.models import EngineResult, Prompt
+    from avp_api.models.engine_result import Engine, EngineResultStatus
+
+    results, prompts = [], {}
+    for i, item in enumerate(spec):
+        intent, mentioned = item[0], item[1]
+        status = item[2] if len(item) > 2 else (
+            EngineResultStatus.OK if mentioned else EngineResultStatus.ANSWERED_NO_MENTION
+        )
+        pid = f"prmt_{i:04d}"
+        prompts[pid] = Prompt(id=pid, prompt_set_id="ps", text="q", intent=intent, position=i)
+        results.append(EngineResult(
+            id=f"eres_{i:04d}", scan_id="scan", prompt_id=pid, engine=Engine.CLAUDE,
+            status=status, mentioned=mentioned,
+        ))
+    return results, prompts
