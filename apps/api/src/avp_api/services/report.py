@@ -128,8 +128,15 @@ async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:
     # same way GET /scans/{id}/score does it — it is a pure function of data
     # already stored, and a second stored copy could fall out of step.
     comparisons: list[Any] = []
+    previous_versions: list[str] = []
     if score_row is not None:
         _row, _computed, comparisons = await scoring_runner.score_scan(session, scan, persist=False)
+        # Whether this scan has been scored under an earlier definition. A
+        # number that moved because the formula changed must not read as a
+        # number that moved because the business did.
+        previous_versions = await scoring_runner.prior_formula_versions(
+            session, scan.id, score_row.formula_version
+        )
 
     return ReportOut(
         scan_id=scan.id,
@@ -151,7 +158,7 @@ async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:
             industry_niche=client.industry_niche,
             brand_name=client.brand_name,
         ),
-        score=_score_out(score_row, comparisons),
+        score=_score_out(score_row, comparisons, previous_versions),
         dimensions=_dimensions(score_row),
         competitor_set=_competitor_set_out(competitor_set, comparisons),
         proof=_proof(results, competitor_set, prompts),
@@ -240,10 +247,13 @@ async def _load_action_items(session: AsyncSession, scan_id: str) -> list[Action
 # --------------------------------------------------------------------------
 
 
-def _score_out(row: Score | None, comparisons: list[Any]) -> ScoreDetailOut | None:
+def _score_out(
+    row: Score | None, comparisons: list[Any], previous_versions: list[str]
+) -> ScoreDetailOut | None:
     if row is None:
         return None
     out = ScoreDetailOut.model_validate(row)
+    out.previous_formula_versions = previous_versions
     out.competitors = [
         CompetitorScoreOut(
             competitor_id=c.competitor_id,

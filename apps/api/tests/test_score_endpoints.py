@@ -302,3 +302,95 @@ class TestInsufficientData:
         assert body["status"] == "insufficient_data"
         assert body["composite"] is None
         assert body["reasonCode"] == "INSUFFICIENT_DATA"
+
+
+class TestReScoringUnderANewFormulaVersion:
+    """Re-scoring is an explicit act that ADDS a row and says so.
+
+    Scoring v2 changed what Mention Rate means, so a scan scored under v1.1 and
+    re-scored today produces a different composite from the same engine results.
+    Rule 5 keeps both rows; these tests are about the half rule 5 does not cover
+    on its own — that a reader is told the definition moved, rather than left to
+    conclude their business did.
+    """
+
+    async def test_re_scoring_inserts_and_leaves_the_earlier_row_intact(
+        self, client: AsyncClient, session, stub_engines
+    ) -> None:  # noqa: ANN001
+        from avp_api import ids
+        from avp_api.models import Score, ScoreStatus
+
+        await _sign_up(client)
+        sid = await _scan(client, stub_engines)
+        session.add(Score(
+            id=ids.new_id(ids.SCORE), scan_id=sid, status=ScoreStatus.SCORED,
+            composite=Decimal("28.89"), formula_version="v1.1",
+            weights={}, excluded_dimensions={}, degradation_flags=[],
+        ))
+        await session.commit()
+
+        fresh = (await client.post(f"{BASE}/scans/{sid}/score")).json()
+
+        assert fresh["formulaVersion"] == FORMULA_VERSION
+        history = (await client.get(f"{BASE}/scans/{sid}/scores")).json()
+        assert {h["formulaVersion"] for h in history} == {"v1.1", FORMULA_VERSION}
+        old = next(h for h in history if h["formulaVersion"] == "v1.1")
+        assert old["composite"] == "28.89", "the earlier definition's record was rewritten"
+
+    async def test_the_score_names_the_definition_it_superseded(
+        self, client: AsyncClient, session, stub_engines
+    ) -> None:  # noqa: ANN001
+        """The number moved because the formula did, and the payload says so.
+
+        Without this the only reading available to a client is "the score
+        dropped", which is a claim about their business. The true one is "the
+        definition changed", which is a claim about ours.
+        """
+        from avp_api import ids
+        from avp_api.models import Score, ScoreStatus
+
+        await _sign_up(client)
+        sid = await _scan(client, stub_engines)
+        session.add(Score(
+            id=ids.new_id(ids.SCORE), scan_id=sid, status=ScoreStatus.SCORED,
+            composite=Decimal("28.89"), formula_version="v1.1",
+            weights={}, excluded_dimensions={}, degradation_flags=[],
+        ))
+        await session.commit()
+
+        fresh = (await client.post(f"{BASE}/scans/{sid}/score")).json()
+        assert fresh["previousFormulaVersions"] == ["v1.1"]
+
+        # And on every surface that shows the score, not just the one that made it.
+        assert (await client.get(f"{BASE}/scans/{sid}/score")).json()[
+            "previousFormulaVersions"
+        ] == ["v1.1"]
+        report = (await client.get(f"{BASE}/scans/{sid}/report")).json()
+        assert report["score"]["previousFormulaVersions"] == ["v1.1"]
+
+    async def test_a_scan_scored_once_names_nothing(
+        self, client: AsyncClient, stub_engines
+    ) -> None:  # noqa: ANN001
+        """Most scans. An empty list, never a note about a change that did not happen."""
+        await _sign_up(client)
+        sid = await _scan(client, stub_engines)
+
+        body = (await client.post(f"{BASE}/scans/{sid}/score")).json()
+
+        assert body["previousFormulaVersions"] == []
+
+    async def test_re_scoring_twice_under_one_version_does_not_report_itself(
+        self, client: AsyncClient, stub_engines
+    ) -> None:  # noqa: ANN001
+        """Rule 5 keys on (scan, version), so a second run at the same version
+        updates that row rather than adding one. Nothing changed definition, so
+        there is nothing to disclose."""
+        await _sign_up(client)
+        sid = await _scan(client, stub_engines)
+
+        await client.post(f"{BASE}/scans/{sid}/score")
+        again = (await client.post(f"{BASE}/scans/{sid}/score")).json()
+
+        assert again["previousFormulaVersions"] == []
+        history = (await client.get(f"{BASE}/scans/{sid}/scores")).json()
+        assert len(history) == 1

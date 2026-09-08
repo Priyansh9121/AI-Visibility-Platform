@@ -194,3 +194,29 @@ describe('the two mention-rate populations are labelled, not reconciled', () => 
     expect(html).not.toContain('are not the Mention Rate in the score above');
   });
 });
+
+describe('a score that moved because the formula moved says so', () => {
+  // Rule 5 keeps a row per formula version, so re-scoring under v2 leaves the
+  // v1.1 row intact and a client sees a different number than last week.
+
+  it('names the earlier definition when one exists', () => {
+    const rescored: Report = {
+      ...helpscoutReport,
+      score: { ...helpscoutReport.score!, previousFormulaVersions: ['v1.1'] },
+    };
+
+    const html = render(rescored);
+    expect(html).toContain('also been scored under an earlier definition');
+    expect(html).toContain('(v1.1)');
+    // The claim it exists to prevent: that the SITE got worse.
+    expect(html).toContain('the measurement changed rather than the site');
+    expect(html).toContain('Both scores are kept');
+  });
+
+  it('says nothing at all for a scan scored once', () => {
+    // Most scans. A note about a change that did not happen is noise that
+    // invites the reader to look for one.
+    const html = render(helpscoutReport);
+    expect(html).not.toContain('also been scored under an earlier definition');
+  });
+});

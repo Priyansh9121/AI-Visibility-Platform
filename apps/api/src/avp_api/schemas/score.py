@@ -48,6 +48,16 @@ class ScoreOut(ApiModel):
     technical_foundation: Decimal | None = None
 
     formula_version: str
+    # Other formula versions this scan has ALSO been scored under, oldest
+    # first — empty for a scan scored once, which is most of them.
+    #
+    # Present so a changed number can be explained. Rule 5 keeps every version's
+    # row, so re-scoring under v2 leaves the v1.1 row intact and the reader sees
+    # a different composite than they saw last week. Without this the only
+    # honest reading available to them is "the score dropped", which is a claim
+    # about their business; the true one is "the definition changed", which is
+    # a claim about ours. The report says which.
+    previous_formula_versions: list[str] = []
     # The EFFECTIVE weights used, after any exclusions — so the breakdown
     # re-sums against its own weights.
     weights: dict = Field(default_factory=dict)

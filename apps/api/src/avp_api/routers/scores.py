@@ -31,8 +31,11 @@ async def _load_scan(db: Any, scan_id: str, agency_id: str) -> Scan:
     return scan
 
 
-def _detail(row: Score, competitors: list) -> ScoreDetailOut:  # noqa: ANN001
+def _detail(
+    row: Score, competitors: list, previous_versions: list[str] | None = None
+) -> ScoreDetailOut:  # noqa: ANN001
     out = ScoreDetailOut.model_validate(row)
+    out.previous_formula_versions = previous_versions or []
     out.competitors = [
         CompetitorScoreOut(
             competitor_id=c.competitor_id, name=c.name,
@@ -69,7 +72,10 @@ async def compute_scan_score(
     row, _computed, competitors = await scoring_runner.score_scan(db, scan)
     await db.commit()
     await db.refresh(row)
-    return _detail(row, competitors)
+    return _detail(
+        row, competitors,
+        await scoring_runner.prior_formula_versions(db, scan.id, row.formula_version),
+    )
 
 
 @router.get("/scans/{scanId}/score", response_model=ScoreDetailOut)
@@ -89,7 +95,10 @@ async def get_scan_score(
     if row is None:
         raise NotFound(detail="This scan has not been scored yet.")
     _, _computed, competitors = await scoring_runner.score_scan(db, scan, persist=False)
-    return _detail(row, competitors)
+    return _detail(
+        row, competitors,
+        await scoring_runner.prior_formula_versions(db, scan.id, row.formula_version),
+    )
 
 
 @router.get("/scans/{scanId}/scores", response_model=list[ScoreOut])
