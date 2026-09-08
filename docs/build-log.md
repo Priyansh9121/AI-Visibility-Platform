@@ -12810,3 +12810,176 @@ constraint applies to a design being proposed, not only to code being shipped.
 The third-engine / Epic 12 fork stays paused, and this entry does not resume
 it — it recommends that both halves wait on the same evidence. Nothing from
 scoring v2 is open.
+
+# Pilot dry run — the send path works, and it would have embarrassed us
+
+`1a1f698` claimed Epic 9's pilot is not blocked on engineering. **That was
+reasoning, not verification.** This session walked the acceptance criterion end
+to end against the real system: sign-up, intake, scan, score, share, open as a
+stranger, download the PDF, revoke.
+
+**The claim was mostly right and importantly wrong.** The mechanism works. What
+the report *says* to a prospect, on the first real subject tried, includes a
+false high-priority instruction about their own infrastructure.
+
+No code was changed. Findings are ranked below; the two that matter get their
+own brief.
+
+## What was walked, and what it cost
+
+A fresh agency (`Northlight Digital`), a fresh prospect (`helpwise.io` — a real
+company, chosen because it scored 0 of 4 on the awareness screen from Epic
+9.26, which is what an agency's actual prospect looks like). Driven through the
+HTTP API with a cookie jar, as a browser would.
+
+    intake (crawl + classify)     9.4s   classified "customer service software",
+                                         niche "shared inbox and omnichannel support
+                                         helpdesk for teams", brand "Helpwise"
+    scan (12 prompts, 3 engines)  286s   succeeded, 36 results
+    score                                composite 8.15, v2
+    share link                           minted, expires in 30 days
+    read as a stranger                   HTTP 200, no session
+    PDF as a stranger                    HTTP 200, 6,298 bytes, valid 4-page PDF
+    revoke                               204, then 404 on BOTH read routes
+
+**Everything in that column works.** The send path Epic 9's acceptance
+criterion depends on is real, including the parts shipped most recently:
+revocation kills both the JSON and the PDF route, and the v2 surfaces render on
+live payloads.
+
+## FIX BEFORE PILOT
+
+### 1. The report tells a prospect to fix a site that is not broken
+
+`helpwise.io` returns **HTTP 200 in 1.13 seconds**. Intake crawled it
+successfully moments earlier — two pages, 828 words. The technical audit then
+failed with `BROWSER_ERROR` (Playwright `TimeoutError`), and the fix generator
+turned that into the fix list's **highest-priority item**:
+
+> *"Fix the crawl failure on helpwise.io so the site returns rendered HTML to
+> automated visitors, then re-run the scan to confirm content is readable"*
+
+**This is the single most damaging thing this product could say.** It is an
+instruction to a prospect to repair infrastructure that works, in a document an
+agency sends to win their business, and the prospect can disprove it in one
+click.
+
+Two separable causes, and the second is the more serious:
+
+* **The crawlers disagree.** `crawl.py` uses `wait_until="domcontentloaded"` at
+  a 12s timeout; `technical_audit.py` uses `wait_until="load"` at 25s. On a
+  marketing site with third-party tags, `load` can miss 25s where
+  `domcontentloaded` finishes in one. Not a one-line fix — the audit genuinely
+  needs the load event, because LCP is meaningless without it.
+* **A tool failure became a client finding.** This codebase already draws
+  exactly this distinction and argues for it at length: `NOT_YET_MEASURED`
+  means *our* capability is missing and must not read as a finding about the
+  client, as against `NO_POPULATION`, which is about them. A `BROWSER_ERROR` is
+  the first kind. It was rendered as the second.
+
+**And it costs the prospect points.** Technical Foundation was excluded and its
+weight redistributed, so the composite of **8.15** is computed over four
+dimensions. Had the audit scored this site anywhere in the 60–80 band a real
+SaaS marketing site would expect, the composite would have been **13.3–15.3**.
+The audit failure roughly halves the number the prospect is shown.
+
+### 2. The landing page understates scan time by about half
+
+It says *"A scan takes about six minutes."* Measured: the operator path took
+**286s (4.8 min) at 12 prompts**. The default is 24 (`TARGET_PROMPTS`, and the
+pricing card says "twenty-four intent-tagged questions"). Extrapolating the
+loop from the three `verify_e2e` runs while holding setup fixed puts a
+24-prompt scan at **8.5–9 minutes** — an estimate, labelled as one, but the
+direction is not in doubt and `product-spec.md` already says the 300s budget is
+missed "and by more" since Epic 9.17.
+
+A prospect told six minutes who waits nine assumes it is broken.
+
+### 3. A sentence claims a denominator it does not have
+
+The proof beat renders *"…is missing from 31 of the 40 answers this scan
+measured."* The scan measured **48**. `MAX_SHELF_PROMPTS = 20` caps the shelf at
+20 prompts × 2 engines = 40 rows, and the copy calls that subset "this scan".
+The number is right about the shelf and wrong about the scan, in a sentence that
+says "scan".
+
+## NOTE AND MOVE ON
+
+* **A fourth population on the page.** That same shelf sentence implies 9 named
+  of 40, beside a v2 Mention Rate of `0.00`. Same class as the mismatch
+  disclosed in `994bb04`, one beat further down, undisclosed. Lower severity
+  because the sentence is about *answers* rather than labelled "mention rate" —
+  but a reader doing arithmetic finds it.
+* **One SerpApi query timed out** (`SERP_TIMEOUT`, "Helpwise competitors") and
+  detection still returned five competitors. Degraded exactly as designed;
+  recorded because it happened on the first real run.
+* **Responsive layout was not checked.** Static markup was rendered and read;
+  no browser at a narrow viewport. Unverified rather than fine.
+
+## The subjective pass — reading it as an operator, not an engineer
+
+**The narrative holds together.** On `psmdigitalagency.com` the headline reads
+*"PSM Digital Agency is close to invisible when buyers ask"*, the score shows
+**17/100 · Effectively invisible**, and the gap beat says *"Mention Rate is
+costing the most — 30.0 points"*, then names what is behind it. That is an
+argument, not five numbers.
+
+**Three of the four fixes read like a person wrote them**, and they cite real
+figures rather than gesturing:
+
+> *"Only 6 of 91 citations in this scan pointed at helpwise.io; the rest went
+> to third-party directories led by g2.com (22) and capterra.com (5)."*
+
+> *"Build comparison pages on helpwise.io covering Helpwise against Missive,
+> Front, Drag, Happyfox and Bolddesk…"*
+
+Specific, checkable, and about this business. **The fourth is finding 1** — and
+it is worth noting that one false item sits in a list whose other three are the
+best argument this product makes.
+
+**Nothing leaked.** Two real payloads rendered: no `undefined`, no bare `null`,
+no `NaN`, no `[object Object]`, no raw `SCREAMING_CODE` in prose, no
+placeholders. `copyCoverage.test.ts` is doing its job on live data and not only
+in fixtures — the `NAMED_ONLY_WHEN_PROMPTED` flag and the v1.1 re-score note
+both rendered as sentences.
+
+**The commercial surface is honest.** The pricing card says *"One plan, one
+price — there is no tier above this one to be upsold to"* and *"Scan volume is
+not metered today. That is an absence rather than a promise of unlimited use"*.
+Nothing on it overstates what exists. §5.3's "one plan, $29/month, 3 seats" and
+the built surface agree.
+
+## Is Epic 9's acceptance criterion ready to attempt?
+
+**Not quite — and the gap is one afternoon, not one epic.**
+
+The mechanism is ready. A pilot agency can sign up, scan a prospect, get a
+report, send a link, and revoke it. That was verified rather than assumed, on
+the real system, including a stranger downloading the PDF.
+
+What stands between here and a pilot is **finding 1**, and it is not a polish
+item: the first real prospect tried produced a report containing a false,
+high-priority claim about that prospect's own website, and a composite roughly
+half what it should be. Sending that to three to five agencies would burn the
+pilot's credibility on the one thing this product sells — being right about
+somebody's site.
+
+Findings 2 and 3 are smaller and both are copy.
+
+**The two live findings from the cross-engine work are legible.**
+`NAMED_ONLY_WHEN_PROMPTED` fired on both a stored scan and the fresh live one
+and reads as a finding rather than reassurance; the population disclosure from
+`994bb04` renders where intended. Neither needed forcing — helpwise triggered
+the flag naturally, which is itself the confirmation that the condition matches
+real subjects.
+
+## Open
+
+**New, from this session:** the audit/fix-generator finding (1) and the two copy
+items (2, 3), each for its own brief. The audit one should be scoped as two
+questions — why the audit's crawler is stricter than intake's, and separately
+why a tool failure can become a client-facing fix at all, which is the part that
+generalises beyond this crawler.
+
+Unchanged: the third-engine / Epic 12 fork stays paused. Nothing from scoring
+v2 is open.
