@@ -13381,3 +13381,159 @@ into whichever brief touches them.
 
 Unchanged: the third-engine / Epic 12 fork stays paused, and Epic 12's "why"
 engine remains recommended-against until the pilot runs.
+
+# The second dry run's list, closed — and Citation Strength taken off the scale
+
+`2436f92` walked Epic 9's acceptance criterion a second time and found three
+things a prospect could catch on one page. All three are closed: two as the
+one-cause bugs they were, the third as an interim that stops the report
+promising what it cannot deliver, without deciding what the dimension should
+measure instead. Governance line, per north-star.md §8.1: Layer 3 (fix
+generation) and Layer 7 (report), Activation phase — and the composite itself
+for the third, which is the one place this session widened, said below.
+
+## Finding 1 — the fix list counted the wrong population (`f342ed2`)
+
+`fix_runner.collect_facts` filtered engine results on `status is OK`, which
+means *answered and named the brand*, and dropped `ANSWERED_NO_MENTION` — the
+status the API contract labels in bold as *a finding, not a failure*. So the
+generator only ever saw the answers that named the brand: the naming count
+always equalled the total, citations were tallied inside that subset, and the
+top-cited-domain list was built from it. That is how a real report came to say
+*"All 30 of 30 answers named Pirsch"* two beats after a proof beat counting 30
+of 71, and *"3 of 123 citations"* against 323 — and why the generator named
+`analytics-compare.com` (4 citations) and never saw
+`analytics-alternatives.com` (15), the page's own top unclaimed source.
+
+**The rule now has one home.** `ANSWERED_STATUSES` lives beside the enum in
+`models/engine_result.py`; `report.py` — which had it right since Epic 7.1 —
+imports it instead of owning a copy, and `collect_facts` filters on it. Tested
+where it went wrong, with the shape that would have caught it: a scan driven
+through the real chain with stubbed engines, half of whose answers do not name
+the brand and whose non-naming answers carry citations of their own. On the old
+predicate the assertions fail at **6 against 12, 4 against 8**, and the facts
+disagree with the proof beat; a fourth test holds `collect_facts` and
+`build_report` to the same four counters for the same scan, whatever either
+counts in future.
+
+**Not confirmed on live copy, and why.** Stored fix lists written before this
+keep their wording until regenerated — the pirsch item in `avp_dev` still says
+"All 30 of 30". Regenerating needs a model call, and the Anthropic balance that
+ran out during the dry run has not been refilled, so the boundary test is the
+proof. A new scan generates from the corrected facts.
+
+## Finding 2 — the PDF's verdict word was not the page's (`45814b0`)
+
+`report_pdf._band` claimed to mirror `VisibilityBadge` and cut at 15 and 35
+with its own words. Corrected to the design system's 20/40/60/80 and *Absent ·
+Barely visible · Emerging · Established · Highly visible*, and policed the way
+`report_narrative.py`'s copy of `derive.ts` already is: one checked-in table at
+every boundary (`packages/shared-types/fixtures/visibility-bands.json`), read
+by a design-system test that asserts it still describes `visibilityBand` and
+the badge label, and by an API test that asserts the PDF says the same. The old
+function fails **13 of the table's 21 assertions**; the design system exports
+`visibilityBandLabel` so the TypeScript side has a name to call. Live: the
+re-scored pirsch PDF prints *"Barely visible"* under 33.93, as the page does.
+
+## Finding 3 — Citation Strength could not be earned (`163894e`)
+
+**The decision, stated rather than defaulted: option (a), exclude the
+dimension.** `scoring.citation_strength` divides the distinct domains citing
+the subject — in practice its own domain, 0 or 1 — by every distinct
+third-party domain the engines cited, so its ceiling is `1/N`. The numbers,
+from `avp_dev` before the change:
+
+    stored scores                         33 (15 v1.1, 18 v2)
+    Citation Strength, maximum          3.70
+                       median           0.88
+                       mean             1.14
+    pirsch.io, N (distinct 3rd-party)    152   -> subject and all five rivals 0.66
+
+Option (b) — capping what the pitch's sum could claim — reaches one of the
+five places the unearnable figure appeared: the score table's *"19.9 points
+left"*, the gap beat's runners-up, the fix list's *"+19.9 pts"* chip, the pitch
+beat's *"91 with the fixes above"*, and a rivals column reading 0.7 six times.
+Excluding the dimension reaches all five through machinery that already
+exists, and it is the treatment v1.1 gave Technical Foundation before Epic 6
+could measure it. Nothing informative is lost: across 33 scores the dimension
+never carried information, and the citations themselves — the proof beat's
+tables and the unclaimed-domain fix — read the persisted rows and never
+depended on the score.
+
+**What changed.** `compute_score` excludes Citation Strength under
+`NO_AUTHORITY_DATA`, which names the missing input as the other reasons do
+(`NOT_YET_MEASURED` would say a capability is on its way). The same code is no
+longer *also* a degradation flag on a new score — a dimension that is left out
+is not "rougher", and saying both says two things — and the flag's sentence on
+older scores now describes what that formula did rather than the comparison
+against the best-cited brand it never made. Rivals' citation strength is
+`null` while the subject's is excluded, so a column means one thing; the
+schema, the regenerated TypeScript contract and both renderers carry it as a
+dash. The PDF's *"Left out of the score, and why"* now prints the page's
+sentence under each label — until this it printed the label alone, which for a
+permanent exclusion would leave a reader two words. `FORMULA_VERSION` is
+`v2.1`; scoring-spec.md and api-contracts.md record all of it.
+
+**Confirmed on the real scan.** Re-scoring pirsch.io through the API wrote a
+v2.1 row at **33.93** beside the untouched v2 row at 27.28;
+`previousFormulaVersions` says `["v2"]`; the share page shows the exclusion
+card with its badge and sentence, the rivals column as dashes, and *"the
+weighted composite of 4 measured dimensions"*; the PDF agrees. Every other
+stored row is untouched — 15 v1.1, 18 v2, and the one v2.1 row this
+verification added. `alembic check` reports no drift; the column was already
+nullable, so there is no migration.
+
+**Said plainly, because it is the kind of thing that hides:** the pitch beat
+now recovers **61.7 points to a composite of 96**, where before it recovered
+63.2 to 91. The sum barely moved and the ceiling rose, because the four
+remaining dimensions each weigh more — Share of Voice's gap went from 22.5 to
+28.2 under a 31.25 weight. Every one of those points can now be earned, which
+was the objection. Whether a pitch should sum gaps at all is a different
+question and not this session's.
+
+**What it costs.** The fix list loses the citation-strength gap fix — on
+pirsch, the *"publish a linkable comparison and methodology section"* item,
+which was one of the better-written ones — because a dimension that is not
+scored has no gap to recover. The unclaimed-domain fix still says where to get
+cited. Under the heavier weights Technical Foundation's gap (7.5) now clears
+the threshold, so its canned fix surfaces. And a re-scored scan's stored fix
+rows keep a `gap:citation_strength` item until regenerated; nothing renders it.
+
+**Alerts.** `generate_for_scan` now declines to compare composites scored
+under different formula versions, with a test each way. Nothing forced this
+today — the bump raises scores, and a rise is never an alert — but a bump the
+other way would have fired *"visibility fell"* on every client with a
+baseline, and the report already refuses that reading through
+`previousFormulaVersions`.
+
+## Verification
+
+**api 1,193** (1,159 → 1,163 → 1,184 → 1,193), **web 750** (749 → 750),
+**design-system 436** (418 → 436), shared-types 53. Each commit green on the
+full API suite, `ruff check src tests` and `tsc` on all three packages before
+the next started. The fix-generator chain tests, which run an engines-only
+executor and had leaned on Citation Strength as their only gap, now stub a
+brand named in half its answers — which is what the generator is for.
+
+## Is the pilot ready now?
+
+**The three findings that `2436f92` put between here and a send are closed.**
+What has not been done is a third operator walk on the new definition, which
+is its own session by the same rule the last two followed. Below the line,
+unchanged from the second dry run: phone-width panning, a partial scan that
+says so only in numbers, re-scoring on every report read, and the
+prompt-sensitivity of the awareness screen.
+
+## Open
+
+**Citation Strength's real definition** — a Layer 5 brief: citation share
+against the best-cited single brand, the rate of answers citing the subject at
+all, or what an authority feed makes possible. The exclusion is an interim and
+says so in three places.
+
+**A third pilot dry run on v2.1**, with a funded balance, to confirm finding 1
+on generated copy and read the pitch beat as an operator now that all of its
+points are earnable.
+
+Unchanged: the third-engine / Epic 12 fork stays paused, and Epic 12's "why"
+engine remains recommended-against until the pilot runs.
