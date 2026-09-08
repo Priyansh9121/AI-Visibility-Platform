@@ -12483,3 +12483,93 @@ OpenAPI contract is untouched, `tsc` clean on all three packages, no migration.
 * **The "answerable but not discoverable" secondary fact.**
 * The third-engine / Epic 12 fork stays paused, and the corrected split
   denominator from the previous entry applies to it when it resumes.
+
+# The two mention rates are now labelled, not reconciled
+
+Scoring v2 scoped the composite's Mention Rate to unprompted questions and
+deliberately left `divergence.py` counting the whole prompt set. That was the
+right call twice over — the cross-engine reading is *about* the engines, and
+the whole prompt set is what makes it that — but it put **two numbers on one
+page, both labelled mention rate, both correct, differing for a reason nothing
+disclosed.** Live on every report since `c0864e3`, not a future risk.
+
+Closes the third open item from the scoring v2 entry.
+
+## Disclosure, not homogenization
+
+Making the standings awareness-only would have deleted the thing the section
+exists to show. So the fix is a paragraph under the standings — the point where
+a reader who has just read the headline score above would notice the figures
+below are higher:
+
+> *These per-engine figures are not the Mention Rate in the score above, and
+> will usually differ from it. The score counts only questions that did not
+> name {subject} — the ones that can show whether a buyer discovers the brand.
+> The figures here count every question in the set, including those that named
+> {subject} and which an engine will nearly always echo back.*
+
+The last clause is the one doing the work. "Different populations" tells a
+reader nothing; "questions that named you, which an engine echoes back" tells
+them why the lower number is the honest one. A test asserts that clause
+specifically, so a future tidy-up cannot reduce it to the vaguer sentence.
+
+**Copy, not schema.** `report_pdf.py` does not render the cross-engine section
+at all — checked rather than assumed — so a `CrossEngineOut` field would have
+been a machine-readable distinction with no machine to read it. The Epic 9.14
+"one source per number" discipline is not at risk here because there is no
+second renderer to drift. If the PDF ever grows this section, the field becomes
+worth adding and this is the note that says so.
+
+## The excluded case needed its own sentence
+
+Scoring v2 can exclude Mention Rate entirely (`NO_AWARENESS_POPULATION`, when a
+prompt set has no unprompted questions). Then the standard sentence points at a
+number that is not on the page. So the component branches on whether the
+headline dimension is included, and the other branch says the score has no
+Mention Rate *because* there was nothing unprompted to measure, and that these
+figures are not a substitute for it.
+
+## Two codes were already reaching readers as raw identifiers
+
+`ReportView` falls back to the code itself when copy is missing —
+`DEGRADATION_FLAG[flag] ?? flag` renders the identifier as a bullet. Checking
+that scoring v2's new code had copy turned up that **`NO_SENTIMENT_POPULATION`
+has been emitted since Epic 5 with no entry at all**, so a scan where the brand
+was never named has been printing that string to clients. Not introduced here;
+found here, and fixed here, because leaving a known machine identifier on a
+document that goes to a prospect's CMO is not a thing to note and walk past.
+
+Both now have copy, and `copyCoverage.test.ts` asserts every code the scoring
+engine can emit has a label and a sentence — plus that no sentence merely
+echoes its own code, which is the shape a placeholder takes when someone
+satisfies the first check without doing the work.
+
+**The guard's weakness is stated in the guard.** Its list mirrors the literals
+in `scoring.py` by hand and nothing enforces the mirror, so a code added there
+and not here still ships. It guards against forgetting the copy, not against
+forgetting the file. Deriving it needs the codes in the shared contract, which
+is more than this defect warrants today.
+
+## And the dimension descriptions still described the retired definition
+
+`DIMENSION_MEANING.mention_rate` read *"How often the brand is named at all
+when a buyer asks"* — which is v1.1's scope, the one v2 replaced, still
+sitting in the string table a week later. Corrected, along with Share of Voice.
+Worth recording that this is the second document scoring v2 left stale after
+`scoring-spec.md`: a definition change has more surfaces than the function it
+starts in.
+
+## Verification
+
+**web 739, up from 721** — 4 render tests for the two wordings, 14 in the new
+coverage guard. api 1,133, design-system 418 and shared-types 53 unchanged, and
+nothing outside `apps/web` was touched. `tsc` clean on all three packages, no
+API or contract change.
+
+## Open, unchanged from the scoring v2 entry
+
+Three of the four remain, and no fifth is added: **re-scoring the 14 stored
+v1.1 scores** (product, waiting on the founder), **whether Sentiment should be
+scoped too** (it would raise scores by up to 26 points), and **the "answerable
+but not discoverable" secondary fact**. The third-engine / Epic 12 fork stays
+paused.

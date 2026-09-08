@@ -228,16 +228,21 @@ function Brand({ agency }: { agency: Report['agency'] }) {
  * absence in words instead of a percentage.
  */
 function CrossEngineReading({
-  proof,
+  report,
   subjectName,
 }: {
-  proof: Report['proof'];
+  report: Report;
   subjectName: string;
 }) {
-  const cross = proof.crossEngine;
+  const cross = report.proof.crossEngine;
   if (!cross || cross.standings.length === 0) return null;
 
   const splits = cross.splits.length;
+  // Whether the headline Mention Rate exists at all changes what the note
+  // below has to say — scoring v2 excludes it when a prompt set has no
+  // unprompted questions, and then there is no number above to differ from.
+  const headline = report.dimensions.find((d) => d.key === 'mention_rate');
+  const headlineMeasured = headline?.included !== false;
 
   return (
     <div>
@@ -290,6 +295,41 @@ function CrossEngineReading({
           {`${cross.agreementRate}% agreement across ${cross.comparablePrompts} comparable questions`}
         </p>
       )}
+
+      {/*
+        TWO POPULATIONS, ONE PAGE — scoring v2.
+
+        The Mention Rate in the score above counts UNPROMPTED questions only,
+        because the product's job is proving a stranger is invisible and a
+        question that names the brand cannot show that. These per-engine
+        figures deliberately count the WHOLE prompt set, including the
+        comparison and bottom-funnel questions that named the subject
+        themselves — that is what makes them a reading about the engines
+        rather than about discovery, and it is information the score does not
+        carry.
+
+        So the two numbers differ, both are right, and a reader comparing them
+        has no way to know why. Disclosed rather than reconciled: making these
+        awareness-only would delete the thing this section is for.
+      */}
+      <p className="mt-3 max-w-measure text-ui-xs leading-prose text-text-tertiary">
+        {headlineMeasured ? (
+          <>
+            These per-engine figures are not the Mention Rate in the score above, and will
+            usually differ from it. The score counts only questions that did not name{' '}
+            {subjectName} — the ones that can show whether a buyer discovers the brand. The
+            figures here count every question in the set, including those that named{' '}
+            {subjectName} and which an engine will nearly always echo back.
+          </>
+        ) : (
+          <>
+            Mention Rate is left out of the score above: this prompt set had no unprompted
+            questions, which are the only ones that can show whether a buyer discovers{' '}
+            {subjectName}. The figures here count every question, including those that named{' '}
+            {subjectName} themselves, so they are not a substitute for it.
+          </>
+        )}
+      </p>
     </div>
   );
 }
@@ -690,7 +730,7 @@ function ProofBeat({
           question answered with the subject by one assistant and without it by
           another, which is the thing no single-engine product can see.
         */}
-        <CrossEngineReading proof={proof} subjectName={subjectName} />
+        <CrossEngineReading report={report} subjectName={subjectName} />
 
         {/* --- engine coverage ---------------------------------------------- */}
         {proof.engineCoverage.length > 0 && (
