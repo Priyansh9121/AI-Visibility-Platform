@@ -274,3 +274,41 @@ class TestFactsOnly:
             if check.detail_code:
                 assert check.detail_code.isupper() or "_" in check.detail_code
                 assert " " not in check.detail_code, "detail codes must not be sentences"
+
+
+class TestTheFallbackKeepsTheChecksThatDoNotNeedLoad:
+    """`load` timing out used to cost seventeen checks to save one.
+
+    The fallback re-navigates on `domcontentloaded`, which is what `crawl.py`
+    has always used. What it must NOT do is report web vitals measured against
+    a page it stopped waiting for.
+    """
+
+    def test_vitals_measured_after_a_partial_load_are_not_reported(self) -> None:
+        """Measured while building this: 988ms on the fallback against 2,952ms
+        on a full load of the same page — a third of the real figure, enough to
+        flip `cwv_lcp` from `warn` to `pass`. A fallback that quietly flatters
+        every slow site it rescues is worse than the outage it survives."""
+        partial = sig(load_event_reached=False, lcp_ms=None, cls=None)
+
+        assert verdict(partial, "cwv_lcp") == "not_applicable"
+        detail = next(c.detail_code for c in build_checks(partial) if c.key == "cwv_lcp")
+        assert detail == "LCP_NOT_OBSERVED"
+
+    def test_the_structural_checks_survive_a_partial_load(self) -> None:
+        """Schema, indexability and the sitemap never needed the load event."""
+        partial = sig(
+            load_event_reached=False, lcp_ms=None,
+            schema_types=["Organization", "FAQPage"],
+            has_organization_schema=True, has_faq_schema=True,
+            has_sitemap=True, is_indexable=True,
+        )
+
+        checks = build_checks(partial)
+        assert len(checks) > 1, "a partial load must not collapse to one error"
+        assert verdict(partial, "site_reachable") == "pass"
+        assert verdict(partial, "indexable") == "pass"
+        assert score_audit(partial).score is not None
+
+    def test_a_full_load_is_still_the_default(self) -> None:
+        assert sig().load_event_reached is True
