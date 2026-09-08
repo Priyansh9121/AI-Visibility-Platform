@@ -11967,3 +11967,157 @@ more than one subject.
 **The Anthropic `web_search` request rate is not recorded in this repo**, so 21
 requests are counted and left unpriced rather than guessed. It is the last
 unpriced line in the cost table.
+
+# Epic 9.25 — a second live run, and the mechanism does fire
+
+Epic 9.24 ran the cross-engine reading against `front.com` and got zero
+visibility splits. That was either a finding about the engines or an artifact
+of testing a category leader, and the entry said so and named this run as the
+thing that would settle it. It mostly does.
+
+**Subject: `missiveapp.com`.** Missive is a real shared-inbox product competing
+against Front, Help Scout, Intercom and Zendesk — the same category as both
+previous subjects, deliberately, so that **only brand prominence varies and
+category is not a second variable**. Same scale, 12 prompts, so the two runs
+differ in one thing. Checked before spending: the site returns 200 with real
+content, and it was not already in `avp_dev`.
+
+## Both runs, side by side
+
+                                front.com        missiveapp.com
+    ------------------------------------------------------------
+    chatgpt        named          12 / 12          11 / 12
+                   rate           100.00            91.67
+                   sentiment       75.00            68.18
+    claude         named          12 / 12          12 / 12
+                   rate           100.00           100.00
+                   sentiment       58.33            75.00
+    claude_search  named          12 / 12          12 / 12
+                   rate           100.00           100.00
+                   sentiment       41.67            87.50
+    ------------------------------------------------------------
+    comparable prompts                12               12
+    SPLIT prompts                      0                1
+    agreement rate               100.00            91.67
+    sentiment disagreements       8 / 12           5 / 12
+    sentiment spread              33.33            19.32
+    composite                     55.29            58.72
+    wall clock                    306.4s           307.1s
+
+## The mechanism fires, and front.com's zero was the artifact it looked like
+
+**One split in twelve, and it is exactly the shape the feature was built for:**
+a buyer question both Claude engines answered naming Missive and ChatGPT
+answered without it. On a category leader that never happened; on a
+second-tier product in the same category it did. So the split-prompt mechanism
+finds real signal on a subject where it plausibly should, and Epic 9.24's zero
+is now explained rather than merely suspected.
+
+**And one in twelve is thin.** 91.67% agreement is not a rich vein, and it is
+one prompt on one subject. What these two runs establish is that the mechanism
+is not dead — not that it is load-bearing. A pitch built on "we find the
+questions where you are invisible on one assistant" is supported by an
+existence proof and nothing stronger yet.
+
+## The correction: grounded Claude is NOT systematically harsher
+
+Epic 9.24 recorded, carefully, as an open question with one observation:
+*"Whether grounded Claude is systematically harsher, or Front simply reads that
+way to it, needs more than one subject."* It now has a second subject, and the
+answer is **no — the ordering reversed completely.**
+
+    front.com        chatgpt 75.00  >  claude 58.33  >  claude_search 41.67
+    missiveapp.com   claude_search 87.50  >  claude 75.00  >  chatgpt 68.18
+
+Kindest and harshest swapped ends. Whatever drives the per-engine sentiment
+number, it is a property of the subject-and-engine pair rather than a standing
+disposition of the engine, and any copy that said "ChatGPT is the generous one"
+would have been wrong by the second scan. This is the clearest thing two runs
+bought that one could not, and it is a correction to this log's own previous
+entry rather than to the code.
+
+**What survives both runs is that engines disagree about tone at all** — 8 of
+12 and 5 of 12 prompts, on subjects where visibility was near-unanimous. That
+is the stable finding. Its direction is not.
+
+## Cost: a range now, not a figure
+
+    run              model $   web search $     TOTAL     per prompt
+    front.com         2.9572        0.2100     3.1672        0.2639
+    missiveapp.com    2.8904        0.2200     3.1104        0.2592
+
+**$3.11–$3.17 for a 12-prompt scan, ~$0.26 per prompt, twice.** Tighter than
+expected given the subjects differ, because the cost is dominated by the fixed
+shape of the pipeline rather than by anything about the subject.
+
+The last unpriced line is closed: Anthropic bills the `web_search` tool at
+**$10 per 1,000 searches** (platform.claude.com's web-search-tool page, read
+2026-09-08), so 21 and 22 requests are $0.21 and $0.22. Nothing in the cost
+table is a footnote any more.
+
+**The meters were checked rather than trusted, and they reconcile exactly.**
+
+* `gpt-5.5` priced automatically this run — evidence the longest-prefix lookup
+  added in Epic 9.24 does match the dated snapshot the API actually returns.
+  That fix was made before it could go wrong; this is the run that proves it.
+* Both runs' token-meter call counts equal a hand count from the pipeline's
+  own shape: 24 engine + N sentiment + 1 classification + 4 co-citation + 1
+  prompt generation + 1 fix generation. 67 and 66, matching.
+* And the subtle one. Missive made **35** sentiment calls, not 36, because
+  sentiment is only spent where the subject was named — and the one result
+  that named nobody is the same result that produced the one split. Two
+  independent parts of the system agreeing on a single event is better
+  evidence the measurement is sound than either number alone.
+
+## Timing, again recorded and again not chased
+
+307.1s against the 300s budget, within 0.7s of the previous run at the same
+prompt count. The scan loop is 66% of it with 28% unexplained overhead, against
+75% and 33% last time — the same shape Epic 9.1 found. Competitor detection
+took 38.1s against 17.9s, entirely in SerpApi (34.8s against 17.5s), which is
+subject-dependent and not a regression.
+
+## Is the fork decided? No, and here is what is missing
+
+**Neither direction is chosen, and two runs are not enough.** Stated plainly
+because the alternative is reading a decision into evidence a careful reader
+would not accept.
+
+* **The split axis is real but thin.** 0 and 1 out of 12. A third engine would
+  add chances for splits to appear, but nothing here suggests they are common
+  enough that widening the field is the highest-value move.
+* **The sentiment axis is strong and unstable.** It fires on two thirds and
+  then five twelfths of prompts, which is a product — but its direction flipped
+  between subjects, so the claim it supports is "they disagree", not "this one
+  dislikes you". That is a weaker pitch than it looked after one run.
+* **And the sentiment finding does not map onto either open direction.** Epic
+  12's "why" engine is page-diffing against competitors, which answers *why am
+  I not named*. Nothing in it answers *why does one assistant describe me worse
+  than another*. If tone is the product, the epic that serves it has not been
+  written down yet, and noticing that is worth more than picking between two
+  epics that were.
+
+**What a third run needs to show.** Both subjects so far scored **at or above
+91.67% on every engine** — the low-visibility region is entirely untested. A
+subject genuinely absent from some answers, mention rate well below 90% on at
+least one engine, would say whether splits scale with obscurity. If they do,
+the split axis is worth widening and a third engine follows. If a barely-known
+subject still comes back near-unanimous, the split mechanism is a rarity to be
+rendered honestly rather than a headline, and tone is the product.
+
+## Verification
+
+No code changed. The harness gained the `web_search` rate and now totals
+provider spend rather than listing searches unpriced. api 1,125, web 721,
+design-system 418, shared-types 53 — all unchanged, and nothing in this session
+touched them.
+
+## Open
+
+**The low-visibility region**, above — the one measurement that would move the
+fork.
+
+**Why the per-engine sentiment number moves.** Two subjects, two orderings, no
+explanation. Whether it tracks grounding, recency, the competitor set, or
+something about the subject's own copy is unknown and would need a different
+kind of investigation from a scan.
