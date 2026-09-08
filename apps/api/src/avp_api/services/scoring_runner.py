@@ -33,10 +33,12 @@ from .. import ids
 from ..models import (
     CompetitorSet,
     EngineResult,
+    Prompt,
     Scan,
     Score,
     TechnicalAudit,
 )
+from ..models.prompt import PromptIntent
 from ..models.score import ScoreStatus
 from ..models.technical_audit import AuditStatus
 from .scoring import (
@@ -78,6 +80,21 @@ async def load_result_facts(session: AsyncSession, scan_id: str) -> list[ResultF
         .all()
     )
 
+    # Prompt intent selects the scoring population for Mention Rate and Share
+    # of Voice (scoring.awareness_only), so it has to travel with the facts.
+    # One extra query rather than a join or a relationship load: the rows are
+    # already in hand, this is a dozen ids, and it leaves the EngineResult
+    # query above exactly as Epic 5 wrote it.
+    intents: dict[str, PromptIntent] = dict(
+        (
+            await session.execute(
+                select(Prompt.id, Prompt.intent).where(
+                    Prompt.id.in_({row.prompt_id for row in rows})
+                )
+            )
+        ).all()
+    ) if rows else {}
+
     facts: list[ResultFacts] = []
     for row in rows:
         brands = tuple(
@@ -90,6 +107,7 @@ async def load_result_facts(session: AsyncSession, scan_id: str) -> list[ResultF
             ResultFacts(
                 result_id=row.id,
                 prompt_id=row.prompt_id,
+                intent=intents.get(row.prompt_id),
                 engine=row.engine.value,
                 status=row.status,
                 mentioned=row.mentioned,

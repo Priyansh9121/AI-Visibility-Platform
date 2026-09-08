@@ -38,6 +38,7 @@ import structlog
 
 from ..models.competitor import DetectionStatus
 from ..models.engine_result import EngineResultStatus, Sentiment
+from ..models.prompt import PromptIntent
 
 logger = structlog.get_logger(__name__)
 
@@ -47,7 +48,14 @@ logger = structlog.get_logger(__name__)
 # rule 5 exists so that difference is attributable rather than silent. Two Score
 # rows with different formula_version are not comparable; Epic 11's before/after
 # reporting depends on being able to tell.
-FORMULA_VERSION = "v1.1"
+# v2 — Mention Rate and Share of Voice are scored on AWARENESS prompts only.
+# The reasoning is on `awareness_only` below and in scoring-spec.md's changelog;
+# the measurement that forced it is build-log "Mention Rate may be measuring the
+# prompt, not the engine". Rows carrying v1.1 were computed under the old
+# definition and are NOT re-scored — rule 5 exists so before/after reporting
+# compares like with like, and silently restating history is the thing it
+# forbids.
+FORMULA_VERSION = "v2"
 
 TWO_PLACES = Decimal("0.01")
 HUNDRED = Decimal("100")
@@ -123,6 +131,10 @@ class ResultFacts:
     status: EngineResultStatus
     mentioned: bool
     sentiment: Sentiment | None
+    # What the prompt was TRYING to find out. Load-bearing since v2: Mention
+    # Rate and Share of Voice are scored on awareness prompts only, and
+    # `awareness_only` below is where that is applied and argued.
+    intent: PromptIntent | None = None
     # Which prompt produced this, so the same facts can be regrouped BY PROMPT
     # rather than by engine — `services/divergence.py` needs that and scoring
     # does not. Carried here rather than in a parallel value object, because two
@@ -267,6 +279,13 @@ def compute_inputs_digest(
                 "id": r.result_id,
                 "engine": r.engine,
                 "status": r.status.value,
+                # v2: the intent selects the scoring population, so it is an
+                # INPUT to the score. Rule 1 — a value that can move the
+                # composite and is absent from the digest makes a changed score
+                # unattributable, which is the ambiguity the digest exists to
+                # prevent (see `technical_foundation` above, added for the same
+                # reason after the same omission).
+                "intent": r.intent.value if r.intent else None,
                 "mentioned": r.mentioned,
                 "sentiment": r.sentiment.value if r.sentiment else None,
                 "brands": sorted(r.brands),
@@ -289,6 +308,41 @@ def compute_inputs_digest(
 # --------------------------------------------------------------------------
 # Sub-scores. Each is a pure function over stored facts.
 # --------------------------------------------------------------------------
+
+
+def awareness_only(results: list[ResultFacts]) -> list[ResultFacts]:
+    """The results that can actually evidence discovery — v2.
+
+    **WHY THIS EXISTS.** `prompts.py`'s generator is instructed to name the
+    subject brand in `comparison` and `bottom_funnel` questions, and its own
+    system prompt states the reason: *"A question that names the brand can only
+    confirm the brand exists; it cannot reveal whether the brand gets
+    discovered."* `INTENT_QUOTA` makes those 55% of every set. A mention is a
+    text match (`extraction.find_brand`), so a question naming the brand very
+    nearly guarantees the answer echoes it.
+
+    That was measured across every scored scan in `avp_dev`: where the prompt
+    named the brand, 255 of 256 answered rows registered a mention (99.61%);
+    where it did not, 386 of 497 (77.67%). An engine answering *"I don't have
+    any knowledge of a product called Zorblex Inbox"* was recorded as a mention
+    at position 1.
+
+    **WHY IT IS THE RIGHT POPULATION**, rather than one of several defensible
+    ones. `product-spec.md`'s Epic 0 states the product's two jobs, and the
+    first is *"prospecting — prove to a stranger they are invisible in AI
+    answers."* Invisibility is an unprompted property. A question that names
+    the brand cannot demonstrate it, whatever the answer says. The requirement
+    and the prompt generator already agreed; only this module was out of step.
+
+    **WHY IT IS A FUNCTION AND NOT A CHANGE TO `mention_rate`.** The rate
+    functions answer "what fraction of THESE results mention the subject",
+    which is a calculation. WHICH results belong in the population is a scoring
+    POLICY, and it lives with the rest of the policy in `compute_score`.
+    Keeping them apart also means `services/divergence.py`, which calls
+    `mention_rate` on its own per-engine slices, is unaffected by this change
+    rather than silently re-scoped by it.
+    """
+    return [r for r in results if r.intent is PromptIntent.AWARENESS]
 
 
 def mention_rate(results: list[ResultFacts]) -> Decimal:
@@ -389,12 +443,30 @@ def compare_competitors(
     """Per-competitor figures for the three measurable dimensions.
 
     No composite — see CompetitorComparison's docstring.
+
+    **Each figure uses the SAME population as the subject's own — v2.** Epic 7's
+    report renders `score.mentionRate` and each `competitor.mentionRate` in one
+    column of one table, so two populations in that column would be a
+    comparison of different things presented as a comparison of brands. Worse,
+    it would be biased in a specific direction: the subject's rate would be
+    awareness-only while every rival's kept the inflated all-prompt figure, so
+    the client would look worse than the competitors it is being measured
+    against, on the strength of an accounting mismatch.
+
+    So Mention Rate and Share of Voice are computed over awareness results here
+    exactly as they are for the subject, and Citation Strength over every
+    answered result exactly as the subject's is. The rule is that a column
+    means one thing.
     """
     answered = [r for r in results if r.answered]
     if not answered or not competitors:
         return []
 
-    total_mentions = sum(len(r.brands) for r in answered)
+    # Discovery dimensions, matching the subject. Empty when a prompt set has
+    # no awareness questions — the case where the subject's own two are
+    # excluded, so these fall to zero and the report has no comparison to draw.
+    aware = awareness_only(answered)
+    total_mentions = sum(len(r.brands) for r in aware)
     all_citation_domains = {
         d for r in answered for d, cites_subject in r.citations if not cites_subject
     }
@@ -407,11 +479,11 @@ def compare_competitors(
     out: list[CompetitorComparison] = []
     for competitor in sorted(competitors, key=lambda c: c.competitor_id):
         appearances = sum(
-            1 for r in answered for name, is_subject in r.brands
+            1 for r in aware for name, is_subject in r.brands
             if not is_subject and name == competitor.name
         )
         answered_with = sum(
-            1 for r in answered
+            1 for r in aware
             if any(name == competitor.name and not is_subject for name, is_subject in r.brands)
         )
         cited = len({
@@ -423,7 +495,8 @@ def compare_competitors(
                 competitor_id=competitor.competitor_id,
                 name=competitor.name,
                 mention_rate=_round2(
-                    Decimal(answered_with) / Decimal(len(answered)) * HUNDRED
+                    Decimal(answered_with) / Decimal(len(aware)) * HUNDRED
+                    if aware else Decimal("0")
                 ),
                 share_of_voice=_round2(
                     Decimal(appearances) / Decimal(total_mentions) * HUNDRED
@@ -478,7 +551,34 @@ def compute_score(
     flags: list[str] = []
     excluded: dict[str, str] = {}
 
-    mr = _round2(mention_rate(results))
+    # --- the scoring population for the two DISCOVERY dimensions — v2 -------
+    #
+    # Mention Rate and Share of Voice both answer a question about being FOUND,
+    # and `awareness_only` is where the argument for that population lives.
+    # Citation Strength, Sentiment and Technical Foundation keep every answered
+    # result on purpose: they are not about discovery. Sentiment in particular
+    # asks how an answer PORTRAYS the brand, which is a real signal whether the
+    # buyer named it or not — a deliberate distinction, with its own numbers, in
+    # the build-log entry.
+    aware = awareness_only(answered)
+
+    # --- Mention Rate ------------------------------------------------------
+    mr: Decimal | None
+    if not aware:
+        # No awareness prompts is no evidence about discovery, and scoring that
+        # 0 would punish a client for the shape of a prompt set they did not
+        # choose. Excluded and redistributed — the same treatment the spec
+        # already prescribes for sentiment with no population and for
+        # Share of Voice with no competitor set. Unreachable through the
+        # generator (45% awareness quota) and through `fallback_prompts` (five
+        # awareness shapes), so this guards a hand-built set rather than a
+        # normal scan.
+        mr = None
+        excluded[Dimension.MENTION_RATE.value] = "NO_AWARENESS_POPULATION"
+        flags.append("NO_AWARENESS_POPULATION")
+    else:
+        mr = _round2(mention_rate(aware))
+
     cs_raw, citation_flags = citation_strength(results)
     cs = _round2(cs_raw)
     flags.extend(citation_flags)
@@ -491,6 +591,21 @@ def compute_score(
     # which is a technically-computable but meaningless number. It is excluded
     # and redistributed instead — the same treatment the spec already prescribes
     # for sentiment with no population. Recorded in the spec's changelog as v1.1.
+    #
+    # v2 scopes it to awareness results for the reason Mention Rate is scoped:
+    # the tautology inflates the NUMERATOR specifically. A comparison prompt
+    # names the subject and usually one rival, so the subject scores a
+    # guaranteed hit while the other four competitors appear only if the engine
+    # volunteers them — which pulls the ratio toward 1/(1+named) regardless of
+    # real standing. Measured: Share of Voice falls awareness-only on 12 of 14
+    # stored scans, by 5 to 29 points.
+    #
+    # The counter-argument, considered and rejected on the code as it is: a
+    # buyer weighing named options IS a competitive signal. But this function
+    # counts PRESENCE, not airtime — one hit per brand however much the answer
+    # says — so a comparison prompt contributes the fact that two named parties
+    # were named, which is a fact about the question. An airtime-weighted Share
+    # of Voice would deserve this argument re-opened; presence-counting does not.
     no_competitors = (
         not competitors
         or competitor_set_status is None
@@ -501,8 +616,11 @@ def compute_score(
         sov = None
         excluded[Dimension.SHARE_OF_VOICE.value] = "NO_COMPETITOR_SET"
         flags.append("NO_COMPETITOR_SET")
+    elif not aware:
+        sov = None
+        excluded[Dimension.SHARE_OF_VOICE.value] = "NO_AWARENESS_POPULATION"
     else:
-        sov = _round2(share_of_voice(results))
+        sov = _round2(share_of_voice(aware))
         if competitor_set_status is DetectionStatus.WEAK_SIGNAL:
             # Epic 3.5 measured SERP-only competitor precision at ~58%. A weakly
             # corroborated set is a weaker denominator, and the report must be

@@ -17,6 +17,7 @@ from avp_api.models.prompt import PromptIntent
 from avp_api.services import scan_runner
 from avp_api.services.engines import CitedSource, EngineAnswer
 from avp_api.services.prompts import GeneratedPrompt
+from avp_api.services.scoring import FORMULA_VERSION
 
 BASE = "/api/v1"
 
@@ -107,7 +108,10 @@ class TestComputeScore:
 
         assert body["id"].startswith("scor_")
         assert body["status"] == "scored"
-        assert body["formulaVersion"] == "v1.1"
+        # The CURRENT version, not a literal. test_scoring.py pins the
+        # literal in one place so a bump is a deliberate edit there; here
+        # the endpoint only has to record whatever that is.
+        assert body["formulaVersion"] == FORMULA_VERSION
         assert body["composite"] is not None
         # Sub-score breakdown is stored and retrievable (§7 item 2).
         assert body["mentionRate"] == "100.00"
@@ -212,10 +216,13 @@ class TestComputeScore:
         await session.commit()
 
         current = (await client.post(f"{BASE}/scans/{sid}/score")).json()
-        assert current["formulaVersion"] == "v1.1"
+        assert current["formulaVersion"] == FORMULA_VERSION
 
         history = (await client.get(f"{BASE}/scans/{sid}/scores")).json()
-        assert {h["formulaVersion"] for h in history} == {"v1.0-historic", "v1.1"}
+        assert {h["formulaVersion"] for h in history} == {
+            "v1.0-historic",
+            FORMULA_VERSION,
+        }
         historic = next(h for h in history if h["formulaVersion"] == "v1.0-historic")
         assert historic["composite"] == "41.00", "prior version untouched"
 
