@@ -1252,22 +1252,24 @@ reproducible.
 ```json
 {
   "id": "scor_01J...", "scanId": "scan_01J...", "status": "scored",
-  "composite": "63.41",
+  "composite": "66.49",
   "mentionRate": "83.33", "shareOfVoice": "41.18",
-  "citationStrength": "50.00", "sentiment": "75.00",
+  "citationStrength": null, "sentiment": "75.00",
   "technicalFoundation": null,
-  "formulaVersion": "v1.1",
+  "formulaVersion": "v2.1",
   "weights": {
-    "citation_strength": "22.22", "mention_rate": "33.33",
-    "sentiment": "16.67", "share_of_voice": "27.78"
+    "mention_rate": "42.86", "sentiment": "21.43", "share_of_voice": "35.71"
   },
-  "excludedDimensions": { "technical_foundation": "NOT_YET_MEASURED" },
-  "degradationFlags": ["NO_AUTHORITY_DATA", "TECHNICAL_FOUNDATION_NOT_MEASURED"],
+  "excludedDimensions": {
+    "citation_strength": "NO_AUTHORITY_DATA",
+    "technical_foundation": "NOT_YET_MEASURED"
+  },
+  "degradationFlags": ["TECHNICAL_FOUNDATION_NOT_MEASURED"],
   "reasonCode": null,
   "inputsDigest": "1f3a422c367d9c3f...",
   "competitors": [
     { "competitorId": "comp_01J...", "name": "Zendesk",
-      "mentionRate": "100.00", "shareOfVoice": "35.29", "citationStrength": "25.00" }
+      "mentionRate": "100.00", "shareOfVoice": "35.29", "citationStrength": null }
   ]
 }
 ```
@@ -1287,16 +1289,22 @@ interchangeable:
 | `NOT_YET_MEASURED` | The capability does not exist yet (Technical Foundation, pending Epic 6) | "not yet checked" |
 | `NO_POPULATION` | Nothing to measure for this brand (no mentions → no sentiment) | "nothing to measure" |
 | `NO_COMPETITOR_SET` | Competitor detection returned nothing | "no comparison was made" |
+| `NO_AWARENESS_POPULATION` | The prompt set had no unprompted questions (v2) | "nothing unprompted to measure" |
+| `NO_AUTHORITY_DATA` | No source of citing-domain authority exists, and the stand-in cannot be earned — Citation Strength, since v2.1 | "no authority source" |
 
 An excluded dimension's weight is redistributed proportionally across the rest.
 **A null sub-score is never a zero** — a brand nobody mentioned has not been
 spoken of badly, and scoring it zero would punish the same absence twice.
 
 **`degradationFlags`** record documented fallback paths, so a depressed number
-can be explained: `NO_AUTHORITY_DATA` (there is no Domain Authority source in
-this system, so Citation Strength normalises against the best-cited brand in the
-same scan), `WEAK_COMPETITOR_SET` (Epic 3 detection was weakly corroborated —
-SERP-only precision measured ~58%), `NO_CITATIONS_IN_SCAN`, `NO_COMPETITOR_SET`.
+can be explained: `WEAK_COMPETITOR_SET` (Epic 3 detection was weakly
+corroborated — SERP-only precision measured ~58%), `NO_CITATIONS_IN_SCAN`,
+`NO_COMPETITOR_SET`. `NO_AUTHORITY_DATA` appears as a flag only on scores
+computed before `v2.1`, where Citation Strength was scored on a stand-in
+(whether the brand's own domain was cited, against every domain cited in the
+scan); since `v2.1` the dimension is excluded under that code instead, and
+**`competitors[].citationStrength` is `null`** while it is — a column means one
+thing.
 
 **`status: "insufficient_data"`** with `composite: null` and
 `reasonCode: "INSUFFICIENT_DATA"` when no engine call answered. An unrunnable

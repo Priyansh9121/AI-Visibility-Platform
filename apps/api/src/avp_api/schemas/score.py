@@ -30,7 +30,11 @@ class CompetitorScoreOut(ApiModel):
     name: str
     mention_rate: Decimal
     share_of_voice: Decimal
-    citation_strength: Decimal
+    # Null since v2.1, while the subject's own Citation Strength is excluded
+    # under NO_AUTHORITY_DATA: a column means one thing, and a rival is not
+    # measured on a stand-in the subject is not scored on. Rendered as a dash,
+    # never a zero.
+    citation_strength: Decimal | None = None
 
 
 class ScoreOut(ApiModel):

@@ -67,6 +67,49 @@ EXCLUSION_REASON: dict[str, str] = {
     "NO_POPULATION": "Nothing to measure",
     "NO_COMPETITOR_SET": "No comparison was made",
     "NO_ANSWERED_RESULTS": "No answers came back",
+    "NO_AWARENESS_POPULATION": "Nothing unprompted to measure",
+    "NO_AUTHORITY_DATA": "No authority source",
+}
+
+# The sentence under each label — `strings.ts`'s `EXCLUSION_REASON[code].detail`,
+# word for word, so the PDF's "Left out of the score, and why" says why. Until
+# 2026-09-08 the PDF printed the label alone, which for a permanent, structural
+# exclusion (NO_AUTHORITY_DATA) would leave a reader with two words.
+EXCLUSION_DETAIL: dict[str, str] = {
+    "NOT_YET_MEASURED": (
+        "This dimension has not been measured for this scan. It is left out of the "
+        "score rather than counted as zero, so nothing here is held against the site "
+        "for a check that never ran."
+    ),
+    "NO_POPULATION": (
+        "There was no data to score this on — the brand was not named often enough "
+        "for this measurement to mean anything. An absence is not a bad result, so it "
+        "is excluded rather than scored zero."
+    ),
+    "NO_COMPETITOR_SET": (
+        "No competitor set was detected for this scan, so there is nothing to measure "
+        "a share against. The dimension is excluded and its weight spread across the "
+        "others, rather than awarding points for a detection that did not happen."
+    ),
+    "NO_AWARENESS_POPULATION": (
+        "Mention Rate counts only questions that did not name the brand — the ones "
+        "that can show whether a buyer would discover it. This prompt set had none, "
+        "so there was nothing to measure discovery with. It is left out and its "
+        "weight spread across the others rather than scored as an absence the brand "
+        "did not earn."
+    ),
+    "NO_ANSWERED_RESULTS": (
+        "No engine returned an answer for this scan, so there is nothing to measure. "
+        "This is a scan that did not run, not a brand that scored badly."
+    ),
+    "NO_AUTHORITY_DATA": (
+        "Citation Strength needs a measure of how authoritative a citing domain is, "
+        "and this system has no source for one. The only stand-in available — "
+        "whether the brand's own domain was cited, against every domain the engines "
+        "cited — cannot rise above about a point for any site, so it is left out and "
+        "its weight spread across the others rather than held against the brand. The "
+        "citations themselves are still shown in the evidence below."
+    ),
 }
 
 ENGINE_LABEL: dict[str, str] = {

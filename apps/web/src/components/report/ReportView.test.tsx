@@ -127,8 +127,12 @@ describe('degraded data renders as degraded, never as bad', () => {
   });
 
   it('explains a degradation flag rather than printing the code', () => {
+    // The Help Scout fixture is a v1.1 score, so it carries NO_AUTHORITY_DATA
+    // as a flag. Since v2.1 the sentence says what that formula actually did
+    // rather than claiming a comparison the arithmetic never made.
     const html = render(helpscoutReport);
-    expect(html).toContain('measured against the best-cited brand in this scan');
+    expect(html).toContain('no external authority source');
+    expect(html).toContain('cannot rise above about a point for any site');
     expect(html).not.toContain('NO_AUTHORITY_DATA');
   });
 });

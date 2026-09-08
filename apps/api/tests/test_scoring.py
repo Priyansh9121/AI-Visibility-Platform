@@ -81,8 +81,10 @@ class TestFormulaConstants:
         # when Mention Rate and Share of Voice moved to the awareness-only
         # population. Rows carrying an earlier version were computed under an
         # earlier definition and are not comparable across the bump — which is
-        # what rule 5 exists to keep true.
-        assert FORMULA_VERSION == "v2"
+        # what rule 5 exists to keep true. v2.1 when Citation Strength was
+        # excluded under NO_AUTHORITY_DATA: a stand-in no brand could score
+        # above 1/N on left the composite, and its weight was redistributed.
+        assert FORMULA_VERSION == "v2.1"
 
 
 class TestMentionRate:
@@ -195,6 +197,96 @@ class TestCitationStrength:
         results = [res(1, citations=(("a.com", True), ("a.com", True), ("b.com", True)))]
         value, _ = citation_strength(results)
         assert value == Decimal("100")
+
+
+class TestCitationStrengthIsExcluded:
+    """v2.1 — a dimension nobody can earn is left out, not scored.
+
+    The stand-in `citation_strength` computes divides the subject's own domain
+    (0 or 1) by every distinct third-party domain in the scan, so its ceiling
+    is 1/N. On the second pilot dry run's 24-prompt scan N was 152: the
+    subject and all five rivals scored 0.66, and across every stored score the
+    maximum was 3.70. Scoring that kept depressing every composite by up to 20
+    points while the pitch beat promised those points back.
+    """
+
+    @staticmethod
+    def _scored():  # noqa: ANN205
+        results = [
+            res(1, mentioned=True, sentiment=Sentiment.POSITIVE,
+                brands=(("Help Scout", True), ("Zendesk", False)),
+                citations=(("helpscout.com", True), ("g2.com", False), ("capterra.com", False))),
+            res(2, mentioned=False, brands=(("Zendesk", False),),
+                citations=(("g2.com", False), ("zendesk.com", False))),
+        ]
+        return compute_score(
+            results, [comp(1, "Zendesk", "zendesk.com")],
+            competitor_set_status=DetectionStatus.OK, technical_foundation=Decimal("80"),
+        )
+
+    def test_excluded_with_the_reason_that_names_the_missing_input(self) -> None:
+        out = self._scored()
+        assert out.excluded_dimensions["citation_strength"] == "NO_AUTHORITY_DATA"
+        assert out.value(Dimension.CITATION_STRENGTH) is None
+        assert not out.sub_scores[Dimension.CITATION_STRENGTH].included
+        # Not NOT_YET_MEASURED: that says a capability is on its way.
+        assert "NOT_YET_MEASURED" not in out.excluded_dimensions.values()
+
+    def test_its_weight_is_redistributed_and_the_composite_re_sums(self) -> None:
+        out = self._scored()
+        included = {d: s for d, s in out.sub_scores.items() if s.included}
+        assert Dimension.CITATION_STRENGTH not in included
+        assert set(included) == {
+            Dimension.MENTION_RATE, Dimension.SHARE_OF_VOICE,
+            Dimension.SENTIMENT, Dimension.TECHNICAL_FOUNDATION,
+        }
+        assert sum(s.weight for s in included.values()) == Decimal("100.00")
+        rebuilt = sum(s.weight * s.value for s in included.values()) / Decimal(100)
+        assert rebuilt.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) == out.composite
+
+    def test_no_authority_data_is_the_exclusion_and_not_also_a_degradation(self) -> None:
+        """A dimension that is left out is not "rougher". One fact, said once."""
+        out = self._scored()
+        assert "NO_AUTHORITY_DATA" not in out.degradation_flags
+
+    def test_no_citations_in_scan_is_still_a_fact_about_the_scan(self) -> None:
+        out = compute_score([res(1, mentioned=True)], [], competitor_set_status=None)
+        assert "NO_CITATIONS_IN_SCAN" in out.degradation_flags
+        assert out.excluded_dimensions["citation_strength"] == "NO_AUTHORITY_DATA"
+
+    def test_rivals_carry_no_citation_strength_while_the_subject_does_not(self) -> None:
+        """A column means one thing — `compare_competitors`'s own rule."""
+        out = self._scored()
+        assert out.competitors
+        assert all(c.citation_strength is None for c in out.competitors)
+        assert all(c.mention_rate is not None and c.share_of_voice is not None
+                   for c in out.competitors)
+
+    def test_the_stand_in_is_still_computed_for_the_day_an_authority_source_exists(self) -> None:
+        # Not asserted in the composite, but not thrown away either: the
+        # function and its flags are what a real source plugs into.
+        value, flags = citation_strength([res(1, citations=(("x.com", True), ("y.com", False)))])
+        assert value == Decimal("100") and "NO_AUTHORITY_DATA" in flags
+
+    def test_the_dry_run_scan_would_have_read_33_93_rather_than_27_28(self) -> None:
+        """pirsch.io's stored v2 sub-scores, re-summed over the four that remain.
+
+        Effective weights are the §6 weights over the 80 points that survive:
+        30/80, 25/80, 15/80, 10/80 — exact at two places, so no rounding
+        question arises in the re-sum.
+        """
+        dims = [
+            Dimension.MENTION_RATE, Dimension.SHARE_OF_VOICE,
+            Dimension.SENTIMENT, Dimension.TECHNICAL_FOUNDATION,
+        ]
+        weights = dict(zip(dims, [
+            Decimal("37.50"), Decimal("31.25"), Decimal("18.75"), Decimal("12.50"),
+        ], strict=True))
+        values = dict(zip(dims, [
+            Decimal("30.56"), Decimal("9.91"), Decimal("76.67"), Decimal("40.00"),
+        ], strict=True))
+        got = weighted_composite(weights, values)
+        assert got.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) == Decimal("33.93")
 
 
 class TestEdgeCasesFromSpec:

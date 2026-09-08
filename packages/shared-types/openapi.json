@@ -1504,9 +1504,16 @@
         "description": "Per-competitor figures for the three measurable dimensions.\n\n**There is deliberately no `composite`.** Sentiment is classified toward the\nsubject only (Epic 4.3) and Technical Foundation arrives in Epic 6, so 25%\nof the weight has no per-competitor input. A composite computed over a\ndifferent weight basis would not be comparable to the subject's, which is\nthe entire purpose of a comparison.",
         "properties": {
           "citationStrength": {
-            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
-            "title": "Citationstrength",
-            "type": "string"
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Citationstrength"
           },
           "competitorId": {
             "title": "Competitorid",
@@ -1531,8 +1538,7 @@
           "competitorId",
           "name",
           "mentionRate",
-          "shareOfVoice",
-          "citationStrength"
+          "shareOfVoice"
         ],
         "title": "CompetitorScoreOut",
         "type": "object"

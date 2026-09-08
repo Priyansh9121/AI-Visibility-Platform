@@ -30,6 +30,7 @@ const EXCLUSION_CODES = [
   'NO_COMPETITOR_SET',
   'NO_ANSWERED_RESULTS',
   'NO_AWARENESS_POPULATION',
+  'NO_AUTHORITY_DATA',
 ] as const;
 
 /** `flags.append("...")` in scoring.py and citation_strength. */
