@@ -184,10 +184,23 @@ def audit_findings(audit: TechnicalAudit | None) -> list[tuple[str, str, str | N
     """(check_key, status, detail_code) for every check that did not pass."""
     if audit is None:
         return []
+    # ERROR IS NOT A FINDING — 2026-09-08.
+    #
+    # `CheckStatus.ERROR` means the check did not complete: a browser timeout,
+    # a driver failure, an attempt this system could not finish. `WARN` and
+    # `FAIL` mean it ran and the site is the way it is. Only the second kind
+    # is something a client can be asked to fix.
+    #
+    # Including ERROR here is what put *"Fix the crawl failure on
+    # helpwise.io"* at the top of a real report, for a site that answers in
+    # 1.13 seconds — an instruction to repair working infrastructure, in the
+    # document an agency sends to win the business. `build_checks` now marks a
+    # server's own 4xx/5xx as `fail`, so a site that really is broken still
+    # produces the real finding; what is dropped is our own inability to look.
     findings = [
         (check.check_key, check.status, check.detail_code)
         for check in audit.checks
-        if check.status in (CheckStatus.WARN, CheckStatus.FAIL, CheckStatus.ERROR)
+        if check.status in (CheckStatus.WARN, CheckStatus.FAIL)
     ]
     findings.sort(key=lambda f: (_SEVERITY.get(f[1], 3), f[0]))
     return [(key, status.value, code) for key, status, code in findings]
