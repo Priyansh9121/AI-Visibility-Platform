@@ -13636,7 +13636,12 @@ printed. The failure was the IP-safety whitelist doing its job — every line of
 the fix prompt must start with a known prefix, and the renamed heading was not
 one — and the fix was the whitelist, not the prompt. Caught on reading the
 output back; the commit after the entry carries the whitelist and the green
-run. The chain should have checked pytest's own status, and the next one will.
+run. **And then the chain that fixed it did the same thing with `ruff`**: its
+"Found 1 error" (a line too long, in the whitelist) also went through a pipe,
+and that commit went in too. The one after it wraps the line, and every check
+in it reads the tool's own exit code from a file rather than a pipe's. Twice in
+one session is the pattern, not the slip: a verification chain must never take
+its verdict from the last command in a pipeline.
 
 ## Still noted, unchanged
 
