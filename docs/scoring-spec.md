@@ -19,11 +19,57 @@ score = Σ (weight_i × subscore_i) / 100
 
 | # | Sub-score | Weight | Inputs |
 |---|---|---|---|
-| 1 | **Mention Rate** | 30% | % of tracked prompts where the brand appears at all |
-| 2 | **Share of Voice** | 25% | Brand mentions ÷ total mentions (brand + competitors) |
+| 1 | **Mention Rate** | 30% | % of **awareness** prompts where the brand appears (v2) |
+| 2 | **Share of Voice** | 25% | Brand mentions ÷ total mentions, over **awareness** prompts (v2) |
 | 3 | **Citation Strength** | 20% | Number + authority of domains citing the brand |
 | 4 | **Sentiment** | 15% | Weighted positive/neutral/negative across all mentions |
 | 5 | **Technical Foundation** | 10% | Schema presence, structured data, content freshness |
+
+### The scoring population — v2
+
+**Mention Rate and Share of Voice count `awareness` prompts only. The other
+three dimensions count every answered result.**
+
+A prompt set is generated across three intents, and `prompts.py`'s generator is
+instructed to name the subject brand in `comparison` and `bottom_funnel`
+questions — 55% of a set by quota. Its own system prompt gives the reason: *"A
+question that names the brand can only confirm the brand exists; it cannot
+reveal whether the brand gets discovered."* A mention is a text match, so those
+questions register a mention almost regardless of what the engine knows.
+Measured across every stored scan: **255 of 256 answered rows on a brand-named
+prompt registered a mention, against 386 of 497 where the prompt did not name
+it.** An engine answering *"I don't have any knowledge of a product called
+Zorblex Inbox"* was recorded as a mention at position 1.
+
+The two dimensions are scoped because of what they are FOR. `product-spec.md`'s
+Epic 0 states the first of the product's two jobs as *"prospecting — prove to a
+stranger they are invisible in AI answers"*, and invisibility is an unprompted
+property that a brand-named question cannot evidence.
+
+Share of Voice is scoped for a reason of its own rather than by analogy: the
+tautology inflates its NUMERATOR specifically, because a comparison prompt
+names the subject and usually one rival, so the subject takes a guaranteed hit
+while the remaining competitors appear only if the engine volunteers them. That
+pulls the ratio toward `1/(1 + named)` whatever the real standing. The
+objection that a buyer weighing named options is itself a competitive signal is
+real but does not apply to this implementation, which counts PRESENCE rather
+than airtime; an airtime-weighted Share of Voice would deserve it reconsidered.
+
+**Sentiment and Citation Strength keep every answered result, deliberately.**
+Sentiment asks how an answer PORTRAYS the brand, which is a real signal whether
+the buyer named it or not. Scoping it would also move scores UP — measured at
++1 to +26 points awareness-only — so it is a separate decision with separate
+evidence, not a consistency fix. Recorded as open.
+
+**No awareness prompts in a set excludes Mention Rate and Share of Voice and
+redistributes their weight**, with `NO_AWARENESS_POPULATION`. Scoring the
+absence 0 would punish a client for the shape of a prompt set they did not
+choose — the same reasoning v1.1 applied to Share of Voice with no competitor
+set. Unreachable through the generator (45% awareness quota) and through
+`fallback_prompts` (five awareness shapes).
+
+Full numbers and method: `build-log.md`, *"Mention Rate may be measuring the
+prompt, not the engine — sized, not fixed"*.
 
 Weights sum to 100. Per-industry weight tuning is deferred until real data
 exists (§6); until then all industries use the table above.
@@ -104,4 +150,5 @@ These are the unit-test targets named by the Epic 5 acceptance criterion.
 |---|---|---|
 | 2026-08-20 | `v1` | Initial weights from product-spec.md §6. Not yet data-tuned. |
 | 2026-08-21 | `v1.1` | **No-competitor Share of Voice now excluded, not scored 100.** v1 awarded a full 25 points when competitor detection returned nothing, which hands a quarter of the composite to a *detection failure* — a technically-computable but meaningless number, and exactly the outcome this project refuses everywhere else (null classification, null score, `INSUFFICIENT_DATA`). It is now excluded and redistributed, the same treatment v1 already prescribed for sentiment with no population. Weights themselves are unchanged. See `build-log.md` Epic 5.2. |
+| 2026-09-08 | `v2` | **Mention Rate and Share of Voice are scored on awareness prompts only.** The generator names the subject brand in comparison and bottom-funnel questions by instruction, and a mention is a text match, so those prompts registered a mention 255 times in 256 — measuring the question rather than the engine. Epic 0's first stated job is proving a stranger is *invisible*, which is an unprompted property. Weights are unchanged; the population is not. Sentiment and Citation Strength deliberately keep every answered result. **Stored `v1.1` scores are not re-scored** — rule 5 exists so before/after reporting compares like with like, and 14 of them describe what the old definition produced. See `build-log.md` for the measurement and the decision. |
 | 2026-08-21 | `v1.1` | **Technical Foundation excluded pending Epic 6**, with reason `NOT_YET_MEASURED` — deliberately distinct from `NO_POPULATION`, so a report can say "not yet checked" rather than "nothing found". Scoring it 0 would depress every score by up to 10 points for a reason unrelated to the client. |
