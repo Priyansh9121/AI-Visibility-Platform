@@ -13627,6 +13627,17 @@ fixes beneath it name Organization and FAQPage again — the key-merge seam
 `2436f92` noted, where a generated dimension fix and the string-table audit
 fixes overlap. Legibility, not truth; noted for the same brief.
 
+## A process note, recorded because it is the kind of thing that hides
+
+The one-line prompt fix was committed on a red suite. Its verification chain
+piped the full run through `tail`, so the chain read `tail`'s exit code, not
+pytest's, and went on to commit with "1 failed" in the line it had just
+printed. The failure was the IP-safety whitelist doing its job — every line of
+the fix prompt must start with a known prefix, and the renamed heading was not
+one — and the fix was the whitelist, not the prompt. Caught on reading the
+output back; the commit after the entry carries the whitelist and the green
+run. The chain should have checked pytest's own status, and the next one will.
+
 ## Still noted, unchanged
 
 Phone width: the share page's scroll width was 455px on a 390px viewport this

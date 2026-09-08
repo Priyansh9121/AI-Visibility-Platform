@@ -867,7 +867,7 @@ def test_the_fix_prompt_carries_no_line_that_is_not_a_whitelisted_fact() -> None
         "Subject brand:", "Website:", "Industry (classified automatically",
         "Niche:", "Visibility score:", "Measurement caveats:",
         "Dimension scores (", "Competitors detected,", "Answer coverage:",
-        "Citation coverage:", "Most-cited domains:", "Site structure signals:",
+        "Citation coverage:", "Most-cited domains:", "Audited page signals (the home page, one URL, not the whole site):",
         "Write one fix for each",
     )
 
