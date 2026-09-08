@@ -213,6 +213,14 @@ function Brand({ agency }: { agency: Report['agency'] }) {
  * no opinion, and the projection has already excluded it — every engine named
  * on either side of a split answered the question it is being compared on.
  *
+ * AND IT MUST NOT CALL VISIBILITY AGREEMENT A SHARED VERDICT. The splits
+ * measure ONE thing: whether each engine named the subject. The first live run
+ * (Epic 9.24, front.com) came back with zero splits and three sentiments of
+ * 75.00, 58.33 and 41.67 — total agreement on visibility, disagreement on tone
+ * in eight of twelve prompts. The copy said "gave the same verdict", which the
+ * standings rendered directly beneath it contradicted. It now says what was
+ * actually compared and points at the tone rather than speaking for it.
+ *
  * And it must not report "there was nothing to compare" as agreement. A scan
  * where one engine was down all run agrees with itself trivially, and rendering
  * that as consensus would make the strongest available claim from the weakest
@@ -243,8 +251,9 @@ function CrossEngineReading({
           </>
         ) : splits === 0 ? (
           <>
-            Every engine that answered gave the same verdict on {subjectName} across all{' '}
-            {cross.comparablePrompts} comparable questions.
+            Every engine that answered named {subjectName} on all{' '}
+            {cross.comparablePrompts} comparable questions. They agree on whether{' '}
+            {subjectName} appears; the tone each takes is below, and it can differ.
           </>
         ) : (
           <>

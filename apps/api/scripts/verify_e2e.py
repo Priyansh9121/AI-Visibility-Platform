@@ -53,7 +53,7 @@ import asyncio
 import os
 import sys
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -204,6 +204,134 @@ def install_meters() -> None:
     wrap(fix_generator, "generate_fixes", "anthropic", "fix-generation")
 
 
+# ---------------------------------------------------------------------------
+# TOKENS AND MONEY — Epic 9.24
+# ---------------------------------------------------------------------------
+# north-star.md §5.1 has wanted a real per-scan cost since it was written, and
+# every run before this one recorded call COUNTS and never token usage — so the
+# dollar figure was always an estimate multiplied by a guess. This meters the
+# providers' own reported usage at the SDK boundary, which is the number they
+# bill from.
+#
+# Wrapped at the SDK, not at our call sites, for the same reason `install_meters`
+# patches where a function is looked up: a per-site wrapper measures the sites
+# this script remembered to wrap, and the SDK boundary measures every call that
+# actually happened.
+
+# Published rates, $ per million tokens, as (input, output). Both are read from
+# the vendors' own pricing rather than inferred: a fabricated rate in a cost
+# table is worse than an honest gap, and this table is the first thing in the
+# project to put a real dollar figure on a scan.
+#
+#   claude-opus-5   $5 / $25    Anthropic's published rate.
+#   gpt-5.5         $5 / $30    developers.openai.com/api/docs/pricing, read
+#                               2026-09-08, for the <272K context tier this
+#                               product's prompts sit far inside. Cached input
+#                               is $0.50/MTok and is reported separately below;
+#                               nothing here sends a cacheable prefix yet.
+#
+# A model that answers and is NOT in this table is metered in tokens and shown
+# unpriced, so a model swap surfaces as a gap rather than as a silent zero.
+RATES: dict[str, tuple[float, float]] = {
+    "claude-opus-5": (5.00, 25.00),
+    "gpt-5.5": (5.00, 30.00),
+}
+
+
+def rate_for(model: str) -> tuple[float, float] | None:
+    """The published rate for a model id, matched by longest prefix.
+
+    Providers report the DATED SNAPSHOT they actually served — a request for
+    `gpt-5.5` comes back as `gpt-5.5-2026-04-23` — so an exact-key lookup
+    silently prices every call at nothing. Longest prefix rather than any
+    prefix, so `gpt-5.5-pro` could never be priced from the `gpt-5.5` row if it
+    is ever added above it.
+    """
+    if model in RATES:
+        return RATES[model]
+    matches = [key for key in RATES if model.startswith(key)]
+    if not matches:
+        return None
+    return RATES[max(matches, key=len)]
+# Anthropic bills the server-side web_search tool per request, separately from
+# tokens. Recorded as a count for the same reason: the rate is not in this repo.
+
+
+@dataclass
+class TokenUsage:
+    calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read: int = 0
+    cache_write: int = 0
+    web_searches: int = 0
+
+    @property
+    def total(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+
+TOKENS: dict[str, TokenUsage] = defaultdict(TokenUsage)
+
+
+def install_token_meter() -> None:
+    """Record provider-reported usage for every model call this run makes.
+
+    Anthropic reports `usage` on the response object; OpenAI reports it in the
+    JSON body, and `ChatGptAdapter` speaks raw `httpx`, so the two are metered
+    at the two different boundaries they actually cross. The httpx wrapper
+    filters on the host so it does not also count SerpApi and the audit's
+    side-fetches, which carry no tokens and are already counted elsewhere.
+    """
+    import anthropic
+    import httpx
+
+    def _record(model: str, usage: object) -> None:
+        entry = TOKENS[model]
+        entry.calls += 1
+        entry.input_tokens += int(getattr(usage, "input_tokens", 0) or 0)
+        entry.output_tokens += int(getattr(usage, "output_tokens", 0) or 0)
+        entry.cache_read += int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+        entry.cache_write += int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
+        server = getattr(usage, "server_tool_use", None)
+        if server is not None:
+            entry.web_searches += int(getattr(server, "web_search_requests", 0) or 0)
+
+    messages = anthropic.resources.messages.AsyncMessages
+    for attr in ("create", "parse"):
+        original = getattr(messages, attr)
+
+        async def metered(self, *args, __original=original, **kwargs):  # noqa: ANN001, ANN002, ANN003, ANN202
+            response = await __original(self, *args, **kwargs)
+            usage = getattr(response, "usage", None)
+            if usage is not None:
+                _record(getattr(response, "model", "anthropic/unknown"), usage)
+            return response
+
+        setattr(messages, attr, metered)
+
+    real_post = httpx.AsyncClient.post
+
+    async def metered_post(self, url, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003, ANN202
+        response = await real_post(self, url, *args, **kwargs)
+        if "openai.com" not in str(url):
+            return response
+        try:
+            payload = response.json()
+        except Exception:  # noqa: BLE001 - a non-JSON body carries no usage
+            return response
+        usage = payload.get("usage") or {}
+        entry = TOKENS[payload.get("model", "openai/unknown")]
+        entry.calls += 1
+        entry.input_tokens += int(usage.get("prompt_tokens") or 0)
+        entry.output_tokens += int(usage.get("completion_tokens") or 0)
+        details = usage.get("prompt_tokens_details") or {}
+        entry.cache_read += int(details.get("cached_tokens") or 0)
+        return response
+
+    httpx.AsyncClient.post = metered_post
+
+
 def install_query_counter(engine: object) -> None:
     """Count every statement the pipeline issues, attributed to the open phase.
 
@@ -283,6 +411,7 @@ async def main() -> int:  # noqa: C901
 
     settings = Settings()
     install_meters()
+    install_token_meter()
 
     engine = create_async_engine(os.environ["DATABASE_URL"])
     install_query_counter(engine)
@@ -459,6 +588,82 @@ async def main() -> int:  # noqa: C901
     )
     print(f"  billed sentiment calls                  : {sentiment_calls}")
     print(f"  billed SerpApi searches                 : {by_provider['serpapi']}")
+
+    # ------------------------------------------------------------------
+    rule("TOKENS AND MONEY")
+    # ------------------------------------------------------------------
+    print()
+    print(f"  {'model':22} {'calls':>6} {'in':>10} {'out':>10} {'cache rd':>9} {'$':>9}")
+    priced = 0.0
+    unpriced: list[str] = []
+    for model in sorted(TOKENS):
+        u = TOKENS[model]
+        rate = rate_for(model)
+        if rate is None:
+            cost_cell = "  unpriced"
+            unpriced.append(model)
+        else:
+            cost = (u.input_tokens * rate[0] + u.output_tokens * rate[1]) / 1_000_000
+            priced += cost
+            cost_cell = f"{cost:9.4f}"
+        print(f"  {model:22} {u.calls:6} {u.input_tokens:10,} {u.output_tokens:10,}"
+              f" {u.cache_read:9,} {cost_cell}")
+    searches = sum(u.web_searches for u in TOKENS.values())
+    print(f"\n  priced model spend  : ${priced:.4f}")
+    if unpriced:
+        print(f"  unpriced, tokens only: {', '.join(unpriced)}"
+              "  (rate is not recorded in this repo; not guessed)")
+    print(f"  web_search requests : {searches}"
+          "  (billed per request, rate not recorded here)")
+    print(f"  SerpApi searches    : {by_provider['serpapi']} of a 250/month quota")
+
+    # ------------------------------------------------------------------
+    rule("CROSS-ENGINE READING (Epic 9.23)")
+    # ------------------------------------------------------------------
+    cross = report.proof.cross_engine
+    print()
+    for standing in cross.standings:
+        sentiment = (
+            f"{standing.sentiment}" if standing.sentiment is not None else "none"
+        )
+        print(f"  {standing.engine.value:16} answered {standing.answered:3}"
+              f"   named {standing.mentioned:3}"
+              f"   rate {standing.mention_rate:>6}"
+              f"   sentiment {sentiment:>6}")
+    agreement = cross.agreement_rate if cross.agreement_rate is not None else "n/a"
+    print(f"\n  comparable prompts : {cross.comparable_prompts}")
+    print(f"  split prompts      : {len(cross.splits)}")
+    print(f"  agreement rate     : {agreement}")
+    for split in cross.splits:
+        print(f"    {split.prompt_id}"
+              f"  named by {[e.value for e in split.named_by]}"
+              f"  missed by {[e.value for e in split.missed_by]}")
+
+    # THE QUESTION THIS RUN EXISTS TO ANSWER: on prompts where two or more
+    # engines DID name the subject, do they agree about the tone? Divergence in
+    # visibility and divergence in sentiment are different products.
+    by_prompt: dict[str, list] = defaultdict(list)
+    for row in results:
+        if row.mentioned and row.sentiment is not None:
+            by_prompt[row.prompt_id].append(row)
+    shared = {p: rows for p, rows in by_prompt.items() if len(rows) >= 2}
+    disagreeing = {
+        p: rows for p, rows in shared.items()
+        if len({r.sentiment for r in rows}) > 1
+    }
+    print(f"\n  prompts where 2+ engines named the subject AND both were scored"
+          f" : {len(shared)}")
+    print(f"  of those, engines that disagreed on SENTIMENT               "
+          f" : {len(disagreeing)}")
+    for prompt_id, rows in sorted(disagreeing.items()):
+        detail = ", ".join(
+            f"{r.engine.value}={r.sentiment.value}" for r in sorted(
+                rows, key=lambda r: r.engine.value
+            )
+        )
+        print(f"    {prompt_id}  {detail}")
+    if shared and not disagreeing:
+        print("    -> every engine that named the subject agreed on the tone")
 
     # ------------------------------------------------------------------
     rule("IS THE SCAN LOOP ENGINE-BOUND?")
