@@ -1,0 +1,22 @@
+{
+  "_comment": "The visibility band for a composite score, at every boundary. Source of truth: packages/design-system/src/tokens/color.ts visibilityBand() and the labels VisibilityBadge renders (components/Badge.tsx). Read by packages/design-system/src/components/visibilityBand.test.ts and apps/api/tests/test_visibility_band.py, so the PDF's copy of this rule (services/report_pdf.py _band) cannot drift from the page's again. Before 2026-09-08 it had: the PDF cut at 15 and 35 and said Marginal and Dominant, so 27.28 was 'Barely visible' on the page and 'Marginal' in the PDF downloaded from it.",
+  "thresholds": { "absent": [0, 20], "barely": [20, 40], "emerging": [40, 60], "established": [60, 80], "beacon": [80, 100] },
+  "cases": [
+    { "score": 0,     "band": "absent",      "label": "Absent" },
+    { "score": 14.99, "band": "absent",      "label": "Absent" },
+    { "score": 15,    "band": "absent",      "label": "Absent" },
+    { "score": 17.46, "band": "absent",      "label": "Absent" },
+    { "score": 19.99, "band": "absent",      "label": "Absent" },
+    { "score": 20,    "band": "barely",      "label": "Barely visible" },
+    { "score": 27.28, "band": "barely",      "label": "Barely visible" },
+    { "score": 34.99, "band": "barely",      "label": "Barely visible" },
+    { "score": 35,    "band": "barely",      "label": "Barely visible" },
+    { "score": 39.99, "band": "barely",      "label": "Barely visible" },
+    { "score": 40,    "band": "emerging",    "label": "Emerging" },
+    { "score": 59.99, "band": "emerging",    "label": "Emerging" },
+    { "score": 60,    "band": "established", "label": "Established" },
+    { "score": 79.99, "band": "established", "label": "Established" },
+    { "score": 80,    "band": "beacon",      "label": "Highly visible" },
+    { "score": 100,   "band": "beacon",      "label": "Highly visible" }
+  ]
+}

@@ -61,19 +61,33 @@ const BAND_LABEL: Record<ReturnType<typeof visibilityBand>, string> = {
 };
 
 /**
+ * The word the badge shows for a score — exported so the rule has one home.
+ *
+ * The PDF renderer (`apps/api/services/report_pdf.py`) carries a Python copy
+ * of this and of `visibilityBand`, because it cannot call either. On
+ * 2026-09-08 that copy had drifted — different thresholds, different words —
+ * and a prospect read "Barely visible" on the page and "Marginal" in the file
+ * they downloaded from it. Both sides now assert against
+ * `packages/shared-types/fixtures/visibility-bands.json`; this function is
+ * what the TypeScript side of that assertion calls.
+ */
+export function visibilityBandLabel(score: number): string {
+  return BAND_LABEL[visibilityBand(score)];
+}
+
+/**
  * VisibilityBadge — the ordinal read of a score.
  *
  * Fill comes from the ramp; the label colour is resolved by luminance, which
  * enforces the fill-only rule rather than leaving it to the caller.
  */
 export function VisibilityBadge({ score, className }: VisibilityBadgeProps): JSX.Element {
-  const band = visibilityBand(score);
   return (
     <span
       className={cn('avp-badge', 'avp-badge--visibility', className)}
       style={{ background: visibilityColor(score), color: onVisibility(score) }}
     >
-      {BAND_LABEL[band]}
+      {visibilityBandLabel(score)}
     </span>
   );
 }
