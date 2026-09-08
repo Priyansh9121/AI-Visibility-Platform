@@ -21,7 +21,13 @@ export {
   type CardProps,
   type CardElevation,
 } from './components/Card.js';
-export { Badge, VisibilityBadge, type BadgeProps, type BadgeTone } from './components/Badge.js';
+export {
+  Badge,
+  VisibilityBadge,
+  visibilityBandLabel,
+  type BadgeProps,
+  type BadgeTone,
+} from './components/Badge.js';
 export {
   StatTile,
   StatRow,

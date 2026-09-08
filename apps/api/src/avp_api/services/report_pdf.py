@@ -591,16 +591,32 @@ def _beat(doc: PdfDocument, step: int, eyebrow: str, heading: str) -> None:
 
 
 def _band(score: float) -> str:
-    """The visibility band. Mirrors `VisibilityBadge`'s thresholds."""
-    if score >= 80:
-        return "Dominant"
-    if score >= 60:
-        return "Established"
-    if score >= 35:
+    """The visibility band, in the words the page uses for the same score.
+
+    A copy of `visibilityBand` (`packages/design-system/src/tokens/color.ts`)
+    and of the labels `VisibilityBadge` renders — the same duplication
+    `report_narrative.py` carries for `derive.ts`, for the same reason: a
+    Python process cannot call a TypeScript function.
+
+    **It is policed the same way, because it drifted.** This function claimed
+    to mirror the badge's thresholds and cut at 15 and 35 with its own words,
+    so a prospect saw *Barely visible* on the page and *Marginal* in the PDF
+    they had just downloaded from it — the exact failure `api-contracts.md`
+    predicted for this route. Both sides now read
+    `packages/shared-types/fixtures/visibility-bands.json` at every boundary
+    (`test_visibility_band.py` here, `visibilityBand.test.ts` in the design
+    system), so the next drift reddens a suite instead of reaching a client.
+    """
+    s = min(100.0, max(0.0, score))
+    if s < 20:
+        return "Absent"
+    if s < 40:
+        return "Barely visible"
+    if s < 60:
         return "Emerging"
-    if score >= 15:
-        return "Marginal"
-    return "Absent"
+    if s < 80:
+        return "Established"
+    return "Highly visible"
 
 
 def _decimal(value: Any) -> str:
