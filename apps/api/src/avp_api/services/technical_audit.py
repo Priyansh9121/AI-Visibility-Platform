@@ -53,6 +53,7 @@ from typing import Any
 import httpx
 import structlog
 from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
 
 from .ai_crawlers import AgentAccess, evaluate_robots, unknown_access
@@ -128,6 +129,11 @@ class AuditSignals:
 
     # --- Core Web Vitals (LAB approximations; INP is unmeasurable here) ---
     lcp_ms: int | None = None
+    # False when the page was read after `domcontentloaded` because `load`
+    # timed out. Everything that does not depend on subresources is still
+    # measured; LCP is not. Recorded so a reader of the signals can tell a
+    # site with no LCP from a page we stopped waiting for.
+    load_event_reached: bool = True
     cls: Decimal | None = None
     inp_ms: int | None = None
 
@@ -313,7 +319,44 @@ async def audit_site(url: str, *, timeout_ms: int = PAGE_TIMEOUT_MS) -> AuditSig
                     """
                 )
 
-                response = await page.goto(start_url, wait_until="load", timeout=timeout_ms)
+                # ONE SLOW LOAD MUST NOT COST THE WHOLE AUDIT — 2026-09-08.
+                #
+                # `load` waits for every subresource, which is what LCP needs
+                # (see the module note: images must load or LCP is
+                # meaningless). It is also the strictest thing this module
+                # asks for, and on a real marketing site with third-party tags
+                # it is the condition most likely to miss.
+                #
+                # The pilot dry run caught the consequence: `helpwise.io`
+                # timed out mid-scan, the whole audit returned BROWSER_ERROR,
+                # and seventeen checks that never needed `load` — schema
+                # types, indexability, sitemap, title, meta description — were
+                # lost along with the one that did. Standalone the same site
+                # then passed six times out of six, median 11.9s against this
+                # 25s ceiling, so the timeout was transient rather than a
+                # property of the site. That is precisely the failure a
+                # fallback is for: the retry costs one measurement instead of
+                # seventeen.
+                #
+                # `domcontentloaded` is what `crawl.py` has always used and
+                # what succeeded on this site during the same scan. LCP is
+                # simply not observed on the fallback path, which
+                # `build_checks` already renders as `cwv_lcp: not_applicable`
+                # with `LCP_NOT_OBSERVED` — a case it handled before this
+                # existed, so nothing downstream had to change.
+                try:
+                    response = await page.goto(
+                        start_url, wait_until="load", timeout=timeout_ms
+                    )
+                except PlaywrightTimeoutError:
+                    logger.info(
+                        "audit.load_timeout_fell_back",
+                        domain=domain, timeout_ms=timeout_ms,
+                    )
+                    signals.load_event_reached = False
+                    response = await page.goto(
+                        start_url, wait_until="domcontentloaded", timeout=timeout_ms
+                    )
                 if response is None:
                     signals.ok = False
                     signals.error_code = "FETCH_FAILED"
@@ -401,7 +444,23 @@ async def audit_site(url: str, *, timeout_ms: int = PAGE_TIMEOUT_MS) -> AuditSig
                         0, (datetime.now(UTC) - freshest).days
                     )
 
-                vitals = data.get("vitals") or {}
+                # WEB VITALS ARE DISCARDED ON THE FALLBACK PATH — 2026-09-08.
+                #
+                # Both are cumulative: LCP is the largest paint SO FAR and CLS
+                # the shift SO FAR, so a page we stopped waiting for reports
+                # better numbers than the same page fully loaded. Measured on
+                # `helpwise.io` while building the fallback: 988ms after
+                # `domcontentloaded` against 2,952ms after `load` — a third of
+                # the real figure, and enough to flip `cwv_lcp` from `warn` to
+                # `pass`.
+                #
+                # Reporting that would be the fallback quietly flattering
+                # every slow site it rescues, which is worse than the outage
+                # it was added to survive. `build_checks` already renders an
+                # absent vital as `not_applicable` with `LCP_NOT_OBSERVED` /
+                # `CLS_NOT_OBSERVED`, so dropping them here says "not
+                # measured" rather than inventing a good number.
+                vitals = (data.get("vitals") or {}) if signals.load_event_reached else {}
                 lcp = vitals.get("lcp")
                 if isinstance(lcp, (int, float)) and lcp > 0:
                     signals.lcp_ms = int(round(lcp))
