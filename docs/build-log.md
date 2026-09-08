@@ -13537,3 +13537,119 @@ points are earnable.
 
 Unchanged: the third-engine / Epic 12 fork stays paused, and Epic 12's "why"
 engine remains recommended-against until the pilot runs.
+
+# Third dry run, on v2.1 — ready, on one model call
+
+`98c9252` closed the second dry run's list and left two things unconfirmed on
+live output: whether the fix list agrees with the proof beat on freshly
+generated copy, and whether the pitch beat reads as something to send now that
+Citation Strength no longer inflates it. Both are properties of the
+fix-generation step alone, and `avp_dev` already held a real, fully scanned
+subject with the v2.1 re-score on it. So this session spent **one model call**
+and no scan. Governance line, per north-star.md §8.1: verification, Layer 3
+(fix generation) and Layer 7 (report), Activation phase; one one-line prompt
+label fixed (`aa08bf6`), nothing else built.
+
+## What was walked, and what it cost
+
+    credit                         taken on the user's word; the one call answered
+                                   201 rather than a quota 400, the only free check
+    regenerate fixes, pirsch.io    POST /scans/{id}/fixes -> 201 in 26.8s;
+    (scan_01M1ZM80…, v2.1, 33.93)  5 candidates, 4 accepted, 1 rejected by the guard
+    report                         200; proof beat 71 answered / 30 naming / 323 citations
+    share link                     200, 30 days
+    read as a stranger             200, no cookies, 52,996 bytes
+    PDF as a stranger              200, 6,778 bytes, 4 pages; the button downloads the
+                                   same file under the same name
+    revoke                         204, then 404 on both routes, 204 again
+
+**Provider spend, stated as a bound because the service does not log usage:**
+one `claude-opus-5` call at effort `medium`. Input measured offline from the
+same facts and candidates: system 1,981 characters plus user 1,788, about
+**940 tokens, $0.005**. Output not recorded; at most the 8,000-token ceiling,
+**$0.20**; a 26.8-second turn at medium effort is realistically a few thousand
+tokens, so a few cents. **Session total: under $0.21, most likely about
+$0.05.** No engine, sentiment, classification, detection or awareness-screen
+call was made, and no scan was started.
+
+## Finding 1 on live, freshly generated copy — confirmed
+
+The facts the generator was handed, read back from the same code path: **71
+answered, 30 naming the subject, 323 citations, 3 to the subject's own domain**,
+top domains led by `simpleanalytics.com` (16) and `analytics-alternatives.com`
+(15) — the proof beat's own population, and the source it never saw before.
+
+The sentence it wrote: *"Pirsch was named in 30 of 71 AI answers, so 41
+answers on this topic resolved without it."* The proof beat on the same page
+says 71 and 30, and the shelf's title says *"missing from 41 of the 71"*. The
+second dry run's version of this sentence was *"All 30 of 30 answers named
+Pirsch"*. The citation pair was not quoted this time — the citation-strength
+fix no longer exists to quote it — so that half is confirmed at the facts
+boundary and by `test_fix_runner.py`, not on prose.
+
+## The pitch beat, read as a skeptical operator
+
+*"34 today. 96 with the fixes above."* Under it: *"Closing the gaps listed
+above recovers 61.7 points, which is a composite of 96. That figure is the same
+weighted sum as the score itself — it is what the score becomes if those
+dimensions reach 100, not a forecast."* Then the per-dimension distance
+(*"Plausible Analytics currently leads on Mention Rate by 69.4 points"*) and
+the inputs fingerprint.
+
+I would send it. The number is a ceiling stated as arithmetic and labelled as
+one; every point in it belongs to a dimension a site can actually earn; and
+the same page says, in the prospect's own words, that a fifth of the scale is
+left out and why. The score beat says *"the weighted composite of 4 measured
+dimensions"* and *"scored under an earlier definition (v2)"*, so a reader who
+saw 27 last week is told the definition moved, not the business.
+
+## What the guard did, and the one line fixed
+
+**The biggest gap's generated fix was rejected**: `fixes.claim_rejected
+candidate=gap:share_of_voice phrase=dominate`. The model wrote "dominate", the
+banned-claim guard refused it, and the page rendered the string-table copy for
+that candidate — *"Compete on the comparisons where rivals currently appear
+alone"*, +28.2 points. Correct behaviour, and worth naming for the generator's
+own brief: one word cost the best-written item on the list, and a rewrite
+would have been cheaper than a drop.
+
+**One sentence overreached, and the prompt let it.** The generated Mention
+Rate fix said *"pirsch.io offers only 1,221 words of indexable content
+overall"*. The number is the audit's word count for the one page it reads; the
+prompt handed it over as `word count 1221` under "Site structure signals", so
+the model scoped it to the site. A prospect knows their own site has more than
+1,221 words. The heading now names the audited home page (`aa08bf6`), verified
+by the prompt test; the stored copy predates the line and was not re-spent on.
+
+**Three items say "add schema".** The generated Technical Foundation fix names
+Organization, SoftwareApplication and FAQPage markup, and the two canned audit
+fixes beneath it name Organization and FAQPage again — the key-merge seam
+`2436f92` noted, where a generated dimension fix and the string-table audit
+fixes overlap. Legibility, not truth; noted for the same brief.
+
+## Still noted, unchanged
+
+Phone width: the share page's scroll width was 455px on a 390px viewport this
+time (441 before the exclusion card existed); the tables scroll inside their
+own wrappers. A partial scan still says so only in numbers — the second dry
+run's helpwise page text, unchanged. Neither was chased.
+
+## The decision
+
+**Ready.** The fix list's figures now come from the population the proof beat
+counts and agree with it on the page a prospect reads; the pitch is arithmetic
+over dimensions a site can earn, labelled as a ceiling rather than a forecast;
+the PDF says what the page says; the exclusion is explained in the prospect's
+own words; and the send path — link, stranger, file, revocation — worked for
+the third time. What remains is legibility and generator polish, none of it a
+number a prospect can disprove. A pilot agency can generate and send a real
+prospect report with this, and I would stand behind the one that was generated
+today.
+
+## Open
+
+**A generator brief**, small: rewrite rather than drop a fix that trips the
+banned-claim guard, and reconcile generated dimension fixes with the canned
+audit fixes they overlap. **Citation Strength's real definition** is unchanged
+from `98c9252`. Unchanged: the third-engine / Epic 12 fork stays paused, and
+Epic 12's "why" engine remains recommended-against until the pilot runs.
