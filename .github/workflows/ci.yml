@@ -1,0 +1,158 @@
+# ===========================================================================
+# Continuous integration
+# ===========================================================================
+#
+# Nothing previously enforced lint or tests before a push. Both halves of the
+# project were checked by hand, which is how a failing test and ~50 unused
+# exports survived.
+#
+# Three jobs:
+#
+#   frontend           lint + build. No services, no secrets.
+#   backend-lint       static analysis only. No database.
+#   backend-tests      the integration suite, against a PostgreSQL service
+#                      container created for the run and thrown away after.
+#
+# The split matters: backend-lint gives a fast signal that does not depend on
+# a database being reachable, so a syntax error is reported in seconds rather
+# than after the service container has spun up.
+#
+# SECRETS: none are required, and none must be added. The test job talks to
+# an ephemeral container on localhost. It must NEVER be pointed at the real
+# Supabase project — see the DATABASE_URL below, which is hard-coded to the
+# service container precisely so nobody wires production credentials in.
+# ===========================================================================
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+# Cancel an in-flight run when a newer commit lands on the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend — lint and build
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Report bundle size
+        run: |
+          echo "### Frontend bundle" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          ls -lh dist/assets/*.js | awk '{print $5, $9}' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+  backend-lint:
+    name: Backend — lint
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+  backend-tests:
+    name: Backend — integration tests
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: backend
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: construction_portal_test
+        ports:
+          - 5432:5432
+        # Do not start the suite until the database actually answers.
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      NODE_ENV: test
+
+      # Ephemeral service container on localhost. NEVER point this at the
+      # real Supabase project — the suite creates and deletes rows.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/construction_portal_test
+
+      # No TLS to a container on localhost.
+      DB_SSL: "false"
+
+      # Test-only signing key. Must be >= 32 characters or the app refuses
+      # to boot. This is not a secret: it signs nothing outside this run.
+      JWT_SECRET: ci-only-not-a-secret-value-padded-to-length-abcdefgh
+
+      DEFAULT_TIMEZONE: Asia/Kolkata
+      DEFAULT_CURRENCY: INR
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - run: npm ci
+
+      - name: Apply migrations
+        # Fresh database: 002 baseline, then RLS, then reference data, then
+        # the duplicate-table drop. See database/migrations/README.md for
+        # why 005 runs even on a fresh install.
+        run: |
+          for f in 002_baseline_supabase 003_supabase_rls \
+                   004_seed_reference_data 005_drop_duplicate_assignment_table; do
+            echo "--- $f"
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "database/migrations/$f.sql"
+          done
+
+      - name: Test
+        run: npm test

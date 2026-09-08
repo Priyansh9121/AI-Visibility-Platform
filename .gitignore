@@ -79,3 +79,9 @@ skills-lock.json
 .github/agents/
 .github/hooks/
 .github/skills/
+
+# Third-party project cloned into the working tree, not part of this product.
+n8n-workflows/
+
+# Vendored skill package, same category as the `skills/` block above.
+ui-ux-pro-max-skill/
