@@ -34,8 +34,12 @@ export const DIMENSION_LABEL: Record<string, string> = {
 
 /** What each dimension actually measures, in one line. */
 export const DIMENSION_MEANING: Record<string, string> = {
-  mention_rate: 'How often the brand is named at all when a buyer asks.',
-  share_of_voice: 'How much of the conversation the brand holds against its rivals.',
+  // Scoring v2: counts UNPROMPTED questions only. "named at all when a buyer
+  // asks" described the retired definition, which also counted questions that
+  // named the brand themselves — see scoring-spec.md's population section.
+  mention_rate: 'How often the brand is named when a buyer asks without naming it first.',
+  share_of_voice:
+    'How much of the conversation the brand holds against its rivals, in those same unprompted answers.',
   citation_strength: 'How often the brand’s own pages are the source an answer cites.',
   sentiment: 'How favourably the brand is described when it is named.',
   technical_foundation: 'How readable the site is to the systems that build those answers.',
@@ -65,6 +69,11 @@ export const EXCLUSION_REASON: Record<string, { label: string; detail: string }>
     detail:
       'No competitor set was detected for this scan, so there is nothing to measure a share against. The dimension is excluded and its weight spread across the others, rather than awarding points for a detection that did not happen.',
   },
+  NO_AWARENESS_POPULATION: {
+    label: 'Nothing unprompted to measure',
+    detail:
+      'Mention Rate counts only questions that did not name the brand — the ones that can show whether a buyer would discover it. This prompt set had none, so there was nothing to measure discovery with. It is left out and its weight spread across the others rather than scored as an absence the brand did not earn.',
+  },
   NO_ANSWERED_RESULTS: {
     label: 'No answers came back',
     detail:
@@ -83,6 +92,13 @@ export const DEGRADATION_FLAG: Record<string, string> = {
   TECHNICAL_FOUNDATION_NOT_MEASURED:
     'The site had not been audited when this score was computed.',
   NO_ANSWERED_RESULTS: 'No engine returned an answer for this scan.',
+  NO_AWARENESS_POPULATION:
+    'This prompt set contained no unprompted questions, which are the only ones Mention Rate and Share of Voice count. Both were left out of the score rather than measured on questions that named the brand.',
+  // Emitted by scoring.py alongside the `NO_POPULATION` exclusion, and missing
+  // from this table until 2026-09-08 — so a scan where the brand was never
+  // named rendered the raw code to a client. Found by the coverage test below.
+  NO_SENTIMENT_POPULATION:
+    'The brand was not named often enough for sentiment to mean anything, so that dimension was left out of the score rather than counted as a bad result.',
 };
 
 export interface DetectionCopy {

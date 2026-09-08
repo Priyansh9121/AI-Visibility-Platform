@@ -145,3 +145,52 @@ describe('it refuses to report silence as consensus', () => {
     expect(render(insufficientDataReport)).not.toContain('Where the engines disagree');
   });
 });
+
+describe('the two mention-rate populations are labelled, not reconciled', () => {
+  // Scoring v2 scoped the composite's Mention Rate to unprompted questions and
+  // deliberately left the cross-engine standings counting the whole prompt set.
+  // Both are right; a reader comparing them had no way to know why they differ.
+
+  it('says the per-engine figures are not the score above', () => {
+    const html = render(divergentReport);
+    expect(html).toContain('are not the Mention Rate in the score above');
+    expect(html).toContain('The score counts only questions that did not name');
+  });
+
+  it('names what the per-engine figures include that the score does not', () => {
+    // The distinction has to be concrete. "Different populations" tells a
+    // reader nothing; "questions that named you, which an engine echoes back"
+    // tells them why the number below is higher.
+    const html = render(divergentReport);
+    expect(html).toContain('including those that named');
+    expect(html).toContain('nearly always echo back');
+  });
+
+  it('does not resolve the difference by changing either number', () => {
+    // The fix is disclosure. If the standings were ever quietly rescoped to
+    // match the composite, this section would stop being a reading about the
+    // engines — and these figures would change.
+    const html = render(divergentReport);
+    expect(html).toContain('Named Help Scout in 4 of 4');
+    expect(html).toContain('Named Help Scout in 1 of 4');
+  });
+
+  it('says something different when the score has no Mention Rate to differ from', () => {
+    // scoring v2's NO_AWARENESS_POPULATION: a prompt set with no unprompted
+    // questions excludes the dimension entirely, so the usual sentence would
+    // point at a number that is not on the page.
+    const excluded: Report = {
+      ...divergentReport,
+      dimensions: divergentReport.dimensions.map((d) =>
+        d.key === 'mention_rate'
+          ? { ...d, included: false, subscore: null, exclusionReason: 'NO_AWARENESS_POPULATION' }
+          : d,
+      ),
+    };
+
+    const html = render(excluded);
+    expect(html).toContain('Mention Rate is left out of the score above');
+    expect(html).toContain('had no unprompted questions');
+    expect(html).not.toContain('are not the Mention Rate in the score above');
+  });
+});
