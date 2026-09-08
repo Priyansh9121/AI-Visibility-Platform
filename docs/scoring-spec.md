@@ -55,11 +55,25 @@ objection that a buyer weighing named options is itself a competitive signal is
 real but does not apply to this implementation, which counts PRESENCE rather
 than airtime; an airtime-weighted Share of Voice would deserve it reconsidered.
 
-**Sentiment and Citation Strength keep every answered result, deliberately.**
-Sentiment asks how an answer PORTRAYS the brand, which is a real signal whether
-the buyer named it or not. Scoping it would also move scores UP — measured at
-+1 to +26 points awareness-only — so it is a separate decision with separate
-evidence, not a consistency fix. Recorded as open.
+**Sentiment and Citation Strength keep every answered result. Decided, not
+pending.** Sentiment asks how an answer PORTRAYS the brand, which is a real
+signal whether the buyer named it or not — unlike Mention Rate and Share of
+Voice, which answer *"was this discovered"*, a claim a brand-named question
+cannot support. The two dimensions were scoped because the tautology made them
+measure the question instead of the engine; sentiment has no such defect,
+because the thing it measures does not depend on who raised the subject.
+
+The measurement backs that up and is worth stating, because it points the other
+way from the fix: awareness-only sentiment is **higher** on every scan with a
+population, by +1.03 to +25.86 points. Engines recommend a brand they surface
+unprompted and hedge about one they are made to discuss. Scoping sentiment
+would therefore RAISE scores rather than correct them, which is the signature of
+a change that flatters rather than fixes.
+
+That is a finding in its own right — how an engine talks about a brand depends
+on whether it chose to bring it up — and it is the subject of its own question,
+not of this one. **Closed for v2.** Reopening it needs a reason of its own, not
+consistency with a fix aimed at a different defect.
 
 **No awareness prompts in a set excludes Mention Rate and Share of Voice and
 redistributes their weight**, with `NO_AWARENESS_POPULATION`. Scoring the
