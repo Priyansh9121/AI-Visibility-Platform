@@ -226,7 +226,7 @@ class TestHistoryShape:
 
 
 class TestRankingsMaterial:
-    async def test_every_rival_carries_the_three_comparable_dimensions(
+    async def test_every_rival_carries_the_comparable_dimensions(
         self, client: AsyncClient, stub_engines, stub_discovery
     ) -> None:  # noqa: ANN001
         await _sign_up(client)
@@ -241,7 +241,10 @@ class TestRankingsMaterial:
         for r in rivals:
             assert r["mentionRate"] is not None
             assert r["shareOfVoice"] is not None
-            assert r["citationStrength"] is not None
+            # v2.1: the subject's Citation Strength is excluded under
+            # NO_AUTHORITY_DATA, so the rivals' is null too — a column means
+            # one thing, and a stand-in nobody can earn is not a comparison.
+            assert r["citationStrength"] is None
 
     async def test_no_rival_carries_a_composite_and_none_ever_will(
         self, client: AsyncClient, stub_engines, stub_discovery

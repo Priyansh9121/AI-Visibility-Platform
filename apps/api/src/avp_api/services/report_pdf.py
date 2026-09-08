@@ -187,10 +187,14 @@ def _score_beat(
             reason = narrative.EXCLUSION_REASON.get(
                 exclusion["reason"], exclusion["reason"]
             )
+            detail = narrative.EXCLUSION_DETAIL.get(exclusion["reason"])
             # An excluded dimension is named with its reason and NO sub-score.
             # Printing it as zero would assert what the scoring engine
-            # deliberately refused to assert.
-            doc.bullet(f"{exclusion['label']} — {reason}.")
+            # deliberately refused to assert. The sentence under the label is
+            # the page's, so the file says why in the same words.
+            doc.bullet(
+                f"{exclusion['label']} — {reason}." + (f" {detail}" if detail else "")
+            )
 
     flags = (data.get("score") or {}).get("degradationFlags") or []
     if flags:
@@ -545,10 +549,14 @@ _PRIORITY = {"high": "High priority", "medium": "Medium priority", "low": "Low p
 _EFFORT = {"S": "Small effort", "M": "Medium effort", "L": "Large effort"}
 
 _DEGRADATION = {
+    # Carried only by scores computed before v2.1. The sentence describes what
+    # that formula actually did, which its predecessor did not: it claimed a
+    # comparison against the best-cited brand that the arithmetic never made.
     "NO_AUTHORITY_DATA": (
-        "Citation Strength is measured against the best-cited brand in this scan rather "
-        "than against an external authority ranking, which this system does not have a "
-        "source for."
+        "Citation Strength was measured as whether the brand's own domain was cited, "
+        "against every domain the engines cited, because this system has no external "
+        "authority source. That measure cannot rise above about a point for any site, "
+        "and later scores leave the dimension out instead."
     ),
     "WEAK_COMPETITOR_SET": (
         "The competitor set was only weakly corroborated — some rivals were surfaced by a "

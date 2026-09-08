@@ -21,7 +21,7 @@ score = Σ (weight_i × subscore_i) / 100
 |---|---|---|---|
 | 1 | **Mention Rate** | 30% | % of **awareness** prompts where the brand appears (v2) |
 | 2 | **Share of Voice** | 25% | Brand mentions ÷ total mentions, over **awareness** prompts (v2) |
-| 3 | **Citation Strength** | 20% | Number + authority of domains citing the brand |
+| 3 | **Citation Strength** | 20% | Number + authority of domains citing the brand — **excluded since v2.1** (`NO_AUTHORITY_DATA`), weight redistributed, until an authority source exists |
 | 4 | **Sentiment** | 15% | Weighted positive/neutral/negative across all mentions |
 | 5 | **Technical Foundation** | 10% | Schema presence, structured data, content freshness |
 
@@ -84,6 +84,44 @@ set. Unreachable through the generator (45% awareness quota) and through
 
 Full numbers and method: `build-log.md`, *"Mention Rate may be measuring the
 prompt, not the engine — sized, not fixed"*.
+
+### Citation Strength — excluded until there is an authority source (v2.1)
+
+**Citation Strength is excluded from the composite with reason
+`NO_AUTHORITY_DATA`, and its 20 points redistributed across the other
+dimensions.** The table above asks for "number **and** authority" of citing
+domains, and this system has no authority source. The stand-in that filled the
+dimension since Epic 5 divided the distinct domains citing the subject — in
+practice the subject's own domain, 0 or 1 — by every distinct third-party
+domain the engines cited in the scan. The most any brand can score under that
+arithmetic is `1/N`, and on a real 24-prompt scan `N` was 152.
+
+Measured across every stored score before the change: **maximum 3.70, median
+0.88, mean 1.1** (33 rows, v1.1 and v2). Every rival on a comparison table
+showed the identical figure, because each owns one domain. The pitch beat
+summed the dimension's gap into the points its fixes could recover — about 20
+of the 63 it promised on that scan — from a dimension nobody could earn.
+
+**This is an interim, not a redesign.** What Citation Strength should measure
+— citation share against the best-cited *single* brand, the rate of answers
+that cite the subject at all, or something an authority feed makes possible —
+is its own decision with its own brief. Until then a stand-in that cannot be
+earned is left out, the same treatment v1.1 gave Technical Foundation before
+Epic 6 could measure it. The citations themselves are unaffected: the proof
+beat's citation tables and the unclaimed-domain fix read the persisted
+`engine_result_citations` rows directly and never depended on this score.
+
+The reason code is `NO_AUTHORITY_DATA` rather than `NOT_YET_MEASURED` because
+the codes name causes: `NOT_YET_MEASURED` says a capability is on its way; this
+says an input does not exist. The same code was previously a degradation flag
+on every score; a score computed under v2.1 does not carry the flag, because a
+dimension that is left out is not "rougher", and stored v2 rows keep it with
+copy that describes what that formula actually did.
+
+Effect on the composite, from the stored v2 sub-scores: pirsch.io 27.28 →
+33.93, zammad.com 41.19 → 51.08, plausible.io 57.62 → 71.83. **Stored v2 rows
+are not re-scored** (rule 5); a scan re-scored under v2.1 gains a second row
+and the report says so through `previousFormulaVersions`.
 
 Weights sum to 100. Per-industry weight tuning is deferred until real data
 exists (§6); until then all industries use the table above.
@@ -164,5 +202,6 @@ These are the unit-test targets named by the Epic 5 acceptance criterion.
 |---|---|---|
 | 2026-08-20 | `v1` | Initial weights from product-spec.md §6. Not yet data-tuned. |
 | 2026-08-21 | `v1.1` | **No-competitor Share of Voice now excluded, not scored 100.** v1 awarded a full 25 points when competitor detection returned nothing, which hands a quarter of the composite to a *detection failure* — a technically-computable but meaningless number, and exactly the outcome this project refuses everywhere else (null classification, null score, `INSUFFICIENT_DATA`). It is now excluded and redistributed, the same treatment v1 already prescribed for sentiment with no population. Weights themselves are unchanged. See `build-log.md` Epic 5.2. |
+| 2026-09-08 | `v2.1` | **Citation Strength excluded under `NO_AUTHORITY_DATA`, weight redistributed.** The stand-in formula — the subject's own domain against every distinct third-party domain cited — could not exceed `1/N` for any brand; across all 33 stored scores the maximum was 3.70, every rival showed the identical figure, and the pitch beat promised about 20 of its recoverable points from it. Interim only: what the dimension should measure is a separate decision. Stored `v2` rows are not re-scored. Rivals' citation strength is `null` while the subject's is excluded, so a column means one thing. See the section above and `build-log.md`, second pilot dry run. |
 | 2026-09-08 | `v2` | **Mention Rate and Share of Voice are scored on awareness prompts only.** The generator names the subject brand in comparison and bottom-funnel questions by instruction, and a mention is a text match, so those prompts registered a mention 255 times in 256 — measuring the question rather than the engine. Epic 0's first stated job is proving a stranger is *invisible*, which is an unprompted property. Weights are unchanged; the population is not. Sentiment and Citation Strength deliberately keep every answered result. **Stored `v1.1` scores are not re-scored** — rule 5 exists so before/after reporting compares like with like, and 14 of them describe what the old definition produced. See `build-log.md` for the measurement and the decision. |
 | 2026-08-21 | `v1.1` | **Technical Foundation excluded pending Epic 6**, with reason `NOT_YET_MEASURED` — deliberately distinct from `NO_POPULATION`, so a report can say "not yet checked" rather than "nothing found". Scoring it 0 would depress every score by up to 10 points for a reason unrelated to the client. |

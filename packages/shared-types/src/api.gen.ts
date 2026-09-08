@@ -2106,7 +2106,7 @@ export interface components {
          */
         CompetitorScoreOut: {
             /** Citationstrength */
-            citationStrength: string;
+            citationStrength?: string | null;
             /** Competitorid */
             competitorId: string;
             /** Mentionrate */

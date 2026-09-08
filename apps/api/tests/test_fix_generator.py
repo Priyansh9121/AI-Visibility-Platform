@@ -604,16 +604,31 @@ def stub_engines(monkeypatch):  # noqa: ANN001, ANN201
             for i in range(n_prompts)
         ]
 
+        index_of = {p.text: i for i, p in enumerate(prompts)}
+
         async def fake_generate(**kwargs):  # noqa: ANN003, ARG001
             return prompts, "stub"
 
+        # Even prompts name the brand, odd ones do not. This suite runs the
+        # engines-only executor, so Share of Voice and Technical Foundation
+        # are excluded before any of these tests begin; until v2.1 the one
+        # dimension left with a gap was Citation Strength, scored 0 because
+        # the stub cited g2.com and never the subject. That stand-in is now
+        # excluded too, so the gap the generator writes from has to be a real
+        # one — a brand named in half its answers is what the generator is
+        # for.
         async def fake_ask_all(prompt, *, engines, settings):  # noqa: ANN001, ARG001
+            names = index_of[prompt] % 2 == 0
             return [
                 EngineAnswer(
                     engine=engine,
                     engine_version="stub",
                     prompt_text=prompt,
-                    text="Zendesk is popular. Help Scout is simpler and well liked.",
+                    text=(
+                        "Zendesk is popular. Help Scout is simpler and well liked."
+                        if names
+                        else "Zendesk is popular. Front is fine for larger teams."
+                    ),
                     citations=[
                         CitedSource(url="https://g2.com/x", domain="g2.com", position=1)
                     ],

@@ -55,7 +55,17 @@ logger = structlog.get_logger(__name__)
 # definition and are NOT re-scored — rule 5 exists so before/after reporting
 # compares like with like, and silently restating history is the thing it
 # forbids.
-FORMULA_VERSION = "v2"
+# v2.1 — Citation Strength is EXCLUDED under NO_AUTHORITY_DATA and its 20
+# points redistributed, until there is a source of citing-domain authority to
+# measure it with. The stand-in that filled its place since Epic 5 divided the
+# subject's own domain (0 or 1) by every distinct third-party domain the
+# engines cited, so no brand could score above 1/N: across all 33 stored
+# scores the maximum was 3.70, every rival on a comparison table showed the
+# identical figure, and the pitch beat promised about 20 of its recoverable
+# points from a dimension nobody could earn (build-log, second pilot dry run,
+# 2026-09-08). An interim, not a redesign — scoring-spec.md's changelog has the
+# numbers. Rows carrying v2 keep the number they were scored with.
+FORMULA_VERSION = "v2.1"
 
 TWO_PLACES = Decimal("0.01")
 HUNDRED = Decimal("100")
@@ -184,7 +194,9 @@ class CompetitorComparison:
     name: str
     mention_rate: Decimal
     share_of_voice: Decimal
-    citation_strength: Decimal
+    # None when the subject's own Citation Strength is excluded (v2.1): a
+    # column means one thing, and a stand-in nobody can earn is not it.
+    citation_strength: Decimal | None
 
 
 @dataclass(slots=True)
@@ -386,6 +398,16 @@ def citation_strength(results: list[ResultFacts]) -> tuple[Decimal, list[str]]:
     absolute target keeps the number meaningful: "how close is the subject to
     the most-cited player here" is answerable from what we have, whereas "is 7
     citing domains good" is not.
+
+    **That was the intent; it is not what the arithmetic does, and since v2.1
+    the value is not in the composite.** `competitor_domain_counts` is the
+    count of every distinct third-party domain in the scan, not the best
+    single rival's, and `subject_domains` is in practice the subject's own
+    domain — so the result is 1/N for any brand cited at all, and 3.70 was the
+    most any of 33 stored scores reached. `compute_score` excludes the
+    dimension under NO_AUTHORITY_DATA. The function stays for the
+    NO_CITATIONS_IN_SCAN flag, and as the number an authority source will one
+    day replace.
     """
     flags: list[str] = ["NO_AUTHORITY_DATA"]
     answered = [r for r in results if r.answered]
@@ -438,7 +460,10 @@ def sentiment_score(results: list[ResultFacts]) -> Decimal | None:
 
 
 def compare_competitors(
-    results: list[ResultFacts], competitors: list[CompetitorFacts]
+    results: list[ResultFacts],
+    competitors: list[CompetitorFacts],
+    *,
+    include_citation_strength: bool = True,
 ) -> list[CompetitorComparison]:
     """Per-competitor figures for the three measurable dimensions.
 
@@ -457,6 +482,13 @@ def compare_competitors(
     exactly as they are for the subject, and Citation Strength over every
     answered result exactly as the subject's is. The rule is that a column
     means one thing.
+
+    **And when the subject's Citation Strength is excluded, the rivals' is
+    None** — v2.1. The stand-in formula gives every single-domain brand the
+    same 1/N, which is how a real report came to show 0.66 for the subject and
+    all five rivals. A column of identical numbers under a dimension the score
+    itself leaves out is the same accounting mismatch this docstring already
+    refuses, from the other side.
     """
     answered = [r for r in results if r.answered]
     if not answered or not competitors:
@@ -502,8 +534,10 @@ def compare_competitors(
                     Decimal(appearances) / Decimal(total_mentions) * HUNDRED
                     if total_mentions else Decimal("0")
                 ),
-                citation_strength=_round2(
-                    Decimal(cited) / Decimal(best_citations) * HUNDRED
+                citation_strength=(
+                    _round2(Decimal(cited) / Decimal(best_citations) * HUNDRED)
+                    if include_citation_strength
+                    else None
                 ),
             )
         )
@@ -579,9 +613,39 @@ def compute_score(
     else:
         mr = _round2(mention_rate(aware))
 
+    # --- Citation Strength — EXCLUDED under NO_AUTHORITY_DATA, v2.1 ---------
+    #
+    # §6 asks for "number AND authority of domains citing the brand", and there
+    # is no authority source in this system. The stand-in `citation_strength`
+    # computes in its place divides the subject's own domain (0 or 1) by every
+    # distinct third-party domain the engines cited, so the most any brand can
+    # score is 1/N: on a real 24-prompt scan N was 152, and the subject and all
+    # five rivals scored 0.66. Across every stored score the maximum was 3.70.
+    # A dimension nobody can earn is not a measurement, and scoring it kept
+    # depressing every composite by up to 20 points while the pitch beat
+    # promised those points back as recoverable.
+    #
+    # So it is excluded and its weight redistributed — the treatment v1.1 gave
+    # Technical Foundation before Epic 6 could measure it — and the reason
+    # names the missing input, as the other reasons do. NOT_YET_MEASURED would
+    # be wrong: that says a capability is on its way; this says an input does
+    # not exist. The raw figure is still computed, because NO_CITATIONS_IN_SCAN
+    # remains true and cheap and is a fact about the scan rather than about
+    # this formula. NO_AUTHORITY_DATA is no longer ALSO a degradation flag on a
+    # new score: a dimension that is left out is not "rougher", and saying both
+    # would say two things. Rows scored under v2 still carry it as a flag, with
+    # copy that now describes what that formula actually did.
     cs_raw, citation_flags = citation_strength(results)
-    cs = _round2(cs_raw)
-    flags.extend(citation_flags)
+    cs: Decimal | None
+    if "NO_AUTHORITY_DATA" in citation_flags:
+        cs = None
+        excluded[Dimension.CITATION_STRENGTH.value] = "NO_AUTHORITY_DATA"
+        flags.extend(f for f in citation_flags if f != "NO_AUTHORITY_DATA")
+    else:
+        # Unreachable today — `citation_strength` always flags the missing
+        # source. The branch is what an authority feed plugs into.
+        cs = _round2(cs_raw)
+        flags.extend(citation_flags)
 
     # --- Share of Voice ---------------------------------------------------
     #
@@ -711,5 +775,9 @@ def compute_score(
         degradation_flags=sorted(set(flags)),
         reason_code=None,
         inputs_digest=digest,
-        competitors=compare_competitors(results, competitors),
+        competitors=compare_competitors(
+            results,
+            competitors,
+            include_citation_strength=Dimension.CITATION_STRENGTH.value not in excluded,
+        ),
     )

@@ -79,6 +79,14 @@ export const EXCLUSION_REASON: Record<string, { label: string; detail: string }>
     detail:
       'No engine returned an answer for this scan, so there is nothing to measure. This is a scan that did not run, not a brand that scored badly.',
   },
+  // v2.1 — 2026-09-08. Not NOT_YET_MEASURED: that says a capability is on its
+  // way; this says an input does not exist. Mirrored word for word in
+  // `report_narrative.EXCLUSION_DETAIL`, so the PDF says the same.
+  NO_AUTHORITY_DATA: {
+    label: 'No authority source',
+    detail:
+      'Citation Strength needs a measure of how authoritative a citing domain is, and this system has no source for one. The only stand-in available — whether the brand’s own domain was cited, against every domain the engines cited — cannot rise above about a point for any site, so it is left out and its weight spread across the others rather than held against the brand. The citations themselves are still shown in the evidence below.',
+  },
 };
 
 /**
@@ -103,8 +111,11 @@ export const VISIBILITY_FLAG: Record<string, string> = {
 
 /** Why a number is lower or rougher than it would otherwise be. */
 export const DEGRADATION_FLAG: Record<string, string> = {
+  // Carried only by scores computed before v2.1. The sentence now describes
+  // what that formula actually did; its predecessor claimed a comparison
+  // against the best-cited brand that the arithmetic never made.
   NO_AUTHORITY_DATA:
-    'Citation Strength is measured against the best-cited brand in this scan rather than against an external authority ranking, which this system does not have a source for.',
+    'Citation Strength was measured as whether the brand’s own domain was cited, against every domain the engines cited, because this system has no external authority source. That measure cannot rise above about a point for any site, and later scores leave the dimension out instead.',
   WEAK_COMPETITOR_SET:
     'The competitor set was only weakly corroborated — some rivals were surfaced by a single signal. Share of Voice should be read as indicative rather than exact.',
   NO_CITATIONS_IN_SCAN: 'No engine cited any source in this scan, for any brand.',

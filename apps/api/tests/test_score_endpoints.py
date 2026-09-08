@@ -124,8 +124,13 @@ class TestComputeScore:
         await _sign_up(client)
         sid = await _scan(client, stub_engines)
         body = (await client.post(f"{BASE}/scans/{sid}/score")).json()
-        for field in ("composite", "mentionRate", "citationStrength"):
+        for field in ("composite", "mentionRate", "sentiment"):
             assert isinstance(body[field], str), f"{field} must be a string"
+        # v2.1: Citation Strength is excluded, so it crosses as null — never a
+        # zero, and never a string that reads as a measurement.
+        assert body["citationStrength"] is None
+        assert body["excludedDimensions"]["citation_strength"] == "NO_AUTHORITY_DATA"
+        assert all(c["citationStrength"] is None for c in body["competitors"])
 
     async def test_technical_foundation_excluded_with_its_own_reason(
         self, client: AsyncClient, stub_engines
@@ -158,14 +163,18 @@ class TestComputeScore:
         body = (await client.post(f"{BASE}/scans/{sid}/score")).json()
         weights = {k: Decimal(v) for k, v in body["weights"].items()}
         assert "share_of_voice" not in weights, "excluded dimensions carry no weight"
+        assert "citation_strength" not in weights, "excluded since v2.1"
         assert abs(sum(weights.values()) - Decimal("100")) < Decimal("0.01")
 
+        camel = {
+            "mention_rate": "mentionRate", "share_of_voice": "shareOfVoice",
+            "citation_strength": "citationStrength", "sentiment": "sentiment",
+            "technical_foundation": "technicalFoundation",
+        }
+        # Whatever survived the exclusions re-sums to the composite against
+        # its own weights — the breakdown is auditable by a reader.
         rebuilt = sum(
-            (weights[k] * Decimal(body[camel]) for k, camel in [
-                ("mention_rate", "mentionRate"),
-                ("citation_strength", "citationStrength"),
-                ("sentiment", "sentiment"),
-            ]),
+            (w * Decimal(body[camel[k]]) for k, w in weights.items()),
             Decimal("0"),
         ) / Decimal("100")
         assert abs(rebuilt - Decimal(body["composite"])) < Decimal("0.01")

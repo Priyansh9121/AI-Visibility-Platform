@@ -130,23 +130,30 @@ async def _baseline_for(session: AsyncSession, scan: Scan) -> Scan | None:
     ).scalars().first()
 
 
-async def _composite(session: AsyncSession, scan_id: str) -> Decimal | None:
-    """The STORED composite, never a recomputed one.
+async def _composite(session: AsyncSession, scan_id: str) -> tuple[Decimal | None, str | None]:
+    """The STORED composite and the formula it was scored under, never a
+    recomputed one.
 
     A scan scored under an older formula version keeps the number it was scored
     with — the rule `client_history.build_history` already follows. Comparing a
     stored figure with a freshly recomputed one would report a formula change
     as a visibility drop.
+
+    **The version travels with the number for the same reason** — v2.1. Two
+    stored composites under different formulas are not comparable either (rule
+    5 is the whole reason the version is stored), and a bump that lowers scores
+    would otherwise fire a "visibility fell" alert on the next scan of every
+    client with a baseline. The caller declines to compare across versions.
     """
     row = (
         await session.execute(
-            select(Score.composite)
+            select(Score.composite, Score.formula_version)
             .where(Score.scan_id == scan_id)
             .order_by(Score.created_at.desc())
             .limit(1)
         )
-    ).scalars().first()
-    return row
+    ).first()
+    return (None, None) if row is None else (row[0], row[1])
 
 
 async def _net_tone(session: AsyncSession, scan_id: str) -> dict[str, tuple[int, int]]:
@@ -252,9 +259,20 @@ async def generate_for_scan(
         )
 
     # --- visibility ---------------------------------------------------------
-    now_score = await _composite(session, scan.id)
-    was_score = await _composite(session, baseline.id)
-    if now_score is not None and was_score is not None and was_score > 0:
+    now_score, now_version = await _composite(session, scan.id)
+    was_score, was_version = await _composite(session, baseline.id)
+    if now_score is not None and was_score is not None and now_version != was_version:
+        # A number that moved because the definition changed is a claim about
+        # us, not about the client's business — the report says so through
+        # `previousFormulaVersions`, and an alert must not say otherwise.
+        logger.info(
+            "alerts.formula_changed",
+            scan_id=scan.id,
+            baseline_id=baseline.id,
+            was=was_version,
+            now=now_version,
+        )
+    elif now_score is not None and was_score is not None and was_score > 0:
         change = _pct(was_score, now_score)
         if change <= -VISIBILITY_DROP_FRACTION:
             add(

@@ -234,6 +234,67 @@ async def _load_client(session, cid: str):  # noqa: ANN001, ANN202
     return await session.get(Client, cid)
 
 
+async def _set_version(session, scan_id: str, version: str) -> None:  # noqa: ANN001
+    """Mark a scan's stored score as computed under some other formula."""
+    row = (
+        await session.execute(
+            select(Score).where(Score.scan_id == scan_id).order_by(Score.created_at.desc())
+        )
+    ).scalars().first()
+    assert row is not None
+    row.formula_version = version
+    await session.commit()
+
+
+class TestAFormulaChangeIsNotABusinessEvent:
+    """v2.1 bumped the formula; the guard here is what keeps that from
+    reading as every client's visibility moving on the same day.
+
+    Rule 5 stores `formula_version` so two composites can be told apart. An
+    alert that compared across the bump would report the definition changing
+    as the business changing — the third form of the failure this module's
+    docstring already names twice (a re-run, and a recomputation).
+    """
+
+    async def test_a_drop_across_formula_versions_is_not_a_visibility_drop(
+        self, client: AsyncClient, stub_engines, session
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        stub_engines()
+        cid = await _client_id(client)
+        first = await _run_scan(client, cid)
+        await _age_scan(session, first, hours=alerts_service.MIN_BASELINE_HOURS + 2)
+        await _set_composite(session, first, "80.0")
+        await _set_version(session, first, "v2")  # the baseline, under the old definition
+        second = await _run_scan(client, cid)
+        await _set_composite(session, second, "60.0")  # this one under the current
+
+        scan = await session.get(Scan, second)
+        cl = await _load_client(session, cid)
+        made = await alerts_service.generate_for_scan(session, scan, cl)
+        assert not any(a.kind is AlertKind.VISIBILITY_DROP for a in made)
+
+    async def test_the_same_drop_under_one_formula_still_fires(
+        self, client: AsyncClient, stub_engines, session
+    ) -> None:  # noqa: ANN001
+        """The guard declines to compare across versions and nothing else."""
+        await _sign_up(client)
+        stub_engines()
+        cid = await _client_id(client)
+        first = await _run_scan(client, cid)
+        await _age_scan(session, first, hours=alerts_service.MIN_BASELINE_HOURS + 2)
+        await _set_composite(session, first, "80.0")
+        await _set_version(session, first, "v2")
+        second = await _run_scan(client, cid)
+        await _set_composite(session, second, "60.0")
+        await _set_version(session, second, "v2")
+
+        scan = await session.get(Scan, second)
+        cl = await _load_client(session, cid)
+        made = await alerts_service.generate_for_scan(session, scan, cl)
+        assert any(a.kind is AlertKind.VISIBILITY_DROP for a in made)
+
+
 class TestWhatEachKindActuallyDetects:
     async def test_a_tone_decline_fires_without_the_sign_ever_changing(
         self, client: AsyncClient, stub_engines, session
