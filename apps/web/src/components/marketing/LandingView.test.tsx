@@ -42,7 +42,11 @@ describe('the page explains the product', () => {
   it('describes the scan in terms of what is actually built', () => {
     const out = html();
     expect(out).toContain('Twenty-four questions, tagged by buying stage');
-    expect(out).toContain('six minutes');
+    // "six minutes" was Epic 9.2's measurement and went stale at 9.17. The
+    // copy now says "about ten minutes", hedged, because three 12-prompt runs
+    // spread 286-331s and no 24-prompt scan has been timed since 9.17.
+    expect(out).toContain('about ten minutes');
+    expect(out).not.toContain('six minutes');
   });
 
   it('walks the whole pipeline, not only the parts that photograph well', () => {

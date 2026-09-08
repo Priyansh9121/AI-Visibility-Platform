@@ -10,7 +10,8 @@
  * Every number and capability below is one this codebase actually ships, and
  * was verified against the build log before it was written:
  *
- *   - the scan pipeline and its ~6 minutes  — build-log Epic 9.2/9.8, measured
+ *   - the scan pipeline's duration          — see the note beside the copy;
+ *                                            the old "~6 minutes" was stale
  *   - 24 prompts, intent-tagged            — Epic 4.1
  *   - the five weighted dimensions         — scoring-spec.md, Epic 5.2
  *   - per-answer ordinality (Answer Shelf) — Epic 7.1
@@ -156,7 +157,29 @@ export function LandingView({
               Scan a website
             </Button>
             <p className="text-ui-sm text-text-tertiary">
-              A scan takes about six minutes. ${PLAN_PRICE_USD}/month when you are ready to
+              {/*
+                "About six minutes" was true of Epic 9.2's measurement and
+                stopped being true at Epic 9.17, which made the UI-triggered
+                path run the whole nine-phase chain. `product-spec.md` already
+                records the 300s budget as missed "and by more" since then, and
+                the pilot dry run measured 286s for a HALF-LENGTH scan — so the
+                default 24-prompt scan is roughly nine minutes, not six.
+
+                NO PRECISE NUMBER IS COMMITTED TO, deliberately. Three
+                12-prompt runs came in at 286s, 306s and 331s — a 16% spread on
+                identical work, because the time is dominated by engine latency
+                this product does not control. And there is no post-9.17
+                measurement of a 24-prompt scan at all; nine minutes is an
+                extrapolation from the loop, not an observation. Printing a
+                figure that precise on a marketing page would repeat the
+                original mistake at a different number.
+
+                So: a round central figure, hedged, and one that a scan running
+                long does not falsify. The failure this replaces is a prospect
+                told six minutes who waits nine and assumes it broke.
+              */}
+              A scan usually takes about ten minutes — twenty-four questions, put to three
+              AI engines, one at a time. ${PLAN_PRICE_USD}/month when you are ready to
               pay for it.
             </p>
           </div>
