@@ -11810,3 +11810,160 @@ axis, and that has not been done.
 **A third engine** (Perplexity or Gemini) remains the Layer 2 catch-up option,
 now genuinely optional rather than blocking. **Epic 12's "why" engine** is
 untouched.
+
+# Epic 9.24 — the first live cross-engine run, and it says the opposite of what was built
+
+Epic 9.23 shipped the cross-engine reading and verified it against a scripted
+disagreement. This ran it against a real subject with real model calls, because
+every fixture in the repo carries `sentiment: null` per engine and nobody had
+looked at what the live path actually computes.
+
+**A measurement, not a build.** One wording defect was fixed because the run
+proved the page contradicted itself; nothing else was tuned, and `divergence.py`
+is untouched.
+
+## The run
+
+`scripts/verify_e2e.py --url front.com --prompts 12`, against `avp_dev`, all
+three engines across both vendors. Front is a real shared-inbox company in the
+same category as the Help Scout data already on record, so the numbers have
+something to sit beside. A first attempt against `basecamp.com` stopped
+instantly and cost nothing: the harness refuses to reuse an existing client, by
+design, so the checked-in verification rows stay intact.
+
+    scan     : succeeded, 12 prompts, 36 results, 0 failures
+    score    : 55.29 composite, 5 competitors, NO_AUTHORITY_DATA
+    audit    : partial, technical foundation 72.67
+    wall     : 306.4s against a 300s budget
+
+## The finding, and it inverts the feature's own emphasis
+
+    engine           answered  named   rate     sentiment
+    chatgpt              12      12    100.00     75.00
+    claude               12      12    100.00     58.33
+    claude_search        12      12    100.00     41.67
+
+    comparable prompts : 12
+    split prompts      : 0
+    agreement rate     : 100.00
+
+    prompts where 2+ engines named the subject and both were scored : 12
+    of those, engines that disagreed on SENTIMENT                   :  8
+
+**Every engine named Front on every prompt. Not one split.** And on two thirds
+of those same prompts the engines disagreed about the tone, across a
+33-point spread from ChatGPT's 75.00 to grounded Claude's 41.67 — with grounded
+Claude consistently the harshest and ChatGPT consistently the kindest.
+
+Epic 9.23 was built around the split prompt: the buyer question one assistant
+answers with the subject and another answers without. On the first real subject
+that finding was empty, and the axis nobody built a headline for carried
+everything. Stated as the pitch it implies: not *"you are invisible on ChatGPT"*
+but **"every assistant names you, and they do not agree on what you are like"** —
+a narrower claim, and a different product conversation.
+
+**One run, one subject, and the subject explains a lot of it.** Front is a
+category leader; a 100% mention rate across three engines is what a well-known
+brand should produce, and it saturates the visibility axis so completely that
+this run cannot say whether splits are rare in general or merely rare *here*.
+That is the honest reading and it is the reason the fork below stays open.
+
+## What the real output changed
+
+**A wording defect, and the page disproved itself.** With zero splits the copy
+read *"Every engine that answered gave the same verdict on Front"* — rendered
+directly above standings of 75.00, 58.33 and 41.67. The splits measure one
+thing, whether each engine named the subject, and the sentence spoke for the
+tone as well. It now says what was actually compared and hands the tone to the
+standings beneath it. Fixed because a report may not make a claim its own page
+disproves, which `ReportView.test.tsx`'s "makes no claim it cannot support" is
+already the rule for; a regression test reproduces the exact shape.
+
+**The fixtures hid the live axis.** Every stored fixture carries a null
+per-engine sentiment, so the one number that turned out to matter was rendered
+in tests and never seen. A fixture that is null where production is populated
+tests the layout and nothing else.
+
+## Tokens and money — the first real figure in this project
+
+`north-star.md` §5.1 has wanted a per-scan cost since it was written, and every
+run before this recorded call counts and never token usage, so the dollar
+figure was an estimate times a guess. The harness now meters the providers' own
+reported usage at the SDK boundary — where they bill from — rather than at our
+call sites, for the reason `install_meters` already gives: a per-site wrapper
+measures the sites the script remembered.
+
+    model              calls        input      output          $
+    claude-opus-5         67      300,520      43,400     2.5876
+    gpt-5.5               12          261      12,275     0.3696
+    ------------------------------------------------------------
+    model spend                                           2.9572
+
+    plus 21 Anthropic web_search requests   (rate not recorded in this repo)
+    plus  6 SerpApi searches                (of a 250/month quota)
+
+**$2.96 in model spend for a 12-prompt scan**, or $0.246 per prompt. A
+24-prompt scan's loop roughly doubles the variable half; setup is fixed, so
+$5.91 is an upper bound on the naive extrapolation rather than a measurement,
+and it is labelled as one.
+
+Two details worth keeping. **The input side dominates**: 300,520 Claude input
+tokens against 43,400 output, because grounded search injects retrieved pages
+and every sentiment call carries an answer back in. And **gpt-5.5 is
+lopsided the other way** — 21.8 input tokens per call against 1,023 output —
+which is what a parametric engine answering a short question looks like.
+
+The rates are read, not assumed: Anthropic's $5/$25 was already implicit in the
+repo, and gpt-5.5's $5/$30 came off OpenAI's pricing page on 2026-09-08. The
+lookup matches by longest prefix because providers report the dated snapshot
+they served (`gpt-5.5-2026-04-23`), and an exact-key table would have priced
+every OpenAI call at zero — found before the first run rather than after.
+
+**The two counters agree exactly.** The call meter and the token meter reached
+67 Anthropic calls independently: 24 engine + 36 sentiment + 1 classification +
+4 co-citation + 1 prompt generation + 1 fix generation. That agreement is the
+evidence the token figure is complete rather than a sample.
+
+## Timing, recorded without acting on it
+
+306.4s against the 300s budget, **at half the prompt count Epic 9.1 measured
+498.2s for**. The scan loop is 75% of it, with a 154.0s engine-bound floor and
+76.6s (33%) unexplained — the same shape Epic 9.1 found and the same open
+question. The slowest single engine call was 112.0s against a 24.1s median.
+Noted, not chased: this run was commissioned to read the cross-engine output.
+
+## Which direction this points — and it is honestly not settled
+
+**Neither of the two open directions is chosen, and n=1 is the reason.**
+
+The visibility axis produced no signal at all, which argues against widening it
+with a third engine — but it produced no signal on a subject where none should
+be expected, so the argument is weak. The tone axis produced a large signal and
+is already available with the two vendors in hand, which argues against needing
+more engines at all, and does not by itself argue for Epic 12's "why" engine.
+
+**The measurement that would settle it is specific**: one more run against a
+subject that is NOT a category leader — a brand plausibly absent from some
+answers. If splits stay near zero there too, the visibility axis is saturated
+in general and a third engine buys little; if splits appear, the axis is live
+and the case for widening it is real. That is one run, and it should be made
+before either direction is scoped.
+
+## Verification
+
+**web 721, up from 720** — one regression test for the wording defect. api
+1,125, design-system 418 and shared-types 53 unchanged; nothing here touched
+the API. `tsc` clean on all three packages. The harness gained a token meter, a
+rate table with both vendors' published rates and their sources, and a
+cross-engine readout — script-only, no production module edited, which is the
+discipline `verify_e2e.py` was built on.
+
+## Open
+
+**The per-engine sentiment spread has one observation.** Whether grounded
+Claude is systematically harsher, or Front simply reads that way to it, needs
+more than one subject.
+
+**The Anthropic `web_search` request rate is not recorded in this repo**, so 21
+requests are counted and left unpriced rather than guessed. It is the last
+unpriced line in the cost table.

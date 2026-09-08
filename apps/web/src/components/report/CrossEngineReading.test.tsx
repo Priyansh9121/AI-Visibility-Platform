@@ -94,12 +94,47 @@ describe('it refuses to report silence as consensus', () => {
     expect(html).not.toContain('agreement across 0 comparable');
   });
 
+  it('visibility agreement is never called a shared verdict', () => {
+    // THE DEFECT THE FIRST LIVE RUN FOUND — Epic 9.24, front.com.
+    //
+    // Zero splits and three sentiments of 75.00, 58.33 and 41.67: the engines
+    // agreed completely on whether Front appears and disagreed on tone in
+    // eight of twelve prompts. The copy said they "gave the same verdict",
+    // which the standings rendered beneath it contradicted. A report may not
+    // make a claim its own page disproves.
+    const agreedOnVisibilityOnly: Report = {
+      ...divergentReport,
+      proof: {
+        ...divergentReport.proof,
+        crossEngine: {
+          standings: [
+            { engine: 'chatgpt', answered: 12, mentioned: 12, mentionRate: '100.00', sentiment: '75.00' },
+            { engine: 'claude', answered: 12, mentioned: 12, mentionRate: '100.00', sentiment: '58.33' },
+            { engine: 'claude_search', answered: 12, mentioned: 12, mentionRate: '100.00', sentiment: '41.67' },
+          ],
+          splits: [],
+          comparablePrompts: 12,
+          agreementRate: '100.00',
+        },
+      },
+    };
+
+    const html = render(agreedOnVisibilityOnly);
+    expect(html).not.toContain('same verdict');
+    // It says what was actually compared, and hands the tone to the standings.
+    expect(html).toContain('named Help Scout on all 12 comparable questions');
+    expect(html).toContain('the tone each takes is below, and it can differ');
+    // The spread the sentence must not paper over is still on the page.
+    expect(html).toContain('sentiment 75.00');
+    expect(html).toContain('sentiment 41.67');
+  });
+
   it('genuine unanimity is stated as unanimity, and is a different sentence', () => {
     // helpscoutReport is real data whose two engines agreed on all three
     // prompts. That IS consensus, and must not be flattened into the
     // nothing-to-compare wording above.
     const html = render(helpscoutReport);
-    expect(html).toContain('gave the same verdict');
+    expect(html).toContain('named Help Scout on all 3 comparable questions');
     expect(html).toContain('3 comparable questions');
     expect(html).not.toContain('there was nothing to compare');
   });
