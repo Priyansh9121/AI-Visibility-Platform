@@ -12692,3 +12692,121 @@ corrected split denominator from the sizing entry applying to it when it
 resumes. And the standing caveat on `copyCoverage.test.ts` — its list mirrors
 `scoring.py` by hand, so it guards against forgetting the copy, not against
 forgetting the file.
+
+# Epic 12's "why" engine — scoped, and recommended against building now
+
+The brief asked for this to be scoped before any code was written, and said to
+stop rather than force the fit if the scoping turned up a reason it was
+premature. **It did, and no code was written.** The scoping itself is below, in
+full, so whoever builds this later does not re-derive it.
+
+The recommendation is about sequencing, not difficulty. **The build is small
+and the pieces already exist** — which is precisely why waiting costs almost
+nothing.
+
+## The scoping, which is the part worth keeping
+
+**What "diffing" means here: structural facts, and `ip-safety.md` #7 already
+says so in as many words.** Scraped data from competitor pages is *"for FACTS
+ONLY (mention counts, citation presence, schema presence, structural
+signals)"*. That is not a constraint to design around; it is a description of
+exactly what this feature needs. Prose comparison is out — not because it is
+hard but because #7 forbids storing a competitor's copy at all, and #8 forbids
+it verbatim anywhere in the product. (Constraint #5, about not reproducing a
+competitor's algorithms, is about rival *products*, not the client's business
+rivals, and is not the binding one here.)
+
+**No new crawler is needed.** `technical_audit.audit_site(url)` already takes
+an arbitrary URL and returns exactly the signals a structural diff wants —
+`has_faq_schema`, `has_product_schema`, `has_organization_schema`,
+`has_sitemap`, `is_indexable`, `schema_types`. `audit_runner.run_audit` simply
+never calls it on anything but `client.domain`. The capability exists and is
+one call away from a competitor domain.
+
+**"vs. competitors" means the detected set**, `CompetitorSet` from Epic 3.
+Confirmed: nothing else in the codebase carries a rival list.
+
+**It feeds the existing fix beat, not a sixth one.** `ip-safety.md` #3 mandates
+score → biggest gap → proof → fix → pitch, and a "why" is a property of a fix
+rather than a beat of its own. `FixFacts` already carries the competitor names
+AND the subject's own structural signals; what it lacks is the competitors'
+side of the same signals. So the shape is: audit the competitor domains, diff
+the booleans, and hand `generate_fixes` a factual line — *"three of five
+competitors publish FAQ schema; this site does not"* — which is ours, derived,
+and contains no competitor text.
+
+**The whole slice is therefore: loop `audit_site` over the competitor domains,
+diff a handful of booleans, add a field to `FixFacts`.** Days, not weeks, and
+it disrupts nothing — which matches Epic 12's own acceptance, *"each is a
+standalone module added without disrupting core scan pipeline"*.
+
+## Why not now
+
+Epic 12's header is a gate: **"start once core product has traction."** The
+gates before it are also explicit, and none is met.
+
+* **Epic 9 (Phase 1) is not complete.** `[ ] Pilot with 3-5 real agencies,
+  collect feedback` is unchecked, and its acceptance is *"pilot agencies
+  successfully generate and send at least one real prospect report."* The build
+  log confirms **no pilot conversation has happened.**
+* **Epic 10 is gated "start after pilot feedback."** Not started.
+* **Epic 11 is gated "start once paying agencies exist."** Not started.
+
+So this would be Phase 4 work begun while Phase 1's acceptance is unmet, and
+the spec's phase order is product judgment recorded before any of this was
+built. This project's recent pattern has been to carry decisions already made
+through to the code that missed them — scoring v2 was exactly that. Skipping
+three gates would be the same pattern run backwards.
+
+**And there is a sharper reason, specific to this feature.** `north-star.md`
+§3.8 marks the Layer 3 differentiation bet `[HYPOTHESIS]` and names what would
+falsify it:
+
+> *"pilot agencies who buy on breadth of engine coverage rather than depth of
+> finding, or who never open the insight beat and only want the outreach
+> draft. Either result moves the bet. **That evidence does not exist yet,
+> which is exactly why this is [HYPOTHESIS].**"*
+
+The "why" engine is *more insight beat*. Of everything that could be built
+next, it is the single item most exposed to the falsifier that document
+already wrote down. Building it now is spending the deepest investment
+available on the least-tested assumption in the product, and the test costs a
+conversation.
+
+**The asymmetry is what decides it.** If the bet holds, this is no harder to
+build in three months than today — the crawler, the signals, the competitor
+set and the fix generator will all still be there. If the bet does not hold,
+the pilot says so first and this is never built at all. There is no version of
+the next quarter where building it now is the better trade.
+
+## What is actually next
+
+**Epic 9's remaining checkbox: the pilot.** The product can now do the thing
+that acceptance criterion requires — Layer 5 closed with revocation, expiry
+and branding; the report projection is one payload with a PDF and a public
+link; and scoring measures what it claims to since v2. The blocker on Epic 9 is
+not engineering.
+
+The two things a pilot would settle happen to be the two open questions this
+log keeps returning to: whether agencies buy on depth or breadth (§3.8's
+falsifier, which decides both this epic and the third-engine fork), and
+whether the corrected Mention Rate reads as credible to someone being told
+they are invisible.
+
+**This is a recommendation, not a refusal.** The founder can overrule the
+sequencing — it is their call and the reasoning above is the input to it, not
+a substitute for it. If the answer is build it anyway, the scoping is done and
+the slice is the one described above.
+
+**IP-safety check passed:** no code was written and nothing was crawled, so no
+new surface exists to check. The design assessed above stays inside constraint
+7 by construction — it stores booleans derived from a competitor's markup and
+no competitor text — and constraint 3's narrative order is preserved by
+feeding the existing fix beat rather than adding a sixth. Recorded because the
+constraint applies to a design being proposed, not only to code being shipped.
+
+## Open, unchanged
+
+The third-engine / Epic 12 fork stays paused, and this entry does not resume
+it — it recommends that both halves wait on the same evidence. Nothing from
+scoring v2 is open.
