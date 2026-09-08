@@ -565,11 +565,52 @@ def _verdict(passed: bool, *, warn: bool = False) -> str:
     return "warn" if warn else "fail"
 
 
+# Error codes that are the SERVER'S OWN ANSWER about itself, as against this
+# module's report on its own attempt. An HTTP 4xx or 5xx is the site saying
+# what it is; a browser timeout is us saying we stopped waiting. Only the
+# first is evidence about a client's site — see `build_checks`.
+SITE_ANSWERED_CODES = ("HTTP_",)
+
+
 def build_checks(signals: AuditSignals) -> list[CheckVerdict]:
-    """Per-check pass/fail with a detail code — §7's acceptance deliverable."""
+    """Per-check pass/fail with a detail code — §7's acceptance deliverable.
+
+    **A FAILED AUDIT IS NOT AUTOMATICALLY A FINDING ABOUT THE SITE** —
+    2026-09-08, and this cost a false claim on a real report before it was
+    fixed.
+
+    Every failure used to collapse into one `site_reachable: error`, which
+    `fix_runner.audit_findings` promoted to a fix candidate, which the
+    generator wrote up as *"Fix the crawl failure on helpwise.io so the site
+    returns rendered HTML to automated visitors"* — the highest-priority item
+    on a report about a site that answers in 1.13 seconds and that this
+    module's own audit then passed six times out of six.
+
+    So the two kinds are separated at the point they are first distinguishable:
+
+    * **The server answered, and its answer was an error** (`HTTP_404`,
+      `HTTP_503`). That is the site describing itself, and it is a genuine
+      `fail` a client can act on.
+    * **We could not complete the measurement** (`BROWSER_ERROR`, `TIMEOUT`,
+      `FETCH_FAILED`). That is a report about our attempt. It stays `error`,
+      which `audit_findings` no longer treats as a finding — the same
+      distinction this codebase already draws between `NOT_YET_MEASURED` and
+      `NO_POPULATION`, applied one layer down.
+
+    Technical Foundation is excluded either way (`score_audit` returns
+    `scored=False` whenever the signals are not ok), so neither kind silently
+    scores a client down.
+    """
     if not signals.ok:
+        code = signals.error_code or "FETCH_FAILED"
+        site_answered = code.startswith(SITE_ANSWERED_CODES)
         return [
-            CheckVerdict("site_reachable", "error", None, signals.error_code or "FETCH_FAILED")
+            CheckVerdict(
+                "site_reachable",
+                "fail" if site_answered else "error",
+                None,
+                code,
+            )
         ]
 
     checks: list[CheckVerdict] = [

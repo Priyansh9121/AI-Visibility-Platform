@@ -276,6 +276,44 @@ class TestFactsOnly:
                 assert " " not in check.detail_code, "detail codes must not be sentences"
 
 
+class TestAToolFailureIsNotAFindingAboutTheSite:
+    """The pilot dry run's blocking bug — 2026-09-08.
+
+    A real site that answers in 1.13 seconds timed out in this module once
+    mid-scan, and the report told its owner to *"fix the crawl failure on
+    helpwise.io so the site returns rendered HTML to automated visitors"*. The
+    same site then passed this audit six times out of six, standalone, median
+    11.9s against a 25s ceiling — so the timeout was never evidence about the
+    site at all.
+
+    The rule: what the server says about itself is a finding; what this module
+    says about its own attempt is not.
+    """
+
+    @pytest.mark.parametrize("code", ["BROWSER_ERROR", "TIMEOUT", "FETCH_FAILED"])
+    def test_our_own_failure_stays_an_error(self, code: str) -> None:
+        (check,) = build_checks(sig(ok=False, error_code=code))
+
+        assert check.key == "site_reachable"
+        assert check.status == "error", "a failed attempt must not read as a failed site"
+        assert check.detail_code == code
+
+    @pytest.mark.parametrize("code", ["HTTP_404", "HTTP_500", "HTTP_503"])
+    def test_the_servers_own_answer_is_a_real_finding(self, code: str) -> None:
+        """A 4xx or 5xx is the site describing itself, and a client can act on it."""
+        (check,) = build_checks(sig(ok=False, error_code=code))
+
+        assert check.status == "fail"
+        assert check.detail_code == code
+
+    def test_technical_foundation_is_excluded_either_way(self) -> None:
+        """Neither kind may silently score a client down for an unmeasured scan."""
+        for code in ("BROWSER_ERROR", "HTTP_500"):
+            out = score_audit(sig(ok=False, error_code=code))
+            assert out.score is None
+            assert out.scored is False
+
+
 class TestTheFallbackKeepsTheChecksThatDoNotNeedLoad:
     """`load` timing out used to cost seventeen checks to save one.
 

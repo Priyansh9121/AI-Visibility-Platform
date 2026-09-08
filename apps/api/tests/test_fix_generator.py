@@ -14,6 +14,7 @@ import pytest
 from httpx import AsyncClient
 
 from avp_api.models.action_item import ActionItemSource, Effort, Priority
+from avp_api.models.technical_audit import CheckStatus
 from avp_api.services import fix_generator, fix_runner
 from avp_api.services.fix_generator import (
     DimensionFact,
@@ -844,3 +845,66 @@ class TestFactCollection:
             if "float(" in line and not line.strip().startswith("#")
         ]
         assert not offenders, offenders
+
+
+class TestATimedOutAuditNeverBecomesAClientFix:
+    """The exact regression from the pilot dry run — 2026-09-08.
+
+    `helpwise.io` answers in 1.13 seconds. One transient browser timeout during
+    a scan produced the report's highest-priority item: *"Fix the crawl failure
+    on helpwise.io so the site returns rendered HTML to automated visitors."*
+    An instruction to repair working infrastructure, in the document an agency
+    sends to win the business, disprovable in one click.
+
+    Asserted at the boundary where it went wrong — `audit_findings` into
+    `build_candidates` — rather than on the generated copy, because the copy is
+    a model's and the boundary is ours.
+    """
+
+    @staticmethod
+    def _audit(status: CheckStatus, detail: str):  # noqa: ANN205
+        from avp_api.models import TechnicalAudit
+        from avp_api.models.technical_audit import TechnicalAuditCheck
+
+        audit = TechnicalAudit(
+            id="audt_0001", scan_id="scan_0001", url_audited="https://x.example"
+        )
+        audit.checks = [
+            TechnicalAuditCheck(
+                id="tchk_0001", audit_id="audt_0001",
+                check_key="site_reachable", status=status, detail_code=detail,
+            )
+        ]
+        return audit
+
+    @pytest.mark.parametrize("code", ["BROWSER_ERROR", "TIMEOUT", "FETCH_FAILED"])
+    def test_our_own_timeout_produces_no_candidate(self, code: str) -> None:
+        from avp_api.services.fix_runner import audit_findings
+
+        audit = self._audit(CheckStatus.ERROR, code)
+
+        assert audit_findings(audit) == []
+        keys = [c.key for c in build_candidates(HELPSCOUT, audit_findings(audit))]
+        assert not any("site_reachable" in k for k in keys), (
+            "a browser timeout became a fix telling the client their site is broken"
+        )
+
+    @pytest.mark.parametrize("code", ["HTTP_404", "HTTP_500"])
+    def test_a_site_that_really_answers_with_an_error_still_does(self, code: str) -> None:
+        """The genuine case must be unaffected: a 5xx is the server's own answer."""
+        from avp_api.services.fix_runner import audit_findings
+
+        audit = self._audit(CheckStatus.FAIL, code)
+
+        assert audit_findings(audit) == [("site_reachable", "fail", code)]
+        keys = [c.key for c in build_candidates(HELPSCOUT, audit_findings(audit))]
+        assert "audit:site_reachable" in keys
+
+    def test_ordinary_warnings_are_untouched(self) -> None:
+        """The three good fixes on that same report came from these."""
+        from avp_api.services.fix_runner import audit_findings
+
+        audit = self._audit(CheckStatus.WARN, "NO_FAQ_SCHEMA")
+        audit.checks[0].check_key = "schema_faq"
+
+        assert audit_findings(audit) == [("schema_faq", "warn", "NO_FAQ_SCHEMA")]
