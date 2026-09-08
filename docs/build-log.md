@@ -12185,3 +12185,164 @@ before it started.
 
 **What this run did NOT settle** is in the next entry, and it is not a detail
 about the subject.
+
+# Mention Rate may be measuring the prompt, not the engine — sized, not fixed
+
+**Layer 5's own bet, and it outranks the cross-engine fork.** Mention Rate is
+30% of the composite, the highest-weighted sub-score in the product, and it is
+on every score every real client has been shown. The fork between a third
+engine and Epic 12 is paused, not abandoned, until this is decided.
+
+**This session changed nothing.** `scoring.py`, `divergence.py` and the formula
+are untouched. The point was to find out how big this is before anyone decides
+what to do about it.
+
+## The mechanism, and it is by design rather than by accident
+
+`prompts.py`'s generator is *instructed* to name the brand:
+
+> *"Most questions must NOT contain the subject brand's name. A question that
+> names the brand can only confirm the brand exists; it cannot reveal whether
+> the brand gets discovered. **Name the brand only in comparison and
+> bottom-funnel questions where a buyer plausibly would.**"*
+
+So the generator's author had already reasoned this through, wrote the reason
+down in the system prompt, and deliberately confined brand-naming to two of the
+three intents — which `INTENT_QUOTA` sets at 35% comparison plus 20%
+bottom-funnel, **55% of every set by design.**
+
+**The insight is in `prompts.py` and never reached `scoring.py`.**
+`mention_rate()` filters on `answered` and nothing else; no caller filters by
+`PromptIntent`. One module states that these prompts cannot reveal discovery,
+and another measures discovery using them.
+
+That makes this structural and permanent, not an artifact of what an LLM
+happened to produce on two runs.
+
+## How big: every scored scan in `avp_dev`, read-only
+
+**The pooled correlation, across all 753 answered prompt × engine rows in 14
+scored scans with generated prompt sets:**
+
+    prompt CONTAINS the brand name : 255 / 256 mentioned = 99.61%
+    prompt does NOT                : 386 / 497 mentioned = 77.67%
+                                                    gap = 21.94 points
+
+**Two hundred and fifty-six rows where the prompt named the brand, and 255
+registered a mention.** The single exception is `psmdigitalagency.com` on
+`claude`, for *"psm digital agency reviews from real clients"* — the one time
+in 256 an engine answered a brand-named question without echoing the brand.
+
+Confirmed independently against a brand that cannot exist: asked *"is zorblex
+inbox worth it or should i just pay for front"*, Claude answered *"I don't have
+any knowledge of a product called Zorblex Inbox"* and the pipeline recorded a
+**mention at position 1**. The awareness-shaped control returned no mention on
+all three engines.
+
+## What it does to the score
+
+Mention Rate on the non-awareness rows is **exactly 100.00%** for eight of the
+fourteen scans. Recomputed awareness-only, against the stored value:
+
+    domain                    stored   awareness      delta
+    ----------------------------------------------------------
+    zammad.com                 87.88       63.64     -24.24
+    psmdigitalagency.com.au    21.43        0.00     -21.43
+    psmdigitalagency.com       18.75        0.00     -18.75
+    basecamp.com               87.23       75.00     -12.23
+    missiveapp.com             97.22       91.67      -5.56
+    notion.so                  97.22       94.44      -2.78
+    front.com / linear.app    100.00      100.00      +0.00
+    ghost.org / plausible.io    ~98.6      ~100.0    +1.4 max
+
+**And it reaches Share of Voice too**, which was worth checking rather than
+assuming: `share_of_voice` counts every brand appearance, and a comparison
+prompt naming two products tautologically produces a hit for both. Awareness-
+only it falls on 12 of 14 scans, by 5 to 29 points — `psmdigitalagency.com`
+from 25.71 to **0.00**, `zammad.com` from 39.73 to 20.59.
+
+**On the composite, with both sub-scores recomputed:**
+
+    swing across 14 scans : min -13.79, max +0.83, mean -4.22 points
+
+    psmdigitalagency.com.au   29.10 -> 15.31   -13.79
+    zammad.com                53.25 -> 41.19   -12.06
+    psmdigitalagency.com      28.89 -> 16.84   -12.05
+    front.com                 55.29 -> 53.61    -1.68
+
+**The error is largest exactly where the score matters most.** A well-known
+brand scores about the same either way — Front moves 1.68 points, because it is
+genuinely named on awareness prompts too. The subjects that move 12 to 14
+points are the ones the product exists to help: `psmdigitalagency.com` scores
+**0.00% mention rate on awareness prompts** — completely undiscoverable — and
+is shown a composite of 28.89 built substantially on questions that named it.
+A real agency being told it has *some* visibility when it has none is the
+failure mode with a client on the other end of it.
+
+## A note on the cross-engine entries, which are not edited
+
+`divergence.analyse()` reads the same `mentioned` field, so it has the same
+exposure — and it is measurable:
+
+    scan             scope          comparable  splits  agreement
+    front.com        all prompts            12       0     100.00
+                     awareness               4       0     100.00
+    missiveapp.com   all prompts            12       1      91.67
+                     awareness               4       1      75.00
+    zammad.com       all prompts            12       1      91.67
+                     awareness               4       1      75.00
+
+**Every split in all three runs occurred on an awareness prompt; not one
+occurred on a brand-named prompt.** So the reported 91.67% agreement is 75.00%
+on the rows that could disagree, and the comparable denominator of 12 was
+really 4. Epics 9.23–9.26 stand as written and are the record of what was
+measured at the time; this is the note that says how to read them.
+
+It also sharpens Epic 9.25's question. Splits were called "thin" at 1 in 12.
+They are 1 in 4 on the prompts capable of showing one — still a small sample,
+but a materially different rate, and any conclusion about widening engine
+coverage should be drawn against the corrected denominator.
+
+## The fork, put back rather than answered
+
+**What should Mention Rate measure?** Two legitimate products, different
+numbers, and `scoring-spec.md` does not currently distinguish them:
+
+* **Unprompted recall — awareness only.** "When a buyer asks who does this,
+  does the engine name you?" The harder, more honest claim, and the one the
+  generator's own system prompt implies. It discards 55% of every prompt set
+  from this dimension and would move real scores by up to 14 composite points.
+* **Answerability — everything, as today.** "Does an engine say something about
+  you when asked?" A real property, but 99.61% of the time the answer is yes,
+  so it separates almost nobody — and it counts an engine denying knowledge of
+  a brand as a mention of it.
+
+A third shape exists and nobody has proposed it: keep both, scored separately,
+so a report can say *"you are answerable but not discoverable"* — which is
+precisely `psmdigitalagency.com`'s situation and is invisible in one number.
+
+**Not decided here, deliberately.** It is the same class of decision as the
+branding-token policy and the lease granularity, and it now has numbers
+attached rather than a description.
+
+**If it changes, it is a `formula_version` change, not a patch.**
+`scoring-spec.md` rule 5 requires one precisely so before-and-after reporting
+does not silently break, and 14 stored scores were computed under the current
+definition. Whether they are re-scored, re-labelled, or left as history is part
+of that decision and is out of scope here.
+
+## Confirmed vs. assumed
+
+**Confirmed by reading code:** the generator is instructed to name the brand in
+two of three intents; `mention_rate` and `share_of_voice` filter only on
+`answered`; `find_brand` is a text match; `divergence.analyse` reads the same
+field.
+
+**Confirmed by measurement:** the 99.61% / 77.67% split over 753 rows; the
+per-scan deltas; the composite swing; that every split sits on an awareness
+prompt; that a nonexistent brand registers a mention on a brand-named prompt.
+
+**Assumed:** that awareness-only is the right corrected comparator. It is the
+obvious one and the generator's own prose implies it, but choosing it is the
+decision above, not a finding. Every number here is reported as "what awareness
+-only would give", never as "the correct score".
