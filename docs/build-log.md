@@ -12346,3 +12346,140 @@ prompt; that a nonexistent brand registers a mention on a brand-named prompt.
 obvious one and the generator's own prose implies it, but choosing it is the
 decision above, not a finding. Every number here is reported as "what awareness
 -only would give", never as "the correct score".
+
+# Scoring v2 — the requirement already said what Mention Rate is for
+
+The previous entry sized the tautology and deliberately did not choose between
+three shapes for Mention Rate, because the decision needed numbers attached.
+The numbers now exist. So does an answer this project committed to before any
+of it was measured, and finding that is what made this an implementation rather
+than a design session.
+
+## The decision was already made, in Epic 0, and never carried through
+
+`product-spec.md`'s Epic 0 working assumptions, reconciled 2026-08-20 and
+verified verbatim this session rather than taken on trust:
+
+> **Two jobs:** (a) prospecting — **prove to a stranger they are invisible in
+> AI answers**; (b) retention — prove to an existing client that the work is
+> moving the number.
+
+Invisibility is an unprompted property. A question that names the brand cannot
+evidence it, whatever the answer says.
+
+And `prompts.py`'s generator had already reasoned exactly this out, in its own
+system prompt:
+
+> *"A question that names the brand can only confirm the brand exists; it
+> cannot reveal whether the brand gets discovered. Name the brand only in
+> comparison and bottom-funnel questions where a buyer plausibly would."*
+
+**The requirement and the prompt generator already agreed. Only `scoring.py`
+was out of step**, counting all three intents into a dimension that means
+discovery. That reframes the whole thing: not a design decision to be taken
+from a blank slate, but a decision taken in Epic 0 that never reached the one
+function that needed it.
+
+So the three shapes the previous entry laid out were not equally open.
+Awareness-only is what the stated job requires.
+
+## What changed
+
+`compute_score` scopes **Mention Rate and Share of Voice** to awareness
+results. `FORMULA_VERSION` is `v2`.
+
+**Share of Voice was decided on its own terms, not by analogy.** The prior
+entry showed the tautology reaches it; the question was whether that is a
+defect or a signal. It is a defect, because the inflation is directional: a
+comparison prompt names the subject and usually one rival, so the subject takes
+a guaranteed hit while the other competitors appear only if the engine
+volunteers them, pulling the ratio toward `1/(1 + named)` regardless of real
+standing. The genuine counter-argument — a buyer weighing named options is a
+competitive signal — does not apply to this implementation, which counts
+PRESENCE, not airtime. One hit per brand however much the answer says about it.
+An airtime-weighted Share of Voice would deserve the argument re-opened, and the
+comment in `scoring.py` says so.
+
+**Sentiment and Citation Strength keep every answered result, deliberately, and
+this was measured rather than assumed.** Sentiment asks how an answer PORTRAYS
+the brand, which is real whether the buyer named it or not. And the direction
+matters: awareness-only sentiment is **higher** on every scan with a population,
+by +1.03 to +25.86 points. Scoping it would raise scores rather than correct
+them — engines recommend a brand they surface unprompted and hedge about one
+they are forced to discuss, which is an interesting finding in its own right and
+a different decision with its own evidence. Named as open below.
+
+## Two design points that were not incidental
+
+**The population lives in `compute_score`, not inside `mention_rate`.** The rate
+functions answer "what fraction of THESE results mention the subject", which is
+a calculation; which results belong is scoring policy. Keeping them apart also
+mattered concretely: `services/divergence.py` calls `mention_rate` on its own
+per-engine slices, so folding the filter into the rate would have silently
+re-scoped the cross-engine track this session was told not to touch. It is
+untouched, and a test pins that separation.
+
+**`compare_competitors` uses the same population**, which was not in the brief
+and is not optional. Epic 7's report renders `score.mentionRate` and each
+`competitor.mentionRate` in **one column of one table**. Scoping only the
+subject would have put two populations in that column — and biased in a
+specific direction, since the client's figure would drop while every rival's
+kept the inflated one. A client made to look worse than its competitors by an
+accounting mismatch is a worse defect than the one being fixed.
+
+## The edges
+
+**No awareness prompts excludes and redistributes**, with
+`NO_AWARENESS_POPULATION`, rather than scoring 0 — the treatment v1.1 already
+gave Share of Voice with no competitor set, for the same reason: a client must
+not be punished for the shape of a prompt set they did not choose. Unreachable
+through the generator (45% quota) and `fallback_prompts` (five awareness
+shapes); confirmed no prompt set in `avp_dev` lacks awareness prompts. It
+guards a hand-built set.
+
+**The intent joins the inputs digest** under rule 1. It now selects the
+population, so it can move the composite, and a value that moves the composite
+while being invisible to the fingerprint makes a changed score unattributable —
+the same omission `technical_foundation` was added to fix.
+
+## What was NOT done
+
+**The 14 stored `v1.1` scores are not re-scored.** They are accurate records of
+what that definition produced, and rule 5 exists precisely so before/after ROI
+reporting compares like with like. **Whether to offer a re-score action to
+existing clients is a product decision and is explicitly open** — it is not
+decided here in passing, and it has a real edge: a client shown 28.89 and later
+16.84 for the same scan needs that explained, not silently swapped.
+
+**`divergence.py` is untouched**, and the note in the previous entry stands.
+One consequence is now visible on the report and should be said out loud: the
+composite's Mention Rate is awareness-only while the cross-engine standings
+report per-engine rates over all prompts, so a reader will see per-engine
+figures higher than the headline. They are different populations, correctly
+computed, and nothing labels them as such. **Follow-up.**
+
+**The "answerable but not discoverable" surface is not built.** `364678d` named
+the case — `psmdigitalagency.com` at 0% awareness mention rate with real
+answerability — and it is a genuine second fact worth showing, the way
+`degradation_flags` shows facts that do not move the composite. Deliberately
+not started: it is a report-surface change, not a scoring one. **Follow-up.**
+
+## Verification
+
+**api 1,133, up from 1,125** — 8 new in `test_scoring.py`, including the
+Zorblex regression: a comparison-intent result whose engine denied all
+knowledge of the brand must not reach Mention Rate. Two endpoint tests that
+hard-coded `v1.1` now assert the CURRENT version, with the literal pinned in
+one place so a bump stays a deliberate edit. `ruff check src tests` clean, the
+OpenAPI contract is untouched, `tsc` clean on all three packages, no migration.
+
+## Open
+
+* **Whether to offer re-scoring** for the 14 stored v1.1 scores — product.
+* **Whether Sentiment should be scoped too**, given it would raise scores by up
+  to 26 points and asks a different question.
+* **The population mismatch between the composite and the cross-engine
+  standings**, now visible on the report.
+* **The "answerable but not discoverable" secondary fact.**
+* The third-engine / Epic 12 fork stays paused, and the corrected split
+  denominator from the previous entry applies to it when it resumes.
