@@ -12,6 +12,7 @@ import pytest
 
 from avp_api.models.competitor import DetectionStatus
 from avp_api.models.engine_result import EngineResultStatus, Sentiment
+from avp_api.models.prompt import PromptIntent
 from avp_api.services.scoring import (
     FORMULA_VERSION,
     WEIGHTS,
@@ -19,6 +20,7 @@ from avp_api.services.scoring import (
     Dimension,
     ResultFacts,
     SubScoreOutOfRangeError,
+    awareness_only,
     citation_strength,
     compare_competitors,
     compute_inputs_digest,
@@ -36,10 +38,20 @@ def res(
     citations: tuple[tuple[str, bool], ...] = (),
     status: EngineResultStatus = EngineResultStatus.OK,
     engine: str = "claude",
+    intent: PromptIntent = PromptIntent.AWARENESS,
 ) -> ResultFacts:
+    """One result. **`intent` defaults to AWARENESS here and NOWHERE ELSE.**
+
+    `ResultFacts.intent` defaults to None in production, which excludes a
+    result from Mention Rate and Share of Voice and raises
+    `NO_AWARENESS_POPULATION` — a loud, visible failure rather than a silently
+    inflated score. That is the right default for the code and the wrong one
+    for a fixture, where every pre-v2 test means "an ordinary scored result".
+    Tests about the intent itself pass it explicitly.
+    """
     return ResultFacts(
         result_id=f"eres_{i:04d}", engine=engine, status=status, mentioned=mentioned,
-        sentiment=sentiment, brands=brands, citations=citations,
+        sentiment=sentiment, brands=brands, citations=citations, intent=intent,
     )
 
 
@@ -64,9 +76,13 @@ class TestFormulaConstants:
         assert sum(WEIGHTS.values()) == Decimal("100")
 
     def test_formula_version_is_recorded(self) -> None:
-        # Bumped when no-competitor Share of Voice changed behaviour. Pinned so
-        # a future formula change cannot ship without a deliberate bump.
-        assert FORMULA_VERSION == "v1.1"
+        # Pinned so a formula change cannot ship without a deliberate bump.
+        # v1.1 bumped when no-competitor Share of Voice changed behaviour; v2
+        # when Mention Rate and Share of Voice moved to the awareness-only
+        # population. Rows carrying an earlier version were computed under an
+        # earlier definition and are not comparable across the bump — which is
+        # what rule 5 exists to keep true.
+        assert FORMULA_VERSION == "v2"
 
 
 class TestMentionRate:
@@ -549,3 +565,188 @@ class TestCompetitorComparison:
             assert [
                 c.competitor_id for c in compare_competitors(results, list(reversed(competitors)))
             ] == first
+
+
+class TestTheScoringPopulationIsAwarenessOnly:
+    """v2 — Mention Rate and Share of Voice count only unprompted discovery.
+
+    `prompts.py`'s generator names the subject brand in `comparison` and
+    `bottom_funnel` questions by instruction, and its own system prompt gives
+    the reason: a question that names the brand can only confirm the brand
+    exists, it cannot reveal whether the brand gets discovered. A mention is a
+    text match, so those questions register a mention almost regardless of what
+    the engine knows — measured at 255 of 256 across every stored scan.
+
+    `product-spec.md`'s Epic 0 states the product's first job as "prove to a
+    stranger they are invisible in AI answers". Invisibility is an unprompted
+    property. These tests are that requirement, executable.
+    """
+
+    def test_a_comparison_mention_does_not_count_toward_mention_rate(self) -> None:
+        """The shape the diagnostic proved matters.
+
+        Named in the comparison question, absent from the awareness one. The
+        honest answer is 0%: nobody discovers this brand.
+        """
+        results = [
+            res(1, mentioned=True, intent=PromptIntent.COMPARISON),
+            res(2, mentioned=True, intent=PromptIntent.BOTTOM_FUNNEL),
+            res(3, mentioned=False, intent=PromptIntent.AWARENESS),
+        ]
+
+        score = compute_score(
+            results, [comp(1, "Zendesk", "zendesk.com")],
+            competitor_set_status=DetectionStatus.OK,
+        )
+
+        assert score.sub_scores[Dimension.MENTION_RATE].value == Decimal("0.00")
+        # And under the retired definition it would have been two thirds.
+        assert mention_rate(results).quantize(Decimal("0.01")) == Decimal("66.67")
+
+    def test_an_engine_denying_all_knowledge_does_not_inflate_the_rate(self) -> None:
+        """The Zorblex case, as a regression.
+
+        Asked "is zorblex inbox worth it or should i just pay for front",
+        Claude answered "I don't have any knowledge of a product called Zorblex
+        Inbox" — and because a mention is a text match, the pipeline recorded a
+        mention at position 1. That row is a comparison row, so v2 must not let
+        it near Mention Rate.
+        """
+        denial = res(1, mentioned=True, intent=PromptIntent.COMPARISON,
+                     brands=(("Zorblex Inbox", True),))
+        genuinely_absent = res(2, mentioned=False, intent=PromptIntent.AWARENESS)
+
+        score = compute_score(
+            [denial, genuinely_absent], [comp(1, "Front", "front.com")],
+            competitor_set_status=DetectionStatus.OK,
+        )
+
+        assert score.sub_scores[Dimension.MENTION_RATE].value == Decimal("0.00")
+
+    def test_share_of_voice_uses_the_same_population(self) -> None:
+        """A comparison prompt names two parties and guarantees both a hit.
+
+        That pulls the ratio toward 1/(1+named) whatever the real standing, so
+        the numerator is inflated in a specific direction rather than neutrally.
+        """
+        results = [
+            # Comparison: subject and one rival, both named because both were asked about.
+            res(1, mentioned=True, intent=PromptIntent.COMPARISON,
+                brands=(SUBJECT, ("Zendesk", False))),
+            # Awareness: the engine volunteers three rivals and not the subject.
+            res(2, mentioned=False, intent=PromptIntent.AWARENESS,
+                brands=(("Zendesk", False), ("Intercom", False), ("Front", False))),
+        ]
+
+        score = compute_score(
+            results, [comp(1, "Zendesk", "zendesk.com")],
+            competitor_set_status=DetectionStatus.OK,
+        )
+
+        assert score.sub_scores[Dimension.SHARE_OF_VOICE].value == Decimal("0.00")
+        # The retired definition counted the tautological pair and reported 20%.
+        assert share_of_voice(results) == Decimal("20.00")
+
+    def test_competitors_are_measured_on_the_same_population_as_the_subject(self) -> None:
+        """One column of the report table means one thing.
+
+        Epic 7 renders `score.mentionRate` and each `competitor.mentionRate` in
+        the same column. Scoping only the subject would make the client look
+        worse than its rivals through an accounting mismatch rather than
+        through anything a scan found.
+        """
+        results = [
+            res(1, mentioned=True, intent=PromptIntent.COMPARISON,
+                brands=(SUBJECT, ("Zendesk", False))),
+            res(2, mentioned=False, intent=PromptIntent.AWARENESS,
+                brands=(("Zendesk", False),)),
+        ]
+
+        score = compute_score(
+            results, [comp(1, "Zendesk", "zendesk.com")],
+            competitor_set_status=DetectionStatus.OK,
+        )
+        (row,) = compare_competitors(results, [comp(1, "Zendesk", "zendesk.com")])
+
+        # Zendesk was named in the one awareness answer: 100% of that population.
+        assert row.mention_rate == Decimal("100.00")
+        # The subject was named in none of it. Both figures over 1 awareness row.
+        assert score.sub_scores[Dimension.MENTION_RATE].value == Decimal("0.00")
+
+    def test_the_other_dimensions_keep_every_answered_result(self) -> None:
+        """Citation Strength and Sentiment are not about discovery.
+
+        Sentiment asks how an answer PORTRAYS the brand, which is a real signal
+        whether the buyer named it or not. Scoping it would be a separate
+        decision with its own evidence, and it is deliberately not made here.
+        """
+        results = [
+            res(1, mentioned=True, sentiment=Sentiment.POSITIVE,
+                intent=PromptIntent.COMPARISON, brands=(SUBJECT,),
+                citations=(("helpscout.com", True),)),
+            res(2, mentioned=False, intent=PromptIntent.AWARENESS),
+        ]
+
+        score = compute_score(
+            results, [comp(1, "Zendesk", "zendesk.com")],
+            competitor_set_status=DetectionStatus.OK,
+        )
+
+        # The comparison row's sentiment still counts — its population is
+        # "results that mentioned", not "results that discovered".
+        assert score.sub_scores[Dimension.SENTIMENT].value == Decimal("100.00")
+        assert score.sub_scores[Dimension.SENTIMENT].included
+
+    def test_no_awareness_prompts_excludes_rather_than_scores_zero(self) -> None:
+        """A prompt set with nothing to measure is not a client with no visibility.
+
+        The same treatment the spec already gives sentiment with no population
+        and Share of Voice with no competitor set: exclude and redistribute,
+        never score the absence.
+        """
+        results = [
+            res(1, mentioned=True, intent=PromptIntent.COMPARISON, brands=(SUBJECT,)),
+            res(2, mentioned=True, intent=PromptIntent.BOTTOM_FUNNEL, brands=(SUBJECT,)),
+        ]
+
+        score = compute_score(
+            results, [comp(1, "Zendesk", "zendesk.com")],
+            competitor_set_status=DetectionStatus.OK,
+        )
+
+        mr = score.sub_scores[Dimension.MENTION_RATE]
+        assert mr.included is False
+        assert mr.value is None
+        assert score.excluded_dimensions[Dimension.MENTION_RATE.value] == (
+            "NO_AWARENESS_POPULATION"
+        )
+        assert "NO_AWARENESS_POPULATION" in score.degradation_flags
+
+    def test_the_filter_is_a_population_choice_not_a_rate_change(self) -> None:
+        """`mention_rate` still answers "what fraction of THESE mention it".
+
+        Kept apart on purpose: `services/divergence.py` calls `mention_rate` on
+        its own per-engine slices, and folding the population into the rate
+        would have re-scoped the cross-engine reading as a side effect of a
+        scoring change.
+        """
+        mixed = [
+            res(1, mentioned=True, intent=PromptIntent.COMPARISON),
+            res(2, mentioned=False, intent=PromptIntent.AWARENESS),
+        ]
+
+        assert mention_rate(mixed) == Decimal("50.00")
+        assert [r.result_id for r in awareness_only(mixed)] == ["eres_0002"]
+        assert mention_rate(awareness_only(mixed)) == Decimal("0")
+
+    def test_the_intent_is_in_the_digest(self) -> None:
+        """Rule 1 — no hidden inputs.
+
+        The intent now selects the scoring population, so two otherwise
+        identical result sets that differ only by intent must not share a
+        fingerprint; a changed score has to stay attributable.
+        """
+        a = [res(1, mentioned=True, intent=PromptIntent.AWARENESS)]
+        b = [res(1, mentioned=True, intent=PromptIntent.COMPARISON)]
+
+        assert compute_inputs_digest(a, []) != compute_inputs_digest(b, [])
