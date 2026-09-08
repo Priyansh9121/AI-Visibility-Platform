@@ -11702,3 +11702,111 @@ in the document is not blocked; it is simply not built.
 concurrency tests against one row. web 712, design-system 418 and shared-types
 unchanged; nothing here touches the contract. `ruff check src tests` clean. No
 migration.
+
+# Epic 9.23 — where the engines disagree
+
+The fork after Layer 5 closed was between deepening Layer 2 (a third engine)
+and building the Layer 3 insight that Layer 2 was supposedly blocking. Checking
+the premise dissolved half the fork: **the block was already gone**, and the
+correction is the previous entry. So this builds the thing that turned out to
+be available rather than the thing that would have unblocked it.
+
+**Layer 3 (Insight), which north-star.md §3.8 names as the differentiation
+bet.** The founder chose this over a third adapter and over Epic 12's page-
+diffing "why" engine, on the reasoning that it costs nothing extra per scan
+because the data is already collected.
+
+## What was already in the database and on no page
+
+Every scan runs each prompt against three engines across two vendors and stores
+a mention, a position and a sentiment for each. The report gave **one** mention
+rate, **one** sentiment sub-score, and per-engine counts with nothing said about
+the difference between them. A brand named by Claude on a question ChatGPT
+answers without it — the single most specific thing this product can say, and
+the one no single-engine competitor can say at all — was in `engine_results`
+and rendered nowhere.
+
+`services/divergence.py` is the reading. It computes each engine's own standing
+and the prompts the engines split on, and the report carries both.
+
+## Two rules, and they are what make it honest rather than merely computable
+
+**An engine that did not answer has no opinion.** A rate-limited, timed-out or
+truncated call is missing data, not evidence of absence. Counting it as "this
+engine did not mention you" would turn every provider outage into a headline
+about cross-engine visibility — precisely the failure
+`EngineResultStatus.ANSWERED_NO_MENTION` and `ScanStatus.PARTIAL` already exist
+to prevent. Every function filters on `answered` before comparing, and a prompt
+with fewer than two answering engines is not a disagreement, it is a gap in
+coverage. An end-to-end test times ChatGPT out on every prompt and asserts it
+appears on the missing side of no split and is given no invented sentiment.
+
+**"They agreed" and "there was nothing to compare" are different claims.** A
+scan where one engine answered agrees with itself trivially, and reporting that
+as consensus would make the strongest available claim from the weakest
+available evidence. `agreementRate` is null in that case rather than 100, and
+the UI renders the absence in words instead of a percentage.
+
+## One source per number
+
+`engine_standings` calls `scoring.mention_rate` and `scoring.sentiment_score`
+on a filtered slice of the same facts the composite is built from. A second
+implementation would eventually disagree with the headline and the disagreement
+would reach a client — the reasoning `fix_generator` gives for not re-deriving
+Epic 7's gap formula. A test asserts each standing equals the scoring function
+run on that engine's own slice, so the two cannot drift.
+
+`ResultFacts` gained `prompt_id` rather than a parallel value object being
+introduced: the divergence reading needs the facts regrouped BY PROMPT and
+scoring does not, and two objects describing one row is two places for a field
+to be forgotten.
+
+## An IP-safety guard fired, and was tightened rather than shortened
+
+`test_report_service_never_reaches_for_answer_text` forbids the substring
+`.answer` in the report service, to stop a report reaching for an engine's
+prose. `standing.answered` — a COUNT of results that came back — matched it.
+
+The guard was made boundary-aware rather than having the entry removed:
+`.answer`, `.answer.text` and `.answer)` all still trip, because none continues
+the word. Removing the entry would have deleted a real guard to fit new code.
+A second test now asserts the pattern against sample source in both directions,
+so the guard's strength is pinned independently of whether today's module
+happens to pass it. Worth recording because a failing safety test is the moment
+where the tempting move and the correct one diverge.
+
+## Fixtures, and one that had to be constructed
+
+`packages/shared-types/fixtures/report-cases.json` and the web fixtures gained
+the block, derived from each fixture's own coverage and shelf rather than
+invented. The real `helpscoutReport` turned out to have **both engines agreeing
+on all three prompts** — genuine consensus, and useless for rendering the case
+this feature exists for. So `divergentReport` is constructed and labelled as
+constructed, with the shape the projection produces: engines that answered on
+both sides of every split, never one that failed. What is synthesised is the
+data, not the schema.
+
+The web fixtures are cast `as unknown as Report`, which is why adding a
+required field to the contract did not fail `tsc` — worth knowing, because it
+means the fixture file's types are documentation rather than a check.
+
+## Verification
+
+**api 1,125, up from 1,105** — 20 new across `test_divergence.py` (pure rules),
+`test_report_endpoint.py` (three end-to-end, including the outage case) and
+`test_ip_safety.py` (the guard's own guard). **web 720, up from 712** — 8 new,
+weighted toward the two refusals. design-system 418 and shared-types 53
+unchanged. `ruff check src tests` clean, `tsc` clean on all three packages with
+`api.gen.ts` regenerated, `alembic check` clean with no migration.
+
+## Open
+
+**Per-engine sentiment is computed but thin on real data.** Every fixture
+carries `sentiment: null` per engine because the stored fixtures predate the
+column being read this way; the live path computes it. A live run would be the
+honest way to see whether the sentiment axis diverges as sharply as the mention
+axis, and that has not been done.
+
+**A third engine** (Perplexity or Gemini) remains the Layer 2 catch-up option,
+now genuinely optional rather than blocking. **Epic 12's "why" engine** is
+untouched.

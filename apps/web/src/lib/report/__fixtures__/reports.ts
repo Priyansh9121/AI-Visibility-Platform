@@ -361,6 +361,27 @@ export const helpscoutReport = {
         "sampleUrl": "https://hiverhq.com/blog/help-scout-pricing"
       }
     ],
+    "crossEngine": {
+      "standings": [
+        {
+          "engine": "claude",
+          "answered": 3,
+          "mentioned": 3,
+          "mentionRate": "100.00",
+          "sentiment": null
+        },
+        {
+          "engine": "claude_search",
+          "answered": 3,
+          "mentioned": 3,
+          "mentionRate": "100.00",
+          "sentiment": null
+        }
+      ],
+      "splits": [],
+      "comparablePrompts": 3,
+      "agreementRate": "100.00"
+    },
     "promptShelf": [
       {
         "promptId": "prmt_01M0HDTA48RNY8GXD1HWJJVKN6",
@@ -788,6 +809,39 @@ export const manualOverrideReport: Report = {
 } as unknown as Report;
 
 /** A scan that ran but produced nothing scoreable — composite null, not zero. */
+/**
+ * A scan where the engines DISAGREED — Epic 9.23.
+ *
+ * Constructed rather than captured, and labelled as such. `helpscoutReport` is
+ * real and its two engines happen to agree on all three prompts, which makes it
+ * useless for rendering the case this feature exists for: a buyer question one
+ * assistant answers with the subject and another answers without it.
+ *
+ * The shape is the one the projection produces — engines that ANSWERED on both
+ * sides of a split, never one that failed — so what is synthesised here is the
+ * data, not the schema.
+ */
+export const divergentReport: Report = {
+  ...helpscoutReport,
+  proof: {
+    ...helpscoutReport.proof,
+    crossEngine: {
+      standings: [
+        { engine: 'claude', answered: 4, mentioned: 4, mentionRate: '100.00', sentiment: '75.00' },
+        { engine: 'claude_search', answered: 4, mentioned: 3, mentionRate: '75.00', sentiment: '66.67' },
+        { engine: 'chatgpt', answered: 4, mentioned: 1, mentionRate: '25.00', sentiment: '50.00' },
+      ],
+      splits: [
+        { promptId: 'prmt_split_one', namedBy: ['claude', 'claude_search'], missedBy: ['chatgpt'] },
+        { promptId: 'prmt_split_two', namedBy: ['claude'], missedBy: ['chatgpt'] },
+        { promptId: 'prmt_split_three', namedBy: ['claude', 'claude_search'], missedBy: ['chatgpt'] },
+      ],
+      comparablePrompts: 4,
+      agreementRate: '25.00',
+    },
+  },
+};
+
 export const insufficientDataReport: Report = {
   ...helpscoutReport,
   score: {
@@ -835,6 +889,16 @@ export const insufficientDataReport: Report = {
     // degraded fixture quietly carrying healthy data.
     unclaimedCitedDomains: [],
     promptShelf: [],
+    // Nothing answered, so nothing was comparable — and that is NOT the same
+    // as the engines agreeing. `agreementRate: null` is the distinction, and
+    // zeroing this here is what keeps the degraded fixture from carrying the
+    // healthy one's 100%.
+    crossEngine: {
+      standings: [],
+      splits: [],
+      comparablePrompts: 0,
+      agreementRate: null,
+    },
   },
 };
 

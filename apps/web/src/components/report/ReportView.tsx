@@ -199,6 +199,92 @@ function Brand({ agency }: { agency: Report['agency'] }) {
   );
 }
 
+/**
+ * Where the engines disagree — Epic 9.23, Layer 3.
+ *
+ * Every scan already ran each prompt against three engines across two vendors
+ * and stored a mention and a sentiment for each. Nothing read them
+ * comparatively until this: the report gave one mention rate, one sentiment,
+ * and per-engine counts with nothing said about the difference between them.
+ *
+ * TWO THINGS THIS MUST NOT SAY
+ * ----------------------------
+ * It must not report an OUTAGE as a disagreement. An engine that timed out has
+ * no opinion, and the projection has already excluded it — every engine named
+ * on either side of a split answered the question it is being compared on.
+ *
+ * And it must not report "there was nothing to compare" as agreement. A scan
+ * where one engine was down all run agrees with itself trivially, and rendering
+ * that as consensus would make the strongest available claim from the weakest
+ * available evidence. `agreementRate` is null in that case and this renders the
+ * absence in words instead of a percentage.
+ */
+function CrossEngineReading({
+  proof,
+  subjectName,
+}: {
+  proof: Report['proof'];
+  subjectName: string;
+}) {
+  const cross = proof.crossEngine;
+  if (!cross || cross.standings.length === 0) return null;
+
+  const splits = cross.splits.length;
+
+  return (
+    <div>
+      <h3 className="text-ui-sm font-medium text-text-primary">Where the engines disagree</h3>
+
+      <p className="mt-2 max-w-measure text-ui-sm leading-prose text-text-secondary">
+        {cross.comparablePrompts === 0 ? (
+          <>
+            Only one engine answered, so there was nothing to compare. That is not the same as
+            the engines agreeing — this scan cannot say either way.
+          </>
+        ) : splits === 0 ? (
+          <>
+            Every engine that answered gave the same verdict on {subjectName} across all{' '}
+            {cross.comparablePrompts} comparable questions.
+          </>
+        ) : (
+          <>
+            On {splits} of {cross.comparablePrompts} comparable questions, one engine named{' '}
+            {subjectName} and another — answering the same question — did not. A buyer who asks
+            one assistant sees a different shortlist from a buyer who asks the other.
+          </>
+        )}
+      </p>
+
+      <div className="mt-3 flex flex-col gap-2">
+        {cross.standings.map((standing) => (
+          <div
+            key={standing.engine}
+            className="flex items-baseline justify-between gap-4 border-b border-line-hairline pb-2 text-ui-sm"
+          >
+            <span className="text-text-primary">{engineLabel(standing.engine)}</span>
+            <span className="text-text-secondary">
+              {standing.answered === 0 ? (
+                'Did not answer'
+              ) : (
+                <>
+                  Named {subjectName} in {standing.mentioned} of {standing.answered}
+                  {standing.sentiment != null && <> · sentiment {standing.sentiment}</>}
+                </>
+              )}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {cross.agreementRate != null && (
+        <p className="mt-3 text-ui-2xs uppercase tracking-caps text-text-tertiary">
+          {`${cross.agreementRate}% agreement across ${cross.comparablePrompts} comparable questions`}
+        </p>
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // 01 — SCORE. Where you stand.
 // ---------------------------------------------------------------------------
@@ -587,6 +673,15 @@ function ProofBeat({
             </CardBody>
           </Card>
         )}
+
+        {/* --- where the engines disagree (Epic 9.23, Layer 3) -------------- */}
+        {/*
+          Placed ABOVE the per-engine counts below, which it reads against.
+          "Answered 24 of 24" is coverage; this is the finding — the same buyer
+          question answered with the subject by one assistant and without it by
+          another, which is the thing no single-engine product can see.
+        */}
+        <CrossEngineReading proof={proof} subjectName={subjectName} />
 
         {/* --- engine coverage ---------------------------------------------- */}
         {proof.engineCoverage.length > 0 && (

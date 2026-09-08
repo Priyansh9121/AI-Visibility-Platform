@@ -612,7 +612,28 @@
           "bestPosition": 3,
           "outranksSubject": false
         }
-      ]
+      ],
+      "crossEngine": {
+        "standings": [
+          {
+            "engine": "claude",
+            "answered": 3,
+            "mentioned": 3,
+            "mentionRate": "100.00",
+            "sentiment": null
+          },
+          {
+            "engine": "claude_search",
+            "answered": 3,
+            "mentioned": 3,
+            "mentionRate": "100.00",
+            "sentiment": null
+          }
+        ],
+        "splits": [],
+        "comparablePrompts": 0,
+        "agreementRate": null
+      }
     },
     "audit": {
       "status": "ok",
@@ -1255,7 +1276,28 @@
           "bestPosition": 3,
           "outranksSubject": false
         }
-      ]
+      ],
+      "crossEngine": {
+        "standings": [
+          {
+            "engine": "claude",
+            "answered": 3,
+            "mentioned": 3,
+            "mentionRate": "100.00",
+            "sentiment": null
+          },
+          {
+            "engine": "claude_search",
+            "answered": 3,
+            "mentioned": 3,
+            "mentionRate": "100.00",
+            "sentiment": null
+          }
+        ],
+        "splits": [],
+        "comparablePrompts": 0,
+        "agreementRate": null
+      }
     },
     "audit": {
       "status": "ok",
@@ -1885,7 +1927,28 @@
           "bestPosition": 3,
           "outranksSubject": false
         }
-      ]
+      ],
+      "crossEngine": {
+        "standings": [
+          {
+            "engine": "claude",
+            "answered": 3,
+            "mentioned": 3,
+            "mentionRate": "100.00",
+            "sentiment": null
+          },
+          {
+            "engine": "claude_search",
+            "answered": 3,
+            "mentioned": 3,
+            "mentionRate": "100.00",
+            "sentiment": null
+          }
+        ],
+        "splits": [],
+        "comparablePrompts": 0,
+        "agreementRate": null
+      }
     },
     "audit": {
       "status": "ok",
@@ -2442,7 +2505,28 @@
           "bestPosition": 3,
           "outranksSubject": false
         }
-      ]
+      ],
+      "crossEngine": {
+        "standings": [
+          {
+            "engine": "claude",
+            "answered": 3,
+            "mentioned": 3,
+            "mentionRate": "100.00",
+            "sentiment": null
+          },
+          {
+            "engine": "claude_search",
+            "answered": 3,
+            "mentioned": 3,
+            "mentionRate": "100.00",
+            "sentiment": null
+          }
+        ],
+        "splits": [],
+        "comparablePrompts": 0,
+        "agreementRate": null
+      }
     },
     "audit": {
       "status": "ok",
@@ -3085,7 +3169,28 @@
           "bestPosition": 3,
           "outranksSubject": false
         }
-      ]
+      ],
+      "crossEngine": {
+        "standings": [
+          {
+            "engine": "claude",
+            "answered": 3,
+            "mentioned": 3,
+            "mentionRate": "100.00",
+            "sentiment": null
+          },
+          {
+            "engine": "claude_search",
+            "answered": 3,
+            "mentioned": 3,
+            "mentionRate": "100.00",
+            "sentiment": null
+          }
+        ],
+        "splits": [],
+        "comparablePrompts": 0,
+        "agreementRate": null
+      }
     },
     "audit": {
       "status": "ok",
@@ -3706,7 +3811,28 @@
           "bestPosition": 3,
           "outranksSubject": false
         }
-      ]
+      ],
+      "crossEngine": {
+        "standings": [
+          {
+            "engine": "claude",
+            "answered": 3,
+            "mentioned": 3,
+            "mentionRate": "100.00",
+            "sentiment": null
+          },
+          {
+            "engine": "claude_search",
+            "answered": 3,
+            "mentioned": 3,
+            "mentionRate": "100.00",
+            "sentiment": null
+          }
+        ],
+        "splits": [],
+        "comparablePrompts": 0,
+        "agreementRate": null
+      }
     },
     "audit": {
       "status": "ok",

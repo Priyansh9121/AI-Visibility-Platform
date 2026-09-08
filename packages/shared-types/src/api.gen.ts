@@ -2256,6 +2256,26 @@ export interface components {
             /** Url */
             url: string;
         };
+        /**
+         * CrossEngineOut
+         * @description Where the engines agree and where they do not — Epic 9.23, Layer 3.
+         *
+         *     **`agreementRate` is null when nothing was comparable, and that is not
+         *     100%.** A scan where only one engine answered agrees with itself trivially;
+         *     reporting it as perfect consensus would make the strongest available claim
+         *     from the weakest available evidence. `comparablePrompts` is the denominator
+         *     every figure here is honest about.
+         */
+        CrossEngineOut: {
+            /** Agreementrate */
+            agreementRate?: string | null;
+            /** Comparableprompts */
+            comparablePrompts: number;
+            /** Splits */
+            splits: components["schemas"]["SplitPromptOut"][];
+            /** Standings */
+            standings: components["schemas"]["EngineStandingOut"][];
+        };
         /** DashboardOut */
         DashboardOut: {
             agency: components["schemas"]["AgencyOut"];
@@ -2345,6 +2365,27 @@ export interface components {
          * @enum {string}
          */
         EngineResultStatus: "ok" | "answered_no_mention" | "rate_limited" | "error" | "timeout" | "truncated" | "paused";
+        /**
+         * EngineStandingOut
+         * @description One engine's own view of the subject — Epic 9.23.
+         *
+         *     The same two axes the composite is built from, computed by the same
+         *     functions on that engine's slice of the results. `sentiment` is null when
+         *     this engine never named the subject: no mention means no sentiment, the
+         *     same exclusion scoring makes for the scan as a whole rather than scoring
+         *     an absence zero twice.
+         */
+        EngineStandingOut: {
+            /** Answered */
+            answered: number;
+            engine: components["schemas"]["Engine"];
+            /** Mentionrate */
+            mentionRate: string;
+            /** Mentioned */
+            mentioned: number;
+            /** Sentiment */
+            sentiment?: string | null;
+        };
         /**
          * GapKind
          * @description One prompt's verdict for this client. Ordered by how bad it is.
@@ -3018,6 +3059,7 @@ export interface components {
             answeredResults: number;
             /** Competitorciteddomains */
             competitorCitedDomains: components["schemas"]["CitedDomainOut"][];
+            crossEngine: components["schemas"]["CrossEngineOut"];
             /** Enginecoverage */
             engineCoverage: components["schemas"]["EngineCoverageOut"][];
             /** Engineresults */
@@ -3417,6 +3459,26 @@ export interface components {
             fullName: string;
             /** Password */
             password: string;
+        };
+        /**
+         * SplitPromptOut
+         * @description A buyer question the engines answered differently — Epic 9.23.
+         *
+         *     The finding no single-engine product can produce and no aggregate mention
+         *     rate reveals: one assistant names the subject and another, answering the
+         *     same question, does not.
+         *
+         *     Both lists hold engines that ANSWERED. An engine that failed on this prompt
+         *     is in neither, because a rate-limited call is missing data rather than
+         *     evidence of absence.
+         */
+        SplitPromptOut: {
+            /** Missedby */
+            missedBy: components["schemas"]["Engine"][];
+            /** Namedby */
+            namedBy: components["schemas"]["Engine"][];
+            /** Promptid */
+            promptId: string;
         };
         /** TechnicalAuditOut */
         TechnicalAuditOut: {

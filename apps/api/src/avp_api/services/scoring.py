@@ -123,6 +123,14 @@ class ResultFacts:
     status: EngineResultStatus
     mentioned: bool
     sentiment: Sentiment | None
+    # Which prompt produced this, so the same facts can be regrouped BY PROMPT
+    # rather than by engine — `services/divergence.py` needs that and scoring
+    # does not. Carried here rather than in a parallel value object, because two
+    # objects describing one row is two places for a field to be forgotten.
+    # Defaulted so the scoring tests that predate it keep constructing facts
+    # without it; nothing in this module reads it.
+    prompt_id: str = ""
+
     # (entity_name, is_subject) per detected brand.
     brands: tuple[tuple[str, bool], ...] = ()
     # Distinct cited domains and whether each cites the subject.
