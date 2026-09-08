@@ -670,7 +670,7 @@ function ProofBeat({
               })),
             }))}
             title={shelfTitle(report, subjectName)}
-            caption={`One row per answer, with the brands it named in the order it named them. A dashed ring is an answer that named other brands and not ${subjectName}; a tick beneath a marker means that same answer cited it.`}
+            caption={shelfCaption(report, subjectName)}
           />
         )}
 
@@ -859,19 +859,52 @@ function ProofBeat({
 /**
  * The shelf's title. A finding, not a chart label — ChartFrame's `title` is
  * documented as "short, declarative, reads as a finding".
+ *
+ * **COUNTED OVER THE SCAN, NOT OVER THE TABLE** — 2026-09-08. The shelf is
+ * capped at `MAX_SHELF_PROMPTS` (20 prompts, so 40 rows on a two-engine scan),
+ * and this sentence used to count the rows it could see while saying "this
+ * scan measured". The pilot dry run caught it saying *"missing from 31 of the
+ * 40 answers this scan measured"* about a scan that measured 48.
+ *
+ * The scan-wide figures are the true finding and are the ones a reader should
+ * carry away, so the title states those and the caption says the table below
+ * is a sample. The other way round — an honest "of the 40 shown" — is
+ * self-consistent but understates the result, and the headline of a beat
+ * should not be the smaller number.
  */
 function shelfTitle(report: Report, subjectName: string): string {
-  const shelf = report.proof.promptShelf ?? [];
-  const answered = shelf.filter((r) => r.answered);
-  const absent = answered.filter((r) => !r.subjectPresent).length;
-  if (answered.length === 0) return 'No engine returned an answer to place anyone in.';
+  const { answeredResults, resultsMentioningSubject } = report.proof;
+  const absent = answeredResults - resultsMentioningSubject;
+  if (answeredResults === 0) return 'No engine returned an answer to place anyone in.';
   if (absent === 0) {
     return `${subjectName} appears in every answer this scan measured.`;
   }
-  if (absent === answered.length) {
-    return `${subjectName} appears in none of the ${answered.length} answers this scan measured.`;
+  if (absent === answeredResults) {
+    return `${subjectName} appears in none of the ${answeredResults} answers this scan measured.`;
   }
-  return `${subjectName} is missing from ${absent} of the ${answered.length} answers this scan measured.`;
+  return `${subjectName} is missing from ${absent} of the ${answeredResults} answers this scan measured.`;
+}
+
+/**
+ * The shelf's caption, which has to say when the table is a sample.
+ *
+ * The title above it counts the whole scan; the rows are capped. Saying so is
+ * what keeps a reader who counts the rows from finding a discrepancy nobody
+ * explained — the same reason the cross-engine section states its own
+ * population.
+ */
+function shelfCaption(report: Report, subjectName: string): string {
+  const shown = (report.proof.promptShelf ?? []).length;
+  const total = report.proof.engineResults;
+  const scope =
+    shown < total
+      ? ` The first ${shown} of ${total} answers are shown; the count above is the whole scan.`
+      : '';
+  return (
+    `One row per answer, with the brands it named in the order it named them.${scope}` +
+    ` A dashed ring is an answer that named other brands and not ${subjectName};` +
+    ' a tick beneath a marker means that same answer cited it.'
+  );
 }
 
 function proofHeading(report: Report, subjectName: string): string {

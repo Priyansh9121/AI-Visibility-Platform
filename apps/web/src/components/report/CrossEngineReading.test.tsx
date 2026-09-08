@@ -244,3 +244,46 @@ describe('named only when prompted is a finding, not reassurance', () => {
     expect(render(helpscoutReport)).not.toContain('answering a question that named it first');
   });
 });
+
+describe('the shelf headline counts the scan, not the table', () => {
+  // The pilot dry run caught it saying "missing from 31 of the 40 answers this
+  // scan measured" about a scan that measured 48. MAX_SHELF_PROMPTS caps the
+  // table at 20 prompts; the sentence said "scan".
+
+  const capped: Report = {
+    ...helpscoutReport,
+    proof: {
+      ...helpscoutReport.proof,
+      engineResults: 48,
+      answeredResults: 48,
+      resultsMentioningSubject: 9,
+    },
+  };
+
+  it('uses the scan-wide denominator in the headline', () => {
+    const html = render(capped);
+    expect(html).toContain('is missing from 39 of the 48 answers this scan measured');
+  });
+
+  it('says the table below is a sample when it is', () => {
+    // Without this a reader who counts rows finds a discrepancy nobody
+    // explained — the same reason the cross-engine section states its scope.
+    const html = render(capped);
+    expect(html).toContain('answers are shown; the count above is the whole scan');
+  });
+
+  it('claims no sample when every answer is shown', () => {
+    const shown = (helpscoutReport.proof.promptShelf ?? []).length;
+    const whole: Report = {
+      ...helpscoutReport,
+      proof: {
+        ...helpscoutReport.proof,
+        engineResults: shown,
+        answeredResults: shown,
+        resultsMentioningSubject: 1,
+      },
+    };
+
+    expect(render(whole)).not.toContain('the count above is the whole scan');
+  });
+});
