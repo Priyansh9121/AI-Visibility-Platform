@@ -81,6 +81,26 @@ export const EXCLUSION_REASON: Record<string, { label: string; detail: string }>
   },
 };
 
+/**
+ * Findings about the SUBJECT, kept apart from the degradation flags below.
+ *
+ * Those say why a NUMBER is rougher than it would otherwise be. These say what
+ * a scan found. Rendering them in one list would repeat the category error this
+ * project already refused when it kept `NOT_YET_MEASURED` apart from
+ * `NO_POPULATION`.
+ *
+ * **Worded so a narrow positive cannot read as a broad one.** "Appears when
+ * asked about by name" is not visibility, and the obvious framing —
+ * "answerable, just not discoverable" — would claim recognition the data does
+ * not support: a mention is a text match, and an engine answering "I have no
+ * knowledge of this brand" is recorded as naming it. So the copy says only
+ * where the mentions came from.
+ */
+export const VISIBILITY_FLAG: Record<string, string> = {
+  NAMED_ONLY_WHEN_PROMPTED:
+    'Every answer that named this brand was answering a question that named it first. No question asked without the name produced a mention. A buyer who already knows the name gets a reply; a buyer who does not is never shown the brand — and being named back by a question that supplied the name is not evidence an engine knows it.',
+};
+
 /** Why a number is lower or rougher than it would otherwise be. */
 export const DEGRADATION_FLAG: Record<string, string> = {
   NO_AUTHORITY_DATA:

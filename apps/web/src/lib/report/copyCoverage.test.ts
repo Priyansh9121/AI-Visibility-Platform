@@ -21,7 +21,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { DEGRADATION_FLAG, EXCLUSION_REASON } from './strings';
+import { DEGRADATION_FLAG, EXCLUSION_REASON, VISIBILITY_FLAG } from './strings';
 
 /** `excluded[Dimension...] = "..."` in scoring.py, plus compute_score's total-failure case. */
 const EXCLUSION_CODES = [
@@ -44,7 +44,26 @@ const DEGRADATION_CODES = [
   'NO_AWARENESS_POPULATION',
 ] as const;
 
+/** Findings emitted by `report._visibility_flags`. */
+const VISIBILITY_CODES = ['NAMED_ONLY_WHEN_PROMPTED'] as const;
+
 describe('no reason code reaches a reader as a raw identifier', () => {
+  it.each(VISIBILITY_CODES)('%s has a sentence', (code) => {
+    expect(VISIBILITY_FLAG[code], `VISIBILITY_FLAG is missing ${code}`).toBeDefined();
+  });
+
+  it('a visibility finding never reads as reassurance', () => {
+    // The framing this copy exists to avoid. "Answerable" and "recognised"
+    // claim the engine knows the brand; a mention is a text match, so a
+    // question that supplied the name proves nothing of the sort.
+    for (const sentence of Object.values(VISIBILITY_FLAG)) {
+      for (const word of ['answerable', 'recognised', 'recognized', 'at least']) {
+        expect(sentence.toLowerCase(), `copy claims more than the data supports: ${word}`)
+          .not.toContain(word);
+      }
+    }
+  });
+
   it.each(EXCLUSION_CODES)('%s has a label and a detail', (code) => {
     const copy = EXCLUSION_REASON[code];
     expect(copy, `EXCLUSION_REASON is missing ${code}`).toBeDefined();
@@ -64,6 +83,10 @@ describe('no reason code reaches a reader as a raw identifier', () => {
       expect(copy.detail).not.toContain(code);
     }
     for (const [code, sentence] of Object.entries(DEGRADATION_FLAG)) {
+      expect(sentence, `${code} sentence is the code`).not.toBe(code);
+      expect(sentence).not.toContain(code);
+    }
+    for (const [code, sentence] of Object.entries(VISIBILITY_FLAG)) {
       expect(sentence, `${code} sentence is the code`).not.toBe(code);
       expect(sentence).not.toContain(code);
     }

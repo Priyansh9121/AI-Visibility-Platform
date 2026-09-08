@@ -37,6 +37,7 @@ from ..models import (
     Score,
     TechnicalAudit,
 )
+from ..models.prompt import PromptIntent
 from ..models.score import DEFAULT_WEIGHTS, DIMENSION_KEYS
 from ..models.technical_audit import CheckStatus
 from ..schemas.action_item import ActionItemOut
@@ -141,6 +142,7 @@ async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:
     return ReportOut(
         scan_id=scan.id,
         scan_status=scan.status.value,
+        visibility_flags=_visibility_flags(results, prompts),
         generated_at=datetime.now(UTC),
         scanned_at=scan.finished_at or scan.started_at,
         agency=ReportAgencyOut(
@@ -245,6 +247,65 @@ async def _load_action_items(session: AsyncSession, scan_id: str) -> list[Action
 # --------------------------------------------------------------------------
 # projection
 # --------------------------------------------------------------------------
+
+
+NAMED_ONLY_WHEN_PROMPTED = "NAMED_ONLY_WHEN_PROMPTED"
+
+
+def _visibility_flags(
+    results: list[EngineResult], prompts: dict[str, Prompt]
+) -> list[str]:
+    """Findings about the subject that no single score number carries.
+
+    One today. `psmdigitalagency.com` scores **0% Mention Rate** — never named
+    in answer to a question that did not name it first — while appearing in
+    almost every answer to a question that did. One number cannot say both, and
+    the composite correctly reports the first.
+
+    **WHY THE FLAG IS NOT CALLED "ANSWERABLE".** The obvious framing — "not
+    discovered, but recognised when asked directly" — claims something the
+    stored facts cannot support. A mention is a text match, and the Zorblex
+    test showed an engine answering *"I don't have any knowledge of a product
+    called Zorblex Inbox"* is recorded as naming it. So a mention on a
+    brand-named question is evidence the engine echoed the question, NOT
+    evidence it knows the brand. A flag claiming recognition would be inventing
+    a positive out of the exact artefact scoring v2 exists to discount.
+
+    So it says only what is true: the brand appears **only** where the question
+    named it. That is a statement about where the mentions came from, and it is
+    not good news — `ip-safety.md`'s posture against false comfort cuts both
+    ways, and a narrow positive must not render as a broad one.
+
+    **THE THRESHOLDS, AND WHY THEY ARE NOT SYMMETRIC.** Zero on the awareness
+    side, because "never discovered" is the claim and one discovery would
+    falsify it. At least one on the prompted side, and NO rate threshold there
+    on purpose: prompted mentions run at 99.61% for everyone measured, so a
+    threshold would add no discrimination while implying the prompted figure
+    means more than it does.
+
+    Requires an awareness population. With none, Mention Rate is already
+    excluded as `NO_AWARENESS_POPULATION` and there is no discovery claim to
+    make either way.
+    """
+    answered = [
+        r for r in results
+        if r.status in (EngineResultStatus.OK, EngineResultStatus.ANSWERED_NO_MENTION)
+    ]
+    awareness = [
+        r for r in answered
+        if (p := prompts.get(r.prompt_id)) is not None and p.intent is PromptIntent.AWARENESS
+    ]
+    prompted = [
+        r for r in answered
+        if (p := prompts.get(r.prompt_id)) is not None and p.intent is not PromptIntent.AWARENESS
+    ]
+
+    flags: list[str] = []
+    if awareness and not any(r.mentioned for r in awareness) and any(
+        r.mentioned for r in prompted
+    ):
+        flags.append(NAMED_ONLY_WHEN_PROMPTED)
+    return flags
 
 
 def _score_out(
