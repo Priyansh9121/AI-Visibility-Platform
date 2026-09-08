@@ -37,6 +37,7 @@ from ..models import (
     Score,
     TechnicalAudit,
 )
+from ..models.engine_result import ANSWERED_STATUSES
 from ..models.prompt import PromptIntent
 from ..models.score import DEFAULT_WEIGHTS, DIMENSION_KEYS
 from ..models.technical_audit import CheckStatus
@@ -110,7 +111,11 @@ MAX_UNCLAIMED_DOMAINS = 3
 # fixture because that scan names the subject in all six answers, so no row
 # ever carried this status. Found while building the Answer Shelf (Epic 7.1),
 # whose entire purpose is to draw those absences.
-ANSWERED_STATUSES = (EngineResultStatus.OK, EngineResultStatus.ANSWERED_NO_MENTION)
+#
+# The tuple itself now lives beside the enum (`models.engine_result`), because
+# `fix_runner.collect_facts` made the same mistake independently a month later
+# and a rule with one home cannot be. Imported above; the name is kept so the
+# three uses below read as they always did.
 
 
 async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:

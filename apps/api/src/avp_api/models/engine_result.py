@@ -122,6 +122,24 @@ class EngineResultStatus(str, enum.Enum):
     PAUSED = "paused"
 
 
+# The two statuses that are ANSWERS. `OK` is "answered and named the subject";
+# `ANSWERED_NO_MENTION` is "answered and did not" — a finding, not a failure,
+# and every population that counts answers has to count both.
+#
+# Defined once, beside the enum, because the rule already had three readers
+# and the third had it wrong. `report.py` got it right in Epic 7.1, and
+# `scan_runner` counts failures against it; `fix_runner.collect_facts`
+# filtered on `OK` alone, so the generator was told that every answer it was
+# shown named the brand — "All 30 of 30 answers named Pirsch" on a scan where
+# 41 of 71 did not, and "3 of 123 citations" beside a proof beat that counted
+# 323 (build-log, second pilot dry run, 2026-09-08). A rule with one home
+# cannot be half-remembered at its third use.
+ANSWERED_STATUSES: tuple[EngineResultStatus, ...] = (
+    EngineResultStatus.OK,
+    EngineResultStatus.ANSWERED_NO_MENTION,
+)
+
+
 class CitationType(str, enum.Enum):
     OWNED = "owned"  # the subject's own domain
     COMPETITOR = "competitor"

@@ -59,11 +59,11 @@ from ..models import (
     Client,
     CompetitorSet,
     EngineResult,
-    EngineResultStatus,
     Scan,
     Score,
     TechnicalAudit,
 )
+from ..models.engine_result import ANSWERED_STATUSES
 from ..models.score import DEFAULT_WEIGHTS, DIMENSION_KEYS, ScoreStatus
 from ..models.technical_audit import CheckStatus
 from . import fix_generator, scoring_runner
@@ -218,7 +218,25 @@ async def collect_facts(session: AsyncSession, scan: Scan, client: Client) -> Fi
     competitor_set = await _load_competitor_set(session, scan.id)
     results = await _load_results(session, scan.id)
 
-    answered = [r for r in results if r.status is EngineResultStatus.OK]
+    # THE POPULATION IS EVERY ANSWER, NOT EVERY ANSWER THAT NAMED THE BRAND —
+    # 2026-09-08.
+    #
+    # This read `status is OK` from Epic 8 until the second pilot dry run, and
+    # `OK` means "answered AND mentioned". `ANSWERED_NO_MENTION` — the status
+    # the API contract labels in bold as *a finding, not a failure* — was
+    # dropped, so the generator was only ever shown the answers that named the
+    # brand. That made `answers_naming_subject` equal `answers_analysed` by
+    # construction, tallied citations inside that subset, and built
+    # `top_cited_domains` from it. On pirsch.io the report said "All 30 of 30
+    # answers named Pirsch" and "3 of 123 citations" two beats after a proof
+    # beat that counted 30 of 71 and 323 — and the generator never saw
+    # `analytics-alternatives.com`, the page's own top unclaimed source,
+    # because its 15 citations sat in answers that did not name the brand.
+    #
+    # The same tuple `report.py` counts the proof beat with, so the two cannot
+    # disagree again by drifting apart; `test_fix_runner.py` asserts they agree
+    # on a scan shaped like that one.
+    answered = [r for r in results if r.status in ANSWERED_STATUSES]
     citations = [c for r in answered for c in r.citations]
     domains = Counter(c.source_domain for c in citations if not c.cites_subject)
 
