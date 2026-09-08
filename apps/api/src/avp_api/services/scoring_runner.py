@@ -89,6 +89,7 @@ async def load_result_facts(session: AsyncSession, scan_id: str) -> list[ResultF
         facts.append(
             ResultFacts(
                 result_id=row.id,
+                prompt_id=row.prompt_id,
                 engine=row.engine.value,
                 status=row.status,
                 mentioned=row.mentioned,

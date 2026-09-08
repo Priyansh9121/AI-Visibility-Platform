@@ -198,6 +198,56 @@ class EngineCoverageOut(ApiModel):
     mentioned: int
 
 
+class EngineStandingOut(ApiModel):
+    """One engine's own view of the subject — Epic 9.23.
+
+    The same two axes the composite is built from, computed by the same
+    functions on that engine's slice of the results. `sentiment` is null when
+    this engine never named the subject: no mention means no sentiment, the
+    same exclusion scoring makes for the scan as a whole rather than scoring
+    an absence zero twice.
+    """
+
+    engine: Engine
+    answered: int
+    mentioned: int
+    mention_rate: Decimal
+    sentiment: Decimal | None = None
+
+
+class SplitPromptOut(ApiModel):
+    """A buyer question the engines answered differently — Epic 9.23.
+
+    The finding no single-engine product can produce and no aggregate mention
+    rate reveals: one assistant names the subject and another, answering the
+    same question, does not.
+
+    Both lists hold engines that ANSWERED. An engine that failed on this prompt
+    is in neither, because a rate-limited call is missing data rather than
+    evidence of absence.
+    """
+
+    prompt_id: str
+    named_by: list[Engine]
+    missed_by: list[Engine]
+
+
+class CrossEngineOut(ApiModel):
+    """Where the engines agree and where they do not — Epic 9.23, Layer 3.
+
+    **`agreementRate` is null when nothing was comparable, and that is not
+    100%.** A scan where only one engine answered agrees with itself trivially;
+    reporting it as perfect consensus would make the strongest available claim
+    from the weakest available evidence. `comparablePrompts` is the denominator
+    every figure here is honest about.
+    """
+
+    standings: list[EngineStandingOut]
+    splits: list[SplitPromptOut]
+    comparable_prompts: int
+    agreement_rate: Decimal | None = None
+
+
 class CitedDomainOut(ApiModel):
     """A domain an engine cited, and how often.
 
@@ -300,6 +350,11 @@ class ReportProofOut(ApiModel):
     answered_results: int
     results_mentioning_subject: int
     engine_coverage: list[EngineCoverageOut]
+    # Epic 9.23. Present on every report; an unrunnable comparison reports
+    # itself through `comparablePrompts: 0` and a null `agreementRate` rather
+    # than by being absent, so a reader can always tell "they agreed" from
+    # "there was nothing to compare".
+    cross_engine: CrossEngineOut
 
     total_citations: int
     subject_citations: int

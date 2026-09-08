@@ -1864,6 +1864,48 @@
         "title": "CreateClientRequest",
         "type": "object"
       },
+      "CrossEngineOut": {
+        "description": "Where the engines agree and where they do not \u2014 Epic 9.23, Layer 3.\n\n**`agreementRate` is null when nothing was comparable, and that is not\n100%.** A scan where only one engine answered agrees with itself trivially;\nreporting it as perfect consensus would make the strongest available claim\nfrom the weakest available evidence. `comparablePrompts` is the denominator\nevery figure here is honest about.",
+        "properties": {
+          "agreementRate": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agreementrate"
+          },
+          "comparablePrompts": {
+            "title": "Comparableprompts",
+            "type": "integer"
+          },
+          "splits": {
+            "items": {
+              "$ref": "#/components/schemas/SplitPromptOut"
+            },
+            "title": "Splits",
+            "type": "array"
+          },
+          "standings": {
+            "items": {
+              "$ref": "#/components/schemas/EngineStandingOut"
+            },
+            "title": "Standings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "standings",
+          "splits",
+          "comparablePrompts"
+        ],
+        "title": "CrossEngineOut",
+        "type": "object"
+      },
       "DashboardOut": {
         "properties": {
           "agency": {
@@ -2125,6 +2167,47 @@
         ],
         "title": "EngineResultStatus",
         "type": "string"
+      },
+      "EngineStandingOut": {
+        "description": "One engine's own view of the subject \u2014 Epic 9.23.\n\nThe same two axes the composite is built from, computed by the same\nfunctions on that engine's slice of the results. `sentiment` is null when\nthis engine never named the subject: no mention means no sentiment, the\nsame exclusion scoring makes for the scan as a whole rather than scoring\nan absence zero twice.",
+        "properties": {
+          "answered": {
+            "title": "Answered",
+            "type": "integer"
+          },
+          "engine": {
+            "$ref": "#/components/schemas/Engine"
+          },
+          "mentionRate": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Mentionrate",
+            "type": "string"
+          },
+          "mentioned": {
+            "title": "Mentioned",
+            "type": "integer"
+          },
+          "sentiment": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sentiment"
+          }
+        },
+        "required": [
+          "engine",
+          "answered",
+          "mentioned",
+          "mentionRate"
+        ],
+        "title": "EngineStandingOut",
+        "type": "object"
       },
       "GapKind": {
         "description": "One prompt's verdict for this client. Ordered by how bad it is.\n\nPrecedence when several could apply is the declaration order below, worst\nfirst \u2014 a prompt that is both absent AND uncited is reported as `absent`,\nbecause being named at all comes before being cited.",
@@ -3610,6 +3693,9 @@
             "title": "Competitorciteddomains",
             "type": "array"
           },
+          "crossEngine": {
+            "$ref": "#/components/schemas/CrossEngineOut"
+          },
           "engineCoverage": {
             "items": {
               "$ref": "#/components/schemas/EngineCoverageOut"
@@ -3672,6 +3758,7 @@
           "answeredResults",
           "resultsMentioningSubject",
           "engineCoverage",
+          "crossEngine",
           "totalCitations",
           "subjectCitations",
           "subjectCitedDomains",
@@ -4616,6 +4703,36 @@
           "password"
         ],
         "title": "SignUpRequest",
+        "type": "object"
+      },
+      "SplitPromptOut": {
+        "description": "A buyer question the engines answered differently \u2014 Epic 9.23.\n\nThe finding no single-engine product can produce and no aggregate mention\nrate reveals: one assistant names the subject and another, answering the\nsame question, does not.\n\nBoth lists hold engines that ANSWERED. An engine that failed on this prompt\nis in neither, because a rate-limited call is missing data rather than\nevidence of absence.",
+        "properties": {
+          "missedBy": {
+            "items": {
+              "$ref": "#/components/schemas/Engine"
+            },
+            "title": "Missedby",
+            "type": "array"
+          },
+          "namedBy": {
+            "items": {
+              "$ref": "#/components/schemas/Engine"
+            },
+            "title": "Namedby",
+            "type": "array"
+          },
+          "promptId": {
+            "title": "Promptid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "promptId",
+          "namedBy",
+          "missedBy"
+        ],
+        "title": "SplitPromptOut",
         "type": "object"
       },
       "TechnicalAuditOut": {

@@ -702,15 +702,62 @@ def test_report_service_never_reaches_for_answer_text() -> None:
     because Epic 7 is where that absence first becomes visible in a UI.
     """
     import inspect
+    import re
 
     from avp_api.services import report as module
 
     source = inspect.getsource(module)
-    for forbidden in (
-        "response_text", "answer_text", "raw_response", ".answer", ".snippet",
-        ".excerpt", "text_extract",
-    ):
+
+    # Attribute accesses are matched with a trailing word boundary, the rest as
+    # plain substrings — Epic 9.23.
+    #
+    # `.answer` as a bare substring also matched `.answered`, which is a COUNT
+    # of results that came back, not the text of any of them. The boundary
+    # keeps every real target: `.answer`, `.answer.text`, `.answer)` all still
+    # trip, because none of them continues the word. `EngineCoverageOut` has
+    # used `answered` for this count since Epic 7 and only avoided the guard by
+    # never reading it back off an object.
+    #
+    # Tightened rather than shortened, deliberately. Dropping the entry would
+    # have removed a real guard to fit new code; this removes only the false
+    # positive, and a test below proves the guard still catches what it is for.
+    forbidden_attributes = (".answer", ".snippet", ".excerpt")
+    forbidden_substrings = ("response_text", "answer_text", "raw_response", "text_extract")
+
+    for forbidden in forbidden_attributes:
+        pattern = re.escape(forbidden) + r"\b"
+        assert not re.search(pattern, source), f"report service touches {forbidden}"
+    for forbidden in forbidden_substrings:
         assert forbidden not in source, f"report service touches {forbidden}"
+
+
+def test_the_answer_text_guard_still_catches_what_it_is_for() -> None:
+    """The guard above was tightened in Epic 9.23. This is why that was safe.
+
+    A boundary-aware `.answer` must still reject every way a report could reach
+    for an engine's prose, and must accept only the count that shares its
+    prefix. Asserted against sample source rather than against the real module,
+    so this test fails if the PATTERN is ever loosened further — the real module
+    passing tells you nothing about what the pattern would have caught.
+    """
+    import re
+
+    pattern = re.compile(r"\.answer\b")
+
+    for reaching in (
+        "text = answer.answer",
+        "return response.answer.text",
+        "blocks.append(row.answer)",
+        "x = r.answer, y",
+    ):
+        assert pattern.search(reaching), f"the guard would have missed {reaching!r}"
+
+    for harmless in (
+        "answered=standing.answered",
+        "count = coverage.answered_results",
+        "if not standing.answered:",
+    ):
+        assert not pattern.search(harmless), f"the guard falsely trips on {harmless!r}"
 
 
 def test_engine_result_has_no_text_column_for_a_report_to_render() -> None:

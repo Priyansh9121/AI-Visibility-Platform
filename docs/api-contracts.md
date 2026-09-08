@@ -1707,6 +1707,21 @@ reflection.
 
 **Errors:** `401`, `404` (unknown scan, or another agency's).
 
+**`proof.crossEngine` — where the engines disagree (Epic 9.23).** Present on
+every report. Carries `standings` (each engine's own mention rate and
+sentiment, computed by `scoring.mention_rate` and `scoring.sentiment_score` on
+that engine's slice — not recomputed, so the per-engine figures cannot drift
+from the composite), `splits` (prompts one engine answered naming the subject
+and another answered without it), `comparablePrompts`, and `agreementRate`.
+
+Two rules the shape enforces. **Only engines that ANSWERED appear on either
+side of a split** — a rate-limited or timed-out call is missing data, not
+evidence of absence, and counting it would turn a provider outage into a
+visibility finding. And **`agreementRate` is null when nothing was comparable,
+which is not 100%**: a scan where one engine answered agrees with itself
+trivially, and `comparablePrompts` is the denominator that keeps the
+distinction readable.
+
 #### `PATCH /api/v1/agencies/{agencyId}/branding`
 **Auth required, admin or owner.** An agency's logo and accent colour. `200` —
 `BrandingOut` — Epic 9.22.

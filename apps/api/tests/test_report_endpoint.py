@@ -12,7 +12,7 @@ from decimal import Decimal
 import pytest
 from httpx import AsyncClient
 
-from avp_api.models.engine_result import Engine, Sentiment
+from avp_api.models.engine_result import Engine, EngineResultStatus, Sentiment
 from avp_api.models.prompt import PromptIntent
 from avp_api.services import scan_runner
 from avp_api.services.engines import CitedSource, EngineAnswer
@@ -894,3 +894,124 @@ class TestUnclaimedRankingUnit:
     def test_ties_break_on_the_domain_so_two_reads_never_reorder(self) -> None:
         proof = self._proof_for(self._cited("b.example", 4) + self._cited("a.example", 4))
         assert [r.domain for r in proof.unclaimed_cited_domains] == ["a.example", "b.example"]
+
+
+class TestTheCrossEngineReading:
+    """Where the engines disagree — Epic 9.23, end to end.
+
+    The unit rules live in `test_divergence.py`. These assert the projection
+    carries them out of a REAL scan: engines that answer differently produce a
+    split, and an engine that fails produces nothing at all.
+    """
+
+    @pytest.fixture
+    def disagreeing_engines(self, monkeypatch):  # noqa: ANN001, ANN201
+        """One engine names the subject; another, answering the same prompt, does not."""
+        def _install(*, failing: Engine | None = None):
+            generated = [
+                GeneratedPrompt(text=f"question {i}", intent=list(PromptIntent)[i % 3])
+                for i in range(4)
+            ]
+
+            async def fake_generate(**kwargs):  # noqa: ANN003, ARG001
+                return generated, "stub"
+
+            async def fake_ask_all(prompt, *, engines, settings):  # noqa: ANN001, ARG001
+                out = []
+                for engine in engines:
+                    if engine is failing:
+                        out.append(EngineAnswer(
+                            engine=engine, engine_version="stub", prompt_text=prompt,
+                            status=EngineResultStatus.TIMEOUT, error_code="TIMEOUT",
+                            latency_ms=5))
+                        continue
+                    # chatgpt answers the same question without naming them.
+                    names_subject = engine is not Engine.CHATGPT
+                    out.append(EngineAnswer(
+                        engine=engine, engine_version="stub", prompt_text=prompt,
+                        text=(
+                            "Zendesk is popular. Help Scout is simpler and well liked."
+                            if names_subject
+                            else "Zendesk is popular and Freshdesk is cheaper."
+                        ),
+                        latency_ms=5))
+                return out
+
+            async def fake_sentiment(answer, *, subject_name, settings=None):  # noqa: ANN001, ARG001
+                return Sentiment.POSITIVE, Decimal("0.900")
+
+            monkeypatch.setattr(scan_runner.prompt_service, "generate_prompts", fake_generate)
+            monkeypatch.setattr(scan_runner.engine_service, "ask_all", fake_ask_all)
+            monkeypatch.setattr(
+                scan_runner.extraction_service, "classify_sentiment", fake_sentiment
+            )
+
+        return _install
+
+    async def test_a_real_scan_where_one_engine_omits_them_reports_every_prompt_as_a_split(
+        self, client: AsyncClient, disagreeing_engines
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client, "cross1@test.example")
+        disagreeing_engines()
+        cid = (await client.post(
+            f"{BASE}/clients", json={"url": "helpscout.com", "classify": False}
+        )).json()["id"]
+        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+
+        cross = (await client.get(f"{BASE}/scans/{sid}/report")).json()["proof"]["crossEngine"]
+
+        assert cross["comparablePrompts"] == 4
+        assert len(cross["splits"]) == 4, "every prompt was answered differently"
+        for split in cross["splits"]:
+            assert split["missedBy"] == ["chatgpt"]
+            assert "claude" in split["namedBy"]
+        assert cross["agreementRate"] == "0.00"
+
+        rates = {s["engine"]: s["mentionRate"] for s in cross["standings"]}
+        assert rates["claude"] == "100.00"
+        assert rates["chatgpt"] == "0.00"
+
+    async def test_an_engine_that_timed_out_is_in_no_split_and_costs_nothing(
+        self, client: AsyncClient, disagreeing_engines
+    ) -> None:  # noqa: ANN001
+        """The rule that keeps an outage from becoming a visibility finding.
+
+        chatgpt times out on every prompt. The two Claude engines agree, so
+        there is no disagreement to report — and chatgpt must not appear on the
+        missing side of one, because it never had an opinion.
+        """
+        await _sign_up(client, "cross2@test.example")
+        disagreeing_engines(failing=Engine.CHATGPT)
+        cid = (await client.post(
+            f"{BASE}/clients", json={"url": "helpscout.com", "classify": False}
+        )).json()["id"]
+        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+
+        cross = (await client.get(f"{BASE}/scans/{sid}/report")).json()["proof"]["crossEngine"]
+
+        assert cross["splits"] == []
+        assert cross["comparablePrompts"] == 4, "the two engines that answered are comparable"
+        assert cross["agreementRate"] == "100.00"
+
+        chatgpt = next(s for s in cross["standings"] if s["engine"] == "chatgpt")
+        assert chatgpt["answered"] == 0
+        # No sentiment invented for an engine that never answered.
+        assert chatgpt["sentiment"] is None
+
+    async def test_the_public_report_carries_the_same_reading(
+        self, client: AsyncClient, disagreeing_engines
+    ) -> None:  # noqa: ANN001
+        """One projection, not two — the guarantee Epic 9.8 built the share path on."""
+        await _sign_up(client, "cross3@test.example")
+        disagreeing_engines()
+        cid = (await client.post(
+            f"{BASE}/clients", json={"url": "helpscout.com", "classify": False}
+        )).json()["id"]
+        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+
+        private = (await client.get(f"{BASE}/scans/{sid}/report")).json()
+        token = (await client.post(f"{BASE}/scans/{sid}/share")).json()["token"]
+        client.cookies.clear()
+        public = (await client.get(f"{BASE}/reports/{token}")).json()
+
+        assert public["proof"]["crossEngine"] == private["proof"]["crossEngine"]

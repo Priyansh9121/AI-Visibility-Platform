@@ -29,6 +29,7 @@ from ..models import (
     Client,
     Competitor,
     CompetitorSet,
+    Engine,
     EngineResult,
     EngineResultStatus,
     Prompt,
@@ -42,7 +43,9 @@ from ..schemas.action_item import ActionItemOut
 from ..schemas.audit import AuditCheckOut
 from ..schemas.report import (
     CitedDomainOut,
+    CrossEngineOut,
     EngineCoverageOut,
+    EngineStandingOut,
     MentionShareOut,
     PromptShelfOut,
     ReportAgencyOut,
@@ -55,9 +58,11 @@ from ..schemas.report import (
     ReportProofOut,
     ReportSubjectOut,
     ShelfSlotOut,
+    SplitPromptOut,
 )
 from ..schemas.score import CompetitorScoreOut, ScoreDetailOut
-from . import scoring_runner
+from . import divergence, scoring_runner
+from .scoring import ResultFacts
 
 # Heaviest dimension first. The Luminance Ledger stacks the heaviest segment at
 # the BOTTOM and this list feeds it directly, so the order is part of the
@@ -539,12 +544,59 @@ def _proof(
             )
         )
 
+    # --- the cross-engine reading — Epic 9.23 -----------------------------
+    #
+    # Built from the rows already in hand rather than a second query, and
+    # through `scoring.ResultFacts` rather than a value object of its own, so
+    # the per-engine mention rate and sentiment come out of the SAME functions
+    # the composite is built from. Two implementations of one number
+    # eventually disagree, and the disagreement reaches a client.
+    facts = [
+        ResultFacts(
+            result_id=r.id,
+            prompt_id=r.prompt_id,
+            engine=r.engine.value,
+            status=r.status,
+            mentioned=r.mentioned,
+            sentiment=r.sentiment,
+        )
+        for r in results
+    ]
+    reading = divergence.analyse(facts)
+    cross_engine = CrossEngineOut(
+        standings=[
+            EngineStandingOut(
+                engine=Engine(s.engine),
+                answered=s.answered,
+                mentioned=s.mentioned,
+                mention_rate=s.mention_rate.quantize(Decimal("0.01")),
+                sentiment=(
+                    s.sentiment.quantize(Decimal("0.01"))
+                    if s.sentiment is not None
+                    else None
+                ),
+            )
+            for s in reading.standings
+        ],
+        splits=[
+            SplitPromptOut(
+                prompt_id=split.prompt_id,
+                named_by=[Engine(e) for e in split.named_by],
+                missed_by=[Engine(e) for e in split.missed_by],
+            )
+            for split in reading.splits
+        ],
+        comparable_prompts=reading.comparable_prompts,
+        agreement_rate=reading.agreement_rate,
+    )
+
     return ReportProofOut(
         prompts_run=len({r.prompt_id for r in results}),
         engine_results=len(results),
         answered_results=len(answered),
         results_mentioning_subject=sum(1 for r in answered if r.mentioned),
         engine_coverage=engine_coverage,
+        cross_engine=cross_engine,
         total_citations=total_citations,
         subject_citations=subject_citations,
         subject_cited_domains=subject_domains,
