@@ -12983,3 +12983,139 @@ generalises beyond this crawler.
 
 Unchanged: the third-engine / Epic 12 fork stays paused. Nothing from scoring
 v2 is open.
+
+# The pilot dry run's list, closed
+
+`72b0fd9` walked Epic 9's acceptance criterion end to end and found three
+things to fix before an agency sees this. All three are fixed. The blocking one
+turned out to be two bugs, and chasing it surfaced a third nobody had looked
+for.
+
+## The blocking bug was not the bug it looked like
+
+The dry run's diagnosis was a crawler too strict for a real marketing site:
+`helpwise.io` timed out in the audit while intake crawled it fine. **Reproducing
+it first, as the brief insisted, showed that was wrong.**
+
+Standalone, the same site passed the same audit **six times out of six** —
+median 11.9s, max 14.4s, against a 25s ceiling. The failure was transient, not
+a property of the site, and nothing about `wait_until="load"` was reliably
+too strict for it.
+
+That changes the fix and strengthens the second half of the diagnosis
+enormously. A timeout on a site that passes six of six is not evidence about
+that site — which is exactly what the report had claimed it was.
+
+**So the fix is to survive a transient timeout rather than to chase it**
+(`1c3cf36`). On a `load` timeout the audit re-navigates with
+`domcontentloaded`, which is what `crawl.py` has always used and what succeeded
+on this site during the same scan. Forced with a 1,500ms ceiling: **17 checks
+and a score of 93.75, where it previously returned one error.** Seventeen checks
+that never needed the load event — schema types, indexability, sitemap, title,
+meta description — no longer die with the one that did.
+
+### Forcing it exposed a bug inside the fallback
+
+LCP and CLS are cumulative: the largest paint *so far*, the shift *so far*. A
+page we stopped waiting for therefore reports **better** numbers than the same
+page fully loaded. Measured on `helpwise.io` while building this: **988ms on the
+fallback against 2,952ms on a full load** — a third of the real figure, and
+enough to flip `cwv_lcp` from `warn` to `pass`.
+
+A fallback that quietly flatters every slow site it rescues is worse than the
+outage it was added to survive. Vitals are discarded on that path, and
+`build_checks` already rendered an absent vital as `not_applicable` with
+`LCP_NOT_OBSERVED` — so it says *not measured* instead of inventing a good
+number, through a branch that existed before the fallback did.
+
+## The bug that generalises: a tool failure is not a finding
+
+`43e2b8d`, and the more important of the two.
+
+Every audit failure collapsed into one `site_reachable: error`, which
+`audit_findings` promoted to a fix candidate, which the generator wrote up as
+the report's **highest-priority item**: *"Fix the crawl failure on helpwise.io
+so the site returns rendered HTML to automated visitors."*
+
+The two kinds are now separated where they first become distinguishable:
+
+* **The server answered, and its answer was an error** — `HTTP_404`,
+  `HTTP_503`. That is the site describing itself. Marked `fail`, and it still
+  produces the real finding.
+* **We could not complete the measurement** — `BROWSER_ERROR`, `TIMEOUT`,
+  `FETCH_FAILED`. That is a report about our own attempt. It stays `error`, and
+  `audit_findings` no longer treats `error` as a finding at all.
+
+This is the distinction the codebase already draws between `NOT_YET_MEASURED`
+and `NO_POPULATION`, applied one layer down — and the six-of-six reproduction is
+the evidence for it: the same site passed and failed the same check on
+different attempts, so a timeout was never evidence about the site.
+
+**The halved composite needed no separate fix.** `score_audit` already returned
+`scored=False` whenever the signals were not ok, so Technical Foundation was
+already excluded and its weight redistributed. What was wrong was that the
+exclusion came with a false accusation attached.
+
+Tested at the boundary where it went wrong — `audit_findings` into
+`build_candidates` — rather than on the generated copy, because the copy is a
+model's and the boundary is ours.
+
+## Two copy corrections
+
+**"A scan takes about six minutes"** (`2db2ab7`) was true of Epic 9.2 and stopped
+being true at Epic 9.17. It now says about ten, hedged, alongside what the scan
+is doing so a longer wait reads as work rather than a fault.
+
+**No precise number is committed to, deliberately.** Three 12-prompt runs came
+in at 286s, 306s and 331s — a 16% spread on identical work, because the duration
+is dominated by engine latency this product does not control — and there is no
+post-9.17 measurement of a 24-prompt scan at all. Nine minutes is an
+extrapolation, not an observation, and printing a figure that precise would
+repeat the original mistake at a different number.
+
+**The shelf headline** (`50ca8f5`) said *"missing from 31 of the 40 answers this
+scan measured"* about a scan that measured 48, because `MAX_SHELF_PROMPTS` caps
+the table at 20 prompts and the sentence counted rows while saying "scan". The
+title now counts the scan and the caption says the table is a sample when it is.
+The alternative — an honest "of the 40 shown" — is self-consistent but
+understates the finding, and the headline of a beat should not be the smaller
+number.
+
+## A process note, recorded because it is the kind of thing that hides
+
+The first attempt at the audit work landed **both causes in one commit whose
+message described only the first**, because `git add apps/api` staged more than
+the message covered. Caught by reading the commit back, and split into
+`1c3cf36` and `43e2b8d`, each verified against the full suite on its own. The
+brief asked for one commit per logical piece and the first attempt did not
+deliver that.
+
+## Verification
+
+**api 1,159** (1,143 → 1,146 → 1,159) and **web 749** (746 → 749) across four
+commits, each green before the next. design-system 418 and shared-types 53
+unchanged. `ruff check src tests` clean, `tsc` clean on all three packages, no
+migration.
+
+The audit fix was verified **against the real failure mode**, not assumed: the
+before state, six standalone runs to characterise it, a forced timeout to prove
+the fallback, and the vitals comparison that found the second bug.
+
+## Is the pilot ready now?
+
+**The three findings that stood between here and an attempt are closed**, and
+the one that mattered is closed twice over — the audit survives a transient
+timeout, and even if it does not, its failure can no longer become an
+instruction to the client.
+
+What has **not** been done is a second dry run to confirm it end to end on a
+live scan, which `72b0fd9`'s own scope note put in its own session. That is the
+remaining step before the answer is yes: the fixes are verified in isolation and
+against a forced reproduction, not yet against another full operator walk.
+
+## Open
+
+**A second pilot dry run**, to confirm these on a live path.
+
+Unchanged: the third-engine / Epic 12 fork stays paused, and Epic 12's "why"
+engine remains recommended-against until the pilot runs.
