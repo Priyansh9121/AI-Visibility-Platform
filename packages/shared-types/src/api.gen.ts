@@ -3286,6 +3286,11 @@ export interface components {
             inputsDigest?: string | null;
             /** Mentionrate */
             mentionRate?: string | null;
+            /**
+             * Previousformulaversions
+             * @default []
+             */
+            previousFormulaVersions: string[];
             /** Reasoncode */
             reasonCode?: string | null;
             /** Scanid */
@@ -3334,6 +3339,11 @@ export interface components {
             inputsDigest?: string | null;
             /** Mentionrate */
             mentionRate?: string | null;
+            /**
+             * Previousformulaversions
+             * @default []
+             */
+            previousFormulaVersions: string[];
             /** Reasoncode */
             reasonCode?: string | null;
             /** Scanid */

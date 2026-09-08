@@ -4287,6 +4287,14 @@
             ],
             "title": "Mentionrate"
           },
+          "previousFormulaVersions": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Previousformulaversions",
+            "type": "array"
+          },
           "reasonCode": {
             "anyOf": [
               {
@@ -4448,6 +4456,14 @@
               }
             ],
             "title": "Mentionrate"
+          },
+          "previousFormulaVersions": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Previousformulaversions",
+            "type": "array"
           },
           "reasonCode": {
             "anyOf": [

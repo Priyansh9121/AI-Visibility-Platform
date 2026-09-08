@@ -386,6 +386,29 @@ function ScoreBeat({
               earned. The lit height of the whole column is the score.
             </p>
           )}
+          {/*
+            A SCORE THAT MOVED BECAUSE THE FORMULA MOVED — scoring v2.
+
+            Rule 5 keeps a row per formula version, so re-scoring a scan under
+            v2 leaves the v1.1 row intact and a client who saw last week's
+            number sees a different one today. The only reading available to
+            them without this note is "the score dropped", which is a claim
+            about their business. The true one is "the definition changed",
+            which is a claim about ours. Shown near the number rather than in a
+            footnote, and only when a re-score actually happened.
+          */}
+          {(report.score?.previousFormulaVersions?.length ?? 0) > 0 && (
+            <p className="mt-4 text-ui-sm leading-prose text-text-tertiary">
+              This scan has also been scored under an earlier definition
+              {report.score?.previousFormulaVersions
+                ?.map((v) => ` (${v})`)
+                .join('')}
+              . The figure above is the current one. Where they differ, the measurement
+              changed rather than the site — earlier versions counted questions that named
+              the brand toward Mention Rate, and this one counts only questions that did not.
+              Both scores are kept.
+            </p>
+          )}
           {narrative.exclusions.length > 0 && <ExclusionNote narrative={narrative} />}
           {flags.length > 0 && (
             <ul className="mt-4 flex flex-col gap-2 text-ui-sm text-text-tertiary">

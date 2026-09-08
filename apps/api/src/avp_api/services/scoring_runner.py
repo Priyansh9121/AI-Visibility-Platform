@@ -119,6 +119,26 @@ async def load_result_facts(session: AsyncSession, scan_id: str) -> list[ResultF
     return facts
 
 
+async def prior_formula_versions(
+    session: AsyncSession, scan_id: str, current: str
+) -> list[str]:
+    """Formula versions this scan carries OTHER than `current`, oldest first.
+
+    Rule 5 keeps a row per (scan, formula_version), so a re-scored scan has
+    history — and a reader looking at a number that moved needs to be told the
+    definition moved with it. Ordered by `id`, which is a ULID and therefore
+    sorts by when the row was written.
+    """
+    rows = (
+        await session.execute(
+            select(Score.formula_version)
+            .where(Score.scan_id == scan_id, Score.formula_version != current)
+            .order_by(Score.id)
+        )
+    ).scalars().all()
+    return list(dict.fromkeys(rows))
+
+
 async def load_competitor_facts(
     session: AsyncSession, scan_id: str
 ) -> tuple[list[CompetitorFacts], CompetitorSet | None]:
