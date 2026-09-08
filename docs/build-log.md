@@ -12121,3 +12121,67 @@ fork.
 explanation. Whether it tracks grounding, recency, the competitor set, or
 something about the subject's own copy is unknown and would need a different
 kind of investigation from a scan.
+
+# Epic 9.26 — the third live run, and the subject was chosen by measurement
+
+Epic 9.25 named the gap: both prior subjects scored at or above 91.67% on every
+engine, so the low-visibility region was untested, and a subject *"genuinely
+absent from some answers"* was the one measurement that would move the fork.
+
+**The subject was screened rather than guessed**, which is the methodological
+change from the first two runs. Runs 1 and 2 picked "smaller player, same
+category" by judgement and both landed at 91.67% or above — an undershoot big
+enough that repeating the method would have wasted a third scan. So four
+candidates were screened first on **awareness-shaped prompts only**, using the
+production `ask_all` + `extract_facts` path with one engine, four calls each:
+
+    Gmelius     3/4 named
+    Zammad      1/4 named
+    Helpwise    0/4 named
+    Richpanel   0/4 named
+
+`zammad.com` was chosen at 1 of 4: genuinely low visibility without being
+invisible, which is where disagreement should live, on a real established
+open-source help desk whose site sustains classification and an audit. Its name
+is also not a common English word, which matters because a mention is a text
+match. The screen cost about ten model calls and is the cheap pre-check the
+brief asked whether existed — it does, out of production code, with no new
+scaffolding.
+
+## Three runs, side by side
+
+                             front.com     missiveapp.com     zammad.com
+    ----------------------------------------------------------------------
+    chatgpt        rate         100.00           91.67           91.67
+                   sentiment     75.00           68.18           68.18
+    claude         rate         100.00          100.00           91.67
+                   sentiment     58.33           75.00           77.27
+    claude_search  rate         100.00          100.00           77.78
+                   sentiment     41.67           87.50           78.57
+    ----------------------------------------------------------------------
+    answered (of 12 x 3)         36/36           36/36           33/36
+    split prompts                    0               1               1
+    agreement rate              100.00           91.67           91.67
+    sentiment disagreements     8 / 12          5 / 12          4 / 11
+    composite                    55.29           58.72           53.25
+    wall clock                   306.4s          307.1s          330.8s
+    provider spend             $3.1672         $3.1104         $2.8646
+
+**The deliberately low-visibility subject still came back at 91.67% agreement**
+— the same number as the mid-tier subject, with one split again. Its mention
+rate did drop (77.78% on grounded Claude, the lowest any engine has scored
+across three runs) and it is the first run to record engine FAILURES: three of
+36 results, all `claude_search`, so it answered 9 of 12 rather than 12.
+
+Sentiment divergence appeared a third time, 4 of 11. And the ordering moved a
+third time — grounded Claude went 41.67 → 87.50 → 78.57 across the three
+subjects, so Epic 9.25's refutation of "grounded Claude is systematically
+harsher" holds with a third point rather than being a two-point coincidence.
+
+**Cost is now a three-run range: $2.86–$3.17 for a 12-prompt scan**, and this
+is the first run whose harness printed the complete total itself rather than
+leaving a line for hand computation, because the `web_search` rate landed
+before it started.
+
+**What this run did NOT settle** is in the next entry, and it is not a detail
+about the subject.
