@@ -923,3 +923,18 @@ class TestATimedOutAuditNeverBecomesAClientFix:
         audit.checks[0].check_key = "schema_faq"
 
         assert audit_findings(audit) == [("schema_faq", "warn", "NO_FAQ_SCHEMA")]
+
+
+class TestPageLevelFactsAreScoped:
+    """The third dry run's regenerated copy said *"1,221 words of indexable
+    content overall"* about a figure the audit measured on one page. The number
+    was the prompt's and correct; the scope was the model's, and wrong — and a
+    prospect's own site would show it wrong in one click. The prompt now says
+    what the structure signals are measurements of.
+    """
+
+    def test_structure_signals_name_the_audited_page(self) -> None:
+        prompt = build_fix_prompt(facts(word_count=1221, h1_count=1), [])
+        assert "Audited page signals (the home page, one URL, not the whole site)" in prompt
+        assert "word count 1221" in prompt
+        assert "Site structure signals" not in prompt
