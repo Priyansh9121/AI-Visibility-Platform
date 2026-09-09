@@ -14227,3 +14227,42 @@ stylesheet was opened or referenced; the light theme was derived from Epic
 token, no working palette, no hero and no theme attribute
 (`reportIsolation.test.ts`, `ReportView.test.tsx`, `tokens.test.ts`);
 nothing here stores or renders third-party prose.
+
+# Epic 14.1, corrected — the report route back at the Presenting width
+
+**2026-09-09.** Governance line unchanged from Epic 14.1: the authenticated
+report route and nothing else.
+
+## The regression, and the table it broke
+
+Epic 14.1 put `wide` on `WorkspaceShell` for `/scans/{id}/report` to give
+the desk room. That was the wrong lever. `wide` pins the shell's content to
+`--avp-app-max`, the **Working** width, and `design-direction.md`'s width
+table — standing since Epic 9.19 and never amended — governs this route to
+`--avp-report-width`, the **Presenting** one. The desk made the mistake
+visible rather than hiding it: the frame spanned 90rem, the page inside it
+capped at 52rem, and the difference was a dead coloured field either side.
+
+## The fix
+
+`wide` removed. The shell's own default rule is already the document
+measure — report width plus its padding — so the desk sizes itself to the
+page and no new token was needed. `.avp-report-frame`, the desk token and
+the share route's full-viewport treatment stay exactly as 14.1 built them;
+`/share/{token}` never used the shell, so it was never affected.
+
+## The guard
+
+`apps/web/src/app/scans/reportWidth.test.ts` scans the route's source and
+fails if any `<WorkspaceShell>` in it carries `wide`, with a positive control
+on the dashboard route and an assertion that the shell's default measure is
+still the report width. Run against the unfixed route it failed on
+`' current="dashboard" wide'`. Widening this route again now means amending
+the width table first, which is the order the table exists for.
+
+## Verified
+
+Design system 601/601, web 806/806 (four new), both typechecks clean. Both
+report routes re-rendered from the fixture in both themes: the desk hugs the
+page with an even margin. `docs/screenshots/epic-14/after-report-route-framed.png`
+replaced; `docs/screenshots/epic-15/report-route-{light,dark}.png` added.
