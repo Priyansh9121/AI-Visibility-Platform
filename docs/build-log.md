@@ -14536,3 +14536,69 @@ fixtures through the same static path — `docs/screenshots/epic-16-2/`:
 Overview, AI crawlers, Alerts and Prompts before and after on the light
 theme, and Overview and Alerts after on the dark theme, where the chip
 sits as a sunken well on the card and reads the same.
+
+# Epic 16.3 — micro-interactions: three additions, five refusals, zero new values
+
+**2026-09-10.** Governance line: Working screens only; the report document
+is untouched and its regression guards still hold. Every duration and curve
+used below is one of `design-direction.md` §4's existing four durations and
+three curves. **Zero motion values were added**, and §4 now carries a
+paragraph recording this epic's additions and refusals so the next brief
+does not re-derive them.
+
+## The gate, and what survived it
+
+The `find-animation-opportunities` skill was loaded and its four questions
+— frequency, named purpose, budget, function — were put to every seam its
+hunt list names. The recon found the system already close to right: press
+feedback on every pressable, hover gated to real pointers, the sidebar
+panel on `grid-template-rows`, badge tones crossfading under a 5s poll, a
+meter that eases when it moves, scan-swap dimming behind `aria-busy` on
+both screens that swap scans, and reduced motion collapsed at the base
+layer with the delay hole closed. Three places survived:
+
+| # | Where | Today | Purpose | Tier | Built |
+|---|---|---|---|---|---|
+| 1 | `LoadingState`, 21 call sites | Text only; a slow fetch reads as frozen | State indication — *alive*, not *progressing* | Every load, ambient loop, blocks nothing | The live badge's breathing dot before the message: same keyframe, same `calc(reveal × 3)` period, `aria-hidden`. No spinner, no bar — that test still passes |
+| 2 | Alerts, "Show N acknowledged" | Rows materialise in one frame | Preventing a jarring change | Occasional, click-fired | `@starting-style` on `.avp-alert.is-acknowledged`: opacity 0 → 0.6 on the hover tier it already used, `translateY(--avp-space-1)` → 0 on the state tier |
+| 3 | Prompts, the run a submit produced | After a ~23s wait the list re-reads and a card is simply there | Preventing a jarring change, and feedback that the wait ended | Rare, click-fired | The workbench diffs run ids across the re-read and marks the one new card `is-new`; `@starting-style` opacity 0 → 1, `translateY(--avp-space-2)` → 0, layout tier. Cleared by the next load, so a reload performs nothing |
+
+Both entrances can only fire on a click. Outstanding alert rows are there on
+load and get nothing; a card already on the page keeps its place and its
+opacity while the new one settles in above it. That is the line Epic 9.19
+drew — *no arrival motion is not the same as no motion; move where something
+is actually changing* — applied three more times.
+
+## Refused, with the question that refused each
+
+- **The theme switch.** `disableTransitionOnChange` on the provider is
+  next-themes' guard against every themed property crossfading at its own
+  rate; Epic 15 set it on purpose. A crossfade would have to be the whole
+  page at once, which is a different feature. Stays instant.
+- **The competitor editor's add/remove rows.** Inside `article.avp-report`,
+  which must not gain motion; and its rows are keyed by index, so an
+  entrance would refire on every removal below the first.
+- **Route loading-to-ready swaps.** Navigation, tens of times a day. The
+  gate's frequency tier says no.
+- **Empty states' arrival.** The delight tier is where the budget lives, but
+  §4's exclusion of the dashboard shell from arrival motion is written, and
+  `EmptyAgency` says in its own comment why it passes `animate={false}`.
+- **Acknowledging an alert.** Looked like a gap; is not. `justAcknowledged`
+  keeps the row mounted and settled, and the code comment records the
+  decision: the fix was not to animate the exit but not to have one.
+
+Also cleared on inspection: `Copy → Copied` (the label change is the
+feedback; a fade would delay it), `MetaChip` (not interactive, so no hover),
+and the scan-swap dimming (already built on both screens that need it).
+
+## Verified
+
+Design system **606/606** (one new), web **816/816** (two new), both
+typechecks clean, styleguide rebuilt. `docs/screenshots/epic-16-3/`: the
+loading state before and after, light and dark. The two entrances cannot be
+shown by a static render, so Playwright re-mounted each element the way its
+click does — the acknowledged row inserted into the list, the run card
+toggled through `display: none` — and captured the frame 16ms and 30ms in.
+The before frames show each element fully settled at that instant; the
+after frames show the row faint and low, the card at half opacity and a few
+pixels down. A live look at the real click is still owed for feel.

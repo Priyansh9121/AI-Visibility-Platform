@@ -433,6 +433,14 @@ describe('LoadingState is the one way this product says wait', () => {
     expect(out).not.toContain('avp-loading__hint');
   });
 
+  it('breathes, but claims nothing — Epic 16.3', () => {
+    // The live badge's dot, saying "still alive" and nothing else: decorative
+    // to assistive tech, which already has the polite status text.
+    const out = html(<LoadingState message="Loading…" />);
+    expect(out).toContain('<span class="avp-loading__pulse" aria-hidden="true"></span>');
+    expect(out).toContain('role="status"');
+  });
+
   it('has no spinner and no progress bar', () => {
     // The rule Epic 2 set and Epic 9.7 restated: this product cannot measure
     // real progress on any long operation, and a bar that fills on a timer is

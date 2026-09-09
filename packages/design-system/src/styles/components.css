@@ -1150,10 +1150,30 @@
 .avp-loading { display: flex; flex-direction: column; gap: var(--avp-space-3); }
 
 .avp-loading__message {
+  display: flex;
+  align-items: center;
+  gap: var(--avp-space-3);
   font-family: var(--avp-font-display);
   font-size: var(--avp-text-ui-lg);
   font-weight: 600;
   color: var(--avp-text-primary);
+}
+
+/* The one sign that a wait is still alive — Epic 16.3. The live badge's
+   breathing dot, same keyframe, same period, on the message a screen shows
+   while it fetches. It claims nothing about progress — there is still no
+   spinner and no bar, for the reason `LoadingState` gives — only that the
+   page is not frozen, which is the claim Epic 9.19 allowed the dashboard's
+   running row to make. Under reduced motion the keyframe ends lit. */
+.avp-loading__pulse {
+  flex: none;
+  width: var(--avp-space-2);
+  height: var(--avp-space-2);
+  border-radius: var(--avp-radius-full);
+  background: var(--avp-beacon-600);
+  box-shadow: 0 0 0 3px var(--avp-beacon-100);
+  animation: avp-live-breath calc(var(--avp-duration-reveal) * 3) var(--avp-ease-standard)
+    infinite;
 }
 
 .avp-loading__steps {
@@ -2375,13 +2395,31 @@
 
 .avp-alert {
   /* HOVER tier: this one transition serves the settling of an acknowledged
-     row and the hover that lifts it back, and the frequent trigger wins. */
-  transition: opacity var(--avp-duration-hover) var(--avp-ease-standard);
+     row and the hover that lifts it back, and the frequent trigger wins.
+     `transform` rides the STATE tier: it only ever moves on the entrance
+     below, which a click asks for. */
+  transition: opacity var(--avp-duration-hover) var(--avp-ease-standard),
+    transform var(--avp-duration-state) var(--avp-ease-out);
 }
 
 /* Settled, not gone. Opacity, not a colour swap. */
 .avp-alert.is-acknowledged {
   opacity: 0.6;
+  transform: translateY(0);
+}
+
+/* Rows the operator asked to see — Epic 16.3. "Show N acknowledged" used to
+   materialise them in one frame; they now settle in from a few pixels below
+   over the state duration. Only acknowledged rows can enter this way, because
+   only they are ever mounted by a click: the outstanding rows are there on
+   load and a Working screen does not perform an entrance. A row acknowledged
+   in-session is already mounted, so it settles by opacity alone, as before.
+   "Hide" is instant — a filter the operator applied, not a dismissal. */
+@starting-style {
+  .avp-alert.is-acknowledged {
+    opacity: 0;
+    transform: translateY(var(--avp-space-1));
+  }
 }
 
 @media (hover: hover) {
@@ -2402,3 +2440,25 @@
 }
 
 .avp-alert__ack { min-width: 9.5rem; }
+
+/* ============================ Prompt run ========================== */
+/*
+ * A run the operator just asked for, landing — Epic 16.3. The wait is ~23s
+ * with a breathing badge saying so; when it ends the list re-reads and a new
+ * card is simply there at the top. `is-new` is set by the workbench on the
+ * one run that was not in the list before the submit, and only on that
+ * render, so the cards already on the page never move and a reload performs
+ * nothing. Layout tier: a card is a block of content taking its place, not a
+ * state flipping.
+ */
+.avp-run { opacity: 1; transform: translateY(0); }
+.avp-run.is-new {
+  transition: opacity var(--avp-duration-layout) var(--avp-ease-out),
+    transform var(--avp-duration-layout) var(--avp-ease-out);
+}
+@starting-style {
+  .avp-run.is-new {
+    opacity: 0;
+    transform: translateY(var(--avp-space-2));
+  }
+}

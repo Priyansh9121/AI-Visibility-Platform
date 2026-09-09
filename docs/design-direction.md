@@ -644,6 +644,20 @@ instant paint).
 > `calc(var(--avp-duration-reveal) * 3)`, which is this section's own
 > dim-to-lit dissolve slowed to a breath, not a fifth number.
 >
+> **Epic 16.3 applied that line three more times, and added nothing else.**
+> A `LoadingState` carries the same breathing dot, because a wait that shows
+> nothing moving reads as frozen — the sentence above, applied to the fetch
+> rather than the poll; it still has no spinner and no bar. Two entrances
+> were added, both `@starting-style`, both fired by a click and never by a
+> load: the acknowledged alert rows the operator asks to see settle in over
+> the state tier, and the one prompt run a submit produced settles in over
+> the layout tier while the cards already on the page stay put. Rejected in
+> the same pass, with the reason: the theme switch (next-themes'
+> `disableTransitionOnChange` is the guard against every themed property
+> crossfading at its own rate, and stays), the competitor editor's rows
+> (inside the report document), route loading-to-ready swaps (navigation,
+> tens of times a day), and empty states (the exclusion above).
+>
 > The report acquired none of it. Its width and its exclusion here are
 > unchanged, and `ReportView.test.tsx` asserts both — plus a byte-identical
 > before/after screenshot in `docs/screenshots/epic-9-19/`.
