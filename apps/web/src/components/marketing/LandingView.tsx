@@ -130,7 +130,7 @@ export function LandingView({
     <div id="top" className="flex flex-col">
       <LandingHeader onGetStarted={onGetStarted} onLogIn={onLogIn} />
 
-      <main className="mx-auto flex w-full max-w-report flex-col gap-24 px-6 py-18">
+      <main className="mx-auto flex w-full max-w-page flex-col gap-24 px-6 py-18">
         {/*
           The hero staggers its OWN parts rather than arriving as one block —
           eyebrow, then headline, then lead, then the call to action. It is the
@@ -444,7 +444,7 @@ function LandingHeader({
 }): JSX.Element {
   return (
     <header className="sticky top-0 z-10 border-b border-line-hairline bg-surface-ground">
-      <div className="mx-auto flex w-full max-w-report flex-wrap items-center gap-4 px-6 py-4">
+      <div className="mx-auto flex w-full max-w-page flex-wrap items-center gap-4 px-6 py-4">
         {/* The wordmark, not a logo: the licensed-assets rule permits custom-drawn marks
             and licensed fonts only, and no mark has been drawn. Type is the
             honest option, and it is the name `layout.tsx` already ships as the

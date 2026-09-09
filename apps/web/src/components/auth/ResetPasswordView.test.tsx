@@ -218,7 +218,7 @@ describe('the card arrives — Epic 9.16', () => {
 
   it('leaves the <main> landmark alone', () => {
     const out = live();
-    expect(out).toMatch(/<main[^>]*max-w-report/);
+    expect(out).toMatch(/<main[^>]*max-w-page/);
     expect(out).not.toMatch(/<main[^>]*avp-reveal/);
   });
 

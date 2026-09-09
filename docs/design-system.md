@@ -315,7 +315,7 @@ Two tokens matter more than the ramp:
   is how a client first sees an exported PDF.
 
 Radii: `sm 3` · `md 5` · `lg 8` · `xl 12` · `full`.
-Layout: `--avp-report-width` 832px (PDF export parity) · `--avp-app-max` 1440px.
+Layout: `--avp-report-width` 1152px (the on-screen document — Epic 17; the PDF is A4 and reads no token) · `--avp-page-width` 832px (landing, auth, welcome, intake) · `--avp-app-max` 1440px.
 
 ---
 

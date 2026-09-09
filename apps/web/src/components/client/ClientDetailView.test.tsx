@@ -104,7 +104,7 @@ describe('Report is a path into the existing document, not a copy of it', () => 
   });
 
   it('renders no report of its own inside the client frame', () => {
-    // The report is a Presenting-context document at --avp-report-width.
+    // The report is a Presenting-context document at --avp-report-width (72rem, Epic 17).
     // Rendering it inside a wide Working shell would change the artefact.
     const html = overview(threeScanHistory);
     expect(html).not.toContain('avp-report__title');

@@ -82,7 +82,7 @@ export default function Home() {
   // navigation ownership across two files — Epic 9.12.
   if (view.kind === 'sign-in' || view.kind === 'sign-up' || view.kind === 'forgot') {
     return (
-      <main className="mx-auto max-w-report px-6 py-18">
+      <main className="mx-auto max-w-page px-6 py-18">
         {/*
           The back link is aligned to the form column rather than the page, so
           it reads as part of the same object instead of floating in the gutter

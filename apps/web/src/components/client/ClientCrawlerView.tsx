@@ -409,7 +409,7 @@ function PurposeGroup({
         {group.cost}
       </p>
       {/*
-        `max-w-report` on the LIST, not on the section — found by driving this
+        `max-w-page` on the LIST, not on the section — found by driving this
         at 1440px. The rows put the agent's name hard left and its badge hard
         right, so at full app width the eye had to cross about 1,100px of empty
         space to connect "Amazonbot" to "Blocked". Fourteen times.
@@ -419,7 +419,7 @@ function PurposeGroup({
         tiles above deliberately keep the full width — four figures genuinely
         use it; a two-item row does not.
       */}
-      <ul aria-labelledby={captionId} className="mt-1 flex max-w-report flex-col gap-1">
+      <ul aria-labelledby={captionId} className="mt-1 flex max-w-page flex-col gap-1">
         {rows.map((row) => (
           <li key={row.agent}>
             <AgentRow row={row} />
