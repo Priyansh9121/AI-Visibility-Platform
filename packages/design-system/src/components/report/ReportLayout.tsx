@@ -1,5 +1,6 @@
 import type { HTMLAttributes, JSX, ReactNode } from 'react';
 import { cn } from '../../lib/cn.js';
+import { MetaChip } from '../MetaChip.js';
 
 /**
  * Report layout primitives.
@@ -83,17 +84,17 @@ export interface ReportMetaItemProps {
  * chip radius the shape lock already reserves for chips. No fill that would
  * not survive greyscale, no colour that could be read as a score — a byline
  * chip is never on the ramp, so `VisibilityBadge` and this cannot be confused.
+ *
+ * Since Epic 16.1 it is `MetaChip` with the report's own class on it: the
+ * Working screens needed the same shape for the same reason, and one rule
+ * set drawn through the tokens serves both scopes. The class is kept so the
+ * document can still be addressed as a document.
  */
 export function ReportMetaItem({ icon, mono = false, children, className }: ReportMetaItemProps): JSX.Element {
   return (
-    <span className={cn('avp-report__meta-item', mono && 'avp-report__meta-item--mono', className)}>
-      {icon != null && (
-        <span className="avp-report__meta-icon" aria-hidden="true">
-          {icon}
-        </span>
-      )}
+    <MetaChip icon={icon} mono={mono} className={cn('avp-report__meta-item', className)}>
       {children}
-    </span>
+    </MetaChip>
   );
 }
 

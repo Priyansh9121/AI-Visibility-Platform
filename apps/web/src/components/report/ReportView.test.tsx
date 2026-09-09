@@ -66,14 +66,13 @@ describe('the score beat is composed, not listed — Epic 16', () => {
 
   it('credentials the scan as five shaped facts, not a run of grey text', () => {
     const head = header(render(helpscoutReport));
-    expect(head.match(/avp-report__meta-item/g)).toHaveLength(6); // five items, one with the mono modifier
-    expect(head).toContain('avp-report__meta-item--mono');
+    expect(head.match(/avp-report__meta-item/g)).toHaveLength(5);
+    expect(head).toContain('avp-chip--mono');
     expect(head).toContain('helpscout.com');
     expect(head).toContain('3 prompts');
     expect(head).toContain('2 engines');
     // Every glyph is decorative and says so; the text beside it is the fact.
-    expect(head.match(/avp-report__meta-icon/g)).toHaveLength(5);
-    expect(head.match(/<span class="avp-report__meta-icon" aria-hidden="true">/g)).toHaveLength(5);
+    expect(head.match(/<span class="avp-chip__icon" aria-hidden="true">/g)).toHaveLength(5);
   });
 
   it('frames the numeral and its explanation as one unit', () => {

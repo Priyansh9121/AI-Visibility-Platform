@@ -19,6 +19,7 @@ import {
   TrendChart,
   ChartPatterns,
   ReportPage,
+  MetaChip,
   ReportHeader,
   ReportMetaItem,
   ScoreBlock,
@@ -456,6 +457,18 @@ export function Styleguide(): JSX.Element {
           {[8, 28, 48, 68, 92].map((s) => (
             <VisibilityBadge key={s} score={s} />
           ))}
+        </div>
+
+        <p className="sg-sub">Meta chips — a fact, never a state and never a score</p>
+        <div className="sg-row">
+          <MetaChip icon={<Globe />} mono>
+            example.com
+          </MetaChip>
+          <MetaChip icon={<MessageSquare />}>28 prompts</MetaChip>
+          <MetaChip icon={<Bot />}>2 engines</MetaChip>
+          <MetaChip icon={<Users />}>2 / 5 seats</MetaChip>
+          <MetaChip icon={<CalendarDays />}>Scanned 20 Aug 2026</MetaChip>
+          <MetaChip>No glyph</MetaChip>
         </div>
       </Section>
 

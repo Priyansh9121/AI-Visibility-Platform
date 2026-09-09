@@ -44,7 +44,11 @@ describe('agency identity and seat usage', () => {
 
   it('shows seats used against the limit, and the counts', () => {
     const html = render(fullPageDashboard);
-    expect(html).toContain('2 / 5');
+    expect(html).toContain('2 / 5 seats');
+    // A fact in the fact's shape — Epic 16.1 — not a badge and not a score.
+    const head = html.slice(html.indexOf('avp-pagehead'), html.indexOf('avp-hero'));
+    expect(head).toContain('avp-chip');
+    expect(head).not.toContain('avp-badge');
     expect(html).toContain('>12<'); // clients
     expect(html).toContain('>42<'); // scans
   });
@@ -459,6 +463,8 @@ describe('accents mark categories, never measurements', () => {
     // A median over "recent scans" with no denominator is a number nobody can
     // verify against the table under it.
     expect(html()).toMatch(/Across \d+ scored scans? below/);
+    // The denominator is a chip inside the hero's meta line — Epic 16.1.
+    expect(html()).toMatch(/avp-hero__meta[^]*?avp-chip[^]*?Across \d+ scored/);
   });
 
   it('counts only scans that HAVE a score — a missing score is not a zero', () => {
