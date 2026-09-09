@@ -57,7 +57,7 @@ import type {
 } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
 import { ClientSpace } from '@/components/client/ClientSpace';
-import { latestScanId } from '@/components/client/ClientDetailView';
+import { latestComposite, latestScanId } from '@/components/client/ClientDetailView';
 import { formatStamp } from '@/lib/dates';
 import { ENGINE_ACCENT, engineLabel } from '@/lib/client/engines';
 import type { ClientDetailState } from '@/components/client/ClientDetailView';
@@ -105,6 +105,7 @@ export function ClientPromptsView({
       me={me}
       current="prompts"
       latestReportScanId={latestScanId(history)}
+      latestScore={latestComposite(history)}
     >
       <PromptWorkbench client={client} />
     </ClientSpace>

@@ -52,21 +52,20 @@ describe('the space says whose it is, and how to leave', () => {
     expect(overview(threeScanHistory)).toContain('All clients');
   });
 
-  it('sits inside the agency shell rather than replacing it', () => {
-    // The sidebar is agency-wide and stays. This is a second level of
-    // navigation nested in it, not a different app.
+  it('sits inside the shell, which is in client mode — Epic 13', () => {
     const html = overview(threeScanHistory);
     expect(html).toContain('avp-shell');
-    expect(html).toContain('avp-localnav');
+    expect(html).toContain('avp-nav__head');
+    expect(html).not.toContain('avp-localnav');
   });
 
   it('is a Working screen and takes the app width', () => {
     expect(overview(threeScanHistory)).toContain('avp-shell__content--wide');
   });
 
-  it('marks exactly one local item as current, per screen', () => {
+  it('marks exactly one section as current, per screen', () => {
     for (const html of [overview(threeScanHistory), sources(threeScanHistory), rankings(threeScanHistory)]) {
-      expect((html.match(/avp-localnav__item is-current/g) ?? []).length).toBe(1);
+      expect((html.match(/aria-current="page"/g) ?? []).length).toBe(1);
     }
   });
 });

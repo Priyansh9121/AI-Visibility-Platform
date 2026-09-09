@@ -122,6 +122,16 @@ export const CLIENT_NAV: readonly ClientNavCluster[] = [
   },
 ];
 
+/** The label a section is shown under — the content's heading, Epic 13. */
+export function sectionLabel(section: ClientSection): string {
+  for (const cluster of CLIENT_NAV) {
+    for (const item of cluster.items) {
+      if (item.section === section) return item.label;
+    }
+  }
+  return section;
+}
+
 /** The accent a section carries, or `null` if it is unaccented. */
 export function accentFor(section: ClientSection): number | null {
   for (const cluster of CLIENT_NAV) {

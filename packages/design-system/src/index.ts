@@ -136,8 +136,21 @@ export {
 export {
   AppShell,
   NavItem,
+  NavGroup,
+  NavSlot,
+  NavDisclosure,
+  NavPanel,
+  NavSubItem,
+  NavHead,
+  NavScore,
   type AppShellProps,
   type NavItemProps,
+  type NavGroupProps,
+  type NavDisclosureProps,
+  type NavPanelProps,
+  type NavSubItemProps,
+  type NavHeadProps,
+  type NavScoreProps,
 } from './components/shell/AppShell.js';
 
 export {

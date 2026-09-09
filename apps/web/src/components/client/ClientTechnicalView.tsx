@@ -38,7 +38,7 @@ import {
 import type { BadgeTone } from '@avp/design-system';
 import type { AuditCheck, Client, ClientHistory, Me, TechnicalAudit } from '@avp/shared-types';
 import { ClientSpace } from '@/components/client/ClientSpace';
-import { latestScanId } from '@/components/client/ClientDetailView';
+import { latestComposite, latestScanId } from '@/components/client/ClientDetailView';
 import {
   auditDimensions,
   checkLabel,
@@ -116,6 +116,7 @@ export function ClientTechnicalView({
       me={me}
       current="technical"
       latestReportScanId={latestScanId(history)}
+      latestScore={latestComposite(history)}
       figures={
         audit && audit.status === 'ok' ? (
           /*

@@ -44,6 +44,7 @@ import type { Alert, AlertFeed, Me } from '@avp/shared-types';
 import { ClientSpace } from '@/components/client/ClientSpace';
 import { accentFor } from '@/components/client/clientNav';
 import {
+  latestComposite,
   latestScanId,
   type ClientDetailState,
 } from '@/components/client/ClientDetailView';
@@ -114,6 +115,7 @@ export function ClientAlertsView({
       me={me}
       current="alerts"
       latestReportScanId={latestScanId(history)}
+      latestScore={latestComposite(history)}
     >
       <AlertsBody
         alerts={alerts}

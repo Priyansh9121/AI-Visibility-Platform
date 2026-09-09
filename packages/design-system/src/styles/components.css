@@ -506,6 +506,228 @@
   color: var(--avp-text-tertiary);
 }
 
+/* Leaves this space — the Report item. Same glyph as `.avp-localnav__out`. */
+.avp-nav__out {
+  margin-left: auto;
+  font-size: var(--avp-text-ui-xs);
+  color: var(--avp-text-tertiary);
+}
+
+/* ---- THE SIDEBAR AS A MAP — Epic 13 -------------------------------------
+   Two modes, built from the primitives below. See AppShell.tsx for why modes
+   rather than a mixed list, and the build log for what 9.20 decided and why it
+   was reversed. */
+
+/* A labelled cluster — the strip's `LocalNavGroup`, carried into the column. */
+.avp-nav__group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--avp-space-0_5);
+}
+
+.avp-nav__group + .avp-nav__group { margin-top: var(--avp-space-5); }
+
+.avp-nav__grouplabel {
+  padding: 0 var(--avp-space-3) var(--avp-space-1);
+  font-size: var(--avp-text-ui-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--avp-tracking-caps);
+  color: var(--avp-text-tertiary);
+}
+
+.avp-nav__grouplist,
+.avp-nav__sublist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--avp-space-0_5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* A plain flex item, never `display: contents` — see LocalNav's note. */
+.avp-nav__slot { display: flex; flex-direction: column; min-width: 0; }
+.avp-nav__slot > .avp-nav__item,
+.avp-nav__slot > .avp-nav__subitem { flex: 1; }
+
+/* A row that opens rather than navigates. Inherits everything a link row has,
+   so the two read as one family; the chevron is the only difference. */
+.avp-nav__item--disclosure {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.avp-nav__chevron {
+  margin-left: auto;
+  flex: none;
+  color: var(--avp-text-tertiary);
+  transition: transform var(--avp-duration-state) var(--avp-ease-out);
+}
+
+.avp-nav__item--disclosure[aria-expanded='true'] .avp-nav__chevron { transform: rotate(90deg); }
+
+/* The panel collapses on grid rows — no measured height, no script. Closed,
+   its contents are `inert` and hidden from assistive tech. */
+.avp-nav__panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--avp-duration-state) var(--avp-ease-out);
+}
+
+.avp-nav__panel.is-open { grid-template-rows: 1fr; }
+
+.avp-nav__panelinner { overflow: hidden; min-height: 0; }
+
+.avp-nav__sublist {
+  padding: var(--avp-space-1) 0 var(--avp-space-2) var(--avp-space-8);
+}
+
+.avp-nav__subitem {
+  display: flex;
+  align-items: center;
+  gap: var(--avp-space-2);
+  min-width: 0;
+  padding: var(--avp-space-1_5) var(--avp-space-3);
+  border-radius: var(--avp-radius-md);
+  color: var(--avp-text-secondary);
+  font-size: var(--avp-text-ui-sm);
+  text-decoration: none;
+  transition: background var(--avp-duration-hover) var(--avp-ease-standard),
+    color var(--avp-duration-hover) var(--avp-ease-standard),
+    transform var(--avp-duration-hover) var(--avp-ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .avp-nav__subitem:hover { background: var(--avp-surface-seated); color: var(--avp-text-primary); }
+}
+
+.avp-nav__subitem:active { transform: scale(0.97); }
+
+.avp-nav__subitem.is-current {
+  background: var(--avp-surface-seated);
+  color: var(--avp-text-primary);
+  font-weight: 600;
+}
+
+/* The dot is the ramp doing its one job; the figure beside it is the number.
+   An empty dot is a client scored as having no reading; no dot is "unknown". */
+.avp-nav__dot {
+  flex: none;
+  width: var(--avp-space-2);
+  height: var(--avp-space-2);
+  border-radius: var(--avp-radius-full);
+}
+
+.avp-nav__dot--empty {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--avp-line-strong);
+}
+
+.avp-nav__sublabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.avp-nav__figure {
+  flex: none;
+  font-family: var(--avp-font-mono);
+  font-size: var(--avp-text-ui-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--avp-text-tertiary);
+}
+
+.avp-nav__figure--note { font-family: var(--avp-font-ui); }
+
+/* The head of the sidebar in client mode: the way back, and whose space. */
+.avp-nav__head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--avp-space-1);
+}
+
+.avp-nav__back {
+  align-self: flex-start;
+  margin-bottom: var(--avp-space-2);
+  font-size: var(--avp-text-ui-xs);
+  color: var(--avp-text-tertiary);
+  text-decoration: none;
+  transition: color var(--avp-duration-hover) var(--avp-ease-out),
+    transform var(--avp-duration-hover) var(--avp-ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .avp-nav__back:hover { color: var(--avp-text-primary); }
+}
+
+.avp-nav__back:active { transform: scale(0.97); }
+
+/* The editorial face at the section scale — `ed-2xs`, one step under the
+   strip's `ed-sm`, because the column is 15rem wide and a name wraps. */
+.avp-nav__title {
+  margin: 0;
+  font-family: var(--avp-font-editorial);
+  font-size: var(--avp-text-ed-2xs);
+  font-weight: 600;
+  line-height: var(--avp-leading-display);
+  letter-spacing: var(--avp-tracking-display);
+  color: var(--avp-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.avp-nav__subtitle {
+  margin: 0;
+  font-family: var(--avp-font-mono);
+  font-size: var(--avp-text-ui-xs);
+  color: var(--avp-text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+/* The score, at sidebar scale. */
+.avp-navscore {
+  display: flex;
+  flex-direction: column;
+  gap: var(--avp-space-0_5);
+  margin: var(--avp-space-3) 0 0;
+}
+
+.avp-navscore__numeral {
+  font-family: var(--avp-font-editorial);
+  font-size: var(--avp-text-ed-xs);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: var(--avp-tracking-display);
+  font-variant-numeric: lining-nums tabular-nums;
+}
+
+.avp-navscore__denominator {
+  margin-left: var(--avp-space-0_5);
+  font-family: var(--avp-font-ui);
+  font-size: var(--avp-text-ui-xs);
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--avp-text-tertiary);
+}
+
+.avp-navscore__band {
+  font-size: var(--avp-text-ui-2xs);
+  font-weight: 600;
+  letter-spacing: var(--avp-tracking-caps);
+  text-transform: uppercase;
+  color: var(--avp-text-tertiary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .avp-nav__panel,
+  .avp-nav__chevron { transition: none; }
+}
+
 /* One breakpoint, no drawer. At four destinations a hamburger is machinery
    nobody needs, so the sidebar becomes a strip above the content instead. */
 @media (max-width: 60rem) {
@@ -520,8 +742,15 @@
     overflow-x: auto;
   }
   .avp-shell__footer { margin-top: 0; margin-left: auto; }
-  .avp-nav { flex-direction: row; gap: var(--avp-space-1); }
+  .avp-nav { flex-direction: row; flex-wrap: wrap; gap: var(--avp-space-1); }
   .avp-nav__note { display: none; }
+  /* In the strip a cluster is a row of items under its label, and the client
+     list opens as a full-width row beneath the Clients row. */
+  .avp-nav__group + .avp-nav__group { margin-top: 0; margin-left: var(--avp-space-4); }
+  .avp-nav__grouplist { flex-direction: row; flex-wrap: wrap; }
+  .avp-nav__panel { flex-basis: 100%; }
+  .avp-nav__sublist { flex-direction: row; flex-wrap: wrap; padding-left: 0; }
+  .avp-nav__head { flex-basis: 100%; }
   .avp-shell__content { padding: var(--avp-space-10) var(--avp-space-6); }
 }
 
