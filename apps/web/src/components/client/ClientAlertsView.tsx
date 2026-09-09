@@ -33,6 +33,7 @@ import {
   Badge,
   Button,
   Card,
+  MetaChip,
   CardBody,
   EmptyState,
   ErrorState,
@@ -49,6 +50,7 @@ import {
   type ClientDetailState,
 } from '@/components/client/ClientDetailView';
 import { engineShort } from '@/lib/client/engines';
+import { Bot, CalendarDays, Check } from 'lucide-react';
 
 /** The screen's accent, read from the nav table — never a second literal. */
 const ACCENT = accentFor('alerts') ?? 0;
@@ -295,27 +297,27 @@ function AlertRow({
             <span className="flex flex-wrap items-center gap-2">
               <Badge tone={seen ? 'neutral' : kind.tone}>{kind.label}</Badge>
               {/*
-                Secondary, not tertiary. When three rows share the badge "Tone
-                declined" — which is what a per-engine measure produces when
-                the whole picture moves — the ENGINE is the only thing telling
+                The engine, in the fact's shape — Epic 16.2. Epic E made it
+                secondary rather than tertiary because when three rows share
+                the badge "Tone declined" the ENGINE is the only thing telling
                 them apart, and the discriminator cannot be the quietest thing
-                in the row.
+                in the row. A chip keeps that and adds the distinction the
+                three-pill rule draws: the badge is a state, this is a fact.
               */}
               {alert.engine != null && (
-                <span className="text-ui-sm text-text-secondary">
-                  {engineShort(alert.engine)}
-                </span>
+                <MetaChip icon={<Bot />}>{engineShort(alert.engine)}</MetaChip>
               )}
-              {seen && <span className="text-ui-2xs text-text-tertiary">Acknowledged</span>}
+              {seen && <MetaChip icon={<Check />}>Acknowledged</MetaChip>}
             </span>
             {/* OUR sentence about OUR numbers — see the API's facts-only note. */}
             <p className="max-w-measure text-ui-base text-text-primary">{alert.detail}</p>
-            <p className="text-ui-2xs uppercase tracking-caps text-text-tertiary">
-              <time dateTime={alert.scannedAt}>{fmtDate(alert.scannedAt)}</time>
-              {' vs '}
-              <time dateTime={alert.baselineScannedAt}>
-                {fmtDate(alert.baselineScannedAt)}
-              </time>
+            {/* The two scans compared, as one fact rather than a caps line. */}
+            <p>
+              <MetaChip icon={<CalendarDays />}>
+                <time dateTime={alert.scannedAt}>{fmtDate(alert.scannedAt)}</time>
+                {' vs '}
+                <time dateTime={alert.baselineScannedAt}>{fmtDate(alert.baselineScannedAt)}</time>
+              </MetaChip>
             </p>
           </div>
           {!seen && onAcknowledge != null && (

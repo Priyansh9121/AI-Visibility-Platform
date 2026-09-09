@@ -41,6 +41,33 @@ const sources = (h: ClientHistory) =>
 const rankings = (h: ClientHistory) =>
   renderToStaticMarkup(<ClientRankingsView state={ready(h)} me={clientsMe} />);
 
+describe('the hero’s facts take the fact’s shape — Epic 16.2', () => {
+  it('sets the scan date, share of voice and rival count as chips beside the delta', () => {
+    const html = overview(threeScanHistory);
+    const meta = html.slice(html.indexOf('avp-hero__meta'), html.indexOf('avp-hero__aside'));
+    expect(meta.match(/class="avp-chip"/g)?.length).toBe(3);
+    expect(meta).toMatch(/avp-chip[^>]*>.*?Scanned /);
+    expect(meta).toMatch(/share of voice/);
+    expect(meta).toMatch(/rivals? in the set/);
+    // The delta is a reading, not a credential: still text, still not a chip.
+    expect(meta).toMatch(/avp-hero__delta/);
+    expect(meta).not.toMatch(/avp-chip[^>]*>[^<]*since last scan/);
+  });
+
+  it('says the absence in a sentence, not a chip', () => {
+    // Scans that were never scored: the hero renders, and its meta line is
+    // an explanation rather than credentials.
+    const unscored: ClientHistory = {
+      ...threeScanHistory,
+      scans: threeScanHistory.scans.map((s) => ({ ...s, composite: null })),
+    };
+    const html = overview(unscored);
+    expect(html).toContain('No scan of this client has produced a reading.');
+    const meta = html.slice(html.indexOf('avp-hero__meta'), html.indexOf('</section>'));
+    expect(meta).not.toContain('avp-chip');
+  });
+});
+
 describe('the space says whose it is, and how to leave', () => {
   it('names the client and its domain', () => {
     const html = overview(threeScanHistory);

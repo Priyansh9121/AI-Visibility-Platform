@@ -168,9 +168,17 @@ describe('the craft pass — things that felt wrong in the hand', () => {
 
   it('styles the engine as the discriminator it is', () => {
     // Three rows share the badge "Tone declined"; the engine is the only thing
-    // telling them apart, so it cannot be the quietest text in the row.
+    // telling them apart, so it cannot be the quietest text in the row. Since
+    // Epic 16.2 it is a MetaChip — a fact beside a state — and never a badge,
+    // so the two pills in the row cannot be read as two states.
     const html = render(feed(toneDeclineFeed));
-    expect(html).toMatch(/text-ui-sm text-text-secondary[^>]*>Claude/);
+    expect(html).toMatch(/avp-chip[^>]*>(?:<span[^>]*>.*?<\/span>)?Claude/);
+    const rows = html.split(/class="[^"]*\bavp-alert\b[^"]*"/).slice(1);
+    expect(rows.length).toBe(3);
+    for (const row of rows) expect(row.match(/class="avp-badge /g)?.length).toBe(1);
+    const row = rows[0]!;
+    // The two dates are one fact, and each is still a machine-readable <time>.
+    expect(row).toMatch(/avp-chip[^>]*>.*?<time dateTime="[^"]+">[^<]+<\/time> vs <time/);
   });
 
   it('says so when an acknowledgement failed, rather than just re-enabling', () => {

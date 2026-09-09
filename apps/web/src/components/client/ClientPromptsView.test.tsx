@@ -33,6 +33,13 @@ const panel = (over: Partial<Parameters<typeof PromptsPanel>[0]> = {}) =>
     />,
   );
 
+describe('a run’s header carries its stamp as a fact — Epic 16.2', () => {
+  it('sets the time it ran as a chip under the question', () => {
+    const html = panel();
+    expect(html).toMatch(/avp-chip[^>]*>.*?\d{2} \w{3} \d{4}, \d{2}:\d{2} UTC/);
+  });
+});
+
 describe('the composer says what a run costs before one is bought', () => {
   it('states how many runs are left this hour', () => {
     // Served by the API rather than guessed — a browser that guessed would
