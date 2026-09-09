@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 // Imported from the tokens subpath, not the package barrel: the barrel pulls
 // in client components, which would force this Server Component to bundle them.
 import { GOOGLE_FONTS_HREF } from '@avp/design-system/tokens';
+import { ThemeProvider } from '@/components/shell/ThemeProvider';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -53,7 +54,16 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             exactly one place. */}
         <link href={GOOGLE_FONTS_HREF} rel="stylesheet" />
       </head>
-      <body>{children}</body>
+      {/*
+        The theme — Epic 15. `ThemeProvider` writes `data-theme` on <html>
+        from a synchronous inline script before hydration, the same way the
+        MOTION_READY script above beats it, so the first paint is already in
+        the chosen theme. Light is the default; the report ignores the
+        attribute entirely (see tokens.css, `.avp-report`).
+      */}
+      <body>
+        <ThemeProvider>{children}</ThemeProvider>
+      </body>
     </html>
   );
 }

@@ -31,6 +31,7 @@ import {
   beacon,
   signal,
   dark,
+  light,
   competitor,
   semantic,
   oklch,
@@ -61,25 +62,26 @@ import type {
 } from '../components/chart/answerShelfLayout.js';
 
 export function Styleguide(): JSX.Element {
-  // DARK IS THE DEFAULT — Epic 14. The toggle shows the paper scope the report
-  // renders in; it is the report's skin, not a mode of the product.
-  const [paper, setPaper] = useState(false);
+  // LIGHT IS THE DEFAULT — Epic 15; dark is the opt-in. The toggle sets the
+  // same attribute the product's theme provider writes on <html>. The report
+  // section below keeps its paper scope under either, which is the point.
+  const [darkTheme, setDarkTheme] = useState(false);
   const layout = layoutLedger(DIMENSIONS, { competitors: COMPETITORS });
 
   return (
-    <div className="sg" data-theme={paper ? 'light' : undefined}>
+    <div className="sg" data-theme={darkTheme ? 'dark' : undefined}>
       <header className="sg__masthead">
         <div>
           <h1 className="sg__title">Design System</h1>
           <p className="sg__lede">
             The proprietary component and token library for the AI Visibility &amp; Competitive
-            Intelligence Platform. Dark, data-dense, and built from the five scoring dimensions.
-            The paper scope below is what the printed report keeps.
+            Intelligence Platform. Light by default, dark by choice, data-dense, and built from the
+            five scoring dimensions. The report section keeps its paper scope under either theme.
           </p>
         </div>
         <div className="sg-toggle">
-          <Button size="sm" variant={paper ? 'primary' : 'secondary'} onClick={() => setPaper((d) => !d)}>
-            {paper ? 'Paper (the report)' : 'Dark (the product)'}
+          <Button size="sm" variant={darkTheme ? 'primary' : 'secondary'} onClick={() => setDarkTheme((d) => !d)}>
+            {darkTheme ? 'Dark (the opt-in)' : 'Light (the default)'}
           </Button>
         </div>
       </header>
@@ -113,10 +115,17 @@ export function Styleguide(): JSX.Element {
             <ScoreHero label="Latest score" score={null} absence="Not scored yet" meta={<span>No scan has produced a reading.</span>} />
           </div>
         </div>
-        <p className="sg-sub">Hero gradients, by score</p>
+        <p className="sg-sub">Hero gradients, by score — light, then dark</p>
         <div className="sg-ramp">
           {[5, 20, 35, 50, 65, 80, 95].map((s) => (
-            <div key={s} className="sg-ramp__step" style={{ background: heroGradient(s), color: 'var(--avp-ink-900)' }}>
+            <div key={s} className="sg-ramp__step" style={{ background: heroGradient(s, 'light'), color: 'var(--avp-paper-000)' }}>
+              {s}
+            </div>
+          ))}
+        </div>
+        <div className="sg-ramp" style={{ marginTop: 'var(--avp-space-2)' }}>
+          {[5, 20, 35, 50, 65, 80, 95].map((s) => (
+            <div key={s} className="sg-ramp__step" style={{ background: heroGradient(s, 'dark'), color: 'var(--avp-ink-900)' }}>
               {s}
             </div>
           ))}
@@ -180,7 +189,12 @@ export function Styleguide(): JSX.Element {
           ))}
         </div>
 
-        <p className="sg-sub">The dark ground — Epic 14</p>
+        <p className="sg-sub">The two grounds — light by default (Epic 15), dark by choice (Epic 14)</p>
+        <div className="sg-grid">
+          {Object.entries(light.surface).map(([k, v]) => (
+            <Swatch key={k} name={`surface-${k} (light)`} value={oklch(v)} />
+          ))}
+        </div>
         <div className="sg-grid">
           {Object.entries(dark.surface).map(([k, v]) => (
             <Swatch key={k} name={`surface-${k}`} value={oklch(v)} />

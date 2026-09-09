@@ -25,6 +25,9 @@ import {
   benchVar,
   semantic,
   dark,
+  light,
+  rampVars,
+  heroVars,
   BENCH_ACCENTS,
   BENCH_HUE_BUFFER,
   BENCH_FEASIBLE_ARC,
@@ -43,11 +46,16 @@ const css = readFileSync(fileURLToPath(new URL('../styles/tokens.css', import.me
  * left in `:root` would pass.
  */
 const ROOT_BLOCK = css.match(/:root\s*\{([\s\S]*?)\n\}/)![1]!;
-const LIGHT_BLOCK = css.match(/\[data-theme='light'\],\s*\.avp-report\s*\{([\s\S]*?)\n\}/)![1]!;
+const DARK_BLOCK = css.match(/\[data-theme='dark'\]\s*\{([\s\S]*?)\n\}/)![1]!;
+const REPORT_BLOCK = css.match(/\n\.avp-report\s*\{([\s\S]*?)\n\}/)![1]!;
 
-/** Pull a custom property value out of a theme block (the dark `:root` by default). */
-function cssVar(name: string, scope: 'root' | 'light' = 'root'): string | null {
-  const block = scope === 'root' ? ROOT_BLOCK : LIGHT_BLOCK;
+/**
+ * Pull a custom property value out of ONE scope — Epic 15: `:root` is the
+ * light default, `[data-theme='dark']` the opt-in, `.avp-report` the paper
+ * system. The report block must not share a selector with a theme.
+ */
+function cssVar(name: string, scope: 'root' | 'dark' | 'report' = 'root'): string | null {
+  const block = scope === 'root' ? ROOT_BLOCK : scope === 'dark' ? DARK_BLOCK : REPORT_BLOCK;
   const m = block.match(new RegExp(`--avp-${name}:\\s*([^;]+);`));
   return m ? m[1]!.trim() : null;
 }
@@ -65,28 +73,32 @@ describe('token parity: TS <-> CSS', () => {
     for (const [key, value] of Object.entries(group)) {
       it(`--avp-${prefix}-${key} matches the TS token`, () => {
         expect(cssVar(`${prefix}-${key}`)).toBe(oklch(value));
-        expect(cssVar(`${prefix}-${key}`, 'light')).toBeNull();
+        expect(cssVar(`${prefix}-${key}`, 'dark')).toBeNull();
+        expect(cssVar(`${prefix}-${key}`, 'report')).toBeNull();
       });
     }
   }
 
-  // The PAPER palette is the report's, scoped to it.
+  // The LIGHT theme is :root — the default, Epic 15.
   for (const [prefix, group] of [
-    ['beacon', beacon],
-    ['signal', signal],
+    ['beacon', light.beacon],
+    ['signal', light.signal],
     ['bench', bench],
-    ['vis', visibility],
-    ['', semantic],
+    ['vis', light.visibility],
+    ['surface', light.surface],
+    ['text', light.text],
+    ['line', light.line],
+    ['', light.semantic],
   ] as const) {
     for (const [key, value] of Object.entries(group)) {
       const name = prefix === '' ? key : `${prefix}-${key}`;
-      it(`--avp-${name} (paper) matches the TS token in the report scope`, () => {
-        expect(cssVar(name, 'light')).toBe(oklch(value));
+      it(`--avp-${name} (light) matches the TS token in :root`, () => {
+        expect(cssVar(name)).toBe(oklch(value));
       });
     }
   }
 
-  // The DARK identity is :root.
+  // The DARK theme is the opt-in block.
   for (const [prefix, group] of [
     ['beacon', dark.beacon],
     ['signal', dark.signal],
@@ -99,17 +111,49 @@ describe('token parity: TS <-> CSS', () => {
   ] as const) {
     for (const [key, value] of Object.entries(group)) {
       const name = prefix === '' ? key : `${prefix}-${key}`;
-      it(`--avp-${name} (dark) matches the TS token in :root`, () => {
-        expect(cssVar(name)).toBe(oklch(value));
+      it(`--avp-${name} (dark) matches the TS token in [data-theme='dark']`, () => {
+        expect(cssVar(name, 'dark')).toBe(oklch(value));
       });
     }
   }
 
-  it('every paper override has a dark counterpart in :root, so no token is theme-only', () => {
+  // The PAPER system is the report's, Epic 0's values, and no theme's.
+  for (const [prefix, group] of [
+    ['beacon', beacon],
+    ['signal', signal],
+    ['bench', bench],
+    ['vis', visibility],
+    ['', semantic],
+  ] as const) {
+    for (const [key, value] of Object.entries(group)) {
+      const name = prefix === '' ? key : `${prefix}-${key}`;
+      it(`--avp-${name} (paper) matches the TS token in .avp-report`, () => {
+        expect(cssVar(name, 'report')).toBe(oklch(value));
+      });
+    }
+  }
+
+  it('every override in the dark and report blocks has a default in :root, so no token is scope-only', () => {
     const declared = (block: string) => [...block.matchAll(/^\s*--avp-([a-z0-9-_]+):/gm)].map((m) => m[1]!);
     const root = new Set(declared(ROOT_BLOCK));
-    const missing = declared(LIGHT_BLOCK).filter((name) => !root.has(name));
-    expect(missing).toEqual([]);
+    expect(declared(DARK_BLOCK).filter((name) => !root.has(name))).toEqual([]);
+    expect(declared(REPORT_BLOCK).filter((name) => !root.has(name))).toEqual([]);
+  });
+
+  it('scopes the paper system to the report alone — no theme attribute shares its rule', () => {
+    // Epic 15's separation. A selector meaning both "the report" and "light
+    // mode" is how the theme toggle would reach the document.
+    expect(css).not.toMatch(/\[data-theme='light'\]/);
+    expect(css).toMatch(/\n\.avp-report\s*\{/);
+    // And the report block is declared AFTER the dark block, so it wins at
+    // equal specificity when the document sits inside a dark app.
+    expect(css.indexOf("[data-theme='dark']")).toBeLessThan(css.indexOf('\n.avp-report {'));
+  });
+
+  it('defaults to light and keeps the dark theme whole', () => {
+    expect(ROOT_BLOCK).toMatch(/color-scheme:\s*light/);
+    expect(DARK_BLOCK).toMatch(/color-scheme:\s*dark/);
+    expect(REPORT_BLOCK).toMatch(/color-scheme:\s*light/);
   });
 });
 
@@ -161,6 +205,25 @@ describe('heroGradient', () => {
       const l = Number(heroGradient(s).match(/oklch\(([\d.]+)/)![1]);
       expect(l).toBeGreaterThanOrEqual(0.7);
     }
+  });
+
+  it('caps lightness on the light ground, so the same figure is legible on white — Epic 15', () => {
+    for (const s of [0, 10, 30, 50, 70, 100]) {
+      const stops = [...heroGradient(s, 'light').matchAll(/oklch\(([\d.]+)/g)].map((m) => Number(m[1]));
+      expect(stops).toHaveLength(2);
+      for (const l of stops) expect(l).toBeLessThanOrEqual(0.62);
+    }
+  });
+
+  it('carries both themes on the element, and the stylesheet picks — never JavaScript', () => {
+    const vars = heroVars(64);
+    expect(vars['--avp-hero-gradient-light']).toBe(heroGradient(64, 'light'));
+    expect(vars['--avp-hero-gradient-dark']).toBe(heroGradient(64, 'dark'));
+    expect(vars['--avp-hero-glow-light']).toBe(visibilityColor(64));
+    expect(vars['--avp-hero-glow-dark']).toBe(visibilityColorDark(64));
+    const ramp = rampVars(64);
+    expect(ramp['--avp-ramp-light']).toBe(visibilityColor(64));
+    expect(ramp['--avp-ramp-dark']).toBe(visibilityColorDark(64));
   });
 
   it('is deterministic', () => {
@@ -781,19 +844,24 @@ describe('seriesStyle is where the two contexts diverge', () => {
     }
   });
 
-  it('draws competitors from the DARK bench on a Working screen — Epic 14', () => {
+  it('draws competitors from the bench CUSTOM PROPERTIES on a Working screen — Epic 15', () => {
+    // A literal would be right in one theme and wrong in the other; the
+    // property resolves per theme in the stylesheet.
     for (let i = 0; i < 6; i++) {
-      expect(seriesStyle('competitor', i, 'working').fill).toBe(benchColorDark(i));
+      expect(seriesStyle('competitor', i, 'working').fill).toBe(benchVar(i));
       expect(seriesStyle('competitor', i, 'working').fill).not.toBe(benchColor(i));
+      expect(seriesStyle('competitor', i, 'working').fill).not.toBe(benchColorDark(i));
     }
   });
 
   it('gives the client beacon in BOTH contexts — one brand, one hue', () => {
-    // Epic 14: the same hue in both, the paper stop on the report and the
-    // electric stop on the dark Working ground.
+    // The paper literal on the report, because its fills land in PDFs; the
+    // custom property on a Working screen, so the line follows the theme
+    // (Epic 15). Same hue in every scope.
     expect(seriesStyle('subject', 0, 'report').fill).toBe(oklch(beacon['600']));
-    expect(seriesStyle('subject', 0, 'working').fill).toBe(oklch(dark.beacon['600']));
+    expect(seriesStyle('subject', 0, 'working').fill).toBe('var(--avp-beacon-600)');
     expect(beacon['600'][2]).toBe(dark.beacon['600'][2]);
+    expect(beacon['600'][2]).toBe(light.beacon['600'][2]);
     for (const palette of ['report', 'working'] as const) {
       expect(seriesStyle('subject', 3, palette).isSubject).toBe(true);
     }

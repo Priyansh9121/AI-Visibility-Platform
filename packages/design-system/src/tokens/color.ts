@@ -245,6 +245,66 @@ export const dark = {
   },
 } as const satisfies Record<string, Record<string, Oklch>>;
 
+/**
+ * THE LIGHT THEME — Epic 15, the default.
+ *
+ * Epic 14 made dark the product's only identity; the founder reversed that
+ * after living with it, and light is the default again — not Epic 0's paper
+ * system, which stays the report's alone, but a light theme in Epic 14's
+ * visual language: the same shape lock, display face, card grid and hero on
+ * a warm off-white ground with white cards. The ramp is Epic 0's (it was
+ * drawn for a light ground); beacon and signal are deeper than the dark
+ * theme's stops so white text clears 4.5:1 on them, and the bench is the
+ * light table `bench` already holds. `dark` above is now the opt-in.
+ */
+export const light = {
+  surface: {
+    sunken: [0.955, 0.008, 75],
+    ground: [0.975, 0.006, 75],
+    seated: [0.995, 0.004, 75],
+    raised: [1, 0, 0],
+    void: [0.925, 0.01, 75],
+  },
+  text: {
+    primary: [0.185, 0.026, 265],
+    body: [0.285, 0.022, 265],
+    secondary: [0.47, 0.018, 265],
+    tertiary: [0.56, 0.014, 75],
+  },
+  line: {
+    hairline: [0.91, 0.01, 75],
+    strong: [0.85, 0.012, 75],
+    ink: [0.285, 0.022, 265],
+  },
+  visibility: {
+    '00': [0.42, 0.045, 35],
+    '25': [0.545, 0.115, 45],
+    '50': [0.655, 0.135, 65],
+    '75': [0.735, 0.125, 150],
+    '100': [0.815, 0.115, 195],
+  },
+  beacon: {
+    '050': [0.965, 0.018, 200],
+    '100': [0.925, 0.038, 200],
+    '400': [0.72, 0.11, 200],
+    '600': [0.53, 0.09, 200],
+    '700': [0.46, 0.078, 200],
+  },
+  signal: {
+    '050': [0.96, 0.03, 155],
+    '100': [0.92, 0.06, 155],
+    '400': [0.7, 0.15, 155],
+    '600': [0.53, 0.125, 155],
+    '700': [0.46, 0.11, 155],
+  },
+  semantic: {
+    success: [0.55, 0.12, 150],
+    warn: [0.7, 0.13, 75],
+    danger: [0.55, 0.17, 25],
+    info: [0.53, 0.09, 200],
+  },
+} as const satisfies Record<string, Record<string, Oklch>>;
+
 const DARK_VISIBILITY_STOPS: readonly (readonly [number, Oklch])[] = [
   [0, dark.visibility['00']],
   [25, dark.visibility['25']],
@@ -263,22 +323,74 @@ export function visibilityColorDark(score: number, alpha = 1): string {
   return oklch(visibilityAtDark(score), alpha);
 }
 
+/** Legible label colour for text sitting on a DARK-ramp fill — same rule, other ramp. */
+export function onVisibilityDark(score: number): string {
+  return visibilityAtDark(score)[0] >= 0.62 ? oklch(ink['900']) : oklch(paper['000']);
+}
+
 /**
- * The gradient a hero figure is set in — Epic 14.
+ * The gradient a hero figure is set in — Epic 14, and per theme from Epic 15.
  *
  * The founder asked for gradient hero numbers; the palette's organising idea
  * is that visibility is luminance. This is both: the gradient is DERIVED from
- * the ramp at the score, running from that stop to a lighter, slightly more
- * chromatic version of the same hue. A 12 glows dim clay, an 88 glows lit
- * cyan, and the figure still says what the meter beside it says. Lightness is
- * floored so the numeral clears the dark ground at every score — it is text
- * here, and text has to be read.
+ * the ramp at the score, in the same hue. A 12 glows dim clay, an 88 glows
+ * lit cyan, and the figure still says what the meter beside it says.
+ *
+ * It is TEXT, so it has to be read against its ground, and the two grounds
+ * pull in opposite directions: on dark the ramp is lifted to a floor of
+ * L 0.70 and runs lighter; on light it is capped at L 0.62 — the same
+ * threshold `onVisibility` uses — and runs deeper. Which one is shown is
+ * decided in CSS by the theme attribute (`heroVars`), never by JavaScript
+ * reading the theme, so a switch in Settings repaints the figure in place.
  */
-export function heroGradient(score: number): string {
+export function heroGradient(score: number, theme: 'dark' | 'light' = 'dark'): string {
+  if (theme === 'light') {
+    const [l, c, h] = visibilityAt(score);
+    const from: Oklch = [Math.min(l, 0.62), Math.min(c + 0.02, 0.19), h];
+    const to: Oklch = [Math.max(from[0] - 0.14, 0.3), Math.max(c - 0.01, 0.04), h];
+    return `linear-gradient(135deg, ${oklch(from)}, ${oklch(to)})`;
+  }
   const [l, c, h] = visibilityAtDark(score);
   const from: Oklch = [Math.max(l, 0.7), Math.min(c + 0.02, 0.19), h];
   const to: Oklch = [Math.min(from[0] + 0.15, 0.93), Math.max(c - 0.02, 0.05), h];
   return `linear-gradient(135deg, ${oklch(from)}, ${oklch(to)})`;
+}
+
+/**
+ * THEME-REACTIVE RAMP PAINT — Epic 15.
+ *
+ * A ramp colour is interpolated per score, so it cannot be a token; it has
+ * always been an inline literal. With two themes an inline literal is wrong
+ * in one of them — the dark ramp's lit end is unreadable on white, the paper
+ * ramp's absent end vanishes on charcoal. So a Working-screen element
+ * carries BOTH literals as custom properties and the class `avp-ramp`, and
+ * `components.css` picks one by the theme attribute:
+ *
+ *   .avp-ramp                    { --avp-ramp: var(--avp-ramp-light) }
+ *   [data-theme='dark'] .avp-ramp { --avp-ramp: var(--avp-ramp-dark) }
+ *
+ * Paint then reads `var(--avp-ramp)` (and `var(--avp-on-ramp)` for a label
+ * on the fill), and a theme switch repaints without a render. The report
+ * never uses this: its figures read `visibilityColor` directly and live
+ * inside the paper scope, which has one ramp.
+ */
+export function rampVars(score: number): Record<string, string> {
+  return {
+    '--avp-ramp-light': visibilityColor(score),
+    '--avp-ramp-dark': visibilityColorDark(score),
+    '--avp-on-ramp-light': onVisibility(score),
+    '--avp-on-ramp-dark': onVisibilityDark(score),
+  };
+}
+
+/** The hero's gradient and glow, both themes, picked in CSS the same way. */
+export function heroVars(score: number): Record<string, string> {
+  return {
+    '--avp-hero-gradient-light': heroGradient(score, 'light'),
+    '--avp-hero-gradient-dark': heroGradient(score, 'dark'),
+    '--avp-hero-glow-light': visibilityColor(score),
+    '--avp-hero-glow-dark': visibilityColorDark(score),
+  };
 }
 
 /* ------------------------------------------------------------------ *
@@ -359,14 +471,18 @@ export function seriesStyle(
   palette: SeriesPalette = 'report',
 ): { fill: string; pattern: CompetitorPattern; isSubject: boolean } {
   if (role === 'subject') {
-    // One brand, one HUE, everywhere: beacon at 200 in both contexts. On the
-    // dark Working ground it is the electric stop; on paper it is the deep one.
-    const fill = palette === 'working' ? oklch(dark.beacon['600']) : oklch(beacon['600']);
+    // One brand, one HUE, everywhere: beacon at 200 in every context. On the
+    // report it is the paper literal, because the report's fills land in
+    // PDFs. On a Working screen it is the CUSTOM PROPERTY — Epic 15 — so the
+    // line follows the theme: the deep stop on the light ground, the
+    // electric stop on the dark one. `var()` is valid in SVG presentation
+    // attributes in every browser this product supports.
+    const fill = palette === 'working' ? 'var(--avp-beacon-600)' : oklch(beacon['600']);
     return { fill, pattern: 'solid', isSubject: true };
   }
   const pattern = COMPETITOR_PATTERNS[index % COMPETITOR_PATTERNS.length]!;
   if (palette === 'working') {
-    return { fill: benchColorDark(index), pattern, isSubject: false };
+    return { fill: benchVar(index), pattern, isSubject: false };
   }
   const keys = ['1', '2', '3', '4', '5'] as const;
   return { fill: oklch(competitor[keys[index % keys.length]!]), pattern, isSubject: false };

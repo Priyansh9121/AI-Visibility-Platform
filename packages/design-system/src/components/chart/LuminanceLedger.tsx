@@ -12,7 +12,7 @@ import {
   type LedgerDimension,
 } from './ledgerLayout.js';
 import { ChartFrame } from './ChartFrame.js';
-import { onVisibility, visibilityColorDark, type SeriesPalette } from '../../tokens/color.js';
+import { onVisibility, rampVars, type SeriesPalette } from '../../tokens/color.js';
 import { cn } from '../../lib/cn.js';
 import { prefersReducedMotion } from '../../lib/motion.js';
 import { useRevealOnIntersect } from '../../lib/useRevealOnIntersect.js';
@@ -120,11 +120,12 @@ export interface LuminanceLedgerProps {
    * report never opts in, so a document rendered by someone who has never read
    * this file gets the paper ramp its PDF has always carried.
    *
-   * On a Working screen the lit segments take the DARK ramp
-   * (`visibilityColorDark`): same five hues, same direction, lifted so the
-   * "absent" end reads as dim-but-present against near-black rather than as a
-   * hole. The identity is untouched — only the paint changes, and the label
-   * colour on each segment is still resolved from the segment's own lightness.
+   * On a Working screen the lit segments take the THEME-REACTIVE ramp
+   * (`rampVars`, Epic 15): the paper ramp on the light default, the lifted
+   * dark ramp under `[data-theme='dark']`, picked in the stylesheet so a
+   * switch repaints in place. The identity is untouched — only the paint
+   * changes, and the label colour on each segment is still resolved from the
+   * segment's own lightness in whichever ramp is showing.
    */
   palette?: SeriesPalette;
   className?: string;
@@ -425,9 +426,10 @@ export function LuminanceLedger({
                   y={seg.litY}
                   width={columnWidth}
                   height={seg.litHeight}
-                  fill={palette === 'working' ? visibilityColorDark(seg.subscore) : seg.color}
-                  className="avp-ledger__lit"
+                  fill={seg.color}
+                  className={cn('avp-ledger__lit', palette === 'working' && 'avp-ramp')}
                   style={{
+                    ...(palette === 'working' ? rampVars(seg.subscore) : {}),
                     transformOrigin: `${columnX + columnWidth / 2}px ${seg.y + seg.height}px`,
                     transform: revealed ? 'scaleY(1)' : 'scaleY(0)',
                     ...stagger,
@@ -473,9 +475,13 @@ export function LuminanceLedger({
                     x={columnX + columnWidth / 2}
                     y={seg.litY + Math.min(seg.litHeight, seg.height) / 2 + 4}
                     textAnchor="middle"
-                    className="avp-ledger__value"
+                    className={cn('avp-ledger__value', palette === 'working' && 'avp-ramp')}
                     fill={onVisibility(seg.subscore)}
-                    style={{ opacity: revealed ? 1 : 0, ...stagger }}
+                    style={{
+                      ...(palette === 'working' ? rampVars(seg.subscore) : {}),
+                      opacity: revealed ? 1 : 0,
+                      ...stagger,
+                    }}
                   >
                     {Math.round(seg.subscore)}
                   </text>

@@ -5,7 +5,7 @@
 
 import { useEffect, useState, type CSSProperties, type JSX, type ReactNode } from 'react';
 import { cn } from '../lib/cn.js';
-import { heroGradient, visibilityBand, visibilityColorDark } from '../tokens/color.js';
+import { heroVars, visibilityBand } from '../tokens/color.js';
 import { visibilityBandLabel } from './Badge.js';
 import { prefersReducedMotion } from '../lib/motion.js';
 
@@ -93,13 +93,9 @@ export function ScoreHero({
   const empty = score === null || Number.isNaN(score);
   const rounded = empty ? null : Math.round(Math.max(0, Math.min(100, score as number)));
 
+  // Both themes' gradient and glow; the stylesheet picks by theme — Epic 15.
   const style: CSSProperties | undefined =
-    rounded === null
-      ? undefined
-      : ({
-          '--avp-hero-gradient': heroGradient(rounded),
-          '--avp-hero-glow': visibilityColorDark(rounded),
-        } as CSSProperties);
+    rounded === null ? undefined : (heroVars(rounded) as CSSProperties);
 
   return (
     <section

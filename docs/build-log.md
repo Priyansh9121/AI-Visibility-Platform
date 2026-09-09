@@ -14109,3 +14109,121 @@ rendered from the report fixture against the compiled stylesheet and
 screenshotted — `docs/screenshots/epic-14/after-report-route-framed.png`,
 `after-share-route-framed.png` — the same fixture-render path Epic 14
 recorded, because a signed-in session is still not reachable from here.
+
+# Epic 15 — light by default, dark by choice: Epic 14's default reversed on purpose
+
+**2026-09-09.** Governance line, per north-star.md §8.1: the design-system
+token and component layer (`packages/design-system`), the web shell's
+provider and Settings (`apps/web/src/components/shell`, `settings`), and
+`layout.tsx`. No lifecycle phase. The report and the PDF path are untouched
+and the tests that hold that are extended, not relaxed.
+
+## What is being reversed, and by whom
+
+Epic 14 — committed earlier today — made dark the product's *only*
+identity, on the founder's decision, and `design-direction.md` §7 recorded
+why. Having looked at the live dark build, **the founder reversed the
+default**: light is the default for every Working screen, and Epic 14's
+dark identity is kept whole as an opt-in a user chooses in Settings. This
+entry names that the way Epic 14's named its reversal of Epic 0, and the way
+Epic 13's named its reversal of 9.20: §7's reasoning stands and is not
+deleted; §7's premise that dark is "the identity, not an opt-in" is
+superseded, and `design-direction.md` §8 says so beside it.
+
+## Two things the brief asked to confirm, decided rather than assumed
+
+The founder was not available mid-task, so both were decided in the
+direction the brief itself leaned, and both are cheap to reverse.
+
+**"Light" means Epic 14's language on a light ground, not Epic 0's paper.**
+The brief steered here — keep the shape lock and the display face, do not
+revert typography — and Epic 0's paper system is now the *report's* skin,
+which the toggle must never reach. So `:root` is a warm off-white ground
+(`oklch(0.975 0.006 75)`), the sidebar one step below it, white cards, the
+same 16px / 8px shape lock, Space Grotesk on every heading and figure, the
+same card grid and hero. If the founder meant "revert to Epic 0", the
+difference is one token block: `:root` takes the paper values and nothing
+else here moves.
+
+**Three options, not two.** Light (the default), Dark, Match system. Three
+is the superset; dropping the third is a one-line change. `defaultTheme` is
+`light`, not `system`, because the founder's decision is that light is the
+default and following the OS is a choice rather than the starting point.
+
+## The restructure — deliberate, not a find-replace
+
+`tokens.css` now has three scopes: `:root` (light), `[data-theme='dark']`
+(Epic 14, verbatim), and `.avp-report` (Epic 0's paper, verbatim). The
+report block used to be `[data-theme='light'], .avp-report` — one selector
+meaning both "the report" and "light mode", which is exactly the seam
+through which an app-level toggle would have reached the document. It is
+scoped to the report's root class alone now, declared after the dark block
+so it wins at equal specificity when a document sits inside a dark app.
+`tokens.test.ts` was rewritten for three scopes: each value is read from
+the block it belongs to (a `light` table joins `dark` in `color.ts`), every
+override in the dark and report blocks must have a default in `:root`, and
+**no theme attribute may share the report's rule** — a comment naming the
+old selector tripped that test on the first run, which is what it is for.
+
+**The light beacon is inside sRGB, and Epic 0's was not.** Hue 200 has a
+chroma ceiling of 0.09 at L 0.53; Epic 0's `beacon-600` at 0.125 has been
+clamped by every browser since Epic 0 without anyone measuring it. The
+light stop is `oklch(0.53 0.09 200)`, white text clears 4.8:1 on it, and
+the report keeps its own literal because its fills land in PDFs.
+
+## Paint that cannot be a token, made theme-reactive
+
+A score's ramp colour is interpolated per value, so it has always been an
+inline literal — and with two themes a literal is wrong in one of them: the
+dark ramp's lit end is unreadable on white, the paper ramp's absent end
+vanishes on charcoal. `rampVars(score)` puts BOTH literals on the element
+as custom properties, class `avp-ramp` lets the stylesheet pick one by the
+theme attribute, and paint reads `var(--avp-ramp)`. A switch in Settings
+repaints in place with no render and no JavaScript reading the theme. Used
+by `ScoreMeter`, `NavScore`, the sidebar's dots, and the Ledger's Working
+palette; `heroVars()` does the same for the hero's gradient and glow, with
+`heroGradient(score, theme)` floored at L 0.70 on dark and capped at L 0.62
+on light — `onVisibility`'s own threshold — so the figure is legible on
+either ground. The hero's delta got the same treatment after the light
+render showed "+0.7" in lit cyan on white: `--avp-delta-up/down`, beacon's
+deep stop and the ramp's ember on light, the ramp's two ends on dark.
+
+Series paint on Working charts became custom properties outright:
+`seriesStyle(…, 'working')` returns `var(--avp-beacon-600)` and
+`benchVar(i)`, which `design-system.md` §6 already asked of chrome that
+must follow a theme switch, and `render.test.tsx` asserts the property
+rather than a literal.
+
+## The provider and the control
+
+`next-themes` (MIT, added to `apps/web`) per `pick-ui-library`'s guidance
+for theme switching with no flash on load, rather than hand-rolling it. It
+writes `data-theme` on `<html>` from a synchronous inline script before
+hydration — the mechanism `layout.tsx`'s `MOTION_READY` already relies on.
+Stored in the browser under `avp.theme`, not on the account: it is a
+preference about this screen. `ThemeControl` sits in a new Appearance
+section of Settings as three `aria-pressed` buttons in a labelled group —
+a three-way choice is not a toggle and a sun does not say "match system" —
+and reads the choice only after mount so hydration cannot disagree with
+the server's markup.
+
+## Verified
+
+Design system **601/601** (538 + 63 new, mostly the three-scope parity),
+web **802/802**, both typechecks clean. Every key screen rendered from the
+repo's fixtures in BOTH themes against the compiled stylesheet and
+screenshotted — `docs/screenshots/epic-15/`, light and dark pairs — plus
+the report inside a light app and a dark app, identical in both, and the
+styleguide live with its toggle. The same fixture-render path as Epics 14
+and 14.1, for the same reason: a signed-in session is not reachable from
+here. The live behaviour still owed a real look: the first paint after a
+reload in the dark choice (the inline script should make it flash-free),
+and "Match system" following an OS change.
+
+**IP-safety check passed:** no competitor product, screenshot, markup or
+stylesheet was opened or referenced; the light theme was derived from Epic
+14's own tokens and the five scoring dimensions; one dependency added,
+`next-themes` 0.4.6 (MIT), recorded here; the report renders no bench
+token, no working palette, no hero and no theme attribute
+(`reportIsolation.test.ts`, `ReportView.test.tsx`, `tokens.test.ts`);
+nothing here stores or renders third-party prose.

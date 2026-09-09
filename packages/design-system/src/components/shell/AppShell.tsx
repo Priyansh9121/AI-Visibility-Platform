@@ -1,6 +1,6 @@
 import type { JSX, ReactNode } from 'react';
 import { cn } from '../../lib/cn.js';
-import { benchAccent, visibilityColorDark } from '../../tokens/color.js';
+import { benchAccent, rampVars } from '../../tokens/color.js';
 import { visibilityBandLabel } from '../Badge.js';
 
 export interface NavItemProps {
@@ -309,9 +309,9 @@ export function NavSubItem({ href, label, current, score, note }: NavSubItemProp
     >
       {known && (
         <span
-          className={cn('avp-nav__dot', !scored && 'avp-nav__dot--empty')}
+          className={cn('avp-nav__dot', scored && 'avp-ramp', !scored && 'avp-nav__dot--empty')}
           aria-hidden="true"
-          style={scored ? { background: visibilityColorDark(score as number) } : undefined}
+          style={scored ? rampVars(score as number) : undefined}
         />
       )}
       <span className="avp-nav__sublabel">{label}</span>
@@ -387,7 +387,7 @@ export function NavScore({ score, className }: NavScoreProps): JSX.Element {
   const rounded = Math.round(Math.max(0, Math.min(100, score)));
   return (
     <p className={cn('avp-navscore', className)}>
-      <span className="avp-navscore__numeral" style={{ color: visibilityColorDark(rounded) }}>
+      <span className="avp-navscore__numeral avp-ramp" style={rampVars(rounded)}>
         {rounded}
         <span className="avp-navscore__denominator">/100</span>
       </span>
