@@ -115,22 +115,33 @@ Concretely, for this document:
 > document, a positioning claim, or a "competitors don't have X" assertion
 > without re-verifying first.
 
-### 2.1 The per-vendor feature detail — [GAP: not transcribed]
+### 2.1 The per-vendor feature detail — [WEB-SOURCED, dated 2026-09-09]
 
-**The specific feature lists for Searchable, AIClicks and PromptWatch are NOT
-recorded here, because they exist only in the source conversation and are not
-present anywhere in this repository.**
+**Status change from the original [GAP: not transcribed].** The rows in §2.2
+below are now filled, but from a **different source than the founder's live
+navigation** originally requested: they are compiled from each vendor's public
+marketing pages, product docs, and third-party reviews (G2, Trustpilot,
+Trakkr, Clutch, and independent GEO-tool review blogs), retrieved via web
+search on **2026-09-09**. Per-source citations are listed under the table.
 
-Writing them from a summary of a conversation would reproduce exactly the
-failure mode this document exists to prevent — an unverifiable claim, written
-down with the authority of a doc, quoted confidently six epics later by someone
-who has no way to check it. Worse, competitor claims are the category where
-being wrong is most expensive: they drive build decisions and end up in sales
-language.
+**This does not upgrade the row to the same status as founder-sourced content
+elsewhere in §2, and it is not a substitute for the founder's own hands-on
+navigation.** Treat it as a distinct, citable, but still-external source with
+its own known weaknesses:
 
-**Action required from the founder:** paste the actual research notes into §2.2
-below, under the four category headings, attributed and dated. Until then this
-section carries the shape of the analysis but not its contents.
+- Marketing copy overstates; review-site content can be sponsored, dated, or
+  reflect a version of the product that has since changed.
+- Two sources materially disagreed on Searchable's content-generation
+  capability (see the row note) — this is recorded, not resolved, because
+  resolving it requires either live product access or founder judgement.
+- None of this is a substitute for `ip-safety.md` #1/#5: nothing below
+  describes a screen, a flow, or any code — only claimed capability, per the
+  bucket definitions in §2.2.
+
+**Still open:** the founder's own live-navigation research, which would be the
+higher-trust source `2.1` was originally scoped for. If it's ever produced, it
+should sit alongside this table, not silently replace it — the two are
+different kinds of evidence and both are worth keeping.
 
 ### 2.2 The four categories the analysis is organised by — [DECIDED shape]
 
@@ -144,15 +155,28 @@ into four buckets. This framing is the durable part; the per-vendor rows are not
 | **Content / distribution** | Producing and publishing material intended to change the above |
 | **Outreach / agent tooling** | Getting the finding in front of a human who will act on it, and whatever is labelled "agent" |
 
-*(Founder: fill each row with the per-vendor detail from your own research, with
-a date. Leave a vendor blank rather than guessing.)*
-
 | Category | Searchable | AIClicks | PromptWatch |
 |---|---|---|---|
-| Visibility / insight | *(to be filled from founder research)* | *(to be filled)* | *(to be filled)* |
-| Sources / citations | *(to be filled)* | *(to be filled)* | *(to be filled)* |
-| Content / distribution | *(to be filled)* | *(to be filled)* | *(to be filled)* |
-| Outreach / agent tooling | *(to be filled)* | *(to be filled)* | *(to be filled)* |
+| **Visibility / insight** | Tracks mentions, share of voice, avg. position, and sentiment across ChatGPT, Gemini, Perplexity, and Google AI Overviews; refreshed on a recurring cadence; scores an "AI Visibility Score." Explicitly narrower than a full SEO suite — no keyword rank tracking, backlink research, or technical SEO audit. | Tracks mentions/positioning across 8–10+ engines (ChatGPT, Perplexity, Gemini, Google AI, Claude, Grok, Mistral, DeepSeek, Meta AI, Copilot, TikTok AI per various listings — vendor claims are inconsistent on the exact count). Distinguishing feature: centralizes and versions prompts like a structured, trackable "prompt CMS" rather than loose docs/chats. Offers country-level/localized tracking. | Distinguishing feature: tracks **real user prompts**, not keyword abstractions, and states it collects data by scraping the actual consumer chat UIs (ChatGPT, Gemini, AI Overviews, Perplexity), not only official APIs — meaning it captures what a real user would see, which can differ from an API response. ~24hr refresh cycle. Includes "Agent Analytics" — tracking real AI-crawler (GPTBot, etc.) visits to a site as a leading indicial signal. |
+| **Sources / citations** | Explicitly separates "who gets named" from "who gets cited," surfacing citation gaps scored as prioritized Opportunities by impact/severity. Includes an "AI Crawler Setup" check confirming bots (OAI-SearchBot, PerplexityBot) can actually access the site — a baseline check, not just an outcome metric. | Connects citations back to source domains ("source intelligence"); no public detail found on citation-authority weighting or a distinct citation-graph feature (Epic 10 on our own roadmap lists "Citation authority graph" as a not-yet-built moat feature — this may be a genuine gap across all three vendors, not just internal). | Citation analysis extends to **off-site/earned media** — Reddit threads, YouTube videos, third-party domains — not just the client's own site. This is broader than the other two as documented; positioned as showing "why AI cites X instead of you" rather than only "does AI cite you." |
+| **Content / distribution** | **Conflicting claims across sources.** Independent reviews (Search Atlas) state Searchable does **not** deploy fixes or generate content — findings convert to human tasks only. Searchable's own marketing copy claims a "content engine" that generates blog posts/landing pages "engineered for AI citation." Not resolved here — flagged as a discrepancy to verify directly rather than build against. | Has both an automated and a managed layer: the **software** tier includes AI blog generation as part of its plan; a separate **paid managed-services tier ($1,699+/mo)** adds a human team that writes content, fixes gaps, and delivers a monthly action plan. Notable: part of "AIClicks" is literally a services business, not pure software. | "Optimize" tool gives content-improvement suggestions on existing pages; content briefs can be configured with live web screenshots, search results, and news context. Maps existing content against AI answers to show coverage vs. gaps (closer to our own "Why engine" concept in Epic 12, not yet built by us either). |
+| **Outreach / agent tooling** | "Actions" feature converts findings into a prioritized task list (by impact/severity), exportable to a connected project-management tool — implementation is always human-executed, never auto-deployed. Markets a "personal AI agent" that reportedly learns brand voice/products/goals over time, though no independent review corroborates this beyond the vendor's own site. | Managed-services layer functions as the "outreach" mechanism — a human account team rather than agentic tooling. No MCP or agent-protocol integration found in public docs. | Publishes an API for programmatic access to visibility/citation data and explicitly supports **MCP (Model Context Protocol)** for structured tool-to-tool communication — the only one of the three with a documented agent-protocol integration. Also offers a JS tracking snippet plus server-log analysis for enterprise-grade AI-crawler detection. |
+
+**Sourcing note on scale claims (treat as vendor-reported, not verified):**
+AIClicks claims 900+ tracked brands and 400+ agencies (~40% of its customer
+base) as of an August 2026 write-up. PromptWatch claims figures ranging from
+1,840 organisations to 7,000+ brands depending on the source and date, plus a
+€6M seed round and €2M ARR reported around September 2025 — the spread between
+those two brand-count figures was not reconciled and should not be quoted as a
+single number.
+
+**Sources (retrieved 2026-09-09):** searchable.com (marketing + pricing +
+features pages), searchatlas.com/blog/searchable-ai-review, g2.com (Searchable
+and AIclicks review pages), trustpilot.com/review/aiclicks.io,
+trakkr.ai/reviews/aiclicks-review, clutch.co/profile/aiclicks,
+docs.aiclicks.io, citedindex.com/aiclicks, promptwatch.com (about + product
+pages), and independent review posts on aiso.blog, generatemore.ai, radarkit.ai,
+brandonleuangpaseuth.com, ai-search-tools.com, and indexly.ai.
 
 ### 2.3 The cross-cutting observation — [DECIDED, as an analytical conclusion]
 
@@ -901,7 +925,10 @@ worthless if unread.
 Three specific decay risks, named so they are noticed:
 
 1. **§2 is a snapshot with no expiry date on it.** Competitor products change.
-   Its per-vendor detail is not even filled in yet (§2.1).
+   §2.1 was filled 2026-09-09, but from web-sourced material, not the founder's
+   own live navigation — see §2.1's status note. That fill has its own expiry:
+   marketing pages and reviews are wrong less obviously than a blank cell, which
+   makes them easier to trust past their shelf life.
 2. **§5's numbers are pre-customer and will be wrong.** The question is not
    *whether* they change but whether anyone updates them when they do.
 3. **§3's build-status claims were verified on 2026-08-27 and start decaying
@@ -913,3 +940,123 @@ Three specific decay risks, named so they are noticed:
 **The whole reason this document exists is that a decision living only in a
 conversation is a liability with a delay fuse. A document that stops being true
 is the same liability, wearing a doc's authority.**
+
+---
+
+## 9. Research literature and upgrade candidates — [WEB-SOURCED, dated 2026-09-09]
+
+**Status: informational, not scoped.** Everything in this section is background
+material gathered from academic literature, competitor product research, and
+public video content. **Per §8.1, none of it is pre-scoped into a build order.**
+Every candidate below still needs its own brief stating which architectural
+layer (§3) and lifecycle phase (§6) it touches before anyone builds against it.
+This section exists so the research isn't lost, not to shortcut §8's discipline
+— the same caution §8.2 gives for this whole document applies doubly to a
+section that is, by its own admission, less vetted than the rest of it.
+
+### 9.1 Primary academic sources
+
+This is a young field — these four papers are close to the whole primary-source
+literature as of 2026-09-09, not a curated subset of a larger canon:
+
+- **Aggarwal et al., "GEO: Generative Engine Optimization"** (arXiv:2311.09735,
+  KDD 2024) — the foundational paper. Introduces generative engines as
+  synthesizing answers from multiple sources rather than ranking pages, and
+  reports GEO techniques boosting visibility up to 40% in its benchmark
+  (GEO-bench), with effectiveness varying by domain.
+- **Martinez, "Optimizing Visibility in Generative Engines: A Critical Survey
+  (2023–2026)"** (arXiv:2607.14035) — reviews 45 studies. **Read this one
+  first; it is the most directly useful paper for this product.** Its core
+  findings, load-bearing for §9.3 below: the foundational paper's 40% gain is
+  conditional on a source already being present in a fixed context and does not
+  establish organic discoverability; topical relevance and context position are
+  the most reproducible levers; citation-oriented rewrites can impair
+  retrieval; and commercial audits show low cross-engine source overlap and
+  substantial run-to-run variability.
+- **Kumar & Lakkaraju, "Manipulating Large Language Models to Increase Product
+  Visibility"** (arXiv:2404.07981, Harvard) — demonstrates that a "strategic
+  text sequence" embedded in a product page can raise its odds of being an
+  LLM's top recommendation. Relevant defensively (§9.3, item 5), not as a
+  technique to offer clients.
+- **"EcoGEO: Trajectory-Aware Evidence Ecosystems for Web-Enabled LLM Search
+  Agents"** (arXiv:2605.12887) — extends the manipulation question into
+  agent-search-trajectory modeling; cites consideration-set choice modeling
+  (Horowitz & Louviere, 1995) as a lens on how an LLM narrows candidates down to
+  the few it names, which bears on the Share of Voice dimension in
+  `scoring-spec.md`.
+
+### 9.2 Competitor set gap
+
+**Two additional direct competitors surfaced that are not in §2's set:**
+**Profound** and **Scrunch AI** (distinct from Scrunch Influencer Marketing, a
+different product under a similar name). Also relevant but a different
+competitive category: **Semrush's AI Toolkit** and **Keyword.com's AI Rank
+Tracker** — incumbent SEO platforms bolting AI-visibility tracking onto an
+existing suite, a different threat model than a visibility-only pure-play.
+**[OPEN]:** whether to extend §2.2's table to five-plus vendors, or keep the
+original three and track the rest separately, is a founder call, not resolved
+here.
+
+### 9.3 Upgrade candidates — each **[OPEN]**, none scoped
+
+1. **Run-to-run variability as a first-class signal, not noise.** The survey's
+   documented finding of substantial run-to-run variability in commercial
+   audits is currently invisible in this product's score: `scoring-spec.md`
+   computes one deterministic number from one `EngineResult` set. Running each
+   prompt multiple times per scan and surfacing a confidence range (or a
+   stability sub-metric) would measure something no competitor is documented
+   doing. **Touches:** Layer 2 (engine execution) and the scoring engine (§5.1
+   `scoring-spec.md`) — likely a large brief, given determinism requirement 1
+   ("no RNG... sort every collection by an explicit key") would need to extend
+   to multi-run aggregation without breaking reproducibility.
+2. **Paraphrase-robustness testing in prompt generation.** Since generic
+   heuristics transfer poorly and reproducibility depends on rewording per the
+   survey, generating 2–3 semantically equivalent paraphrases per prompt intent
+   and aggregating results would harden exactly the kind of tautology
+   `scoring-spec.md` v2 already fixed for a different reason (brand-named
+   prompts inflating Mention Rate). **Touches:** `prompts.py` generator only —
+   plausibly a contained brief.
+3. **A distinct "absorption/fidelity" sub-dimension**, separate from Sentiment.
+   The critical survey's own contribution is a visibility vector separating
+   discoverability, citation, absorption, and economic outcome. Sentiment
+   currently asks *how positively* an engine portrays the brand;
+   absorption/fidelity would ask whether the portrayal is *accurate* — a
+   different failure mode (a glowing but factually wrong description scores
+   well on Sentiment today and shouldn't). **Touches:** scoring formula
+   directly — a formula-version-bump change per rule 5, same treatment as v2/v2.1.
+4. **Cross-engine source-overlap as a client-facing insight**, not just an
+   internal QA signal. If low source overlap between engines is a documented,
+   reproducible finding, showing a client "ChatGPT and Perplexity cite
+   completely different domains for you" is a sharper, more defensible insight
+   than a single blended score, and the underlying data (per-engine citations)
+   already exists in `engine_result_citations` per `scoring-spec.md`'s Citation
+   Strength section. **Touches:** report generation (Epic 7) — likely a small,
+   contained brief since no new data collection is needed.
+5. **A manipulation-risk check on competitor pages** — detecting
+   conspicuously engineered text patterns of the kind demonstrated in Kumar &
+   Lakkaraju as a "Sources/citations" signal. **Explicitly detection only —
+   `ip-safety.md` and this document's own §1 caveat both prohibit ever
+   suggesting a client emulate the technique.** This is the one candidate here
+   with a live IP-safety question attached: detecting the pattern requires
+   reading and characterizing a competitor's live page content, which needs
+   sign-off against `ip-safety.md` constraints before it is scoped, not after.
+6. **A citation-oriented-rewrite warning inside the Epic 8 fix generator.**
+   If citation-heavy rewrites can impair retrieval per the survey, a fix
+   recommendation that says "add more citations" without qualification could
+   make a client's page worse. This is a small, contained change (a caveat in
+   the fix-generation prompt) rather than a new feature — but it should be
+   checked against real behavior before being asserted as a rule, not assumed
+   from the paper alone.
+
+### 9.4 Video/practitioner sources (informational; lowest evidence tier)
+
+Consistent with the evidence-hierarchy idea in §9.1: practitioner videos and
+courses reflect current market narrative and sales language, not measured
+results, and should be weighted well below the academic sources above.
+Retrieved 2026-09-09: a Profound product review and hands-on walkthrough
+(youtube.com/watch?v=FTQsWzpeSSc), a GEO ranking-factors explainer
+(youtube.com/watch?v=gReszNnykpg), a Semrush-sponsored GEO tactics video
+(youtube.com/watch?v=M-RZMEvak8U), a short current crash-course
+(youtube.com/watch?v=9nHvH7MlME4), and an agency-framed GEO/AEO strategy video
+(youtube.com/watch?v=57ezDalCHA4). Useful for benchmarking sales and pitch
+language (§7); not a substitute for §9.1 when a technical claim is being made.

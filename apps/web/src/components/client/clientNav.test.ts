@@ -66,7 +66,9 @@ describe('a hue is scoped to its cluster', () => {
      *
      * Measurement is now FULL: six items and no free seat. Any seventh
      * section there needs a palette decision, not a nav edit, and this test is
-     * where that will surface.
+     * where that will surface. Epic 13's Competitors section went to
+     * Investigation, where it belongs on its own merits — see `clientNav.ts`
+     * — and this test is the record that Measurement could not have taken it.
      *
      * Prompt discovery (G) is the one section still to come, in Investigation.
      */
@@ -105,6 +107,7 @@ describe('sections and clusters', () => {
       'prompts',
       'alerts',
       'crawler',
+      'competitors',
     ];
     for (const section of sections) {
       expect(accentFor(section), `${section} has no accent`).not.toBeNull();
@@ -144,6 +147,27 @@ describe('sections and clusters', () => {
     );
     expect(crawler!.label).toBe('AI crawlers');
     expect(crawler!.label.toLowerCase()).not.toContain('activity');
+  });
+
+  it('files Competitors as Investigation, beside Answer gaps, repainting nothing — Epic 13', () => {
+    /*
+     * A derivation over rows a scan already wrote, one step past the report's
+     * own per-dimension comparison, so it is Investigation for the reason
+     * Answer gaps is. It is inserted ABOVE Prompts and Alerts, and the point
+     * of accents being identities is that doing so changed neither of their
+     * hues — asserted, because a positional accent would have failed exactly
+     * here and looked fine in the diff.
+     */
+    const investigation = CLIENT_NAV.find((c) => c.key === 'investigation')!;
+    const keys = investigation.items.map((i) => i.section);
+    expect(keys.indexOf('competitors')).toBe(keys.indexOf('gaps') + 1);
+    expect(accentFor('competitors')).toBe(3);
+    expect(accentFor('gaps')).toBe(0);
+    expect(accentFor('prompts')).toBe(1);
+    expect(accentFor('alerts')).toBe(2);
+    const item = investigation.items.find((i) => i.section === 'competitors')!;
+    expect(item.path).toBe('/competitors');
+    expect(item.external).toBeUndefined();
   });
 
   it('files Sentiment as Measurement, not as an analysis', () => {

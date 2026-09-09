@@ -177,6 +177,8 @@ const SECTION_ICON: Record<ClientSection, (props: typeof ICON) => JSX.Element> =
   gaps: (p) => <LayoutGrid {...p} />,
   prompts: (p) => <Terminal {...p} />,
   alerts: (p) => <Bell {...p} />,
+  // Epic 13. The section the icon was imported for before it existed.
+  competitors: (p) => <Users {...p} />,
 };
 
 export function ClientNav({ client }: { client: ShellClient }): JSX.Element {
