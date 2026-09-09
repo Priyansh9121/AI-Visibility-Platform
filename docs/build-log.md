@@ -13669,3 +13669,80 @@ banned-claim guard, and reconcile generated dimension fixes with the canned
 audit fixes they overlap. **Citation Strength's real definition** is unchanged
 from `98c9252`. Unchanged: the third-engine / Epic 12 fork stays paused, and
 Epic 12's "why" engine remains recommended-against until the pilot runs.
+
+# Epic 13 — the sidebar becomes the map: a client workspace, and a decision reversed on purpose
+
+Governance line, per north-star.md §8.1: the frontend shell and navigation
+(`apps/web/src/components/shell`, `apps/web/src/components/client`) and the
+visual treatment of the screens under `/clients/[clientId]/*`. No lifecycle
+phase directly — this is the operator's tooling. Scoring, the scan pipeline
+and the report/PDF path are untouched; `reportIsolation.test.ts` is the proof
+rather than the promise.
+
+## What is being reversed, and by whom
+
+Epic 9.20 built a client's own space and put its navigation **inside the
+content area** as a second-level strip (`LocalNav`), and the reasoning is
+recorded three times — in `ClientSpace.tsx`'s header, in `LocalNav.tsx`'s, and
+in `design-system.md` §5e:
+
+> *The agency sidebar stays exactly as it is. It is agency-wide — every item in
+> it is about the whole account across every client at once — and depth about
+> one client cannot go there without either changing what those items mean or
+> inventing a global "selected client" the rest of the product does not have.*
+
+**This epic does exactly that, deliberately, on the founder's decision.** The
+product now wants a persistent per-client workspace whose sections are
+discoverable from the sidebar itself, rather than from a strip nested one level
+down — the way `scoring-spec.md`'s changelog records a superseded formula
+without deleting the record of what it was and why. The record above stands;
+what follows is why the ruling changed.
+
+**Why it changed.** In 9.20 a client had three sections and the strip was a
+row of three words. Eleven epics later it has ten (Overview, Report, Sources,
+Rankings, Sentiment, Technical, AI crawlers, Answer gaps, Prompts, Alerts),
+grouped into two clusters, and an operator's working day is spent *inside one
+client at a time* — reading its sources, then its rankings, then its gaps.
+Every one of those moves is a step across a strip under a header, while the
+sidebar to the left holds four agency-wide items the operator is not using.
+The persistent frame carries the least-used navigation and the content area
+carries the most-used. The founder's call is that the sidebar should carry
+the operator's map, and that a "selected client" is not an invention — it is
+already in the URL of every screen under `/clients/{id}/`.
+
+**What the reversal costs, stated.** 9.20's argument was right about one
+thing that still has to be true: the sidebar's meaning must not become
+ambiguous. So the sidebar switches **modes** rather than mixing levels — in
+agency mode it is agency-wide exactly as before, with the Clients item grown
+into a disclosure listing every client; in client mode it is *that client's*
+map, with a way back at the top. An item in the sidebar is always about one
+thing, and the head of the sidebar says which.
+
+## How the "selected client" is known
+
+**From the route, not from a store.** Every screen under
+`/clients/[clientId]/*` already receives the id as a route param and already
+loads the client's record and history through `useClientDetail`. The pages
+hand that record to `ClientSpace`, which hands it to `WorkspaceShell` as a
+prop; the shell renders client mode when a client is present and agency mode
+when one is not. There is no context, no global state and no second source of
+truth: the selected client is whatever the URL says it is, and a screen with no
+client in its URL has no selected client. `lib/` was checked first — no
+existing pattern reads `useParams` anywhere in the app, and the prop-driven
+split every view already follows (pure view, fetching route) keeps the shell
+statically renderable and testable in both modes.
+
+## What is preserved
+
+* **Every URL.** No route moved. `LocalNav` stays in the design system, its
+  reasoning intact and superseded by a note pointing here; nothing in the app
+  renders it any more.
+* **The accent clusters.** `CLIENT_NAV` in `clientNav.ts` is the single table
+  the sidebar's client mode reads, clusters and cluster-relative accents
+  included, so `clientNav.test.ts`'s invariants hold unchanged. The Report
+  item stays unaccented and external.
+* **The report and the PDF.** Untouched, and the isolation test still scans
+  them.
+
+The rest of this epic — the primitives, the hero, the reskins, the new
+Competitors section — is recorded in the entry that follows once it is built.
