@@ -14061,3 +14061,51 @@ saw.
 ## Verified
 
 Design system 538/538, web 803/803 (three new), both typechecks clean.
+
+# Epic 14.1 — the report on a desk: route-level framing, the document untouched
+
+**2026-09-09.** Governance line, per north-star.md §8.1: the two report
+routes (`apps/web/src/app/scans/[scanId]/report`, `apps/web/src/app/share`)
+and one wrapper rule plus one token in the design system. The report itself
+— `ReportView`, the report primitives, every token the document resolves —
+is not touched, and the PDF is not touched.
+
+## The finding
+
+On the live Epic 14 build the report's 52rem paper column dropped straight
+onto the app's dark ground, with no framing, and read as clipped or stranded
+content — a phone screenshot on a desktop — rather than as "a document,
+deliberately narrow". The width is right and stays. The surface around it
+was the bug.
+
+## The fix
+
+**A desk.** `--avp-surface-desk`, `oklch(0.905 0.01 75)`: a light warm
+neutral that is neither the page's white nor the app's ground, the same in
+every theme, because a printed page sits on a light surface whatever the
+app around it looks like. `.avp-report-frame` paints it, and the page on it
+gets a hard contact edge and a soft drop in the ink hue the paper scope
+already uses for its own elevation. A print strips the desk, so the PDF is
+the page and nothing else.
+
+**Wide, on the authenticated route.** `/scans/{id}/report` now runs the
+workspace shell to the app width and centres the page on the desk, which is
+what a document viewer does; the share and download controls sit above the
+desk at the report's measure. `/share/{token}` makes the desk the whole
+viewport — a stranger opening the link gets a page on a surface, edge to
+edge.
+
+**What did not change.** `ReportView.tsx`, `ReportLayout.tsx`, `.avp-report`'s
+own rule, and every value inside the paper scope. The framing rule targets
+`.avp-report-frame > .avp-report`, so a report rendered without the frame —
+the PDF path, the styleguide — is byte-identical to before.
+`ReportView.test.tsx` (unchanged) and `reportIsolation.test.ts` (extended
+only by the new `desk` suffix in its resolvable-utility list) both pass.
+
+## Verified
+
+Design system 538/538, web 803/803, both typechecks clean. Both routes
+rendered from the report fixture against the compiled stylesheet and
+screenshotted — `docs/screenshots/epic-14/after-report-route-framed.png`,
+`after-share-route-framed.png` — the same fixture-render path Epic 14
+recorded, because a signed-in session is still not reachable from here.

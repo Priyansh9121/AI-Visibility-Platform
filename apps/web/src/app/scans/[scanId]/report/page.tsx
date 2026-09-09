@@ -103,33 +103,50 @@ export default function ReportPageRoute({
   }
 
   return (
-    <WorkspaceShell current="dashboard">
+    /*
+      WIDE, and the document is placed on a desk — Epic 14.1.
+
+      The report itself keeps its 52rem paper measure; that is the artefact
+      and it is not up for debate. What was wrong on the live dark build was
+      everything around it: a fixed-width white column dropped straight onto
+      the workspace ground read as a clipped phone screenshot. The shell now
+      runs to the app width and `.avp-report-frame` gives the page a light
+      neutral desk and a real edge, so it reads as a document sitting on a
+      surface. Route-level framing only — ReportView and the report's tokens
+      are untouched, which ReportView.test.tsx and reportIsolation.test.ts
+      keep asserting.
+    */
+    <WorkspaceShell current="dashboard" wide>
       {/*
         Operator chrome, deliberately ABOVE the report rather than inside it.
         ReportView is the document that gets sent; anything to do with sending
         it must not be part of what is sent. It is also why this is not passed
         as a slot — a slot would put it inside the rendered page.
       */}
-      <ShareLinkBar scanId={scanId} />
-      <div className="mt-4">
-        <DownloadPdfButton
-          scanId={scanId}
-          subjectName={view.report.subject.brandName || view.report.subject.name}
-          unscored={view.report.score === null}
+      <div className="mx-auto max-w-report">
+        <ShareLinkBar scanId={scanId} />
+        <div className="mt-4 mb-6">
+          <DownloadPdfButton
+            scanId={scanId}
+            subjectName={view.report.subject.brandName || view.report.subject.name}
+            unscored={view.report.score === null}
+          />
+        </div>
+      </div>
+      <div className="avp-report-frame">
+        <ReportView
+          report={view.report}
+          competitorEditor={
+            view.report.competitorSet ? (
+              <CompetitorEditor
+                clientId={view.report.subject.clientId}
+                competitors={view.report.competitorSet.competitors}
+                onSaved={reload}
+              />
+            ) : undefined
+          }
         />
       </div>
-      <ReportView
-        report={view.report}
-        competitorEditor={
-          view.report.competitorSet ? (
-            <CompetitorEditor
-              clientId={view.report.subject.clientId}
-              competitors={view.report.competitorSet.competitors}
-              onSaved={reload}
-            />
-          ) : undefined
-        }
-      />
     </WorkspaceShell>
   );
 }

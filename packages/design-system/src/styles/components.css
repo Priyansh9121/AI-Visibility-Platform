@@ -1364,6 +1364,44 @@
   margin: 0 auto;
 }
 
+/* ========================= Report frame ========================== */
+/*
+ * The desk the report sits on — Epic 14.1. ROUTE-LEVEL FRAMING, not the
+ * report: the founder's finding on the live build was that the report's
+ * 52rem paper column dropped straight onto the app's ground read as a
+ * clipped phone screenshot rather than as "a document, deliberately
+ * narrow". The column's width is intentional and stays; what it needed was
+ * a surface. The routes wrap `ReportView` in this, the report's own rule and
+ * tokens are untouched, and a print strips the desk so the PDF is the page.
+ */
+
+.avp-report-frame {
+  padding: var(--avp-space-10) var(--avp-space-6) var(--avp-space-14);
+  border-radius: var(--avp-radius-2xl);
+  background: var(--avp-surface-desk);
+}
+
+/* The public share page: the desk is the whole viewport. */
+.avp-report-frame--page {
+  min-height: 100vh;
+  border-radius: 0;
+}
+
+/* The page on the desk. A hard contact edge and a soft drop, both in the
+   ink hue the paper scope already uses for its own elevation — the desk is
+   light in every theme, so the shadow is too. */
+.avp-report-frame > .avp-report {
+  border: 1px solid oklch(0.185 0.026 265 / 0.08);
+  border-radius: var(--avp-radius-sm);
+  box-shadow: 0 1px 2px oklch(0.185 0.026 265 / 0.12),
+    0 24px 48px -24px oklch(0.185 0.026 265 / 0.35);
+}
+
+@media print {
+  .avp-report-frame { padding: 0; background: none; border-radius: 0; }
+  .avp-report-frame > .avp-report { border: 0; box-shadow: none; }
+}
+
 /* =========================== Report ============================== */
 /*
  * THE REPORT IS UNTOUCHED BY EPIC 14. `.avp-report` carries the paper scope

@@ -54,6 +54,11 @@
   --avp-surface-void: oklch(0.275 0.014 265);
   /* A row or tile under the pointer. Alpha, so it sits on any surface. */
   --avp-surface-hover: oklch(1 0 0 / 0.04);
+  /* The desk a printed page sits on — Epic 14.1. One value in every theme:
+     a light neutral that is neither the page's white nor the app's ground,
+     so a report column inside the app reads as a document on a surface
+     rather than as content stranded on the ground. */
+  --avp-surface-desk: oklch(0.905 0.01 75);
 
   --avp-text-primary: oklch(0.965 0.006 75);
   --avp-text-body: oklch(0.88 0.008 75);

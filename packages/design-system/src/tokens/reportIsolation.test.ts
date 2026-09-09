@@ -309,7 +309,7 @@ describe('colour utilities exist in the preset', () => {
    */
   const GROUPS: Record<string, readonly string[]> = {
     line: ['hairline', 'strong', 'ink'],
-    surface: ['ground', 'sunken', 'seated', 'raised', 'void', 'hover'],
+    surface: ['ground', 'sunken', 'seated', 'raised', 'void', 'hover', 'desk'],
     text: ['primary', 'body', 'secondary', 'tertiary'],
     on: ['accent', 'danger', 'warn'],
   };
