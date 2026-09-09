@@ -129,7 +129,7 @@ export default function Home() {
         <p className="text-ui-2xs uppercase tracking-caps text-text-tertiary">
           Compare
         </p>
-        <h1 className="mt-2 max-w-headline font-editorial text-ed-sm leading-display tracking-display text-text-primary">
+        <h1 className="mt-2 max-w-headline font-display text-ed-sm leading-display tracking-display text-text-primary">
           Start with a website.
         </h1>
         <p className="mt-3 max-w-measure text-ui-md leading-prose text-text-secondary">

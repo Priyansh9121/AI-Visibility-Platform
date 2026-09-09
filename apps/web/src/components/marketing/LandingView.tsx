@@ -451,7 +451,7 @@ function LandingHeader({
             document title rather than a second name invented here. */}
         <a
           href="#top"
-          className="font-editorial text-ui-lg tracking-display text-text-primary"
+          className="font-display text-ui-lg tracking-display text-text-primary"
         >
           AI Visibility Platform
         </a>

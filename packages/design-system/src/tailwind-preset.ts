@@ -54,6 +54,15 @@ const tailwindPreset = {
         600: v('beacon-600'),
         700: v('beacon-700'),
       },
+      /* The second accent — beacon's gradient partner, Epic 14. Never a value,
+         a category or a state on its own; see tokens/color.ts. */
+      signal: {
+        '050': v('signal-050'),
+        100: v('signal-100'),
+        400: v('signal-400'),
+        600: v('signal-600'),
+        700: v('signal-700'),
+      },
       /* The Working-screen accent layer. Deliberately a SEPARATE scale from
          `beacon` and `vis`: a screen can be colourful without the report's
          token set gaining a single new value. Report surfaces never use these
@@ -85,6 +94,9 @@ const tailwindPreset = {
         ground: v('surface-ground'),
         sunken: v('surface-sunken'),
         seated: v('surface-seated'),
+        raised: v('surface-raised'),
+        void: v('surface-void'),
+        hover: v('surface-hover'),
       },
       text: {
         primary: v('text-primary'),
@@ -95,6 +107,13 @@ const tailwindPreset = {
       line: {
         hairline: v('line-hairline'),
         strong: v('line-strong'),
+        ink: v('line-ink'),
+      },
+      /* Text ON an accent or a semantic fill — resolves per theme. */
+      on: {
+        accent: v('on-accent'),
+        danger: v('on-danger'),
+        warn: v('on-warn'),
       },
     },
 
@@ -120,6 +139,7 @@ const tailwindPreset = {
     },
 
     fontFamily: {
+      display: v('font-display'),
       editorial: v('font-editorial'),
       ui: v('font-ui'),
       mono: v('font-mono'),
@@ -143,6 +163,9 @@ const tailwindPreset = {
       'ed-xl': [v('text-ed-xl'), { lineHeight: v('leading-display') }],
       'ed-2xl': [v('text-ed-2xl'), { lineHeight: v('leading-display') }],
       score: [v('text-score'), { lineHeight: '0.9', letterSpacing: v('tracking-display') }],
+      /* The dark identity's two display figures — Epic 14. */
+      kpi: [v('text-kpi'), { lineHeight: '1', letterSpacing: v('tracking-display') }],
+      hero: [v('text-hero'), { lineHeight: '0.95', letterSpacing: v('tracking-hero') }],
     },
 
     borderRadius: {
@@ -151,6 +174,7 @@ const tailwindPreset = {
       md: v('radius-md'),
       lg: v('radius-lg'),
       xl: v('radius-xl'),
+      '2xl': v('radius-2xl'),
       full: v('radius-full'),
     },
 
@@ -186,7 +210,11 @@ const tailwindPreset = {
       },
       letterSpacing: {
         display: v('tracking-display'),
+        hero: v('tracking-hero'),
         caps: v('tracking-caps'),
+      },
+      backgroundImage: {
+        accent: v('gradient-accent'),
       },
       /* The leading tokens existed in tokens.css from Epic 0 but were never
          exposed as utilities, so `leading-prose` silently compiled to nothing.

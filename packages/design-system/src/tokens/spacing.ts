@@ -41,12 +41,25 @@ export const space = {
 export const rhythm = '0.5rem'; // 8
 export const beat = '4.5rem'; //  72
 
+/**
+ * THE SHAPE LOCK — Epic 14.
+ *
+ * One corner system, followed everywhere on a Working screen: cards, tiles
+ * and the hero take `2xl`; buttons, inputs and nav rows take `lg`; chips take
+ * `full`. A round button in a square layout, or a square card on a pill-button
+ * screen, is what an assembled-not-authored interface looks like, so the rule
+ * is written down and the styleguide shows it.
+ *
+ * The report keeps Epic 0's `sm` (3) and `md` (5) through the paper scope in
+ * tokens.css, so no corner in the printed document moves by a pixel.
+ */
 export const radius = {
   none: '0',
-  sm: '0.1875rem', //  3
-  md: '0.3125rem', //  5
+  sm: '0.25rem', //    4
+  md: '0.375rem', //   6
   lg: '0.5rem', //     8
   xl: '0.75rem', //   12
+  '2xl': '1rem', //   16 — cards, tiles, the hero
   full: '9999px',
 } as const;
 

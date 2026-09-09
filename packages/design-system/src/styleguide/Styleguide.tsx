@@ -11,6 +11,9 @@ import {
   VisibilityBadge,
   DataTable,
   ScoreDisplay,
+  ScoreHero,
+  StatRow,
+  StatTile,
   LuminanceLedger,
   AnswerShelf,
   TrendChart,
@@ -26,11 +29,15 @@ import {
   ink,
   visibility,
   beacon,
+  signal,
+  dark,
   competitor,
   semantic,
   oklch,
   visibilityColor,
+  visibilityColorDark,
   onVisibility,
+  heroGradient,
   fontSizeUi,
   fontSizeEditorial,
   space,
@@ -54,25 +61,81 @@ import type {
 } from '../components/chart/answerShelfLayout.js';
 
 export function Styleguide(): JSX.Element {
-  const [dark, setDark] = useState(false);
+  // DARK IS THE DEFAULT — Epic 14. The toggle shows the paper scope the report
+  // renders in; it is the report's skin, not a mode of the product.
+  const [paper, setPaper] = useState(false);
   const layout = layoutLedger(DIMENSIONS, { competitors: COMPETITORS });
 
   return (
-    <div className="sg" data-theme={dark ? 'dark' : undefined}>
+    <div className="sg" data-theme={paper ? 'light' : undefined}>
       <header className="sg__masthead">
         <div>
           <h1 className="sg__title">Design System</h1>
           <p className="sg__lede">
             The proprietary component and token library for the AI Visibility &amp; Competitive
-            Intelligence Platform. Every customer-facing surface is built from these primitives.
+            Intelligence Platform. Dark, data-dense, and built from the five scoring dimensions.
+            The paper scope below is what the printed report keeps.
           </p>
         </div>
         <div className="sg-toggle">
-          <Button size="sm" variant={dark ? 'primary' : 'secondary'} onClick={() => setDark((d) => !d)}>
-            {dark ? 'Dark' : 'Light'}
+          <Button size="sm" variant={paper ? 'primary' : 'secondary'} onClick={() => setPaper((d) => !d)}>
+            {paper ? 'Paper (the report)' : 'Dark (the product)'}
           </Button>
         </div>
       </header>
+
+      {/* ============================================================ */}
+      <Section
+        num="00"
+        title="The hero — the score, drawn as light, at the top of a screen"
+        note="The first thing on the dashboard and on a client's Overview. The figure is a visibility score; its gradient and its glow are derived from the ramp at that score, so a low score reads dim and warm and a high one reads lit and cool."
+      >
+        <div className="sg-stack">
+          <ScoreHero
+            label="Latest score"
+            score={layout.composite}
+            delta={4.2}
+            meta={<span>Scanned 6 Sep 2026 · 24 prompts · 3 engines</span>}
+            aside={
+              <LuminanceLedger
+                subjectName={SUBJECT}
+                dimensions={DIMENSIONS}
+                height={220}
+                bounded
+                annotateGap={false}
+                palette="working"
+                animate={false}
+              />
+            }
+          />
+          <div className="sg-split">
+            <ScoreHero label="Portfolio visibility" score={14} meta={<span>Across 3 scored scans</span>} />
+            <ScoreHero label="Latest score" score={null} absence="Not scored yet" meta={<span>No scan has produced a reading.</span>} />
+          </div>
+        </div>
+        <p className="sg-sub">Hero gradients, by score</p>
+        <div className="sg-ramp">
+          {[5, 20, 35, 50, 65, 80, 95].map((s) => (
+            <div key={s} className="sg-ramp__step" style={{ background: heroGradient(s), color: 'var(--avp-ink-900)' }}>
+              {s}
+            </div>
+          ))}
+        </div>
+
+        <p className="sg-sub">Metric tiles — a card grid</p>
+        <StatRow>
+          <StatTile label="Clients" value="12" accent={1} />
+          <StatTile label="Scans" value="47" accent={2} />
+          <StatTile label="Running now" value="1" accent={3} note="This page is updating itself." />
+          <StatTile label="Needs attention" value="2" accent={4} emphasis note="Failed or partial." />
+          <StatTile label="Median visibility" value="41" note="Across 9 scored scans." />
+        </StatRow>
+        <p className="sg-section__note">
+          A tile is the same surface a card is: seated, 16px corners, lit along its top edge, one tone
+          brighter under the pointer. The accent is a dot beside the label — a category, never a hue
+          around the value. A score takes no accent at all; the ramp is already its colour language.
+        </p>
+      </Section>
 
       {/* ============================================================ */}
       <Section
@@ -117,12 +180,64 @@ export function Styleguide(): JSX.Element {
           ))}
         </div>
 
-        <p className="sg-sub">Brand accent — the client is always beacon</p>
+        <p className="sg-sub">The dark ground — Epic 14</p>
         <div className="sg-grid">
-          {Object.entries(beacon).map(([k, v]) => (
-            <Swatch key={k} name={`beacon-${k}`} value={oklch(v)} />
+          {Object.entries(dark.surface).map(([k, v]) => (
+            <Swatch key={k} name={`surface-${k}`} value={oklch(v)} />
+          ))}
+          {Object.entries(dark.text).map(([k, v]) => (
+            <Swatch key={k} name={`text-${k}`} value={oklch(v)} />
           ))}
         </div>
+        <p className="sg-section__note">
+          Deep cool charcoal (hue 265), never pure black, with warm text (hue 75): the paper
+          system&rsquo;s warm-light / cool-dark hand-off, inverted rather than abandoned.
+        </p>
+
+        <p className="sg-sub">The dark ramp — same five hues, lifted for near-black</p>
+        <div className="sg-ramp">
+          {[0, 12.5, 25, 37.5, 50, 62.5, 75, 87.5, 100].map((s) => (
+            <div
+              key={s}
+              className="sg-ramp__step"
+              style={{ background: visibilityColorDark(s), color: onVisibility(s) }}
+            >
+              {s}
+            </div>
+          ))}
+        </div>
+
+        <p className="sg-sub">Brand accent — the client is always beacon. Dark stops, then paper.</p>
+        <div className="sg-grid">
+          {Object.entries(dark.beacon).map(([k, v]) => (
+            <Swatch key={k} name={`beacon-${k} (dark)`} value={oklch(v)} />
+          ))}
+          {Object.entries(beacon).map(([k, v]) => (
+            <Swatch key={k} name={`beacon-${k} (paper)`} value={oklch(v)} />
+          ))}
+        </div>
+
+        <p className="sg-sub">Signal — beacon's gradient partner, and nothing else</p>
+        <div className="sg-grid">
+          {Object.entries(dark.signal).map(([k, v]) => (
+            <Swatch key={k} name={`signal-${k}`} value={oklch(v)} />
+          ))}
+          <div className="sg-swatch">
+            <div className="sg-swatch__chip" style={{ background: 'var(--avp-gradient-accent)' }} />
+            <div className="sg-swatch__meta">
+              <div className="sg-swatch__name">gradient-accent</div>
+              <div className="sg-swatch__value">signal-600 → beacon-600</div>
+            </div>
+          </div>
+          {Object.entries(signal).map(([k, v]) => (
+            <Swatch key={k} name={`signal-${k} (paper)`} value={oklch(v)} />
+          ))}
+        </div>
+        <p className="sg-section__note">
+          Two accents, both saturated, carrying real weight: the primary action and the glow behind a
+          hero are the only places signal appears. It never encodes a value, a category or a state on
+          its own.
+        </p>
 
         <p className="sg-sub">Competitor series — neutral by rule</p>
         <div className="sg-grid">
@@ -149,16 +264,39 @@ export function Styleguide(): JSX.Element {
       <Section
         num="02"
         title="Typography"
-        note="Three faces, three jobs, all OFL-licensed. Fraunces carries the argument, IBM Plex Sans runs the interface, IBM Plex Mono marks verbatim machine output."
+        note="Four faces, four jobs, all OFL-licensed. Space Grotesk is the product's voice on every Working screen; Fraunces is the report's, and only the report's; IBM Plex Sans runs the interface; IBM Plex Mono marks verbatim machine output."
       >
-        <p className="sg-sub">Editorial track — ratio 1.25</p>
+        <p className="sg-sub">Display — Space Grotesk, on the editorial sizes</p>
         {Object.entries(fontSizeEditorial).map(([k, v]) => (
           <div className="sg-type-row" key={k}>
             <span className="sg-type-row__key">{`ed-${k} · ${v}`}</span>
             <span
               style={{
-                fontFamily: 'var(--avp-font-editorial)',
+                fontFamily: 'var(--avp-font-display)',
                 fontSize: v,
+                fontWeight: 700,
+                letterSpacing: 'var(--avp-tracking-display)',
+                color: 'var(--avp-text-primary)',
+              }}
+            >
+              Invisible in the answer 47
+            </span>
+          </div>
+        ))}
+        <p className="sg-section__note">
+          A geometric grotesk with genuine character in its figures — the flat-based 1, the open 4,
+          the squared 0 — and true tabular figures, so a row of KPI tiles aligns. Deliberately not
+          Inter, and deliberately not the serif below.
+        </p>
+
+        <p className="sg-sub">Editorial — Fraunces, the report only</p>
+        {(['xs', 'md', 'xl'] as const).map((k) => (
+          <div className="sg-type-row" key={k}>
+            <span className="sg-type-row__key">{`ed-${k} · ${fontSizeEditorial[k]}`}</span>
+            <span
+              style={{
+                fontFamily: 'var(--avp-font-editorial)',
+                fontSize: fontSizeEditorial[k],
                 fontWeight: 600,
                 letterSpacing: 'var(--avp-tracking-display)',
                 color: 'var(--avp-text-primary)',
@@ -218,8 +356,8 @@ export function Styleguide(): JSX.Element {
       {/* ============================================================ */}
       <Section
         num="04"
-        title="Elevation — paper doesn't float"
-        note="Elevation is borders and hard offsets, not blurred halos. Blurred shadows vanish when a report is printed, and this product's main artifact is a PDF someone reads on paper."
+        title="Elevation — a card sits in the dark, lit along its top edge"
+        note="A raised surface is a plate with light on it: a 1px inner highlight, a shadow tinted to the ground, a lighter tone. The report keeps Epic 0's borders-and-offsets set through its paper scope, because blurred shadows vanish in print."
       >
         <div className="sg-elev">
           {(Object.keys(elevation) as (keyof typeof elevation)[]).map((k) => (
@@ -227,7 +365,7 @@ export function Styleguide(): JSX.Element {
               <strong>{k}</strong>
               <br />
               <span style={{ color: 'var(--avp-text-tertiary)', fontSize: 'var(--avp-text-ui-xs)' }}>
-                {k === 'flat' || k === 'seated' || k === 'raised' ? 'prints correctly' : 'transient UI only'}
+                {k === 'flat' || k === 'seated' || k === 'raised' ? 'a surface' : 'transient UI only'}
               </span>
             </div>
           ))}
@@ -246,7 +384,7 @@ export function Styleguide(): JSX.Element {
       <Section
         num="05"
         title="Buttons"
-        note="Hover darkens rather than raising. Focus is a beacon ring and halo. Icons are Lucide (ISC) or custom-drawn."
+        note="The primary action carries the accent gradient with dark text; secondary lifts one tone and takes a beacon edge on hover. Focus is a beacon ring and halo. Buttons and inputs take the shape lock's 8px; cards take 16px; chips are pills."
       >
         <p className="sg-sub">Variants</p>
         <div className="sg-row">
@@ -272,7 +410,7 @@ export function Styleguide(): JSX.Element {
       </Section>
 
       {/* ============================================================ */}
-      <Section num="06" title="Cards & badges" note="Cards separate by tone and hairline. Badges carry system state — never a score.">
+      <Section num="06" title="Cards & badges" note="A card is a seated surface with 16px corners and a lit top edge; raised adds a ground-tinted shadow. Badges carry system state — never a score.">
         <div className="sg-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
           {(['flat', 'seated', 'raised'] as const).map((e) => (
             <Card key={e} elevation={e}>
@@ -355,6 +493,7 @@ export function Styleguide(): JSX.Element {
             subjectName={SUBJECT}
             dimensions={DIMENSIONS}
             competitors={COMPETITORS}
+            palette="working"
           />
         </div>
 
@@ -387,6 +526,34 @@ export function Styleguide(): JSX.Element {
             </p>
           </div>
         </div>
+
+        <p className="sg-sub">Compact, in a grid — and partial, for a rival</p>
+        <div className="sg-row" style={{ gap: 'var(--avp-space-6)', alignItems: 'flex-start' }}>
+          <LuminanceLedger subjectName={SUBJECT} dimensions={DIMENSIONS} compact animate={false} />
+          {COMPETITORS.map((c) => (
+            <LuminanceLedger
+              key={c.name}
+              subjectName={c.name}
+              dimensions={DIMENSIONS.map((d) =>
+                d.key === 'sentiment' || d.key === 'technical'
+                  ? { ...d, subscore: 0, measured: false }
+                  : (c.dimensions.find((x) => x.key === d.key) ?? d)
+              )}
+              compact
+              animate={false}
+            />
+          ))}
+        </div>
+        <p className="sg-section__note">
+          The same identity at a third of the width, with the label gutter gone: a grid of columns
+          carries one legend beside it rather than five labels per column. A rival is measured on
+          three of the five dimensions — sentiment is classified toward the subject only and the
+          technical audit is of the subject&rsquo;s own site — so a rival&rsquo;s column keeps the
+          subject&rsquo;s five-segment shape, hatches the two nobody measured, and makes{' '}
+          <em>no</em> composite claim: no number is spoken for it, and its table says so. A rival
+          composite over 75% of the weight would draw every rival shorter than they are, which is
+          the weight-basis error the ghost columns above also avoid by being outlines.
+        </p>
 
         <p className="sg-sub">Score display</p>
         <div className="sg-row" style={{ gap: 'var(--avp-space-14)' }}>

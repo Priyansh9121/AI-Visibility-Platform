@@ -6,6 +6,16 @@
  * in Next.js, and inside the PDF export path (React-PDF / WeasyPrint) without
  * dragging a Tailwind build into each. Apps consume the Tailwind preset for
  * THEIR layout code; the system's own components do not depend on it.
+ *
+ * EPIC 14 — THE DARK IDENTITY
+ * ---------------------------
+ * Every rule below is painted with ROLE tokens (`--avp-surface-*`,
+ * `--avp-text-*`, `--avp-line-*`, `--avp-on-*`) rather than raw paper/ink
+ * literals, because the same rule now has to render on the dark ground and
+ * inside the report's paper scope. Where a rule used to read `--avp-ink-800`
+ * directly it now reads the role that means the same thing in both themes.
+ * The report section at the bottom is the one place raw paper/ink may still
+ * appear, because that section only ever renders inside `.avp-report`.
  */
 
 .avp-visually-hidden {
@@ -28,15 +38,16 @@
   justify-content: center;
   gap: var(--avp-space-2);
   border: 1px solid transparent;
-  border-radius: var(--avp-radius-md);
+  border-radius: var(--avp-radius-lg);
   font-family: var(--avp-font-ui);
-  font-weight: 500;
+  font-weight: 600;
   line-height: 1;
   cursor: pointer;
   white-space: nowrap;
   transition: background-color var(--avp-duration-hover) var(--avp-ease-out),
     border-color var(--avp-duration-hover) var(--avp-ease-out),
     color var(--avp-duration-hover) var(--avp-ease-out),
+    filter var(--avp-duration-hover) var(--avp-ease-out),
     transform var(--avp-duration-hover) var(--avp-ease-out);
 }
 
@@ -50,66 +61,60 @@
 .avp-btn--lg { padding: var(--avp-space-3) var(--avp-space-5); font-size: var(--avp-text-ui-md); }
 .avp-btn--full { width: 100%; }
 
+/*
+ * The primary action carries the accent gradient — Epic 14. On the dark
+ * ground that is signal-to-beacon with dark text; inside the report's paper
+ * scope `--avp-gradient-accent` is flat beacon and `--avp-on-accent` is paper,
+ * so the pitch beat's button renders exactly as Epic 7 drew it.
+ */
 .avp-btn--primary {
-  background: var(--avp-beacon-600);
-  color: var(--avp-paper-000);
+  background-color: var(--avp-beacon-600);
+  background-image: var(--avp-gradient-accent);
+  color: var(--avp-on-accent);
 }
 
 .avp-btn--secondary {
-  background: var(--avp-surface-ground);
+  background: var(--avp-surface-seated);
   border-color: var(--avp-line-strong);
   color: var(--avp-text-primary);
 }
 
 .avp-btn--ghost { background: transparent; color: var(--avp-text-secondary); }
 
-.avp-btn--danger { background: var(--avp-danger); color: var(--avp-paper-000); }
+.avp-btn--danger { background: var(--avp-danger); color: var(--avp-on-danger); }
 
 /*
  * HOVER IS GATED — Epic 9.23.
  *
  * A touch device fires `:hover` on tap and then LEAVES IT STUCK until the next
- * tap elsewhere. Every hover rule in this file was ungated, so on a phone or a
- * tablet the last button pressed kept its hover colour, which reads as a
- * selected state that nothing selected. `(pointer: fine)` is what distinguishes
- * a real pointer from a finger.
- *
- * Only hover is gated. `:active` and `:focus-visible` are NOT — a press state
- * is exactly what a touch device gets right, and focus is a keyboard
- * affordance that must survive on every input type.
+ * tap elsewhere, so every hover rule is behind `(pointer: fine)`. Only hover is
+ * gated. `:active` and `:focus-visible` are NOT — a press state is exactly what
+ * a touch device gets right, and focus is a keyboard affordance that must
+ * survive on every input type.
  */
 @media (hover: hover) and (pointer: fine) {
-  .avp-btn--primary:hover:not(:disabled) { background: var(--avp-beacon-700); }
+  /* A gradient cannot transition; brightness can, and it lifts the whole
+     fill together rather than swapping it. */
+  .avp-btn--primary:hover:not(:disabled) { filter: brightness(1.08); }
 
   .avp-btn--secondary:hover:not(:disabled) {
-    background: var(--avp-surface-seated);
+    background: var(--avp-surface-raised);
     border-color: var(--avp-beacon-400);
   }
 
   .avp-btn--ghost:hover:not(:disabled) {
-    background: var(--avp-surface-seated);
+    background: var(--avp-surface-hover);
     color: var(--avp-text-primary);
   }
 
-  .avp-btn--danger:hover:not(:disabled) { filter: brightness(0.92); }
+  .avp-btn--danger:hover:not(:disabled) { filter: brightness(1.08); }
 }
 
 /*
- * THE PRESS STATE — Epic 9.23, and the highest-leverage motion finding in the
- * system: nothing here had one. Zero elements had an `:active` rule at all.
- *
- * `scale(0.97)` over `--avp-duration-hover` (120ms), which sits inside the
- * 100-160ms press-feedback budget. Its purpose is FEEDBACK — confirming the
- * interface heard the press — which is the one purpose that stays valid at a
- * button's frequency, because it is near-imperceptible and answers the input
- * rather than delaying it.
- *
- * Deliberately NOT gated behind `(hover: hover)`: a press is precisely what a
- * touch device gets right, and it is where the feedback matters most.
- *
- * Form controls are deliberately excluded. A select or a text field that
- * shrank on press would be movement in a control the user is aiming at, and
- * its real feedback is the menu opening or the caret arriving.
+ * THE PRESS STATE — Epic 9.23. `scale(0.97)` over `--avp-duration-hover`
+ * (120ms), inside the 100-160ms press-feedback budget. Deliberately NOT gated
+ * behind `(hover: hover)`: a press is precisely what a touch device gets
+ * right. Form controls are excluded — their feedback is the caret arriving.
  */
 .avp-btn:active:not(:disabled) { transform: scale(0.97); }
 
@@ -117,17 +122,25 @@
 .avp-btn__icon svg { width: 1em; height: 1em; }
 
 /* ============================= Card ============================== */
+/*
+ * A card sits in the dark, lit along its top edge — Epic 14.
+ *
+ * Surface one step above the ground, a hairline, and the elevation token's
+ * inner highlight. Corners take `2xl`, the shape lock's card radius. The
+ * report's paper scope resolves the same tokens to Epic 0's flat card.
+ */
 
 .avp-card {
-  border-radius: var(--avp-radius-lg);
+  border-radius: var(--avp-radius-2xl);
   border: 1px solid var(--avp-line-hairline);
-  background: var(--avp-surface-ground);
-  transition: box-shadow var(--avp-duration-state) var(--avp-ease-out);
+  background: var(--avp-surface-seated);
+  transition: box-shadow var(--avp-duration-state) var(--avp-ease-out),
+    border-color var(--avp-duration-hover) var(--avp-ease-out),
+    background-color var(--avp-duration-hover) var(--avp-ease-out);
 }
 
-.avp-card--flat { box-shadow: var(--avp-elev-flat); }
-/* Seated separates by TONE, not shadow. */
-.avp-card--seated { background: var(--avp-surface-seated); box-shadow: var(--avp-elev-seated); }
+.avp-card--flat { background: var(--avp-surface-ground); box-shadow: var(--avp-elev-flat); }
+.avp-card--seated { box-shadow: var(--avp-elev-seated); }
 .avp-card--raised { box-shadow: var(--avp-elev-raised); }
 
 /* Selected reads as lit from within — emphasis is light, not lift. */
@@ -137,13 +150,19 @@
 }
 
 .avp-card__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--avp-space-3);
   padding: var(--avp-space-4) var(--avp-space-5);
   border-bottom: 1px solid var(--avp-line-hairline);
 }
 .avp-card__title {
-  font-family: var(--avp-font-ui);
+  font-family: var(--avp-font-display);
   font-size: var(--avp-text-ui-lg);
   font-weight: 600;
+  letter-spacing: var(--avp-tracking-display);
   color: var(--avp-text-primary);
 }
 .avp-card__body { padding: var(--avp-space-5); }
@@ -154,6 +173,11 @@
   gap: var(--avp-space-2);
   justify-content: flex-end;
 }
+
+/* A table inside a card runs edge to edge; the card is the table's frame. */
+.avp-card > .avp-table-wrap { padding: 0 var(--avp-space-2); }
+.avp-card > .avp-table-wrap .avp-table__caption { padding: var(--avp-space-3) var(--avp-space-3) var(--avp-space-2); }
+.avp-card > .avp-table-wrap tbody tr:last-child td { border-bottom: 0; }
 
 /* ============================= Badge ============================= */
 
@@ -169,31 +193,19 @@
   text-transform: uppercase;
   border: 1px solid transparent;
   /* A status badge is the one element on a Working screen that changes on its
-     own: the dashboard re-reads itself every 5s while a scan runs, and
-     "Running" becomes "Complete" underneath the reader. Crossfading the tone
-     over the existing state duration is what stops that reading as a flicker.
-     Nothing here animates on first paint — a transition needs a previous
-     value, and a badge that never changes tone never moves. */
+     own: the dashboard re-reads itself every 5s while a scan runs. Crossfading
+     the tone over the state duration is what stops that reading as a flicker.
+     Nothing here animates on first paint. */
   transition: background-color var(--avp-duration-state) var(--avp-ease-out),
     border-color var(--avp-duration-state) var(--avp-ease-out),
     color var(--avp-duration-state) var(--avp-ease-out);
 }
 
 /*
- * The live dot — `<Badge live>`. See Badge.tsx for why this motion is allowed
- * on a screen that is deliberately excluded from arrival motion.
- *
- * The period is `--avp-duration-reveal` x 3 rather than a new number: this is
- * the score's dim-to-lit dissolve put on a loop, slowed to a rate that reads as
- * breathing rather than blinking, and it stays tied to the reveal if that value
- * is ever retuned. The corona is a static beacon ring, so the dot reads as lit
- * rather than merely coloured — design-direction.md section 4, emphasis is
- * light, not lift.
- *
- * The keyframe ENDS fully lit on purpose. base.css collapses animations to
- * 0.01ms and one iteration under `prefers-reduced-motion`, which lands the dot
- * on its final frame — so a reader who asked for less motion gets a lit dot,
- * not a dot stuck at 35% that looks disabled.
+ * The live dot — `<Badge live>`. Its period is `--avp-duration-reveal` x 3
+ * rather than a new number: the score's dim-to-lit dissolve on a loop, slowed
+ * to breathing. The keyframe ENDS fully lit on purpose, so reduced motion
+ * (which collapses the loop to one iteration) leaves a lit dot.
  */
 .avp-badge__pulse {
   flex: none;
@@ -213,14 +225,14 @@
 }
 
 .avp-badge--neutral {
-  background: var(--avp-surface-seated);
+  background: var(--avp-surface-raised);
   color: var(--avp-text-secondary);
   border-color: var(--avp-line-hairline);
 }
 .avp-badge--beacon { background: var(--avp-beacon-050); color: var(--avp-beacon-700); border-color: var(--avp-beacon-100); }
-.avp-badge--success { background: color-mix(in oklab, var(--avp-success) 12%, transparent); color: var(--avp-success); }
-.avp-badge--warn { background: color-mix(in oklab, var(--avp-warn) 16%, transparent); color: var(--avp-ink-800); }
-.avp-badge--danger { background: color-mix(in oklab, var(--avp-danger) 12%, transparent); color: var(--avp-danger); }
+.avp-badge--success { background: color-mix(in oklab, var(--avp-success) 14%, transparent); color: var(--avp-success); }
+.avp-badge--warn { background: color-mix(in oklab, var(--avp-warn) 16%, transparent); color: var(--avp-on-warn); }
+.avp-badge--danger { background: color-mix(in oklab, var(--avp-danger) 14%, transparent); color: var(--avp-danger); }
 .avp-badge--visibility { border: none; }
 
 /* ============================= Table ============================= */
@@ -257,16 +269,13 @@
   padding: var(--avp-space-3);
   border-bottom: 1px solid var(--avp-line-hairline);
   color: var(--avp-text-body);
-  /* Hover was an instant repaint, which is the default-browser feel this
-     product avoids everywhere else — buttons, fields and nav items have all
-     eased over `--avp-duration-hover` since Epic 0. The comparison table is
-     the surface an operator's pointer spends the most time on, and it was the
-     one that never got it. */
+  /* Hover eases over the hover tier rather than repainting instantly — the
+     comparison table is the surface a pointer spends the most time on. */
   transition: background-color var(--avp-duration-hover) var(--avp-ease-out);
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .avp-table tbody tr:hover td { background: var(--avp-surface-sunken); }
+  .avp-table tbody tr:hover td { background: var(--avp-surface-hover); }
 }
 .avp-table tbody tr.is-subject td { background: var(--avp-beacon-050); font-weight: 500; }
 .avp-table__cell--end { text-align: right; }
@@ -277,6 +286,8 @@
 }
 
 /* ========================== ScoreDisplay ========================= */
+/* The REPORT's composite — Fraunces, because it renders inside the paper
+   scope and only there. The Working screens' figure is `.avp-hero`. */
 
 .avp-score { display: flex; flex-direction: column; gap: var(--avp-space-2); }
 
@@ -316,10 +327,136 @@
   max-width: 34ch;
 }
 
+/* ============================== Hero ============================== */
+/*
+ * The one figure at the top of a screen — Epic 14.
+ *
+ * The founder asked for a hero KPI as the first thing on the dashboard and on
+ * a client's Overview: large, bold, geometric, with a gradient. This is that,
+ * built from the product's own data model rather than a template: the figure
+ * is a visibility SCORE, its gradient is DERIVED from the ramp at that score
+ * (`heroGradient()`), and the glow behind it is the same colour, so a 12 sits
+ * in dim clay and an 88 in lit cyan. The Luminance Ledger's identity — the
+ * score is drawn as light — at the size the founder wanted it.
+ *
+ * The card takes the shape lock's `2xl` and the raised elevation; the aside
+ * slot holds whatever draws the score's structure (a ledger, a trend).
+ */
+
+.avp-hero {
+  /* Set inline per instance from the score. Declared here with a neutral
+     default so the stylesheet can be read on its own. */
+  --avp-hero-glow: var(--avp-surface-raised);
+  --avp-hero-gradient: linear-gradient(135deg, var(--avp-text-primary), var(--avp-text-secondary));
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--avp-space-8);
+  padding: var(--avp-space-8);
+  border: 1px solid var(--avp-line-hairline);
+  border-radius: var(--avp-radius-2xl);
+  background: var(--avp-surface-seated);
+  box-shadow: var(--avp-elev-raised);
+}
+
+/* The glow: one radial wash in the score's own colour, bleeding off the
+   top-left corner. Low alpha, so it reads as light on a surface rather than
+   as a coloured card. A fixed-position pseudo-element, never a filter. */
+.avp-hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(
+    60% 90% at 0% 0%,
+    color-mix(in oklab, var(--avp-hero-glow) 22%, transparent),
+    transparent 70%
+  );
+}
+
+@media (min-width: 60rem) {
+  .avp-hero--aside { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); align-items: center; }
+}
+
+.avp-hero__copy { display: flex; flex-direction: column; gap: var(--avp-space-3); min-width: 0; }
+
+.avp-hero__label {
+  font-size: var(--avp-text-ui-xs);
+  font-weight: 600;
+  letter-spacing: var(--avp-tracking-caps);
+  text-transform: uppercase;
+  color: var(--avp-text-tertiary);
+}
+
+.avp-hero__figure { display: flex; align-items: baseline; gap: var(--avp-space-2); flex-wrap: wrap; }
+
+.avp-hero__numeral {
+  font-family: var(--avp-font-display);
+  font-size: var(--avp-text-hero);
+  font-weight: 700;
+  line-height: 0.95;
+  letter-spacing: var(--avp-tracking-hero);
+  font-variant-numeric: lining-nums tabular-nums;
+  /* Gradient text: the fill is the score's own gradient. */
+  background-image: var(--avp-hero-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  /* The dim-to-lit reveal, in the one property gradient text can animate. */
+  transition: opacity var(--avp-duration-reveal) var(--avp-ease-reveal);
+}
+
+.avp-hero__numeral.is-dim { opacity: 0.3; }
+
+/* No score: the absence, in words, never a zero — and no gradient, because
+   there is nothing to light. */
+.avp-hero__numeral--empty {
+  background-image: none;
+  color: var(--avp-text-tertiary);
+  font-size: var(--avp-text-ed-lg);
+}
+
+.avp-hero__denominator {
+  font-family: var(--avp-font-display);
+  font-size: var(--avp-text-ed-2xs);
+  font-weight: 500;
+  color: var(--avp-text-tertiary);
+  letter-spacing: 0;
+}
+
+.avp-hero__band {
+  font-family: var(--avp-font-display);
+  font-size: var(--avp-text-ui-lg);
+  font-weight: 500;
+  color: var(--avp-text-primary);
+  max-width: 34ch;
+}
+
+.avp-hero__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--avp-space-2) var(--avp-space-5);
+  margin-top: var(--avp-space-2);
+  font-size: var(--avp-text-ui-sm);
+  color: var(--avp-text-secondary);
+}
+
+/* A change since the previous reading. Sign and word carry it; colour is the
+   fourth cue — success/danger are SYSTEM state, so a delta takes the ramp's
+   two ends instead of the semantics. */
+.avp-hero__delta { font-weight: 600; font-variant-numeric: tabular-nums; }
+.avp-hero__delta--up { color: var(--avp-vis-100); }
+.avp-hero__delta--down { color: var(--avp-vis-25); }
+.avp-hero__delta--flat { color: var(--avp-text-secondary); }
+
+.avp-hero__aside { min-width: 0; display: flex; justify-content: center; }
+
 /* =========================== ScoreMeter ========================== */
 /* The Ledger's identity at list scale: lit length IS the score. Width is the
-   only channel that carries value — never colour alone, which would fail for
-   anyone who cannot separate the ramp's hues. */
+   only channel that carries value — never colour alone. */
 
 .avp-meter {
   display: flex;
@@ -335,21 +472,18 @@
 }
 
 .avp-meter__numeral {
-  font-family: var(--avp-font-editorial);
+  font-family: var(--avp-font-display);
   font-size: var(--avp-text-ed-2xs);
   font-weight: 600;
   line-height: 1;
   letter-spacing: var(--avp-tracking-display);
-  /* Tabular figures so a column of scores aligns on the decimal, the same
-     reason ScoreDisplay sets them. */
   font-variant-numeric: lining-nums tabular-nums;
 }
 
 .avp-meter__numeral--empty { color: var(--avp-text-tertiary); }
 
 /* A polled row whose scan lands goes tertiary-grey -> ramp colour on the SAME
-   element, so this eases rather than snaps. Layout duration, because it is the
-   score arriving rather than a pointer passing over. */
+   element, so this eases rather than snaps. */
 .avp-meter__numeral { transition: color var(--avp-duration-layout) var(--avp-ease-out); }
 
 .avp-meter__band {
@@ -367,51 +501,46 @@
   border-radius: var(--avp-radius-full);
   /* The unearned remainder, drawn as an unlit void — the Ledger's own
      treatment for the same thing. */
-  background: var(--avp-surface-sunken);
-  box-shadow: inset 0 0 0 1px var(--avp-line-hairline);
+  background: var(--avp-surface-void);
   overflow: hidden;
-  /* Dimmed while there is no score (below) and full strength once there is.
-     The track element survives that switch — React keeps it, only the class
-     changes — so the row comes up out of its "measuring" state instead of
-     blinking into a new one. */
   transition: opacity var(--avp-duration-state) var(--avp-ease-out);
 }
 
 .avp-meter__lit {
   height: 100%;
   border-radius: var(--avp-radius-full);
-  /*
-   * A score that MOVES eases to its new length. A score that ARRIVES does not,
-   * and that asymmetry is the point: this element does not exist while a scan
-   * is unscored (see ScoreMeter.tsx — a zero-width fill would read as a score
-   * of zero), and a CSS transition never runs on an element's first paint. So
-   * re-running a client and watching 41 become 48 is animated, and loading the
-   * dashboard for the fiftieth time today is not.
-   */
+  /* A score that MOVES eases to its new length. A score that ARRIVES does not:
+     this element does not exist while unscored, and a transition never runs on
+     first paint. */
   transition: width var(--avp-duration-layout) var(--avp-ease-out),
     background-color var(--avp-duration-layout) var(--avp-ease-out);
 }
 
-/* An absent score keeps its track so the row keeps its shape, but the track is
-   visibly empty rather than a zero-width fill that would read as a score of 0. */
 .avp-meter--empty .avp-meter__track { opacity: 0.55; }
 
 /* ============================= AppShell ========================== */
-/* The persistent frame around signed-in screens (Epic 9.13). It frames what
-   Epics 7 / 9.8 / 9.9 / 9.10 settled; it does not restyle it. */
+/* The persistent frame around signed-in screens (Epic 9.13), re-skinned in
+   Epic 14. The sidebar is the darkest surface on the screen — sunken — so the
+   content reads as the lit plane in front of it. */
 
 .avp-shell {
   display: grid;
-  grid-template-columns: 15rem minmax(0, 1fr);
+  grid-template-columns: 16rem minmax(0, 1fr);
   min-height: 100vh;
   background: var(--avp-surface-ground);
 }
 
 .avp-shell__sidebar {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  min-height: 100vh;
+  max-height: 100vh;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: var(--avp-space-8);
-  padding: var(--avp-space-8) var(--avp-space-5);
+  padding: var(--avp-space-6) var(--avp-space-4);
   border-right: 1px solid var(--avp-line-hairline);
   background: var(--avp-surface-sunken);
 }
@@ -420,16 +549,17 @@
   display: flex;
   flex-direction: column;
   gap: var(--avp-space-1);
+  padding: 0 var(--avp-space-3);
 }
 
-.avp-shell__footer { margin-top: auto; }
+.avp-shell__footer { margin-top: auto; padding: 0 var(--avp-space-3); }
 
 .avp-shell__content {
   min-width: 0;
-  padding: var(--avp-space-18) var(--avp-space-6);
+  padding: var(--avp-space-10) var(--avp-space-8);
   margin-inline: auto;
   width: 100%;
-  max-width: calc(var(--avp-report-width) + (2 * var(--avp-space-6)));
+  max-width: calc(var(--avp-report-width) + (2 * var(--avp-space-8)));
 }
 
 .avp-shell__content--wide { max-width: var(--avp-app-max); }
@@ -438,16 +568,14 @@
 
 .avp-nav__item {
   /* Component-scoped, and DECLARED HERE with a working default rather than
-     only being set inline by NavItem — a stylesheet that reads a property
-     nothing in it defines cannot be understood on its own, and the token test
-     enforces that. `accent` overrides these from the markup. */
+     only being set inline by NavItem. `accent` overrides these from the markup. */
   --avp-nav-accent: currentColor;
   --avp-nav-wash: var(--avp-surface-seated);
   display: flex;
   align-items: center;
   gap: var(--avp-space-3);
   padding: var(--avp-space-2) var(--avp-space-3);
-  border-radius: var(--avp-radius-md);
+  border-radius: var(--avp-radius-lg);
   color: var(--avp-text-secondary);
   text-decoration: none;
   transition: background var(--avp-duration-hover) var(--avp-ease-standard),
@@ -456,15 +584,14 @@
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .avp-nav__item:hover { background: var(--avp-surface-seated); color: var(--avp-text-primary); }
+  .avp-nav__item:hover { background: var(--avp-surface-hover); color: var(--avp-text-primary); }
 }
 
 /* A nav item is a link, and a link that leads somewhere should answer a press
    the same way a button does. */
 .avp-nav__item:active { transform: scale(0.97); }
 
-/* Current is marked by weight and a rule, not by colour alone — the same
-   reason VisibilityBadge resolves its label colour rather than relying on hue. */
+/* Current is marked by weight and a rail, not by colour alone. */
 .avp-nav__item.is-current {
   background: var(--avp-surface-seated);
   color: var(--avp-text-primary);
@@ -472,16 +599,10 @@
   box-shadow: inset 2px 0 0 var(--avp-beacon-600);
 }
 
-/* THE SIDEBAR IN COLOUR — Epic 9.24.
-   A column of identical grey glyphs is the least scannable thing a persistent
-   frame can be. `--avp-nav-accent` is set per destination by NavItem; without
-   it every rule below is inert, so an un-accented sidebar looks exactly as it
-   did before this epic. */
+/* THE SIDEBAR IN COLOUR — Epic 9.24. `--avp-nav-accent` is set per
+   destination by NavItem; without it every rule below is inert. */
 .avp-nav__item.has-accent .avp-nav__icon { color: var(--avp-nav-accent); }
 
-/* Current takes the destination's own hue for its rail and wash, rather than
-   the one brand teal every item shared. Weight and `aria-current` still carry
-   the state — this is the fourth cue, not the only one. */
 .avp-nav__item.has-accent.is-current {
   background: var(--avp-nav-wash);
   box-shadow: inset 2px 0 0 var(--avp-nav-accent);
@@ -514,11 +635,9 @@
 }
 
 /* ---- THE SIDEBAR AS A MAP — Epic 13 -------------------------------------
-   Two modes, built from the primitives below. See AppShell.tsx for why modes
-   rather than a mixed list, and the build log for what 9.20 decided and why it
-   was reversed. */
+   Two modes, built from the primitives below. Structure unchanged by Epic 14;
+   only the skin. */
 
-/* A labelled cluster — the strip's `LocalNavGroup`, carried into the column. */
 .avp-nav__group {
   display: flex;
   flex-direction: column;
@@ -530,6 +649,7 @@
 .avp-nav__grouplabel {
   padding: 0 var(--avp-space-3) var(--avp-space-1);
   font-size: var(--avp-text-ui-2xs);
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: var(--avp-tracking-caps);
   color: var(--avp-text-tertiary);
@@ -550,8 +670,7 @@
 .avp-nav__slot > .avp-nav__item,
 .avp-nav__slot > .avp-nav__subitem { flex: 1; }
 
-/* A row that opens rather than navigates. Inherits everything a link row has,
-   so the two read as one family; the chevron is the only difference. */
+/* A row that opens rather than navigates. */
 .avp-nav__item--disclosure {
   width: 100%;
   border: 0;
@@ -570,8 +689,7 @@
 
 .avp-nav__item--disclosure[aria-expanded='true'] .avp-nav__chevron { transform: rotate(90deg); }
 
-/* The panel collapses on grid rows — no measured height, no script. Closed,
-   its contents are `inert` and hidden from assistive tech. */
+/* The panel collapses on grid rows — no measured height, no script. */
 .avp-nav__panel {
   display: grid;
   grid-template-rows: 0fr;
@@ -592,7 +710,7 @@
   gap: var(--avp-space-2);
   min-width: 0;
   padding: var(--avp-space-1_5) var(--avp-space-3);
-  border-radius: var(--avp-radius-md);
+  border-radius: var(--avp-radius-lg);
   color: var(--avp-text-secondary);
   font-size: var(--avp-text-ui-sm);
   text-decoration: none;
@@ -602,7 +720,7 @@
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .avp-nav__subitem:hover { background: var(--avp-surface-seated); color: var(--avp-text-primary); }
+  .avp-nav__subitem:hover { background: var(--avp-surface-hover); color: var(--avp-text-primary); }
 }
 
 .avp-nav__subitem:active { transform: scale(0.97); }
@@ -613,8 +731,7 @@
   font-weight: 600;
 }
 
-/* The dot is the ramp doing its one job; the figure beside it is the number.
-   An empty dot is a client scored as having no reading; no dot is "unknown". */
+/* The dot is the ramp doing its one job; the figure beside it is the number. */
 .avp-nav__dot {
   flex: none;
   width: var(--avp-space-2);
@@ -637,13 +754,14 @@
 
 .avp-nav__figure {
   flex: none;
-  font-family: var(--avp-font-mono);
+  font-family: var(--avp-font-display);
   font-size: var(--avp-text-ui-xs);
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
-  color: var(--avp-text-tertiary);
+  color: var(--avp-text-secondary);
 }
 
-.avp-nav__figure--note { font-family: var(--avp-font-ui); }
+.avp-nav__figure--note { font-family: var(--avp-font-ui); font-weight: 400; color: var(--avp-text-tertiary); }
 
 /* The head of the sidebar in client mode: the way back, and whose space. */
 .avp-nav__head {
@@ -668,11 +786,10 @@
 
 .avp-nav__back:active { transform: scale(0.97); }
 
-/* The editorial face at the section scale — `ed-2xs`, one step under the
-   strip's `ed-sm`, because the column is 15rem wide and a name wraps. */
+/* The display face at the section scale — the column is 16rem and a name wraps. */
 .avp-nav__title {
   margin: 0;
-  font-family: var(--avp-font-editorial);
+  font-family: var(--avp-font-display);
   font-size: var(--avp-text-ed-2xs);
   font-weight: 600;
   line-height: var(--avp-leading-display);
@@ -698,9 +815,9 @@
 }
 
 .avp-navscore__numeral {
-  font-family: var(--avp-font-editorial);
+  font-family: var(--avp-font-display);
   font-size: var(--avp-text-ed-xs);
-  font-weight: 600;
+  font-weight: 700;
   line-height: 1;
   letter-spacing: var(--avp-tracking-display);
   font-variant-numeric: lining-nums tabular-nums;
@@ -728,11 +845,13 @@
   .avp-nav__chevron { transition: none; }
 }
 
-/* One breakpoint, no drawer. At four destinations a hamburger is machinery
-   nobody needs, so the sidebar becomes a strip above the content instead. */
+/* One breakpoint, no drawer. The sidebar becomes a strip above the content. */
 @media (max-width: 60rem) {
   .avp-shell { grid-template-columns: minmax(0, 1fr); }
   .avp-shell__sidebar {
+    position: static;
+    min-height: 0;
+    max-height: none;
     flex-direction: row;
     align-items: center;
     gap: var(--avp-space-5);
@@ -744,22 +863,57 @@
   .avp-shell__footer { margin-top: 0; margin-left: auto; }
   .avp-nav { flex-direction: row; flex-wrap: wrap; gap: var(--avp-space-1); }
   .avp-nav__note { display: none; }
-  /* In the strip a cluster is a row of items under its label, and the client
-     list opens as a full-width row beneath the Clients row. */
   .avp-nav__group + .avp-nav__group { margin-top: 0; margin-left: var(--avp-space-4); }
   .avp-nav__grouplist { flex-direction: row; flex-wrap: wrap; }
   .avp-nav__panel { flex-basis: 100%; }
   .avp-nav__sublist { flex-direction: row; flex-wrap: wrap; padding-left: 0; }
   .avp-nav__head { flex-basis: 100%; }
-  .avp-shell__content { padding: var(--avp-space-10) var(--avp-space-6); }
+  .avp-shell__content { padding: var(--avp-space-8) var(--avp-space-5); }
+}
+
+/* =========================== Page head =========================== */
+/*
+ * The title block of a Working screen — Epic 14. One place for the display
+ * face at screen scale, so every screen's first line is set the same way.
+ */
+
+.avp-pagehead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--avp-space-4) var(--avp-space-6);
+}
+
+.avp-pagehead__eyebrow {
+  font-size: var(--avp-text-ui-xs);
+  font-weight: 600;
+  letter-spacing: var(--avp-tracking-caps);
+  text-transform: uppercase;
+  color: var(--avp-text-tertiary);
+}
+
+.avp-pagehead__title {
+  margin: 0;
+  font-family: var(--avp-font-display);
+  font-size: var(--avp-text-ed-sm);
+  font-weight: 700;
+  line-height: var(--avp-leading-display);
+  letter-spacing: var(--avp-tracking-display);
+  color: var(--avp-text-primary);
+}
+
+.avp-pagehead__eyebrow + .avp-pagehead__title { margin-top: var(--avp-space-2); }
+
+.avp-pagehead__aside {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--avp-space-3);
 }
 
 /* ============================ LocalNav =========================== */
-/*
- * Navigation scoped to one record, inside the agency-wide shell — Epic 9.20.
- * See LocalNav.tsx for why depth about one client is a second level of
- * navigation rather than more items in the sidebar.
- */
+/* Kept in the system, superseded by the sidebar's client mode (Epic 13). */
 
 .avp-localnav {
   display: flex;
@@ -794,11 +948,8 @@
 
 .avp-localnav__identity { display: flex; flex-direction: column; gap: var(--avp-space-1); }
 
-/* The editorial face, at the section scale — the same voice the rest of the
-   product speaks in. A client's own space is still a Working screen, so this
-   is `ed-sm` rather than the report's `ed-xl`. */
 .avp-localnav__title {
-  font-family: var(--avp-font-editorial);
+  font-family: var(--avp-font-display);
   font-size: var(--avp-text-ed-sm);
   font-weight: 600;
   line-height: var(--avp-leading-display);
@@ -822,17 +973,9 @@
 .avp-localnav__items {
   display: flex;
   flex-wrap: wrap;
-  /* Between CLUSTERS, not between items. Wider than the intra-group gap so the
-     split is legible before the labels are read — a group that only separates
-     by a label makes the reader parse text to see structure. */
   gap: var(--avp-space-2) var(--avp-space-6);
   margin-top: var(--avp-space-2);
 }
-
-/* ---- clusters, Epic B.1 -------------------------------------------------
-   The nav grows GROUPS rather than hues: the bench arc holds seven accents and
-   a client's space is heading for ten sections. See LocalNav.tsx for why
-   grouping costs nothing that shrinking the buffer or varying chroma would. */
 
 .avp-localnav__group {
   display: flex;
@@ -842,9 +985,6 @@
 }
 
 .avp-localnav__grouplabel {
-  /* The label is quieter than the items it names. It is a wayfinding aid, not
-     a destination, and a label competing with its own links would invert that.
-     Same treatment `.avp-tile__label` gives a figure's caption. */
   padding-inline: var(--avp-space-3);
   font-size: var(--avp-text-ui-2xs);
   text-transform: uppercase;
@@ -861,16 +1001,7 @@
   list-style: none;
 }
 
-/*
- * The list item is a plain flex item, NOT `display: contents`.
- *
- * `display: contents` would remove its box and let the `<a>` be the flex child
- * directly, which is tidier CSS and a real accessibility hazard: several
- * browsers have shipped bugs where it strips `<li>` from the accessibility
- * tree, which would take the list semantics this grouping exists to provide
- * with it. Epic 9.16 refused the same property on `.avp-reveal-group` for a
- * related reason and `tokens.test.ts` guards it there; the lesson generalises.
- */
+/* A plain flex item, NOT `display: contents` — see the note in LocalNav.tsx. */
 .avp-localnav__slot {
   display: inline-flex;
   min-width: 0;
@@ -883,7 +1014,7 @@
   align-items: center;
   gap: var(--avp-space-1_5);
   padding: var(--avp-space-2) var(--avp-space-3);
-  border-radius: var(--avp-radius-md);
+  border-radius: var(--avp-radius-lg);
   font-size: var(--avp-text-ui-base);
   color: var(--avp-text-secondary);
   text-decoration: none;
@@ -894,16 +1025,13 @@
 
 @media (hover: hover) and (pointer: fine) {
   .avp-localnav__item:hover {
-    background: var(--avp-surface-seated);
+    background: var(--avp-surface-hover);
     color: var(--avp-text-primary);
   }
 }
 
 .avp-localnav__item:active { transform: scale(0.97); }
 
-/* Current is marked by weight and a rule, not colour alone — the same reason
-   `.avp-nav__item.is-current` is. The rule sits UNDER the item here rather than
-   inside its left edge, because this strip is horizontal. */
 .avp-localnav__item.is-current {
   background: var(--avp-surface-seated);
   color: var(--avp-text-primary);
@@ -911,8 +1039,6 @@
   box-shadow: inset 0 -2px 0 var(--avp-beacon-600);
 }
 
-/* The client's own sections, in colour — Epic 9.24. Inert without an accent,
-   exactly like the sidebar above. */
 .avp-localnav__item.has-accent::before {
   content: '';
   width: 0.5rem;
@@ -920,9 +1046,6 @@
   border-radius: var(--avp-radius-full);
   background: var(--avp-localnav-accent);
   flex: none;
-  /* Dimmed until current, so the strip reads as one object with one item lit
-     rather than as five competing dots. The metaphor the whole palette runs
-     on: emphasis is light. */
   opacity: 0.45;
   transition: opacity var(--avp-duration-hover) var(--avp-ease-standard);
 }
@@ -943,14 +1066,13 @@
 .avp-localnav__out { color: var(--avp-text-tertiary); font-size: var(--avp-text-ui-xs); }
 
 /* ==================== LoadingState / ErrorState =================== */
-/* One treatment each, app-wide. Epic 9.11 replaced four bespoke loading
-   paragraphs and five bespoke error cards with these. */
 
 .avp-loading { display: flex; flex-direction: column; gap: var(--avp-space-3); }
 
 .avp-loading__message {
-  font-size: var(--avp-text-ui-md);
-  font-weight: 500;
+  font-family: var(--avp-font-display);
+  font-size: var(--avp-text-ui-lg);
+  font-weight: 600;
   color: var(--avp-text-primary);
 }
 
@@ -970,8 +1092,9 @@
 }
 
 .avp-errorstate__title {
-  font-size: var(--avp-text-ui-md);
-  font-weight: 500;
+  font-family: var(--avp-font-display);
+  font-size: var(--avp-text-ui-lg);
+  font-weight: 600;
   color: var(--avp-text-primary);
 }
 
@@ -983,8 +1106,7 @@
   max-width: var(--avp-measure);
 }
 
-/* Small, last, and monospaced: a reference to quote back to us, not a headline.
-   Same treatment ClassificationResult already used for its reason code. */
+/* Small, last, and monospaced: a reference to quote back to us, not a headline. */
 .avp-errorstate__code {
   margin-top: var(--avp-space-3);
   font-family: var(--avp-font-mono);
@@ -995,14 +1117,8 @@
 .avp-errorstate__action { margin-top: var(--avp-space-5); }
 
 /* ============================= EmptyState ========================= */
-/*
- * "There is nothing here yet", one treatment app-wide — the third member of
- * the set LoadingState and ErrorState opened in Epic 9.11. See EmptyState.tsx
- * for why it is dashed rather than seated: a dashed hairline already means
- * "an absence that is itself the finding" in this system (`.avp-shelf__notch`,
- * `.avp-ledger__gap-zone`, `.avp-ledger--empty`), and an empty screen is that
- * fact at page scale.
- */
+/* "There is nothing here yet". Dashed rather than seated: a dashed stroke
+   already means "an absence that is itself the finding" in this system. */
 
 .avp-empty {
   display: grid;
@@ -1010,18 +1126,11 @@
   align-items: center;
   padding: var(--avp-space-10);
   border: 1px dashed var(--avp-line-strong);
-  border-radius: var(--avp-radius-lg);
+  border-radius: var(--avp-radius-2xl);
   background: var(--avp-surface-ground);
-  /* Left-aligned, unlike `.avp-ledger--empty`, because this one carries an
-     action: centring the column puts the button somewhere the eye is not
-     already reading from. It also has to survive being dropped into a table's
-     empty cell, which centres its text. */
   text-align: left;
 }
 
-/* With a figure the copy takes the reading measure and the drawing takes the
-   rest — which is what stops a Working screen's empty state from being one
-   short sentence stranded in a very wide box. */
 .avp-empty--figured {
   grid-template-columns: minmax(0, 1fr);
 }
@@ -1043,11 +1152,8 @@
   color: var(--avp-text-tertiary);
 }
 
-/* The editorial face, at the section scale rather than the report's — an empty
-   state is a statement, and it should read in the same voice as everything
-   else this product says. */
 .avp-empty__title {
-  font-family: var(--avp-font-editorial);
+  font-family: var(--avp-font-display);
   font-size: var(--avp-text-ed-xs);
   font-weight: 600;
   line-height: var(--avp-leading-display);
@@ -1072,28 +1178,19 @@
 
 .avp-empty__action { margin-top: var(--avp-space-2); }
 
-/*
- * BOUNDED, and not for tidiness. A chart drawn from a viewBox scales its TYPE
- * with its box: the Ledger's 13px dimension labels are 13px at its natural
- * 344 units wide and 30px stretched across a Working screen's full column,
- * which is bigger than the page's own headline. Capping the figure near its
- * natural width keeps the labels the size the chart was drawn at.
- */
+/* BOUNDED: a chart drawn from a viewBox scales its TYPE with its box. */
 .avp-empty__figure {
   min-width: 0;
   width: min(100%, 22rem);
 }
 
-/* Nested in a DataTable's empty cell, the cell's own padding and centring are
-   the wrong frame for a box that brings both. */
 .avp-table__empty:has(> .avp-empty) {
   padding: var(--avp-space-4) 0 var(--avp-space-2);
   text-align: left;
 }
 
 /* ========================== PageSection ========================== */
-/* Sections of a non-report page. Same editorial voice as the report's beats,
-   deliberately without their numbering — see PageSection.tsx. */
+/* Sections of a non-report page — the landing page. */
 
 .avp-section { display: flex; flex-direction: column; gap: var(--avp-space-4); }
 
@@ -1106,9 +1203,9 @@
 }
 
 .avp-section__heading {
-  font-family: var(--avp-font-editorial);
+  font-family: var(--avp-font-display);
   font-size: var(--avp-text-ed-md);
-  font-weight: 600;
+  font-weight: 700;
   line-height: var(--avp-leading-display);
   letter-spacing: var(--avp-tracking-display);
   color: var(--avp-text-primary);
@@ -1117,6 +1214,7 @@
 
 .avp-section--lead .avp-section__heading {
   font-size: var(--avp-text-ed-xl);
+  letter-spacing: var(--avp-tracking-hero);
   max-width: 18ch;
 }
 
@@ -1157,28 +1255,17 @@
 
 .avp-ledger__svg { display: block; overflow: visible; }
 
-/* The unlit void: what this dimension could have been. */
-.avp-ledger__void { fill: var(--avp-surface-sunken); }
+/* The unlit void: what this dimension could have been. A slab in the dark,
+   paper-050 in the report — `--avp-surface-void` resolves per scope. */
+.avp-ledger__void { fill: var(--avp-surface-void); }
 
 .avp-ledger__lit {
   transition: transform var(--avp-duration-reveal) var(--avp-ease-reveal);
 }
 
-/*
- * Per-bar stagger — Epic 9.16, and OPT-IN ONLY.
- *
- * Reached only when `LuminanceLedger` is given `staggerDimensions`, which the
- * report never passes and which defaults to false. Without the modifier class
- * every bar lights at once, exactly as it has since Epic 0. See the component
- * for why the default is off rather than on.
- *
- * Same `--avp-stagger-reveal` the page's text uses, so the chart builds to the
- * same rhythm as the section around it rather than to one of its own — which is
- * what made the earlier standalone bar-by-bar experiment read as a gimmick.
- */
+/* Per-bar stagger — Epic 9.16, OPT-IN ONLY. Reached only via
+   `staggerDimensions`, which the report never passes. */
 .avp-ledger--staggered {
-  /* Set inline per segment by the component; declared here for the same reason
-     `--avp-reveal-index` is. Inherits to the rects, which override it. */
   --avp-ledger-index: 0;
 }
 
@@ -1187,17 +1274,22 @@
   transition-delay: calc(var(--avp-ledger-index) * var(--avp-stagger-reveal));
 }
 
-/*
- * Unmeasured: the void carries the whole drawing, so it needs to be visible as
- * a SHAPE rather than as the faint remainder behind a lit column. One step up
- * the same neutral ramp — seated rather than sunken — which is the tone every
- * other "this is a surface, not the page" in the product already uses.
- */
+/* Unmeasured: the void carries the whole drawing, so it needs to be visible as
+   a SHAPE. One step up the same neutral ramp. */
 .avp-ledger--unmeasured .avp-ledger__void { fill: var(--avp-surface-seated); }
 
 .avp-ledger__rule { stroke: var(--avp-surface-ground); stroke-width: 1; }
 .avp-ledger__outline { fill: none; stroke: var(--avp-line-strong); stroke-width: 1; }
-.avp-ledger__base { stroke: var(--avp-ink-800); stroke-width: 1; }
+.avp-ledger__base { stroke: var(--avp-line-ink); stroke-width: 1; }
+
+/* A dimension nobody measured for THIS subject — Epic 13. Hatched in the
+   hairline colour, never on the ramp. */
+.avp-ledger__hatch { stroke: var(--avp-line-strong); stroke-width: 1; }
+.avp-ledger--partial .avp-ledger__void { fill: var(--avp-surface-void); }
+
+/* Compact — Epic 13, opt-in only. */
+.avp-ledger--compact .avp-ledger__value { font-size: 12px; }
+.avp-ledger--compact .avp-ledger__subject { font-size: 11px; font-weight: 500; }
 
 .avp-ledger__label {
   font-family: var(--avp-font-ui);
@@ -1255,12 +1347,13 @@
 .avp-ledger--empty {
   padding: var(--avp-space-8);
   border: 1px dashed var(--avp-line-strong);
-  border-radius: var(--avp-radius-lg);
+  border-radius: var(--avp-radius-2xl);
   text-align: center;
 }
 .avp-ledger__empty-title {
-  font-family: var(--avp-font-editorial);
+  font-family: var(--avp-font-display);
   font-size: var(--avp-text-ed-2xs);
+  font-weight: 600;
   color: var(--avp-text-primary);
   margin-bottom: var(--avp-space-2);
 }
@@ -1272,13 +1365,23 @@
 }
 
 /* =========================== Report ============================== */
+/*
+ * THE REPORT IS UNTOUCHED BY EPIC 14. `.avp-report` carries the paper scope
+ * in tokens.css, so every rule here resolves to Epic 0's values — the
+ * editorial face, the flat card, the hard-offset elevation — and the document
+ * renders byte-for-byte as it did. `.avp-report__empty-title` and the rest
+ * of the report's own voice keep Fraunces on purpose.
+ */
 
 .avp-report {
   max-width: var(--avp-report-width);
   margin: 0 auto;
   padding: var(--avp-space-14) var(--avp-report-gutter) var(--avp-space-24);
   background: var(--avp-surface-ground);
+  color: var(--avp-text-body);
 }
+
+.avp-report .avp-ledger__empty-title { font-family: var(--avp-font-editorial); font-weight: 400; }
 
 .avp-report__brand {
   padding-bottom: var(--avp-space-6);
@@ -1473,9 +1576,9 @@
   display: flex;
   align-items: center;
   gap: var(--avp-space-1);
-  background: var(--avp-surface-ground);
+  background: var(--avp-surface-sunken);
   border: 1px solid var(--avp-line-strong);
-  border-radius: var(--avp-radius-md);
+  border-radius: var(--avp-radius-lg);
   transition: border-color var(--avp-duration-hover) var(--avp-ease-out),
     box-shadow var(--avp-duration-hover) var(--avp-ease-out);
 }
@@ -1521,11 +1624,8 @@
 .avp-field__input::placeholder { color: var(--avp-text-tertiary); }
 .avp-field__input:disabled { cursor: not-allowed; }
 
-/* The native select needs its own appearance reset — a UA-drawn control keeps
-   its own border and background inside our wrapper, which reads as two nested
-   fields. `appearance: none` removes the platform arrow with it, so one is
-   drawn back as a background chevron; without it the control looks like a
-   text input that cannot be typed in. */
+/* The native select needs its own appearance reset; a chevron is drawn back
+   as a background so it does not read as a text input that cannot be typed in. */
 .avp-field__select {
   appearance: none;
   cursor: pointer;
@@ -1537,18 +1637,14 @@
   background-repeat: no-repeat;
 }
 .avp-field__select:disabled { cursor: not-allowed; }
+.avp-field__select option { background: var(--avp-surface-raised); color: var(--avp-text-primary); }
 
 .avp-field__hint { font-size: var(--avp-text-ui-sm); color: var(--avp-text-secondary); }
 .avp-field__error { font-size: var(--avp-text-ui-sm); color: var(--avp-danger); font-weight: 500; }
 
 /* =========================== VerdictBar ========================== */
-/*
- * pass / warn / fail as one proportional strip — Epic 9.22.
- *
- * Semantic colour is correct here and nowhere near the visibility ramp: §1
- * reserves semantics for SYSTEM STATE, and a technical check's verdict is
- * exactly that. See VerdictBar.tsx.
- */
+/* pass / warn / fail as one proportional strip — Epic 9.22. Semantic colour
+   is correct here: a technical check's verdict is SYSTEM STATE. */
 
 .avp-verdict { display: flex; flex-direction: column; gap: var(--avp-space-2); }
 
@@ -1557,14 +1653,9 @@
   height: var(--avp-space-1_5);
   border-radius: var(--avp-radius-full);
   overflow: hidden;
-  background: var(--avp-surface-sunken);
-  box-shadow: inset 0 0 0 1px var(--avp-line-hairline);
+  background: var(--avp-surface-void);
 }
 
-/* Width is set inline from the counts. The transition is here so a re-audit
-   that moves the proportions eases rather than snapping — and, as with
-   `.avp-meter__lit`, it never fires on first paint, because a transition has no
-   previous value to run from. */
 .avp-verdict__seg {
   height: 100%;
   transition: width var(--avp-duration-layout) var(--avp-ease-out);
@@ -1574,8 +1665,6 @@
 .avp-verdict__seg--warn { background: var(--avp-warn); }
 .avp-verdict__seg--fail { background: var(--avp-danger); }
 
-/* Nothing measured: an empty track, never a full green one. Same rule
-   `.avp-meter--empty` follows — an absence is drawn as an absence. */
 .avp-verdict__empty { width: 100%; height: 100%; opacity: 0.55; }
 
 .avp-verdict__legend {
@@ -1600,6 +1689,7 @@
 
 .avp-verdict__value {
   margin: 0;
+  font-family: var(--avp-font-display);
   font-size: var(--avp-text-ui-md);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -1617,22 +1707,17 @@
 .avp-verdict__dot--warn { background: var(--avp-warn); }
 .avp-verdict__dot--fail { background: var(--avp-danger); }
 .avp-verdict__dot--na {
-  background: var(--avp-surface-sunken);
+  background: var(--avp-surface-void);
   box-shadow: inset 0 0 0 1px var(--avp-line-strong);
 }
 
 /* ============================ Trend ============================== */
-/*
- * The first time-series shape in this system — Epic 9.20. Every value below is
- * an existing token; the SERIES colours are painted from tokens/color.ts in the
- * component, because the client-is-beacon / rivals-are-neutral rule is enforced
- * by `seriesStyle`, not by CSS.
- */
+/* The first time-series shape in this system — Epic 9.20. The SERIES colours
+   are painted from tokens/color.ts in the component. */
 
 .avp-trend__svg { display: block; width: 100%; height: auto; overflow: visible; }
 
-/* Hairlines, not a grid. The rules are for reading a value off the axis, not
-   for decorating the plot. */
+/* Hairlines, not a grid. */
 .avp-trend__rule { stroke: var(--avp-line-hairline); stroke-width: 1; }
 
 .avp-trend__tick {
@@ -1641,9 +1726,6 @@
   fill: var(--avp-text-tertiary);
 }
 
-/* The series name, at the end of its own line rather than in a legend box: a
-   legend makes the reader match colours back to names, and on a neutral
-   competitor palette that is exactly the match this palette makes hard. */
 .avp-trend__label {
   font-family: var(--avp-font-ui);
   font-size: var(--avp-text-ui-2xs);
@@ -1652,12 +1734,19 @@
 
 .avp-trend__label--subject { font-weight: 600; }
 
-/* ========================= Answer Shelf ========================== */
 /*
- * Direction A. Every value below is a token — the marks themselves are painted
- * from tokens/color.ts in the component, because the subject-is-beacon /
- * rivals-are-neutral rule is enforced by `seriesStyle`, not by CSS.
+ * The area under the client's line — Epic 14, OPT-IN ONLY.
+ *
+ * Reached only through `area`, which the report never passes: a filled
+ * gradient under a line is the visual weight the founder asked for on a
+ * Working screen, and a document that prints in greyscale does not want it.
+ * Only the SUBJECT'S line is filled, so the client-is-beacon rule gains a
+ * second carrier rather than losing its first. The gradient is drawn by the
+ * component from the series colour; this only sets the stroke of nothing.
  */
+.avp-trend__area { stroke: none; }
+
+/* ========================= Answer Shelf ========================== */
 
 .avp-shelf__svg { display: block; width: 100%; height: auto; overflow: visible; }
 
@@ -1681,11 +1770,7 @@
 
 .avp-shelf__rule { stroke: var(--avp-line-hairline); stroke-width: 1; }
 
-/*
- * The empty notch. Hollow and dashed so it reads as a place nobody is standing
- * in rather than as a faint mark — the absence has to be as legible as a
- * presence, because on most scans the absences ARE the finding.
- */
+/* The empty notch. Hollow and dashed so it reads as a place nobody is standing in. */
 .avp-shelf__notch {
   fill: none;
   stroke: var(--avp-text-tertiary);
@@ -1693,7 +1778,7 @@
   stroke-dasharray: 2.5 2.5;
 }
 
-/* No answer came back. A dash, not a hole — we have nothing to be absent from. */
+/* No answer came back. A dash, not a hole. */
 .avp-shelf__unanswered { stroke: var(--avp-line-hairline); stroke-width: 1.5; }
 
 .avp-shelf__empty {
@@ -1701,65 +1786,24 @@
   color: var(--avp-text-secondary);
 }
 
-/* The engine, beside the question. Dimmer than the prompt: it identifies the
-   row, it is not the row's subject. */
 .avp-shelf__engine { fill: var(--avp-text-tertiary); }
 
 /* ============================== Reveal =============================== */
-
 /*
  * Content arrives rather than being already there — Epic 9.16.
  *
- * Fades up by one spacing step over the SAME duration and curve as the score's
- * dim-to-lit dissolve, because design-direction.md §4 defines that pairing as
- * *the* reveal. A second timing for text would put the page and its signature
- * chart on two different rhythms.
- *
- * The delay is computed here rather than in JavaScript. `Reveal` sets
- * `--avp-reveal-index` and the multiplication happens in CSS, so there is no
- * millisecond literal anywhere in the component and a call site that wants a
- * different rhythm overrides `--avp-stagger-reveal` instead of doing sums.
- */
-/*
  * THE DEFAULT IS VISIBLE. This is the single most important line in the file.
- *
- * Epic 9.16 shipped this rule as `opacity: 0` and reasoned about the ways JS
- * might fail to reveal it. That reasoning had a hole, and the two screens added
- * in 9.16a walked straight into it: `/invite/{token}` and
- * `/reset-password/{token}` are SERVER-RENDERED — their routes' initial state
- * IS the rendered state — so Next put the card in the HTML at `opacity: 0` and
- * the page stayed blank until the client bundle hydrated. On the two screens
- * people open cold, from an email, on a phone.
- *
- * The four screens 9.16 already did never showed it, because they are never
- * server-rendered at all: `/` and `/welcome` both start at `{ kind: 'loading' }`
- * and only construct a `Reveal` after a client-side fetch. `curl /` returns zero
- * occurrences of `avp-reveal`; `curl /invite/x` returned one, unrevealed. The
- * precedent looked safe and was only ever accidentally safe.
- *
- * So the hidden state is no longer the default. It applies only under
- * `.avp-motion-ready`, a class added to <html> by a SYNCHRONOUS inline script in
- * the document head — which runs before the first paint, and only if scripting
- * genuinely works. Server HTML is therefore visible on its own, and a visitor
- * whose bundle never arrives reads the page instead of a blank rectangle.
+ * The hidden state applies only under `.avp-motion-ready`, a class added to
+ * <html> by a SYNCHRONOUS inline script in the document head. Server HTML is
+ * therefore visible on its own, and a visitor whose bundle never arrives reads
+ * the page instead of a blank rectangle. See design-system.md §5c.
  */
 .avp-reveal {
-  /* Set inline, per sibling, by `Reveal`. Declared here rather than in
-     tokens.css because it is a per-instance runtime value, not a design token —
-     and tokens.test.ts is right to insist on the difference: a component-local
-     property in the token layer is a token nobody can find the meaning of. */
   --avp-reveal-index: 0;
   opacity: 1;
   transform: none;
 }
 
-/*
- * The arrival, gated on proof that scripting runs BEFORE the page paints.
- *
- * Two classes deep, so it beats the visible default above without `!important`
- * — which matters, because the reduced-motion block below still has to beat
- * THIS, and it does so with `!important`.
- */
 .avp-motion-ready .avp-reveal {
   opacity: 0;
   transform: translateY(var(--avp-space-3));
@@ -1767,70 +1811,24 @@
     opacity var(--avp-duration-reveal) var(--avp-ease-reveal),
     transform var(--avp-duration-reveal) var(--avp-ease-reveal);
   transition-delay: calc(var(--avp-reveal-index) * var(--avp-stagger-reveal));
-  /* Hint the compositor for the one property pair that actually moves. Not
-     `will-change: auto` on everything — that costs a layer per element for the
-     life of the page. */
   will-change: opacity, transform;
 }
 
 .avp-motion-ready .avp-reveal--revealed {
   opacity: 1;
   transform: none;
-  /* The animation is over; release the layer. */
   will-change: auto;
 }
 
-/*
- * The group is a marker class ONLY. It sets no layout, and specifically NOT
- * `display: contents`.
- *
- * The first version did, reasoning that the group should not introduce a box.
- * It does not introduce one — it IS one: `RevealGroup` renders the <section> or
- * the <ol> itself, carrying whatever layout class the caller gave it. And
- * `display: contents` removes the element's box entirely, which has two
- * consequences that took a live browser to see:
- *
- *   1. An element with no box NEVER INTERSECTS. IntersectionObserver had
- *      nothing to observe, so every grouped reveal — the whole hero and all
- *      seven pipeline steps — stayed at opacity 0 forever. A blank page, from
- *      a rule written to be tidy.
- *   2. It overrode `.avp-section`'s own `display: flex`, silently dropping the
- *      gap between the hero's parts.
- *
- * Neither is visible to a static render or to jsdom, which computes no layout.
- * `tokens.test.ts` now asserts this rule stays absent.
- */
-.avp-reveal-group { /* intentionally empty — see above */ }
+/* The group is a marker class ONLY. It sets no layout, and specifically NOT
+   `display: contents` — an element with no box never intersects. */
+.avp-reveal-group { /* intentionally empty — see design-system.md §5c */ }
 
-/*
- * THE PART THAT IS NOT AN ENHANCEMENT.
- *
- * Reduced motion is painted revealed here, with `!important`, because it must
- * beat `.avp-motion-ready .avp-reveal` above — which is two classes deep — and
- * because it must hold regardless of what a component sets inline.
- *
- * There is deliberately no `@media (scripting: none)` block any more. It used
- * to be one of four guarantees against a blank page; it is now redundant by
- * construction, because with scripting off the inline script never runs, the
- * `.avp-motion-ready` class is never added, and `.avp-reveal` keeps its visible
- * default. A rule that can no longer fire is a rule the next reader has to
- * reason about for nothing.
- */
-/*
- * The press state is MOVEMENT, so reduced motion drops it — Epic 9.23.
- *
- * The global block in base.css collapses every transition DURATION, which makes
- * the press instant rather than absent: the element would still jump to 97% and
- * back. Reduced motion means fewer and gentler animations, not faster ones, and
- * a scale is exactly the position change it asks to be spared.
- *
- * The colour change on `:hover` and the focus ring are deliberately left alone.
- * They aid comprehension and involve no movement, which is the line this
- * setting actually draws.
- */
+/* The press state is MOVEMENT, so reduced motion drops it — Epic 9.23. */
 @media (prefers-reduced-motion: reduce) {
   .avp-btn:active:not(:disabled),
   .avp-nav__item:active,
+  .avp-nav__subitem:active,
   .avp-localnav__item:active,
   .avp-localnav__back:active {
     transform: none !important;
@@ -1848,91 +1846,100 @@
 
 /* ============================ StatTile =========================== */
 /*
- * One figure on a Working screen — Epic 9.24.
+ * One figure on a Working screen — Epic 9.24, re-drawn as a CARD in Epic 14.
  *
- * Replaces the two-stacked-spans `Stat` that DashboardView and ClientsView each
- * kept privately. That shape read as a caption strip; this reads as a figure,
- * which is what lets a row of them hold the width of a 90rem Working column
- * instead of leaving it empty. See StatTile.tsx.
+ * The founder's brief: metric tiles as a real card grid — rounded corners,
+ * subtle elevation, hover states — rather than the hairline-bordered tile with
+ * an accent rail. So a tile is now the same surface a card is: seated, `2xl`,
+ * lit along its top edge, lifting one tone under the pointer. The accent
+ * moved from a rail on the left to a dot beside the label, where it still
+ * identifies the figure's category without framing its value in a hue.
  */
 
 .avp-tile-row {
   --avp-tile-min: 11rem;
   display: grid;
-  /* auto-fit + minmax, so the row picks its own column count from the space it
-     is given. A fixed count breaks at one end of the range or the other. */
   grid-template-columns: repeat(auto-fit, minmax(var(--avp-tile-min), 1fr));
-  gap: var(--avp-space-3);
+  gap: var(--avp-space-4);
   margin: 0;
 }
 
 .avp-tile {
   /* Declared here for the reason .avp-nav__item's are. Unset, a tile is a
-     plain hairline card; StatTile's `accent` overrides all three. */
-  --avp-tile-accent: var(--avp-line-hairline);
+     plain card; StatTile's `accent` overrides all three. */
+  --avp-tile-accent: var(--avp-text-tertiary);
   --avp-tile-wash: transparent;
   --avp-tile-line: var(--avp-line-hairline);
   display: flex;
   flex-direction: column;
-  gap: var(--avp-space-1);
-  padding: var(--avp-space-4);
+  gap: var(--avp-space-2);
+  padding: var(--avp-space-5);
   border: 1px solid var(--avp-line-hairline);
-  border-radius: var(--avp-radius-lg);
-  background: var(--avp-surface-ground);
-  /* The accent rail. Inert at 0 width until `--avp-tile-accent` is set, so an
-     un-accented tile is a plain card rather than a card with a grey stripe. */
-  border-left: 3px solid var(--avp-tile-accent);
+  border-radius: var(--avp-radius-2xl);
+  background: var(--avp-surface-seated);
+  box-shadow: var(--avp-elev-seated);
   transition: border-color var(--avp-duration-hover) var(--avp-ease-standard),
     background var(--avp-duration-hover) var(--avp-ease-standard);
 }
 
-.avp-tile--accented {
-  background: var(--avp-tile-wash);
-  border-color: var(--avp-tile-line);
-  border-left-color: var(--avp-tile-accent);
+/* A colour shift, not a lift: tiles are read tens of times a day, and the
+   hover only says "this one", never moves the figure. */
+@media (hover: hover) and (pointer: fine) {
+  .avp-tile:hover { background: var(--avp-surface-raised); border-color: var(--avp-line-strong); }
+  .avp-tile--accented:hover { border-color: var(--avp-tile-accent); }
 }
 
+.avp-tile--accented { border-color: var(--avp-tile-line); }
+
 .avp-tile__label {
+  display: flex;
+  align-items: center;
+  gap: var(--avp-space-2);
   font-size: var(--avp-text-ui-2xs);
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: var(--avp-tracking-caps);
   color: var(--avp-text-tertiary);
 }
 
+/* The accent dot: category, beside the label, never around the value. */
+.avp-tile--accented .avp-tile__label::before {
+  content: '';
+  flex: none;
+  width: var(--avp-space-2);
+  height: var(--avp-space-2);
+  border-radius: var(--avp-radius-full);
+  background: var(--avp-tile-accent);
+  box-shadow: 0 0 0 3px var(--avp-tile-wash);
+}
+
 .avp-tile__value {
   margin: 0;
-  font-size: var(--avp-text-ui-xl);
-  font-weight: 600;
-  line-height: var(--avp-leading-display);
+  font-family: var(--avp-font-display);
+  font-size: var(--avp-text-kpi);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: var(--avp-tracking-display);
   color: var(--avp-text-primary);
-  /* Mandatory: these are comparison figures in a grid and they must align
-     column to column. design-direction.md §2 is why Plex is the UI face. */
+  /* Mandatory: comparison figures in a grid must align column to column. */
   font-variant-numeric: tabular-nums;
 }
 
 .avp-tile__note {
   margin: 0;
   font-size: var(--avp-text-ui-xs);
+  line-height: var(--avp-leading-ui);
   color: var(--avp-text-secondary);
 }
 
-/* Emphasis changes WEIGHT as well as colour, so it is not carried by hue
-   alone — the rule VisibilityBadge and the nav's current state both follow. */
+/* Emphasis changes the VALUE's colour — a figure an operator may need to act
+   on — and never the label's, so the category dot keeps its own hue. */
 .avp-tile.is-emphasis .avp-tile__value { color: var(--avp-tile-accent); }
-.avp-tile.is-emphasis { border-left-width: 5px; }
 
 /* ========================== SentimentTide ========================= */
-/*
- * How each engine described the client, scan by scan — Epic A.
- *
- * Tone is carried by POSITION (above/below the waterline) and by pattern, not
- * by hue; hue is the engine. See SentimentTide.tsx for why the semantic
- * success/danger pair was considered and rejected.
- */
 
 .avp-tide__svg { display: block; width: 100%; }
 
-/* The one rule on the chart, and the only thing that must never be missed. */
 .avp-tide__waterline {
   stroke: var(--avp-line-strong);
   stroke-width: 1;
@@ -1950,35 +1957,13 @@
   letter-spacing: var(--avp-tracking-caps);
 }
 
-/*
- * MOTION — the tide rises from the waterline.
- *
- * Tied to a real state change, per design-direction.md §4: the bars are the
- * measurement arriving, and they grow out of the zero line they are measured
- * against rather than fading in from nowhere. `transform-origin` is the
- * waterline itself, so positive grows up and negative grows down from the same
- * place — the geometry animates the metaphor rather than decorating it.
- *
- * Opt-in via `animate`, like the Ledger's reveal. Nothing on a Working screen
- * performs on every load unless something really changed.
- */
+/* MOTION — the tide rises from the waterline, at the LAYOUT tier. */
 .avp-tide--animate .avp-tide__seg {
   transform: scaleY(0);
   transform-box: fill-box;
-  /*
-    THE LAYOUT TIER, NOT THE REVEAL TIER — and the difference is the point.
-    `--avp-duration-reveal` (600ms) is the REPORT's dim-to-lit dissolve, spent
-    once on a document somebody is presenting. This is a Working screen an
-    operator reopens all day, and design-direction.md §4's Epic 9.16 note is
-    explicit that Working screens are excluded from performing on every load.
-    320ms is fast enough not to be a performance and long enough to show the
-    measurement growing out of the zero line it is measured against.
-  */
   animation: avp-tide-rise var(--avp-duration-layout) var(--avp-ease-out) forwards;
 }
 
-/* Positive grows UP from its bottom edge, negative DOWN from its top edge —
-   both away from the waterline they share. */
 .avp-tide--animate .avp-tide__seg--positive { transform-origin: bottom; }
 .avp-tide--animate .avp-tide__seg--negative { transform-origin: top; }
 .avp-tide--animate .avp-tide__seg--neutral { transform-origin: center; }
@@ -1987,15 +1972,6 @@
   to { transform: scaleY(1); }
 }
 
-/*
-  READING AID, NOT DECORATION.
-  Eight bars across three scans is a lot to follow, and the one an operator is
-  pointing at should separate from its neighbours. Opacity only — the data does
-  not move, it is only de-emphasised, so nothing being read changes position.
-  120ms is the hover tier every button and nav item in this product has used
-  since Epic 0. Gated on a real pointer, so a touch device never gets a state
-  it cannot leave — the rule Epic 9.23 established.
-*/
 @media (hover: hover) and (pointer: fine) {
   .avp-tide__bar {
     transition: opacity var(--avp-duration-hover) var(--avp-ease-standard);
@@ -2004,60 +1980,28 @@
   .avp-tide__svg .avp-tide__bar:hover { opacity: 1; }
 }
 
-/*
- * The global prefers-reduced-motion block in base.css resets every animation
- * duration AND delay, so the keyframe lands on its end state instantly and the
- * bars are simply drawn. Stated here because a `scaleY(0)` start state is the
- * one shape that would leave a chart INVISIBLE if that reset ever regressed.
- */
 @media (prefers-reduced-motion: reduce) {
   .avp-tide--animate .avp-tide__seg { transform: scaleY(1); animation: none; }
 }
 
 /* ============================== GapGrid ============================== */
-/*
- * Prompts down, brands across — Epic B.
- *
- * A real <table>, not an SVG heatmap: the data is tabular, so the visible
- * representation and the accessible one are the same object rather than two
- * copies to keep in step. See GapGrid.tsx.
- *
- * COLOUR NEVER CARRIES A VALUE ALONE HERE. Every cell prints its count and
- * every row prints its verdict as a word; intensity and hue are a second
- * reading of both. That is what keeps the grid legible in greyscale and under
- * CVD, and it is the same rule VisibilityBadge follows.
- */
+/* Prompts down, brands across — Epic B. A real <table>. Colour never carries
+   a value alone: every cell prints its count and every row its verdict. */
 
-/*
- * A focus ring on the scroll container.
- *
- * The grid is wider than a narrow viewport and scrolls horizontally, and a
- * scrollable region that cannot take focus cannot be scrolled by keyboard at
- * all — so on a phone-width screen the rival columns were unreachable without
- * a pointer. `tabIndex={0}` in GapGrid.tsx makes it focusable; this makes the
- * focus visible.
- */
 .avp-gapgrid:focus-visible {
   outline: 2px solid var(--avp-gapgrid-accent);
   outline-offset: 2px;
 }
 
 .avp-gapgrid {
-  /* Declared here for the reason .avp-tile's are: unset, the grid must still
-     be a legible neutral table rather than one with invisible rules. GapGrid
-     overrides both from the screen's own bench accent. */
   --avp-gapgrid-accent: var(--avp-line-strong);
   --avp-gapgrid-wash: transparent;
-  /* Per-cell, set inline from the layout's 0-1 intensity. Zero here so a cell
-     that never receives one renders empty rather than fully filled. */
   --avp-gapgrid-fill: 0;
-  /* Its own scroll container. A grid of 24 prompts x 8 brands is wider than a
-     narrow viewport, and the PAGE must never scroll sideways to accommodate
-     it — the rule Epic 9.21 set for the charts. */
   overflow-x: auto;
   border: 1px solid var(--avp-line-hairline);
-  border-radius: var(--avp-radius-lg);
-  background: var(--avp-surface-ground);
+  border-radius: var(--avp-radius-2xl);
+  background: var(--avp-surface-seated);
+  box-shadow: var(--avp-elev-seated);
 }
 
 .avp-gapgrid__table {
@@ -2078,9 +2022,7 @@
   position: sticky;
   top: 0;
   z-index: 1;
-  background: var(--avp-surface-ground);
-  /* The screen's own accent, on the header rule only. The columns below carry
-     brand identity instead, and two accent systems in one table would fight. */
+  background: var(--avp-surface-seated);
   border-bottom: 2px solid var(--avp-gapgrid-accent);
   padding: var(--avp-space-2) var(--avp-space-3);
   text-align: left;
@@ -2116,27 +2058,19 @@
   letter-spacing: 0;
 }
 
-/* §1: one brand, one colour. The client is `beacon` here as everywhere. */
+/* §1: one brand, one colour. */
 .avp-gapgrid__brand--subject {
   color: var(--avp-beacon-600);
 }
 
 .avp-gapgrid__row {
   border-top: 1px solid var(--avp-line-hairline);
-  /* Eased, not an instant repaint. `.avp-table tbody td` carries the argument
-     in full from Epic 9.19: an instant hover repaint is the default-browser
-     feel this product avoids everywhere else, and buttons, fields and nav
-     items have all eased over this token since Epic 0. The cell's own
-     transition does NOT cover this — the row paints on the <tr>, underneath
-     the cells' fills. */
   transition: background var(--avp-duration-hover) var(--avp-ease-standard);
 }
 
-/* Hover isolates one row of twenty-four. A grid this dense is hard to read
-   across, and the row under the pointer is the one being read. */
 @media (hover: hover) {
   .avp-gapgrid__row:hover {
-    background: var(--avp-surface-sunken);
+    background: var(--avp-surface-hover);
   }
 }
 
@@ -2151,8 +2085,6 @@
   display: block;
   font-size: var(--avp-text-ui-sm);
   color: var(--avp-text-primary);
-  /* Two lines, then ellipsis. A generated prompt runs to 300 characters and a
-     row that tall would let four prompts fill the viewport. */
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -2178,23 +2110,15 @@
 .avp-gapgrid__chip {
   display: inline-block;
   padding: 2px var(--avp-space-2);
-  border-radius: var(--avp-radius-sm);
+  border-radius: var(--avp-radius-full);
   font-size: var(--avp-text-ui-2xs);
   text-transform: uppercase;
   letter-spacing: var(--avp-tracking-caps);
-  border: 1px solid var(--avp-line-hairline);
+  border: 1px solid var(--avp-line-strong);
   color: var(--avp-text-secondary);
 }
 
-/*
- * The verdict chips.
- *
- * `absent` is the only one that takes a semantic colour, and it takes `warn`
- * rather than `danger`: a rival owning an answer is a finding to act on, not a
- * system fault, and design-direction.md §1 reserves danger for state. The
- * others are weight and hairline only — a table where six of twenty-four rows
- * are red reads as an outage.
- */
+/* `absent` takes `warn`, not `danger`: a finding to act on, not a fault. */
 .avp-gapgrid__chip--absent {
   border-color: var(--avp-warn);
   color: var(--avp-warn);
@@ -2208,7 +2132,6 @@
   color: var(--avp-beacon-600);
 }
 
-/* Not a gap and not a win. Deliberately the quietest thing in the table. */
 .avp-gapgrid__chip--no_brands,
 .avp-gapgrid__chip--unanswered {
   color: var(--avp-text-tertiary);
@@ -2227,18 +2150,12 @@
   font-size: var(--avp-text-ui-sm);
   color: var(--avp-text-primary);
   /* `--avp-gapgrid-fill` is 0-1: the share of this prompt's engines that named
-     this brand. Carried into alpha so a brand named by one engine of three is
-     visibly weaker than one named by all three. */
+     this brand, carried into alpha. */
   background: color-mix(
     in oklch,
-    var(--avp-ink-400) calc(var(--avp-gapgrid-fill, 0) * 18%),
+    var(--avp-text-tertiary) calc(var(--avp-gapgrid-fill, 0) * 22%),
     transparent
   );
-  /* `--avp-duration-state`, not `--avp-duration-hover`. Nothing about hover
-     changes a cell's background — hover draws an OUTLINE, deliberately, so the
-     fill that encodes the value never moves under the reader. The only thing
-     that repaints a cell is a scan being swapped underneath it, which is a
-     state change and takes the state token, alongside the container's dim. */
   transition: background var(--avp-duration-state) var(--avp-ease-standard);
 }
 
@@ -2246,7 +2163,7 @@
 .avp-gapgrid__cell--subject {
   background: color-mix(
     in oklch,
-    var(--avp-beacon-600) calc(var(--avp-gapgrid-fill, 0) * 28%),
+    var(--avp-beacon-600) calc(var(--avp-gapgrid-fill, 0) * 32%),
     transparent
   );
   border-left: 1px solid var(--avp-line-hairline);
@@ -2258,22 +2175,15 @@
 .avp-gapgrid__cell--took {
   background: color-mix(
     in oklch,
-    var(--avp-warn) calc(var(--avp-gapgrid-fill, 0) * 26%),
+    var(--avp-warn) calc(var(--avp-gapgrid-fill, 0) * 30%),
     transparent
   );
 }
 
 .avp-gapgrid__cell--none { color: var(--avp-text-tertiary); }
 
-/* Rows where nobody was named recede — they are context, not findings. */
 .avp-gapgrid__row--inert .avp-gapgrid__prompt-text { color: var(--avp-text-secondary); }
 
-/*
- * Cell hover, per the brief's "heatmap highlighting on hover per cell".
- *
- * Ring rather than a fill change: the fill already encodes the value, and
- * changing it on hover would make the reader doubt the number they just read.
- */
 @media (hover: hover) {
   .avp-gapgrid__cell:hover {
     outline: 2px solid var(--avp-gapgrid-accent);
@@ -2281,31 +2191,7 @@
   }
 }
 
-/*
- * Arrival — Epic B.
- *
- * `--avp-duration-layout` (320ms), NOT `--avp-duration-reveal` (600ms): §4's
- * Epic 9.16 note excludes Working screens from performing on every load, and
- * Epic A moved SentimentTide down to the same tier for the same reason.
- *
- * NO STAGGER, and the first draft had one — 28ms per row, capped at 12, which
- * put the grid's arrival at 656ms. Running the animation gate over it killed
- * it on three counts and all three are worth keeping written down:
- *
- *   1. 656ms IS performing on every load. The rule was cited in this very
- *      comment while the rule below broke it.
- *   2. The stagger was decoration. A cascade says data is arriving
- *      progressively; this grid arrives whole, from one response, so the
- *      cascade depicts something that did not happen.
- *   3. `28ms` was hand-typed. The only stagger this system defines is
- *      `--avp-stagger-reveal` (70ms), which is reveal-tier and belongs to the
- *      Report — so there was no honest token to spell it in, which is usually
- *      the sign that the motion itself does not belong.
- *
- * What survives is the part tied to data: the cells fill from transparent to
- * their intensity, once, together. The fill IS the value, so watching it
- * arrive is watching the measurement land.
- */
+/* Arrival — Epic B. One fill, no stagger, at the LAYOUT tier. */
 @keyframes avp-gapgrid-fill-in {
   from { background-color: transparent; }
 }
@@ -2314,15 +2200,6 @@
   animation: avp-gapgrid-fill-in var(--avp-duration-layout) var(--avp-ease-out) backwards;
 }
 
-/*
- * A scan being swapped underneath the grid.
- *
- * The picker that triggers it stays mounted — the first draft unmounted the
- * whole body to a loading state, so the control an operator had just used
- * disappeared from under their pointer and came back somewhere else. The grid
- * dims instead, which says "these numbers are stale" without taking the
- * controls away, and `aria-busy` says the same thing to a screen reader.
- */
 .avp-gapgrid--pending {
   opacity: var(--avp-dim-pending);
   transition: opacity var(--avp-duration-state) var(--avp-ease-standard);
@@ -2335,62 +2212,23 @@
   .avp-gapgrid__cell { transition: none; }
 }
 
-/* --- TrendChart annotations, Epic E ---------------------------------------
- * A scan that produced an alert gets a marker UNDER the axis, never on the
- * plot. A mark among the lines reads as a data point, and an annotation is not
- * a measurement — it is a note that something happened at this reading.
- *
- * Shape, not colour, is what tells it from a plotted value: every other mark
- * in this chart is a dot or a line, so a triangle is unambiguous even in
- * greyscale and under CVD. `warn` for the same reason GapGrid's `absent` chip
- * takes it — a finding to act on is not a system fault, and §1 reserves
- * `danger` for state.
- */
+/* --- TrendChart annotations, Epic E --------------------------------------- */
 .avp-trend__annotation { fill: var(--avp-warn); }
 
-/* The date under an annotated column is emphasised too, so the mark is not the
-   only thing carrying it. Weight, not hue — the rule VisibilityBadge follows. */
 .avp-trend__tick--annotated {
   fill: var(--avp-text-primary);
   font-weight: 600;
 }
 
 /* ============================== Alert row ============================== */
-/*
- * One entry in a client's alert feed — Epic E.
- *
- * These two rules existed as class names on the component before they existed
- * here, which rendered fine and did nothing — the silent no-op Epic 7.1's
- * stylesheet guard was written for, found by a craft review rather than by a
- * test. An acknowledged row has to LOOK settled or acknowledging it appears to
- * do nothing at all.
- */
+
 .avp-alert {
-  /*
-   * HOVER tier, not state tier, and the audit is why.
-   *
-   * This one transition serves two triggers: the row settling when it is
-   * acknowledged (a state change, occasional) and the row lifting back to full
-   * opacity on hover (frequent, as an operator reads down the list). 200ms is
-   * right for the first and sluggish on the second, and the frequent trigger
-   * wins — a large opacity delta still reads at 120ms.
-   *
-   * `border-color` was in this list and is gone: `.avp-card` already carries
-   * `border: 1px solid var(--avp-line-hairline)` and the acknowledged state
-   * set the same value, so that half of the transition animated nothing, ever.
-   */
+  /* HOVER tier: this one transition serves the settling of an acknowledged
+     row and the hover that lifts it back, and the frequent trigger wins. */
   transition: opacity var(--avp-duration-hover) var(--avp-ease-standard);
 }
 
-/*
- * Settled, not gone. The row keeps its place in the list — see the note in
- * ClientAlertsView about why acknowledging must not remove it under the
- * cursor — so it has to recede without vanishing.
- *
- * Opacity, not a colour swap: every word in the row is still true after
- * somebody has read it, and greying the text would say the finding had expired
- * rather than been seen.
- */
+/* Settled, not gone. Opacity, not a colour swap. */
 .avp-alert.is-acknowledged {
   opacity: 0.6;
 }
@@ -2403,18 +2241,6 @@
   .avp-alert { transition: none; }
 }
 
-/*
- * The failure line on an alert row — Epic E.
- *
- * The ONE animation that survived this screen's gate. It is tied to a real
- * state change (a request failed), it is rare enough to sit in the delight
- * tier, and an error that appears unannounced is easy to miss — which is the
- * one thing an error message cannot be.
- *
- * `@starting-style` rather than a keyframe: the entry animates without a
- * mount flag, and a transition retargets smoothly if the operator retries
- * before it settles. Opacity only — nothing moves.
- */
 .avp-alert__failure {
   opacity: 1;
   transition: opacity var(--avp-duration-state) var(--avp-ease-out);
@@ -2424,22 +2250,4 @@
   .avp-alert__failure { opacity: 0; }
 }
 
-/*
- * NO reduced-motion override here, deliberately.
- *
- * `base.css` already collapses every transition duration globally with
- * `!important`, so a second rule would be redundant — and unlike
- * `SentimentTide`'s and `GapGrid`'s explicit blocks, this one would guard
- * nothing: those exist because a keyframe's start state could leave content
- * invisible if the global reset ever regressed. `opacity: 1` is this rule's
- * base value, so the worst case is the message simply appearing.
- */
-
-/*
- * The acknowledge button holds its widest label's width.
- *
- * "Acknowledging…" is wider than "Acknowledge", so without this the button
- * grows the moment it is clicked and the row's right edge jumps. A layout fix,
- * not a motion one — animating a jump is worse than not jumping.
- */
 .avp-alert__ack { min-width: 9.5rem; }

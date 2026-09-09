@@ -55,7 +55,7 @@ textarea {
 
 ::selection {
   background: var(--avp-beacon-100);
-  color: var(--avp-ink-900);
+  color: var(--avp-text-primary);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -77,12 +77,15 @@ textarea {
   }
 }
 
-/* Export path: the report is a document first. */
+/* Export path: the report is a document first. The document carries its own
+   paper palette (`.avp-report` in tokens.css); what a print needs from here
+   is a white page around it and no workspace chrome. */
 @media print {
   body {
     background: #fff;
   }
-  .avp-no-print {
+  .avp-no-print,
+  .avp-shell__sidebar {
     display: none !important;
   }
 }

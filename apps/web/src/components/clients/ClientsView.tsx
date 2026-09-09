@@ -23,10 +23,12 @@ import type { JSX } from 'react';
 import {
   Badge,
   Button,
+  Card,
   DataTable,
   EmptyState,
   ErrorState,
   LoadingState,
+  PageHead,
   StatRow,
   StatTile,
 } from '@avp/design-system';
@@ -88,18 +90,21 @@ export function ClientsView({
       )}
 
       {state.kind === 'ready' && (
-        <div className="flex flex-col gap-8">
-          <header className="flex flex-col gap-6 border-b border-line-hairline pb-8">
-            <div>
-              <p className="text-ui-2xs uppercase tracking-caps text-text-tertiary">
-                Clients
-              </p>
-              <h1 className="mt-2 font-editorial text-ed-sm leading-display tracking-display text-text-primary">
-                {state.clients.length === 1
-                  ? 'One business'
-                  : `${state.clients.length} businesses`}
-              </h1>
-            </div>
+        <div className="flex flex-col gap-6">
+          <PageHead
+            eyebrow="Clients"
+            title={
+              state.clients.length === 1
+                ? 'One business'
+                : `${state.clients.length} businesses`
+            }
+            aside={
+              <Button variant="primary" size="sm" onClick={() => window.location.assign('/')}>
+                Scan a business
+              </Button>
+            }
+          />
+          <>
             {/*
               The classification split, in the dashboard header's own treatment
               — Epic 9.19. Three columns of table stretched across a Working
@@ -154,8 +159,9 @@ export function ClientsView({
                 />
               </StatRow>
             )}
-          </header>
+          </>
 
+          <Card elevation="seated">
           <DataTable
             columns={[
               {
@@ -173,7 +179,7 @@ export function ClientsView({
                   <div className="flex flex-col gap-0.5">
                     <a
                       href={`/clients/${c.id}`}
-                      className="text-ui-base font-medium text-text-primary underline decoration-line-strong underline-offset-2 transition-colors duration-hover ease-out hover:text-beacon-700 hover:decoration-beacon-400"
+                      className="text-ui-base font-medium text-text-primary underline decoration-line-strong underline-offset-2 transition-colors duration-hover ease-out hover:text-beacon-600 hover:decoration-beacon-400"
                     >
                       {c.brandName ?? c.name}
                     </a>
@@ -236,6 +242,7 @@ export function ClientsView({
               />
             }
           />
+          </Card>
 
           {state.more && (
             /*

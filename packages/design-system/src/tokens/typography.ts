@@ -1,11 +1,19 @@
 /**
  * Typography tokens.
  *
- * Three faces, three jobs, all OFL-licensed via Google Fonts (ip-safety.md #4).
+ * Four faces, four jobs, all OFL-licensed via Google Fonts (ip-safety.md #4).
  *
- * - Fraunces  (editorial) — a serif is the loudest available signal that this
- *   is a document making an argument, not a metrics grid. Variable, with opsz
- *   and SOFT/WONK axes, so it sets warm at display sizes without going stiff.
+ * - Space Grotesk (display) — Epic 14. The product's own voice on every
+ *   Working screen: headings, KPI figures, the hero numeral. A geometric
+ *   grotesk with genuine character in its figures (the flat-based 1, the open
+ *   4, the squared 0) and TRUE TABULAR FIGURES, so a row of KPI tiles aligns.
+ *   Deliberately not Inter, and deliberately not the serif below: a dark,
+ *   data-dense analytics screen set in an editorial serif was the single
+ *   loudest thing the founder rejected about the light system.
+ *
+ * - Fraunces  (editorial) — THE REPORT'S face, and only the report's. A serif
+ *   is the loudest available signal that this is a document making an
+ *   argument, not a metrics grid, and the printed document still makes one.
  * - IBM Plex Sans (interface) — deliberately NOT Inter, which is the default of
  *   the entire category and reads as generic SaaS. Plex carries more character,
  *   stays unambiguous at 12-14px, and ships true TABULAR FIGURES, which are
@@ -18,6 +26,7 @@
  */
 
 export const fontFamily = {
+  display: "'Space Grotesk', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif",
   editorial: "'Fraunces Variable', 'Fraunces', ui-serif, Georgia, 'Times New Roman', serif",
   ui: "'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif",
   mono: "'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
@@ -61,6 +70,18 @@ export const fontSizeEditorial = {
  */
 export const fontSizeScore = '7rem'; // 112
 
+/**
+ * The two display figures the dark identity adds — Epic 14.
+ *
+ * `kpi` is a figure in a tile; `hero` is the one figure at the top of a
+ * screen — the portfolio's median on the dashboard, a client's latest score
+ * on its Overview. The hero is fluid because it is the first thing on the
+ * screen at every viewport, and a fixed 84px is either a wall at 375px or
+ * timid at 1440.
+ */
+export const fontSizeKpi = '1.875rem'; // 30
+export const fontSizeHero = 'clamp(3.5rem, 2.5rem + 3vw, 5.25rem)'; // 56 – 84
+
 export const fontWeight = {
   regular: 400,
   medium: 500,
@@ -78,6 +99,8 @@ export const lineHeight = {
 export const letterSpacing = {
   /** Applied above 39px — large type needs negative tracking to hold together. */
   display: '-0.02em',
+  /** The hero numeral, tighter still — at 80px letters read too far apart. */
+  hero: '-0.04em',
   normal: '0',
   /** All-caps micro-labels need positive tracking to stay readable. */
   caps: '0.06em',
@@ -87,13 +110,14 @@ export const letterSpacing = {
 export const measure = '68ch';
 
 /**
- * Google Fonts URL for the three faces.
+ * Google Fonts URL for the four faces.
  * Kept here so there is exactly one place fonts are declared, and so an audit
  * against ip-safety.md #4 has a single thing to check.
  */
 export const GOOGLE_FONTS_HREF =
   'https://fonts.googleapis.com/css2' +
-  '?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700' +
+  '?family=Space+Grotesk:wght@500;600;700' +
+  '&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700' +
   '&family=IBM+Plex+Sans:wght@400;500;600;700' +
   '&family=IBM+Plex+Mono:wght@400;500' +
   '&display=swap';

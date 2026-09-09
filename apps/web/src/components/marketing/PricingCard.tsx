@@ -98,7 +98,7 @@ export function PricingCard({
               One plan
             </p>
             <p className="mt-3 flex items-baseline gap-2">
-              <span className="font-editorial text-ed-xl leading-display tracking-display text-text-primary">
+              <span className="font-display text-ed-xl leading-display tracking-display text-text-primary">
                 ${PLAN_PRICE_USD}
               </span>
               <span className="text-ui-md text-text-secondary">per month</span>

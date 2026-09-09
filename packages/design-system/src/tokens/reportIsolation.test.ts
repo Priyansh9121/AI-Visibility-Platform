@@ -308,11 +308,12 @@ describe('colour utilities exist in the preset', () => {
    * so a general check there produces false positives rather than findings.
    */
   const GROUPS: Record<string, readonly string[]> = {
-    line: ['hairline', 'strong'],
-    surface: ['ground', 'sunken', 'seated'],
+    line: ['hairline', 'strong', 'ink'],
+    surface: ['ground', 'sunken', 'seated', 'raised', 'void', 'hover'],
     text: ['primary', 'body', 'secondary', 'tertiary'],
+    on: ['accent', 'danger', 'warn'],
   };
-  const RADII = ['none', 'sm', 'md', 'lg', 'xl', 'full'];
+  const RADII = ['none', 'sm', 'md', 'lg', 'xl', '2xl', 'full'];
 
   const GROUPED = new RegExp(
     `\\b(?:${COLOUR_PREFIXES})-(${Object.keys(GROUPS).join('|')})-([a-z][a-z0-9]*)\\b`,

@@ -12,7 +12,7 @@ import {
   type LedgerDimension,
 } from './ledgerLayout.js';
 import { ChartFrame } from './ChartFrame.js';
-import { onVisibility } from '../../tokens/color.js';
+import { onVisibility, visibilityColorDark, type SeriesPalette } from '../../tokens/color.js';
 import { cn } from '../../lib/cn.js';
 import { prefersReducedMotion } from '../../lib/motion.js';
 import { useRevealOnIntersect } from '../../lib/useRevealOnIntersect.js';
@@ -95,6 +95,38 @@ export interface LuminanceLedgerProps {
    * recorded as a known, deliberate exception.
    */
   bounded?: boolean;
+  /**
+   * Draw the column SMALL, for a grid of them — Epic 13. **Defaults to
+   * `false`**, the same guardrail as `staggerDimensions`, `unmeasured` and
+   * `bounded`, and for the same reason: neither report call site passes
+   * anything, so the document gets Epic 0's drawing.
+   *
+   * What changes: the label gutter goes (a grid of six columns each repeating
+   * "Mention Rate, 30% weight" is noise, and the caller puts the stack order
+   * beside the grid once), the column narrows, the gap annotation is not
+   * drawn, and the figure bounds itself at its drawn width — a mini chart
+   * that scaled its 12px values up with its container would defeat the point
+   * of being small. The hidden data table is unchanged, so a screen reader
+   * gets every label a sighted reader gets from the legend.
+   *
+   * What does NOT change: the identity. Segment height is still weight and
+   * lit height is still value, so two compact columns side by side compare
+   * honestly, which is what a grid of them is for.
+   */
+  compact?: boolean;
+  /**
+   * Which context this chart is drawn in — Epic 14. **Defaults to `'report'`**,
+   * the same guardrail `TrendChart` carries and for the same reason: the
+   * report never opts in, so a document rendered by someone who has never read
+   * this file gets the paper ramp its PDF has always carried.
+   *
+   * On a Working screen the lit segments take the DARK ramp
+   * (`visibilityColorDark`): same five hues, same direction, lifted so the
+   * "absent" end reads as dim-but-present against near-black rather than as a
+   * hole. The identity is untouched — only the paint changes, and the label
+   * colour on each segment is still resolved from the segment's own lightness.
+   */
+  palette?: SeriesPalette;
   className?: string;
 }
 
@@ -104,6 +136,13 @@ const GHOST_GAP = 12;
 const LABEL_GUTTER = 188;
 const PAD_TOP = 28;
 const PAD_BOTTOM = 34;
+
+/** Compact geometry — Epic 13. No gutter: the legend lives beside the grid. */
+const COMPACT_COLUMN_WIDTH = 84;
+const COMPACT_PAD_X = 8;
+const COMPACT_PAD_TOP = 10;
+const COMPACT_PAD_BOTTOM = 24;
+const COMPACT_HEIGHT = 180;
 
 /**
  * THE LUMINANCE LEDGER — the product's signature visualisation.
@@ -130,15 +169,34 @@ export function LuminanceLedger({
   subjectName,
   dimensions,
   competitors = [],
-  height = 420,
+  height: heightProp,
   animate = true,
   staggerDimensions = false,
   annotateGap = true,
   unmeasured = false,
   bounded = false,
+  compact = false,
   className,
+  palette = 'report',
 }: LuminanceLedgerProps): JSX.Element {
-  const layout = layoutLedger(dimensions, { height, competitors });
+  const height = heightProp ?? (compact ? COMPACT_HEIGHT : 420);
+
+  // PARTIAL: some dimension was never measured for THIS subject — Epic 13.
+  //
+  // The geometry is drawn on the full weight basis, with the unmeasured
+  // segments at zero so their shape is there and their light is not. That
+  // makes `layout.composite` a number over a basis this subject was not
+  // scored on, and it is therefore never spoken, printed or annotated below.
+  // Distinct from `unmeasured`, which is the whole column: that says "nothing
+  // was measured yet", this says "this dimension is not measured for this
+  // subject", and the second must not read as the first.
+  const partial = dimensions.some((d) => d.measured === false);
+  const measuredCount = dimensions.filter((d) => d.measured !== false).length;
+  const layout = layoutLedger(
+    partial ? dimensions.map((d) => (d.measured === false ? { ...d, subscore: 0 } : d)) : dimensions,
+    { height, competitors },
+  );
+  const unmeasuredKeys = new Set(dimensions.filter((d) => d.measured === false).map((d) => d.key));
   const uid = useId().replace(/:/g, '');
 
   // TWO TRIGGERS, AND THE UNSTAGGERED ONE IS UNCHANGED FROM EPIC 0.
@@ -168,9 +226,21 @@ export function LuminanceLedger({
 
   const ghostBlockWidth =
     competitors.length > 0 ? competitors.length * (GHOST_WIDTH + GHOST_GAP) + GHOST_GAP : 0;
-  const width = LABEL_GUTTER + COLUMN_WIDTH + ghostBlockWidth + 24;
-  const totalHeight = height + PAD_TOP + PAD_BOTTOM;
-  const columnX = LABEL_GUTTER;
+  const columnWidth = compact ? COMPACT_COLUMN_WIDTH : COLUMN_WIDTH;
+  const columnX = compact ? COMPACT_PAD_X : LABEL_GUTTER;
+  const padTop = compact ? COMPACT_PAD_TOP : PAD_TOP;
+  const padBottom = compact ? COMPACT_PAD_BOTTOM : PAD_BOTTOM;
+  const width = compact
+    ? COMPACT_PAD_X + columnWidth + ghostBlockWidth + COMPACT_PAD_X
+    : LABEL_GUTTER + COLUMN_WIDTH + ghostBlockWidth + 24;
+  const totalHeight = height + padTop + padBottom;
+  // A compact column bounds itself: see the prop's note.
+  const bound = bounded || compact;
+  // No gap on a compact column (nowhere to write it) and none on a partial
+  // one (the largest unlit area is the dimension nobody measured, which is
+  // not a gap this subject can close).
+  const drawGap = annotateGap && !unmeasured && !compact && !partial;
+  const valueMin = compact ? 14 : 20;
 
   if (layout.composite === null) {
     return (
@@ -185,6 +255,7 @@ export function LuminanceLedger({
   }
 
   const score = Math.round(layout.composite);
+  const hatchId = `ledger-hatch-${uid}`;
 
   return (
     <ChartFrame
@@ -193,6 +264,9 @@ export function LuminanceLedger({
         // The one marker the report-path regression test looks for.
         staggerDimensions && 'avp-ledger--staggered',
         unmeasured && 'avp-ledger--unmeasured',
+        compact && 'avp-ledger--compact',
+        partial && 'avp-ledger--partial',
+        palette === 'working' && 'avp-ledger--working',
         className,
       )}
       ariaLabel={
@@ -200,15 +274,27 @@ export function LuminanceLedger({
           ? `The ${layout.segments.length} weighted dimensions an AI Visibility scan measures, none of them measured yet: ` +
             layout.segments.map((s) => `${s.label}, worth ${s.weight} points`).join('. ') +
             '.'
-          : `AI Visibility Score for ${subjectName}: ${score} out of 100. ` +
-            layout.segments
-              .map((s) => `${s.label} ${Math.round(s.subscore)} of 100, weighted ${s.weight} percent`)
-              .join('. ') +
-            (layout.biggestGap
-              ? `. Largest recoverable gap: ${layout.biggestGap.label}, worth ${layout.biggestGap.gap.toFixed(1)} points.`
-              : '')
+          : partial
+            ? // No composite is spoken: the column is on a basis this subject
+              // was not scored on. Each measured dimension is a real figure.
+              `${subjectName}, measured on ${measuredCount} of ${layout.segments.length} dimensions. ` +
+              layout.segments
+                .map((s) =>
+                  unmeasuredKeys.has(s.key)
+                    ? `${s.label}: not measured for ${subjectName}`
+                    : `${s.label} ${Math.round(s.subscore)} of 100, weighted ${s.weight} percent`,
+                )
+                .join('. ') +
+              '. No combined score, because the dimensions are not all measured.'
+            : `AI Visibility Score for ${subjectName}: ${score} out of 100. ` +
+              layout.segments
+                .map((s) => `${s.label} ${Math.round(s.subscore)} of 100, weighted ${s.weight} percent`)
+                .join('. ') +
+              (layout.biggestGap
+                ? `. Largest recoverable gap: ${layout.biggestGap.label}, worth ${layout.biggestGap.gap.toFixed(1)} points.`
+                : '')
       }
-      {...(bounded ? { style: { maxWidth: `${width}px` } } : {})}
+      {...(bound ? { style: { maxWidth: `${width}px` } } : {})}
       dataTable={
         unmeasured ? (
           <table>
@@ -232,7 +318,11 @@ export function LuminanceLedger({
           </table>
         ) : (
         <table>
-          <caption>{`AI Visibility Score breakdown for ${subjectName}`}</caption>
+          <caption>
+            {partial
+              ? `Dimension readings for ${subjectName}`
+              : `AI Visibility Score breakdown for ${subjectName}`}
+          </caption>
           <thead>
             <tr>
               <th scope="col">Dimension</th>
@@ -243,20 +333,34 @@ export function LuminanceLedger({
             </tr>
           </thead>
           <tbody>
-            {layout.segments.map((s) => (
-              <tr key={s.key}>
-                <th scope="row">{s.label}</th>
-                <td>{s.weight}%</td>
-                <td>{Math.round(s.subscore)}</td>
-                <td>{((s.weight * s.subscore) / 100).toFixed(1)}</td>
-                <td>{s.weight}</td>
-              </tr>
-            ))}
+            {layout.segments.map((s) =>
+              unmeasuredKeys.has(s.key) ? (
+                <tr key={s.key}>
+                  <th scope="row">{s.label}</th>
+                  <td>{s.weight}%</td>
+                  <td>Not measured</td>
+                  <td>Not measured</td>
+                  <td>{s.weight}</td>
+                </tr>
+              ) : (
+                <tr key={s.key}>
+                  <th scope="row">{s.label}</th>
+                  <td>{s.weight}%</td>
+                  <td>{Math.round(s.subscore)}</td>
+                  <td>{((s.weight * s.subscore) / 100).toFixed(1)}</td>
+                  <td>{s.weight}</td>
+                </tr>
+              ),
+            )}
           </tbody>
           <tfoot>
             <tr>
               <th scope="row">Composite</th>
-              <td colSpan={4}>{score} / 100</td>
+              <td colSpan={4}>
+                {partial
+                  ? `No composite — measured on ${measuredCount} of ${layout.segments.length} dimensions`
+                  : `${score} / 100`}
+              </td>
             </tr>
           </tfoot>
         </table>
@@ -271,10 +375,20 @@ export function LuminanceLedger({
         aria-hidden="true"
         focusable="false"
       >
-        <g transform={`translate(0, ${PAD_TOP})`}>
+        {partial && (
+          // The hatch for a dimension nobody measured for this subject. Defined
+          // per instance so a grid of partial columns never shares an id.
+          <defs>
+            <pattern id={hatchId} width="6" height="6" patternUnits="userSpaceOnUse">
+              <path d="M0 6 L6 0" className="avp-ledger__hatch" />
+            </pattern>
+          </defs>
+        )}
+        <g transform={`translate(0, ${padTop})`}>
           {/* ---- subject column ---- */}
           {layout.segments.map((seg, segIndex) => {
-            const labelFits = seg.height >= 22;
+            const labelFits = !compact && seg.height >= 22;
+            const segUnmeasured = unmeasuredKeys.has(seg.key);
             // Only emitted when staggering. An unstaggered ledger carries no
             // index at all, so the report's markup is unchanged rather than
             // merely unaffected — which is what the regression test asserts.
@@ -287,20 +401,34 @@ export function LuminanceLedger({
                 <rect
                   x={columnX}
                   y={seg.y}
-                  width={COLUMN_WIDTH}
+                  width={columnWidth}
                   height={seg.height}
                   className="avp-ledger__void"
                 />
+                {segUnmeasured && (
+                  // Shape only, hatched: the dimension exists in the score,
+                  // and this subject has no reading on it. Drawn over the
+                  // void rather than instead of it so the column's outline
+                  // and rules are identical to a measured column's.
+                  <rect
+                    x={columnX}
+                    y={seg.y}
+                    width={columnWidth}
+                    height={seg.height}
+                    fill={`url(#${hatchId})`}
+                    className="avp-ledger__void--unmeasured"
+                  />
+                )}
                 {/* lit portion: what was actually earned */}
                 <rect
                   x={columnX}
                   y={seg.litY}
-                  width={COLUMN_WIDTH}
+                  width={columnWidth}
                   height={seg.litHeight}
-                  fill={seg.color}
+                  fill={palette === 'working' ? visibilityColorDark(seg.subscore) : seg.color}
                   className="avp-ledger__lit"
                   style={{
-                    transformOrigin: `${columnX + COLUMN_WIDTH / 2}px ${seg.y + seg.height}px`,
+                    transformOrigin: `${columnX + columnWidth / 2}px ${seg.y + seg.height}px`,
                     transform: revealed ? 'scaleY(1)' : 'scaleY(0)',
                     ...stagger,
                   }}
@@ -309,7 +437,7 @@ export function LuminanceLedger({
                 <line
                   x1={columnX}
                   y1={seg.y}
-                  x2={columnX + COLUMN_WIDTH}
+                  x2={columnX + columnWidth}
                   y2={seg.y}
                   className="avp-ledger__rule"
                 />
@@ -340,9 +468,9 @@ export function LuminanceLedger({
                     Never drawn when unmeasured — a nothing-measured ledger has
                     no per-dimension figure to print, and at sub-score 0 there
                     is no lit area to print it in either. */}
-                {!unmeasured && seg.litHeight >= 20 && (
+                {!unmeasured && !segUnmeasured && seg.litHeight >= valueMin && (
                   <text
-                    x={columnX + COLUMN_WIDTH / 2}
+                    x={columnX + columnWidth / 2}
                     y={seg.litY + Math.min(seg.litHeight, seg.height) / 2 + 4}
                     textAnchor="middle"
                     className="avp-ledger__value"
@@ -360,13 +488,13 @@ export function LuminanceLedger({
           <rect
             x={columnX}
             y={0}
-            width={COLUMN_WIDTH}
+            width={columnWidth}
             height={height}
             className="avp-ledger__outline"
           />
 
           {/* ---- biggest-gap annotation: this IS the report headline ---- */}
-          {annotateGap && !unmeasured && layout.biggestGap && layout.biggestGap.gap > 0.5 && (
+          {drawGap && layout.biggestGap && layout.biggestGap.gap > 0.5 && (
             <g className="avp-ledger__annotation" style={{ opacity: revealed ? 1 : 0 }}>
               <line
                 x1={columnX}
@@ -397,7 +525,7 @@ export function LuminanceLedger({
 
           {/* ---- competitor ghost columns ---- */}
           {layout.ghosts.map((ghost) => {
-            const gx = columnX + COLUMN_WIDTH + GHOST_GAP + ghost.index * (GHOST_WIDTH + GHOST_GAP);
+            const gx = columnX + columnWidth + GHOST_GAP + ghost.index * (GHOST_WIDTH + GHOST_GAP);
             return (
               <g key={`${ghost.name}-${ghost.index}`}>
                 <rect
@@ -442,18 +570,28 @@ export function LuminanceLedger({
           })}
 
           {/* baseline */}
-          <line x1={columnX - 8} y1={height} x2={width} y2={height} className="avp-ledger__base" />
-          <text x={columnX + COLUMN_WIDTH / 2} y={height + 20} textAnchor="middle" className="avp-ledger__subject">
-            {subjectName}
+          <line
+            x1={compact ? 0 : columnX - 8}
+            y1={height}
+            x2={width}
+            y2={height}
+            className="avp-ledger__base"
+          />
+          <text x={columnX + columnWidth / 2} y={height + 18} textAnchor="middle" className="avp-ledger__subject">
+            {compact ? abbreviate(subjectName, 13) : subjectName}
           </text>
         </g>
-        <title id={`ledger-${uid}`}>{`AI Visibility Score: ${score} of 100`}</title>
+        <title id={`ledger-${uid}`}>
+          {partial
+            ? `${subjectName}: measured on ${measuredCount} of ${layout.segments.length} dimensions`
+            : `AI Visibility Score: ${score} of 100`}
+        </title>
       </svg>
     </ChartFrame>
   );
 }
 
-/** Ghost columns are narrow; long competitor names need trimming. */
-function abbreviate(name: string): string {
-  return name.length <= 9 ? name : `${name.slice(0, 8)}…`;
+/** Ghost columns and compact columns are narrow; long names need trimming. */
+function abbreviate(name: string, max = 9): string {
+  return name.length <= max ? name : `${name.slice(0, max - 1)}…`;
 }

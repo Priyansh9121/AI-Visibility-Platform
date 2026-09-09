@@ -439,14 +439,20 @@ describe('accents mark categories, never measurements', () => {
     expect(out).toContain('--avp-bench-');
   });
 
-  it('leaves the median visibility tile unaccented, because it is a score', () => {
-    // Split the row into its tiles and look at the one that carries the score.
-    const tiles = html().split('<div class="avp-tile');
-    const median = tiles.find((t) => t.includes('Median visibility'));
-    expect(median, 'no Median visibility tile rendered').toBeDefined();
-    expect(median!).not.toContain('--avp-bench-');
-    // ...while its neighbours, which are counts, do carry one.
+  it('leaves the portfolio hero unaccented, because it is a score — Epic 14', () => {
+    // The median moved from a tile to the hero; the rule moved with it. The
+    // hero's colour is the ramp's gradient at the score, never a bench hue.
+    const out = html();
+    const heroStart = out.indexOf('<section class="avp-hero');
+    expect(heroStart, 'no hero rendered').toBeGreaterThanOrEqual(0);
+    const hero = out.slice(heroStart, out.indexOf('</section>', heroStart));
+    expect(hero).toContain('Portfolio visibility');
+    expect(hero).not.toContain('--avp-bench-');
+    expect(hero).toContain('--avp-hero-gradient');
+    // ...while the tiles, which are counts, do carry one.
+    const tiles = out.split('<div class="avp-tile');
     expect(tiles.find((t) => t.includes('Clients'))!).toContain('--avp-bench-');
+    expect(tiles.some((t) => t.includes('Median visibility'))).toBe(false);
   });
 
   it('states what the median is across, so the figure is checkable', () => {

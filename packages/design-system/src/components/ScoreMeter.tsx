@@ -1,6 +1,6 @@
 import type { JSX } from 'react';
 import { cn } from '../lib/cn.js';
-import { visibilityColor, visibilityBand } from '../tokens/color.js';
+import { visibilityColorDark, visibilityBand } from '../tokens/color.js';
 
 /**
  * Why a score has no number. Both are real states the API distinguishes; neither
@@ -67,6 +67,11 @@ const BAND_LABEL: Record<ReturnType<typeof visibilityBand>, string> = {
  *
  * Pure and hook-free, so it stays server-renderable like Card, Badge and Table
  * — Epic 7's static-markup render path depends on that.
+ *
+ * PAINTED FROM THE DARK RAMP — Epic 14. This component only ever renders on a
+ * Working screen (the dashboard's table, a client's history), and those are
+ * dark now; the paper ramp's low end (L 0.42) all but vanishes on near-black.
+ * The report's figures keep `visibilityColor` and are untouched.
  */
 export function ScoreMeter({
   score,
@@ -92,7 +97,7 @@ export function ScoreMeter({
   return (
     <div className={cn('avp-meter', className)}>
       <div className="avp-meter__head">
-        <span className="avp-meter__numeral" style={{ color: visibilityColor(rounded) }}>
+        <span className="avp-meter__numeral" style={{ color: visibilityColorDark(rounded) }}>
           {rounded}
         </span>
         <span className="avp-meter__band">{BAND_LABEL[band]}</span>
@@ -105,7 +110,7 @@ export function ScoreMeter({
         {/* Lit length IS the score. Width is the only channel carrying value. */}
         <div
           className="avp-meter__lit"
-          style={{ width: `${clamped}%`, background: visibilityColor(rounded) }}
+          style={{ width: `${clamped}%`, background: visibilityColorDark(rounded) }}
         />
       </div>
     </div>

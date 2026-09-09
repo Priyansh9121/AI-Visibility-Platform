@@ -1,6 +1,19 @@
-# Design Direction — Epic 0 Proposal (SIGNED OFF; see the status note)
+# Design Direction — Epic 0 Proposal (SIGNED OFF; see the status notes)
 
 Nothing in `packages/design-system` is built until this is signed off.
+
+> **Status, added in Epic 14 (2026-09-09). §§0–4 below describe the light,
+> paper-derived identity Epic 0 chose. That identity is no longer what the
+> product looks like.** The founder rejected it after seeing it live and
+> directed a full visual redesign: dark by default, a display sans instead of
+> the editorial serif on every Working screen, two saturated accents carrying
+> real weight, metric tiles as a card grid, charts with filled weight. §7 at
+> the end of this file records that direction as built and says, argument by
+> argument, which of §§0–4's reasoning it supersedes and which it keeps. The
+> sections are left in place rather than rewritten, the way Epic 13's build
+> log entry kept 9.20's argument beside the decision that reversed it: the
+> printed **report still renders on the paper system**, so §§0–4 are still the
+> reasoning for that one artefact.
 
 > **Status, added in Epic 7.1.** The heading said "AWAITING APPROVAL" for the
 > whole life of the project. It has been stale since Epic 0.4: all five items in
@@ -758,3 +771,146 @@ eleven pages that would fix it. That progression is the product.
 Once approved I build the token layer, the component skeleton (buttons, cards,
 tables, chart primitives, report layout primitives), the Luminance Ledger, and the
 style guide page.
+
+---
+
+## 7. Epic 14 — the dark identity, and what it supersedes
+
+**Designed from:** `scoring-spec.md`'s five dimensions, `ClientHistory`,
+`CompetitorSet` and the operator's goals, in the visual language of the
+AI-visibility / GEO analytics genre. **No competitor product was opened,
+screenshotted or navigated to while building this** — `ip-safety.md` #1's
+actual rule: research the category, never design from a competitor's screen.
+The genre was taken as a *direction* (dark, data-dense, hero KPI, card grids,
+weighted charts); every screen below was then derived from our own data model.
+
+### 7.0 The decision, and who made it
+
+Epic 0's §0 argued that the presenting context wins ties, and drew a light,
+paper, serif system from that. The founder saw it live and rejected it for the
+product: an operator's console set like a printed document reads as a document,
+and the product had to read as the analytics tool it is. This is a founder
+decision, recorded as such, and the reasons below are the reasons the new
+direction *holds*, not the reasons the old one was wrong. Where an old argument
+is still true it is kept and said so.
+
+### 7.1 What §0 gets to keep, and what it loses
+
+**Kept: the two contexts.** The report is still a document a CMO reads on
+paper. It still renders on Epic 0's palette, Epic 0's serif, Epic 0's
+borders-and-offsets elevation — scoped to `article.avp-report` in
+`tokens.css` so it carries its own skin wherever it is rendered, with **zero
+change to its markup**. `reportIsolation.test.ts` and `ReportView.test.tsx`
+assert it acquires none of the dark identity's opt-ins.
+
+**Lost: "the presenting context wins ties" for the product.** Every Working
+screen — the shell, the dashboard, the clients list, a client's whole space —
+is now designed for the operator with twenty tabs open, and the report is the
+exception rather than the rule. §0's own table already said Working screens
+are "tolerant of dark UI"; Epic 14 takes that at its word.
+
+### 7.2 Colour — supersedes §1's neutrals and its "restrained accent" rule
+
+**Ground.** Deep cool charcoal, `oklch(0.175 0.012 265)`, never pure black.
+The sidebar sits one step darker (sunken), cards one step lighter (seated),
+a hovered card one more (raised). Hue 265 is the cool-ink axis §1 chose for
+dark neutrals; the text is warm (hue 75) for the reason paper was. §1's
+warm-light / cool-dark hand-off is **inverted, not abandoned**.
+
+**Two accents, both saturated, both carrying weight.** This explicitly
+replaces §1's philosophy of one restrained accent plus categorical hues only.
+
+| Accent | Dark stop (600) | Job |
+|---|---|---|
+| **beacon** | `oklch(0.80 0.13 200)` | Still "the client's colour" — the rule §1 made, kept. Now the electric stop of the same hue, so the meaning system survives the retune. Primary CTAs, focus, the sidebar rail, the client's line on every chart. |
+| **signal** | `oklch(0.84 0.17 155)` | Beacon's gradient partner and nothing else: the primary button's gradient and the glow behind a hero. It never encodes a value, a category or a state on its own. |
+
+**Gradients on hero numbers are appropriate, and they are derived, not
+decorative.** The hero numeral's gradient comes from the visibility ramp at
+that score (`heroGradient()`): a 12 glows dim clay, an 88 glows lit cyan.
+That is §1's "visibility is luminance" metaphor at the size the founder asked
+for, and the ramp is still the score's colour language — a score is still
+never wrapped in a categorical hue.
+
+**The ramp keeps its direction, lifted.** Same five hues, monotonic in
+lightness, warm to cool; the low end lifted so "absent" reads as
+dim-but-present against near-black. `visibilityColorDark()` is the Working
+screens' ramp; `visibilityColor()` is the report's, untouched, because its
+fills land in PDFs clients compare across months. The three ramp invariants
+are asserted on both.
+
+**"Fill only, never text" is a paper rule.** It existed because the ramp's
+high end could not hit 4.5:1 on paper. On the dark ground the lifted ramp
+clears the ground at every stop for large text, and the hero numeral is
+floored at L 0.70 for exactly that reason.
+
+**The bench layer is unchanged in hue and now dark by default.** The seven
+categorical accents, the 30° buffer and the full-arc argument all stand; the
+dark stops move into `:root` and `benchDark` in `color.ts`, and the paper
+stops move into the report's scope.
+
+### 7.3 Type — supersedes §2's "the serif is the loudest signal"
+
+§2 chose Fraunces because "a serif is the single loudest signal that this is a
+document making an argument, not a metrics grid." For the report that is still
+true, and the report keeps it. For the product it was the loudest thing the
+founder rejected.
+
+**Display: Space Grotesk** (OFL, Google Fonts). A geometric grotesk with
+genuine character in its figures — the flat-based 1, the open 4, the squared
+0 — and **true tabular figures**, so a row of KPI tiles aligns. Chosen per
+`design-taste-frontend`'s guidance: not Inter, not a serif on a dashboard, a
+face with a point of view. Headings, KPI figures and the hero numeral.
+Interface stays IBM Plex Sans, evidence stays IBM Plex Mono — both already
+carried the tabular-figures requirement and neither was the problem.
+
+Two sizes join the ladders: `--avp-text-kpi` (30px, a figure in a tile) and
+`--avp-text-hero` (fluid 56–84px, the one figure at the top of a screen), with
+`--avp-tracking-hero` at −0.04em.
+
+### 7.4 Cards, elevation and the shape lock — supersedes §4's "paper doesn't float"
+
+§4's rule existed because blurred shadows vanish in print. The report keeps
+it. On the dark ground **a card is a plate with light on it**: a surface one
+tone above the ground, a hairline, a 1px inner highlight along the top edge,
+and a shadow tinted to the ground rather than black at low alpha. Hover lifts
+the surface one tone and brightens the border over the existing 120ms hover
+token — a colour shift, never a translate, because tiles are read tens of
+times a day.
+
+**The shape lock.** Cards, tiles and the hero take 16px; buttons, inputs and
+nav rows take 8px; chips are pills. One rule, followed everywhere, shown in
+the styleguide. The report keeps Epic 0's 3px / 5px through its scope so no
+corner in the document moves.
+
+"Emphasis is light, not lift" survives intact: focus is still a beacon ring
+and halo, selection still reads as lit from within.
+
+### 7.5 Charts — extends §5 rather than replacing it
+
+The Luminance Ledger, the Answer Shelf, the Tide and the GapGrid are
+unchanged in geometry. Two Working-only opt-ins were added, both defaulting
+off and both guarded by the report regression test: the Ledger's dark ramp
+(`palette="working"`) and the Trend's **gradient area under the client's
+line** (`area`). Only the subject is filled, so the client-is-beacon rule
+gains a second carrier rather than losing its first.
+
+### 7.6 The hero — the founder's ask, from the data model
+
+A hero KPI is the first thing on the dashboard and on a client's Overview.
+`ScoreHero` draws a **visibility score** — the portfolio's median across the
+scored scans on the dashboard, the latest composite on the Overview — in the
+display face, in the ramp's gradient, with the ramp's glow behind it, the
+band in words beside it, and the score's structure in the aside (the latest
+reading per client; the composite's own line across the client's history).
+The Luminance Ledger's idea — the score, drawn as light — at the size the
+genre puts it.
+
+### 7.7 What did not change
+
+The sidebar's structure (Epic 13's two modes, `clientNav.ts`'s clusters and
+cluster-relative accents), every URL, every motion duration and curve, the
+reduced-motion and hover-gating disciplines, the null-is-not-zero rule on
+every figure, the report and the PDF, and the scoring pipeline.
+
+Screenshots: `docs/screenshots/epic-14/`. Reasoning per token: `design-system.md`.

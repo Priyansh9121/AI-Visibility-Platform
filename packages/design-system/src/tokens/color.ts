@@ -94,10 +94,14 @@ const VISIBILITY_STOPS: readonly (readonly [number, Oklch])[] = [
  * across months.
  */
 export function visibilityAt(score: number): Oklch {
+  return interpolate(VISIBILITY_STOPS, score);
+}
+
+function interpolate(stops: readonly (readonly [number, Oklch])[], score: number): Oklch {
   const s = clamp(score, 0, 100);
-  for (let i = 0; i < VISIBILITY_STOPS.length - 1; i++) {
-    const [lo, loColor] = VISIBILITY_STOPS[i]!;
-    const [hi, hiColor] = VISIBILITY_STOPS[i + 1]!;
+  for (let i = 0; i < stops.length - 1; i++) {
+    const [lo, loColor] = stops[i]!;
+    const [hi, hiColor] = stops[i + 1]!;
     if (s <= hi) {
       const t = hi === lo ? 0 : (s - lo) / (hi - lo);
       return [
@@ -107,7 +111,7 @@ export function visibilityAt(score: number): Oklch {
       ];
     }
   }
-  return VISIBILITY_STOPS[VISIBILITY_STOPS.length - 1]![1];
+  return stops[stops.length - 1]![1];
 }
 
 /** CSS string form of {@link visibilityAt}. */
@@ -148,6 +152,134 @@ export const beacon = {
   '600': [0.545, 0.125, 200],
   '700': [0.46, 0.105, 200],
 } as const satisfies Record<string, Oklch>;
+
+/* ------------------------------------------------------------------ *
+ * THE DARK IDENTITY — Epic 14.
+ *
+ * Everything above this comment is the PAPER palette: Epic 0's values, which
+ * the report still renders on and the PDF still carries. Everything in `dark`
+ * is what the product itself now looks like. The founder rejected the light
+ * editorial system after seeing it live (build-log.md, Epic 14), and the
+ * Working screens — shell, dashboard, clients, a client's space — render on
+ * this palette with no toggle. The report keeps paper by being scoped to it
+ * in tokens.css (`.avp-report`), not by a route remembering to ask.
+ *
+ * WHY THE PAPER TABLES STAY THE CANONICAL ONES
+ * -------------------------------------------
+ * `visibilityColor()` and `seriesStyle('subject')` are LITERALS baked into SVG
+ * fills, and the report's fills land in PDFs clients compare across months.
+ * Retuning `visibility` or `beacon` in place would silently change every
+ * exported document. So the dark ramp and the dark beacon are separate tables,
+ * reached through `visibilityColorDark()` and the `'working'` palette, and the
+ * report never calls either.
+ *
+ * THE RAMP KEEPS ITS DIRECTION. Dim is still bad, lit is still good; the low
+ * end is lifted so "absent" reads as dim-but-present against near-black, and
+ * chroma is raised across the board because the ground no longer competes.
+ * Monotonic in lightness, warm-to-cool, chroma rising overall — the three
+ * properties tokens.test.ts asserts on the paper ramp are asserted here too.
+ * ------------------------------------------------------------------ */
+
+/**
+ * The second accent — beacon's gradient partner, and nothing else.
+ *
+ * It sits at hue 155, the "established" end of the ramp made vivid, so the
+ * accent gradient reads as the lit state the product exists to measure rather
+ * than as a decoration imported from a template. It never encodes a value, a
+ * category or a state on its own: a CTA, the glow behind a hero figure, and
+ * `--avp-gradient-accent` are its whole vocabulary.
+ */
+export const signal = {
+  '050': [0.96, 0.03, 155],
+  '100': [0.92, 0.06, 155],
+  '400': [0.7, 0.15, 155],
+  '600': [0.55, 0.14, 155],
+  '700': [0.47, 0.12, 155],
+} as const satisfies Record<string, Oklch>;
+
+export const dark = {
+  surface: {
+    sunken: [0.145, 0.012, 265],
+    ground: [0.175, 0.012, 265],
+    seated: [0.215, 0.014, 265],
+    raised: [0.25, 0.015, 265],
+    void: [0.275, 0.014, 265],
+  },
+  text: {
+    primary: [0.965, 0.006, 75],
+    body: [0.88, 0.008, 75],
+    secondary: [0.72, 0.01, 75],
+    tertiary: [0.58, 0.012, 75],
+  },
+  line: {
+    hairline: [0.275, 0.014, 265],
+    strong: [0.35, 0.016, 265],
+    ink: [0.72, 0.01, 75],
+  },
+  visibility: {
+    '00': [0.5, 0.07, 35],
+    '25': [0.62, 0.14, 45],
+    '50': [0.74, 0.155, 65],
+    '75': [0.81, 0.16, 150],
+    '100': [0.87, 0.135, 195],
+  },
+  beacon: {
+    '050': [0.25, 0.04, 200],
+    '100': [0.34, 0.055, 200],
+    '400': [0.7, 0.11, 200],
+    '600': [0.8, 0.13, 200],
+    '700': [0.86, 0.1, 200],
+  },
+  signal: {
+    '050': [0.25, 0.05, 155],
+    '100': [0.34, 0.08, 155],
+    '400': [0.74, 0.16, 155],
+    '600': [0.84, 0.17, 155],
+    '700': [0.9, 0.14, 155],
+  },
+  semantic: {
+    success: [0.78, 0.15, 150],
+    warn: [0.82, 0.15, 75],
+    danger: [0.7, 0.19, 25],
+    info: [0.8, 0.13, 200],
+  },
+} as const satisfies Record<string, Record<string, Oklch>>;
+
+const DARK_VISIBILITY_STOPS: readonly (readonly [number, Oklch])[] = [
+  [0, dark.visibility['00']],
+  [25, dark.visibility['25']],
+  [50, dark.visibility['50']],
+  [75, dark.visibility['75']],
+  [100, dark.visibility['100']],
+];
+
+/** The dark ramp at a 0-100 score. Same shape as `visibilityAt`, lifted ground. */
+export function visibilityAtDark(score: number): Oklch {
+  return interpolate(DARK_VISIBILITY_STOPS, score);
+}
+
+/** CSS string form of {@link visibilityAtDark} — for a fill on a Working screen. */
+export function visibilityColorDark(score: number, alpha = 1): string {
+  return oklch(visibilityAtDark(score), alpha);
+}
+
+/**
+ * The gradient a hero figure is set in — Epic 14.
+ *
+ * The founder asked for gradient hero numbers; the palette's organising idea
+ * is that visibility is luminance. This is both: the gradient is DERIVED from
+ * the ramp at the score, running from that stop to a lighter, slightly more
+ * chromatic version of the same hue. A 12 glows dim clay, an 88 glows lit
+ * cyan, and the figure still says what the meter beside it says. Lightness is
+ * floored so the numeral clears the dark ground at every score — it is text
+ * here, and text has to be read.
+ */
+export function heroGradient(score: number): string {
+  const [l, c, h] = visibilityAtDark(score);
+  const from: Oklch = [Math.max(l, 0.7), Math.min(c + 0.02, 0.19), h];
+  const to: Oklch = [Math.min(from[0] + 0.15, 0.93), Math.max(c - 0.02, 0.05), h];
+  return `linear-gradient(135deg, ${oklch(from)}, ${oklch(to)})`;
+}
 
 /* ------------------------------------------------------------------ *
  * Competitor series — deliberately NOT the visibility ramp.
@@ -227,11 +359,14 @@ export function seriesStyle(
   palette: SeriesPalette = 'report',
 ): { fill: string; pattern: CompetitorPattern; isSubject: boolean } {
   if (role === 'subject') {
-    return { fill: oklch(beacon['600']), pattern: 'solid', isSubject: true };
+    // One brand, one HUE, everywhere: beacon at 200 in both contexts. On the
+    // dark Working ground it is the electric stop; on paper it is the deep one.
+    const fill = palette === 'working' ? oklch(dark.beacon['600']) : oklch(beacon['600']);
+    return { fill, pattern: 'solid', isSubject: true };
   }
   const pattern = COMPETITOR_PATTERNS[index % COMPETITOR_PATTERNS.length]!;
   if (palette === 'working') {
-    return { fill: benchColor(index), pattern, isSubject: false };
+    return { fill: benchColorDark(index), pattern, isSubject: false };
   }
   const keys = ['1', '2', '3', '4', '5'] as const;
   return { fill: oklch(competitor[keys[index % keys.length]!]), pattern, isSubject: false };
@@ -371,13 +506,57 @@ function buildBench(): Record<string, Oklch> {
 /**
  * The light-mode bench palette, keyed `"{accent}-{stop}"` — e.g. `bench['3-600']`.
  *
- * Dark-mode values are NOT here. They cannot be derived by the same table:
- * blue at hue 258 simply cannot be both light and saturated inside sRGB, so the
- * dark scale is chroma-clamped per hue at the gamut boundary. They live in
- * tokens.css's `[data-theme='dark']` block, which is the one place in this
- * system that has always owned the neutral flip.
+ * Dark values are NOT derived by the same table: blue at hue 258 simply cannot
+ * be both light and saturated inside sRGB, so the dark scale is chroma-clamped
+ * per hue at the gamut boundary. See `benchDark` below.
  */
 export const bench: Record<string, Oklch> = buildBench();
+
+/**
+ * The DARK bench palette — Epic 14 moves it here from the stylesheet so the
+ * Working screens can paint SVG fills from it.
+ *
+ * Chroma-clamped to the sRGB boundary per hue: blue at 258 cannot be both
+ * light and saturated, so each stop takes 92% of the gamut ceiling at its own
+ * lightness rather than one shared chroma. `700` LIGHTENS here, for the reason
+ * the neutral axis flips. Parity with tokens.css's `:root` is asserted in
+ * tokens.test.ts.
+ */
+export const benchDark: Record<string, Oklch> = {
+  '1-050': [0.245, 0.055, 258],
+  '1-100': [0.325, 0.075, 258],
+  '1-600': [0.785, 0.101, 258],
+  '1-700': [0.855, 0.066, 258],
+  '2-050': [0.245, 0.055, 275],
+  '2-100': [0.325, 0.075, 275],
+  '2-600': [0.785, 0.1, 275],
+  '2-700': [0.855, 0.066, 275],
+  '3-050': [0.245, 0.055, 292],
+  '3-100': [0.325, 0.075, 292],
+  '3-600': [0.785, 0.11, 292],
+  '3-700': [0.855, 0.072, 292],
+  '4-050': [0.245, 0.055, 309],
+  '4-100': [0.325, 0.075, 309],
+  '4-600': [0.785, 0.133, 309],
+  '4-700': [0.855, 0.087, 309],
+  '5-050': [0.245, 0.055, 326],
+  '5-100': [0.325, 0.075, 326],
+  '5-600': [0.785, 0.15, 326],
+  '5-700': [0.855, 0.11, 326],
+  '6-050': [0.245, 0.055, 343],
+  '6-100': [0.325, 0.075, 343],
+  '6-600': [0.785, 0.15, 343],
+  '6-700': [0.855, 0.094, 343],
+  '7-050': [0.245, 0.055, 355],
+  '7-100': [0.325, 0.075, 355],
+  '7-600': [0.785, 0.131, 355],
+  '7-700': [0.855, 0.082, 355],
+};
+
+/** CSS colour for a categorical index on the DARK ground — a Working-screen SVG fill. */
+export function benchColorDark(index: number, stop: BenchStop = '600', alpha = 1): string {
+  return oklch(benchDark[`${benchAccent(index).key}-${stop}`]!, alpha);
+}
 
 /** The accent at a categorical index. Cycles, so any list length is safe. */
 export function benchAccent(index: number): BenchAccent {

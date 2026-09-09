@@ -234,7 +234,7 @@ export function PromptsPanel({
   return (
     <div className="flex flex-col gap-8">
       <div className="flex flex-col gap-2">
-        <h2 className="max-w-headline font-editorial text-ed-xs leading-display tracking-display text-text-primary">
+        <h2 className="max-w-headline font-display text-ed-xs leading-display tracking-display text-text-primary">
           Ask the engines something now
         </h2>
         <p className="max-w-measure text-ui-base leading-prose text-text-secondary">

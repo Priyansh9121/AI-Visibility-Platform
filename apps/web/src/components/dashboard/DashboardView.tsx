@@ -29,13 +29,19 @@ import type { JSX } from 'react';
 import {
   Badge,
   Button,
+  Card,
+  CardHeader,
+  CardTitle,
   DataTable,
   EmptyState,
   ErrorState,
   LuminanceLedger,
+  PageHead,
+  ScoreHero,
   ScoreMeter,
   StatRow,
   StatTile,
+  visibilityBandLabel,
 } from '@avp/design-system';
 import type { BadgeTone, Column, LedgerDimension, ScoreAbsence } from '@avp/design-system';
 import type { Dashboard, ScanStatus, ScanSummary } from '@avp/shared-types';
@@ -221,21 +227,39 @@ export function DashboardView({
   ];
 
   return (
-    <div className="flex flex-col gap-8">
-      <header className="flex flex-col gap-6 border-b border-line-hairline pb-8">
-        <div>
-          <p className="text-ui-2xs uppercase tracking-caps text-text-tertiary">Agency</p>
-          <h1 className="mt-2 font-editorial text-ed-sm leading-display tracking-display text-text-primary">
-            {agency.name}
-          </h1>
-        </div>
-        <DashboardStats
-          seats={seats}
-          clientCount={clientCount}
-          scanCount={scanCount}
-          recentScans={recentScans}
-        />
-      </header>
+    <div className="flex flex-col gap-6">
+      {/*
+        THE SCREEN'S SHAPE — Epic 14.
+
+        Head, hero, tiles, table: the founder's brief for a dark analytics
+        dashboard, built from what this endpoint already serves. The hero is
+        the median visibility across the scored scans below — a SCORE, so it
+        takes the ramp's gradient and never a categorical hue — with the latest
+        reading per client beside it. The tiles are the four counts. Nothing
+        new is fetched; the header used to say what the table says, and now it
+        says it first and largest.
+      */}
+      <PageHead
+        eyebrow="Agency"
+        title={agency.name}
+        aside={
+          <p className="text-ui-sm text-text-secondary">
+            <span className="font-display font-semibold text-text-primary">{`${seats.used} / ${seats.limit}`}</span>
+            {' seats'}
+          </p>
+        }
+      />
+
+      {!isEmpty && (
+        <>
+          <PortfolioHero recentScans={recentScans} />
+          <DashboardStats
+            clientCount={clientCount}
+            scanCount={scanCount}
+            recentScans={recentScans}
+          />
+        </>
+      )}
 
       {/*
         Both of these were the same Card + title + detail written out longhand,
@@ -252,9 +276,9 @@ export function DashboardView({
       )}
 
       {isEmpty ? <EmptyAgency /> : (
-        <section className="flex flex-col gap-4">
-          <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <h2 className="text-ui-md font-medium text-text-primary">Recent scans</h2>
+        <Card elevation="seated">
+          <CardHeader>
+            <CardTitle>Recent scans</CardTitle>
             {live === true && (
               <p className="flex items-center gap-3 text-ui-sm text-text-tertiary">
                 <Badge tone="beacon" live>
@@ -263,7 +287,7 @@ export function DashboardView({
                 A scan is running — this page updates itself.
               </p>
             )}
-          </div>
+          </CardHeader>
           <DataTable
             columns={columns}
             rows={recentScans}
@@ -271,9 +295,93 @@ export function DashboardView({
             caption="Newest first."
             emptyMessage={<NoScansYet clientCount={clientCount} />}
           />
-        </section>
+        </Card>
       )}
     </div>
+  );
+}
+
+/**
+ * The hero — Epic 14.
+ *
+ * The median composite across the scored scans on this page, as the first
+ * and largest thing on the dashboard. It is the same figure the "Median
+ * visibility" tile carried since Epic 9.24, at the size the founder asked for,
+ * and it keeps that tile's two disciplines: only scans that HAVE a score are
+ * averaged (a scan without one is not a zero), and the denominator is stated.
+ *
+ * Beside it, the latest reading per client — the newest scan on this page for
+ * each client, at most five — so the portfolio's spread is visible next to its
+ * middle. Read off `recentScans`, already in hand.
+ */
+function PortfolioHero({ recentScans }: { recentScans: readonly ScanSummary[] }): JSX.Element {
+  const scored = recentScans
+    .map((s) => (s.compositeScore == null ? null : Number(s.compositeScore)))
+    .filter((n): n is number => n != null && !Number.isNaN(n));
+  const median =
+    scored.length === 0
+      ? null
+      : [...scored].sort((a, b) => a - b)[Math.floor((scored.length - 1) / 2)]!;
+
+  const latestPerClient: ScanSummary[] = [];
+  const seen = new Set<string>();
+  for (const scan of recentScans) {
+    if (seen.has(scan.clientId)) continue;
+    seen.add(scan.clientId);
+    latestPerClient.push(scan);
+    if (latestPerClient.length === 5) break;
+  }
+
+  return (
+    <ScoreHero
+      label="Portfolio visibility"
+      score={median}
+      /*
+        "No scores yet", not "Not scored" — `ScoreMeter`'s vocabulary describes
+        ONE SCAN's state, and this is an aggregate with no scans to average.
+        DashboardView.test.tsx asserts a queued row reads "Measuring" and NOT
+        "Not scored" anywhere on the page; the words here keep that intact.
+      */
+      absence="No scores yet"
+      /*
+        The band in its short form, not `ScoreHero`'s sentence: the sentence
+        describes ONE client's standing, and this figure is a median across
+        several. The word is the same one the meters in the table print.
+      */
+      band={
+        median == null
+          ? 'No scan here has produced a score yet.'
+          : `${visibilityBandLabel(median)} at the median`
+      }
+      meta={
+        <span>
+          {median == null
+            ? 'The median appears once a scan finishes and is scored.'
+            : `Across ${scored.length} scored ${scored.length === 1 ? 'scan' : 'scans'} below.`}
+        </span>
+      }
+      aside={
+        latestPerClient.length === 0 ? undefined : (
+          <ul className="flex w-full flex-col gap-3" aria-label="Latest reading per client">
+            {latestPerClient.map((scan) => (
+              <li key={scan.clientId} className="grid grid-cols-[minmax(0,1fr)_minmax(9rem,10rem)] items-center gap-4">
+                <span className="flex min-w-0 flex-col">
+                  <a
+                    href={`/clients/${scan.clientId}`}
+                    className="truncate text-ui-sm font-medium text-text-primary transition-colors duration-hover ease-out hover:text-beacon-600"
+                  >
+                    {scan.clientName}
+                  </a>
+                  <span className="truncate font-mono text-ui-2xs text-text-tertiary">{scan.clientDomain}</span>
+                </span>
+                <ScoreCell composite={scan.compositeScore} status={scan.status} />
+              </li>
+            ))}
+          </ul>
+        )
+      }
+      animate={false}
+    />
   );
 }
 
@@ -300,12 +408,10 @@ export function DashboardView({
  * a zero at it. Nothing here invents a measurement.
  */
 function DashboardStats({
-  seats,
   clientCount,
   scanCount,
   recentScans,
 }: {
-  seats: Dashboard['seats'];
   clientCount: number;
   scanCount: number;
   recentScans: readonly ScanSummary[];
@@ -314,20 +420,15 @@ function DashboardStats({
   const attention = recentScans.filter(
     (s) => s.status === 'failed' || s.status === 'partial',
   ).length;
-  // Only over scans that HAVE a score. A scan without one is not a zero — the
-  // same rule ScoreCell follows — so it is excluded from the average rather
-  // than dragging it down.
-  const scored = recentScans
-    .map((s) => (s.compositeScore == null ? null : Number(s.compositeScore)))
-    .filter((n): n is number => n != null && !Number.isNaN(n));
-  const median =
-    scored.length === 0
-      ? null
-      : [...scored].sort((a, b) => a - b)[Math.floor((scored.length - 1) / 2)]!;
 
+  /*
+    Epic 14 moved two figures out of this row. Seats is an account fact rather
+    than a reading, and it sits beside the title now; the median visibility is
+    the hero above — `PortfolioHero` carries the "a score takes no accent"
+    reasoning that used to live on its tile.
+  */
   return (
-    <StatRow>
-      <StatTile label="Seats" value={`${seats.used} / ${seats.limit}`} accent={0} />
+    <StatRow min="12rem">
       <StatTile label="Clients" value={String(clientCount)} accent={1} />
       <StatTile label="Scans" value={String(scanCount)} accent={2} />
       <StatTile
@@ -342,39 +443,6 @@ function DashboardStats({
         accent={4}
         emphasis={attention > 0}
         note={attention > 0 ? 'Failed or partial, in the list below.' : undefined}
-      />
-      <StatTile
-        label="Median visibility"
-        /*
-          "No scores yet", not "Not scored" — Epic 9.24. `ScoreMeter`'s
-          vocabulary ("Measuring" / "Not scored") describes ONE SCAN's state,
-          and this is an aggregate that has no scans to average. Reusing the
-          per-scan phrase here would say something false about a scan, and it
-          also collided with a real guarantee: DashboardView.test.tsx asserts a
-          queued row reads "Measuring" and NOT "Not scored" anywhere on the
-          page. Getting the words right kept that assertion at full strength
-          instead of narrowing it to make room for this tile.
-        */
-        value={median == null ? 'No scores yet' : median.toFixed(0)}
-        /*
-          NO ACCENT, unlike the five counts beside it — Epic 9.24.
-
-          This tile's value is a SCORE, and this product already has a colour
-          language for a score: the visibility ramp, where hue means how visible
-          you are. Wrapping a score in a categorical hue puts two colour
-          languages on one tile and invites the reading that the tile's colour
-          says something about the number. The bench hues sit 30 degrees clear
-          of every ramp stop precisely so they cannot be confused with one;
-          spending that separation on decoration around an actual score would
-          give it away. Counts take accents. Measurements do not.
-        */
-        // Says WHAT it is the median of. A bare median across "recent scans"
-        // with no denominator is a number nobody can check.
-        note={
-          median == null
-            ? 'No scan here has produced a score yet.'
-            : `Across ${scored.length} scored ${scored.length === 1 ? 'scan' : 'scans'} below.`
-        }
       />
     </StatRow>
   );

@@ -36,6 +36,8 @@ export {
 } from './components/StatTile.js';
 export { DataTable, type DataTableProps, type Column } from './components/Table.js';
 export { ScoreDisplay, type ScoreDisplayProps } from './components/ScoreDisplay.js';
+export { ScoreHero, type ScoreHeroProps } from './components/ScoreHero.js';
+export { PageHead, type PageHeadProps } from './components/PageHead.js';
 export { ScoreMeter, type ScoreMeterProps, type ScoreAbsence } from './components/ScoreMeter.js';
 export {
   VerdictBar,

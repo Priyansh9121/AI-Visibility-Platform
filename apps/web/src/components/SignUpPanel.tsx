@@ -100,7 +100,7 @@ export function SignUpPanel({
         <CardBody>
           <form onSubmit={submit} className="flex flex-col gap-5">
             <div className="flex flex-col gap-2">
-              <h1 className="font-editorial text-ed-xs leading-display text-text-primary">
+              <h1 className="font-display text-ed-xs leading-display text-text-primary">
                 Create your agency
               </h1>
               <p className="text-ui-sm leading-prose text-text-secondary">

@@ -1,40 +1,51 @@
 /**
- * Elevation tokens — "paper doesn't float".
+ * Elevation tokens — Epic 14: a card sits in the dark, lit along its top edge.
  *
- * The category default is a big soft blurred drop shadow: material floating
- * over a canvas. Two problems. It reads as generic app chrome, and — the
- * decisive one — SHADOWS DISAPPEAR WHEN THE REPORT IS PRINTED, taking the
- * entire visual hierarchy with them. This product's main artifact is a PDF put
- * in front of a client.
+ * On the dark identity a raised surface is a plate with light on it: a 1px
+ * inner highlight along the top, a shadow tinted to the ground rather than
+ * black at low alpha, and a lighter surface tone. The three together are what
+ * make a card read as elevation rather than as a lighter rectangle.
  *
- * So elevation here is built from borders and tight offsets, like stacked card
- * stock. Levels 0-2 print correctly. Levels 3-4 are transient UI (popovers,
- * modals) that never appears in an export, so they may use blur.
+ * `paper` is Epic 0's "paper doesn't float" set, unchanged: borders and hard
+ * offsets, because blurred shadows vanish when the report is printed and the
+ * report is the artefact this product sells. It is scoped to `.avp-report` in
+ * tokens.css, so the document keeps it without a route having to ask.
  */
 
 export const elevation = {
   /** On-ground. Separation by hairline only. */
   flat: 'none',
-  /** Seated surfaces. NO shadow at all — separation is by tone shift. */
+  /** A seated surface — the inner top highlight and nothing else. */
+  seated: 'inset 0 1px 0 0 oklch(1 0 0 / 0.05)',
+  /** A card. Highlight, contact shadow, and a soft ground-tinted drop. */
+  raised:
+    'inset 0 1px 0 0 oklch(1 0 0 / 0.07), 0 1px 2px 0 oklch(0.08 0.01 265 / 0.5), 0 16px 32px -20px oklch(0.08 0.01 265 / 0.8)',
+  /** Popovers and menus. */
+  lifted:
+    'inset 0 1px 0 0 oklch(1 0 0 / 0.08), 0 4px 10px -2px oklch(0.08 0.01 265 / 0.6), 0 16px 40px -12px oklch(0.08 0.01 265 / 0.8)',
+  /** Modals. */
+  overlay: '0 8px 16px -4px oklch(0.08 0.01 265 / 0.6), 0 32px 64px -16px oklch(0.08 0.01 265 / 0.85)',
+} as const;
+
+/** The report's elevation — Epic 0's, verbatim. */
+export const paperElevation = {
+  flat: 'none',
   seated: 'none',
-  /** Printed-card edge: hard 1px offset, zero blur. Survives print. */
   raised: '0 1px 0 0 oklch(0.185 0.026 265 / 0.10)',
-  /** Popovers and menus. Transient — blur permitted. */
   lifted:
     '0 2px 4px -1px oklch(0.185 0.026 265 / 0.10), 0 6px 12px -4px oklch(0.185 0.026 265 / 0.12)',
-  /** Modals. Transient — blur permitted. */
   overlay:
     '0 4px 8px -2px oklch(0.185 0.026 265 / 0.14), 0 12px 28px -8px oklch(0.185 0.026 265 / 0.18)',
 } as const;
 
 /** Hairlines carry the hierarchy that shadows are not allowed to carry. */
 export const border = {
-  hairline: '1px solid oklch(0.925 0.010 75)',
-  strong: '1px solid oklch(0.870 0.012 75)',
-  ink: '1px solid oklch(0.285 0.022 265)',
+  hairline: '1px solid oklch(0.275 0.014 265)',
+  strong: '1px solid oklch(0.35 0.016 265)',
+  ink: '1px solid oklch(0.72 0.01 75)',
 } as const;
 
-export const scrim = 'oklch(0.185 0.026 265 / 0.40)';
+export const scrim = 'oklch(0.08 0.01 265 / 0.7)';
 
 /**
  * THE OWNABLE PART: emphasis is light, not lift.
@@ -46,8 +57,7 @@ export const scrim = 'oklch(0.185 0.026 265 / 0.40)';
  * not a per-component decision.
  */
 export const emphasis = {
-  focusRing:
-    '0 0 0 2px oklch(0.72 0.11 200 / 0.60), 0 0 0 6px oklch(0.72 0.11 200 / 0.12)',
-  selectedRing: 'inset 0 0 0 1px oklch(0.545 0.125 200)',
-  selectedWash: 'oklch(0.545 0.125 200 / 0.04)',
+  focusRing: '0 0 0 2px oklch(0.8 0.13 200 / 0.7), 0 0 0 6px oklch(0.8 0.13 200 / 0.15)',
+  selectedRing: 'inset 0 0 0 1px oklch(0.8 0.13 200)',
+  selectedWash: 'oklch(0.8 0.13 200 / 0.08)',
 } as const;

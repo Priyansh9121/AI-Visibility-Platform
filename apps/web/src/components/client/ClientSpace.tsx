@@ -57,6 +57,13 @@
  *   not, per scan. Sits beside Rankings because both read the same competitive
  *   picture: Rankings says who is ahead overall, this says on WHICH questions.
  *   Reads only rows a scan already wrote; it runs nothing.
+ * - **Competitors** — Epic 13. The field from the latest scan's report, one
+ *   compact Luminance Ledger per brand, compared dimension by dimension. The
+ *   subject's column is its score; a rival's column is the same five-segment
+ *   shape with the two dimensions nobody measures for rivals hatched, and it
+ *   claims no composite — there is no per-competitor composite and there
+ *   deliberately never has been. Reads the report the Report item opens;
+ *   runs nothing.
  *
  * Nothing about this frame assumes a fixed number of items.
  *
@@ -76,6 +83,7 @@
  */
 
 import type { JSX, ReactNode } from 'react';
+import { PageHead } from '@avp/design-system';
 import type { Client, Me } from '@avp/shared-types';
 import { WorkspaceShell } from '@/components/shell/WorkspaceShell';
 import { sectionLabel, type ClientSection } from '@/components/client/clientNav';
@@ -140,19 +148,14 @@ export function ClientSpace({
         latestScore,
       }}
     >
-      <div className="flex flex-col gap-8">
+      <div className="flex flex-col gap-6">
         {/*
           The content names the SECTION, because the sidebar now names the
           client. Two headings both saying "Pirsch Analytics" would be the
           strip's redundancy carried into the new frame; one place says whose
           space this is and the other says where in it you stand.
         */}
-        <header className="flex flex-wrap items-end justify-between gap-6 border-b border-line-hairline pb-4">
-          <h1 className="font-editorial text-ed-sm font-semibold leading-display tracking-display text-text-primary">
-            {sectionLabel(current)}
-          </h1>
-          {meta != null && <div className="flex flex-wrap items-end gap-8">{meta}</div>}
-        </header>
+        <PageHead title={sectionLabel(current)} {...(meta != null ? { aside: meta } : {})} />
         {figures}
         {children}
       </div>

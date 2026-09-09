@@ -597,6 +597,32 @@ describe('the report never acquires the landing page motion', () => {
     expect(html).not.toContain('avp-reveal');
   });
 
+  for (const [name, report] of REPORTS) {
+    it(`carries no compact or partial ledger markup — ${name} (Epic 13)`, () => {
+      // The Competitors screen draws the same component small and with
+      // rival-blind dimensions hatched. Both are opt-ins the report never
+      // passes, and this is the assertion that keeps it so — the same
+      // guardrail as stagger and unmeasured, extended to the two new modes.
+      const html = render(report);
+      expect(html).not.toContain('avp-ledger--compact');
+      expect(html).not.toContain('avp-ledger--partial');
+      expect(html).not.toContain('ledger-hatch');
+    });
+  }
+
+  for (const [name, report] of REPORTS) {
+    it(`carries none of the dark identity's opt-ins — ${name} (Epic 14)`, () => {
+      // Epic 14 made the product dark and gave two charts Working-only
+      // treatments: the Ledger's dark ramp (the working palette prop) and the
+      // Trend's gradient area (`area`). Both default off; the document renders
+      // on the paper scope and must carry neither. Same guardrail, extended.
+      const html = render(report);
+      expect(html).not.toContain('avp-ledger--working');
+      expect(html).not.toContain('avp-trend__area');
+      expect(html).not.toContain('avp-hero');
+    });
+  }
+
   it('still renders the ledger, so the tests above are not passing on absence', () => {
     // Without this, deleting the chart entirely would make every assertion in
     // this group pass.

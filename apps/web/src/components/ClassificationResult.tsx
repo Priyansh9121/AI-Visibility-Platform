@@ -95,7 +95,7 @@ export function ClassificationResult({
 
           {status === 'classified' && (
             <div className="flex flex-col gap-4">
-              <h2 className="max-w-headline font-editorial text-ed-sm leading-display tracking-display text-text-primary">
+              <h2 className="max-w-headline font-display text-ed-sm leading-display tracking-display text-text-primary">
                 {name} is {article(client.industry)}
                 {client.industry}.
               </h2>

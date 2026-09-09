@@ -1,4 +1,4 @@
-import type { JSX } from 'react';
+import { useId, type JSX } from 'react';
 import { cn } from '../../lib/cn.js';
 import { seriesStyle, type SeriesPalette } from '../../tokens/color.js';
 import { ChartFrame } from './ChartFrame.js';
@@ -58,6 +58,22 @@ export interface TrendChartProps {
    * the existing layout, not a second thing the layout has to know about.
    */
   annotations?: Readonly<Record<string, string>>;
+  /**
+   * Fill the area under the CLIENT'S line with a gradient of its own colour —
+   * Epic 14. **Defaults to `false`; the report never passes it.**
+   *
+   * The visual weight the founder asked for on a Working chart: a filled area
+   * rather than a hairline on a ground. Only the subject's line is filled, so
+   * the client-is-beacon rule gains a second carrier instead of losing its
+   * first, and rivals stay lines an operator can tell apart by dash. The
+   * gradient runs from the series colour at the line to transparent at the
+   * baseline — it is light falling off, not a second colour.
+   *
+   * A document that prints in greyscale does not want a gradient wash under
+   * its one solid line, which is why this is an opt-in beside `palette`
+   * rather than a consequence of it.
+   */
+  area?: boolean;
 }
 
 /**
@@ -111,7 +127,10 @@ export function TrendChart({
   layoutOptions,
   palette = 'report',
   annotations,
+  area = false,
 }: TrendChartProps): JSX.Element {
+  // Stable per instance, so two charts on one screen do not share a gradient.
+  const gradientId = `avp-trend-area-${useId().replace(/:/g, '')}`;
   const layout = layoutTrend(points, series, {
     ...layoutOptions,
     ...(yMax != null ? { yMax } : {}),
@@ -289,11 +308,32 @@ export function TrendChart({
             );
             const dash = s.isSubject ? undefined : DASH[style.pattern];
             const last = s.plotted[s.plotted.length - 1];
+            const baseline = layout.plot.y + layout.plot.height;
             return (
               <g
                 key={s.key}
                 className={cn('avp-trend__series', s.isSubject && 'is-subject')}
               >
+                {area && s.isSubject && (
+                  <defs>
+                    <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0" stopColor={style.fill} stopOpacity="0.35" />
+                      <stop offset="1" stopColor={style.fill} stopOpacity="0" />
+                    </linearGradient>
+                  </defs>
+                )}
+                {area &&
+                  s.isSubject &&
+                  s.segments
+                    .filter((seg) => seg.points.length > 1)
+                    .map((seg, i) => (
+                      <path
+                        key={`area-${i}`}
+                        className="avp-trend__area"
+                        d={`${segmentPath(seg)} L${seg.points[seg.points.length - 1]!.x.toFixed(2)} ${baseline.toFixed(2)} L${seg.points[0]!.x.toFixed(2)} ${baseline.toFixed(2)} Z`}
+                        fill={`url(#${gradientId})`}
+                      />
+                    ))}
                 {s.segments.map((seg, i) => (
                   <path
                     key={i}
