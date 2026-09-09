@@ -70,6 +70,21 @@ export function latestScanId(history: ClientHistory): string | null {
   return last ? last.scanId : null;
 }
 
+/**
+ * The newest composite among scans that have one — the sidebar's figure.
+ *
+ * The same rule `ClientMetaFigures` follows for its Latest tile: a scan
+ * without a reading is not a zero, so it is skipped rather than reported.
+ * `null` when no scan has produced one.
+ */
+export function latestComposite(history: ClientHistory): number | null {
+  for (let i = history.scans.length - 1; i >= 0; i -= 1) {
+    const n = num(history.scans[i]!.composite);
+    if (n !== null) return n;
+  }
+  return null;
+}
+
 function num(v: string | number | null | undefined): number | null {
   if (v === null || v === undefined) return null;
   const n = typeof v === 'number' ? v : Number(v);
@@ -132,6 +147,7 @@ function Frame({
       me={me}
       current={current}
       latestReportScanId={latestScanId(history)}
+      latestScore={latestComposite(history)}
       figures={<ClientMetaFigures history={history} />}
     >
       {children?.({ client, history })}

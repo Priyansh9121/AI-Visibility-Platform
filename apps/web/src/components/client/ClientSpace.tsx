@@ -18,6 +18,18 @@
  * So this is a second level of navigation, nested inside the first, and
  * `LocalNav` is the primitive that says so.
  *
+ * > **SUPERSEDED — Epic 13, 2026-09-09.** The paragraph above is kept as the
+ * > record of what Epic 9.20 decided and why; it is no longer what this
+ * > component does. On the founder's decision the sidebar now switches
+ * > MODES: given a client it becomes that client's map, with `CLIENT_NAV`
+ * > as its items and the way back at its head, and the "selected client" is
+ * > the `[clientId]` every screen in this space already receives from its
+ * > route — passed down as a prop, never read from a store. This frame no
+ * > longer renders `LocalNav`; it hands the client to `WorkspaceShell` and
+ * > keeps the content's own header, figures and body. The build log entry
+ * > "Epic 13 — the sidebar becomes the map" records the reversal in full, the
+ * > way scoring-spec.md's changelog keeps a superseded formula's reasoning.
+ *
  * WHERE EACH DESTINATION GOES
  * ---------------------------
  * - **Overview** (`/clients/{id}`) — where a client row lands. It exists
@@ -64,10 +76,9 @@
  */
 
 import type { JSX, ReactNode } from 'react';
-import { LocalNav, LocalNavGroup, LocalNavItem } from '@avp/design-system';
 import type { Client, Me } from '@avp/shared-types';
 import { WorkspaceShell } from '@/components/shell/WorkspaceShell';
-import { CLIENT_NAV, type ClientSection } from '@/components/client/clientNav';
+import { sectionLabel, type ClientSection } from '@/components/client/clientNav';
 
 export type { ClientSection };
 
@@ -81,6 +92,7 @@ export function ClientSpace({
    * than rendered dead, which is `NavItem`'s rule and holds here too.
    */
   latestReportScanId,
+  latestScore,
   meta,
   figures,
   children,
@@ -89,6 +101,12 @@ export function ClientSpace({
   me: Me | null;
   current: ClientSection;
   latestReportScanId: string | null;
+  /**
+   * The latest composite, for the sidebar's head — Epic 13. `null` is a
+   * client never scored; omitted means the screen has not loaded it, and the
+   * head then prints nothing rather than a claim.
+   */
+  latestScore?: number | null | undefined;
   meta?: ReactNode;
   /**
    * A full-width row of figures, under the nav strip — Epic 9.24.
@@ -106,48 +124,35 @@ export function ClientSpace({
   figures?: ReactNode;
   children: ReactNode;
 }): JSX.Element {
-  const base = `/clients/${client.id}`;
   return (
-    <WorkspaceShell current="clients" agencyName={me?.agency.name} seats={me?.seats} wide>
+    <WorkspaceShell
+      current="clients"
+      agencyName={me?.agency.name}
+      seats={me?.seats}
+      wide
+      client={{
+        id: client.id,
+        name: client.name,
+        brandName: client.brandName ?? null,
+        domain: client.domain,
+        section: current,
+        latestReportScanId,
+        latestScore,
+      }}
+    >
       <div className="flex flex-col gap-8">
-        <LocalNav
-          title={client.brandName ?? client.name}
-          subtitle={client.domain}
-          back={{ href: '/clients', label: 'All clients' }}
-          meta={meta}
-        >
-          {CLIENT_NAV.map((cluster) => (
-            <LocalNavGroup key={cluster.key} label={cluster.label}>
-              {cluster.items.map((item) => {
-                /*
-                 * The Report resolves to a SCAN, not to a path under the
-                 * client, and when there is no scan it is not rendered at all
-                 * rather than rendered dead — `NavItem`'s rule, which has held
-                 * here since Epic 9.20.
-                 */
-                if (item.section === null) {
-                  return latestReportScanId == null ? null : (
-                    <LocalNavItem
-                      key="report"
-                      href={`/scans/${latestReportScanId}/report`}
-                      label={item.label}
-                      external
-                    />
-                  );
-                }
-                return (
-                  <LocalNavItem
-                    key={item.section}
-                    href={`${base}${item.path ?? ''}`}
-                    label={item.label}
-                    current={current === item.section}
-                    {...(item.accent != null ? { accent: item.accent } : {})}
-                  />
-                );
-              })}
-            </LocalNavGroup>
-          ))}
-        </LocalNav>
+        {/*
+          The content names the SECTION, because the sidebar now names the
+          client. Two headings both saying "Pirsch Analytics" would be the
+          strip's redundancy carried into the new frame; one place says whose
+          space this is and the other says where in it you stand.
+        */}
+        <header className="flex flex-wrap items-end justify-between gap-6 border-b border-line-hairline pb-4">
+          <h1 className="font-editorial text-ed-sm font-semibold leading-display tracking-display text-text-primary">
+            {sectionLabel(current)}
+          </h1>
+          {meta != null && <div className="flex flex-wrap items-end gap-8">{meta}</div>}
+        </header>
         {figures}
         {children}
       </div>

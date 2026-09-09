@@ -42,6 +42,7 @@ import type { ClientHistory, Me } from '@avp/shared-types';
 import { ClientSpace } from '@/components/client/ClientSpace';
 import {
   ClientMetaFigures,
+  latestComposite,
   latestScanId,
   type ClientDetailState,
 } from '@/components/client/ClientDetailView';
@@ -79,6 +80,7 @@ export function ClientSentimentView({
       me={me}
       current="sentiment"
       latestReportScanId={latestScanId(history)}
+      latestScore={latestComposite(history)}
       figures={<ClientMetaFigures history={history} />}
     >
       <SentimentBody history={history} />

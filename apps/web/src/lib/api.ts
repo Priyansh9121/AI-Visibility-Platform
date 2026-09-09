@@ -229,8 +229,15 @@ export const api = {
       body: JSON.stringify({ token, newPassword }),
     }),
 
-  /** The agency dashboard — identity, seat usage and the recent scans. */
-  dashboard: () => request<Dashboard>('/dashboard'),
+  /**
+   * The agency dashboard — identity, seat usage and the recent scans.
+   *
+   * `limit` widens the recent-scans window (the endpoint caps it at 50). The
+   * sidebar's client list reads its scores off this window — Epic 13 — and
+   * asks for the widest one, so as few clients as possible fall outside it.
+   */
+  dashboard: (limit?: number) =>
+    request<Dashboard>(limit == null ? '/dashboard' : `/dashboard?limit=${limit}`),
 
   /**
    * Start a scan for a client — the dashboard's "re-run".

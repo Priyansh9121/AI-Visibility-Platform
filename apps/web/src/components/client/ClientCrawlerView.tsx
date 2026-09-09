@@ -70,6 +70,7 @@ import type { CrawlerAccess, CrawlerAgent, Me } from '@avp/shared-types';
 import { ClientSpace } from '@/components/client/ClientSpace';
 import { accentFor } from '@/components/client/clientNav';
 import {
+  latestComposite,
   latestScanId,
   type ClientDetailState,
 } from '@/components/client/ClientDetailView';
@@ -212,6 +213,7 @@ export function ClientCrawlerView({
       me={me}
       current="crawler"
       latestReportScanId={latestScanId(history)}
+      latestScore={latestComposite(history)}
     >
       <CrawlerBody access={access} onSelectScan={onSelectScan} />
     </ClientSpace>
