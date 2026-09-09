@@ -273,6 +273,8 @@ describe('the rule that decided a verdict is on the row', () => {
     // An agency saying "you are blocking Amazonbot" needs to know whether the
     // client typed the name or inherited a blanket rule. Different fixes.
     expect(render(shown(notionAccess))).toContain('named as amazonbot');
+    // The rule is a fact in the mono face, beside the verdict — Epic 16.2.
+    expect(render(shown(notionAccess))).toMatch(/avp-chip avp-chip--mono[^>]*>named as amazonbot/);
     expect(render(shown(blanketBlockAccess))).toContain('via User-agent: *');
   });
 

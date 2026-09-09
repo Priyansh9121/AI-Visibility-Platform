@@ -58,6 +58,7 @@ import {
   Badge,
   Button,
   Card,
+  MetaChip,
   CardBody,
   EmptyState,
   ErrorState,
@@ -467,11 +468,15 @@ function AgentRow({ row }: { row: CrawlerAgent }): JSX.Element {
           finding.
         */}
         {showRule && (
-          <span className="text-ui-2xs text-text-tertiary">
+          // The rule is a fact about the file, in the fact's shape — Epic
+          // 16.2 — and in the mono face because it is a token the operator
+          // may need to find in that file. Beside the verdict badge the two
+          // pills now read as what they are: a state, and the evidence for it.
+          <MetaChip mono>
             {row.matchedToken === '*'
               ? 'via User-agent: *'
               : `named as ${row.matchedToken}`}
-          </span>
+          </MetaChip>
         )}
         {verdict != null ? (
           <Badge tone={verdict.tone}>{verdict.label}</Badge>

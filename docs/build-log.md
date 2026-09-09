@@ -14484,3 +14484,55 @@ the badges so the three pills can be told apart on one screen. Rendered
 through the same fixture path as Epics 14–16 — `docs/screenshots/epic-16-1/`:
 the dashboard before and after in both themes, and the unchanged Clients
 screen.
+
+# Epic 16.2 — the client screens: one primitive, cascaded, and an honest audit
+
+**2026-09-09.** Governance line: Working screens inside one client's space,
+both themes. No design-system change — the point of Epic 16.1's `MetaChip`
+was that this epic would need none, and it did not. The report is untouched.
+
+## The audit, screen by screen
+
+Each screen was read in source and looked at in a fixture render before
+anything was changed, for the two patterns the brief named — the weak tile
+and the flat metadata line.
+
+| Screen | Weak tile? | Flat metadata? | Done |
+|---|---|---|---|
+| Overview | No — the hero is a score, the tiles are counts | **Yes.** The hero's meta line: delta, scan date, share of voice, rival count — four items of grey text at one weight | Three facts are chips; the delta stays text |
+| Technical | No. The earlier capture's `undefined` on "Pages crawled" was that harness's incomplete fixture; the field is a non-nullable `number` on the wire | No — a check row is name, badge, mono code, in three weights already | Nothing |
+| AI crawlers | No | **Yes.** "named as amazonbot" / "via User-agent: \*" at 11px tertiary beside a verdict badge — the one row worth reading, set as the quietest thing in it | The rule is a mono chip beside the badge |
+| Answer gaps | No | No — the grid's intent labels are categorical, and a chip per row would be noise | Nothing |
+| Prompts | No — a run's three tiles are counts | **Yes, mildly.** A run's stamp as tertiary text under the question | The stamp is a chip, so a run's header reads as the report's does: the question, its state, its credentials |
+| Alerts | No | **Yes.** The engine beside the badge as plain text, "Acknowledged" at 11px, and the two dates compared as a caps line | Engine, acknowledgement and the date pair are chips; the badge is the only badge |
+
+Sentiment, Sources, Rankings and Competitors were grepped for the same
+patterns and carry none; they were not in the brief's list and were not
+touched.
+
+## The rule this exercised
+
+Every change above is the three-pill rule from Epic 16.1 applied: a
+**state** is a `Badge`, a **score** is a `VisibilityBadge`, a **fact** is a
+`MetaChip`. On the Alerts row that rule does real work — the row used to
+carry one badge and two lines of grey text, and now carries one badge and
+three facts, so an operator can tell at a glance which pill is the thing
+that changed and which pills are the circumstances. The test asserts one
+badge per row. On the Crawler row it does the same: a verdict, and beside
+it the evidence for the verdict, in the mono face because it is a token the
+operator may need to find in the file.
+
+Two things were deliberately left as text. The Overview's delta ("+0.7 since
+last scan") is a reading with a direction, not a credential, and its colour
+is the ramp's two ends by Epic 14's rule; and the hero's no-reading sentence
+stays a sentence, because an explanation in a pill reads as a state to
+clear. Both are asserted.
+
+## Verified
+
+Web **814/814** (four new, two amended), typecheck clean; the design system
+was not touched and stands at Epic 16.1's 605. Rendered from the repo's
+fixtures through the same static path — `docs/screenshots/epic-16-2/`:
+Overview, AI crawlers, Alerts and Prompts before and after on the light
+theme, and Overview and Alerts after on the dark theme, where the chip
+sits as a sunken well on the card and reads the same.

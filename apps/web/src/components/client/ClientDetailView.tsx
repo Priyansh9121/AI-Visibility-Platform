@@ -19,6 +19,7 @@ import {
   EmptyState,
   ErrorState,
   LoadingState,
+  MetaChip,
   ScoreHero,
   ScoreMeter,
   StatRow,
@@ -27,6 +28,7 @@ import {
 } from '@avp/design-system';
 import type { BadgeTone, Column, ScoreAbsence, TrendSeriesInput } from '@avp/design-system';
 import { seriesStyle } from '@avp/design-system';
+import { CalendarDays, PieChart, Users } from 'lucide-react';
 import type {
   AlertFeed,
   Client,
@@ -341,15 +343,19 @@ function OverviewHero({ history }: { history: ClientHistory }): JSX.Element {
       absence="Not scored yet"
       {...(delta != null ? { delta } : {})}
       meta={
+        // Three facts, each in the fact's shape — Epic 16.2. Beside the
+        // delta they used to be four items of grey text at one weight, which
+        // is the report byline's failure on a Working screen. The delta stays
+        // as text: it is a reading with a direction, not a credential.
         latest ? (
           <>
-            <span>{`Scanned ${formatStamp(latest.scan.scannedAt)}`}</span>
-            {sov !== null && <span>{`${sov.toFixed(1)}% share of voice`}</span>}
-            <span>
+            <MetaChip icon={<CalendarDays />}>{`Scanned ${formatStamp(latest.scan.scannedAt)}`}</MetaChip>
+            {sov !== null && <MetaChip icon={<PieChart />}>{`${sov.toFixed(1)}% share of voice`}</MetaChip>}
+            <MetaChip icon={<Users />}>
               {latest.scan.competitors.length === 1
                 ? '1 rival in the set'
                 : `${latest.scan.competitors.length} rivals in the set`}
-            </span>
+            </MetaChip>
           </>
         ) : (
           <span>No scan of this client has produced a reading.</span>

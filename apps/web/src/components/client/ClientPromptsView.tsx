@@ -43,11 +43,13 @@ import {
   EmptyState,
   ErrorState,
   LoadingState,
+  MetaChip,
   StatRow,
   StatTile,
   TextField,
 } from '@avp/design-system';
 import type { BadgeTone } from '@avp/design-system';
+import { CalendarDays } from 'lucide-react';
 import type {
   Client,
   Me,
@@ -333,7 +335,11 @@ function RunCard({ run }: { run: PromptRun }): JSX.Element {
             {RUN_LABEL[run.status] ?? run.status}
           </Badge>
         </div>
-        <p className="text-ui-xs text-text-tertiary">{formatStamp(run.createdAt)}</p>
+        {/* When it ran, in the fact's shape — Epic 16.2 — so a run's header
+            reads as the report's does: the question, its state, its credentials. */}
+        <p>
+          <MetaChip icon={<CalendarDays />}>{formatStamp(run.createdAt)}</MetaChip>
+        </p>
       </header>
 
       <StatRow min="9rem">
