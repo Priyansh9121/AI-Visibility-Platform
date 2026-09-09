@@ -27,6 +27,7 @@ import { WorkspaceShell } from '@/components/shell/WorkspaceShell';
 import { SeatsPanel } from '@/components/settings/SeatsPanel';
 import { PasswordChangePanel } from '@/components/settings/PasswordChangePanel';
 import { BillingPanel } from '@/components/settings/BillingPanel';
+import { ThemeControl } from '@/components/settings/ThemeControl';
 
 /** Roles that may invite and remove. A member holds a seat; they do not grant them. */
 const MANAGING_ROLES = new Set(['owner', 'admin']);
@@ -107,6 +108,24 @@ export function SettingsView({
                     value={`${state.me.seats.used} of ${state.me.seats.limit}`}
                   />
                 </dl>
+              </CardBody>
+            </Card>
+          </PageSection>
+
+          {/*
+            Appearance — Epic 15. Light is the default; dark is Epic 14's
+            identity as a choice; the third option follows the OS. Stored in
+            the browser, not on the account: it is a preference about THIS
+            screen, and an operator on two machines may want them different.
+          */}
+          <PageSection
+            eyebrow="Appearance"
+            heading="How the product looks"
+            lead="Applies to every screen you work in. Stored in this browser."
+          >
+            <Card elevation="seated">
+              <CardBody>
+                <ThemeControl />
               </CardBody>
             </Card>
           </PageSection>

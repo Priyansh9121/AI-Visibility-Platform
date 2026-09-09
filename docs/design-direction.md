@@ -2,6 +2,13 @@
 
 Nothing in `packages/design-system` is built until this is signed off.
 
+> **Status, added in Epic 15 (2026-09-09), the same day as Epic 14's.** §7
+> below records Epic 14's decision that dark was the product's *only*
+> identity. The founder reversed the default after living with the live
+> build: **light is the default again and dark is a choice in Settings.** §8
+> records that, names what in §7 it supersedes (the default, and only the
+> default) and what it keeps (everything else). Read §7 and §8 together.
+>
 > **Status, added in Epic 14 (2026-09-09). §§0–4 below describe the light,
 > paper-derived identity Epic 0 chose. That identity is no longer what the
 > product looks like.** The founder rejected it after seeing it live and
@@ -914,3 +921,84 @@ reduced-motion and hover-gating disciplines, the null-is-not-zero rule on
 every figure, the report and the PDF, and the scoring pipeline.
 
 Screenshots: `docs/screenshots/epic-14/`. Reasoning per token: `design-system.md`.
+
+---
+
+## 8. Epic 15 — light by default, dark by choice: what in §7 is superseded, and what is not
+
+**The decision, and who made it.** §7.0 records that the founder rejected
+Epic 0's light system live and directed a dark identity. Having lived with
+the dark build, the founder reversed the *default*: the product is light by
+default, and Epic 14's dark identity is kept whole as an opt-in a user
+chooses in Settings. Recorded here the way §7 recorded its reversal of §0,
+and the way Epic 13's build-log entry kept 9.20's argument beside the
+decision that overturned it. §7's reasoning stands; §7's premise that dark
+is "the identity, not an opt-in" does not.
+
+**What "light" means here, decided rather than assumed.** The brief left
+two readings open — revert to Epic 0's paper system, or build a light theme
+in Epic 14's language — and named them as different amounts of work. This
+epic took the second, on the brief's own steer to keep the shape lock and
+the display face, and because Epic 0's paper system is now the *report's*
+skin, which the toggle must not touch. So the light theme is Epic 14's
+system on a light ground: a warm off-white page (`oklch(0.975 0.006 75)`),
+the sidebar one step below it, white cards on it, the same 16px / 8px shape
+lock, Space Grotesk on every heading and figure, the same card grid and hero.
+If the founder meant the first reading, the difference is a token block, not
+an architecture: `:root` would take the paper values and everything else
+here holds.
+
+**Two accents, still, deeper on the light ground.** Beacon is
+`oklch(0.53 0.09 200)` — the same hue as every other scope, held inside
+sRGB (hue 200's chroma ceiling at that lightness is 0.09; Epic 0's 0.125 was
+being clamped by the browser), and deep enough that white text clears
+4.8:1 on it. Signal at `oklch(0.53 0.125 155)` is its gradient partner, as
+before. The primary button is the same signal-to-beacon gradient with
+white text; in the dark theme it is the electric pair with dark text. The
+ramp on light is Epic 0's ramp, which was drawn for a light ground.
+
+**The hero survives on both grounds, and the ramp decides which way.** A
+hero numeral's gradient is still derived from the ramp at the score (§7.2).
+On dark the ramp is lifted to a floor of L 0.70 and runs lighter; on light
+it is capped at L 0.62 — `onVisibility`'s own threshold — and runs deeper.
+`heroGradient(score, theme)` produces both and `heroVars()` puts both on the
+element; the stylesheet picks by the theme attribute, so a switch repaints
+the figure without JavaScript reading the theme. The same mechanism
+(`rampVars()`, class `avp-ramp`) carries every interpolated ramp colour on a
+Working screen — the meters, the sidebar's dots and score, the Ledger's lit
+segments on a Working screen — because a per-score colour cannot be a token
+and an inline literal is wrong in one of two themes. Series paint on Working
+charts became custom properties for the same reason: `seriesStyle(…,
+'working')` returns `var(--avp-beacon-600)` and `benchVar(i)`, which
+`design-system.md` §6 already asked of chrome that must follow a theme.
+
+**Three scopes, and the report's own.** `tokens.css` is now `:root` (light,
+the default), `[data-theme='dark']` (Epic 14, the opt-in) and `.avp-report`
+(Epic 0's paper, verbatim). The report block used to share a selector with
+a light theme attribute — one rule meaning both "the report" and "light
+mode" — and that was exactly the seam through which a toggle would reach
+the document. It is scoped to the report's root class alone now, declared
+after the dark block so it wins at equal specificity when a document sits
+inside a dark app, and `tokens.test.ts` asserts that no theme attribute
+shares its rule.
+
+**The choice, and where it lives.** Three options in Settings — Light (the
+default), Dark, Match system — as buttons with `aria-pressed` in a labelled
+group, not a sun-and-moon switch: a three-way choice is not a toggle. Stored
+in the browser, not on the account, because it is a preference about this
+screen and an operator on two machines may want them different. The
+provider is `next-themes` (MIT), per `pick-ui-library`'s guidance for theme
+switching with no flash on load; it writes `data-theme` on `<html>` from a
+synchronous inline script before hydration, the same mechanism
+`layout.tsx`'s `MOTION_READY` already uses. `defaultTheme` is `light`, not
+`system`: the founder's decision is that light is the default, and following
+the OS is the third option rather than the starting point. The brief asked
+whether two options or three; three is the superset, and dropping the third
+is a one-line change if the founder prefers two.
+
+**What §7 keeps, unchanged.** The dark palette and every argument for it;
+the display face; the shape lock; the card grid and the hero; the filled
+area under the client's line; the bench layer; the report's isolation and
+its tests; every motion value. Only the default moved.
+
+Screenshots in both themes: `docs/screenshots/epic-15/`.

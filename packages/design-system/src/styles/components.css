@@ -344,10 +344,17 @@
  */
 
 .avp-hero {
-  /* Set inline per instance from the score. Declared here with a neutral
-     default so the stylesheet can be read on its own. */
-  --avp-hero-glow: var(--avp-surface-raised);
-  --avp-hero-gradient: linear-gradient(135deg, var(--avp-text-primary), var(--avp-text-secondary));
+  /* Set inline per instance from the score, one pair per theme (`heroVars()`),
+     and picked here by the theme attribute — Epic 15. Declared with neutral
+     defaults so the stylesheet can be read on its own. */
+  --avp-hero-glow-light: var(--avp-surface-raised);
+  --avp-hero-glow-dark: var(--avp-surface-raised);
+  --avp-hero-gradient-light: linear-gradient(135deg, var(--avp-text-primary), var(--avp-text-secondary));
+  --avp-hero-gradient-dark: linear-gradient(135deg, var(--avp-text-primary), var(--avp-text-secondary));
+  --avp-hero-glow: var(--avp-hero-glow-light);
+  --avp-hero-gradient: var(--avp-hero-gradient-light);
+  /* The glow's strength: soft on a light ground, fuller in the dark. */
+  --avp-hero-glow-alpha: 14%;
   position: relative;
   isolation: isolate;
   overflow: hidden;
@@ -372,9 +379,18 @@
   pointer-events: none;
   background: radial-gradient(
     60% 90% at 0% 0%,
-    color-mix(in oklab, var(--avp-hero-glow) 22%, transparent),
+    color-mix(in oklab, var(--avp-hero-glow) var(--avp-hero-glow-alpha), transparent),
     transparent 70%
   );
+}
+
+[data-theme='dark'] .avp-hero {
+  --avp-hero-glow-alpha: 22%;
+}
+
+[data-theme='dark'] .avp-hero {
+  --avp-hero-glow: var(--avp-hero-glow-dark);
+  --avp-hero-gradient: var(--avp-hero-gradient-dark);
 }
 
 @media (min-width: 60rem) {
@@ -448,11 +464,34 @@
    fourth cue — success/danger are SYSTEM state, so a delta takes the ramp's
    two ends instead of the semantics. */
 .avp-hero__delta { font-weight: 600; font-variant-numeric: tabular-nums; }
-.avp-hero__delta--up { color: var(--avp-vis-100); }
-.avp-hero__delta--down { color: var(--avp-vis-25); }
+.avp-hero__delta--up { color: var(--avp-delta-up); }
+.avp-hero__delta--down { color: var(--avp-delta-down); }
 .avp-hero__delta--flat { color: var(--avp-text-secondary); }
 
 .avp-hero__aside { min-width: 0; display: flex; justify-content: center; }
+
+/* ======================= Theme-reactive ramp ====================== */
+/*
+ * A score's ramp colour is interpolated per value, so it cannot be a token —
+ * and with two themes (Epic 15) an inline literal is wrong in one of them.
+ * Elements carrying `avp-ramp` set BOTH literals as custom properties
+ * (`rampVars()` in tokens/color.ts) and this rule picks one by theme. Paint
+ * then reads `--avp-ramp`. Defaults declared here so the stylesheet can be
+ * read on its own; the inline values override them on the element.
+ */
+.avp-ramp {
+  --avp-ramp-light: currentColor;
+  --avp-ramp-dark: currentColor;
+  --avp-on-ramp-light: currentColor;
+  --avp-on-ramp-dark: currentColor;
+  --avp-ramp: var(--avp-ramp-light);
+  --avp-on-ramp: var(--avp-on-ramp-light);
+}
+
+[data-theme='dark'] .avp-ramp {
+  --avp-ramp: var(--avp-ramp-dark);
+  --avp-on-ramp: var(--avp-on-ramp-dark);
+}
 
 /* =========================== ScoreMeter ========================== */
 /* The Ledger's identity at list scale: lit length IS the score. Width is the
@@ -480,6 +519,7 @@
   font-variant-numeric: lining-nums tabular-nums;
 }
 
+.avp-meter__numeral.avp-ramp { color: var(--avp-ramp); }
 .avp-meter__numeral--empty { color: var(--avp-text-tertiary); }
 
 /* A polled row whose scan lands goes tertiary-grey -> ramp colour on the SAME
@@ -509,6 +549,7 @@
 .avp-meter__lit {
   height: 100%;
   border-radius: var(--avp-radius-full);
+  background: var(--avp-ramp);
   /* A score that MOVES eases to its new length. A score that ARRIVES does not:
      this element does not exist while unscored, and a transition never runs on
      first paint. */
@@ -739,6 +780,8 @@
   border-radius: var(--avp-radius-full);
 }
 
+.avp-nav__dot.avp-ramp { background: var(--avp-ramp); }
+
 .avp-nav__dot--empty {
   background: transparent;
   box-shadow: inset 0 0 0 1px var(--avp-line-strong);
@@ -813,6 +856,8 @@
   gap: var(--avp-space-0_5);
   margin: var(--avp-space-3) 0 0;
 }
+
+.avp-navscore__numeral.avp-ramp { color: var(--avp-ramp); }
 
 .avp-navscore__numeral {
   font-family: var(--avp-font-display);
@@ -1262,6 +1307,11 @@
 .avp-ledger__lit {
   transition: transform var(--avp-duration-reveal) var(--avp-ease-reveal);
 }
+
+/* On a Working screen (`palette="working"`) the lit segment and its label
+   read the theme-reactive ramp — Epic 15. The report's fills stay literal. */
+.avp-ledger__lit.avp-ramp { fill: var(--avp-ramp); }
+.avp-ledger__value.avp-ramp { fill: var(--avp-on-ramp); }
 
 /* Per-bar stagger — Epic 9.16, OPT-IN ONLY. Reached only via
    `staggerDimensions`, which the report never passes. */

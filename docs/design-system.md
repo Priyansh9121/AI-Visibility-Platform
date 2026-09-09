@@ -12,25 +12,61 @@ screenshot, or markup was referenced, and no competitor code was inspected
 
 ---
 
-## 0. Epic 14 — the system as it is actually built now
+## 0. Epics 14 and 15 — the system as it is actually built now
 
 **Read this section first.** Everything under §§1–4 below describes the paper
 system Epic 0 built; from Epic 14 that system is **the report's skin only**.
-The product is dark. `design-direction.md` §7 carries the argument and what it
-supersedes; this section is the reference for what is in the code.
+Epic 14 made the product dark; **Epic 15 made light the default and dark the
+opt-in** (`design-direction.md` §8 — the founder's reversal of §7's default,
+and only its default). This section is the reference for what is in the code.
 
-### Two scopes, one token set
+### Three scopes, one token set
 
-`tokens.css` declares every role token twice:
+`tokens.css` declares every role token three times:
 
 | Scope | Selector | What it is |
 |---|---|---|
-| **Dark** | `:root` | The product. Every Working screen, the shell, the styleguide. |
-| **Paper** | `[data-theme='light'], .avp-report` | Epic 0's values verbatim. The report carries it on its own root class, so the document renders identically wherever it sits — inside the dark workspace shell, on `/share/{token}`, in a PDF — with **no markup change**. |
+| **Light** | `:root` | **The default** (Epic 15). Epic 14's language on a warm off-white ground with white cards. `light` in `tokens/color.ts`. |
+| **Dark** | `[data-theme='dark']` | Epic 14's identity, kept whole as the opt-in. Set on `<html>` by the theme provider. `dark` in `tokens/color.ts`. |
+| **Paper** | `.avp-report` | Epic 0's values verbatim, on the report's own root class and nothing else — declared last, so it wins over the dark block when a document sits inside a dark app. The document renders identically in a light app, a dark app, on `/share/{token}` and in a PDF, with **no markup change**. |
 
-`tokens.test.ts` reads each value from the block it belongs to (the first
-`--avp-beacon-600:` in the file is now the dark cyan) and asserts every paper
-override has a dark counterpart, so no token is theme-only.
+`tokens.test.ts` reads each value from the block it belongs to, asserts every
+override in the dark and report blocks has a default in `:root`, and asserts
+that no theme attribute shares the report's rule — the separation Epic 15
+made so the toggle cannot reach the document.
+
+### The theme choice
+
+`ThemeProvider` (`apps/web/src/components/shell/ThemeProvider.tsx`) wraps
+`next-themes` with `attribute="data-theme"`, `defaultTheme="light"`,
+`enableSystem`, storage key `avp.theme`. `ThemeControl` in Settings offers
+Light / Dark / Match system as `aria-pressed` buttons and reads the choice
+only after mount so hydration cannot disagree with the server's markup.
+
+### Theme-reactive paint for values that cannot be tokens
+
+A score's ramp colour is interpolated, so it is an inline literal — and with
+two themes a literal is wrong in one of them. `rampVars(score)` puts both
+ramps' values on the element (`--avp-ramp-light/dark`, `--avp-on-ramp-*`),
+class `avp-ramp` lets `components.css` pick one by theme, and paint reads
+`var(--avp-ramp)`. Used by `ScoreMeter`, `NavScore`, `NavSubItem`, the
+Ledger's Working palette, and — as `heroVars()` — the hero's gradient and
+glow. Series paint on Working charts is custom properties outright:
+`seriesStyle(…, 'working')` returns `var(--avp-beacon-600)` / `benchVar(i)`.
+
+### The light palette (`light` in `tokens/color.ts`)
+
+| Role | Value | Use |
+|---|---|---|
+| `surface-sunken / ground / seated / raised` | L 0.955 / 0.975 / 0.995 / 1.0, hue 75 | Sidebar, page, cards, hovered card |
+| `surface-void` | `oklch(0.925 0.01 75)` | The unlit part of a ledger or meter |
+| `text-primary / body / secondary / tertiary` | ink-900 / ink-800 / ink-600 / `oklch(0.56 0.014 75)` | Tertiary a step darker than ink-400 for 4.6:1 |
+| `line-hairline / strong / ink` | L 0.91 / 0.85 (hue 75) / ink-800 | Rules; a chart baseline |
+| `beacon-600 / 700` | `oklch(0.53 0.09 200)` / `oklch(0.46 0.078 200)` | Inside sRGB; white text 4.8:1 |
+| `signal-600 / 700` | `oklch(0.53 0.125 155)` / `oklch(0.46 0.11 155)` | Beacon's gradient partner |
+| `--avp-on-accent / on-danger / on-warn` | paper-000 / paper-000 / ink-800 | Text on a fill |
+| `vis-*`, `bench-*`, semantics | Epic 0's values | Drawn for a light ground |
+| elevation | soft ink-tinted shadows, no inner highlight | A white card on off-white |
 
 ### The dark palette (`dark` in `tokens/color.ts`)
 
@@ -100,8 +136,8 @@ out.
 
 ### Verified
 
-Design system 538/538, web 799/799 (the render harness deleted before
-counting), both typechecks clean. Screens verified in Chromium against the
+Epic 14: design system 538/538, web 799/799. Epic 15: design system
+601/601, web 802/802. Both typechecks clean at each. Screens verified in Chromium against the
 compiled stylesheet from the app's own fixtures rather than a live session —
 see `build-log.md`, Epic 14, for why — and the styleguide live on :4100.
 `docs/screenshots/epic-14/`.

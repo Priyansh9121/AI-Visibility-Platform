@@ -709,17 +709,21 @@ describe('TrendChart', () => {
     for (let i = 0; i < 6; i++) expect(out).not.toContain(benchColor(i));
   });
 
-  it('draws Working-screen competitors from the DARK accent layer — Epic 14', () => {
+  it('draws Working-screen competitors from the accent layer, as custom properties — Epic 15', () => {
+    // The property resolves per theme in the stylesheet; a literal would be
+    // right in one theme and wrong in the other.
     const out = chart({ palette: 'working' });
-    expect(out).toContain(benchColorDark(0));
+    expect(out).toContain('var(--avp-bench-1-600)');
     expect(out).not.toContain(benchColor(0));
+    expect(out).not.toContain(benchColorDark(0));
     expect(out).not.toContain(oklch(competitor['1']));
   });
 
-  it('keeps the client in beacon on a Working screen too — the electric stop', () => {
-    // One brand, one HUE: the cyan line an operator learns on the dark
-    // dashboard is the teal line in the document they send, at hue 200 in both.
-    expect(chart({ palette: 'working' })).toContain(oklch(dark.beacon['600']));
+  it('keeps the client in beacon on a Working screen too — as the property', () => {
+    // One brand, one HUE: the line an operator learns on the dashboard is the
+    // line in the document they send, at hue 200 in every theme.
+    expect(chart({ palette: 'working' })).toContain('var(--avp-beacon-600)');
+    expect(chart({ palette: 'working' })).not.toContain(oklch(dark.beacon['600']));
   });
 
   it('fills the area under the client only when asked, and never by default', () => {
