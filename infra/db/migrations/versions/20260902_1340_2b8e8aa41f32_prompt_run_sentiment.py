@@ -14,7 +14,7 @@ same question asked two ways produced different depth. This closes that.
 NULLABLE, AND NULL IS THE RIGHT ANSWER FOR EVERY EXISTING ROW. No run in any
 database was ever classified, because the pass did not run for them. A backfill
 would mean re-asking a model about answers this system deliberately did not
-keep — the text is gone, which is the point of ip-safety.md #7. Every run made
+keep — the text is gone, which is the point of the facts-only rule. Every run made
 before this migration therefore reads as "tone not measured", which is exactly
 what happened.
 

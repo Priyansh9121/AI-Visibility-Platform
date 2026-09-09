@@ -252,7 +252,7 @@ def test_a_dimension_we_have_not_measured_never_becomes_a_fix() -> None:
 
 
 def test_the_five_beats_appear_in_order() -> None:
-    """ip-safety.md #3 mandates the sequence. It is the argument, not a layout."""
+    """The narrative-report rule mandates the sequence. It is the argument, not a layout."""
     text = _visible_text(_render("scored-no-generated-fixes"))
     positions = [
         text.index("01 WHERE YOU STAND"),
@@ -299,7 +299,7 @@ def test_the_pitch_asserts_only_arithmetic() -> None:
 
 
 def test_no_third_party_prose_reaches_the_document() -> None:
-    """ip-safety.md #7 at the last gate before a file leaves the process.
+    """The facts-only rule at the last gate before a file leaves the process.
 
     `ReportOut` has no text-bearing field for an engine answer, so there is
     nothing to leak — but this is the surface that renders facts, and the sweep

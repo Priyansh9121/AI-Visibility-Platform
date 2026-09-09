@@ -349,7 +349,7 @@ describe('PageSection is the report voice without the report contract', () => {
 
   it('does NOT borrow the report beat numbering', () => {
     // Beat numbers itself from BEAT_SEQUENCE to enforce the narrative order
-    // ip-safety.md #3 mandates. If a marketing section could take a step
+    // the narrative-report rule mandates. If a marketing section could take a step
     // number, that sequence would stop meaning anything where it matters.
     const out = html(<PageSection heading="x" />);
     expect(out).not.toContain('avp-beat');

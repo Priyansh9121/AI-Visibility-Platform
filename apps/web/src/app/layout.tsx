@@ -49,7 +49,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <script dangerouslySetInnerHTML={{ __html: MOTION_READY }} />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
-        {/* Fraunces + IBM Plex Sans/Mono, all OFL-1.1 (docs/ip-safety.md #4).
+        {/* Fraunces + IBM Plex Sans/Mono, all OFL-1.1 (the licensed-assets rule).
             The href is exported by the design system so fonts are declared in
             exactly one place. */}
         <link href={GOOGLE_FONTS_HREF} rel="stylesheet" />

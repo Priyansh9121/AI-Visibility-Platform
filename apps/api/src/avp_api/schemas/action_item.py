@@ -2,13 +2,13 @@
 
 `title` and `detail` carry free text, and unlike every other response schema in
 this API that is correct here: these are OUR OWN generated recommendations, not
-scraped material (ip-safety.md #7, and the same justification recorded on
+scraped material (the facts-only rule, and the same justification recorded on
 models/action_item.py). Nothing on this model is derived from a competitor's
 page, an engine's answer, or a cited publisher's copy — services/fix_generator
 cannot see any of those, which is what the Epic 8 prompt guards enforce.
 
 Declared here rather than in schemas/report.py deliberately. That module is
-swept field-by-field by test_ip_safety.py's `test_report_projection_exposes_no_
+swept field-by-field by test_facts_only.py's `test_report_projection_exposes_no_
 third_party_prose`, whose forbidden set includes `title` — correctly, because
 every other thing a report renders is somebody else's. The sweep skips classes
 declared elsewhere and re-exported, which is the sanctioned way to hold an

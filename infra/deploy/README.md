@@ -45,4 +45,4 @@ These are decided and must hold wherever this is deployed:
 | `CORS_ALLOW_ORIGINS` must name real origins | Session cookies require explicit origins; browsers reject wildcard-with-credentials |
 | Redis `/0`, `/1`, `/2` must be the same instance or three coordinated ones | Sessions, Celery broker, Celery results. Separated so flushing a wedged queue does not sign every user out |
 | Migrations run before the API starts | `cd infra/db && alembic upgrade head` |
-| No synchronous Postgres driver is available | `psycopg2`/`psycopg3` are LGPL-3.0 and excluded by ip-safety.md #6. Everything uses asyncpg, including Alembic |
+| No synchronous Postgres driver is available | `psycopg2`/`psycopg3` are LGPL-3.0 and excluded by the dependency-licensing rule. Everything uses asyncpg, including Alembic |

@@ -18,7 +18,7 @@ import { api, ApiProblem } from '@/lib/api';
  * compiler is a cheaper guard than a test this repo has no DOM library to
  * write. Password reset arrived in Epic 9.13.
  *
- * ip-safety.md #2: every element from `@avp/design-system`. The width comes
+ * The design-system-only rule: every element from `@avp/design-system`. The width comes
  * from `max-w-form`, a token added in 9.11 to retire the hardcoded
  * `max-w-[26rem]` that used to live here — the only arbitrary Tailwind value
  * this component had, and exactly the off-system styling #2 prohibits.

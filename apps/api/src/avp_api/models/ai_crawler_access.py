@@ -1,6 +1,6 @@
 """AiCrawlerAccess — what a site's robots.txt asks one AI crawler to do. Epic F.
 
-IP-safety note (#7): this table records a VERDICT and a COUNT per agent. There
+Facts-only note: this table records a VERDICT and a COUNT per agent. There
 is no column capable of holding a path, a rule body, or any part of the
 client's robots.txt file. `matched_token` is the user-agent token that decided
 the verdict — a product name like `gptbot` or the literal `*`, never a URL.

@@ -22,7 +22,7 @@ import { api, ApiProblem } from '@/lib/api';
  * -----------------------------------------------------------
  * The two failure branches already read as prose. The SUCCESS branch did not:
  * it was a `<dl>` of Industry / Niche / Confidence, which is a field list — the
- * generic-metrics shape ip-safety.md #3 rules against — sitting inside a screen
+ * generic-metrics shape the narrative-report rule argues against — sitting inside a screen
  * whose other two branches argue in sentences. The screen disagreed with
  * itself about what kind of thing it was.
  *

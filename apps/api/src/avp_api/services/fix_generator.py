@@ -4,7 +4,7 @@
     recommendations" / "Priority + effort estimation per fix"
 
 =============================================================================
-IP-SAFETY BOUNDARY (ip-safety.md #7)
+FACTS-ONLY BOUNDARY
 =============================================================================
 Every value this module interpolates into a prompt is a fact: a brand name, a
 registrable domain, an industry LABEL, a weight, a sub-score, a count, an
@@ -15,7 +15,7 @@ carrying any of them.
 
 Unlike Epics 2 and 4, where third-party text is deliberately handed to the
 model and the guard sits on the OUTPUT schema, this module's boundary is on the
-INPUT. That is what the guards in test_ip_safety.py's Epic 8 block check, and
+INPUT. That is what the guards in test_facts_only.py's Epic 8 block check, and
 they are the first prompt-input guards in this repo.
 =============================================================================
 
@@ -182,7 +182,7 @@ class FixFacts:
     degradation_flags: list[str] = field(default_factory=list)
     dimensions: list[DimensionFact] = field(default_factory=list)
 
-    # Entity names and domains only (ip-safety.md #7: "names of entities
+    # Entity names and domains only (the facts-only rule: "names of entities
     # mentioned"), in detection rank order.
     competitor_names: list[tuple[str, str]] = field(default_factory=list)
 

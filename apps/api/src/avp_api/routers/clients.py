@@ -39,7 +39,7 @@ def _crawl_summary(crawl: CrawlResult | None) -> CrawlSummaryOut | None:
     This function is the last gate before crawl output reaches a response body.
     It names every field explicitly rather than spreading the dataclass, so
     adding a field to CrawlSignals cannot silently start returning it — and
-    `text_extract` has no path here at all (ip-safety.md #7).
+    `text_extract` has no path here at all (the facts-only rule).
     """
     if crawl is None:
         return None

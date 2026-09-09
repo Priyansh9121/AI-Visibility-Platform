@@ -2,7 +2,7 @@
 
 Every field is a fact or a count over facts. There is no text-bearing field
 here at all, and nothing upstream to fill one with: this reads citation
-domains, brand names and numbers, which ip-safety.md #7 permits explicitly, and
+domains, brand names and numbers, which the facts-only rule permits explicitly, and
 the cited page's text is never read, stored or shown.
 """
 

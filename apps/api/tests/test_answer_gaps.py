@@ -426,7 +426,7 @@ class TestIpSafety:
     async def test_the_response_carries_no_engine_answer_text(
         self, client: AsyncClient, stub_engines, stub_discovery
     ) -> None:  # noqa: ANN001
-        """ip-safety.md #7. The only free text here is the prompt, which is ours.
+        """The facts-only rule. The only free text here is the prompt, which is ours.
 
         The stub's answers contain a phrase that appears nowhere in any prompt,
         so if any field ever started echoing an answer this fails.

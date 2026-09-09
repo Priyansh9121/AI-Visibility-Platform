@@ -202,7 +202,7 @@ describe('the report is isolated from the Working-screen accent layer', () => {
  *
  * The Tailwind preset REPLACES the spacing scale rather than extending it, so a
  * class like `w-40` or `h-2.5` does not exist and compiles to NOTHING. That is
- * the intended defence — ip-safety.md #2 forbids ad hoc Tailwind defaults — but
+ * the intended defence — the design-system-only rule forbids ad hoc Tailwind defaults — but
  * it fails silently: the element simply has no width, and every test still
  * passes because jsdom applies no stylesheet and a static render has no box.
  *

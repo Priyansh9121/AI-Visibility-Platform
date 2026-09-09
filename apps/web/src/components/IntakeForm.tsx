@@ -9,7 +9,7 @@ import { api, ApiProblem } from '@/lib/api';
 /**
  * URL intake — §5.4 step 1, and the first customer-facing screen.
  *
- * Every visual element comes from `@avp/design-system` (ip-safety.md #2). The
+ * Every visual element comes from `@avp/design-system` (the design-system-only rule). The
  * only local styling is layout utilities from the Tailwind preset, which is
  * itself generated from the design tokens — Tailwind's stock palette is not
  * available in this app, so an off-system colour cannot compile.

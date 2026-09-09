@@ -1,6 +1,6 @@
 """Technical audit schemas — Epic 6.
 
-ip-safety.md #7: every field is a boolean, a count, a schema TYPE NAME, a
+The facts-only rule: every field is a boolean, a count, a schema TYPE NAME, a
 duration, or a day count. There is deliberately no field capable of carrying
 page copy, a meta description's text, or an OG tag's value.
 """

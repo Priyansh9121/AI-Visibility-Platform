@@ -1,7 +1,7 @@
 /**
  * Typography tokens.
  *
- * Four faces, four jobs, all OFL-licensed via Google Fonts (ip-safety.md #4).
+ * Four faces, four jobs, all OFL-licensed via Google Fonts (the licensed-assets rule).
  *
  * - Space Grotesk (display) — Epic 14. The product's own voice on every
  *   Working screen: headings, KPI figures, the hero numeral. A geometric
@@ -21,7 +21,7 @@
  *   align down the column.
  * - IBM Plex Mono (evidence) — same skeleton as Plex Sans, so evidence blocks
  *   sit inside body copy without a visual seam. Monospacing marks "verbatim
- *   machine output", a useful honesty signal given ip-safety.md #7 limits what
+ *   machine output", a useful honesty signal given the facts-only rule limits what
  *   may be quoted.
  */
 
@@ -112,7 +112,7 @@ export const measure = '68ch';
 /**
  * Google Fonts URL for the four faces.
  * Kept here so there is exactly one place fonts are declared, and so an audit
- * against ip-safety.md #4 has a single thing to check.
+ * against the licensed-assets rule has a single thing to check.
  */
 export const GOOGLE_FONTS_HREF =
   'https://fonts.googleapis.com/css2' +

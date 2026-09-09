@@ -1,7 +1,7 @@
 """Technical SEO audit — §7 Epic 6, feeding §6's Technical Foundation.
 
 =============================================================================
-IP-SAFETY (ip-safety.md #7)
+FACTS-ONLY RULE
 =============================================================================
 This module crawls the CLIENT'S OWN site, not a competitor's and not an engine
 answer. The facts-only discipline still applies to what is persisted: schema.org

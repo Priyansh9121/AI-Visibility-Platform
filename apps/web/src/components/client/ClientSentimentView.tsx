@@ -11,7 +11,7 @@
  * into that one number. This is the same stored labels read on their own.
  *
  * **Nothing is re-analysed and no answer text is read.** There is none to read:
- * ip-safety.md #7 means an engine's answer exists only inside the request that
+ * the facts-only rule means an engine's answer exists only inside the request that
  * produced it, and `classify_sentiment` runs there, against the transient text,
  * persisting a LABEL. Every figure on this screen is a count of those labels.
  *

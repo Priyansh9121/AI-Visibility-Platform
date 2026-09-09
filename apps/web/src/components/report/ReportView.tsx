@@ -3,18 +3,18 @@
 /**
  * The narrative report — Epic 7, the first customer-facing surface.
  *
- * ip-safety.md #3 requires primary screens to read as a narrative report:
+ * The narrative-report rule requires primary screens to read as a narrative report:
  * score -> biggest gap -> proof -> fix -> pitch. Not a metrics-tile dashboard.
  * The structure is not decorative — it is an argument, and each beat only
  * exists because the one before it earned the right to make it.
  *
- * ip-safety.md #2: every element here comes from `@avp/design-system`. The
+ * The design-system-only rule: every element here comes from `@avp/design-system`. The
  * Tailwind classes used for layout resolve exclusively to design tokens — the
  * preset REPLACES Tailwind's scales rather than extending them, so an off-system
  * value like `bg-slate-500` does not compile. There is no ad hoc styling on this
  * screen and no way to add any without a build error.
  *
- * ip-safety.md #7, with new weight: this is the first screen that RENDERS the
+ * The facts-only rule, with new weight: this is the first screen that RENDERS the
  * facts other epics collected. A citation appears as a domain and a link out. A
  * competitor appears as a name and a domain. No engine's prose appears anywhere,
  * and there is none to appear — `engine_results` has no text-bearing column at
@@ -942,7 +942,7 @@ function CitationTable({
           key: 'domain',
           header: 'Domain',
           // A link out is the sanctioned way to evidence a source without
-          // reproducing it (ip-safety.md #7). The link text is the domain —
+          // reproducing it (the facts-only rule). The link text is the domain —
           // itself a fact — never the page's title.
           render: (row) =>
             row.sampleUrl ? (

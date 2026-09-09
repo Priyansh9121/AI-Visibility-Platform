@@ -2,7 +2,7 @@
  * Tailwind preset.
  *
  * product-spec.md §5.1 requires Tailwind "customized to proprietary design
- * tokens", and ip-safety.md #2 forbids ad hoc Tailwind defaults on
+ * tokens", and the design-system-only rule forbids ad hoc Tailwind defaults on
  * customer-facing screens. This preset is how both are enforced mechanically
  * rather than by reviewer vigilance.
  *

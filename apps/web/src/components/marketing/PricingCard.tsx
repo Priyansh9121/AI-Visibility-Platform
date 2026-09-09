@@ -38,7 +38,7 @@
  * and §5.4 records that none of it is built — so the absence of a cap is an
  * absence, not a feature, and the card says exactly that.
  *
- * ip-safety.md #1, #5 and #8: derived from product-spec.md §3's core loop,
+ * The no-competitor-reference and no-borrowed-copy rules: derived from product-spec.md §3's core loop,
  * §5.4's pipeline and the seat model in `models/tenancy.py`. No competitor's
  * pricing page was opened, referenced or paraphrased while writing this.
  */

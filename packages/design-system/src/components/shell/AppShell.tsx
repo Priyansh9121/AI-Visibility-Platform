@@ -6,7 +6,7 @@ import { visibilityBandLabel } from '../Badge.js';
 export interface NavItemProps {
   href: string;
   label: string;
-  /** Rendered before the label. Lucide only (ip-safety.md #4), or nothing. */
+  /** Rendered before the label. Lucide only (the licensed-assets rule), or nothing. */
   icon?: ReactNode;
   /** The item for the screen currently shown. */
   current?: boolean;
@@ -217,7 +217,7 @@ export function NavDisclosure({
       <span className="avp-nav__text">
         <span className="avp-nav__label">{label}</span>
       </span>
-      {/* Drawn here rather than imported: ip-safety.md #4 allows Lucide or
+      {/* Drawn here rather than imported: the licensed-assets rule allows Lucide or
           custom-drawn, and the design system does not depend on Lucide. */}
       <svg
         className="avp-nav__chevron"

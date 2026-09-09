@@ -61,7 +61,7 @@ async def load_result_facts(session: AsyncSession, scan_id: str) -> list[ResultF
     inputs_digest reproducible even if that ever regressed.
 
     Reads FACTS ONLY — booleans, labels, entity names, cited domains. There is
-    no engine text in the database to read (ip-safety.md #7); Epic 4 stored a
+    no engine text in the database to read (the facts-only rule); Epic 4 stored a
     digest instead.
     """
     rows = list(

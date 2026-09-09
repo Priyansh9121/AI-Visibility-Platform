@@ -6,7 +6,7 @@ would add a package, a sync-only call style inside an async service, and
 another licence to audit — for one HTTP request.
 
 =============================================================================
-IP-SAFETY BOUNDARY (ip-safety.md #7)
+FACTS-ONLY BOUNDARY
 =============================================================================
 Search results are third-party content. Result titles and snippets are
 publisher copy and are **never persisted**: they exist inside `SerpResult` in

@@ -1,7 +1,7 @@
 """EngineResult, Citation, BrandMention — what each AI engine actually returned.
 
 =============================================================================
-IP-SAFETY CRITICAL TABLE  (docs/ip-safety.md constraint 7)
+FACTS-ONLY CRITICAL TABLE
 =============================================================================
 
 The rule: "Scraped data from AI engines or competitor pages is for FACTS ONLY
@@ -25,7 +25,7 @@ What IS stored, and why each is a fact rather than content:
   * brand mentions       - entity NAMES. Explicitly permitted.
 
 The raw answer exists only transiently inside a worker process while these
-facts are extracted, and is discarded. A test in tests/test_ip_safety.py
+facts are extracted, and is discarded. A test in tests/test_facts_only.py
 asserts this module introduces no text-bearing column, so adding one later
 fails CI rather than passing review unnoticed.
 
@@ -226,7 +226,7 @@ class Citation(Base, TimestampMixin):
     """A source the engine cited.
 
     Domain and URL only. There is deliberately NO `title` or `snippet` column:
-    a page title is the publisher's words, and ip-safety.md #7 permits "URLs and
+    a page title is the publisher's words, and the facts-only rule permits "URLs and
     domains that were cited", not their copy. The UI renders the domain and
     links out.
     """
@@ -258,7 +258,7 @@ class Citation(Base, TimestampMixin):
 
 
 class BrandMention(Base, TimestampMixin):
-    """A brand named in an answer. Entity names are facts (ip-safety.md #7).
+    """A brand named in an answer. Entity names are facts (the facts-only rule).
 
     Populated for the subject AND every competitor named, which is what makes
     Share of Voice computable: brand mentions / total mentions.

@@ -2,7 +2,7 @@
  * Minimal class-name joiner.
  *
  * Deliberately not a dependency: clsx/classnames are fine libraries, but this
- * is nine lines and every dependency added has to clear the ip-safety.md #6
+ * is nine lines and every dependency added has to clear the dependency-licensing
  * licence gate and be recorded in the build log. Not worth it for this.
  */
 export type ClassValue = string | number | false | null | undefined;

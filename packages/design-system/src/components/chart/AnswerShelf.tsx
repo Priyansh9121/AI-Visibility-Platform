@@ -55,7 +55,7 @@ const NOTCH_LABEL_PAD = 44;
  * hatchet job — see the series colour rule in `tokens/color.ts`.
  *
  * The row label is OUR generated question. No engine answer text exists to
- * render: `EngineResult` has no column able to hold prose (ip-safety.md #7).
+ * render: `EngineResult` has no column able to hold prose (the facts-only rule).
  */
 export function AnswerShelf({
   subjectName,

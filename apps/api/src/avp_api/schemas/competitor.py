@@ -1,6 +1,6 @@
 """Competitor detection schemas.
 
-ip-safety.md #7: every field here is a name, a domain, a count, or a score.
+The facts-only rule: every field here is a name, a domain, a count, or a score.
 There is no field capable of carrying a search-result snippet or an engine
 answer, and that is enforced by the type rather than by review.
 """

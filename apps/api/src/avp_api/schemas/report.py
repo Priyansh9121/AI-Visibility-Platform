@@ -12,11 +12,11 @@ how each engine covered the prompt set. Deriving those in the browser means
 paging `/scans/{id}/results` (48 rows and ~400 citations on a full scan) and
 re-aggregating on every render. Server-side it is one query set.
 
-It also keeps the facts-only projection in ONE place. `tests/test_ip_safety.py`
+It also keeps the facts-only projection in ONE place. `tests/test_facts_only.py`
 asserts over this module; four separate client-side derivations would have four
 places for a snippet to slip in.
 
-ip-safety.md #7 — what may appear here
+The facts-only rule — what may appear here
 --------------------------------------
 Every field below is a name, a domain, a URL, a count, an ordinal, an enum
 member, a machine code, or a number. There is deliberately **no field capable
@@ -251,7 +251,7 @@ class CrossEngineOut(ApiModel):
 class CitedDomainOut(ApiModel):
     """A domain an engine cited, and how often.
 
-    Domain + URL + count. api-contracts.md and ip-safety.md #7 both permit
+    Domain + URL + count. api-contracts.md and the facts-only rule both permit
     cited domains and URLs explicitly; the cited PAGE's text is never read,
     stored, or shown. `sample_url` is a link out to the source — the sanctioned
     alternative to quoting it.
@@ -283,7 +283,7 @@ class MentionShareOut(ApiModel):
 class ShelfSlotOut(ApiModel):
     """One brand standing in one ordinal slot of one answer.
 
-    ip-safety.md #7 names exactly this shape as permitted: "counts and ordinal
+    The facts-only rule names exactly this shape as permitted: "counts and ordinal
     positions (e.g. 'mentioned 3rd')" plus "names of entities mentioned". There
     is no field here that could carry what the answer SAID about the brand —
     only that it named it, and where in the order.
@@ -312,10 +312,10 @@ class PromptShelfOut(ApiModel):
     that is merely missing, because the visualisation draws absence as an
     empty notch and a silently absent row would draw nothing.
 
-    On `prompt_text` — ip-safety.md #7 governs scraped and model-returned
+    On `prompt_text` — the facts-only rule governs scraped and model-returned
     content ABOUT third parties. This is OUR OWN generated question, the same
     field `PromptOut.text` has returned on `/scans/{id}/prompts` since Epic 4,
-    and the exception is registered by name in `test_ip_safety.py` rather than
+    and the exception is registered by name in `test_facts_only.py` rather than
     left to dodge the forbidden-field sweep by luck.
     """
 
@@ -339,7 +339,7 @@ class PromptShelfOut(ApiModel):
 class ReportProofOut(ApiModel):
     """The evidence beat's raw material — all of it aggregated counts.
 
-    This is the surface ip-safety.md #7 is most exposed on, because it is the
+    This is the surface the facts-only rule is most exposed on, because it is the
     first time collected facts are RENDERED rather than stored. There is no
     field here that could hold an engine's prose, and there is nothing upstream
     to fill one with: `engine_results` has no text-bearing column at all.

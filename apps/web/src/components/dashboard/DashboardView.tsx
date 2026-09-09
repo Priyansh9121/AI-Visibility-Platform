@@ -524,7 +524,7 @@ function RerunButton({
  * screen in the product where nothing is lit yet. Showing the shape of the
  * scan unlit says what a scan will produce and how much each part of it is
  * worth, using this product's own chart rather than a graphic imported from
- * nowhere (ip-safety.md #4).
+ * nowhere (the licensed-assets rule).
  *
  * `unmeasured` is what keeps it honest: without it the Ledger would tell a
  * screen reader "AI Visibility Score: 0 out of 100", which is a measurement

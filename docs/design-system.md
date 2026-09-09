@@ -8,7 +8,7 @@ Required by product-spec.md §7, Epic 0: *"Document design tokens in
 
 Designed from the data model and user goal only. No competitor screen,
 screenshot, or markup was referenced, and no competitor code was inspected
-(`docs/ip-safety.md` #1, #5).
+(the no-competitor-reference rules).
 
 ---
 
@@ -158,7 +158,7 @@ The presenting context closes deals, so it wins ties. That single ruling
 produces the light-first paper palette, the editorial serif, a colour ramp that
 survives photocopying, and elevation built from borders rather than blur.
 
-It also happens to be where ip-safety.md #3 (narrative report, not metrics
+It also happens to be where the narrative-report rule (narrative report, not metrics
 tiles) points. The two agree, so the system leans in hard.
 
 ---
@@ -258,7 +258,7 @@ the presenting/export context is always light.
 
 ## 2. Typography
 
-All OFL-1.1 via Google Fonts (ip-safety.md #4). Declared in exactly one place:
+All OFL-1.1 via Google Fonts (the licensed-assets rule). Declared in exactly one place:
 `GOOGLE_FONTS_HREF` in `src/tokens/typography.ts`.
 
 | Role | Face | Why |
@@ -873,7 +873,7 @@ that same fact at page scale, so it takes the same stroke instead of a new one.
 
 ### The `figure` slot is not an icon slot
 
-ip-safety.md #4 rules out icon packs and illustration kits, and this system's
+The licensed-assets rule excludes icon packs and illustration kits, and this system's
 house style is that a graphic is **data drawn as illustration** — the Luminance
 Ledger and the Answer Shelf both are. So what a caller passes is the shape of
 the data that will exist once the screen is not empty.
@@ -901,7 +901,7 @@ than the page's own headline.
 
 ## 7. Report primitives — narrative, not dashboard
 
-ip-safety.md #3 requires primary screens to be a narrative report:
+The narrative-report rule requires primary screens to be a narrative report:
 **score → biggest gap → proof → fix → pitch.** These primitives make that the
 path of least resistance.
 
@@ -915,7 +915,7 @@ the structural label so the heading is free to argue.
 
 `<Evidence>` takes `engine`, `prompt`, and `findings: {label, value}[]` — and
 nothing else. There is no free-text body prop and no children, so **a paragraph
-of scraped answer text has nowhere to go.** ip-safety.md #7 is enforced by the
+of scraped answer text has nowhere to go.** The facts-only rule is enforced by the
 prop types rather than by a reviewer noticing.
 
 ---
@@ -937,7 +937,7 @@ The preset uses `theme` (**replace**), not `theme.extend`, for colour, spacing,
 font family/size, shadow and radius. Tailwind's stock palette is **removed**, so
 `bg-slate-500` and `text-blue-600` simply do not compile. Off-system colour
 cannot ship by accident, because the class does not exist — that is how
-ip-safety.md #2 is enforced mechanically rather than by vigilance.
+the design-system-only rule is enforced mechanically rather than by vigilance.
 
 The system's own components are authored in plain CSS over the token custom
 properties, not Tailwind utilities, so the package renders in Next.js, in the

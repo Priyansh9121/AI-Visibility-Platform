@@ -7,7 +7,7 @@ export type ButtonSize = 'sm' | 'md' | 'lg';
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
   size?: ButtonSize;
-  /** Lucide icon element (MIT) or custom-drawn SVG only — ip-safety.md #4. */
+  /** Lucide icon element (MIT) or custom-drawn SVG only — the licensed-assets rule. */
   iconStart?: ReactNode;
   iconEnd?: ReactNode;
   fullWidth?: boolean;

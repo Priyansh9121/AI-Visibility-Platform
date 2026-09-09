@@ -44,7 +44,7 @@ Nothing in `packages/design-system` is built until this is signed off.
 > (`design-system.md` §5b). See `build-log.md`, Epic 7.1.
 
 **Designed from:** the data model and the user goal only. No competitor screen,
-screenshot, or markup was referenced. (`docs/ip-safety.md` constraints 1 and 5.)
+screenshot, or markup was referenced. (the no-competitor-reference rules).
 
 ---
 
@@ -64,9 +64,9 @@ That single ruling produces: a **light-first, paper-derived** palette; an
 **greyscale**; and elevation rules that behave like **printed card stock rather
 than floating glass**.
 
-It also means the report is a *document*, which is exactly what IP-safety
-constraint 3 (narrative report, not a metrics-tile grid) is pushing toward. The
-two constraints agree, so I've leaned in hard.
+It also means the report is a *document*, which is exactly what the
+narrative-report rule (a narrative, not a metrics-tile grid) is pushing toward.
+The two constraints agree, so I've leaned in hard.
 
 > ### BUILT — Epic 9.19, 2026-08-29. Which screen is on which side, and how wide.
 >
@@ -661,7 +661,7 @@ instant paint).
 > The technique — content fades and rises, staggered by a fixed delay per
 > sibling, triggered by scroll position — is generic. It was derived from this
 > product's own content and Epic 0's own tokens; no real company's page, markup
-> or stylesheet was inspected, measured or referenced. ip-safety.md #1 and #5
+> or stylesheet was inspected, measured or referenced. the no-competitor-reference rules
 > apply here exactly as they apply to the three named competitors in
 > `north-star.md` §2.
 
@@ -786,8 +786,8 @@ style guide page.
 **Designed from:** `scoring-spec.md`'s five dimensions, `ClientHistory`,
 `CompetitorSet` and the operator's goals, in the visual language of the
 AI-visibility / GEO analytics genre. **No competitor product was opened,
-screenshotted or navigated to while building this** — `ip-safety.md` #1's
-actual rule: research the category, never design from a competitor's screen.
+screenshotted or navigated to while building this** — the design-from-the-data-model
+rule, exactly: research the category, never design from a competitor's screen.
 The genre was taken as a *direction* (dark, data-dense, hero KPI, card grids,
 weighted charts); every screen below was then derived from our own data model.
 

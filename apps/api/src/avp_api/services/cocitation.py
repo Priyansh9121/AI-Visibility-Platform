@@ -8,7 +8,7 @@ the subject is a competitor by the only definition that matters to this product,
 namely *the set of brands an AI answer puts in front of a buyer*.
 
 =============================================================================
-IP-SAFETY BOUNDARY (ip-safety.md #7)
+FACTS-ONLY BOUNDARY
 =============================================================================
 Only **entity names and domains** are extracted and persisted. The engine's
 prose is never stored, never returned by an endpoint, and never rendered. The

@@ -9,7 +9,7 @@ Report, and pitch export.
 through `@avp/design-system` chart theme — never Recharts' default theme.
 
 Every customer-facing surface **must** import from `@avp/design-system`.
-Ad hoc Tailwind defaults on customer-facing screens are not permitted
-(see `/docs/ip-safety.md`, constraint 2).
+Ad hoc Tailwind defaults on customer-facing screens are not permitted —
+the design-system-only rule.
 
 Scaffolded in Epic 1. Screen work begins at Epic 2+.

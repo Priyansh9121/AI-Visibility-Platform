@@ -4,13 +4,9 @@
 
 ## 0. Status and how to use this document
 
-**This is a NORMATIVE reference.** Read it at the start of every brief, the same
-way `ip-safety.md` is read — not optional context, not background reading, not
-"skim if time allows." A brief that has not been checked against this document
-has not been scoped.
-
-It does **not** outrank `ip-safety.md`. Where the two touch, `ip-safety.md`
-wins, per its own authority clause. Nothing here is an exception to it.
+**This is a NORMATIVE reference.** Read it at the start of every brief — not
+optional context, not background reading, not "skim if time allows." A brief
+that has not been checked against this document has not been scoped.
 
 ### The labelling convention
 
@@ -79,17 +75,18 @@ and written down decays. **Re-verify via live research before treating any
 competitor claim here as current.** That research is a separate, future,
 explicitly-scoped task — it was deliberately out of scope here.
 
-### `ip-safety.md` #1 and #5, restated in this context — [DECIDED, non-negotiable]
+### The no-competitor-reference rules, restated in this context — [DECIDED, non-negotiable]
 
 This document exists to understand **the market gap**. It is a map of where
 value is unclaimed. It is not, and must never be read as, a licence to copy.
 
-> **#1** — *Never design any screen from a competitor's screenshot or "make it
-> like X but better." Design from the data model and user goal only.*
+> **Design from the data model.** *Never design any screen from a competitor's
+> screenshot or "make it like X but better." Design from the data model and
+> user goal only.*
 >
-> **#5** — *Never inspect or copy competitor source code, HTML/CSS/JS, or DOM
-> structure. Looking at a rendered competitor page for UX research is fine;
-> lifting its code is not, even "as a reference."*
+> **Never copy.** *Never inspect or copy competitor source code, HTML/CSS/JS,
+> or DOM structure. Looking at a rendered competitor page for UX research is
+> fine; lifting its code is not, even "as a reference."*
 
 Concretely, for this document:
 
@@ -98,9 +95,9 @@ Concretely, for this document:
   flows, or is built.
 - "Exceed AIClicks" means exceed on **outcome for the agency operator**. It does
   not mean feature-match their surface.
-- **Nothing in this document is an exception to `ip-safety.md`.** If a brief
-  cites this document as justification for a design decision that would fail
-  constraint 1 or 5, the brief is wrong, not the constraint.
+- **Nothing in this document is an exception to the two rules above.** If a
+  brief cites this document as justification for a design decision that would
+  fail either of them, the brief is wrong, not the rule.
 
 ---
 
@@ -134,7 +131,7 @@ its own known weaknesses:
 - Two sources materially disagreed on Searchable's content-generation
   capability (see the row note) — this is recorded, not resolved, because
   resolving it requires either live product access or founder judgement.
-- None of this is a substitute for `ip-safety.md` #1/#5: nothing below
+- None of this is a substitute for the no-competitor-reference rules: nothing below
   describes a screen, a flow, or any code — only claimed capability, per the
   bucket definitions in §2.2.
 
@@ -233,7 +230,7 @@ another's data. Not by policy — by test.
 
 **Build status: SHIPPED and enforced.** Verified:
 
-- `apps/api/tests/test_ip_safety.py` — **76 tests collected**, including **sweep tests**
+- `apps/api/tests/test_facts_only.py` — **76 tests collected**, including **sweep tests**
   that walk every SQLAlchemy model and every response schema rather than
   checking a hand-listed set. Examples verified in the file:
   `test_no_column_named_like_raw_content`, `test_no_unbounded_text_columns`,
@@ -266,7 +263,7 @@ substrate that has to work.
 |---|---|---|
 | Agency + seat-based auth | Epic 1.3, 1.4 | `models/tenancy.py` (`Agency.seat_limit`, default 3, `CheckConstraint seat_limit >= 1`); `services/seats.py`; `tests/test_seats.py`, `tests/test_auth_flow.py`. httpOnly session cookies, Argon2id. |
 | Core data model | Epic 1.4 | `models/` — `tenancy`, `client`, `scan`, `prompt`, `competitor`, `engine_result`, `score`, `technical_audit`, `action_item` |
-| Narrative report render | Epic 7.0 | score → biggest gap → proof → fix → pitch, per `ip-safety.md` #3. Accepted live on `scan_01M0HDRGJNWNZDSJPP0NC3SV8W` (Help Scout, composite 58.24). |
+| Narrative report render | Epic 7.0 | score → biggest gap → proof → fix → pitch, per the narrative-report rule. Accepted live on `scan_01M0HDRGJNWNZDSJPP0NC3SV8W` (Help Scout, composite 58.24). |
 | E2E timing harness | Epic 9.1 (`2dd1ede`) | `apps/api/scripts/verify_e2e.py`, nine phases timed |
 | Bounded engine calls | Epic 9.2 (`f4c58a3`) | `ENGINE_CALL_CEILING = 122.0`, enforced by `asyncio.timeout`, not arithmetic. `tests/test_engine_timeout.py`, 6 cases, 5 fail pre-fix. |
 | Agency dashboard | Epic 9.3 (`26be4d0`, `9a3228a`) | list of past scans + re-run |
@@ -484,12 +481,12 @@ backlink/social audits.
    customers, a cross-client benchmark is a sample of one wearing a lab coat. It
    does not "work badly" at low volume — **it produces confidently wrong
    numbers**, which is worse than producing none.
-2. **Anonymisation rigour at least equal to `ip-safety.md`'s existing facts-only
+2. **Anonymisation rigour at least equal to the existing facts-only
    discipline, designed and tested BEFORE any aggregate ships.** Aggregating
    across tenants is the single most dangerous thing in this document: it points
    directly at the invariant `test_tenant_isolation.py` exists to protect. Any
    Layer 6 work needs its own sweep tests proving no client is re-identifiable
-   from an aggregate, written to the same standard as `test_ip_safety.py` —
+   from an aggregate, written to the same standard as `test_facts_only.py` —
    **written first, not retrofitted.**
 
 **Flag: Phase 3+ consideration. Not now, and not soon.**
@@ -533,7 +530,7 @@ yet, which is exactly why this is [HYPOTHESIS].**
 |---|---|---|
 | **Web** | Next.js on Vercel | `apps/web` is already Next.js; the platform is the path of least resistance for it |
 | **API** | FastAPI on a **persistent-process host** (Fly.io / Render — **neither chosen**) | **Explicitly NOT serverless.** Two hard blockers, both verified in this repo: Playwright drives a real browser (`services/crawl.py:185`, `async_playwright()`), and `BackgroundTasks` runs *in the API process* (`deps.py:40`, `services/scan_executor.py:187`). A serverless function that returns `202` and then dies takes the scan with it. |
-| **Database** | Managed Postgres | Postgres 17. **`psycopg2`/`psycopg3` are unavailable** — LGPL-3.0, on `ip-safety.md` #6's stop-and-ask list. Everything uses `asyncpg`, **including Alembic**. Any host must accept that. |
+| **Database** | Managed Postgres | Postgres 17. **`psycopg2`/`psycopg3` are unavailable** — LGPL-3.0, on the dependency-licensing rule's stop-and-ask list. Everything uses `asyncpg`, **including Alembic**. Any host must accept that. |
 | **Cache / queue** | Managed Redis | Sessions `/0`, Celery broker `/1`, results `/2` — same instance or three coordinated ones, so flushing a wedged queue does not sign every user out (`infra/deploy/README.md`) |
 | **CI/CD** | GitHub Actions, **gating deploys on the existing test suite** | See §4.3 — this does not exist |
 | **Error tracking** | Not chosen | — |
@@ -852,17 +849,18 @@ promised:**
 That claim is backed by real, checkable mechanism — not a privacy-policy
 paragraph:
 
-- `ip-safety.md` constraint 7 restricts persistence to **structured facts only**:
+- The facts-only rule restricts persistence to **structured facts only**:
   booleans, counts, ordinals, cited URLs and domains, entity names, structural
   signals.
-- `test_ip_safety.py`'s **sweep tests** walk every model and every response
+- `test_facts_only.py`'s **sweep tests** walk every model and every response
   schema, so a *newly added* column or field is covered without anyone
   remembering to add a test — which is the failure mode a hand-listed set has.
 - The boundary is architectural: `EngineAnswer`, `CrawlResult` and `SerpResult`
   are plain dataclasses with **no persistence path at all**.
-- Every UI epic in `build-log.md` carries an explicit
-  `IP-safety check passed: …` line enumerating what was verified — constraint 9's
-  gate, honoured in every entry through Epic 9.7.
+- Every UI epic in `build-log.md` through Epic 15 carries an explicit
+  `IP-safety check passed: …` line enumerating what was verified. That
+  self-check line was retired on 2026-09-09 with the document that required
+  it; the entries stay as history.
 
 **Where it belongs:** in actual sales materials, once Layer 5 exists to carry
 them. **Not built now.** Recorded here as a real, defensible asset — earned over
@@ -1035,11 +1033,11 @@ here.
 5. **A manipulation-risk check on competitor pages** — detecting
    conspicuously engineered text patterns of the kind demonstrated in Kumar &
    Lakkaraju as a "Sources/citations" signal. **Explicitly detection only —
-   `ip-safety.md` and this document's own §1 caveat both prohibit ever
-   suggesting a client emulate the technique.** This is the one candidate here
-   with a live IP-safety question attached: detecting the pattern requires
-   reading and characterizing a competitor's live page content, which needs
-   sign-off against `ip-safety.md` constraints before it is scoped, not after.
+   this document's own §1 caveat prohibits ever suggesting a client emulate
+   the technique.** This is the one candidate here with a live facts-only
+   question attached: detecting the pattern requires reading and
+   characterizing a competitor's live page content, which needs founder
+   sign-off against the facts-only rule before it is scoped, not after.
 6. **A citation-oriented-rewrite warning inside the Epic 8 fix generator.**
    If citation-heavy rewrites can impair retrieval per the survey, a fix
    recommendation that says "add more citations" without qualification could

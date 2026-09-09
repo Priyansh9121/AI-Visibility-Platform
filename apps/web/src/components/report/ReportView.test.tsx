@@ -3,7 +3,7 @@
  *
  * Rendered to static markup and asserted over, the same approach the design
  * system's own render tests use. Two things are being checked: that the
- * narrative structure ip-safety.md #3 mandates is actually present, and — the
+ * narrative structure the narrative-report rule mandates is actually present, and — the
  * part that matters most for this epic — that the rendered HTML contains no
  * third-party prose, because this is the first screen that puts collected facts
  * on a page rather than in a table.
@@ -174,7 +174,7 @@ describe('the pitch is arithmetic, not sales language', () => {
 });
 
 // ---------------------------------------------------------------------------
-// ip-safety.md #7 — the render gate.
+// The facts-only rule — the render gate.
 //
 // Epic 7 is the first epic that RENDERS the facts other epics collected. The
 // database rule has been enforced since Epic 4; what is new is that a violation
@@ -182,7 +182,7 @@ describe('the pitch is arithmetic, not sales language', () => {
 // against the actual emitted HTML rather than against a schema.
 // ---------------------------------------------------------------------------
 
-describe('ip-safety: the rendered page carries facts only', () => {
+describe('facts-only: the rendered page carries facts only', () => {
   const html = render(helpscoutReport);
 
   it('shows every citation as a domain and a link, never as quoted text', () => {
@@ -348,7 +348,7 @@ describe('competitor provenance and the override affordance — Epic 3.6', () =>
   });
 
   it('stays facts-only with an override present', () => {
-    // ip-safety.md #7: a manually added competitor is a name and a domain, the
+    // The facts-only rule: a manually added competitor is a name and a domain, the
     // same as a detected one. The override path introduces no prose field.
     const payload = JSON.stringify(manualOverrideReport);
     for (const field of ['"description"', '"tagline"', '"summary"', '"positioning"', '"note"']) {
@@ -421,7 +421,7 @@ describe('the answer shelf — Epic 7.1, Direction A', () => {
   });
 
   it('labels rows with our own generated questions', () => {
-    // ip-safety.md #7 permits our own content. These are the prompts this
+    // The facts-only rule permits our own content. These are the prompts this
     // system wrote and sent — the same strings /scans/{id}/prompts returns.
     expect(html).toContain('help scout vs zendesk for a small team');
     expect(html).toContain('shared inbox tool for a small support team');
@@ -448,7 +448,7 @@ describe('the answer shelf — Epic 7.1, Direction A', () => {
   });
 
   it('names rivals but reproduces no engine or competitor prose', () => {
-    // Entity names are facts (ip-safety.md #7). Anything describing them is not.
+    // Entity names are facts (the facts-only rule). Anything describing them is not.
     expect(html).toContain('Zendesk');
     for (const word of ['snippet', 'excerpt', 'according to', 'the answer said']) {
       expect(html.toLowerCase()).not.toContain(word);
@@ -501,7 +501,7 @@ describe('the unclaimed-domain fix — Epic 7.1, Direction C', () => {
   });
 
   it('describes the domain by name and count only, never by its content', () => {
-    // ip-safety.md #7: we have never read the cited page, and nothing here
+    // The facts-only rule: we have never read the cited page, and nothing here
     // claims to know what is on it. Asserted over the fix's OWN strings rather
     // than the whole document, so the page's `<article>` tag cannot mask it.
     const fix = deriveNarrative(helpscoutReport).fixes.find((f) => f.source === 'citation')!;

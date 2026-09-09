@@ -308,7 +308,7 @@ function AlertRow({
               )}
               {seen && <span className="text-ui-2xs text-text-tertiary">Acknowledged</span>}
             </span>
-            {/* OUR sentence about OUR numbers — see the API's ip-safety note. */}
+            {/* OUR sentence about OUR numbers — see the API's facts-only note. */}
             <p className="max-w-measure text-ui-base text-text-primary">{alert.detail}</p>
             <p className="text-ui-2xs uppercase tracking-caps text-text-tertiary">
               <time dateTime={alert.scannedAt}>{fmtDate(alert.scannedAt)}</time>

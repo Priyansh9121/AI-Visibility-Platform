@@ -1,7 +1,11 @@
-"""Schema-level enforcement of docs/ip-safety.md constraint 7.
+"""Schema-level enforcement of the facts-only rule.
 
-"Scraped data from AI engines or competitor pages is for FACTS ONLY... Never
-store, render, or republish a competitor's actual copyrighted text."
+The rule, stated here because this file is where it is enforced: scraped data
+from AI engines or competitor pages is for FACTS ONLY — booleans, counts,
+ordinal positions, cited URLs and domains, entity names, structural signals.
+Raw answer text and raw page HTML may exist transiently inside a worker for
+extraction and nowhere else. Never store, render, or republish a competitor's
+actual text, images, or marketing copy.
 
 These tests make that a build failure rather than a review comment. If someone
 adds a `raw_response` column to EngineResult in eighteen months, CI stops them.
@@ -70,7 +74,7 @@ def test_no_column_named_like_raw_content(model: type[Base]) -> None:
     }
     assert not offending, (
         f"{model.__tablename__} has column(s) {sorted(offending)} whose names indicate "
-        f"raw third-party content. ip-safety.md #7 permits facts only: booleans, "
+        f"raw third-party content. The facts-only rule permits facts only: booleans, "
         f"counts, ordinals, domains, URLs, entity names, and structural signals. "
         f"If a feature seems to need the raw text, STOP and flag it."
     )
@@ -88,7 +92,7 @@ def test_no_unbounded_text_columns(model: type[Base]) -> None:
             offending.append(f"{column.name} (VARCHAR({type_.length}))")
     assert not offending, (
         f"{model.__tablename__} has unbounded/oversized text column(s) {offending}. "
-        f"Facts are short and bounded. See ip-safety.md #7."
+        f"Facts are short and bounded. See the facts-only rule."
     )
 
 
@@ -140,7 +144,7 @@ def test_prompt_run_stores_facts_and_never_the_answer() -> None:
     for forbidden in ("text", "answer", "answer_text", "response", "content", "raw"):
         assert forbidden not in names, (
             f"prompt_run_results.{forbidden} would retain an engine answer. "
-            f"ip-safety.md #7 permits facts only."
+            f"The facts-only rule permits facts only."
         )
 
 
@@ -568,7 +572,7 @@ def test_audit_crawler_reads_only_presence_not_values() -> None:
     """The page evaluate() must not pull meta or OG tag CONTENT.
 
     Reading `content` off a meta description and storing it would be the exact
-    violation ip-safety.md #7 describes. Checked at source level because the
+    violation the facts-only rule describes. Checked at source level because the
     boundary is one line of JavaScript.
     """
     import inspect
@@ -633,7 +637,7 @@ def test_report_projection_exposes_no_third_party_prose() -> None:
         "prompt_text",
     }
 
-    # ip-safety.md #7 governs scraped and model-returned content ABOUT third
+    # The facts-only rule governs scraped and model-returned content ABOUT third
     # parties. Our own generated question is not that: `PromptOut.text` has
     # returned it on /scans/{id}/prompts since Epic 4, and the Answer Shelf
     # needs it to label a row. Registered here BY NAME so the exception is a
@@ -661,7 +665,7 @@ def test_report_projection_exposes_no_third_party_prose() -> None:
 
 
 def test_report_evidence_is_a_domain_and_a_link_never_a_quotation() -> None:
-    """ip-safety.md #7: link out to a source, never reproduce it."""
+    """The facts-only rule: link out to a source, never reproduce it."""
     from avp_api.schemas.report import CitedDomainOut
 
     fields = set(CitedDomainOut.model_fields)
@@ -1077,7 +1081,7 @@ def test_action_item_response_schemas_expose_no_third_party_prose() -> None:
 # numbering. Epic 3's guards above cover the tables and the READ schemas, which
 # is everything that existed then: detection wrote the rows and the API only
 # ever handed them back. Epic 3.6 turns the override endpoint into a reachable,
-# user-facing write path, so the REQUEST schema becomes an ip-safety surface for
+# user-facing write path, so the REQUEST schema becomes a facts-only surface for
 # the first time — an operator typing into a form is the one input to this
 # system that no upstream extractor has already reduced to facts.
 # ---------------------------------------------------------------------------
@@ -1086,7 +1090,7 @@ def test_action_item_response_schemas_expose_no_third_party_prose() -> None:
 def test_the_override_request_can_carry_only_a_name_and_a_domain() -> None:
     """Exact-field lock on the operator's input.
 
-    ip-safety.md #7 permits "names of entities mentioned" and the domains that
+    The facts-only rule permits "names of entities mentioned" and the domains that
     were cited. A competitor an operator names is the same kind of fact as one
     detection found, and gets the same fields — no more. Locked by equality
     rather than a forbidden list so that ADDING a field fails here, which is
@@ -1175,7 +1179,7 @@ def test_the_override_writer_copies_only_identity_onto_the_row() -> None:
 def test_a_manually_added_competitor_is_stored_exactly_like_a_detected_one() -> None:
     """No column exists that only a manual row could populate.
 
-    The point of the ip-safety rule is that provenance changes nothing about
+    The point of the facts-only rule is that provenance changes nothing about
     what may be STORED. If an override could carry a field detection cannot,
     that field would by definition be something no extractor produced — which
     is the definition of prose in this system.
@@ -1195,7 +1199,7 @@ def test_a_suppression_records_the_fact_and_never_the_reason() -> None:
     The obvious next field after "the operator removed this" is "why", and the
     honest answer is usually a sentence about a competitor — "they're a
     listicle site, not a vendor", "acquired last year". That is exactly the
-    third-party characterisation ip-safety.md #7 keeps out of this system, and
+    third-party characterisation the facts-only rule keeps out of this system, and
     it would arrive through the one input no extractor has reduced to facts.
 
     The boolean itself is already covered by the parametrized sweeps at the top
@@ -1250,7 +1254,7 @@ def test_the_set_has_one_definition_of_which_competitors_are_real() -> None:
 
 
 def test_answer_shelf_carries_ordinals_and_names_and_our_own_question() -> None:
-    """ip-safety.md #7 names this shape as permitted almost verbatim.
+    """The facts-only rule names this shape as permitted almost verbatim.
 
     "counts and ordinal positions (e.g. 'mentioned 3rd')" and "names of
     entities mentioned" are exactly what a shelf slot is. What must not exist

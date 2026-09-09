@@ -18,14 +18,13 @@ client.
 | `packages/shared-types` | Domain types shared across all apps | Epic 1 |
 | `infra/db` | Schema, migrations, local docker-compose | Epic 1 |
 | `infra/deploy` | Deploy manifests, CI/CD | Epic 1 |
-| `docs` | Spec, build log, API contracts, scoring spec, IP safety | live |
+| `docs` | Spec, build log, API contracts, scoring spec | live |
 
 ## Docs you should read first
 
-- **`docs/ip-safety.md`** — standing design/IP constraints. Normative. Read before writing UI code.
 - **`docs/north-star.md`** — competitive goal, the seven-layer product architecture,
-  deployment and commercial architecture. **Normative.** Read alongside `ip-safety.md`
-  at the start of every brief; §8 states the drift-check rule every brief must answer.
+  deployment and commercial architecture. **Normative.** Read at the start of every
+  brief; §8 states the drift-check rule every brief must answer.
 - `docs/product-spec.md` — source of truth for the product (§3 core loop, §5 architecture, §6 scoring, §7 epics).
 - `docs/design-system.md` — token and component reference, with the reasoning behind each decision.
 - `docs/build-log.md` — what was built, why, and what was traded off.
@@ -260,7 +259,7 @@ cd ../.. && pnpm --filter @avp/shared-types generate
 
 ## Licence audit
 
-Every dependency must be MIT / Apache-2.0 / BSD per `docs/ip-safety.md` #6.
+Every dependency must be MIT / Apache-2.0 / BSD per the dependency-licensing rule.
 
 ```bash
 cd apps/api && uv run python scripts/license_audit.py

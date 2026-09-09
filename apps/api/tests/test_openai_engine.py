@@ -305,7 +305,7 @@ class TestTheAdapterItself:
     async def test_the_answer_text_never_reaches_a_log_view(
         self, engine_settings: Settings, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # ip-safety.md #7 — the same boundary the Claude adapters hold.
+        # The facts-only rule — the same boundary the Claude adapters hold.
         secret = "PROPRIETARY THIRD PARTY PROSE"
         _install(
             monkeypatch,

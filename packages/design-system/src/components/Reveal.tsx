@@ -47,7 +47,7 @@ import { useRevealOnIntersect } from '../lib/useRevealOnIntersect.js';
  *   - `animate={false}` starts revealed, which is what every static render and
  *     every test gets.
  *
- * ip-safety.md #1 and #5: fade-and-rise-on-scroll is a generic technique with
+ * The no-competitor-reference rules: fade-and-rise-on-scroll is a generic technique with
  * nothing proprietary to derive it from. Nobody's site, markup or stylesheet
  * was inspected, measured or referenced. The timing comes from this project's
  * own `design-direction.md` §4 and the tokens Epic 0 shipped.

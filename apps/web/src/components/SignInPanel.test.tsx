@@ -46,7 +46,7 @@ describe('width comes from a token, not a hardcoded value', () => {
   it('uses max-w-form rather than an arbitrary Tailwind value', () => {
     const out = render();
     // Epic 9.11 retired `max-w-[26rem]` here — the only arbitrary value this
-    // component had, and exactly the off-system styling ip-safety.md #2 bans.
+    // component had, and exactly the off-system styling the design-system-only rule bans.
     expect(out).toContain('max-w-form');
     expect(out).not.toMatch(/max-w-\[/);
   });

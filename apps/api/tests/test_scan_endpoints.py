@@ -239,7 +239,7 @@ class TestRunScan:
     async def test_answer_text_never_appears_in_any_response(
         self, client: AsyncClient, stub_engines
     ) -> None:  # noqa: ANN001
-        """ip-safety.md #7, asserted where the engine results actually are.
+        """The facts-only rule, asserted where the engine results actually are.
 
         This used to search the POST response, which carried every result. The
         queue receipt carries none (Epic 9.5), so that assertion alone would now

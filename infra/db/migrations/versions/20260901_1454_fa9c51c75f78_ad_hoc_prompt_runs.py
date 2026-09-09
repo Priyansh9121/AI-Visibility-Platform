@@ -20,13 +20,13 @@ would have to learn about, and that exactly one of them would eventually forget.
 
 Separate tables cost four `CREATE TABLE`s and make the wrong reading impossible.
 
-IP-SAFETY (ip-safety.md #7)
+FACTS-ONLY RULE
 ---------------------------
 `prompt_runs.prompt_text` is the only TEXT column here, and it holds what the
 OPERATOR typed — our side of the exchange, exactly as `prompts.text` is. The
 three child tables carry booleans, ordinals, counts, a SHA-256 digest, entity
 names and cited URLs, and no column capable of holding an engine's answer.
-`test_ip_safety.py` lists all three in `FACTS_ONLY_MODELS`, so adding one later
+`test_facts_only.py` lists all three in `FACTS_ONLY_MODELS`, so adding one later
 fails CI rather than passing review.
 
 Revision ID: fa9c51c75f78

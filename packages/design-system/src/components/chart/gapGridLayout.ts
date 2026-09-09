@@ -46,7 +46,7 @@ export interface GapCellInput {
 
 export interface GapRowInput {
   promptId: string;
-  /** OUR OWN prompt text — see the API's ip-safety note. */
+  /** OUR OWN prompt text — see the API's facts-only note. */
   text: string;
   intent: string;
   kind: GapRowKind;

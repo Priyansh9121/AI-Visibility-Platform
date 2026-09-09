@@ -519,7 +519,7 @@ class TestAnswerShelf:
     async def test_the_row_label_is_our_own_generated_question(
         self, client: AsyncClient, stub_engines
     ) -> None:  # noqa: ANN001
-        """ip-safety.md #7 permits our own content. The prompt is ours — the
+        """The facts-only rule permits our own content. The prompt is ours — the
         same field `PromptOut.text` has returned since Epic 4."""
         await _sign_up(client)
         sid = await _scored_scan(client, stub_engines, n=4)

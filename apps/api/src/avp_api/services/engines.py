@@ -1,7 +1,7 @@
 """Engine adapters — §5.4 step 4, "run each prompt against each AI engine".
 
 =============================================================================
-IP-SAFETY BOUNDARY (ip-safety.md #7)
+FACTS-ONLY BOUNDARY
 =============================================================================
 `EngineAnswer.text` holds a live engine response. It is a plain dataclass with
 no SQLAlchemy mapping and no persistence path — the same contract as
@@ -378,7 +378,7 @@ def _extract_citations(response) -> list[CitedSource]:  # noqa: ANN001
     text would pick up whatever the model happened to type.
 
     **Titles and page snippets in those blocks are deliberately ignored.** They
-    are publisher copy (ip-safety.md #7). Only the URL and its registrable
+    are publisher copy (the facts-only rule). Only the URL and its registrable
     domain are kept.
     """
     citations: list[CitedSource] = []

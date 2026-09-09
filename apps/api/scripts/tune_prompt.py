@@ -7,7 +7,7 @@ Experimental design, because "the label changed" is worthless without it:
     variants would let page changes and different secondary-page choices move
     the result, and a difference could not be attributed to the prompt.
   * **Crawls are never written to disk.** They live in memory for the process
-    lifetime only — ip-safety.md #7 forbids persisting page text, and a "just
+    lifetime only — the facts-only rule forbids persisting page text, and a "just
     for testing" cache file is still a durable store.
   * **One variable per variant.** B changes only the exemplar. C adds only the
     explicit negative on top of B.

@@ -1,7 +1,7 @@
 """Live verification of the Epic 7 acceptance criterion.
 
 §7 Epic 7: "a full report renders correctly for a real test scan, passes
-IP-safety visual review (Section 2)."
+visual review."
 
 Costs nothing — no model, search or crawl calls. The report PRESENTS data the
 earlier epics already produced, so this script's job is to prove it presents the
@@ -151,7 +151,7 @@ async def main() -> int:
                   f"/{coverage.prompts_run} mentioned={coverage.mentioned}")
 
         # ------------------------------------------------------------------
-        rule("PART 2 — ip-safety.md #7: the wire payload carries facts only")
+        rule("PART 2 — the facts-only rule: the wire payload carries facts only")
         # ------------------------------------------------------------------
         payload = report.model_dump_json(by_alias=True)
         print(f"\n  payload size : {len(payload)} bytes")
@@ -165,7 +165,7 @@ async def main() -> int:
         # and an ActionItem is the one thing here that is OURS: our own
         # recommendation about our own client's site, generated from our own
         # measurements. models/action_item.py documents that exception and
-        # test_ip_safety.py's `test_action_item_is_the_documented_free_text_
+        # test_facts_only.py's `test_action_item_is_the_documented_free_text_
         # exception` asserts it deliberately stays out of FACTS_ONLY_MODELS.
         #
         # So the payload was right and this check was stale — a hand-written
@@ -385,7 +385,7 @@ async def main() -> int:
 
         # The row label is OUR generated question. Asserted against the prompts
         # table rather than eyeballed, because this is the one prose field in
-        # the whole report projection and ip-safety.md #7 turns on it being ours.
+        # the whole report projection and the facts-only rule turns on it being ours.
         prompt_texts = {
             row[0] for row in (await session.execute(
                 select(Prompt.text).join(PromptSet, PromptSet.id == Prompt.prompt_set_id)

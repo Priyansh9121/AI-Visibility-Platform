@@ -3,12 +3,12 @@
 WHY THERE IS NO PDF DEPENDENCY HERE
 -----------------------------------
 product-spec.md §5.1 names "React-PDF or WeasyPrint". Both were assessed against
-ip-safety.md #6 rather than assumed, the same discipline Epic 9.13 applied to the
+the dependency-licensing rule rather than assumed, the same discipline Epic 9.13 applied to the
 `openai` and `resend` SDKs, and both were declined:
 
 **WeasyPrint** is BSD-3-Clause itself, but it hard-requires **Pyphen**, whose
 PyPI classifiers are `GPLv2+`, `LGPLv2+` and `MPL 1.1`. Every one of those trips
-`license_audit.py`'s BLOCKING pattern, and ip-safety.md #6 requires an explicit
+`license_audit.py`'s BLOCKING pattern, and the dependency-licensing rule requires an explicit
 sign-off for GPL/LGPL — MPL is not in ALLOWED either. Read off PyPI metadata,
 not from memory. It also needs system pango/cairo/harfbuzz, which is a native
 stack the deployment does not currently carry.

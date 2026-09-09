@@ -1,4 +1,4 @@
-"""Dependency licence audit — enforces ip-safety.md constraint 6.
+"""Dependency licence audit — enforces the dependency-licensing rule.
 
 Walks every installed distribution in the active environment, resolves its
 licence from packaging metadata, and classifies it. Exits non-zero if anything
@@ -13,7 +13,7 @@ import re
 import sys
 from importlib.metadata import distributions
 
-# ip-safety.md "Operational notes": allowed without asking.
+# Allowed without asking.
 ALLOWED = {
     "MIT", "MIT License", "Expat",
     "Apache-2.0", "Apache 2.0", "Apache Software License", "Apache License 2.0",
@@ -24,11 +24,11 @@ ALLOWED = {
 }
 
 # MPL-2.0 is deliberately NOT in ALLOWED. It is weak (file-level) copyleft, so it
-# does not infect a proprietary codebase when used unmodified — but ip-safety.md
-# says "MIT/Apache-2.0/BSD only", and MPL is none of those. It surfaces as REVIEW
+# does not infect a proprietary codebase when used unmodified — but the rule is
+# "MIT/Apache-2.0/BSD only", and MPL is none of those. It surfaces as REVIEW
 # so a human decides, rather than being silently waved through.
 
-# Stop-and-ask list from ip-safety.md.
+# Stop-and-ask list.
 BLOCKING = re.compile(
     r"\b(GPL|AGPL|LGPL|SSPL|BUSL|Business Source|Elastic License|Commons.?Clause|"
     r"source.available|Prosperity|Polyform)\b",
@@ -97,7 +97,7 @@ def main() -> int:
         print(f"  {n:>3}  {lic}")
 
     if counts.get("BLOCK"):
-        print("\nFAIL: blocking or undeclared licences present (ip-safety.md #6).")
+        print("\nFAIL: blocking or undeclared licences present (the dependency-licensing rule).")
         return 1
     print("\nPASS: no copyleft, source-available, or undeclared licences.")
     return 0

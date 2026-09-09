@@ -175,7 +175,7 @@ class TestPrompt:
 
 class TestOutcomeShape:
     def test_outcome_has_no_rationale_field(self) -> None:
-        """ip-safety: model-authored prose is a debug aid, never persisted."""
+        """facts-only: model-authored prose is a debug aid, never persisted."""
         assert "rationale" not in ClassificationOutcome.model_fields
 
     def test_default_model_is_recorded(self) -> None:

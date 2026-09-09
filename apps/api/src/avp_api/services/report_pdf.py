@@ -11,7 +11,7 @@ page it was downloaded from would be the worst possible outcome of building one.
 
 THE FIVE BEATS, IN ORDER
 ------------------------
-score → gap → proof → fix → pitch, the sequence ip-safety.md #3 mandates and
+score → gap → proof → fix → pitch, the sequence the narrative-report rule mandates and
 `BEAT_SEQUENCE` fixes. The PDF is not a data dump with the same numbers in it;
 it is the same argument on paper, so the order is not a display preference.
 
@@ -28,7 +28,7 @@ Everything the screen refuses to fake, this refuses to fake:
   * an empty `actionItems` list renders the deterministic derivation, exactly
     as api-contracts.md's note on that field says the fix beat does
 
-ip-safety.md #7: every value written here is a name, a domain, a URL, a count,
+The facts-only rule: every value written here is a name, a domain, a URL, a count,
 an ordinal, a machine code resolved through OUR OWN string table, or a number.
 `ReportOut` has no field capable of carrying an engine's prose, so there is
 nothing for this to leak even by accident — and `test_report_pdf.py` asserts it.
@@ -80,7 +80,7 @@ def _cover(doc: PdfDocument, data: dict[str, Any], subject_name: str) -> None:
 
     A logo would be the first image this document has ever needed, and this
     module was built at zero dependencies behind an explicit licensing survey:
-    WeasyPrint's required `Pyphen` is GPL/LGPL/MPL, which ip-safety.md #6
+    WeasyPrint's required `Pyphen` is GPL/LGPL/MPL, which the dependency-licensing rule
     blocks, and React-PDF is a Node library in a Python process. Adding image
     support would reopen that survey for a letterhead mark, and it would also
     mean the server FETCHING an agency-supplied URL to embed it — a
