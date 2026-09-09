@@ -1,9 +1,23 @@
 /**
- * Design token custom properties.
+ * Design token custom properties — Epic 14, the dark identity.
  *
  * Mirrors src/tokens/*.ts. The pairing is enforced by a unit test
  * (src/tokens/tokens.test.ts) that parses this file and fails on drift — two
  * hand-maintained copies of a palette will otherwise diverge within a month.
+ *
+ * TWO THEMES, AND WHICH ONE IS THE PRODUCT
+ * ----------------------------------------
+ * `:root` is DARK. It is the product's identity, not an opt-in: the founder
+ * rejected the light paper system after seeing it live (build-log.md, Epic 14),
+ * and every Working screen — the shell, the dashboard, the clients list, a
+ * client's space — renders on it.
+ *
+ * `[data-theme='light']` and `.avp-report` carry the PAPER system, verbatim
+ * from Epic 0. The report is a document that gets printed and handed to a
+ * CMO, design-direction.md §0's argument for THAT artefact still holds, and
+ * scoping the paper tokens to the report's own root class is what keeps the
+ * document byte-identical with no change to its markup. The light block is
+ * therefore not a "light mode" anybody toggles; it is the report's own skin.
  *
  * Framework-agnostic on purpose: these work in Next.js, in the Vite style
  * guide, and inside the WeasyPrint/React-PDF export path where a JS runtime
@@ -11,249 +25,87 @@
  */
 
 :root {
-  /* --- neutrals: warm paper -------------------------------------- */
+  color-scheme: dark;
+
+  /* --- raw neutrals: warm paper, cool ink ---------------------------
+     Theme-independent literals. `onVisibility()` picks between paper-000 and
+     ink-900 for a label sitting ON a ramp fill, which is fill-relative and
+     therefore the same in both themes; the report reads the rest. */
   --avp-paper-000: oklch(0.995 0.004 75);
   --avp-paper-050: oklch(0.978 0.006 75);
   --avp-paper-100: oklch(0.958 0.008 75);
   --avp-paper-200: oklch(0.925 0.01 75);
   --avp-paper-300: oklch(0.87 0.012 75);
 
-  /* --- neutrals: cool ink (hue hand-off at 400) ------------------- */
   --avp-ink-400: oklch(0.62 0.014 75);
   --avp-ink-600: oklch(0.47 0.018 265);
   --avp-ink-800: oklch(0.285 0.022 265);
   --avp-ink-900: oklch(0.185 0.026 265);
 
-  /* --- visibility ramp (FILL ONLY, never text) ------------------- */
-  --avp-vis-00: oklch(0.42 0.045 35);
-  --avp-vis-25: oklch(0.545 0.115 45);
-  --avp-vis-50: oklch(0.655 0.135 65);
-  --avp-vis-75: oklch(0.735 0.125 150);
-  --avp-vis-100: oklch(0.815 0.115 195);
+  /* --- the dark ground: deep cool charcoal, never pure black -------
+     Hue 265 continues the cool-ink axis of the paper system; the text is
+     warm (hue 75) for the same reason paper was — the hand-off is inverted,
+     not abandoned. */
+  --avp-surface-sunken: oklch(0.145 0.012 265);
+  --avp-surface-ground: oklch(0.175 0.012 265);
+  --avp-surface-seated: oklch(0.215 0.014 265);
+  --avp-surface-raised: oklch(0.25 0.015 265);
+  /* The unlit part of a ledger or a meter — visibly a slab, not a hole. */
+  --avp-surface-void: oklch(0.275 0.014 265);
+  /* A row or tile under the pointer. Alpha, so it sits on any surface. */
+  --avp-surface-hover: oklch(1 0 0 / 0.04);
 
-  /* --- brand accent: the client is always beacon ------------------ */
-  --avp-beacon-050: oklch(0.965 0.018 200);
-  --avp-beacon-100: oklch(0.925 0.038 200);
-  --avp-beacon-400: oklch(0.72 0.11 200);
-  --avp-beacon-600: oklch(0.545 0.125 200);
-  --avp-beacon-700: oklch(0.46 0.105 200);
+  --avp-text-primary: oklch(0.965 0.006 75);
+  --avp-text-body: oklch(0.88 0.008 75);
+  --avp-text-secondary: oklch(0.72 0.01 75);
+  --avp-text-tertiary: oklch(0.58 0.012 75);
 
-  /* --- the working-screen accent layer (Epic 9.24) -------------- */
-  /* NOT read by the report. See tokens/color.ts and the guard in
-     tokens.test.ts, which fails if a report surface ever references one. */
-  /* cobalt */
-  --avp-bench-1-050: oklch(0.955 0.035 258);
-  --avp-bench-1-100: oklch(0.905 0.062 258);
-  --avp-bench-1-600: oklch(0.55 0.185 258);
-  --avp-bench-1-700: oklch(0.46 0.158 258);
-  /* indigo */
-  --avp-bench-2-050: oklch(0.955 0.035 275);
-  --avp-bench-2-100: oklch(0.905 0.062 275);
-  --avp-bench-2-600: oklch(0.55 0.185 275);
-  --avp-bench-2-700: oklch(0.46 0.158 275);
-  /* violet */
-  --avp-bench-3-050: oklch(0.955 0.035 292);
-  --avp-bench-3-100: oklch(0.905 0.062 292);
-  --avp-bench-3-600: oklch(0.55 0.185 292);
-  --avp-bench-3-700: oklch(0.46 0.158 292);
-  /* orchid */
-  --avp-bench-4-050: oklch(0.955 0.035 309);
-  --avp-bench-4-100: oklch(0.905 0.062 309);
-  --avp-bench-4-600: oklch(0.55 0.185 309);
-  --avp-bench-4-700: oklch(0.46 0.158 309);
-  /* magenta */
-  --avp-bench-5-050: oklch(0.955 0.035 326);
-  --avp-bench-5-100: oklch(0.905 0.062 326);
-  --avp-bench-5-600: oklch(0.55 0.185 326);
-  --avp-bench-5-700: oklch(0.46 0.158 326);
-  /* rose */
-  --avp-bench-6-050: oklch(0.955 0.035 343);
-  --avp-bench-6-100: oklch(0.905 0.062 343);
-  --avp-bench-6-600: oklch(0.55 0.185 343);
-  --avp-bench-6-700: oklch(0.46 0.158 343);
+  --avp-line-hairline: oklch(0.275 0.014 265);
+  --avp-line-strong: oklch(0.35 0.016 265);
+  /* The one INK line that survives the flip — a chart baseline. */
+  --avp-line-ink: oklch(0.72 0.01 75);
 
-  /* crimson — Epic B. The last seat in the feasible arc: 30deg exactly from
-     `danger`, which is BENCH_HUE_BUFFER's stated threshold. See color.ts. */
-  --avp-bench-7-050: oklch(0.955 0.035 355);
-  --avp-bench-7-100: oklch(0.905 0.062 355);
-  --avp-bench-7-600: oklch(0.55 0.185 355);
-  --avp-bench-7-700: oklch(0.46 0.158 355);
+  /* --- visibility ramp, lifted for the dark ground (FILL and hero) --
+     Same five hues, same direction — dim is still bad, lit is still good —
+     with the low end lifted so "absent" reads as dim-but-present against
+     near-black rather than vanishing into it. */
+  --avp-vis-00: oklch(0.5 0.07 35);
+  --avp-vis-25: oklch(0.62 0.14 45);
+  --avp-vis-50: oklch(0.74 0.155 65);
+  --avp-vis-75: oklch(0.81 0.16 150);
+  --avp-vis-100: oklch(0.87 0.135 195);
 
-  /* --- competitor series: neutral, non-judgmental ----------------- */
-  --avp-competitor-1: oklch(0.55 0.02 265);
-  --avp-competitor-2: oklch(0.64 0.02 265);
-  --avp-competitor-3: oklch(0.73 0.02 265);
-  --avp-competitor-4: oklch(0.8 0.018 265);
-  --avp-competitor-5: oklch(0.86 0.015 265);
+  /* --- brand accent: the client is always beacon ------------------
+     Electric cyan at the lit end of the ramp. `700` LIGHTENS on the dark
+     ground, for the reason the neutral axis flips. */
+  --avp-beacon-050: oklch(0.25 0.04 200);
+  --avp-beacon-100: oklch(0.34 0.055 200);
+  --avp-beacon-400: oklch(0.7 0.11 200);
+  --avp-beacon-600: oklch(0.8 0.13 200);
+  --avp-beacon-700: oklch(0.86 0.1 200);
 
-  /* --- semantics: SYSTEM STATE ONLY, never score values ---------- */
-  --avp-success: oklch(0.55 0.12 150);
-  --avp-warn: oklch(0.7 0.13 75);
-  --avp-danger: oklch(0.55 0.17 25);
-  --avp-info: oklch(0.545 0.125 200);
+  /* --- the second accent: signal --------------------------------------
+     Beacon's gradient partner and nothing else. It appears on a CTA, on the
+     glow behind a hero figure, and in `--avp-gradient-accent`; it never
+     encodes a value, a category or a state on its own. */
+  --avp-signal-050: oklch(0.25 0.05 155);
+  --avp-signal-100: oklch(0.34 0.08 155);
+  --avp-signal-400: oklch(0.74 0.16 155);
+  --avp-signal-600: oklch(0.84 0.17 155);
+  --avp-signal-700: oklch(0.9 0.14 155);
 
-  /* --- semantic surface roles ------------------------------------ */
-  --avp-surface-ground: var(--avp-paper-000);
-  --avp-surface-sunken: var(--avp-paper-050);
-  --avp-surface-seated: var(--avp-paper-100);
-  --avp-text-primary: var(--avp-ink-900);
-  --avp-text-body: var(--avp-ink-800);
-  --avp-text-secondary: var(--avp-ink-600);
-  --avp-text-tertiary: var(--avp-ink-400);
-  --avp-line-hairline: var(--avp-paper-200);
-  --avp-line-strong: var(--avp-paper-300);
+  --avp-gradient-accent: linear-gradient(135deg, var(--avp-signal-600), var(--avp-beacon-600));
+  /* Text sitting ON an accent fill — dark, because the accents are light. */
+  --avp-on-accent: var(--avp-ink-900);
+  --avp-on-danger: var(--avp-ink-900);
+  --avp-on-warn: oklch(0.82 0.15 75);
 
-  /* --- type ------------------------------------------------------- */
-  --avp-font-editorial: 'Fraunces Variable', 'Fraunces', ui-serif, Georgia, 'Times New Roman', serif;
-  --avp-font-ui: 'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --avp-font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-
-  --avp-text-ui-2xs: 0.6875rem;
-  --avp-text-ui-xs: 0.75rem;
-  --avp-text-ui-sm: 0.8125rem;
-  --avp-text-ui-base: 0.875rem;
-  --avp-text-ui-md: 1rem;
-  --avp-text-ui-lg: 1.125rem;
-  --avp-text-ui-xl: 1.25rem;
-
-  --avp-text-ed-2xs: 1.25rem;
-  --avp-text-ed-xs: 1.5625rem;
-  --avp-text-ed-sm: 1.9375rem;
-  --avp-text-ed-md: 2.4375rem;
-  --avp-text-ed-lg: 3.0625rem;
-  --avp-text-ed-xl: 3.8125rem;
-  --avp-text-ed-2xl: 4.75rem;
-
-  --avp-text-score: 7rem;
-
-  --avp-leading-display: 1.15;
-  --avp-leading-ui: 1.35;
-  --avp-leading-prose: 1.6;
-  --avp-leading-mono: 1.5;
-
-  --avp-tracking-display: -0.02em;
-  --avp-tracking-caps: 0.06em;
-  --avp-measure: 68ch;
-
-  /* --- space ------------------------------------------------------ */
-  --avp-space-0: 0;
-  --avp-space-px: 1px;
-  --avp-space-0_5: 0.125rem;
-  --avp-space-1: 0.25rem;
-  --avp-space-1_5: 0.375rem;
-  --avp-space-2: 0.5rem;
-  --avp-space-3: 0.75rem;
-  --avp-space-4: 1rem;
-  --avp-space-5: 1.25rem;
-  --avp-space-6: 1.5rem;
-  --avp-space-8: 2rem;
-  --avp-space-10: 2.5rem;
-  --avp-space-14: 3.5rem;
-  --avp-space-18: 4.5rem;
-  --avp-space-24: 6rem;
-  --avp-space-32: 8rem;
-
-  --avp-rhythm: 0.5rem;
-  --avp-beat: 4.5rem;
-
-  --avp-radius-sm: 0.1875rem;
-  --avp-radius-md: 0.3125rem;
-  --avp-radius-lg: 0.5rem;
-  --avp-radius-xl: 0.75rem;
-  --avp-radius-full: 9999px;
-
-  --avp-report-width: 52rem;
-  --avp-report-gutter: 3.5rem;
-  --avp-app-max: 90rem;
-  /* A single-column form (sign-in, and any later account screen). Narrow
-     enough that a short field does not strand its label across dead space.
-     Added in Epic 9.11 to retire a hardcoded `max-w-[26rem]` in apps/web. */
-  --avp-form-width: 26rem;
-  /* Display headlines wrap by measure, not by container. Editorial type set to
-     the full prose measure reads as a paragraph rather than a headline. */
-  --avp-headline: 20ch;
-
-  /* --- elevation: borders and hard offsets, not blur -------------- */
-  --avp-elev-flat: none;
-  --avp-elev-seated: none;
-  --avp-elev-raised: 0 1px 0 0 oklch(0.185 0.026 265 / 0.1);
-  --avp-elev-lifted: 0 2px 4px -1px oklch(0.185 0.026 265 / 0.1),
-    0 6px 12px -4px oklch(0.185 0.026 265 / 0.12);
-  --avp-elev-overlay: 0 4px 8px -2px oklch(0.185 0.026 265 / 0.14),
-    0 12px 28px -8px oklch(0.185 0.026 265 / 0.18);
-  --avp-scrim: oklch(0.185 0.026 265 / 0.4);
-
-  /* --- emphasis is light, not lift -------------------------------- */
-  --avp-focus-ring: 0 0 0 2px oklch(0.72 0.11 200 / 0.6), 0 0 0 6px oklch(0.72 0.11 200 / 0.12);
-  --avp-selected-ring: inset 0 0 0 1px oklch(0.545 0.125 200);
-  --avp-selected-wash: oklch(0.545 0.125 200 / 0.04);
-
-  /* --- motion ----------------------------------------------------- */
-  --avp-duration-hover: 120ms;
-  --avp-duration-state: 200ms;
-  --avp-duration-layout: 320ms;
-  --avp-duration-reveal: 600ms;
-  --avp-ease-standard: cubic-bezier(0.2, 0, 0.2, 1);
-  --avp-ease-out: cubic-bezier(0, 0, 0.2, 1);
-  --avp-ease-reveal: cubic-bezier(0.22, 1, 0.36, 1);
-
-  /* How far a panel recedes while the figures in it are being replaced —
-     Epic F, promoted from a literal once a second screen needed it.
-
-     Epic B introduced the pattern on the answer-gaps grid: when an operator
-     picks another scan, the body must NOT reset to a loading state, because
-     that unmounts the picker they just used. It dims instead, which says
-     "these numbers are stale" while keeping the controls where they were.
-
-     It is a token rather than two 0.45s because it is a MEANING — "shown, but
-     no longer current" — and a screen reaching for that meaning must not have
-     to guess the number. It is deliberately not a duration or an easing: the
-     motion tier is already `--avp-duration-state`, since a scan swap is a
-     state change. */
-  --avp-dim-pending: 0.45;
-
-  /* Gap between siblings arriving in sequence — Epic 9.16.
-     The only motion value this project has added since Epic 0, and it is a
-     DELAY rather than a duration on purpose: the reveal itself already has a
-     duration (`reveal`, 600ms) and design-direction.md §4 defines that as *the*
-     reveal. A staggered group needs to know how far apart its members start,
-     not how long each one takes.
-     70ms is tight enough that four hero elements finish inside a second
-     (3 x 70 + 600 = 810ms) and slow enough to read as a sequence rather than
-     as one block with a soft edge. */
-  --avp-stagger-reveal: 70ms;
-}
-
-/**
- * Dark mode — for the WORKING context only. The presenting/export context is
- * always light, because that artifact gets printed.
- *
- * This is NOT a colour inversion. The visibility ramp KEEPS ITS DIRECTION: dim
- * stays bad, lit stays good, because that mapping is the entire concept. Only
- * the neutral axis flips, and the ramp's low end gains lightness so "absent"
- * stays visible against a dark ground rather than disappearing into it.
- */
-[data-theme='dark'] {
-  --avp-surface-ground: oklch(0.19 0.012 265);
-  --avp-surface-sunken: oklch(0.16 0.012 265);
-  --avp-surface-seated: oklch(0.235 0.014 265);
-  --avp-text-primary: oklch(0.97 0.005 75);
-  --avp-text-body: oklch(0.9 0.006 75);
-  --avp-text-secondary: oklch(0.75 0.008 75);
-  --avp-text-tertiary: oklch(0.6 0.01 75);
-  --avp-line-hairline: oklch(0.3 0.014 265);
-  --avp-line-strong: oklch(0.38 0.016 265);
-
-  /* low end lifted so "absent" reads as dim-but-present, not as a hole */
-  --avp-vis-00: oklch(0.46 0.05 35);
-  --avp-vis-25: oklch(0.575 0.12 45);
-
-  /* --- bench, chroma-clamped to the sRGB boundary per hue --------
-     Blue cannot be both light and saturated in sRGB, so the dark scale
-     cannot reuse one chroma across six hues the way the light one does.
-     Each stop takes 92% of the gamut ceiling at its own lightness, which
-     is why these numbers are not a single table. Hover DEEPENS in light
-     mode and LIGHTENS here, for the reason the neutral axis flips. */
+  /* --- the working-screen accent layer (Epic 9.24) -------------------
+     NOT read by the report — reportIsolation.test.ts fails if a report
+     surface ever references one. Chroma-clamped to the sRGB boundary per hue:
+     blue cannot be both light and saturated, so each stop takes 92% of the
+     gamut ceiling at its own lightness, which is why these are not a single
+     table. Hover LIGHTENS here and deepens on paper. */
   --avp-bench-1-050: oklch(0.245 0.055 258);
   --avp-bench-1-100: oklch(0.325 0.075 258);
   --avp-bench-1-600: oklch(0.785 0.101 258);
@@ -283,8 +135,246 @@
   --avp-bench-7-600: oklch(0.785 0.131 355);
   --avp-bench-7-700: oklch(0.855 0.082 355);
 
-  --avp-elev-raised: 0 1px 0 0 oklch(0 0 0 / 0.4);
-  --avp-scrim: oklch(0.1 0.01 265 / 0.6);
+  /* --- competitor series: neutral, non-judgmental -------------------- */
+  --avp-competitor-1: oklch(0.55 0.02 265);
+  --avp-competitor-2: oklch(0.64 0.02 265);
+  --avp-competitor-3: oklch(0.73 0.02 265);
+  --avp-competitor-4: oklch(0.8 0.018 265);
+  --avp-competitor-5: oklch(0.86 0.015 265);
+
+  /* --- semantics: SYSTEM STATE ONLY, never score values ------------- */
+  --avp-success: oklch(0.78 0.15 150);
+  --avp-warn: oklch(0.82 0.15 75);
+  --avp-danger: oklch(0.7 0.19 25);
+  --avp-info: oklch(0.8 0.13 200);
+
+  /* --- type ------------------------------------------------------------
+     Four faces now. `display` is the product's voice — headings, KPI
+     figures, the hero numeral; `editorial` is the report's, and only the
+     report's. */
+  --avp-font-display: 'Space Grotesk', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --avp-font-editorial: 'Fraunces Variable', 'Fraunces', ui-serif, Georgia, 'Times New Roman', serif;
+  --avp-font-ui: 'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --avp-font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --avp-text-ui-2xs: 0.6875rem;
+  --avp-text-ui-xs: 0.75rem;
+  --avp-text-ui-sm: 0.8125rem;
+  --avp-text-ui-base: 0.875rem;
+  --avp-text-ui-md: 1rem;
+  --avp-text-ui-lg: 1.125rem;
+  --avp-text-ui-xl: 1.25rem;
+
+  --avp-text-ed-2xs: 1.25rem;
+  --avp-text-ed-xs: 1.5625rem;
+  --avp-text-ed-sm: 1.9375rem;
+  --avp-text-ed-md: 2.4375rem;
+  --avp-text-ed-lg: 3.0625rem;
+  --avp-text-ed-xl: 3.8125rem;
+  --avp-text-ed-2xl: 4.75rem;
+
+  /* The report's composite numeral — bespoke, outside both ladders. */
+  --avp-text-score: 7rem;
+  /* A KPI figure in a tile, and the hero figure at the top of a screen. */
+  --avp-text-kpi: 1.875rem;
+  --avp-text-hero: clamp(3.5rem, 2.5rem + 3vw, 5.25rem);
+
+  --avp-leading-display: 1.15;
+  --avp-leading-ui: 1.35;
+  --avp-leading-prose: 1.6;
+  --avp-leading-mono: 1.5;
+
+  --avp-tracking-display: -0.02em;
+  --avp-tracking-hero: -0.04em;
+  --avp-tracking-caps: 0.06em;
+  --avp-measure: 68ch;
+
+  /* --- space -------------------------------------------------------------- */
+  --avp-space-0: 0;
+  --avp-space-px: 1px;
+  --avp-space-0_5: 0.125rem;
+  --avp-space-1: 0.25rem;
+  --avp-space-1_5: 0.375rem;
+  --avp-space-2: 0.5rem;
+  --avp-space-3: 0.75rem;
+  --avp-space-4: 1rem;
+  --avp-space-5: 1.25rem;
+  --avp-space-6: 1.5rem;
+  --avp-space-8: 2rem;
+  --avp-space-10: 2.5rem;
+  --avp-space-14: 3.5rem;
+  --avp-space-18: 4.5rem;
+  --avp-space-24: 6rem;
+  --avp-space-32: 8rem;
+
+  --avp-rhythm: 0.5rem;
+  --avp-beat: 4.5rem;
+
+  /* --- shape lock ----------------------------------------------------------
+     Cards, tiles and the hero take `2xl`; buttons and inputs take `lg`;
+     chips take `full`. One rule, followed everywhere, documented in
+     design-system.md §4. */
+  --avp-radius-sm: 0.25rem;
+  --avp-radius-md: 0.375rem;
+  --avp-radius-lg: 0.5rem;
+  --avp-radius-xl: 0.75rem;
+  --avp-radius-2xl: 1rem;
+  --avp-radius-full: 9999px;
+
+  --avp-report-width: 52rem;
+  --avp-report-gutter: 3.5rem;
+  --avp-app-max: 90rem;
+  /* A single-column form (sign-in, and any later account screen). Narrow
+     enough that a short field does not strand its label across dead space.
+     Added in Epic 9.11 to retire a hardcoded `max-w-[26rem]` in apps/web. */
+  --avp-form-width: 26rem;
+  /* Display headlines wrap by measure, not by container. Editorial type set to
+     the full prose measure reads as a paragraph rather than a headline. */
+  --avp-headline: 20ch;
+
+  /* --- elevation: a card sits in the dark, lit along its top edge ------
+     The inner 1px highlight is what makes a raised surface read as a plate
+     with light on it rather than a lighter rectangle; the shadow is tinted to
+     the ground rather than being black at low alpha. */
+  --avp-elev-flat: none;
+  --avp-elev-seated: inset 0 1px 0 0 oklch(1 0 0 / 0.05);
+  --avp-elev-raised: inset 0 1px 0 0 oklch(1 0 0 / 0.07), 0 1px 2px 0 oklch(0.08 0.01 265 / 0.5),
+    0 16px 32px -20px oklch(0.08 0.01 265 / 0.8);
+  --avp-elev-lifted: inset 0 1px 0 0 oklch(1 0 0 / 0.08), 0 4px 10px -2px oklch(0.08 0.01 265 / 0.6),
+    0 16px 40px -12px oklch(0.08 0.01 265 / 0.8);
+  --avp-elev-overlay: 0 8px 16px -4px oklch(0.08 0.01 265 / 0.6),
+    0 32px 64px -16px oklch(0.08 0.01 265 / 0.85);
+  --avp-scrim: oklch(0.08 0.01 265 / 0.7);
+
+  /* --- emphasis is light, not lift ---------------------------------------- */
+  --avp-focus-ring: 0 0 0 2px oklch(0.8 0.13 200 / 0.7), 0 0 0 6px oklch(0.8 0.13 200 / 0.15);
+  --avp-selected-ring: inset 0 0 0 1px oklch(0.8 0.13 200);
+  --avp-selected-wash: oklch(0.8 0.13 200 / 0.08);
+
+  /* --- motion ---------------------------------------------------------------- */
+  --avp-duration-hover: 120ms;
+  --avp-duration-state: 200ms;
+  --avp-duration-layout: 320ms;
+  --avp-duration-reveal: 600ms;
+  --avp-ease-standard: cubic-bezier(0.2, 0, 0.2, 1);
+  --avp-ease-out: cubic-bezier(0, 0, 0.2, 1);
+  --avp-ease-reveal: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* How far a panel recedes while the figures in it are being replaced —
+     Epic F, promoted from a literal once a second screen needed it. It is a
+     MEANING — "shown, but no longer current" — so it is a token rather than
+     two 0.45s. */
+  --avp-dim-pending: 0.45;
+
+  /* Gap between siblings arriving in sequence — Epic 9.16. A DELAY, not a
+     duration: the reveal already has one. */
+  --avp-stagger-reveal: 70ms;
+}
+
+/**
+ * THE PAPER SYSTEM — the report's skin, and the only light surface left.
+ *
+ * Every value below is Epic 0's, unchanged, so that `article.avp-report` and
+ * the exported PDF render exactly as they did before Epic 14. It is scoped to
+ * the report's own root class rather than applied by a route, which is what
+ * makes it impossible for a report surface to acquire the dark identity by
+ * omission: the document carries its palette with it wherever it is rendered.
+ * `[data-theme='light']` exists for the style guide's toggle.
+ */
+[data-theme='light'],
+.avp-report {
+  color-scheme: light;
+
+  --avp-surface-ground: var(--avp-paper-000);
+  --avp-surface-sunken: var(--avp-paper-050);
+  --avp-surface-seated: var(--avp-paper-100);
+  --avp-surface-raised: var(--avp-paper-000);
+  --avp-surface-void: var(--avp-paper-050);
+  --avp-surface-hover: oklch(0 0 0 / 0.03);
+  --avp-text-primary: var(--avp-ink-900);
+  --avp-text-body: var(--avp-ink-800);
+  --avp-text-secondary: var(--avp-ink-600);
+  --avp-text-tertiary: var(--avp-ink-400);
+  --avp-line-hairline: var(--avp-paper-200);
+  --avp-line-strong: var(--avp-paper-300);
+  --avp-line-ink: var(--avp-ink-800);
+
+  --avp-vis-00: oklch(0.42 0.045 35);
+  --avp-vis-25: oklch(0.545 0.115 45);
+  --avp-vis-50: oklch(0.655 0.135 65);
+  --avp-vis-75: oklch(0.735 0.125 150);
+  --avp-vis-100: oklch(0.815 0.115 195);
+
+  --avp-beacon-050: oklch(0.965 0.018 200);
+  --avp-beacon-100: oklch(0.925 0.038 200);
+  --avp-beacon-400: oklch(0.72 0.11 200);
+  --avp-beacon-600: oklch(0.545 0.125 200);
+  --avp-beacon-700: oklch(0.46 0.105 200);
+
+  --avp-signal-050: oklch(0.96 0.03 155);
+  --avp-signal-100: oklch(0.92 0.06 155);
+  --avp-signal-400: oklch(0.7 0.15 155);
+  --avp-signal-600: oklch(0.55 0.14 155);
+  --avp-signal-700: oklch(0.47 0.12 155);
+
+  /* On paper the "gradient" is flat beacon, so a primary button in the
+     report's pitch beat renders exactly as it did in Epic 7. */
+  --avp-gradient-accent: linear-gradient(var(--avp-beacon-600), var(--avp-beacon-600));
+  --avp-on-accent: var(--avp-paper-000);
+  --avp-on-danger: var(--avp-paper-000);
+  --avp-on-warn: var(--avp-ink-800);
+
+  --avp-bench-1-050: oklch(0.955 0.035 258);
+  --avp-bench-1-100: oklch(0.905 0.062 258);
+  --avp-bench-1-600: oklch(0.55 0.185 258);
+  --avp-bench-1-700: oklch(0.46 0.158 258);
+  --avp-bench-2-050: oklch(0.955 0.035 275);
+  --avp-bench-2-100: oklch(0.905 0.062 275);
+  --avp-bench-2-600: oklch(0.55 0.185 275);
+  --avp-bench-2-700: oklch(0.46 0.158 275);
+  --avp-bench-3-050: oklch(0.955 0.035 292);
+  --avp-bench-3-100: oklch(0.905 0.062 292);
+  --avp-bench-3-600: oklch(0.55 0.185 292);
+  --avp-bench-3-700: oklch(0.46 0.158 292);
+  --avp-bench-4-050: oklch(0.955 0.035 309);
+  --avp-bench-4-100: oklch(0.905 0.062 309);
+  --avp-bench-4-600: oklch(0.55 0.185 309);
+  --avp-bench-4-700: oklch(0.46 0.158 309);
+  --avp-bench-5-050: oklch(0.955 0.035 326);
+  --avp-bench-5-100: oklch(0.905 0.062 326);
+  --avp-bench-5-600: oklch(0.55 0.185 326);
+  --avp-bench-5-700: oklch(0.46 0.158 326);
+  --avp-bench-6-050: oklch(0.955 0.035 343);
+  --avp-bench-6-100: oklch(0.905 0.062 343);
+  --avp-bench-6-600: oklch(0.55 0.185 343);
+  --avp-bench-6-700: oklch(0.46 0.158 343);
+  --avp-bench-7-050: oklch(0.955 0.035 355);
+  --avp-bench-7-100: oklch(0.905 0.062 355);
+  --avp-bench-7-600: oklch(0.55 0.185 355);
+  --avp-bench-7-700: oklch(0.46 0.158 355);
+
+  --avp-success: oklch(0.55 0.12 150);
+  --avp-warn: oklch(0.7 0.13 75);
+  --avp-danger: oklch(0.55 0.17 25);
+  --avp-info: oklch(0.545 0.125 200);
+
+  /* Epic 0's radii, so no corner in the document moves by a pixel. */
+  --avp-radius-sm: 0.1875rem;
+  --avp-radius-md: 0.3125rem;
+
+  /* "Paper doesn't float": borders and hard offsets, not blur. */
+  --avp-elev-flat: none;
+  --avp-elev-seated: none;
+  --avp-elev-raised: 0 1px 0 0 oklch(0.185 0.026 265 / 0.1);
+  --avp-elev-lifted: 0 2px 4px -1px oklch(0.185 0.026 265 / 0.1),
+    0 6px 12px -4px oklch(0.185 0.026 265 / 0.12);
+  --avp-elev-overlay: 0 4px 8px -2px oklch(0.185 0.026 265 / 0.14),
+    0 12px 28px -8px oklch(0.185 0.026 265 / 0.18);
+  --avp-scrim: oklch(0.185 0.026 265 / 0.4);
+
+  --avp-focus-ring: 0 0 0 2px oklch(0.72 0.11 200 / 0.6), 0 0 0 6px oklch(0.72 0.11 200 / 0.12);
+  --avp-selected-ring: inset 0 0 0 1px oklch(0.545 0.125 200);
+  --avp-selected-wash: oklch(0.545 0.125 200 / 0.04);
 }
 
 @media print {

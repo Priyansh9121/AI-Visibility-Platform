@@ -13746,3 +13746,271 @@ statically renderable and testable in both modes.
 
 The rest of this epic — the primitives, the hero, the reskins, the new
 Competitors section — is recorded in the entry that follows once it is built.
+
+# Epic 13, continued — Competitors: the field drawn in the score's own shape, and the number it refuses to say
+
+**2026-09-09.** The section the previous entry left "recorded in the entry
+that follows once it is built". Governance line unchanged: the frontend shell
+and the screens under `/clients/[clientId]/*`, plus one opt-in pair on a
+design-system component. Scoring, the scan pipeline and the report/PDF path
+are untouched, and `ReportView.test.tsx` now asserts the document carries
+neither of the two new ledger classes rather than promising it.
+
+## What was found before anything was built
+
+`sidebars.tsx` had imported a `Users` icon for a `competitors` entry in
+`SECTION_ICON`, and the entry had been cut during Epic 13's cleanup because
+`ClientSection` had no such member. The brief's intent for the section was a
+grid of mini-ledgers, one per competitor, drawn with `LuminanceLedger` in a
+compact mode. Two facts in the repo decide what that can honestly be:
+
+* **There is no per-competitor composite, and there deliberately never has
+  been.** api-contracts.md says so twice (Epic 5, and again under the history
+  endpoint): sentiment is classified toward the subject only and the technical
+  audit is of the subject's own site, so 25% of the composite's weight has no
+  rival input. The report declined to draw competitor ghost columns for exactly
+  this reason (Epic 7's entry), and the Rankings tab plots share of voice
+  rather than a rival score for the same one.
+* **A rival's figures live on the report, not the history.** `ClientHistory`
+  carries per-rival mention rate, share of voice and citation strength scan by
+  scan, but the client's own side only as a composite and a share of voice —
+  so the client's column could not be built from it. The latest scan's report
+  carries both sides at once, already shaped, and it is the document the
+  Report item opens.
+
+So "a mini-ledger per competitor" cannot mean "a small ledger with a rival's
+score on it", because there is no such score. What it can mean is the rule the
+report states in a sentence, **drawn**.
+
+## The two opt-ins on the ledger, and the guardrail they inherit
+
+**`compact`** draws the column at a third of the width for a grid: the label
+gutter goes (one legend beside the grid, not five labels per column), no gap is
+annotated, and the figure bounds itself so its 12px values are the size
+rendered. The identity is not touched — `render.test.tsx` pins the height and
+asserts a compact column's lit rects are the same heights as a full one's,
+which is the property that makes two columns side by side comparable at all.
+
+**`LedgerDimension.measured: false`** marks a dimension this subject has no
+reading on. The layout ignores it, on purpose: the segment is drawn at the same
+height and place, so a rival's column keeps the client's five-segment shape.
+The component reads it to hatch the segment in the hairline colour (never the
+ramp — an unmeasured sentiment must not read as a dim low one), to print
+"Not measured" in the hidden table, and to make **no composite claim** for the
+column: nothing spoken as "out of 100", a footer that says *No composite —
+measured on 3 of 5 dimensions*, and no gap annotation, because the largest
+unlit area is a dimension nobody measured rather than a gap this subject can
+close. It is distinct from `unmeasured`, which is the whole column, and the
+test asserts the two never carry each other's markup.
+
+Both default off. Neither report route passes anything, so the document gets
+Epic 0's drawing — the same guardrail `staggerDimensions`, `unmeasured` and
+`bounded` each arrived with, and the same regression test extended to cover
+them. The style guide's ledger section shows the compact grid with three
+invented rivals.
+
+## The screen
+
+`/clients/{id}/competitors`. One column per brand from the latest scan's
+report: the client first, then rivals in detection rank. The client's column
+is its score — the one composite on the page, and the one the report shows.
+Every rival's column is the client's shape with sentiment and technical
+foundation hatched, its three readings printed under it with a signed lead
+over the client, and how many of this client's scans carried it (a set is
+re-detected per scan, and "in 1 of 3 scans" is a different fact from "in 3 of
+3"). A rival with no figure on a comparable dimension is hatched there too,
+rather than scored zero; a rival named in no answer scores a real zero and
+lights nothing. "Who leads on what" beside the grid is read off the same deltas
+the cards print, so the two cannot disagree.
+
+**`ClientCompetitorsView.test.tsx` counts composite claims on the page and
+expects exactly one**, however many rivals the scan found. A screen of six
+ledgers side by side is the easiest place in the product to imply a rival
+score, and that assertion is the line.
+
+Four empty voices, each saying what is the case: never scanned; the latest scan
+has no report; the latest scan was not scored (a rival's column is built to the
+client's shape, and there is none); no competitor set, pointing at the report,
+which is where a set is detected or named by hand. The report read is allowed
+to 404 without failing the screen, the way the Technical route treats a missing
+audit.
+
+## Where it sits in the nav, and why
+
+**Investigation, beside Answer gaps, accent 3.** On its own merits: no row it
+shows was written for it — the per-rival figures are derived on read
+(`CompetitorComparison` has no stored column), and this screen derives one step
+further, which is what Investigation means. Rankings says who is ahead over
+time, Answer gaps says on which questions, this says on which dimensions.
+Measurement is also full — `clientNav.test.ts` has said so since Epic F — but
+that is the constraint, not the reason, and the test's comment now records
+both.
+
+It is inserted **above** Prompts and Alerts, which is the case the accent
+model was built for: accents are identities, so Prompts is still hue 1 and
+Alerts still hue 2, and the new test asserts that rather than trusting it. The
+`Users` icon takes the seat it was imported for.
+
+## Verified
+
+* Design system: 459/459 (447 + 12 new), typecheck clean.
+* Web: 795/795 (756 + 39 new: 14 on the field's columns, 20 on the screen, 4
+  extending the report-path regression, 1 on the nav table), typecheck clean.
+* Node 22, esbuild pinned at 0.25.12 (commit b01a908).
+* Not verified live: neither the API nor the web server nor the database was
+  running in this session, and standing all three up for one screenshot was
+  judged not worth it against a screen that is fully reachable by static
+  render. The first live look at this grid is still owed, and the compact
+  column's 12px value at real pixel size is the thing to check first.
+
+# Epic 14 — the dark identity: a full visual redesign, and Epic 0's direction reversed on purpose
+
+**2026-09-09.** Governance line, per north-star.md §8.1: the design-system
+token and component layer (`packages/design-system`) and the visual treatment
+of every Working screen in `apps/web` — the shell, the dashboard, the clients
+list, a client's whole space, and the signed-out landing, auth and settings
+screens that share the tokens. No lifecycle phase; this is the operator's
+tooling. **Out of scope and untouched:** the report and PDF path (`ReportView`,
+`/scans/{id}/report`, `/share/{token}`, `services/pdf.py`) and the scoring
+pipeline. `reportIsolation.test.ts` and `ReportView.test.tsx` are the proof.
+
+## What is being reversed, and by whom
+
+Epic 0 chose a light, paper-derived, editorial-serif identity, and
+`design-direction.md` §0 gives the reason in one line: *the presenting context
+is the one that closes deals, so it wins the ties.* Every Working screen since
+— nine epics of them, through 9.19's width table and 9.24's accent layer —
+was built on that ruling, and the ruling was restated each time.
+
+**This epic reverses it for the product, deliberately, on the founder's
+decision.** The founder saw the light system live and rejected it: a dark,
+data-dense analytics identity in the genre of AI-visibility / GEO dashboards,
+not a skin over the paper one. The record stands, the way Epic 13 kept 9.20's
+sidebar argument beside the decision that reversed it; `design-direction.md`
+§7 now says, argument by argument, what survives and what does not. What
+survives is the half of §0 that was always about the *document*: the report
+still renders on Epic 0's palette, serif and elevation, scoped to its own
+root class so it carries its skin with it and its markup did not change by a
+byte.
+
+**How the direction was set — and the constraint that bounded it.** The
+brief named a genre, not a screen. No competitor product was opened,
+screenshotted or navigated to at any point (ip-safety.md #1's actual rule).
+Every screen was derived from `scoring-spec.md`'s five dimensions,
+`ClientHistory` and `CompetitorSet`, and from what an operator does with
+them; the genre supplied only the vocabulary — dark ground, hero KPI, card
+grid, weighted charts, saturated accents.
+
+## One confirmed direction
+
+Stated before it was applied anywhere, and applied everywhere:
+
+* **Font.** Space Grotesk (OFL, Google Fonts) for headings, KPI figures and
+  the hero numeral — a geometric grotesk with real character in its figures
+  and true tabular figures. IBM Plex Sans and Mono stay for interface and
+  evidence. Fraunces survives only inside the report.
+* **Accents.** Two, saturated. `beacon` retuned to electric cyan for the dark
+  ground — still the client's colour, same hue, so the meaning system holds —
+  and a new `signal` mint that exists only as beacon's gradient partner on the
+  primary button and the glow behind a hero. Hero numerals take a gradient
+  **derived from the visibility ramp at that score**, so a 12 glows dim clay
+  and an 88 glows lit cyan: the founder's gradient hero and Epic 0's
+  visibility-is-luminance metaphor are the same object.
+* **Ground.** Deep cool charcoal, never pure black; sidebar one tone darker,
+  cards one tone lighter, warm text on cool ground (Epic 0's hand-off
+  inverted, not abandoned).
+* **Cards.** 16px, seated surface, 1px inner top highlight, ground-tinted
+  shadow, hover lifts one tone. Shape lock: cards and hero 16px, buttons and
+  inputs 8px, chips pills.
+* **Charts.** A gradient area under the client's line, opt-in, never on the
+  report.
+
+## How the token layer was replaced without touching the report
+
+`tokens.css` now declares `:root` as the dark identity and
+`[data-theme='light'], .avp-report` as Epic 0's paper system verbatim — every
+colour, both elevation sets, the original 3px/5px radii. A report surface
+cannot acquire the dark identity by omission because the document's own root
+class carries the paper scope. `tokens.test.ts` was rewritten to read each
+value from the block it belongs to (the first `--avp-beacon-600:` in the file
+is now the dark cyan, and a test matching the first occurrence would have
+compared the report's teal against it), and asserts every paper override has
+a dark counterpart.
+
+The TypeScript side keeps the paper tables as canonical — `visibilityColor()`
+and `seriesStyle('subject')` are literals baked into SVG fills that land in
+PDFs — and adds `dark`, `signal`, `benchDark`, `visibilityColorDark()` and
+`heroGradient()`. The Working screens' components paint from those:
+`ScoreMeter`, `NavScore`, the sidebar's dots, and two opt-ins on charts the
+report also renders — `LuminanceLedger palette="working"` and
+`TrendChart area` — both defaulting off and both added to
+`ReportView.test.tsx`'s regression list, alongside `avp-hero`.
+
+Every rule in `components.css` was moved from raw paper/ink literals to role
+tokens so one rule renders on both grounds; the places a literal was load-
+bearing (a ledger's baseline, a badge's text on a warn wash, a primary
+button's label) became `--avp-line-ink`, `--avp-on-warn`, `--avp-on-accent`,
+resolved per scope. The report section of the stylesheet is the one place raw
+paper/ink still appears, and it only ever renders inside `.avp-report`.
+
+## The screens
+
+* **Shell.** Structure untouched — Epic 13's two modes, `clientNav.ts`'s
+  clusters, every URL. Skin: sunken sticky sidebar, cyan rail, bench-hued
+  icons, the display face on the head and the client's score.
+* **Dashboard.** `PageHead`, then `ScoreHero` with the portfolio median and
+  the latest reading per client beside it, then four count tiles as a card
+  grid, then the recent-scans table in a card. Seats moved from a tile to the
+  head; the median moved from a tile to the hero; the "a score takes no
+  accent" test moved with it.
+* **Clients.** `PageHead` with the primary action, four tiles, the table in a
+  card.
+* **Client Overview.** `ScoreHero` with the latest composite, the change
+  since the previous scored scan, share of voice, rivals, and the composite's
+  own line across the history (area-filled, drawn at the width it is shown
+  at) beside it. The "Latest" tile is omitted there because the hero is it.
+* **Sources, Rankings, Sentiment.** Chart and value table together in a card;
+  the client's line filled.
+* **Competitors.** Compact ledgers on the dark ramp.
+* **Everything else** — Technical, AI crawlers, Answer gaps, Prompts, Alerts,
+  Settings, the landing page, sign-in — reskinned by the tokens and the
+  display face, checked one by one.
+
+## Verified — and how, because the how is the finding
+
+Design system **538/538**, web **799/799**, both typechecks clean. Node 22.
+
+**Not verified in a signed-in session, and not for want of trying.** The API,
+web server and database were all running, but every route to a session was
+blocked by the auto-mode permission classifier as a credential action —
+resetting a dev account's hash, and even a plain sign-up through the public
+API. No existing account's password is recorded anywhere in the repo. The
+block is correct and was not worked around.
+
+What was done instead is close to as good and is recorded so the next visual
+epic starts there: a temporary vitest file rendered every screen from the
+repo's own fixtures, wrapped in the real `WorkspaceShell`, to static HTML;
+the app's stylesheet was compiled with the Tailwind CLI from the same config;
+Chromium screenshotted the pages with the real fonts. Same markup, same CSS,
+same type — minus live data and hydration. Eighteen screens were checked that
+way, in three stages (tokens in the live styleguide on :4100, then the shell,
+then each screen as it was rebuilt), and the harness was deleted before the
+test count above. `docs/screenshots/epic-14/`. **The first live look at the
+hero's reveal and a running scan's live badge on the dark ground is still
+owed** — both are motion, and a static render cannot show them.
+
+**IP-safety check passed:** no competitor product, screenshot, markup or
+stylesheet was opened or referenced; every screen was derived from
+`scoring-spec.md`, `ClientHistory` and `CompetitorSet`; the one new dependency
+is a font (Space Grotesk, OFL-1.1, Google Fonts — ip-safety.md #4), no
+package was added; the report renders no bench token, no working palette and
+no hero (`reportIsolation.test.ts`, `ReportView.test.tsx`); nothing here
+stores or renders third-party prose.
+
+**Left on the table, stated:** the impeccable design hook flags the hero
+numeral's gradient text as a common tell. It is the founder's explicit ask
+and it is derived from the score rather than decorative, so it stays; the
+finding is acknowledged rather than suppressed. And the Epic 13 Competitors
+work that was uncommitted in the working tree when this session started is
+still uncommitted beside this — it was not touched beyond the ledger palette
+opt-in, and the two should be committed as two entries.

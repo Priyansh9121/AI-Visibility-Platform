@@ -170,10 +170,10 @@ export function WorkspaceShell({
           <ClientHead client={client} />
         ) : (
           <>
-            <span className="text-ui-2xs uppercase tracking-caps text-text-tertiary">
+            <span className="text-ui-2xs font-semibold uppercase tracking-caps text-text-tertiary">
               Agency
             </span>
-            <span className="font-editorial text-ed-2xs leading-display text-text-primary">
+            <span className="font-display text-ed-2xs font-semibold leading-display tracking-display text-text-primary">
               {agencyName ?? '—'}
             </span>
           </>

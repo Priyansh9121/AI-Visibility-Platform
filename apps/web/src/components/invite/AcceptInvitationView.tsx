@@ -117,7 +117,7 @@ export function AcceptInvitationView({
           <CardBody>
             <form onSubmit={onSubmit} className="flex flex-col gap-5">
               <div className="flex flex-col gap-2">
-                <h1 className="font-editorial text-ed-xs leading-display text-text-primary">
+                <h1 className="font-display text-ed-xs leading-display text-text-primary">
                   Join the workspace
                 </h1>
                 <p className="text-ui-sm leading-prose text-text-secondary">

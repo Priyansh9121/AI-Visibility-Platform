@@ -200,7 +200,7 @@ function Grid({
   return (
     <section className="flex flex-col gap-6">
       <div className="flex flex-col gap-2">
-        <h2 className="max-w-headline font-editorial text-ed-xs leading-display tracking-display text-text-primary">
+        <h2 className="max-w-headline font-display text-ed-xs leading-display tracking-display text-text-primary">
           Which questions somebody else owns
         </h2>
         <p className="max-w-measure text-ui-base leading-prose text-text-secondary">

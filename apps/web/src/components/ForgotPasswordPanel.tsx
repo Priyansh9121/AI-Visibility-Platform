@@ -63,7 +63,7 @@ export function ForgotPasswordPanel({
         <Card elevation="raised">
           <CardBody>
             <div className="flex flex-col gap-3">
-              <h1 className="font-editorial text-ed-xs leading-display text-text-primary">
+              <h1 className="font-display text-ed-xs leading-display text-text-primary">
                 Check your email
               </h1>
               <p className="text-ui-base leading-prose text-text-secondary">
@@ -97,7 +97,7 @@ export function ForgotPasswordPanel({
         <CardBody>
           <form onSubmit={submit} className="flex flex-col gap-5">
             <div className="flex flex-col gap-2">
-              <h1 className="font-editorial text-ed-xs leading-display text-text-primary">
+              <h1 className="font-display text-ed-xs leading-display text-text-primary">
                 Reset your password
               </h1>
               <p className="text-ui-sm leading-prose text-text-secondary">

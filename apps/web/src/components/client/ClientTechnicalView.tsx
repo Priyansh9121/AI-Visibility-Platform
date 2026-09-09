@@ -182,7 +182,7 @@ function Audited({ audit }: { audit: TechnicalAudit }): JSX.Element {
       <section className="grid gap-10 lg:grid-cols-[minmax(0,26rem)_auto]">
         <div className="flex flex-col gap-4">
           <div className="flex flex-col gap-2">
-            <h2 className="max-w-headline font-editorial text-ed-xs leading-display tracking-display text-text-primary">
+            <h2 className="max-w-headline font-display text-ed-xs leading-display tracking-display text-text-primary">
               What the site itself contributes
             </h2>
             <p className="max-w-measure text-ui-base leading-prose text-text-secondary">

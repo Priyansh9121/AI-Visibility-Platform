@@ -30,6 +30,7 @@
 import type { JSX } from 'react';
 import {
   Button,
+  Card,
   EmptyState,
   ErrorState,
   LoadingState,
@@ -100,7 +101,7 @@ function SentimentBody({ history }: { history: ClientHistory }): JSX.Element {
   return (
     <section className="flex flex-col gap-6">
       <div className="flex flex-col gap-2">
-        <h2 className="max-w-headline font-editorial text-ed-xs leading-display tracking-display text-text-primary">
+        <h2 className="max-w-headline font-display text-ed-xs leading-display tracking-display text-text-primary">
           How the engines talk about this client
         </h2>
         <p className="max-w-measure text-ui-base leading-prose text-text-secondary">
@@ -135,7 +136,7 @@ function SentimentBody({ history }: { history: ClientHistory }): JSX.Element {
         )}
       </div>
 
-      <div className="grid items-start gap-8 lg:grid-cols-[auto_minmax(16rem,1fr)]">
+      <Card elevation="seated" className="grid items-start gap-8 p-6 lg:grid-cols-[auto_minmax(16rem,1fr)]">
         <SentimentTide
           points={points}
           height={340}
@@ -153,7 +154,7 @@ function SentimentBody({ history }: { history: ClientHistory }): JSX.Element {
           }.`}
         />
         <ToneLedger nets={nets} />
-      </div>
+      </Card>
 
       <StatRow min="11rem">
         <StatTile

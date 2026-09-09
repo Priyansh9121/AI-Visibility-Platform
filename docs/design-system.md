@@ -12,7 +12,103 @@ screenshot, or markup was referenced, and no competitor code was inspected
 
 ---
 
-## The ruling that drives every decision
+## 0. Epic 14 — the system as it is actually built now
+
+**Read this section first.** Everything under §§1–4 below describes the paper
+system Epic 0 built; from Epic 14 that system is **the report's skin only**.
+The product is dark. `design-direction.md` §7 carries the argument and what it
+supersedes; this section is the reference for what is in the code.
+
+### Two scopes, one token set
+
+`tokens.css` declares every role token twice:
+
+| Scope | Selector | What it is |
+|---|---|---|
+| **Dark** | `:root` | The product. Every Working screen, the shell, the styleguide. |
+| **Paper** | `[data-theme='light'], .avp-report` | Epic 0's values verbatim. The report carries it on its own root class, so the document renders identically wherever it sits — inside the dark workspace shell, on `/share/{token}`, in a PDF — with **no markup change**. |
+
+`tokens.test.ts` reads each value from the block it belongs to (the first
+`--avp-beacon-600:` in the file is now the dark cyan) and asserts every paper
+override has a dark counterpart, so no token is theme-only.
+
+### The dark palette (`dark` in `tokens/color.ts`)
+
+| Role | Value | Use |
+|---|---|---|
+| `surface-sunken` | `oklch(0.145 0.012 265)` | Sidebar, inputs, meter tracks |
+| `surface-ground` | `oklch(0.175 0.012 265)` | The page |
+| `surface-seated` | `oklch(0.215 0.014 265)` | Cards, tiles, the hero |
+| `surface-raised` | `oklch(0.25 0.015 265)` | A card under the pointer, popovers |
+| `surface-void` | `oklch(0.275 0.014 265)` | The unlit part of a ledger or meter |
+| `surface-hover` | `oklch(1 0 0 / 0.04)` | A row under the pointer, on any surface |
+| `text-primary / body / secondary / tertiary` | L 0.965 / 0.88 / 0.72 / 0.58, hue 75 | Warm text on cool ground |
+| `line-hairline / strong / ink` | L 0.275 / 0.35 (hue 265) / 0.72 (hue 75) | Rules; `ink` is a chart baseline |
+| `beacon-600` | `oklch(0.80 0.13 200)` | The client's colour, electric stop; `700` lightens |
+| `signal-600` | `oklch(0.84 0.17 155)` | Beacon's gradient partner, nothing else |
+| `--avp-gradient-accent` | signal-600 → beacon-600 at 135° | Primary buttons. Flat beacon in the paper scope. |
+| `--avp-on-accent / on-danger / on-warn` | ink-900 / ink-900 / warn | Text ON a fill, resolved per scope |
+| `vis-00 … vis-100` | L 0.50 → 0.87, hues 35 → 195 | The lifted ramp. `visibilityColorDark()`. |
+| `success / warn / danger / info` | L 0.78 / 0.82 / 0.70 / 0.80 | System state, brighter for the ground |
+| `bench-*` | `benchDark`, 92 % of the sRGB ceiling per hue | Seven categorical accents, unchanged in hue |
+
+`heroGradient(score)`: the ramp at the score → a lighter, slightly less
+chromatic stop of the same hue, lightness floored at 0.70. Deterministic,
+tested.
+
+### Type
+
+`--avp-font-display: 'Space Grotesk'` joins the three faces. Headings
+(`PageHead`, card titles, empty-state titles, nav head), KPI figures
+(`--avp-text-kpi`, 30px) and the hero numeral (`--avp-text-hero`, fluid
+56–84px, `--avp-tracking-hero` −0.04em) use it. `font-editorial` (Fraunces)
+now appears only inside `.avp-report`. Tailwind: `font-display`, `text-kpi`,
+`text-hero`, `tracking-hero`, `bg-accent`.
+
+### The shape lock
+
+`--avp-radius-2xl` (16px) for cards, tiles, the hero, empty states and the
+GapGrid; `lg` (8px) for buttons, inputs and nav rows; `full` for chips. The
+paper scope pins `sm`/`md` back to Epic 0's 3px / 5px.
+
+### Elevation
+
+`seated` = inner 1px top highlight; `raised` = highlight + contact shadow +
+soft ground-tinted drop; `lifted`/`overlay` for transient UI. `paperElevation`
+in `tokens/elevation.ts` is Epic 0's set, applied through the paper scope.
+
+### Components added or changed
+
+| Component | Epic 14 |
+|---|---|
+| `ScoreHero` | **New.** The one figure at the top of a screen: label, gradient numeral, `/100`, band, delta (`+4.2 since last scan`, coloured by the ramp's two ends, never success/danger), meta, and an `aside` slot. Null renders the absence in words, no gradient, no glow. Client component (reveal). |
+| `PageHead` | **New.** Eyebrow, title in the display face, `aside` for controls. Every Working screen's first line. |
+| `StatTile` | Redrawn as a card: seated surface, 16px, top highlight, hover lifts one tone. The accent is a **dot beside the label**, no longer a left rail; `emphasis` colours the value. |
+| `Card` | Seated by default, 16px, `CardHeader` is a flex row so a title and a live badge sit on one line; a `DataTable` directly inside runs edge to edge. |
+| `Button` | Primary carries `--avp-gradient-accent` with `--avp-on-accent` text; hover brightens. Secondary lifts to `surface-raised` with a beacon edge. |
+| `ScoreMeter`, `NavScore`, `NavSubItem` | Painted from `visibilityColorDark`. |
+| `LuminanceLedger` | `palette="working"` (default `'report'`) paints lit segments from the dark ramp and adds `avp-ledger--working`. Void is `--avp-surface-void`. |
+| `TrendChart` | `area` (default `false`) fills under the **subject's** line only, gradient from the series colour to transparent, one `<linearGradient>` per instance via `useId`. `seriesStyle(…, 'working')` now returns the dark beacon and `benchColorDark`. |
+| `AppShell` | Sidebar is sunken, sticky, full height, 16rem; content padding tightened for density. |
+
+### What the report must never acquire
+
+`ReportView.test.tsx` asserts, for every report fixture, none of:
+`avp-ledger--working`, `avp-trend__area`, `avp-hero` — alongside the existing
+stagger / compact / partial guards. The report never opts in; it never opts
+out.
+
+### Verified
+
+Design system 538/538, web 799/799 (the render harness deleted before
+counting), both typechecks clean. Screens verified in Chromium against the
+compiled stylesheet from the app's own fixtures rather than a live session —
+see `build-log.md`, Epic 14, for why — and the styleguide live on :4100.
+`docs/screenshots/epic-14/`.
+
+---
+
+## The ruling that drives every decision (Epic 0 — the report's ruling now)
 
 This product's main output is not a dashboard — it is **an argument someone
 makes to another person.** It is read in two contexts:
@@ -307,6 +403,37 @@ the chart generates the narrative rather than illustrating it.
 per-dimension structure that makes a score actionable. A radar implies the axes
 are commensurable and equally weighted, which under §6 they are not — the whole
 point is that the weights differ.
+
+### Compact, and partial — Epic 13
+
+`<LuminanceLedger compact />` draws the same column at a third of the width for
+a **grid** of them: the label gutter goes (the caller puts the stack order
+beside the grid once, instead of five labels per column), the column narrows,
+no gap is annotated, and the figure bounds itself at its drawn width so its
+12px values are the size actually rendered. The identity is untouched — at one
+height a compact column's lit rects are the same heights as a full one's, which
+is what makes two of them side by side comparable, and `render.test.tsx`
+asserts it.
+
+`LedgerDimension.measured: false` marks a dimension **this subject has no
+reading on**. The segment is still drawn — same height, same place, so the
+column keeps the shape of the one beside it — but as a hatched void in the
+hairline colour, never on the ramp, and the column then makes **no composite
+claim**: nothing is spoken as "out of 100", the hidden table's footer says
+*No composite — measured on 3 of 5 dimensions*, and no gap is annotated,
+because the largest unlit area is a dimension nobody measured rather than a
+gap this subject can close. Distinct from `unmeasured`, which is the whole
+column: that says *nothing was measured yet*; this says *this dimension is not
+measured for this subject*, and the second must not read as the first.
+
+It exists for the one place in the product that draws a rival as a ledger — the
+Competitors screen — where a rival is measured on three of the five dimensions
+(sentiment is classified toward the subject only, and the technical audit is of
+the subject's own site). A three-segment rival column normalised to full height
+would be the weight-basis error api-contracts.md warns about under Epic 5,
+drawn; this is the honest alternative. Both are opt-ins with the usual
+guardrail: neither report route passes anything, and `ReportView.test.tsx`
+asserts the document carries neither class.
 
 ---
 

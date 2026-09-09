@@ -12,10 +12,14 @@ import type { JSX } from 'react';
 import {
   Badge,
   Button,
+  Card,
+  CardHeader,
+  CardTitle,
   DataTable,
   EmptyState,
   ErrorState,
   LoadingState,
+  ScoreHero,
   ScoreMeter,
   StatRow,
   StatTile,
@@ -99,11 +103,18 @@ function Frame({
   state,
   me,
   current,
+  figures,
   children,
 }: {
   state: ClientDetailState;
   me: Me | null;
   current: ClientSection;
+  /**
+   * What sits between the head and the body — Epic 14. Defaults to the four
+   * shared figures; the Overview passes its hero plus the figures without the
+   * one the hero already carries.
+   */
+  figures?: (ready: { client: Client; history: ClientHistory }) => JSX.Element;
   children?: (ready: { client: Client; history: ClientHistory }) => JSX.Element;
 }): JSX.Element {
   if (state.kind === 'loading') {
@@ -148,7 +159,7 @@ function Frame({
       current={current}
       latestReportScanId={latestScanId(history)}
       latestScore={latestComposite(history)}
-      figures={<ClientMetaFigures history={history} />}
+      figures={figures ? figures({ client, history }) : <ClientMetaFigures history={history} />}
     >
       {children?.({ client, history })}
     </ClientSpace>
@@ -165,7 +176,21 @@ export function ClientOverviewView({
   me: Me | null;
 }): JSX.Element {
   return (
-    <Frame state={state} me={me} current="overview">
+    <Frame
+      state={state}
+      me={me}
+      current="overview"
+      figures={({ history }) =>
+        history.scans.length === 0 ? (
+          <ClientMetaFigures history={history} />
+        ) : (
+          <>
+            <OverviewHero history={history} />
+            <ClientMetaFigures history={history} omitLatest />
+          </>
+        )
+      }
+    >
       {({ history }) => {
         if (history.scans.length === 0) {
           return (
@@ -251,8 +276,10 @@ export function ClientOverviewView({
         ];
 
         return (
-          <section className="flex flex-col gap-4">
-            <h2 className="text-ui-md font-medium text-text-primary">Scan history</h2>
+          <Card elevation="seated">
+            <CardHeader>
+              <CardTitle>Scan history</CardTitle>
+            </CardHeader>
             {/*
               Oldest first, matching the trends. The dashboard's list is
               newest-first and stays so: that one is "what happened lately"
@@ -266,10 +293,93 @@ export function ClientOverviewView({
               rowKey={(s) => s.scanId}
               caption="Oldest first, matching the Sources and Rankings trends."
             />
-          </section>
+          </Card>
         );
       }}
     </Frame>
+  );
+}
+
+/**
+ * The Overview's hero — Epic 14: the Luminance Ledger's idea at the top of a
+ * client's space.
+ *
+ * The latest composite, as the first and largest thing on the screen, with
+ * the change since the reading before it and the score's own line across the
+ * client's history beside it. Every figure is read off `history`, which the
+ * screen already has: the latest and previous composites are the newest two
+ * scans WITH a reading (a scan without one is not a zero and is not a point on
+ * the line), the delta is their difference, and the trend is the composite
+ * series the Rankings and Sources screens never draw because they plot the
+ * field rather than the client alone.
+ *
+ * One scan is a reading, not a direction: with fewer than two scored scans
+ * there is no delta and no line, and the hero says the number on its own.
+ */
+function OverviewHero({ history }: { history: ClientHistory }): JSX.Element {
+  const scored = history.scans
+    .map((s) => ({ scan: s, value: num(s.composite) }))
+    .filter((p): p is { scan: HistoryScan; value: number } => p.value !== null);
+  const latest = scored[scored.length - 1] ?? null;
+  const previous = scored.length >= 2 ? scored[scored.length - 2]! : null;
+  const delta = latest && previous ? latest.value - previous.value : null;
+  const sov = latest ? num(latest.scan.shareOfVoice) : null;
+
+  const series: TrendSeriesInput[] = [
+    {
+      key: 'composite',
+      label: 'Score',
+      isSubject: true,
+      values: history.scans.map((s) => num(s.composite)),
+    },
+  ];
+
+  return (
+    <ScoreHero
+      label="Latest score"
+      score={latest ? latest.value : null}
+      absence="Not scored yet"
+      {...(delta != null ? { delta } : {})}
+      meta={
+        latest ? (
+          <>
+            <span>{`Scanned ${formatStamp(latest.scan.scannedAt)}`}</span>
+            {sov !== null && <span>{`${sov.toFixed(1)}% share of voice`}</span>}
+            <span>
+              {latest.scan.competitors.length === 1
+                ? '1 rival in the set'
+                : `${latest.scan.competitors.length} rivals in the set`}
+            </span>
+          </>
+        ) : (
+          <span>No scan of this client has produced a reading.</span>
+        )
+      }
+      aside={
+        scored.length >= 2 ? (
+          <TrendChart
+            points={trendPoints(history)}
+            series={series}
+            unit=""
+            yMax={100}
+            height={200}
+            /*
+              Drawn at the width it is shown at. The default 720-unit chart in
+              a hero aside half that wide would scale its 11px ticks to 6px —
+              the Epic 9.21 failure in the other direction.
+            */
+            layoutOptions={{ width: 420, height: 200 }}
+            title="Score across scans"
+            palette="working"
+            area
+            ariaLabel={`AI Visibility Score across ${history.scans.length} scans of ${history.name}: ${scored
+              .map((p) => p.value.toFixed(0))
+              .join(', ')}.`}
+          />
+        ) : undefined
+      }
+      animate={false}
+    />
   );
 }
 
@@ -301,7 +411,7 @@ export function ClientSourcesView({
               heading="Who gets cited when engines answer"
               lead="Every time an engine answered one of this client's prompts it cited sources. This is how often each domain was cited, scan by scan."
             />
-            <div className="grid items-start gap-8 lg:grid-cols-[auto_minmax(16rem,1fr)]">
+            <Card elevation="seated" className="grid items-start gap-8 p-6 lg:grid-cols-[auto_minmax(16rem,1fr)]">
                 <TrendChart
                   points={points}
                   series={series}
@@ -326,13 +436,14 @@ export function ClientSourcesView({
                     CMO and §1's non-judgmental rule is doing different work.
                   */
                   palette="working"
+                  area
                   caption="Counted across every answered prompt in each scan. A gap means the domain fell below what that scan recorded, not that it was cited zero times."
                   ariaLabel={`Citations per domain across ${points.length} scans of ${history.name}. ${series
                     .map((s) => `${s.label}: ${s.values.map((v) => (v === null ? 'not measured' : v)).join(', ')}`)
                     .join('. ')}`}
                 />
               <SeriesLedger series={series} unit={""} />
-            </div>
+            </Card>
           </section>
         );
       }}
@@ -369,7 +480,7 @@ export function ClientRankingsView({
               heading="How the field is sharing the answers"
               lead="Share of voice is this client's mentions as a fraction of every brand named in the same answers — so a rival's rise is this client's fall, and the lines sum across the field."
             />
-            <div className="grid items-start gap-8 lg:grid-cols-[auto_minmax(16rem,1fr)]">
+            <Card elevation="seated" className="grid items-start gap-8 p-6 lg:grid-cols-[auto_minmax(16rem,1fr)]">
                 <TrendChart
                   points={points}
                   series={series}
@@ -395,13 +506,14 @@ export function ClientRankingsView({
                     CMO and §1's non-judgmental rule is doing different work.
                   */
                   palette="working"
+                  area
                   caption="Share of voice, not the composite score: there is no per-competitor composite, because sentiment and technical foundation are measured on this client's site alone."
                   ariaLabel={`Share of voice across ${points.length} scans. ${series
                     .map((s) => `${s.label}: ${s.values.map((v) => (v === null ? 'not measured' : `${v}%`)).join(', ')}`)
                     .join('. ')}`}
                 />
               <SeriesLedger series={series} unit={"%"} />
-            </div>
+            </Card>
             {intermittent.length > 0 && (
               // The gaps in the chart, explained rather than left to be
               // noticed. A rival missing from one scan's set is a real event —
@@ -538,7 +650,7 @@ function SeriesLedger({
 function Intro({ heading, lead }: { heading: string; lead: string }): JSX.Element {
   return (
     <div className="flex flex-col gap-2">
-      <h2 className="max-w-headline font-editorial text-ed-xs leading-display tracking-display text-text-primary">
+      <h2 className="max-w-headline font-display text-ed-xs leading-display tracking-display text-text-primary">
         {heading}
       </h2>
       <p className="max-w-measure text-ui-base leading-prose text-text-secondary">{lead}</p>
@@ -607,7 +719,14 @@ function NoTrendYet({
  * growing its own. Two headers reporting a client's scan count differently
  * would be two answers to one question.
  */
-export function ClientMetaFigures({ history }: { history: ClientHistory }): JSX.Element {
+export function ClientMetaFigures({
+  history,
+  omitLatest = false,
+}: {
+  history: ClientHistory;
+  /** The Overview's hero already carries the latest reading — Epic 14. */
+  omitLatest?: boolean;
+}): JSX.Element {
   const scored = history.scans
     .map((s) => num(s.composite))
     .filter((n): n is number => n != null);
@@ -629,7 +748,9 @@ export function ClientMetaFigures({ history }: { history: ClientHistory }): JSX.
         one directly around a score would give that separation away for
         decoration. Counts take accents; measurements do not.
       */}
-      <StatTile label="Latest" value={latest == null ? 'Not scored' : latest.toFixed(0)} />
+      {!omitLatest && (
+        <StatTile label="Latest" value={latest == null ? 'Not scored' : latest.toFixed(0)} />
+      )}
       <StatTile label="Best" value={best == null ? 'Not scored' : best.toFixed(0)} />
       {history.scansWithoutData > 0 && (
         <StatTile

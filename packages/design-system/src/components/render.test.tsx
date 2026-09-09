@@ -19,7 +19,7 @@ import { SentimentTide, negativePatternId } from './chart/SentimentTide.js';
 import { LocalNav, LocalNavItem } from './shell/LocalNav.js';
 import type { ShelfRowInput } from './chart/answerShelfLayout.js';
 import { Beat, Evidence, ReportPage, BEAT_SEQUENCE } from './report/ReportLayout.js';
-import { visibility, beacon, competitor, oklch, benchColor } from '../tokens/color.js';
+import { visibility, beacon, competitor, oklch, benchColor, benchColorDark, dark } from '../tokens/color.js';
 import { DIMENSIONS, COMPETITORS, SUBJECT } from '../styleguide/fixtures.js';
 
 const html = (node: Parameters<typeof renderToStaticMarkup>[0]) => renderToStaticMarkup(node);
@@ -709,16 +709,28 @@ describe('TrendChart', () => {
     for (let i = 0; i < 6; i++) expect(out).not.toContain(benchColor(i));
   });
 
-  it('draws Working-screen competitors from the accent layer', () => {
+  it('draws Working-screen competitors from the DARK accent layer — Epic 14', () => {
     const out = chart({ palette: 'working' });
-    expect(out).toContain(benchColor(0));
+    expect(out).toContain(benchColorDark(0));
+    expect(out).not.toContain(benchColor(0));
     expect(out).not.toContain(oklch(competitor['1']));
   });
 
-  it('keeps the client in the brand accent on a Working screen too', () => {
-    // One brand, one colour: the teal line an operator learns on the dashboard
-    // must be the same teal line in the document they send.
-    expect(chart({ palette: 'working' })).toContain(oklch(beacon['600']));
+  it('keeps the client in beacon on a Working screen too — the electric stop', () => {
+    // One brand, one HUE: the cyan line an operator learns on the dark
+    // dashboard is the teal line in the document they send, at hue 200 in both.
+    expect(chart({ palette: 'working' })).toContain(oklch(dark.beacon['600']));
+  });
+
+  it('fills the area under the client only when asked, and never by default', () => {
+    // The report never passes `area`, so the default must draw no fill.
+    expect(chart()).not.toContain('avp-trend__area');
+    expect(chart({ palette: 'working' })).not.toContain('avp-trend__area');
+    const filled = chart({ palette: 'working', area: true });
+    expect(filled).toContain('avp-trend__area');
+    expect(filled).toContain('<linearGradient');
+    // One area — the subject's — however many rivals there are.
+    expect((filled.match(/avp-trend__area/g) ?? []).length).toBe(1);
   });
 
   it('still never paints a Working competitor from the visibility ramp', () => {
@@ -1103,5 +1115,126 @@ describe('LuminanceLedger bounding', () => {
 
   it('still scales down — it is a max, not a width', () => {
     expect(ledger({ bounded: true })).toContain('width="100%"');
+  });
+});
+
+/*
+ * Compact and partial — Epic 13.
+ *
+ * Two opt-ins for a grid of columns, and the guardrail is the same one every
+ * other ledger opt-in has: the default rendering is byte-for-byte what the
+ * report gets. The second describe is the honesty rule — a rival is measured
+ * on three of five dimensions, and a column on that basis must not speak a
+ * composite.
+ */
+describe('LuminanceLedger, compact — Epic 13', () => {
+  const full = () => html(<LuminanceLedger subjectName="Acme" dimensions={DIMENSIONS} animate={false} />);
+  const compact = () =>
+    html(<LuminanceLedger subjectName="Acme" dimensions={DIMENSIONS} animate={false} compact />);
+
+  it('is off by default, so the report is untouched', () => {
+    expect(full()).not.toContain('avp-ledger--compact');
+    expect(full()).toContain('% weight');
+  });
+
+  it('drops the label gutter and narrows the drawing', () => {
+    const out = compact();
+    expect(out).toContain('avp-ledger--compact');
+    expect(out).not.toContain('% weight');
+    const wide = Number(/viewBox="0 0 (\d+)/.exec(full())?.[1]);
+    const narrow = Number(/viewBox="0 0 (\d+)/.exec(out)?.[1]);
+    expect(narrow).toBeLessThan(wide / 2);
+  });
+
+  it('bounds itself at its drawn width without being asked', () => {
+    const out = compact();
+    const vb = /viewBox="0 0 (\d+)/.exec(out)?.[1];
+    const cap = /max-width:(\d+)px/.exec(out)?.[1];
+    expect(cap).toBe(vb);
+  });
+
+  it('keeps the identity: at one height, lit heights are unchanged by being compact', () => {
+    // Same dimensions, same height, so the lit rects must be the same heights;
+    // only their x and width differ. A compact column that drew a different
+    // column would not be comparable to the one beside it. (Compact DEFAULTS
+    // to a shorter column, which is why the height is pinned here.)
+    const at = (extra: Record<string, unknown>) =>
+      html(<LuminanceLedger subjectName="Acme" dimensions={DIMENSIONS} animate={false} height={300} {...extra} />);
+    const heights = (s: string) =>
+      [...s.matchAll(/<rect x="[\d.]+" y="[\d.]+" width="[\d.]+" height="([\d.]+)" fill="[^"]+" class="avp-ledger__lit"/g)].map(
+        (m) => m[1],
+      );
+    expect(heights(at({ compact: true }))).toEqual(heights(at({})));
+    expect(heights(at({})).length).toBe(DIMENSIONS.length);
+  });
+
+  it('draws no gap annotation — there is nowhere to write it', () => {
+    expect(compact()).not.toContain('avp-ledger__gap-label');
+    expect(full()).toContain('avp-ledger__gap-label');
+  });
+
+  it('still carries the full data table, labels included', () => {
+    const out = compact();
+    for (const d of DIMENSIONS) expect(out).toContain(d.label);
+    expect(out).toContain('<table>');
+  });
+});
+
+describe('LuminanceLedger, partial — a rival is measured on three of five', () => {
+  const RIVAL = DIMENSIONS.map((d) =>
+    d.key === 'sentiment' || d.key === 'technical' ? { ...d, subscore: 0, measured: false } : d,
+  );
+  const rival = () =>
+    html(<LuminanceLedger subjectName="Competitor A" dimensions={RIVAL} animate={false} compact />);
+
+  it('never claims a composite for the column', () => {
+    const out = rival();
+    expect(out).not.toContain('out of 100');
+    expect(out).not.toMatch(/AI Visibility Score/);
+    expect(out).toContain('No combined score');
+    expect(out).toContain('No composite — measured on 3 of 5 dimensions');
+    expect(out).toContain('measured on 3 of 5 dimensions');
+  });
+
+  it('speaks the measured dimensions as figures and the others as not measured', () => {
+    const out = rival();
+    expect(out).toContain('Mention Rate 41 of 100, weighted 30 percent');
+    expect(out).toContain('Sentiment: not measured for Competitor A');
+    expect(out).toContain('Technical Foundation: not measured for Competitor A');
+  });
+
+  it('hatches exactly the unmeasured segments and lights none of them', () => {
+    const out = rival();
+    expect(out).toContain('avp-ledger--partial');
+    expect((out.match(/avp-ledger__void--unmeasured/g) ?? []).length).toBe(2);
+    expect(out).toContain('<pattern id="ledger-hatch-');
+    // The two unmeasured segments have zero lit height, so no value is ever
+    // printed for them: every figure on the column is one of the measured
+    // sub-scores. (A small sub-score may not fit its label at all, which is
+    // the component's existing rule, so this asserts membership, not count.)
+    const values = [...out.matchAll(/class="avp-ledger__value"[^>]*>(\d+)</g)].map((m) => m[1]);
+    expect(values.length).toBeGreaterThan(0);
+    for (const v of values) expect(['41', '22', '15']).toContain(v);
+    expect(values).not.toContain('0');
+    expect(values).not.toContain('78');
+    expect(values).not.toContain('64');
+  });
+
+  it('draws no gap annotation — the largest unlit area is not a gap this subject can close', () => {
+    const out = html(<LuminanceLedger subjectName="Competitor A" dimensions={RIVAL} animate={false} />);
+    expect(out).not.toContain('avp-ledger__gap-label');
+  });
+
+  it('is distinct from the whole-column unmeasured state', () => {
+    const out = rival();
+    expect(out).not.toContain('avp-ledger--unmeasured');
+    expect(out).not.toContain('none of them measured yet');
+  });
+
+  it('a fully measured column carries none of it', () => {
+    const out = html(<LuminanceLedger subjectName="Acme" dimensions={DIMENSIONS} animate={false} />);
+    expect(out).not.toContain('avp-ledger--partial');
+    expect(out).not.toContain('ledger-hatch');
+    expect(out).not.toContain('Not measured');
   });
 });

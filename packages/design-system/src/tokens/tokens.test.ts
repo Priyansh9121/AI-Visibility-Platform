@@ -7,17 +7,24 @@ import {
   ink,
   visibility,
   beacon,
+  signal,
   competitor,
   visibilityAt,
+  visibilityAtDark,
   visibilityColor,
+  visibilityColorDark,
   visibilityBand,
   onVisibility,
+  heroGradient,
   seriesStyle,
   bench,
+  benchDark,
   benchAccent,
   benchColor,
+  benchColorDark,
   benchVar,
   semantic,
+  dark,
   BENCH_ACCENTS,
   BENCH_HUE_BUFFER,
   BENCH_FEASIBLE_ARC,
@@ -25,36 +32,140 @@ import {
 
 const css = readFileSync(fileURLToPath(new URL('../styles/tokens.css', import.meta.url)), 'utf8');
 
-/** Pull a custom property value out of the :root block. */
-function cssVar(name: string): string | null {
-  const m = css.match(new RegExp(`--avp-${name}:\\s*([^;]+);`));
+/*
+ * TWO SCOPES — Epic 14.
+ *
+ * `:root` is the dark identity and `[data-theme='light'], .avp-report` is the
+ * paper system the report keeps. A value has to be read from the block it
+ * belongs to: the first `--avp-beacon-600:` in the file is now the dark cyan,
+ * and a parity test that matched the first occurrence would compare the
+ * report's teal against it and fail — or worse, a paper value accidentally
+ * left in `:root` would pass.
+ */
+const ROOT_BLOCK = css.match(/:root\s*\{([\s\S]*?)\n\}/)![1]!;
+const LIGHT_BLOCK = css.match(/\[data-theme='light'\],\s*\.avp-report\s*\{([\s\S]*?)\n\}/)![1]!;
+
+/** Pull a custom property value out of a theme block (the dark `:root` by default). */
+function cssVar(name: string, scope: 'root' | 'light' = 'root'): string | null {
+  const block = scope === 'root' ? ROOT_BLOCK : LIGHT_BLOCK;
+  const m = block.match(new RegExp(`--avp-${name}:\\s*([^;]+);`));
   return m ? m[1]!.trim() : null;
 }
 
 describe('token parity: TS <-> CSS', () => {
   // Two hand-maintained copies of a palette diverge within a month. This is
   // the test that stops it.
-  const groups: [string, Record<string, readonly [number, number, number]>][] = [
+
+  // Theme-independent literals live in :root and nowhere else.
+  for (const [prefix, group] of [
     ['paper', paper],
     ['ink', ink],
-    ['beacon', beacon],
     ['competitor', competitor],
-    ['bench', bench],
-  ];
-
-  for (const [prefix, group] of groups) {
+  ] as const) {
     for (const [key, value] of Object.entries(group)) {
       it(`--avp-${prefix}-${key} matches the TS token`, () => {
         expect(cssVar(`${prefix}-${key}`)).toBe(oklch(value));
+        expect(cssVar(`${prefix}-${key}`, 'light')).toBeNull();
       });
     }
   }
 
-  for (const [key, value] of Object.entries(visibility)) {
-    it(`--avp-vis-${key} matches the TS token`, () => {
-      expect(cssVar(`vis-${key}`)).toBe(oklch(value));
-    });
+  // The PAPER palette is the report's, scoped to it.
+  for (const [prefix, group] of [
+    ['beacon', beacon],
+    ['signal', signal],
+    ['bench', bench],
+    ['vis', visibility],
+    ['', semantic],
+  ] as const) {
+    for (const [key, value] of Object.entries(group)) {
+      const name = prefix === '' ? key : `${prefix}-${key}`;
+      it(`--avp-${name} (paper) matches the TS token in the report scope`, () => {
+        expect(cssVar(name, 'light')).toBe(oklch(value));
+      });
+    }
   }
+
+  // The DARK identity is :root.
+  for (const [prefix, group] of [
+    ['beacon', dark.beacon],
+    ['signal', dark.signal],
+    ['bench', benchDark],
+    ['vis', dark.visibility],
+    ['surface', dark.surface],
+    ['text', dark.text],
+    ['line', dark.line],
+    ['', dark.semantic],
+  ] as const) {
+    for (const [key, value] of Object.entries(group)) {
+      const name = prefix === '' ? key : `${prefix}-${key}`;
+      it(`--avp-${name} (dark) matches the TS token in :root`, () => {
+        expect(cssVar(name)).toBe(oklch(value));
+      });
+    }
+  }
+
+  it('every paper override has a dark counterpart in :root, so no token is theme-only', () => {
+    const declared = (block: string) => [...block.matchAll(/^\s*--avp-([a-z0-9-_]+):/gm)].map((m) => m[1]!);
+    const root = new Set(declared(ROOT_BLOCK));
+    const missing = declared(LIGHT_BLOCK).filter((name) => !root.has(name));
+    expect(missing).toEqual([]);
+  });
+});
+
+describe('the dark ramp keeps the paper ramp\'s three properties', () => {
+  it('is strictly monotonic in lightness', () => {
+    for (let s = 1; s <= 100; s++) {
+      expect(visibilityAtDark(s)[0]).toBeGreaterThan(visibilityAtDark(s - 1)[0]);
+    }
+  });
+
+  it('traverses warm to cool', () => {
+    expect(visibilityAtDark(0)[2]).toBeLessThan(60);
+    expect(visibilityAtDark(100)[2]).toBeGreaterThan(180);
+  });
+
+  it('raises chroma with lightness', () => {
+    expect(visibilityAtDark(100)[1]).toBeGreaterThan(visibilityAtDark(0)[1]);
+  });
+
+  it('is lifted at the low end so "absent" stays visible on near-black', () => {
+    expect(visibilityAtDark(0)[0]).toBeGreaterThan(visibilityAt(0)[0]);
+  });
+
+  it('keeps the same five hues as the paper ramp — the meaning is the direction, not the tint', () => {
+    for (const s of [0, 25, 50, 75, 100]) {
+      expect(visibilityAtDark(s)[2]).toBe(visibilityAt(s)[2]);
+    }
+  });
+
+  it('hits the declared dark stops exactly', () => {
+    expect(visibilityColorDark(0)).toBe(oklch(dark.visibility['00']));
+    expect(visibilityColorDark(100)).toBe(oklch(dark.visibility['100']));
+  });
+});
+
+describe('heroGradient', () => {
+  it('is derived from the ramp at the score, so a low score does not glow like a high one', () => {
+    const low = heroGradient(12);
+    const high = heroGradient(88);
+    expect(low).not.toBe(high);
+    // Same hue as the ramp stop it is derived from — read back out of the string.
+    const hueOf = (g: string) => Number(g.match(/oklch\([\d.]+ [\d.]+ ([\d.]+)\)/)![1]);
+    expect(hueOf(low)).toBeCloseTo(visibilityAtDark(12)[2], 1);
+    expect(hueOf(high)).toBeCloseTo(visibilityAtDark(88)[2], 1);
+  });
+
+  it('floors lightness so the numeral is legible text on the dark ground', () => {
+    for (const s of [0, 10, 30, 50, 70, 100]) {
+      const l = Number(heroGradient(s).match(/oklch\(([\d.]+)/)![1]);
+      expect(l).toBeGreaterThanOrEqual(0.7);
+    }
+  });
+
+  it('is deterministic', () => {
+    expect(heroGradient(37.5)).toBe(heroGradient(37.5));
+  });
 });
 
 describe('visibility ramp invariants', () => {
@@ -670,15 +781,20 @@ describe('seriesStyle is where the two contexts diverge', () => {
     }
   });
 
-  it('draws competitors from bench on a Working screen', () => {
+  it('draws competitors from the DARK bench on a Working screen — Epic 14', () => {
     for (let i = 0; i < 6; i++) {
-      expect(seriesStyle('competitor', i, 'working').fill).toBe(benchColor(i));
+      expect(seriesStyle('competitor', i, 'working').fill).toBe(benchColorDark(i));
+      expect(seriesStyle('competitor', i, 'working').fill).not.toBe(benchColor(i));
     }
   });
 
-  it('gives the client beacon in BOTH contexts — one brand, one colour', () => {
+  it('gives the client beacon in BOTH contexts — one brand, one hue', () => {
+    // Epic 14: the same hue in both, the paper stop on the report and the
+    // electric stop on the dark Working ground.
+    expect(seriesStyle('subject', 0, 'report').fill).toBe(oklch(beacon['600']));
+    expect(seriesStyle('subject', 0, 'working').fill).toBe(oklch(dark.beacon['600']));
+    expect(beacon['600'][2]).toBe(dark.beacon['600'][2]);
     for (const palette of ['report', 'working'] as const) {
-      expect(seriesStyle('subject', 0, palette).fill).toBe(oklch(beacon['600']));
       expect(seriesStyle('subject', 3, palette).isSubject).toBe(true);
     }
   });
@@ -687,6 +803,7 @@ describe('seriesStyle is where the two contexts diverge', () => {
     for (const palette of ['report', 'working'] as const) {
       for (let i = 0; i < 12; i++) {
         expect(seriesStyle('competitor', i, palette).fill).not.toBe(oklch(beacon['600']));
+        expect(seriesStyle('competitor', i, palette).fill).not.toBe(oklch(dark.beacon['600']));
       }
     }
   });
@@ -700,7 +817,7 @@ describe('seriesStyle is where the two contexts diverge', () => {
   });
 
   it('never returns a visibility ramp colour for a competitor, in either context', () => {
-    const ramp = Object.values(visibility).map((c) => oklch(c));
+    const ramp = [...Object.values(visibility), ...Object.values(dark.visibility)].map((c) => oklch(c));
     for (const palette of ['report', 'working'] as const) {
       for (let i = 0; i < 12; i++) {
         expect(ramp).not.toContain(seriesStyle('competitor', i, palette).fill);

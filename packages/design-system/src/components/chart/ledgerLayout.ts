@@ -26,6 +26,19 @@ export interface LedgerDimension {
   weight: number;
   /** Normalised sub-score, 0-100. */
   subscore: number;
+  /**
+   * Whether this subject was measured on this dimension at all — Epic 13.
+   * **Defaults to `true`**, and the layout does not read it: geometry is the
+   * same either way, which is the point. A rival is scored on three of the five
+   * dimensions (sentiment is classified toward the subject only, the technical
+   * audit is of the subject's own site), and the honest column for a rival has
+   * the SAME five-segment shape as the subject's, with the two segments nobody
+   * measured drawn as shape only. The component reads this flag to draw those
+   * as hatched voids, to print "Not measured" for them, and to make NO
+   * composite claim for the column — the weight-basis error api-contracts.md
+   * warns about under Epic 5 is exactly a composite over a partial column.
+   */
+  measured?: boolean;
 }
 
 export interface LedgerCompetitor {

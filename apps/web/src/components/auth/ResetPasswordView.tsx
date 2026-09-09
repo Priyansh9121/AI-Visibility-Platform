@@ -78,7 +78,7 @@ export function ResetPasswordView({
         <Reveal animate={animate} className="mx-auto flex max-w-form flex-col gap-4">
           <Card elevation="raised">
             <CardBody>
-              <h1 className="font-editorial text-ed-xs leading-display text-text-primary">
+              <h1 className="font-display text-ed-xs leading-display text-text-primary">
                 Password changed
               </h1>
               <p className="mt-3 text-ui-base leading-prose text-text-secondary">
@@ -124,7 +124,7 @@ export function ResetPasswordView({
           <CardBody>
             <form onSubmit={onSubmit} className="flex flex-col gap-5">
               <div className="flex flex-col gap-2">
-                <h1 className="font-editorial text-ed-xs leading-display text-text-primary">
+                <h1 className="font-display text-ed-xs leading-display text-text-primary">
                   Choose a new password
                 </h1>
                 <p className="text-ui-sm leading-prose text-text-secondary">
