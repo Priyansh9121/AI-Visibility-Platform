@@ -14014,3 +14014,50 @@ finding is acknowledged rather than suppressed. And the Epic 13 Competitors
 work that was uncommitted in the working tree when this session started is
 still uncommitted beside this — it was not touched beyond the ledger palette
 opt-in, and the two should be committed as two entries.
+
+# Epic 14.2 — the sidebar's client list never arrived
+
+**2026-09-09.** Governance line, per north-star.md §8.1: the frontend shell
+(`apps/web/src/components/shell`). No lifecycle phase; no other layer.
+
+## The finding
+
+Opening the Clients disclosure in the sidebar left "Loading clients…" on
+screen indefinitely for the `Local Dev Agency 2` account. The brief's
+diagnosis order was followed and stopped at its first step: the disclosure's
+`onToggle` did flip `clientsOpen`, both reads did fire, and the list never
+left `loading` — for that account and for every other, because the cause was
+in the effect's own wiring rather than in any response.
+
+`WorkspaceShell`'s effect depended on `[clientsOpen, list.kind]` and set
+`list.kind` to `loading` inside its own body. React then re-ran the effect
+for the dependency it had just changed, running the previous run's cleanup
+first — which flipped that run's `cancelled` flag — and the new run returned
+early because the list was no longer `idle`. The response arrived into a
+closure told to discard it. `sidebarClients()` was never reached, so the
+shape check in step 3 never mattered, and `GET /clients` for that agency
+returns its one client correctly (confirmed against the database: one
+client, one scan).
+
+## Why nothing caught it
+
+Every test in `apps/web` renders to static markup, and `navModes.test.tsx`
+renders `ready`, `loading` and `error` by prop. All three states were
+covered; the one thing a static render cannot show is a state that never
+*arrives*. Epic 13 also recorded that it was never verified live.
+
+## The fix, and the test that would have caught it
+
+The fetch is keyed on the disclosure opening and nothing else: a ref makes it
+fire once per mount, and the only thing that cancels it is the component
+unmounting. `WorkspaceShell.test.tsx` mounts the real component in jsdom
+(`jsdom@30.0.1`, MIT, added as a web devDependency — it was already in the
+workspace store for the design system), clicks the real button, waits for
+the mocked reads, and asserts the rows; it also asserts the error branch and
+that toggling twice does not fetch twice. Run against the unfixed effect it
+failed with `'All clientsLoading clients…'`, which is the screen the founder
+saw.
+
+## Verified
+
+Design system 538/538, web 803/803 (three new), both typechecks clean.
