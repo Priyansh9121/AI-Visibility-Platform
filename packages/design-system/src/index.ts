@@ -122,6 +122,8 @@ export {
 export {
   ReportPage,
   ReportHeader,
+  ReportMetaItem,
+  ScoreBlock,
   Beat,
   Prose,
   Evidence,
@@ -130,6 +132,8 @@ export {
   type BeatId,
   type ReportPageProps,
   type ReportHeaderProps,
+  type ReportMetaItemProps,
+  type ScoreBlockProps,
   type BeatProps,
   type EvidenceProps,
   type FixItem,

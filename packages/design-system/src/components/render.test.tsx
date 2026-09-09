@@ -5,6 +5,7 @@ import { Card, CardBody } from './Card.js';
 import { Badge, VisibilityBadge } from './Badge.js';
 import { DataTable } from './Table.js';
 import { ScoreDisplay } from './ScoreDisplay.js';
+import { ReportMetaItem, ScoreBlock } from './report/ReportLayout.js';
 import { ScoreMeter } from './ScoreMeter.js';
 import { VerdictBar } from './VerdictBar.js';
 import { PageSection } from './marketing/PageSection.js';
@@ -113,6 +114,42 @@ describe('components render', () => {
     const out = html(<ScoreDisplay score={null} />);
     expect(out).toContain('—');
     expect(out).toContain('Not enough data to score this scan');
+  });
+
+  it('ScoreDisplay owns its badge when asked, from the rounded score — Epic 16', () => {
+    const out = html(<ScoreDisplay score={58.24} animate={false} badge />);
+    expect(out).toContain('avp-badge--visibility');
+    expect(out).toContain('Emerging');
+    const numeral = out.match(/avp-score__numeral" style="color:(oklch\([^)]*\))/)?.[1];
+    const badge = out.match(/avp-score__badge" style="background:(oklch\([^)]*\))/)?.[1];
+    expect(numeral).toBeDefined();
+    expect(badge).toBe(numeral);
+    // Off by default, and never for a null score: there is no band to name.
+    expect(html(<ScoreDisplay score={58} />)).not.toContain('avp-badge');
+    expect(html(<ScoreDisplay score={null} badge />)).not.toContain('avp-badge');
+  });
+
+  it('ReportMetaItem gives a byline fact a shape and hides its glyph — Epic 16', () => {
+    const out = html(
+      <ReportMetaItem icon={<svg data-glyph="" />} mono>
+        example.com
+      </ReportMetaItem>,
+    );
+    expect(out).toContain('avp-report__meta-item--mono');
+    expect(out).toContain('<span class="avp-report__meta-icon" aria-hidden="true"><svg data-glyph=""></svg></span>');
+    expect(out).toContain('example.com');
+    // No glyph, no empty wrapper.
+    expect(html(<ReportMetaItem>3 prompts</ReportMetaItem>)).not.toContain('avp-report__meta-icon');
+  });
+
+  it('ScoreBlock puts the figure before the explanation — Epic 16', () => {
+    const out = html(
+      <ScoreBlock figure={<b>figure</b>}>
+        <p>explain</p>
+      </ScoreBlock>,
+    );
+    expect(out.indexOf('avp-scoreblock__figure')).toBeLessThan(out.indexOf('avp-scoreblock__explain'));
+    expect(out.indexOf('figure')).toBeLessThan(out.indexOf('explain'));
   });
 });
 

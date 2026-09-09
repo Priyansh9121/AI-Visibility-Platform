@@ -57,6 +57,62 @@ describe('the narrative structure is the page', () => {
   });
 });
 
+describe('the score beat is composed, not listed — Epic 16', () => {
+  const header = (html: string) => html.slice(0, html.indexOf('avp-beat--score'));
+  const scoreBeat = (html: string) =>
+    html.slice(html.indexOf('avp-beat--score'), html.indexOf('avp-beat--gap'));
+  const gapBeat = (html: string) =>
+    html.slice(html.indexOf('avp-beat--gap'), html.indexOf('avp-beat--proof'));
+
+  it('credentials the scan as five shaped facts, not a run of grey text', () => {
+    const head = header(render(helpscoutReport));
+    expect(head.match(/avp-report__meta-item/g)).toHaveLength(6); // five items, one with the mono modifier
+    expect(head).toContain('avp-report__meta-item--mono');
+    expect(head).toContain('helpscout.com');
+    expect(head).toContain('3 prompts');
+    expect(head).toContain('2 engines');
+    // Every glyph is decorative and says so; the text beside it is the fact.
+    expect(head.match(/avp-report__meta-icon/g)).toHaveLength(5);
+    expect(head.match(/<span class="avp-report__meta-icon" aria-hidden="true">/g)).toHaveLength(5);
+  });
+
+  it('frames the numeral and its explanation as one unit', () => {
+    const beat = scoreBeat(render(helpscoutReport));
+    expect(beat).toContain('avp-scoreblock');
+    expect(beat.indexOf('avp-scoreblock__figure')).toBeLessThan(beat.indexOf('avp-scoreblock__explain'));
+    expect(beat.indexOf('avp-score__numeral')).toBeLessThan(beat.indexOf('avp-prose'));
+  });
+
+  it('draws the ledger compact beside the numeral, and in full only in the gap beat', () => {
+    const html = render(helpscoutReport);
+    expect(scoreBeat(html).match(/avp-ledger--compact/g)).toHaveLength(1);
+    expect(gapBeat(html)).toContain('avp-ledger__svg');
+    expect(gapBeat(html)).not.toContain('avp-ledger--compact');
+    // Still the one chart: the compact column's hidden table carries the composite.
+    expect(scoreBeat(html)).toContain('58 / 100');
+  });
+
+  it('draws no small column when there is no score to draw', () => {
+    for (const report of [insufficientDataReport, unscoredReport]) {
+      const html = render(report);
+      expect(scoreBeat(html)).not.toContain('avp-ledger');
+      expect(scoreBeat(html)).not.toContain('avp-badge--visibility');
+    }
+  });
+
+  it('paints the badge from the same rounded score as the numeral', () => {
+    // The fixture's composite is 58.24. Rounded, the numeral is 58; the badge
+    // used to be handed 58.24 and interpolate the ramp a fraction away — a
+    // colour that matched by coincidence. Now both come from one number.
+    const beat = scoreBeat(render(helpscoutReport));
+    const numeral = beat.match(/avp-score__numeral" style="color:(oklch\([^)]*\))/)?.[1];
+    const badge = beat.match(/avp-badge--visibility avp-score__badge" style="background:(oklch\([^)]*\))/)?.[1];
+    expect(numeral).toBeDefined();
+    expect(badge).toBe(numeral);
+    expect(beat.indexOf('avp-score__badge')).toBeGreaterThan(beat.indexOf('avp-score__band'));
+  });
+});
+
 describe('degraded data renders as degraded, never as bad', () => {
   it('INSUFFICIENT_DATA shows no score at all rather than a zero', () => {
     const html = render(insufficientDataReport);
@@ -598,13 +654,19 @@ describe('the report never acquires the landing page motion', () => {
   });
 
   for (const [name, report] of REPORTS) {
-    it(`carries no compact or partial ledger markup — ${name} (Epic 13)`, () => {
+    it(`the full ledger is never compact, and nothing is partial — ${name} (Epic 13, amended Epic 16)`, () => {
       // The Competitors screen draws the same component small and with
-      // rival-blind dimensions hatched. Both are opt-ins the report never
-      // passes, and this is the assertion that keeps it so — the same
-      // guardrail as stagger and unmeasured, extended to the two new modes.
+      // rival-blind dimensions hatched. As written in Epic 13 this asserted
+      // the report carried neither anywhere. Epic 16 amended it on purpose:
+      // the score beat now draws ONE compact column beside the numeral (the
+      // positive assertion lives in the Epic 16 block above), so the guard
+      // here is narrower and no weaker — the gap beat's full column is still
+      // Epic 0's drawing, no second compact column exists, and the partial
+      // hatch is still something the document never carries.
       const html = render(report);
-      expect(html).not.toContain('avp-ledger--compact');
+      const gap = html.slice(html.indexOf('avp-beat--gap'), html.indexOf('avp-beat--proof'));
+      expect(gap).not.toContain('avp-ledger--compact');
+      expect(html.match(/avp-ledger--compact/g)?.length ?? 0).toBeLessThanOrEqual(1);
       expect(html).not.toContain('avp-ledger--partial');
       expect(html).not.toContain('ledger-hatch');
     });

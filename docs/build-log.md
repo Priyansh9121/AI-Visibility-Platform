@@ -14334,3 +14334,91 @@ API 1194/1194 and ruff clean, workers 13/13, design system 601/601, web
 806/806, shared-types 53/53, all three typechecks clean. One grammar
 regression from the mechanical pass (a joined line over ruff's 100-column
 limit) was caught by ruff and fixed before commit.
+
+# Epic 16 — the report's first beat: hierarchy and rhythm, not a reskin
+
+**2026-09-09.** Governance line, stated first because it is the constraint
+that shaped every choice below: the report stays in the print-safe editorial
+idiom — Epic 0's paper palette, Fraunces, hairline and flat elevation. No
+gradient, no glow, no dark ground, no card grid. Everything here is a
+hairline, a seated tone or the paper ramp, and it has to survive a greyscale
+photocopy in front of a CMO. The beat sequence, the narrative derivation,
+`lib/report/derive.ts` and the PDF path are untouched.
+
+## What was weak
+
+The founder's mockup (`report-header-redesign-mockup.html`) named four
+things, and the "before" capture agreed with all four:
+
+1. **The byline read as a debug dump.** Domain, industry, prompt count,
+   engine count, scan date: five facts at one grey weight, space-separated.
+2. **The score had nothing to look at.** A bare numeral, its band and a
+   badge, with the Luminance Ledger — the product's signature chart — one
+   beat further down and nowhere near the number it explains.
+3. **No frame** around the score and its explanation; the eye took the
+   number and left the sentence.
+4. **The badge's colour matched the numeral's by coincidence.** The numeral
+   rounds before it paints; the badge was handed the unrounded composite and
+   interpolated the ramp a fraction away. Same on most scores, tied on none.
+
+## What was built
+
+Two report primitives, one prop, and the score beat recomposed.
+
+**`ReportMetaItem`** (`ReportLayout.tsx`). One byline fact, given a shape:
+the seated tone, a hairline, the chip radius the shape lock already reserves
+for chips, and a Lucide glyph at 13px that is `aria-hidden` because the text
+beside it is the fact. `mono` for the domain. Level-1 elevation only, so it
+prints; never on the ramp, so it cannot be read as a score, and the buffer
+between a byline chip and `VisibilityBadge` is structural rather than a
+matter of restraint. Lucide only (Globe, Building2, MessageSquare, Bot,
+CalendarDays) — the mockup's hand-drawn SVGs were for the demo.
+
+**`ScoreBlock`** (`ReportLayout.tsx`). A rule above, a rule below, the
+figure and its prose in two columns between them, one column under 40rem.
+Most of what makes the mockup feel composed is this, and it is two
+hairlines.
+
+**`ScoreDisplay badge`.** The badge is now rendered by the numeral's own
+component from the same `rounded` value the digits paint from. One number,
+one call to the ramp for each surface. `ReportView.test.tsx` extracts the
+two `oklch(...)` strings from the rendered beat and asserts they are equal —
+on the 58.24 fixture they were not, before.
+
+**The compact Ledger, beside the numeral.** Epic 13 built `compact` for the
+Competitors grid, and the brief's instinct was right: this was "surface a
+chart that already exists at a smaller size", not new UI. The score beat now
+draws `<LuminanceLedger compact annotateGap={false}>` at the numeral's side,
+bounded at its own 100px, so the number is never seen without the shape that
+is its explanation. The full column still follows in the gap beat, where its
+gutter labels and gap annotation do work the small one cannot. Drawn only
+when `narrative.status === 'scored'`: an unscored scan shows the em dash and
+no column, because a column at zero is a measurement nobody took. The prose
+was amended from "drawn below as light" to "drawn as light beside it and in
+full in the next section".
+
+## A written rule, amended first
+
+`ReportView.test.tsx` carried an Epic 13 guard: *the report never carries
+`avp-ledger--compact`*. Its purpose was that the document should not change
+by accident. This epic changes it on purpose, so the guard was narrowed
+rather than deleted and no weaker for it: the gap beat's full column is
+asserted never compact, no more than one compact column may exist, and the
+partial hatch is still something the document never carries. The positive
+half — exactly one compact column, inside the score beat — lives in the new
+Epic 16 block. `LuminanceLedger`'s `compact` doc and `design-system.md`'s
+"what the report must never acquire" were amended in the same commit, the
+order `design-direction.md` asks for. `design-direction.md` itself has no
+rule about the byline or the score beat's composition, and the print-safe
+constraint in §0 is honoured, so it was not touched.
+
+## Verified
+
+Design system **604/604** (three new: the owned badge, the meta item, the
+block), web **811/811** (five new, one amended), both typechecks clean.
+Rendered from the repo's fixtures through the same static-render path Epics
+14 and 15 used — `docs/screenshots/epic-16/`: the score beat before and
+after on the Help Scout fixture, the weak-signal fixture before and after,
+the unscored fixture after (em dash, no column, no badge), and the after at
+420px, where the figure row still fits and the prose follows it. The
+styleguide's report section now shows the same primitives and was rebuilt.

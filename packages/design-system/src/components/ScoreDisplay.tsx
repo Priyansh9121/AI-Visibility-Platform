@@ -8,12 +8,25 @@
 import { useEffect, useState, type JSX } from 'react';
 import { cn } from '../lib/cn.js';
 import { visibilityColor, visibilityBand } from '../tokens/color.js';
+import { VisibilityBadge } from './Badge.js';
 
 export interface ScoreDisplayProps {
   /** 0-100, or null for INSUFFICIENT_DATA. */
   score: number | null;
   label?: string;
   animate?: boolean;
+  /**
+   * Render the ordinal badge under the band, painted from the SAME rounded
+   * score as the numeral — Epic 16.
+   *
+   * The report used to place a `VisibilityBadge` beside this component and
+   * hand it the unrounded composite. The numeral rounds before it paints, so
+   * the two were two interpolations of the ramp a fraction apart: close enough
+   * to match on most scores, and nothing made them match. Owning the badge
+   * here makes the tie structural — one `rounded`, one call to the ramp for
+   * each surface, and `ReportView.test.tsx` asserts the two strings are equal.
+   */
+  badge?: boolean;
   className?: string;
 }
 
@@ -37,6 +50,7 @@ export function ScoreDisplay({
   score,
   label = 'AI Visibility Score',
   animate = true,
+  badge = false,
   className,
 }: ScoreDisplayProps): JSX.Element {
   const [revealed, setRevealed] = useState(!animate);
@@ -79,6 +93,7 @@ export function ScoreDisplay({
         <span className="avp-score__denominator">/100</span>
       </p>
       <p className="avp-score__band">{BAND_COPY[visibilityBand(rounded)]}</p>
+      {badge && <VisibilityBadge score={rounded} className="avp-score__badge" />}
     </div>
   );
 }

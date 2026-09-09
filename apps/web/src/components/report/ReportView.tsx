@@ -36,14 +36,15 @@ import {
   LuminanceLedger,
   Prose,
   ReportHeader,
+  ReportMetaItem,
   ReportPage,
+  ScoreBlock,
   ScoreDisplay,
-  VisibilityBadge,
 } from '@avp/design-system';
 import type { CSSProperties } from 'react';
 import type { ReactNode } from 'react';
 import type { Report, ReportCompetitorSet } from '@avp/shared-types';
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight, Bot, Building2, CalendarDays, Globe, MessageSquare } from 'lucide-react';
 import { deriveNarrative, gapHeading, scoreHeading } from '@/lib/report/derive';
 import {
   DEGRADATION_FLAG,
@@ -102,12 +103,20 @@ export function ReportView({
         subject={subjectName}
         subtitle={`How ${subjectName} appears when buyers ask AI assistants for a recommendation.`}
         meta={
+          // The document's credentials, one shape each — Epic 16. The same
+          // five facts as before; what changed is that they no longer read as
+          // a log line. Lucide glyphs only, and each is hidden from assistive
+          // tech by the primitive: the text is the fact.
           <>
-            <span>{report.subject.domain}</span>
-            {report.subject.industry && <span>{report.subject.industry}</span>}
-            <span>{`${report.proof.promptsRun} prompts`}</span>
-            <span>{`${report.proof.engineCoverage.length} engines`}</span>
-            <span>{`Scanned ${formatDate(scanned)}`}</span>
+            <ReportMetaItem icon={<Globe />} mono>
+              {report.subject.domain}
+            </ReportMetaItem>
+            {report.subject.industry && (
+              <ReportMetaItem icon={<Building2 />}>{report.subject.industry}</ReportMetaItem>
+            )}
+            <ReportMetaItem icon={<MessageSquare />}>{`${report.proof.promptsRun} prompts`}</ReportMetaItem>
+            <ReportMetaItem icon={<Bot />}>{`${report.proof.engineCoverage.length} engines`}</ReportMetaItem>
+            <ReportMetaItem icon={<CalendarDays />}>{`Scanned ${formatDate(scanned)}`}</ReportMetaItem>
           </>
         }
       />
@@ -355,16 +364,38 @@ function ScoreBeat({
   return (
     <Beat id="score" heading={scoreHeading(narrative, subjectName)}>
       {/*
-        A two-column grid rather than a flex row: the score block's natural
-        width is set by its band copy ("Present, but losing the answer to
-        competitors"), which under flex squeezed the explanation beside it to
-        about thirty characters a line. An even split keeps both readable.
+        THE SCORE AND ITS SHAPE, TOGETHER — Epic 16.
+
+        `ScoreBlock` frames the figure and the prose between two rules so they
+        read as one unit; its even split is the same one the old grid had,
+        kept because the band copy ("Present, but losing the answer to
+        competitors") squeezed the explanation to thirty characters a line
+        under flex. The figure is the numeral stack — label, composite, band,
+        and now the badge, painted by `ScoreDisplay` from the same rounded
+        score as the digits — with the Luminance Ledger drawn COMPACT at its
+        side. The full column still follows in the gap beat, where its gutter
+        labels and gap annotation do the work; this one is the same chart at
+        the size of the number, so the number is never seen without the shape
+        that is its explanation. Drawn only when there is a score: an unscored
+        scan shows the em dash and no column, and a column at zero would be a
+        measurement nobody took.
       */}
-      <div className="grid items-start gap-10 sm:grid-cols-2">
-        <div className="flex flex-col items-start gap-3">
-          <ScoreDisplay score={narrative.composite} animate={animate} />
-          {narrative.composite !== null && <VisibilityBadge score={narrative.composite} />}
-        </div>
+      <ScoreBlock
+        figure={
+          <>
+            <ScoreDisplay score={narrative.composite} animate={animate} badge />
+            {narrative.status === 'scored' && (
+              <LuminanceLedger
+                subjectName={subjectName}
+                dimensions={narrative.dimensions}
+                compact
+                annotateGap={false}
+                animate={animate}
+              />
+            )}
+          </>
+        }
+      >
         <Prose>
           {narrative.status === 'not_scored' && (
             <p>
@@ -382,9 +413,10 @@ function ScoreBeat({
           {narrative.status === 'scored' && (
             <p>
               The score is the weighted composite of{' '}
-              {narrative.dimensions.length} measured dimensions, drawn below as light: each
-              dimension&rsquo;s height is the points it is worth, and its lit portion is the points
-              earned. The lit height of the whole column is the score.
+              {narrative.dimensions.length} measured dimensions, drawn as light beside it and in
+              full in the next section: each dimension&rsquo;s height is the points it is worth,
+              and its lit portion is the points earned. The lit height of the whole column is the
+              score.
             </p>
           )}
           {/*
@@ -429,7 +461,7 @@ function ScoreBeat({
             </ul>
           )}
         </Prose>
-      </div>
+      </ScoreBlock>
     </Beat>
   );
 }

@@ -98,8 +98,15 @@ export interface LuminanceLedgerProps {
   /**
    * Draw the column SMALL, for a grid of them — Epic 13. **Defaults to
    * `false`**, the same guardrail as `staggerDimensions`, `unmeasured` and
-   * `bounded`, and for the same reason: neither report call site passes
-   * anything, so the document gets Epic 0's drawing.
+   * `bounded`, and for the same reason: the gap beat's full column passes
+   * nothing, so the document's chart is Epic 0's drawing.
+   *
+   * Since Epic 16 the report has a SECOND call site that opts in on purpose:
+   * the score beat draws a compact column beside the numeral, so the number
+   * and the shape that explains it are never apart. That is the one place
+   * the report passes this, and `ReportView.test.tsx` asserts both halves —
+   * exactly one compact column, inside the score beat, and none in the gap
+   * beat.
    *
    * What changes: the label gutter goes (a grid of six columns each repeating
    * "Mention Rate, 30% weight" is noise, and the caller puts the stack order
