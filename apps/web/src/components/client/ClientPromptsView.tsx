@@ -132,6 +132,13 @@ function PromptWorkbench({ client }: { client: Client }): JSX.Element {
   const [running, setRunning] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  /**
+   * The run the last submit produced, so its card can settle in rather than
+   * appear — Epic 16.3. Set alongside `runs` in the same continuation, so
+   * React batches the two and the card mounts already marked; cleared by the
+   * next load, so a reload or a later re-read performs nothing.
+   */
+  const [freshId, setFreshId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const body = await api.promptRuns(client.id);
@@ -141,6 +148,8 @@ function PromptWorkbench({ client }: { client: Client }): JSX.Element {
       runsPerHour: body.runsPerHour,
       maxPromptChars: body.maxPromptChars,
     });
+    setFreshId(null);
+    return body.data;
   }, [client.id]);
 
   useEffect(() => {
@@ -171,7 +180,9 @@ function PromptWorkbench({ client }: { client: Client }): JSX.Element {
       // Re-read rather than pushing the new run onto the list: the throttle
       // figure has to come back from the server anyway, and one source for
       // both keeps them from disagreeing on the screen.
-      await load();
+      const before = new Set((runs ?? []).map((r) => r.id));
+      const after = await load();
+      setFreshId(after.find((r) => !before.has(r.id))?.id ?? null);
     } catch (err) {
       setProblem(
         err instanceof ApiProblem
@@ -199,6 +210,7 @@ function PromptWorkbench({ client }: { client: Client }): JSX.Element {
       problem={problem}
       onPromptChange={setPrompt}
       onSubmit={submit}
+      freshId={freshId}
     />
   );
 }
@@ -211,6 +223,8 @@ export interface PromptsPanelProps {
   problem: string | null;
   onPromptChange: (value: string) => void;
   onSubmit: (event: FormEvent) => void;
+  /** The run the last submit produced, if any — its card settles in. Epic 16.3. */
+  freshId?: string | null | undefined;
 }
 
 /**
@@ -229,6 +243,7 @@ export function PromptsPanel({
   problem,
   onPromptChange,
   onSubmit,
+  freshId = null,
 }: PromptsPanelProps): JSX.Element {
   const exhausted = limits.runsRemaining <= 0;
   const tooLong = prompt.trim().length > limits.maxPromptChars;
@@ -309,7 +324,7 @@ export function PromptsPanel({
           </div>
           <div className="flex flex-col gap-6">
             {runs.map((run) => (
-              <RunCard key={run.id} run={run} />
+              <RunCard key={run.id} run={run} fresh={run.id === freshId} />
             ))}
           </div>
         </section>
@@ -318,14 +333,16 @@ export function PromptsPanel({
   );
 }
 
-function RunCard({ run }: { run: PromptRun }): JSX.Element {
+function RunCard({ run, fresh = false }: { run: PromptRun; fresh?: boolean }): JSX.Element {
   const named = run.results.filter((r) => r.mentioned).length;
   const best = run.results
     .map((r) => r.position)
     .filter((p): p is number => p != null);
 
   return (
-    <article className="flex flex-col gap-4 rounded-lg border border-line-hairline p-5">
+    <article
+      className={`avp-run flex flex-col gap-4 rounded-lg border border-line-hairline p-5${fresh ? ' is-new' : ''}`}
+    >
       <header className="flex flex-col gap-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <p className="max-w-measure font-mono text-ui-sm leading-mono text-text-primary">

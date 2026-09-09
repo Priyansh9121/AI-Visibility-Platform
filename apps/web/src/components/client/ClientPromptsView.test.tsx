@@ -33,6 +33,21 @@ const panel = (over: Partial<Parameters<typeof PromptsPanel>[0]> = {}) =>
     />,
   );
 
+describe('a fresh run settles in; the rest never move — Epic 16.3', () => {
+  it('marks only the run the submit produced', () => {
+    const html = panel({ runs: [mixedRun, absentRun], freshId: absentRun.id });
+    const cards = html.split('<article ').slice(1);
+    expect(cards.length).toBe(2);
+    expect(cards[0]!).toMatch(/^class="avp-run /);
+    expect(cards[0]!).not.toContain('is-new');
+    expect(cards[1]!).toMatch(/^class="avp-run [^"]*is-new"/);
+  });
+
+  it('marks nothing when nothing was just submitted, so a reload performs nothing', () => {
+    expect(panel({ runs: [mixedRun, absentRun] })).not.toContain('is-new');
+  });
+});
+
 describe('a run’s header carries its stamp as a fact — Epic 16.2', () => {
   it('sets the time it ran as a chip under the question', () => {
     const html = panel();

@@ -44,7 +44,11 @@ export function LoadingState({
 }: LoadingStateProps): JSX.Element {
   return (
     <div className={cn('avp-loading', className)} role="status" aria-live="polite">
-      <p className="avp-loading__message">{message}</p>
+      <p className="avp-loading__message">
+        {/* Alive, not progressing — see the stylesheet's note. Epic 16.3. */}
+        <span className="avp-loading__pulse" aria-hidden="true" />
+        {message}
+      </p>
       {steps != null && steps.length > 0 && (
         <ol className="avp-loading__steps">
           {steps.map((step) => (
