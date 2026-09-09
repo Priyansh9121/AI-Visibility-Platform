@@ -81,7 +81,13 @@ export default function PublicReportRoute({
   }
 
   return (
-    <main className="mx-auto max-w-report px-6 py-18">
+    /*
+      The desk is the whole page here — Epic 14.1. A stranger opening this
+      link gets a document on a light neutral surface, edge to edge, rather
+      than a white column on the app's ground. The report's own measure and
+      tokens are untouched; this is the wrapper.
+    */
+    <main className="avp-report-frame avp-report-frame--page">
       {/*
         The one affordance a stranger DOES get — Epic 9.14.
 
@@ -96,7 +102,7 @@ export default function PublicReportRoute({
         screen states: `ReportView` is the document that gets sent, and a
         control for sending it must not appear in what is sent.
       */}
-      <div className="mb-8">
+      <div className="mx-auto mb-8 max-w-report">
         <DownloadPdfButton
           token={token}
           subjectName={view.report.subject.brandName || view.report.subject.name}

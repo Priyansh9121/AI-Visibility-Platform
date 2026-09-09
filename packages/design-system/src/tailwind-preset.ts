@@ -97,6 +97,7 @@ const tailwindPreset = {
         raised: v('surface-raised'),
         void: v('surface-void'),
         hover: v('surface-hover'),
+        desk: v('surface-desk'),
       },
       text: {
         primary: v('text-primary'),
