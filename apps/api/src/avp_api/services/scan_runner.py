@@ -183,7 +183,7 @@ async def build_prompt_set(
     """Generate and persist the scan's prompt set.
 
     Prompt.text is our OWN generated text, not third-party content — the
-    deliberate exception to the facts-only rule, recorded in test_ip_safety.py.
+    deliberate exception to the facts-only rule, recorded in test_facts_only.py.
     """
     generated, generated_by = await prompt_service.generate_prompts(
         brand_name=client.brand_name,
@@ -273,7 +273,7 @@ def persist_result(
     """Write one EngineResult plus its BrandMention and Citation rows.
 
     `response_digest` carries the SHA-256 of the answer; the answer itself is
-    not written anywhere (ip-safety.md #7).
+    not written anywhere (the facts-only rule).
     """
     result = EngineResult(
         id=ids.new_id(ids.ENGINE_RESULT),

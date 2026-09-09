@@ -14266,3 +14266,71 @@ Design system 601/601, web 806/806 (four new), both typechecks clean. Both
 report routes re-rendered from the fixture in both themes: the desk hugs the
 page with an even margin. `docs/screenshots/epic-14/after-report-route-framed.png`
 replaced; `docs/screenshots/epic-15/report-route-{light,dark}.png` added.
+
+# ip-safety.md removed — the founder's decision
+
+**2026-09-09.** `docs/ip-safety.md` had sat deleted-but-uncommitted in the
+working tree since an earlier session. The founder confirmed the deletion is
+deliberate and permanent, so this entry commits it and removes the document's
+fingerprints from everything that still pointed at it — the same way every
+other reversal in this log is recorded: as a decision, not a drift.
+
+## What went, and what stayed
+
+The **document** is gone, and with it the constraint numbering (`#1`–`#9`),
+the "normative, wins over every other doc" authority clause, and the
+constraint-9 self-check gate. The **engineering practices** the document
+described were never enforced by the document; they are enforced by tests,
+the licence audit and the design system's own token layer, and all of that
+stays exactly as it was:
+
+- `apps/api/tests/test_ip_safety.py` is renamed `test_facts_only.py` — same
+  1194-suite membership, same sweeps, same registered exceptions. Its module
+  docstring now states the facts-only rule in full, because with the document
+  gone this file is where the rule is enforced and therefore where it should
+  be written down.
+- `scripts/license_audit.py`, the `FACTS_ONLY_MODELS` sweep, the
+  `reportIsolation` tests, the render tests that assert the beat sequence —
+  untouched in behaviour. No test was deleted; the brief's rule was to ask
+  before removing any check whose reason for existing might be independent
+  of the document, and none needed removing to complete the sweep.
+
+## The sweep
+
+Around 230 references across ~125 tracked files, plus two generated files
+(`openapi.json`, `api.gen.ts`, regenerated from the edited Pydantic
+docstrings) and the built styleguide (rebuilt). Every citation of a numbered
+constraint was rewritten to name the rule itself so the surrounding reasoning
+still stands on its own:
+
+| was | now |
+|---|---|
+| `ip-safety.md #1` | the design-from-the-data-model rule |
+| `ip-safety.md #2` | the design-system-only rule |
+| `ip-safety.md #3` | the narrative-report rule |
+| `ip-safety.md #4` | the licensed-assets rule |
+| `ip-safety.md #5` | the no-copying rule (`#1` + `#5` together: the no-competitor-reference rules) |
+| `ip-safety.md #6` | the dependency-licensing rule |
+| `ip-safety.md #7` | the facts-only rule |
+| `ip-safety.md #8` | the no-borrowed-copy rule |
+
+Where a comment only cited the document and the fact beside it still holds
+(Google Fonts under OFL, Lucide under MIT, psycopg excluded for LGPL), the
+fact stays and the citation goes. Nothing in the reasoning was deleted
+wholesale.
+
+Standing docs: `README.md` no longer lists the document as required reading;
+`north-star.md` §0 drops the "does not outrank ip-safety.md" clause and its
+§1 restatement of the two no-copying rules now carries them in its own words;
+`product-spec.md` drops the phantom "Section 2" pointer; `design-system.md`
+and `design-direction.md` keep every constraint they described, unnumbered.
+`north-star.md`'s note on the `IP-safety check passed:` line now records that
+the line was retired today. Past build-log entries that carry it stay as
+history and were not rewritten.
+
+## Verified
+
+API 1194/1194 and ruff clean, workers 13/13, design system 601/601, web
+806/806, shared-types 53/53, all three typechecks clean. One grammar
+regression from the mechanical pass (a joined line over ruff's 100-column
+limit) was caught by ruff and fixed before commit.

@@ -128,7 +128,7 @@ async def get_report_pdf(
     field describes.
 
     **No dependency was added to build this.** WeasyPrint's required `Pyphen` is
-    GPL/LGPL/MPL, which ip-safety.md #6 blocks; React-PDF is a Node library and
+    GPL/LGPL/MPL, which the dependency-licensing rule blocks; React-PDF is a Node library and
     this is a Python process. See `services/pdf.py` for the full assessment.
 
     **Errors:** `401`, `404` (unknown scan, or another agency's).
@@ -341,7 +341,7 @@ async def get_public_report(
     * **No `401`, ever.** A `401` would say "this token is real, authenticate to
       use it", which is precisely the bit an enumerator wants.
     * **Same projection as the authenticated route.** `build_report` is reused
-      rather than reimplemented, so the facts-only guarantee `test_ip_safety.py`
+      rather than reimplemented, so the facts-only guarantee `test_facts_only.py`
       sweeps over this module covers this response too — a second assembly path
       would be a second place for a snippet to slip in.
 

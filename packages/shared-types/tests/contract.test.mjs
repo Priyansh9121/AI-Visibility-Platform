@@ -134,7 +134,7 @@ test('confidence score is a string-encoded decimal, not a JSON number', () => {
 });
 
 test('the crawl projection exposes facts, never page content', () => {
-  // ip-safety.md #7 — mirrored on the API surface, not just in the database.
+  // The facts-only rule — mirrored on the API surface, not just in the database.
   const props = Object.keys(spec.components.schemas.CrawlSummaryOut.properties);
   for (const forbidden of ['textExtract', 'text', 'content', 'html', 'titles', 'body']) {
     assert.ok(!props.includes(forbidden), `CrawlSummaryOut.${forbidden} leaks page content`);
@@ -178,7 +178,7 @@ test('prompt intents cover the buyer journey', () => {
 });
 
 test('engine results expose facts, never the answer', () => {
-  // ip-safety.md #7 — mirrored on the API surface, not only in the database.
+  // The facts-only rule — mirrored on the API surface, not only in the database.
   const props = Object.keys(spec.components.schemas.EngineResultOut.properties);
   for (const forbidden of ['text', 'answer', 'response', 'content', 'snippet', 'body', 'excerpt']) {
     assert.ok(!props.includes(forbidden), `EngineResultOut.${forbidden} leaks the answer`);
@@ -282,7 +282,7 @@ test('score exposes provenance for auditability', () => {
 });
 
 test('score schemas expose no prose fields', () => {
-  // ip-safety.md #7 mirrored on the API surface.
+  // The facts-only rule mirrored on the API surface.
   for (const name of ['ScoreOut', 'ScoreDetailOut', 'CompetitorScoreOut']) {
     const props = Object.keys(spec.components.schemas[name].properties ?? {});
     for (const forbidden of ['text', 'answer', 'snippet', 'quote', 'evidence', 'rationale']) {
@@ -326,7 +326,7 @@ test('technicalFoundation is a nullable string-encoded decimal', () => {
 });
 
 test('audit exposes presence and counts, never page content', () => {
-  // ip-safety.md #7 mirrored on the API surface.
+  // The facts-only rule mirrored on the API surface.
   const props = Object.keys(spec.components.schemas.TechnicalAuditOut.properties);
   for (const forbidden of [
     'html', 'body', 'text', 'title', 'metaDescription', 'description',
@@ -481,7 +481,7 @@ test('the report carries the generated fix list', () => {
 });
 
 test('no action item schema exposes third-party prose', () => {
-  // `title` and `detail` are ours (ip-safety.md #7, models/action_item.py).
+  // `title` and `detail` are ours (the facts-only rule, models/action_item.py).
   // Nothing sourced from a competitor, publisher or engine may sit beside them.
   const forbidden = [
     'text', 'answer', 'response', 'snippet', 'excerpt', 'quote', 'body',

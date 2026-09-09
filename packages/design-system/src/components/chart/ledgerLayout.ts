@@ -42,7 +42,7 @@ export interface LedgerDimension {
 }
 
 export interface LedgerCompetitor {
-  /** Display name. Competitor NAMES are facts and may be stored (ip-safety #7). */
+  /** Display name. Competitor NAMES are facts and may be stored (the facts-only rule). */
   name: string;
   dimensions: readonly LedgerDimension[];
 }

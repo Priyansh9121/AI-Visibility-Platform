@@ -21,7 +21,7 @@
  * every action takes effect immediately. A staged "save your seat changes"
  * button would imply an atomicity the API does not offer.
  *
- * ip-safety.md #1 and #5: derived from the data model and the goal, and from
+ * The no-competitor-reference rules: derived from the data model and the goal, and from
  * the precedent above. No competitor's seat or team screen was opened, looked
  * at, or used as a reference at any point.
  *

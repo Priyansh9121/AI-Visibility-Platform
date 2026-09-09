@@ -36,7 +36,7 @@ The other axis that survives between scans is the RIVAL, because competitors
 are persistent rows. `AnswerGapRivalOut` counts those across the client's whole
 history, which is the cross-scan half of the same question.
 
-IP-SAFETY (docs/ip-safety.md #7)
+FACTS-ONLY RULE
 --------------------------------
 Every field below is a count, a boolean, an ordinal, an entity NAME or OUR OWN
 prompt text. No engine answer text is read or returned — there is none stored
@@ -103,7 +103,7 @@ class AnswerGapRowOut(ApiModel):
     """One prompt, across every engine that answered it."""
 
     prompt_id: str
-    # OURS — Epic 4 generated it. See the module note on ip-safety.
+    # OURS — Epic 4 generated it. See the module note on the facts-only rule.
     text: str
     intent: str
     position: int

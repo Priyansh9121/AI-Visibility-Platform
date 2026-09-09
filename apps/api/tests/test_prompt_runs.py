@@ -2,7 +2,7 @@
 
 The engines are stubbed, so these run without network and without spending
 anything. What they assert is the behaviour that costs money or leaks data if it
-is wrong: the throttle, the tenancy boundary, and the ip-safety line.
+is wrong: the throttle, the tenancy boundary, and the facts-only line.
 """
 
 from __future__ import annotations
@@ -232,7 +232,7 @@ async def test_citations_are_recorded_as_location_never_content(
     cite = body["results"][0]["citations"][0]
     assert cite["domain"] == "helpscout.com"
     assert cite["citesSubject"] is True
-    # ip-safety.md #7 — a citation is a URL and a domain, and nothing else.
+    # the facts-only rule — a citation is a URL and a domain, and nothing else.
     assert set(cite) == {"url", "domain", "sourceType", "position", "citesSubject"}
 
 
@@ -581,7 +581,7 @@ async def test_tone_survives_into_the_history(
 
 
 def test_the_response_schema_carries_a_label_not_the_text_it_came_from() -> None:
-    """ip-safety.md #7, at the boundary Epic A widened.
+    """The facts-only rule, at the boundary Epic A widened.
 
     Adding sentiment means a second thing derived from an answer is now stored
     on the ad-hoc path. It is a LABEL and a confidence — no field capable of

@@ -52,11 +52,11 @@ since Epic 3. So no call here blocks the event loop, and `email.py`'s objection
 is answered rather than ignored.
 
 Licence: `stripe` 15.6.0 is MIT. Verified by reading the `LICENSE` file out of
-the sdist rather than trusting the PyPI classifier, per ip-safety.md #6, which
+the sdist rather than trusting the PyPI classifier, per the dependency-licensing rule, which
 says not to assume. Its two runtime dependencies were already present:
 `requests` (Apache-2.0, via `tldextract`) and `typing_extensions` (PSF-2.0).
 
-ip-safety.md #7 is not at stake. Nothing here touches engine answers or
+The facts-only rule is not at stake. Nothing here touches engine answers or
 competitor pages; the only third-party data is our own Stripe account's view of
 our own customers.
 """

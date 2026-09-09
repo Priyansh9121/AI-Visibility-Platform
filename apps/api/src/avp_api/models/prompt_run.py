@@ -15,7 +15,7 @@ and must never appear in a trend, a dashboard figure, or a client's scan history
 where it would be read as one.
 
 =============================================================================
-IP-SAFETY (docs/ip-safety.md constraint 7) — the same rule, applied again
+FACTS-ONLY RULE — the same rule, applied again
 =============================================================================
 `prompt_runs.prompt_text` holds full text and that is deliberate, for exactly
 the reason `prompts.text` does: it is OUR side of the exchange. An operator typed
@@ -27,7 +27,7 @@ is **no column anywhere below capable of holding an engine's answer**: no
 is what survives a scan — a boolean, an ordinal, a count, a digest, entity names
 and cited URLs. The answer itself lives only inside the request that produced it.
 
-`test_ip_safety.py` lists the three child tables in `FACTS_ONLY_MODELS`, so a
+`test_facts_only.py` lists the three child tables in `FACTS_ONLY_MODELS`, so a
 text-bearing column added here later fails CI rather than passing review.
 =============================================================================
 """

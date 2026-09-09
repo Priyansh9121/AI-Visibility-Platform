@@ -45,7 +45,7 @@ describe('a failed submission cannot leave the page mid-flight', () => {
     // The guarantee is enforced by the TYPE, not by this assertion: omitting
     // `onFailed` is a compile error, and `tsc --noEmit` runs in the same gate
     // as these tests. This repo has no DOM-driving test library (adding one
-    // would need a licence review under ip-safety.md #6), so a required prop
+    // would need a licence review under the dependency-licensing rule), so a required prop
     // is both the stronger guard and the cheaper one.
     //
     // @ts-expect-error - onFailed is required; removing it must not compile.

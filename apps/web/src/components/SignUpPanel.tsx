@@ -34,7 +34,7 @@ import { api, ApiProblem } from '@/lib/api';
  * * anything else — unreachable API, a 500 — is environmental, belongs to no
  *   field, and renders as an `ErrorState` above the card.
  *
- * ip-safety.md #2: every element from `@avp/design-system`; width from the
+ * The design-system-only rule: every element from `@avp/design-system`; width from the
  * `max-w-form` token added in 9.11.
  */
 /**

@@ -19,7 +19,7 @@ any way to detect that its input was wrong. Same reasoning as Score's
 INSUFFICIENT_DATA in scoring-spec.md: a result we could not determine must be
 representable as undetermined.
 
-**ip-safety.md #7.** Page text reaches this module only as a transient argument
+**Facts only.** Page text reaches this module only as a transient argument
 and is sent to the model the way a human would read a page to decide what
 business it is. What comes back and is persisted is the conclusion — an
 industry label, a niche, the subject's own brand name, a confidence number —

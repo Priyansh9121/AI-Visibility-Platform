@@ -18,7 +18,7 @@
  * and the copy here says so before the click rather than letting someone
  * discover it in a file they have already sent to a client.
  *
- * ip-safety.md #1: derived from what the endpoint does. No competitor's export
+ * The design-from-the-data-model rule: derived from what the endpoint does. No competitor's export
  * control was looked at.
  */
 

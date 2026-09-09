@@ -5,7 +5,7 @@ description = "AI Visibility & Competitive Intelligence Platform — FastAPI ser
 requires-python = ">=3.12,<3.14"
 license = { text = "UNLICENSED" }
 
-# Every dependency below is MIT / Apache-2.0 / BSD / PSF per ip-safety.md #6.
+# Every dependency below is MIT / Apache-2.0 / BSD / PSF per the dependency-licensing rule.
 # The audit that verifies this is `uv run python -m scripts.license_audit`
 # (see apps/api/scripts/license_audit.py); its output is recorded in
 # docs/build-log.md for each epic that adds packages.

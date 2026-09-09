@@ -1,6 +1,6 @@
 """Ad-hoc prompt run schemas — Epic 9.24.
 
-ip-safety.md #7: every field below is a boolean, an ordinal, a count, a status
+The facts-only rule: every field below is a boolean, an ordinal, a count, a status
 enum, an entity NAME, a cited URL/domain, a duration or a hash. There is
 deliberately no field capable of carrying an engine's answer — `PromptRunResult`
 has no such column to serve one from, and this layer adds none.

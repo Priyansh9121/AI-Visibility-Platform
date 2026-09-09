@@ -1000,7 +1000,7 @@ export interface paths {
          *     * **No `401`, ever.** A `401` would say "this token is real, authenticate to
          *       use it", which is precisely the bit an enumerator wants.
          *     * **Same projection as the authenticated route.** `build_report` is reused
-         *       rather than reimplemented, so the facts-only guarantee `test_ip_safety.py`
+         *       rather than reimplemented, so the facts-only guarantee `test_facts_only.py`
          *       sweeps over this module covers this response too — a second assembly path
          *       would be a second place for a snippet to slip in.
          *
@@ -1252,7 +1252,7 @@ export interface paths {
          *     field describes.
          *
          *     **No dependency was added to build this.** WeasyPrint's required `Pyphen` is
-         *     GPL/LGPL/MPL, which ip-safety.md #6 blocks; React-PDF is a Node library and
+         *     GPL/LGPL/MPL, which the dependency-licensing rule blocks; React-PDF is a Node library and
          *     this is a Python process. See `services/pdf.py` for the full assessment.
          *
          *     **Errors:** `401`, `404` (unknown scan, or another agency's).
@@ -1926,7 +1926,7 @@ export interface components {
          * CitedDomainOut
          * @description A domain an engine cited, and how often.
          *
-         *     Domain + URL + count. api-contracts.md and ip-safety.md #7 both permit
+         *     Domain + URL + count. api-contracts.md and the facts-only rule both permit
          *     cited domains and URLs explicitly; the cited PAGE's text is never read,
          *     stored, or shown. `sample_url` is a link out to the source — the sanctioned
          *     alternative to quoting it.
@@ -2816,10 +2816,10 @@ export interface components {
          *     that is merely missing, because the visualisation draws absence as an
          *     empty notch and a silently absent row would draw nothing.
          *
-         *     On `prompt_text` — ip-safety.md #7 governs scraped and model-returned
+         *     On `prompt_text` — the facts-only rule governs scraped and model-returned
          *     content ABOUT third parties. This is OUR OWN generated question, the same
          *     field `PromptOut.text` has returned on `/scans/{id}/prompts` since Epic 4,
-         *     and the exception is registered by name in `test_ip_safety.py` rather than
+         *     and the exception is registered by name in `test_facts_only.py` rather than
          *     left to dodge the forbidden-field sweep by luck.
          */
         PromptShelfOut: {
@@ -3054,7 +3054,7 @@ export interface components {
          * ReportProofOut
          * @description The evidence beat's raw material — all of it aggregated counts.
          *
-         *     This is the surface ip-safety.md #7 is most exposed on, because it is the
+         *     This is the surface the facts-only rule is most exposed on, because it is the
          *     first time collected facts are RENDERED rather than stored. There is no
          *     field here that could hold an engine's prose, and there is nothing upstream
          *     to fill one with: `engine_results` has no text-bearing column at all.
@@ -3439,7 +3439,7 @@ export interface components {
          * ShelfSlotOut
          * @description One brand standing in one ordinal slot of one answer.
          *
-         *     ip-safety.md #7 names exactly this shape as permitted: "counts and ordinal
+         *     The facts-only rule names exactly this shape as permitted: "counts and ordinal
          *     positions (e.g. 'mentioned 3rd')" plus "names of entities mentioned". There
          *     is no field here that could carry what the answer SAID about the brand —
          *     only that it named it, and where in the order.

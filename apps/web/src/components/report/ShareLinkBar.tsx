@@ -12,7 +12,7 @@
  * Rendered ABOVE `ReportView`, never inside it. `ReportView` is the document
  * that gets sent — a control for sending it must not appear in what is sent.
  *
- * ip-safety.md #2: every element comes from `@avp/design-system` — `Button`,
+ * The design-system-only rule: every element comes from `@avp/design-system` — `Button`,
  * `Card`, `CardBody` and `TextField` — and the only local classes are layout
  * utilities (flex, gap, margin) resolving to the preset's own spacing scale.
  *

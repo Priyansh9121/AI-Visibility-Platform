@@ -17,7 +17,7 @@
  * B.1, clusters and cluster-relative accents included — the reasoning for
  * those lives in `clientNav.ts` and is unchanged by moving them.
  *
- * Icons are Lucide (ip-safety.md #4). Fixed by SECTION, never by position,
+ * Icons are Lucide (the licensed-assets rule). Fixed by SECTION, never by position,
  * for the same reason the accents are: an operator who has learnt where the
  * bell is should not have to re-learn it because somebody reordered the list.
  */

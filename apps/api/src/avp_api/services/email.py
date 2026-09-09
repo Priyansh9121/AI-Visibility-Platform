@@ -24,7 +24,7 @@ exact objection Epic 3.1 raised against the SerpApi SDK inside an async service,
 and the send is one authenticated JSON POST. `httpx` is already vetted
 (BSD-3-Clause). Zero dependencies added.
 
-ip-safety.md #7 is not at stake here — the only content is our own copy and our
+The facts-only rule is not at stake here — the only content is our own copy and our
 own URL — but the token itself is a credential and is never logged. The log line
 carries the recipient and the URL because in the unconfigured mode the URL is
 the point; that mode is for development, and the docstring on the endpoint says

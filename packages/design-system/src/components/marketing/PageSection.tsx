@@ -38,11 +38,11 @@ export interface PageSectionProps {
  *
  * **Why this is not `Beat`.** `Beat` is bound to `BeatId` and numbers itself
  * from `BEAT_SEQUENCE`: it exists to enforce the report's fixed narrative order
- * (score -> gap -> proof -> fix -> pitch, mandated by ip-safety.md #3). A public
+ * (score -> gap -> proof -> fix -> pitch, mandated by the narrative-report rule). A public
  * page is not that document and must not borrow its numbering, or the sequence
  * stops meaning anything on the screen where it is load-bearing.
  *
- * **Why it is in the design system rather than in apps/web.** ip-safety.md #2:
+ * **Why it is in the design system rather than in apps/web.** The design-system-only rule:
  * a public marketing page is a customer-facing screen like any other, and a
  * hero styled locally would be exactly the ad hoc styling that rule prohibits.
  * Epic 0's build-before-screens discipline applies to marketing layout too.

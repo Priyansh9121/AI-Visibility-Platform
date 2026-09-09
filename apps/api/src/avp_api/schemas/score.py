@@ -1,6 +1,6 @@
 """Score schemas — Epic 5.
 
-ip-safety.md #7: every field is a number, a label, a flag, or a digest. Scoring
+The facts-only rule: every field is a number, a label, a flag, or a digest. Scoring
 reads persisted facts and produces arithmetic; there is no path by which
 third-party content could reach this surface.
 """

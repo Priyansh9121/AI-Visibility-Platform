@@ -15,7 +15,7 @@
  *   - 24 prompts, intent-tagged            — Epic 4.1
  *   - the five weighted dimensions         — scoring-spec.md, Epic 5.2
  *   - per-answer ordinality (Answer Shelf) — Epic 7.1
- *   - facts-only storage, test-enforced    — ip-safety.md #7, test_ip_safety.py
+ *   - facts-only storage, test-enforced    — test_facts_only.py
  *   - named fixes with priority + effort   — Epic 8.0
  *   - one vendor, two modes, today         — Epic 4.2's own stated limitation
  *   - PDF export and a share link          — Epic 9.8 and 9.14, both shipped
@@ -49,12 +49,12 @@
  * whose entire argument is that its claims are checkable. They are gone. The
  * list itself stays, because the remaining lines are still true.
  *
- * ip-safety.md #1, #5 and #8: designed and written from the data model, the
+ * The no-competitor-reference and no-borrowed-copy rules: designed and written from the data model, the
  * build log, and product-spec.md §3's core loop and §5.4's pipeline. No
  * competitor site was opened, referenced or paraphrased while building this,
  * and no sentence here is a reworded version of anyone else's marketing copy.
  *
- * ip-safety.md #4: no icon pack, illustration kit or stock imagery. The only
+ * The licensed-assets rule: no icon pack, illustration kit or stock imagery. The only
  * graphic is the product's own Luminance Ledger, rendered from example data
  * that is labelled as example data.
  */
@@ -445,7 +445,7 @@ function LandingHeader({
   return (
     <header className="sticky top-0 z-10 border-b border-line-hairline bg-surface-ground">
       <div className="mx-auto flex w-full max-w-report flex-wrap items-center gap-4 px-6 py-4">
-        {/* The wordmark, not a logo: ip-safety.md #4 permits custom-drawn marks
+        {/* The wordmark, not a logo: the licensed-assets rule permits custom-drawn marks
             and licensed fonts only, and no mark has been drawn. Type is the
             honest option, and it is the name `layout.tsx` already ships as the
             document title rather than a second name invented here. */}

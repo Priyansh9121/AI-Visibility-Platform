@@ -47,7 +47,7 @@ def _apply(row: TechnicalAudit, signals: AuditSignals, outcome: AuditOutcome) ->
 
     Only FACTS are written: booleans, counts, schema TYPE NAMES, durations and
     a day count. No page copy, no meta description text, no OG tag values, no
-    HTML (ip-safety.md #7).
+    HTML (the facts-only rule).
     """
     row.url_audited = signals.url
     row.status = _audit_status(signals, outcome)

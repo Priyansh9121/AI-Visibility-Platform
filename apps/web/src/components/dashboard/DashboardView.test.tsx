@@ -303,7 +303,7 @@ describe('timestamps are stable regardless of where they render', () => {
 
 describe('the screen carries no third-party prose', () => {
   it('renders only identity, status, numbers and timestamps', () => {
-    // ip-safety.md #7 — the dashboard shows facts about scans. Nothing an
+    // The facts-only rule — the dashboard shows facts about scans. Nothing an
     // engine or a competitor page said may reach it.
     const html = render(fullPageDashboard) + render(partialDashboard);
     expect(html).not.toContain('answer');

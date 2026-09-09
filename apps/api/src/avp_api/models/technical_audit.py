@@ -1,6 +1,6 @@
 """TechnicalAudit — the crawl-based half of the score (§5.3, §5.4 step 6).
 
-IP-safety note (#7): this table records STRUCTURAL SIGNALS about a page, never
+Facts-only note: this table records STRUCTURAL SIGNALS about a page, never
 its content. Schema.org types present, Core Web Vitals numbers, indexability
 booleans, heading and word counts. There is no column for page copy, meta
 description text, or rendered HTML. `detail_code` is a machine-readable
@@ -77,7 +77,7 @@ class TechnicalAudit(Base, TimestampMixin):
 
     # The §6 Technical Foundation sub-score, 0-100, or NULL when the site could
     # not be read. Stored rather than recomputed on read: the full AuditSignals
-    # object is transient (ip-safety.md #7 — it is derived from the client's
+    # object is transient (the facts-only rule — it is derived from the client's
     # pages and is not persisted in full), so there is nothing to recompute
     # from. Storing the number also makes it auditable at the time it was taken.
     technical_foundation: Mapped[Decimal | None] = mapped_column(

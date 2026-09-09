@@ -5,7 +5,7 @@ reflect live in apps/api/src/avp_api/models.
 
 **Why this runs async.** Alembic's default template uses a synchronous driver,
 which in practice means psycopg2 or psycopg3 — and BOTH are LGPL-3.0, which
-docs/ip-safety.md #6 puts on the stop-and-ask list. Rather than seek an
+the dependency-licensing rule puts on the stop-and-ask list. Rather than seek an
 exception for a dependency used only by migrations, this environment drives
 migrations through asyncpg (Apache-2.0), which the service already depends on.
 One driver, one licence, no exception needed.

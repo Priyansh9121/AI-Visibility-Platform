@@ -1007,7 +1007,7 @@
         "type": "string"
       },
       "CitedDomainOut": {
-        "description": "A domain an engine cited, and how often.\n\nDomain + URL + count. api-contracts.md and ip-safety.md #7 both permit\ncited domains and URLs explicitly; the cited PAGE's text is never read,\nstored, or shown. `sample_url` is a link out to the source \u2014 the sanctioned\nalternative to quoting it.",
+        "description": "A domain an engine cited, and how often.\n\nDomain + URL + count. api-contracts.md and the facts-only rule both permit\ncited domains and URLs explicitly; the cited PAGE's text is never read,\nstored, or shown. `sample_url` is a link out to the source \u2014 the sanctioned\nalternative to quoting it.",
         "properties": {
           "citations": {
             "title": "Citations",
@@ -3115,7 +3115,7 @@
         "type": "object"
       },
       "PromptShelfOut": {
-        "description": "One answer, as the ordered shelf of brands it named \u2014 Epic 7.1.\n\nDirection A of `design-direction.md` \u00a75. The report's aggregate tables\nanswer \"how often overall\"; this answers \"in THIS question, who stood\nwhere, and were you there at all\". The subject's absence is a fact this\nrow carries explicitly (`subject_present: false`) rather than an entry\nthat is merely missing, because the visualisation draws absence as an\nempty notch and a silently absent row would draw nothing.\n\nOn `prompt_text` \u2014 ip-safety.md #7 governs scraped and model-returned\ncontent ABOUT third parties. This is OUR OWN generated question, the same\nfield `PromptOut.text` has returned on `/scans/{id}/prompts` since Epic 4,\nand the exception is registered by name in `test_ip_safety.py` rather than\nleft to dodge the forbidden-field sweep by luck.",
+        "description": "One answer, as the ordered shelf of brands it named \u2014 Epic 7.1.\n\nDirection A of `design-direction.md` \u00a75. The report's aggregate tables\nanswer \"how often overall\"; this answers \"in THIS question, who stood\nwhere, and were you there at all\". The subject's absence is a fact this\nrow carries explicitly (`subject_present: false`) rather than an entry\nthat is merely missing, because the visualisation draws absence as an\nempty notch and a silently absent row would draw nothing.\n\nOn `prompt_text` \u2014 the facts-only rule governs scraped and model-returned\ncontent ABOUT third parties. This is OUR OWN generated question, the same\nfield `PromptOut.text` has returned on `/scans/{id}/prompts` since Epic 4,\nand the exception is registered by name in `test_facts_only.py` rather than\nleft to dodge the forbidden-field sweep by luck.",
         "properties": {
           "answered": {
             "title": "Answered",
@@ -3694,7 +3694,7 @@
         "type": "object"
       },
       "ReportProofOut": {
-        "description": "The evidence beat's raw material \u2014 all of it aggregated counts.\n\nThis is the surface ip-safety.md #7 is most exposed on, because it is the\nfirst time collected facts are RENDERED rather than stored. There is no\nfield here that could hold an engine's prose, and there is nothing upstream\nto fill one with: `engine_results` has no text-bearing column at all.",
+        "description": "The evidence beat's raw material \u2014 all of it aggregated counts.\n\nThis is the surface the facts-only rule is most exposed on, because it is the\nfirst time collected facts are RENDERED rather than stored. There is no\nfield here that could hold an engine's prose, and there is nothing upstream\nto fill one with: `engine_results` has no text-bearing column at all.",
         "properties": {
           "answeredResults": {
             "title": "Answeredresults",
@@ -4650,7 +4650,7 @@
         "type": "object"
       },
       "ShelfSlotOut": {
-        "description": "One brand standing in one ordinal slot of one answer.\n\nip-safety.md #7 names exactly this shape as permitted: \"counts and ordinal\npositions (e.g. 'mentioned 3rd')\" plus \"names of entities mentioned\". There\nis no field here that could carry what the answer SAID about the brand \u2014\nonly that it named it, and where in the order.",
+        "description": "One brand standing in one ordinal slot of one answer.\n\nThe facts-only rule names exactly this shape as permitted: \"counts and ordinal\npositions (e.g. 'mentioned 3rd')\" plus \"names of entities mentioned\". There\nis no field here that could carry what the answer SAID about the brand \u2014\nonly that it named it, and where in the order.",
         "properties": {
           "cited": {
             "default": false,
@@ -6616,7 +6616,7 @@
     },
     "/api/v1/reports/{token}": {
       "get": {
-        "description": "A report, by share token. **No session required** \u2014 Epic 9.8.\n\nThis is the send path Epic 9's acceptance criterion needs: the prospect a\nreport is about has no account, and must not need one to read it.\n\n**The token is the whole credential**, so the rules are narrow and worth\nstating:\n\n* **Read-only.** There is no sibling route that mutates anything by token.\n  A holder cannot edit the competitor set, re-run the scan, or reach any\n  other scan \u2014 the token resolves to exactly one row.\n* **`404` for every rejection, with one code path.** A malformed token, an\n  unknown token and a well-formed miss are indistinguishable in both status\n  and body. There is no shape or length pre-check, deliberately: rejecting\n  an implausible token faster than a plausible one is a timing oracle that\n  makes enumeration cheaper. Every guess pays for the same index lookup.\n* **No `401`, ever.** A `401` would say \"this token is real, authenticate to\n  use it\", which is precisely the bit an enumerator wants.\n* **Same projection as the authenticated route.** `build_report` is reused\n  rather than reimplemented, so the facts-only guarantee `test_ip_safety.py`\n  sweeps over this module covers this response too \u2014 a second assembly path\n  would be a second place for a snippet to slip in.\n\n**Errors:** `404` only.",
+        "description": "A report, by share token. **No session required** \u2014 Epic 9.8.\n\nThis is the send path Epic 9's acceptance criterion needs: the prospect a\nreport is about has no account, and must not need one to read it.\n\n**The token is the whole credential**, so the rules are narrow and worth\nstating:\n\n* **Read-only.** There is no sibling route that mutates anything by token.\n  A holder cannot edit the competitor set, re-run the scan, or reach any\n  other scan \u2014 the token resolves to exactly one row.\n* **`404` for every rejection, with one code path.** A malformed token, an\n  unknown token and a well-formed miss are indistinguishable in both status\n  and body. There is no shape or length pre-check, deliberately: rejecting\n  an implausible token faster than a plausible one is a timing oracle that\n  makes enumeration cheaper. Every guess pays for the same index lookup.\n* **No `401`, ever.** A `401` would say \"this token is real, authenticate to\n  use it\", which is precisely the bit an enumerator wants.\n* **Same projection as the authenticated route.** `build_report` is reused\n  rather than reimplemented, so the facts-only guarantee `test_facts_only.py`\n  sweeps over this module covers this response too \u2014 a second assembly path\n  would be a second place for a snippet to slip in.\n\n**Errors:** `404` only.",
         "operationId": "get_public_report_api_v1_reports__token__get",
         "parameters": [
           {
@@ -6995,7 +6995,7 @@
     },
     "/api/v1/scans/{scanId}/report.pdf": {
       "get": {
-        "description": "The same report, as a PDF \u2014 Epic 9.14 (Epic 9 send path, slice 3).\n\n**A rendering target, not a second report.** It calls the same\n`build_report` the JSON route calls and renders what comes back; there is no\nsecond query, no second aggregation and no second set of numbers. A PDF\nassembled independently would eventually disagree with the page it was\ndownloaded from, and the disagreement would reach a client.\n\nIt degrades exactly as the web report does, because it is derived from the\nsame payload: a null composite prints \"Not scored\" and never a zero,\n`insufficient_data` gets its own sentence, an excluded dimension prints its\nreason rather than a sub-score, a null competitor set says detection did not\nrun instead of quietly dropping the beat, and an empty `actionItems` renders\nthe deterministic fix derivation \u2014 the case api-contracts.md's note on that\nfield describes.\n\n**No dependency was added to build this.** WeasyPrint's required `Pyphen` is\nGPL/LGPL/MPL, which ip-safety.md #6 blocks; React-PDF is a Node library and\nthis is a Python process. See `services/pdf.py` for the full assessment.\n\n**Errors:** `401`, `404` (unknown scan, or another agency's).",
+        "description": "The same report, as a PDF \u2014 Epic 9.14 (Epic 9 send path, slice 3).\n\n**A rendering target, not a second report.** It calls the same\n`build_report` the JSON route calls and renders what comes back; there is no\nsecond query, no second aggregation and no second set of numbers. A PDF\nassembled independently would eventually disagree with the page it was\ndownloaded from, and the disagreement would reach a client.\n\nIt degrades exactly as the web report does, because it is derived from the\nsame payload: a null composite prints \"Not scored\" and never a zero,\n`insufficient_data` gets its own sentence, an excluded dimension prints its\nreason rather than a sub-score, a null competitor set says detection did not\nrun instead of quietly dropping the beat, and an empty `actionItems` renders\nthe deterministic fix derivation \u2014 the case api-contracts.md's note on that\nfield describes.\n\n**No dependency was added to build this.** WeasyPrint's required `Pyphen` is\nGPL/LGPL/MPL, which the dependency-licensing rule blocks; React-PDF is a Node library and\nthis is a Python process. See `services/pdf.py` for the full assessment.\n\n**Errors:** `401`, `404` (unknown scan, or another agency's).",
         "operationId": "get_report_pdf_api_v1_scans__scanId__report_pdf_get",
         "parameters": [
           {

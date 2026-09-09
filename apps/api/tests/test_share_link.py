@@ -178,7 +178,7 @@ class TestPublicRead:
         """One projection, not two.
 
         `build_report` is reused rather than reimplemented, so the facts-only
-        sweep in test_ip_safety.py covers this response too. A second assembly
+        sweep in test_facts_only.py covers this response too. A second assembly
         path would be a second place for a snippet to slip in. `generatedAt` is
         a clock read and is the only field allowed to differ.
         """
@@ -199,7 +199,7 @@ class TestPublicRead:
     ) -> None:  # noqa: ANN001
         """Assert what CANNOT be there, sweeping the whole payload.
 
-        Same principle as test_ip_safety.py's report sweep: a recursive walk
+        Same principle as test_facts_only.py's report sweep: a recursive walk
         over every key at every depth, so a field added to any nested schema
         later is caught rather than missed by a hand-picked list.
         """

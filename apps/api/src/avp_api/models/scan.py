@@ -71,7 +71,7 @@ class Scan(Base, TimestampMixin):
 
     # Machine-readable code plus a SAFE detail string. `error_detail` carries
     # our own diagnostics only — never a vendor response body, which could
-    # contain third-party content (ip-safety.md #7).
+    # contain third-party content (the facts-only rule).
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
 

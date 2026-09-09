@@ -47,7 +47,7 @@ first draft, not an answer. In particular it cannot see:
 
 **Everything runs through asyncpg.** Alembic's default template uses a
 synchronous driver, which in practice means psycopg2 or psycopg3 — and both are
-LGPL-3.0, which `docs/ip-safety.md` #6 puts on the stop-and-ask list. `env.py`
+LGPL-3.0, which the dependency-licensing rule puts on the stop-and-ask list. `env.py`
 drives migrations through asyncpg (Apache-2.0) instead, so the project needs no
 licence exception for a dependency used only by migrations.
 

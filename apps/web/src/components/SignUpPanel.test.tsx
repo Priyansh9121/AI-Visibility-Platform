@@ -3,7 +3,7 @@
  *
  * Static render only, per Epic 9.11's finding: this repo has no DOM-driving
  * test library, and adding one would need a licence review under
- * ip-safety.md #6. Submit-path behaviour is asserted where it is testable —
+ * the dependency-licensing rule. Submit-path behaviour is asserted where it is testable —
  * the API's own auth tests already cover 201, 409 and 422.
  */
 

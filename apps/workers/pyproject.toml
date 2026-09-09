@@ -5,7 +5,7 @@ description = "AI Visibility Platform — background scan workers (Celery)"
 requires-python = ">=3.12,<3.14"
 license = { text = "UNLICENSED" }
 
-# Licences verified per ip-safety.md #6 — see apps/api/scripts/license_audit.py.
+# Licences verified per the dependency-licensing rule — see apps/api/scripts/license_audit.py.
 dependencies = [
     "celery[redis]>=5.4,<6",  # BSD-3-Clause
     "redis>=5.2,<7",          # MIT

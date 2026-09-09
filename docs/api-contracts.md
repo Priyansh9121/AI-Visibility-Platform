@@ -840,7 +840,7 @@ the database by `ck_clients_industry_matches_classification_status`.
 IEEE double.
 
 **`crawl` contains FACTS only** — counts, booleans, URLs, and schema.org type
-names. Page text is never returned (ip-safety.md #7); the projection in
+names. Page text is never returned (the facts-only rule); the projection in
 `routers/clients.py:_crawl_summary` names every field explicitly so adding one
 to `CrawlSignals` cannot silently start returning it.
 
@@ -1186,7 +1186,7 @@ prefix of the set is representative of the buyer journey. This matters for
 while reporting a mention rate that looks whole.
 
 **`responseDigest` is a SHA-256 of the answer, and the answer itself is never
-stored or returned** (ip-safety.md #7). It exists so a re-scan can detect "the
+stored or returned** (the facts-only rule). It exists so a re-scan can detect "the
 answer changed" without retaining it.
 
 **`status` on each result:**
@@ -1399,7 +1399,7 @@ stay out has no foundation whatever its markup looks like. A component with no
 signal is excluded and its weight redistributed, exactly as
 `Score.excludedDimensions` works.
 
-**Facts only** (ip-safety.md #7). Schema **type names**, presence booleans,
+**Facts only** (the facts-only rule). Schema **type names**, presence booleans,
 counts, durations and a day count. No page copy, no meta description text, no
 Open Graph values — `openGraphTagCount` is a count, and the tags' contents are
 never read.
@@ -1438,7 +1438,7 @@ facts. Makes no provider calls and costs nothing.
 raw endpoints do not expose. Deriving them client-side means paging
 `/scans/{id}/results` (48 rows and ~400 citations on a full scan) and
 re-aggregating on every render. It also keeps the facts-only projection in one
-place that `tests/test_ip_safety.py` can assert over.
+place that `tests/test_facts_only.py` can assert over.
 
 **Response `200`** — `ReportOut`:
 ```json
@@ -1544,7 +1544,7 @@ reads as that engine not answering.
   * `promptText` is **our own generated question**, the same string
     `PromptOut.text` has returned since Epic 4. It is the only prose-bearing
     field in the whole report projection, and it is registered by name in
-    `test_ip_safety.py`'s sweep rather than left to pass by not matching a word
+    `test_facts_only.py`'s sweep rather than left to pass by not matching a word
     on the forbidden list.
 
 **`ANSWERED_NO_MENTION` counts as answered (corrected in Epic 7.1).** Epic 7 read
@@ -1568,7 +1568,7 @@ report renders all three states differently.
 **`outranksSubject`** is arithmetic over stored counts and ordinals — more
 appearances wins; on a tie, the better position wins. Not a judgement.
 
-**Facts only** (ip-safety.md #7). Every field is a name, a domain, a URL, a
+**Facts only** (the facts-only rule). Every field is a name, a domain, a URL, a
 count, an ordinal, an enum member, a machine code, or a number. There is no
 field capable of carrying an engine's answer or a competitor's copy, and
 `test_report_projection_exposes_no_third_party_prose` sweeps the whole schema
@@ -1617,7 +1617,7 @@ says detection did not run rather than dropping the beat, and an empty
 that field above describes.
 
 **No dependency was added.** product-spec.md §5.1 names React-PDF or WeasyPrint;
-both were assessed against ip-safety.md #6 rather than assumed. WeasyPrint
+both were assessed against the dependency-licensing rule rather than assumed. WeasyPrint
 hard-requires **Pyphen**, whose classifiers are GPLv2+/LGPLv2+/MPL-1.1 — all
 blocked. React-PDF is MIT but is a Node library, so a Python endpoint would need
 a subprocess in the request path, and its own `StyleSheet` primitives mean
@@ -1813,7 +1813,7 @@ above.
 
 Returns **exactly** the same `ReportOut` as
 `GET /api/v1/scans/{scanId}/report` — `build_report` is reused, not
-reimplemented, so the facts-only sweep in `test_ip_safety.py` covers this
+reimplemented, so the facts-only sweep in `test_facts_only.py` covers this
 response too. A second assembly path would be a second place for a snippet to
 slip in. `generatedAt` is a clock read and is the only field that differs
 between the two; a test asserts the rest are byte-identical.
@@ -1925,7 +1925,7 @@ generated copy merge onto the client's derived list instead of replacing it.
 system does not measure how much a single check contributes, and an invented
 number would be worse than none.
 
-**Free text, deliberately** (ip-safety.md #7). `title` and `detail` are the only
+**Free text, deliberately** (the facts-only rule). `title` and `detail` are the only
 prose fields on this API, and they are correct here because they are *our own*
 recommendations about our own client's site, generated from our own measurements.
 `services/fix_generator.py` is handed facts only — names, domains, labels, check
@@ -2012,7 +2012,7 @@ count is exact, and a counter that resets on restart is useless exactly when a
 runaway loop is still running. `test_prompt_runs.py` asserts the ratio rather
 than the literal 30, so raising it forces the argument to be made again.
 
-**ip-safety.md #7.** `promptText` is the operator's own words — the same
+**Facts only.** `promptText` is the operator's own words — the same
 deliberate exception `prompts.text` is. No field in `results` can carry an
 engine's answer; a SHA-256 digest is kept so a re-ask can detect the answer
 CHANGED without retaining what it said.
@@ -2079,7 +2079,7 @@ costs exactly what it cost before Epic A. Asserted, not assumed:
 
 **NULL means "never asked", not "neutral".** Every run made before this shipped
 reads as tone-not-measured, and no backfill is possible or wanted: the answers
-those runs were derived from are gone, which is the point of ip-safety.md #7.
+those runs were derived from are gone, which is the point of the facts-only rule.
 
 **Still facts only.** A label and a confidence. There is no field here capable
 of carrying what was classified.
@@ -2338,7 +2338,7 @@ citations; blocking a SEARCH crawler removes the site from the retrieval index
 an engine cites from, which is this product's whole subject. A single count
 cannot tell those apart, and they are different conversations with a client.
 
-**IP-safety (#7).** Every field is a verdict, a count, an agent product token, a
+**Facts only.** Every field is a verdict, a count, an agent product token, a
 vendor name, or OUR OWN classification of that agent's purpose. `matchedToken`
 is a user-agent token — a product name or the literal `*` — never a URL. No
 path or rule body is carried, and `ai_crawler_access` has no column one could

@@ -278,7 +278,7 @@ def _visibility_flags(
 
     So it says only what is true: the brand appears **only** where the question
     named it. That is a statement about where the mentions came from, and it is
-    not good news — `ip-safety.md`'s posture against false comfort cuts both
+    not good news — the standing posture against false comfort cuts both
     ways, and a narrow positive must not render as a broad one.
 
     **THE THRESHOLDS, AND WHY THEY ARE NOT SYMMETRIC.** Zero on the awareness
@@ -450,7 +450,7 @@ def _proof(
 
     # --- citations --------------------------------------------------------
     # Grouped by domain. The URL is kept as a LINK OUT — the sanctioned way to
-    # evidence a source without reproducing it (ip-safety.md #7).
+    # evidence a source without reproducing it (the facts-only rule).
     domains: dict[tuple[str, bool, str | None], dict[str, Any]] = {}
     total_citations = 0
     for r in answered:

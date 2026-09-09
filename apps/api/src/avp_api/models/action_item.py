@@ -1,7 +1,7 @@
 """ActionItem — the prioritised fix list (§5.3, generated in Epic 8).
 
 `title` and `detail` hold free text, and that is correct: these are OUR OWN
-generated recommendations, not scraped material (ip-safety.md #7).
+generated recommendations, not scraped material (the facts-only rule).
 
 `points_upside` ties each fix back to the ledger gap calculation in
 docs/scoring-spec.md, so the report never asserts that a fix matters without

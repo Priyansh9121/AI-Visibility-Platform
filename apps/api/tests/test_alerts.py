@@ -561,7 +561,7 @@ class TestIpSafety:
     async def test_no_alert_carries_engine_text(
         self, client: AsyncClient, stub_engines, session
     ) -> None:  # noqa: ANN001
-        """ip-safety.md #7. `detail` is OUR sentence about OUR numbers."""
+        """The facts-only rule. `detail` is OUR sentence about OUR numbers."""
         await _sign_up(client)
         stub_engines()
         cid = await _client_id(client)

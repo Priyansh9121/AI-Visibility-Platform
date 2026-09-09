@@ -30,7 +30,7 @@ Everything it writes is SYNTHETIC and says so
 The subject is `Seedwell Supply` at `seed-fixture.example`, and every competitor
 and cited domain is also `.example` — a reserved TLD (RFC 2606) that can never
 resolve. This is deliberate on two counts. It keeps a real company's name out of
-a committed fixture (ip-safety.md #7/#8), and it makes the data unmistakable in
+a committed fixture (the facts-only and no-borrowed-copy rules), and it makes the data unmistakable in
 any output: a reader who sees `seed-fixture.example` in a report knows they are
 not looking at a measurement.
 
@@ -201,7 +201,7 @@ TECHNICAL_FOUNDATION = Decimal("87.50")
 #
 # `title`/`detail` are free text and that is correct here for the same reason it
 # is correct in production: these are OUR OWN recommendations, not scraped
-# material (models/action_item.py, ip-safety.md #7).
+# material (models/action_item.py, the facts-only rule).
 ACTION_ITEMS = [
     (
         ActionItemSource.GAP, "citation_strength", "citation_strength",
@@ -650,7 +650,7 @@ async def main() -> int:
             # asserted nowhere, which is how the override script's default
             # ADD_NAME ("Intercom") got into a synthetic set without anyone
             # noticing. Asserted now, over what is actually in the database.
-            ("ip-safety: every seeded domain is a reserved TLD",
+            ("facts-only: every seeded domain is a reserved TLD",
              all(
                  d.endswith(SYNTHETIC_TLDS)
                  for d in await _seeded_domains(session, scan, client)

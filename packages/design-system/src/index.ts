@@ -2,7 +2,7 @@
  * @avp/design-system — the proprietary design system.
  *
  * Every customer-facing surface imports from here. Ad hoc Tailwind defaults on
- * customer-facing screens are prohibited (docs/ip-safety.md #2).
+ * customer-facing screens are prohibited (the design-system-only rule).
  *
  * Consumers must also import the stylesheets:
  *   import '@avp/design-system/styles.css'

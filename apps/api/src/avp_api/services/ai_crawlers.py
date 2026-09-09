@@ -174,7 +174,7 @@ class AiAgent:
 # screen's default grouping needs no second sort.
 #
 # This list is OUR OWN, assembled from the crawler operators' published
-# documentation of their own user agents (ip-safety.md constraint 1) — it is
+# documentation of their own user agents (the design-from-the-data-model rule) — it is
 # not lifted from any competitor product's feature list.
 AGENTS: Final[tuple[AiAgent, ...]] = (
     # --- OpenAI ---
@@ -219,7 +219,7 @@ class AgentAccess:
     # nothing applied. `'*'` for a wildcard group.
     matched_token: str | None = None
     # How many Disallow rules the deciding group carries — a COUNT, never the
-    # paths themselves (ip-safety.md #7: a disallow path is a fragment of the
+    # paths themselves (the facts-only rule: a disallow path is a fragment of the
     # client's own site structure, and a count answers the question without
     # persisting it). Qualifies an ALLOWED verdict so an operator can see there
     # is a rule set worth reading, without this becoming a verdict of its own.

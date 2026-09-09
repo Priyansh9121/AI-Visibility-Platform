@@ -1,7 +1,7 @@
 """PromptSet and Prompt — the questions a scan asks the engines.
 
 Storage note: `Prompt.text` holds full prompt text, and that is correct under
-ip-safety.md #7. These strings are OUR OWN generated content (Epic 4 generates
+the facts-only rule. These strings are OUR OWN generated content (Epic 4 generates
 them with an LLM from the client's industry), not scraped third-party material.
 This is the only place in the schema where free-form text is stored, and it is
 ours.

@@ -405,7 +405,7 @@ class TestIpSafety:
     async def test_the_response_carries_no_part_of_the_robots_file(
         self, client: AsyncClient, monkeypatch  # noqa: ANN001
     ) -> None:
-        """ip-safety.md #7. A verdict and a count, never a path or a rule body.
+        """The facts-only rule. A verdict and a count, never a path or a rule body.
 
         The robots.txt below carries a distinctive path. If any field ever
         started echoing rule text — a "blocked paths" list is the obvious way

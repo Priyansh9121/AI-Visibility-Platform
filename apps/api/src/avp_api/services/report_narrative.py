@@ -27,11 +27,11 @@ The alternatives were considered and are worse. A Node sidecar invoked per
 request puts a second runtime in the request path (see `services/pdf.py` for the
 same conclusion reached about React-PDF). Moving the derivation into the API
 response would change `ReportOut` for every existing consumer and put authored
-copy in a payload that `test_ip_safety.py` sweeps for prose-bearing fields.
+copy in a payload that `test_facts_only.py` sweeps for prose-bearing fields.
 Shipping a PDF WITHOUT the fix beat would make it a different document from the
 one on screen, which is the one thing the brief rules out.
 
-ip-safety.md #8: every string below is our own copy, ported character-for-
+The no-borrowed-copy rule: every string below is our own copy, ported character-for-
 character from our own string table. Nothing here is adapted from another
 product, and the cross-language test asserts the exact bytes.
 """
@@ -416,8 +416,8 @@ def fix_for_unclaimed_domains(
     A function rather than a table entry because the whole value of it is that
     it NAMES the domain. Everything interpolated is a fact — a domain, a count,
     and the subject's own citation count. Nothing describes what is ON the
-    domain, which would be republishing someone else's content (ip-safety.md
-    #7); we have never read it in any case.
+    domain, which would be republishing someone else's content (the facts-only
+    rule); we have never read it in any case.
     """
     if not domains:
         return None

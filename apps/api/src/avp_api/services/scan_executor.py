@@ -586,7 +586,7 @@ async def _mark_failed(scan_id: str, exc: Exception, *, settings: Settings) -> N
             )
             # The exception TYPE only. `error_detail` carries our own
             # diagnostics and never a vendor response body, which could hold
-            # third-party content (ip-safety.md #7).
+            # third-party content (the facts-only rule).
             scan.error_detail = type(exc).__name__
             scan.finished_at = datetime.now(UTC)
             await session.commit()

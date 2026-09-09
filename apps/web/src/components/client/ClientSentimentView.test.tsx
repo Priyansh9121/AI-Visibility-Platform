@@ -207,7 +207,7 @@ describe('what this screen does not claim', () => {
   });
 
   it('does not re-analyse anything — no answer text appears anywhere', () => {
-    // There is none to appear: ip-safety.md #7 means the text never left the
+    // There is none to appear: the facts-only rule means the text never left the
     // request that produced it. This asserts the screen reads labels only.
     const html = render(threeScanHistory);
     expect(html).not.toMatch(/answerText|responseText|"text":/);

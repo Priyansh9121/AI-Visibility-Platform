@@ -19,7 +19,7 @@ DETERMINISM (scoring-spec.md "Determinism requirements")
    rather than overwriting, so before/after reporting (Epic 11) stays honest.
 
 =============================================================================
-IP-SAFETY (ip-safety.md #7)
+FACTS-ONLY RULE
 =============================================================================
 Scoring reads stored FACTS only — booleans, ordinals, labels, domains, counts.
 It never touches raw engine text; there is none to touch, because Epic 4 never

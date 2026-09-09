@@ -29,7 +29,7 @@ fetched at all — and is never merged with an allow. That is Epics A, B and E's
 house rule applied unchanged: a state where the measurement was never taken is
 never the same as a measurement that came back permissive.
 
-IP-SAFETY (docs/ip-safety.md #7)
+FACTS-ONLY RULE
 --------------------------------
 Every field is a verdict enum, a count, an agent product token, a vendor name,
 or OUR OWN classification of that agent's purpose. `matchedToken` is the

@@ -7,7 +7,7 @@
  * to store `detail_code` rather than a sentence precisely so the human wording
  * would live in one place we control, be translatable, and be white-labelable.
  *
- * ip-safety.md #8 — no verbatim competitor marketing copy anywhere, including
+ * The no-borrowed-copy rule — no verbatim competitor marketing copy anywhere, including
  * microcopy. Nothing here is adapted from another product's UI. The wording is
  * written from the data model: each string says what the measurement found and
  * what changing it would do, in the plainest terms that are still accurate.
@@ -337,7 +337,7 @@ export const FIX_FOR_DIMENSION: Record<string, FixCopy> = {
  *
  * Everything interpolated is a fact: a domain, a count, and the subject's own
  * citation count. Nothing describes what is ON the domain, which would be
- * republishing someone else's content (ip-safety.md #7) — and we have never
+ * republishing someone else's content (the facts-only rule) — and we have never
  * read it in any case.
  */
 export function fixForUnclaimedDomains(

@@ -364,7 +364,7 @@ class TestScopingAndSafety:
     async def test_carries_no_field_that_could_hold_engine_prose(
         self, client: AsyncClient, stub_engines
     ) -> None:  # noqa: ANN001
-        # ip-safety.md #7. Domains, brand names and counts are facts; the
+        # The facts-only rule. Domains, brand names and counts are facts; the
         # answer's text is not ours to republish, and the stub answers carry a
         # distinctive sentence that must not appear anywhere in the response.
         await _sign_up(client)
@@ -462,7 +462,7 @@ class TestSentimentTally:
     async def test_the_tally_carries_no_field_able_to_hold_engine_prose(
         self, client: AsyncClient, stub_engines, stub_discovery
     ) -> None:
-        """ip-safety.md #7, at the boundary Epic A widened.
+        """The facts-only rule, at the boundary Epic A widened.
 
         Tone reaches the browser as four integers and an engine key. There is
         nothing here capable of carrying what was classified.

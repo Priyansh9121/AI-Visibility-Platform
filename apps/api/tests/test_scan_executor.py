@@ -116,7 +116,7 @@ class TestAPipelineThatRaises:
     async def test_the_recorded_detail_is_our_own_diagnostic_never_vendor_text(
         self, client: AsyncClient, session, monkeypatch
     ) -> None:  # noqa: ANN001
-        """ip-safety.md #7 — `error_detail` carries our diagnostics only.
+        """The facts-only rule — `error_detail` carries our diagnostics only.
 
         An exception message can contain a provider response body. Only the
         exception TYPE is persisted.

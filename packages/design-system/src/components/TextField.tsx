@@ -31,7 +31,7 @@ export interface TextFieldProps
  * Single-line text input.
  *
  * Added in Epic 2 for the URL intake form. It lives here rather than in
- * apps/web because ip-safety.md #2 prohibits ad hoc styling on customer-facing
+ * apps/web because the design-system-only rule prohibits ad hoc styling on customer-facing
  * screens — a form input styled locally would be exactly that.
  *
  * Accessibility is wired up rather than left to the caller: the label is a

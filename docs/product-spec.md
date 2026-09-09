@@ -40,7 +40,6 @@ Enter prospect URL → Auto-detect industry + competitors → Run scan
   /db               -> migrations, schema
   /deploy           -> IaC / deployment configs
 /docs
-  ip-safety.md       -> Section 2 of this doc, standalone reference for all contributors
   api-contracts.md
   scoring-spec.md
 ```
@@ -87,7 +86,7 @@ Each sub-score normalized 0-100, weighted sum = final score. Tune weights per-in
 
 ## 7. Full Roadmap for the AI Coding Agent — Epics, Tasks, Acceptance Criteria
 
-> Instructions for the agent: work epic by epic, in order. Do not start UI/screen work (Epic 4+) until Epic 0 (design system) and Epic 1 (infra) are complete. Re-read Section 2 (IP Safety) before any design or frontend task.
+> Instructions for the agent: work epic by epic, in order. Do not start UI/screen work (Epic 4+) until Epic 0 (design system) and Epic 1 (infra) are complete.
 
 > **Checkbox status, corrected 2026-08-25 (build-log Epic 9.0 / 9.1).** Until now
 > every box in this section read `[ ]` regardless of what had shipped, so the
@@ -277,7 +276,7 @@ twice.
   the number.
 - **Core loop:** pick a domain → pick/generate a prompt set → scan across AI
   answer engines → get a score + gaps vs competitors → get fixes → export a pitch.
-- **Narrative order (mandated by IP-safety constraint 3):**
+- **Narrative order (the narrative-report rule):**
   score → biggest gap → proof → fix → pitch.
 - **The report is an outward-facing artifact.** It gets exported and put in front
   of a prospect's CMO. This drives the light-first, print-safe design decisions

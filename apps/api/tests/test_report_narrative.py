@@ -132,7 +132,7 @@ def test_the_citation_fix_gets_its_own_slot_rather_than_taking_one() -> None:
 
 
 def test_the_citation_fix_names_a_domain_and_nothing_about_it() -> None:
-    """ip-safety.md #7: a domain and a count are facts; what is ON it is not."""
+    """The facts-only rule: a domain and a count are facts; what is ON it is not."""
     result = narrative.derive_narrative(CASES["scored-no-generated-fixes"])
     fix = next(f for f in result.fixes if f.source == "citation")
     assert "eesel.ai" in fix.title

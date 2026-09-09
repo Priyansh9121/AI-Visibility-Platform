@@ -4,7 +4,7 @@ import { cn } from '../../lib/cn.js';
 /**
  * Report layout primitives.
  *
- * ip-safety.md #3 requires primary screens to be structured as a NARRATIVE
+ * The narrative-report rule requires primary screens to be structured as a NARRATIVE
  * REPORT — score, biggest gap, proof, fix, pitch — rather than a metrics-tile
  * dashboard. These primitives make that structure the path of least resistance:
  * a report is assembled from ordered Beats, and the spacing between them
@@ -104,7 +104,7 @@ export interface EvidenceProps {
   /** Engine name. A fact. */
   engine: string;
   /**
-   * Structured findings ONLY. ip-safety.md #7: never pass raw answer text or
+   * Structured findings ONLY. The facts-only rule: never pass raw answer text or
    * competitor copy through here. Mentions, positions, and cited domains are
    * facts; the engine's prose is not ours to republish.
    */

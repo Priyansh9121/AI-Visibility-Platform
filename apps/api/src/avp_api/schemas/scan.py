@@ -1,6 +1,6 @@
 """Scan, prompt-set and engine-result schemas — Epic 4.
 
-ip-safety.md #7: `PromptOut.text` is our OWN generated question, the deliberate
+The facts-only rule: `PromptOut.text` is our OWN generated question, the deliberate
 exception. Nothing here can carry an engine's answer — EngineResultOut exposes
 booleans, ordinals, a sentiment label, counts, cited domains, and a digest.
 """

@@ -33,7 +33,7 @@ def check_datastores() -> dict[str, str]:
 
     Note this runs an event loop inside a synchronous Celery task. That is not
     incidental: the project has no synchronous Postgres driver, because both
-    psycopg2 and psycopg3 are LGPL-3.0 and ip-safety.md #6 puts LGPL on the
+    psycopg2 and psycopg3 are LGPL-3.0 and the dependency-licensing rule puts LGPL on the
     stop-and-ask list. asyncpg (Apache-2.0) is async-only, so every worker that
     touches Postgres bridges through `asyncio.run`. The pipeline stages from
     Epic 2 onward follow the same pattern.

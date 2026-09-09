@@ -42,7 +42,7 @@ describe('a classification is stated as a conclusion, not a field list', () => {
     const out = render(base);
     expect(out).toContain('Northaven Dental is a dental practice.');
     // The old shape was a <dl> of Industry / Niche / Confidence — the generic
-    // field-list treatment ip-safety.md #3 rules against.
+    // field-list treatment the narrative-report rule argues against.
     expect(out).not.toContain('<dl');
     expect(out).not.toContain('>Industry<');
   });

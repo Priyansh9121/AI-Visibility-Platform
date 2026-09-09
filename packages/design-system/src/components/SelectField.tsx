@@ -30,7 +30,7 @@ export interface SelectFieldProps
  * Single-choice select.
  *
  * Added in Epic 9.14 for the seat-invitation role picker, and added HERE rather
- * than in `apps/web` for the reason ip-safety.md #2 states and `TextField`'s
+ * than in `apps/web` for the reason the design-system-only rule states and `TextField`'s
  * docstring already spells out: a form control styled locally is precisely the
  * ad hoc styling that rule prohibits. The first draft of the seat panel did
  * hand-assemble a `<select>` out of `avp-field__*` classes, which is the same

@@ -1,7 +1,7 @@
 """Fact extraction from engine answers — §5.4 step 4, "capture citations/mentions".
 
 =============================================================================
-IP-SAFETY BOUNDARY (ip-safety.md #7)
+FACTS-ONLY BOUNDARY
 =============================================================================
 This module is where a live engine answer is converted into the facts that get
 stored. Everything it returns is a boolean, a count, an ordinal, a normalised

@@ -22,7 +22,7 @@
  * not that they are still the account holder. An unlocked laptop presents a
  * perfectly valid session.
  *
- * ip-safety.md #1: derived from the endpoint and the user goal. No competitor's
+ * The design-from-the-data-model rule: derived from the endpoint and the user goal. No competitor's
  * account screen was referenced.
  */
 

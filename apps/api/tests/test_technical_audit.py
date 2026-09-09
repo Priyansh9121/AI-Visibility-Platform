@@ -246,7 +246,7 @@ class TestDeterminism:
 
 
 class TestFactsOnly:
-    """ip-safety.md #7 — the client's own site, but the same discipline."""
+    """The facts-only rule — the client's own site, but the same discipline."""
 
     def test_signals_carry_no_page_content(self) -> None:
         import dataclasses

@@ -1,7 +1,7 @@
 """Playwright crawl — §5.4 step 1, "crawl homepage/key pages".
 
 =============================================================================
-IP-SAFETY BOUNDARY  (docs/ip-safety.md constraint 7)
+FACTS-ONLY BOUNDARY
 =============================================================================
 
 This module is where third-party page content enters the process, so the rule
@@ -88,7 +88,7 @@ class CrawlSignals:
     """Derived FACTS about a site. Safe to persist.
 
     Every field is a count, a boolean, a URL, a schema.org type name, or the
-    subject's own name — all explicitly permitted by ip-safety.md #7.
+    subject's own name — all explicitly permitted by the facts-only rule.
     """
 
     final_url: str
@@ -340,7 +340,7 @@ def _apply_page_signals(signals: CrawlSignals, page_data: dict, *, is_home: bool
 def _schema_types(json_ld: str, microdata: list[str]) -> list[str]:
     """Extract schema.org TYPE NAMES.
 
-    Type names are a structural signal (ip-safety.md #7 permits "structural
+    Type names are a structural signal (the facts-only rule permits "structural
     signals (schema.org types present, ...)"). The VALUES inside the JSON-LD —
     descriptions, addresses, review text — are content and are deliberately
     discarded here rather than parsed.

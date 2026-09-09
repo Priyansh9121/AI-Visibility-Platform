@@ -95,7 +95,7 @@ class Alert(Base, TimestampMixin):
     # never "unknown engine".
     engine: Mapped[str | None] = mapped_column(String(40), nullable=True)
 
-    # OUR OWN sentence, assembled from our own numbers (ip-safety.md #7). There
+    # OUR OWN sentence, assembled from our own numbers (the facts-only rule). There
     # is no engine text anywhere in this row and no column that could hold any.
     detail: Mapped[str] = mapped_column(Text, nullable=False)
 

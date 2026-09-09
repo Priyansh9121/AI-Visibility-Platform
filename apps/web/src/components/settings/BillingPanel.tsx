@@ -31,7 +31,7 @@
  * degradation rather than a routine one. An agency whose payment failed sees
  * that in those words; it does not discover it as features quietly not working.
  *
- * ip-safety.md #1 and #5: derived from the API's own `BillingStatus` shape and
+ * The no-competitor-reference rules: derived from the API's own `BillingStatus` shape and
  * the states it can actually be in. No competitor's billing screen was opened
  * or referenced.
  */

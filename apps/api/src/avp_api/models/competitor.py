@@ -1,6 +1,6 @@
 """CompetitorSet and Competitor — the auto-detected rival set for a scan.
 
-IP-safety note (ip-safety.md #7): a competitor is stored as NAME + DOMAIN +
+Facts-only note: a competitor is stored as NAME + DOMAIN +
 provenance, and nothing else. There is deliberately no description, tagline,
 summary, or positioning column. Entity names and domains are facts and are
 explicitly permitted; a competitor's marketing copy is theirs and is not stored
@@ -164,7 +164,7 @@ class Competitor(Base, TimestampMixin):
 
     # Per-signal evidence counts, kept so a ranking can be audited rather than
     # taken on trust. Counts are facts; the search results and engine answers
-    # they were derived from are not stored (ip-safety.md #7).
+    # they were derived from are not stored (the facts-only rule).
     serp_mentions: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     co_citation_mentions: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 

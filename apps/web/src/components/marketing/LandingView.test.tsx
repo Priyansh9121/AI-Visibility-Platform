@@ -351,7 +351,7 @@ describe('it is built from the design system, not styled locally', () => {
     const out = html();
     expect(out).toContain('avp-ledger');
     expect(out).toContain('avp-meter');
-    // No external asset of any kind: ip-safety.md #4. The header wordmark is
+    // No external asset of any kind: the licensed-assets rule. The header wordmark is
     // type, not an image, for the same reason.
     expect(out).not.toContain('<img');
     expect(out).not.toContain('background-image');

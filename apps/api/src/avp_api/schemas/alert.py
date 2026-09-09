@@ -1,6 +1,6 @@
 """Alert schemas — Epic E.
 
-Facts only (ip-safety.md #7): an enum, two scan ids, an engine key, timestamps,
+Facts only (the facts-only rule): an enum, two scan ids, an engine key, timestamps,
 and a sentence THIS CODEBASE wrote from its own numbers. No field here can hold
 an engine's answer, and none is derived from one.
 """

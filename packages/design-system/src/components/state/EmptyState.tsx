@@ -42,7 +42,7 @@ export interface EmptyStateProps {
  *
  * WHY `figure` IS NOT AN ICON SLOT
  * --------------------------------
- * ip-safety.md #4 rules out icon packs and illustration kits, and
+ * The licensed-assets rule excludes icon packs and illustration kits, and
  * design-direction.md's house style is that a graphic here is DATA drawn as
  * illustration — the Luminance Ledger and the Answer Shelf both are. So the
  * figure a caller passes should be the shape of the data that will exist once

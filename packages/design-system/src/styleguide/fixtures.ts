@@ -2,7 +2,7 @@
  * Style-guide fixtures.
  *
  * INVENTED DATA about an INVENTED COMPANY. No real brand, no real competitor,
- * and no scraped text appears anywhere in this file (docs/ip-safety.md #7, #8).
+ * and no scraped text appears anywhere in this file (the facts-only and no-borrowed-copy rules).
  * Prompts are original strings written for this guide.
  */
 
