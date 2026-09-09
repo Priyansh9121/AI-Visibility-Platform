@@ -194,6 +194,7 @@ const tailwindPreset = {
       maxWidth: {
         measure: v('measure'),
         report: v('report-width'),
+        page: v('page-width'),
         app: v('app-max'),
         form: v('form-width'),
         headline: v('headline'),

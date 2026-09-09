@@ -80,7 +80,7 @@ export default function ReportPageRoute({
 
   if (view.kind === 'loading') {
     return (
-      <WorkspaceShell current="dashboard">
+      <WorkspaceShell current="dashboard" wide>
         <LoadingState message="Assembling the report…" />
       </WorkspaceShell>
     );
@@ -88,7 +88,7 @@ export default function ReportPageRoute({
 
   if (view.kind === 'error') {
     return (
-      <WorkspaceShell current="dashboard">
+      <WorkspaceShell current="dashboard" wide>
         <ErrorState
           title={view.title}
           detail={view.detail}
@@ -104,29 +104,29 @@ export default function ReportPageRoute({
 
   return (
     /*
-      The document is placed on a desk — Epic 14.1 — at the PRESENTING width.
+      The document is placed on a desk — Epic 14.1 — and the document is
+      72rem wide — Epic 17.
 
-      The report itself keeps its 52rem paper measure; that is the artefact
-      and it is not up for debate. What was wrong on the live dark build was
-      everything around it: a fixed-width white column dropped straight onto
-      the workspace ground read as a clipped phone screenshot.
-      `.avp-report-frame` gives the page a light neutral desk and a real
-      edge, so it reads as a document sitting on a surface.
+      Epic 14.1 fixed the framing: a fixed white column dropped onto the
+      workspace ground read as a clipped phone screenshot, so
+      `.avp-report-frame` gave it a light neutral desk and a real edge. It
+      kept the page at design-direction.md's 52rem Presenting measure, and
+      the founder then looked at it live twice and found a well-fitted desk
+      around a narrow page is still a narrow page. Epic 17 reversed the
+      width table's row for this route and `/share/{token}`, explicitly,
+      in the table.
 
-      NOT widened. Epic 14.1 first shipped this route on the shell's Working
-      measure (`--avp-app-max`), and design-direction.md's width table has
-      governed this route to `--avp-report-width` since Epic 9.19. The desk
-      made the mistake visible: it spanned 90rem while the page inside it
-      capped at 52rem, and the gap was a dead coloured field either side.
-      On the shell's own default measure — report width plus padding — the
-      desk hugs the page. `reportWidth.test.ts` holds this; widening the
-      route again means amending the table first.
+      `wide` is deliberate now: the shell runs at the Working measure and
+      the FRAME caps itself at the report width plus the desk's own gutter,
+      so the desk still hugs the page — the mistake 14.1 corrected cannot
+      recur, because the hug no longer depends on which shell measure the
+      route happens to be on. `reportWidth.test.ts` asserts both halves.
 
-      Route-level framing only — ReportView and the report's tokens are
-      untouched, which ReportView.test.tsx and reportIsolation.test.ts keep
-      asserting.
+      Route-level framing and width only — the report's identity, its
+      beats and its tokens are untouched, which ReportView.test.tsx and
+      reportIsolation.test.ts keep asserting.
     */
-    <WorkspaceShell current="dashboard">
+    <WorkspaceShell current="dashboard" wide>
       {/*
         Operator chrome, deliberately ABOVE the report rather than inside it.
         ReportView is the document that gets sent; anything to do with sending

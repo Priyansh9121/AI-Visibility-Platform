@@ -63,7 +63,7 @@ export default function PublicReportRoute({
 
   if (view.kind === 'loading') {
     return (
-      <main className="mx-auto max-w-report px-6 py-18">
+      <main className="mx-auto max-w-page px-6 py-18">
         <LoadingState message="Loading the report…" />
       </main>
     );
@@ -71,7 +71,7 @@ export default function PublicReportRoute({
 
   if (view.kind === 'gone') {
     return (
-      <main className="mx-auto max-w-report px-6 py-18">
+      <main className="mx-auto max-w-page px-6 py-18">
         <ErrorState
           title="This report link is not available"
           detail="The link may be incomplete, or it may have been withdrawn. Ask whoever sent it for a current one."
@@ -84,8 +84,8 @@ export default function PublicReportRoute({
     /*
       The desk is the whole page here — Epic 14.1. A stranger opening this
       link gets a document on a light neutral surface, edge to edge, rather
-      than a white column on the app's ground. The report's own measure and
-      tokens are untouched; this is the wrapper.
+      than a white column on the app's ground. The report's measure is
+      `--avp-report-width`, 72rem since Epic 17; its tokens are untouched.
     */
     <main className="avp-report-frame avp-report-frame--page">
       {/*

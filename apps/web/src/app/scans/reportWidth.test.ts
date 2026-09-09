@@ -1,20 +1,25 @@
 /**
- * The report route renders at the PRESENTING width — Epic 14.1, corrected.
+ * The report route renders at the REPORT width, and the desk hugs the page —
+ * Epic 14.1 (corrected), reversed on purpose by Epic 17.
  *
- * design-direction.md's width table (Epic 9.19) governs every route:
- * `/dashboard`, `/clients` and `/settings` are Working screens at
- * `--avp-app-max`; `/scans/{id}/report` and `/share/{token}` are Presenting
- * screens at `--avp-report-width`. Epic 14.1's first cut put `wide` on the
- * report route to solve a framing problem and, in doing so, quietly moved the
- * route to the Working width — the desk it added then spanned 90rem around a
- * 52rem page. This is the assertion that stops that happening again without
- * someone first amending the table.
+ * design-direction.md's width table governs every route. Since Epic 9.19 it
+ * put `/scans/{id}/report` and `/share/{token}` at `--avp-report-width`,
+ * 52rem, and this file's first version asserted the route never carried
+ * `wide`, because Epic 14.1's first cut had used `wide` to solve a framing
+ * problem and quietly moved the route to the Working measure — the desk it
+ * added then spanned 90rem around a 52rem page.
+ *
+ * Epic 17 changed the rule, not the bug. The founder saw the 52rem page live
+ * twice and found it narrow, so the table's row for these two routes is now
+ * 72rem, and the route DOES carry `wide` — but the frame caps itself at the
+ * report width, so the desk still hugs the page whatever the shell's
+ * measure. The assertion flipped deliberately, and what it guards is what
+ * 14.1 actually cared about: a desk that fits its page.
  *
  * A SOURCE scan rather than a render, on purpose: the route is a client
  * component that resolves `params` and fetches, and what this guards is a
- * prop on a JSX element, which is exactly what a grep sees and a render
- * would have to mock its way to. `reportIsolation.test.ts` guards the same
- * surfaces the same way.
+ * prop on a JSX element and a rule in a stylesheet, which is exactly what a
+ * grep sees and a render would have to mock its way to.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -26,37 +31,58 @@ const read = (rel: string): string =>
 
 const REPORT_ROUTE = read('./[scanId]/report/page.tsx');
 const SHARE_ROUTE = read('../share/[token]/page.tsx');
-const DASHBOARD_ROUTE = read('../dashboard/page.tsx');
+const COMPARE_ROUTE = read('../page.tsx');
 const SHELL_CSS = read('../../../../../packages/design-system/src/styles/components.css');
+const TOKENS_CSS = read('../../../../../packages/design-system/src/styles/tokens.css');
 
 /** Every `<WorkspaceShell …>` opening tag in a source, with its props. */
 const shells = (source: string): string[] =>
   [...source.matchAll(/<WorkspaceShell\b([^>]*)>/g)].map((m) => m[1]!);
 
-describe('the report route keeps the Presenting width', () => {
-  it('renders the shell without `wide`, in every branch', () => {
+const rule = (selector: string): string => {
+  // Anchored at a line start, so `.avp-report` cannot match the tail of
+  // `.avp-report-frame > .avp-report`.
+  const m = SHELL_CSS.match(new RegExp('(?:^|\\n)' + selector.replace(/[.\-]/g, '\\$&') + '\\s*\\{([^}]*)\\}'));
+  expect(m, `${selector} rule missing`).not.toBeNull();
+  return m![1]!;
+};
+
+describe('the report route is wide, and the desk still hugs the page — Epic 17', () => {
+  it('renders the shell WITH `wide`, in every branch', () => {
     const tags = shells(REPORT_ROUTE);
-    // Loading, error and ready all frame the route; none may widen it.
+    // Loading, error and ready all frame the route; all three widen it, so
+    // the frame never jumps between branches.
     expect(tags.length).toBeGreaterThanOrEqual(3);
-    for (const props of tags) expect(props).not.toMatch(/\bwide\b/);
+    for (const props of tags) expect(props).toMatch(/\bwide\b/);
   });
 
-  it('is not a vacuous check — a Working route does use `wide`', () => {
-    expect(shells(DASHBOARD_ROUTE).some((props) => /\bwide\b/.test(props))).toBe(true);
+  it('is not a vacuous check — a prose route does NOT use `wide`', () => {
+    // Compare (`/` signed in) is a page of prose on the shell default.
+    expect(shells(COMPARE_ROUTE).some((props) => /\bwide\b/.test(props))).toBe(false);
   });
 
-  it('gets its measure from the shell default, which IS report width plus padding', () => {
-    // The default rule is what the route falls back to without `wide`. If
-    // that ever stops being the report measure, this route drifts again.
-    const rule = SHELL_CSS.match(/\.avp-shell__content\s*\{([^}]*)\}/);
-    expect(rule, '.avp-shell__content rule missing').not.toBeNull();
-    expect(rule![1]).toMatch(/max-width:\s*calc\(var\(--avp-report-width\)/);
-    const wide = SHELL_CSS.match(/\.avp-shell__content--wide\s*\{([^}]*)\}/);
-    expect(wide![1]).toMatch(/--avp-app-max/);
+  it('the frame caps itself at the report width, so the hug does not depend on the shell', () => {
+    // This is the half Epic 14.1 cared about. If the frame ever loses its
+    // cap, `wide` puts a 90rem desk around a 72rem page again.
+    expect(rule('.avp-report-frame')).toMatch(/max-width:\s*calc\(var\(--avp-report-width\)/);
+    expect(rule('.avp-report-frame')).toMatch(/margin-inline:\s*auto/);
+    expect(rule('.avp-report')).toMatch(/max-width:\s*var\(--avp-report-width\)/);
   });
 
-  it('the share route never used the shell at all, so the table holds there by construction', () => {
+  it('the shell default is the reading page, not the report', () => {
+    expect(rule('.avp-shell__content')).toMatch(/max-width:\s*calc\(var\(--avp-page-width\)/);
+    expect(rule('.avp-shell__content--wide')).toMatch(/--avp-app-max/);
+  });
+
+  it('the table\u2019s numbers are the tokens\u2019 numbers', () => {
+    expect(TOKENS_CSS).toMatch(/--avp-report-width:\s*72rem/);
+    expect(TOKENS_CSS).toMatch(/--avp-page-width:\s*52rem/);
+  });
+
+  it('the share route never used the shell; its page is the report width and its states are prose', () => {
     expect(SHARE_ROUTE).not.toContain('WorkspaceShell');
+    expect(SHARE_ROUTE).toContain('avp-report-frame--page');
     expect(SHARE_ROUTE).toContain('max-w-report');
+    expect(SHARE_ROUTE).toContain('max-w-page');
   });
 });

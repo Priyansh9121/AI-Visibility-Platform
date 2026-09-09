@@ -14602,3 +14602,89 @@ toggled through `display: none` — and captured the frame 16ms and 30ms in.
 The before frames show each element fully settled at that instant; the
 after frames show the row faint and low, the card at half opacity and a few
 pixels down. A live look at the real click is still owed for feel.
+
+# Epic 17 — the report is 72rem: Epic 9.19's width table reversed for two routes, on the founder's decision
+
+**2026-09-10.** Governance line: a width change only, for `/scans/{id}/report`
+and `/share/{token}`. The paper identity — Fraunces, hairlines, flat
+elevation, no gradient, no dark ground — is untouched, and so are the beat
+sequence, `derive.ts`, and everything Epic 16 built into the first beat.
+The reversal is written into `design-direction.md`'s width table itself,
+in its own dated note, the way every other reversal here is recorded.
+
+## What was being reversed, and why it was right to reverse it
+
+Epic 9.19's table put the report at `--avp-report-width`, 52rem, on the
+argument that a document someone reads and eventually prints wants a
+document's measure. Epic 14.1 then fixed a framing bug — a wide desk
+around that narrow page — by making the desk hug the page, and its
+correction added a test that the route never widens. Both were right on
+their own terms, and the founder then looked at the result live twice and
+found the page itself narrow beside a 1440px screen. A well-fitted desk
+around a narrow page is still a narrow page. This entry does not claim the
+old width was wrong; it records that the founder decided otherwise after
+seeing it, which is the one reason the table can be overruled.
+
+## Picking the width — rendered, not guessed
+
+Both candidates the brief named were rendered at 1440 and 1920 through the
+fixture path before anything was changed
+(`docs/screenshots/epic-17/`):
+
+- **At 1440 the two are the same page.** The shell's content area is the
+  limit, so 72rem and 90rem both fill it edge to edge and the complaint is
+  resolved either way.
+- **At 1920 they differ.** The 90rem page strands its 68ch prose in a field
+  of margin (`candidate-90rem-report-route-1920.png`); the 72rem page still
+  reads as a document, and the extra width goes to the parts that can use
+  it — the score block's two columns and the evidence tables.
+
+**72rem, then.** The prose measure did not move: paragraphs stay at
+`--avp-measure`, so nothing is set at a hundred characters a line because
+the container grew.
+
+**The one thing widening broke, and its fix.** The gap beat's Luminance
+Ledger is `width: 100%` over its viewBox and scales its type with its
+column; Epic 9.22 recorded it as the report's one uncapped chart precisely
+because the report's width was out of scope then. At 72rem its gutter
+labels rendered at 40px — the largest type on the page
+(`candidate-72rem-ledger-uncapped-1920.png`). It is now capped at the prose
+measure, where it draws at about the size it always has and in the column
+the prose reads in (`after-ledger-capped-1920.png`).
+
+## PDF parity: the answer is "never coupled"
+
+`services/pdf.py` writes A4 in PostScript points (595.28 × 841.89) and
+reads no stylesheet and no token; `report_pdf.py` lays its tables out in
+points of its own. `@media print` sets `.avp-report { max-width: none }`
+in any case. So widening the on-screen document changes nothing about the
+file a prospect downloads — and it never could have. `tokens/spacing.ts`
+claimed "PDF export parity" for this width since Epic 0; the claim was
+false and is corrected in this commit rather than left for the next person
+to assume.
+
+## How it is built
+
+- `--avp-report-width` is **72rem** and means the document. A new
+  `--avp-page-width`, **52rem**, keeps the reading measure for everything
+  that used to share the report's: landing, auth, welcome, invite, the
+  Compare form on the shell default, the crawler list, and the share
+  route's loading and error states (`max-w-page`).
+- The report route passes `wide` in every branch — **deliberately**, the
+  thing 14.1's correction forbade — and `.avp-report-frame` now caps
+  itself at the report width plus the desk's gutter, so the desk hugs the
+  page whatever shell measure the route is on. The hug no longer depends
+  on the shell's default, which is what let 14.1's bug happen.
+- `reportWidth.test.ts` is rewritten, not deleted: it asserts `wide` in
+  every branch, the frame's self-cap, the shell default at page width, the
+  two token values, and the share route's split between report and page
+  measures. Its header records the flip and why.
+
+## Verified
+
+Design system **606/606**, web **818/818** (the guard rewritten from four
+assertions to six), both typechecks clean, styleguide rebuilt. Before and
+after on both routes at 1440 and 1920, plus the proof beat's tables at
+1440 using the width. Looked at rather than assumed: at 1440 the page now
+fills the content area with the sidebar beside it; at 1920 it is a
+document on a desk with an even margin, not a column in a field.

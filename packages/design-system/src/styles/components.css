@@ -635,7 +635,9 @@
   padding: var(--avp-space-10) var(--avp-space-8);
   margin-inline: auto;
   width: 100%;
-  max-width: calc(var(--avp-report-width) + (2 * var(--avp-space-8)));
+  /* The reading page plus its padding. The report route does not rely on
+     this any more (Epic 17): it takes `wide` and its frame caps itself. */
+  max-width: calc(var(--avp-page-width) + (2 * var(--avp-space-8)));
 }
 
 .avp-shell__content--wide { max-width: var(--avp-app-max); }
@@ -1484,11 +1486,18 @@
   padding: var(--avp-space-10) var(--avp-space-6) var(--avp-space-14);
   border-radius: var(--avp-radius-2xl);
   background: var(--avp-surface-desk);
+  /* The desk sizes itself to the page — Epic 17. Epic 14.1 got this from
+     the shell's default measure; now the route is `wide` and the page is
+     72rem, so the frame carries its own cap and the desk still hugs the
+     page on any shell. */
+  max-width: calc(var(--avp-report-width) + (2 * var(--avp-space-6)));
+  margin-inline: auto;
 }
 
 /* The public share page: the desk is the whole viewport. */
 .avp-report-frame--page {
   min-height: 100vh;
+  max-width: none;
   border-radius: 0;
 }
 

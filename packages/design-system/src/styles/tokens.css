@@ -230,8 +230,14 @@
   --avp-radius-2xl: 1rem;
   --avp-radius-full: 9999px;
 
-  --avp-report-width: 52rem;
+  /* The report DOCUMENT on screen — Epic 17, the founder's decision after
+     seeing 52rem live twice. Screen only: the PDF is written at A4 by
+     `services/pdf.py` and reads no token, and `@media print` lifts this cap. */
+  --avp-report-width: 72rem;
   --avp-report-gutter: 3.5rem;
+  /* A page of prose someone reads — landing, auth, welcome, the intake form.
+     The 52rem the report used to share; the report has its own measure now. */
+  --avp-page-width: 52rem;
   --avp-app-max: 90rem;
   /* A single-column form (sign-in, and any later account screen). */
   --avp-form-width: 26rem;

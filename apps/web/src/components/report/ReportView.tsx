@@ -602,7 +602,17 @@ function GapBeat({
         )}
       </Prose>
 
-      <div className="mt-6">
+      {/*
+        Capped at the prose measure — Epic 17. This chart is `width: 100%`
+        over its viewBox, so it scales its type with its column; Epic 9.22
+        recorded the report's copy as a known exception because the report's
+        width was out of scope. A 72rem document put the exception on the
+        page: at 1040px the gutter labels rendered at 40px, the largest type
+        in the report. At the 68ch measure it draws about the size it always
+        has, in the same column the prose reads in, and the wider page goes
+        to the parts that can use it — the score block and the tables.
+      */}
+      <div className="mt-6 max-w-measure">
         <LuminanceLedger
           subjectName={subjectName}
           dimensions={narrative.dimensions}

@@ -69,14 +69,14 @@ export function WelcomeView({
 }): JSX.Element {
   if (state.kind === 'loading') {
     return (
-      <main className="mx-auto max-w-report px-6 py-18">
+      <main className="mx-auto max-w-page px-6 py-18">
         <LoadingState message="Setting up your workspace…" />
       </main>
     );
   }
 
   return (
-    <main className="mx-auto max-w-report px-6 py-18">
+    <main className="mx-auto max-w-page px-6 py-18">
       <Reveal animate={animate} className="flex flex-col gap-10">
         <PageSection
           tone="lead"

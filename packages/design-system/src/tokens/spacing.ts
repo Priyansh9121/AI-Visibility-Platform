@@ -63,9 +63,16 @@ export const radius = {
   full: '9999px',
 } as const;
 
-/** Report page geometry. Matches A4/Letter proportions for PDF export parity. */
+/**
+ * Page geometry. `reportWidth` is the on-screen document only: the PDF is a
+ * hand-rolled A4 writer (`services/pdf.py`) that reads no token, so the two
+ * were never coupled — an earlier comment here claimed "PDF export parity"
+ * and was wrong. Epic 17 widened the document from 52rem on the founder's
+ * decision; `pageWidth` keeps the 52rem reading measure for prose pages.
+ */
 export const layout = {
-  reportWidth: '52rem', //   832 — the exported report column
+  reportWidth: '72rem', //   1152 — the report document, on screen
+  pageWidth: '52rem', //     832 — landing, auth, welcome, intake
   reportGutter: '3.5rem', // 56
   appMax: '90rem', //      1440 — working-context app shell
 } as const;

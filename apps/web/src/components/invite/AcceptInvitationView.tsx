@@ -91,7 +91,7 @@ export function AcceptInvitationView({
 }): JSX.Element {
   if (state.kind === 'invalid') {
     return (
-      <main className="mx-auto max-w-report px-6 py-18">
+      <main className="mx-auto max-w-page px-6 py-18">
         <Reveal animate={animate} className="mx-auto flex max-w-form flex-col gap-4">
           <ErrorState
             title="This invitation link is not valid"
@@ -111,7 +111,7 @@ export function AcceptInvitationView({
   const rejected = state.kind === 'rejected' ? state : null;
 
   return (
-    <main className="mx-auto max-w-report px-6 py-18">
+    <main className="mx-auto max-w-page px-6 py-18">
       <Reveal animate={animate} className="mx-auto flex max-w-form flex-col gap-4">
         <Card elevation="raised">
           <CardBody>

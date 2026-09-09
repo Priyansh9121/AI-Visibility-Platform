@@ -83,8 +83,8 @@ The two constraints agree, so I've leaned in hard.
 > | `/dashboard` | Working | `--avp-app-max` (90rem) | No |
 > | `/clients` | Working | `--avp-app-max` | No |
 > | `/settings` | Working | `--avp-app-max` — **corrected in 9.19** | No |
-> | `/scans/{id}/report`, `/share/{token}` | Presenting | `--avp-report-width` (52rem) | No — §4 |
-> | `/` (landing), auth, `/welcome` | Presenting | `--avp-report-width` | Yes — §4, Epic 9.16 |
+> | `/scans/{id}/report`, `/share/{token}` | Presenting | `--avp-report-width` — **72rem since Epic 17**, was 52rem | No — §4 |
+> | `/` (landing), auth, `/welcome` | Presenting | `--avp-page-width` (52rem — the measure the report used to share) | Yes — §4, Epic 9.16 |
 >
 > Widening a screen is not free, and 9.19 paid for it rather than declaring it
 > done: at 90rem the seat roster's Remove button and the clients list's status
@@ -92,6 +92,40 @@ The two constraints agree, so I've leaned in hard.
 > nearly the full viewport. Alignment and `--avp-form-width` fixed those in the
 > same pass. **Screenshots before and after in `docs/screenshots/epic-9-19/`.**
 
+> ### Reversed for two routes — Epic 17, 2026-09-10. The report is 72rem, on the founder's decision.
+>
+> The table above put the report at 52rem on the argument that a document
+> someone reads and eventually prints wants a document's measure. That
+> argument is not wrong, and it is not what decided this: the founder looked
+> at the report live twice — once on the dark build, once after Epic 14.1
+> had put the page on a desk that fit it — and both times found the page
+> itself narrow beside a 1440px screen. A well-fitted desk around a narrow
+> page is still a narrow page. So the row is reversed **for these two routes
+> only**, explicitly, here: `--avp-report-width` is **72rem**, and landing,
+> auth and welcome keep the 52rem reading measure under a token of their
+> own, `--avp-page-width`.
+>
+> **Why 72rem and not the Working 90rem.** Both were rendered at 1440 and
+> 1920 before choosing. At 1440 they are the same page — the content area
+> is the limit — so the complaint is resolved either way. At 1920 the 90rem
+> page strands its 68ch prose in a field of margin; 72rem still reads as a
+> document, with the width going to the parts that can use it: the score
+> block and the tables. **The prose measure did not change** — paragraphs
+> stay at `--avp-measure`, and the gap beat's Luminance Ledger, which scales
+> its type with its column, is now capped at that measure too (Epic 9.22 had
+> recorded it as the one uncapped chart because the width was out of scope).
+>
+> **The PDF is unaffected, and was never coupled.** `services/pdf.py` writes
+> A4 in PostScript points and reads no stylesheet or token; `@media print`
+> lifts `.avp-report`'s cap entirely. `tokens/spacing.ts` used to claim
+> "PDF export parity" for this width, and that comment was simply wrong; it
+> is corrected in the same commit.
+>
+> **`wide` on the route is now deliberate.** `reportWidth.test.ts` asserted
+> the opposite after Epic 14.1; it now asserts the route carries `wide` in
+> every branch AND that `.avp-report-frame` caps itself at the report width
+> — the half 14.1 actually cared about, made independent of the shell.
+>
 > ### Amended — Epic 9.21. A client's own space, and a width that was not the problem.
 >
 > Epic 9.20 added `/clients/{id}` and its Sources and Rankings trends. All three
