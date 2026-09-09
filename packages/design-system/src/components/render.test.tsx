@@ -6,6 +6,7 @@ import { Badge, VisibilityBadge } from './Badge.js';
 import { DataTable } from './Table.js';
 import { ScoreDisplay } from './ScoreDisplay.js';
 import { ReportMetaItem, ScoreBlock } from './report/ReportLayout.js';
+import { MetaChip } from './MetaChip.js';
 import { ScoreMeter } from './ScoreMeter.js';
 import { VerdictBar } from './VerdictBar.js';
 import { PageSection } from './marketing/PageSection.js';
@@ -129,17 +130,29 @@ describe('components render', () => {
     expect(html(<ScoreDisplay score={null} badge />)).not.toContain('avp-badge');
   });
 
-  it('ReportMetaItem gives a byline fact a shape and hides its glyph — Epic 16', () => {
+  it('MetaChip gives a fact a shape and hides its glyph — Epic 16.1', () => {
+    const out = html(
+      <MetaChip icon={<svg data-glyph="" />} mono>
+        example.com
+      </MetaChip>,
+    );
+    expect(out).toContain('avp-chip avp-chip--mono');
+    expect(out).toContain('<span class="avp-chip__icon" aria-hidden="true"><svg data-glyph=""></svg></span>');
+    expect(out).toContain('example.com');
+    // No glyph, no empty wrapper.
+    expect(html(<MetaChip>3 prompts</MetaChip>)).not.toContain('avp-chip__icon');
+    // A fact is never a state or a score: no tone class can be reached.
+    expect(out).not.toContain('avp-badge');
+  });
+
+  it('ReportMetaItem is MetaChip wearing the report’s class — Epic 16', () => {
     const out = html(
       <ReportMetaItem icon={<svg data-glyph="" />} mono>
         example.com
       </ReportMetaItem>,
     );
-    expect(out).toContain('avp-report__meta-item--mono');
-    expect(out).toContain('<span class="avp-report__meta-icon" aria-hidden="true"><svg data-glyph=""></svg></span>');
-    expect(out).toContain('example.com');
-    // No glyph, no empty wrapper.
-    expect(html(<ReportMetaItem>3 prompts</ReportMetaItem>)).not.toContain('avp-report__meta-icon');
+    expect(out).toContain('avp-chip avp-chip--mono avp-report__meta-item');
+    expect(out).toContain('<span class="avp-chip__icon" aria-hidden="true">');
   });
 
   it('ScoreBlock puts the figure before the explanation — Epic 16', () => {

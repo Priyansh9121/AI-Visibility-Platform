@@ -14422,3 +14422,65 @@ after on the Help Scout fixture, the weak-signal fixture before and after,
 the unscored fixture after (em dash, no column, no badge), and the after at
 420px, where the figure row still fits and the prose follows it. The
 styleguide's report section now shows the same primitives and was rebuilt.
+
+# Epic 16.1 — Dashboard and Clients: the fact's shape, cascaded
+
+**2026-09-09.** Governance line: Working screens only, both themes; the
+report is untouched except that its byline chip now shares one primitive
+with the rest of the product. `reportIsolation.test.ts` still passes, and
+the report's own `ReportView.test.tsx` byline assertions were updated to the
+shared class names in the same commit.
+
+## The audit, and what it actually found
+
+The brief asked for the report's "flat facts, no hierarchy" pattern to be
+looked for on the Dashboard and Clients screens. Looked for honestly, it is
+in two places on the Dashboard and nowhere on Clients:
+
+- **The seats fact beside the dashboard title.** A sentence at one weight,
+  with the ratio in the display face doing a badge's job.
+- **The hero's meta line.** One fact on the dashboard ("Across 10 scored
+  scans below"); on a client's Overview the same slot carries three —
+  scan date, share of voice, rival count — space-separated at one weight,
+  which is the report byline's failure exactly. `ScoreHero` is shared, so
+  the fix is one primitive, not two.
+
+Clients has no such line. Its head is a count and a button, its tiles carry
+the accent layer, and its rows already set name over domain in two weights.
+The before capture is kept (`clients-light-unchanged.png`) and the markup
+was diffed before and after this commit: byte-identical. Inventing a
+treatment for it would have been the thing the brief warned against.
+
+## What was built
+
+**`MetaChip`** — a fact, given a shape. The report's `ReportMetaItem` from
+Epic 16, promoted: sentence case, an `aria-hidden` Lucide glyph, the seated
+tone and a hairline, `mono` for a domain. Its CSS is token-only, so ONE rule
+draws the paper chip inside `.avp-report` and the light and dark Working
+chips, and a theme switch repaints it in place — which is what "cascade
+rather than six one-off treatments" needs from a primitive. `ReportMetaItem`
+is now `MetaChip` wearing the report's class; nothing about the document
+changed.
+
+**The rule that keeps three pills apart**, stated in the component and in
+`design-system.md`: `Badge` is a STATE (uppercase, tinted by a tone),
+`VisibilityBadge` is a SCORE (filled from the ramp), `MetaChip` is a FACT.
+It has no `tone` and no `accent` prop on purpose. A chip that could be
+tinted could be misread as either of the other two, and the hue buffer
+`design-direction.md` §1 keeps between categorical and meaning-bearing
+colour is worth nothing if a neutral element can opt into either.
+
+**Applied on the dashboard:** the seats fact is a chip with the Users glyph;
+the hero's denominator is a chip with the Layers glyph. The hero's
+no-median sentence stays a sentence — an explanation in a pill would read as
+a state the operator has to clear. The Overview's three-fact meta line is
+Epic 16.2's, per the brief's ordering, and will use this primitive.
+
+## Verified
+
+Design system **605/605** (one new, one amended), web **811/811** (two
+amended), both typechecks clean, styleguide rebuilt with a chip row beside
+the badges so the three pills can be told apart on one screen. Rendered
+through the same fixture path as Epics 14–16 — `docs/screenshots/epic-16-1/`:
+the dashboard before and after in both themes, and the unchanged Clients
+screen.

@@ -235,6 +235,38 @@
 .avp-badge--danger { background: color-mix(in oklab, var(--avp-danger) 14%, transparent); color: var(--avp-danger); }
 .avp-badge--visibility { border: none; }
 
+/* ============================ MetaChip =========================== */
+/*
+ * One fact, given a shape — Epic 16 (report byline), Epic 16.1 (everywhere).
+ * Seated tone, hairline, chip radius: level-1 elevation, so it prints on the
+ * paper scope and sits flat on the Working ground. Every value is a token, so
+ * the same rule draws the paper chip inside `.avp-report` and the light and
+ * dark Working chips, and a theme switch repaints it in place. Never a tone,
+ * never the ramp: sentence case with a glyph is a FACT, uppercase and tinted
+ * is a STATE (`.avp-badge`), filled from the ramp is a SCORE
+ * (`.avp-badge--visibility`).
+ */
+.avp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--avp-space-2);
+  padding: var(--avp-space-1) var(--avp-space-3);
+  border: 1px solid var(--avp-line-hairline);
+  border-radius: var(--avp-radius-full);
+  background: var(--avp-surface-sunken);
+  font-family: var(--avp-font-ui);
+  font-size: var(--avp-text-ui-xs);
+  font-weight: 400;
+  line-height: var(--avp-leading-ui);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--avp-text-secondary);
+  white-space: nowrap;
+}
+.avp-chip--mono { font-family: var(--avp-font-mono); }
+.avp-chip__icon { display: inline-flex; flex: none; opacity: 0.65; }
+.avp-chip__icon > svg { width: 13px; height: 13px; }
+
 /* ============================= Table ============================= */
 
 .avp-table-wrap { overflow-x: auto; }
@@ -1506,23 +1538,10 @@
   color: var(--avp-text-tertiary);
 }
 
-/* The byline's facts, each given a shape — Epic 16. Seated tone, hairline,
-   chip radius: level-1 elevation, so it prints. Never on the ramp. */
-.avp-report__meta-item {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--avp-space-2);
-  padding: var(--avp-space-1) var(--avp-space-3);
-  border: 1px solid var(--avp-line-hairline);
-  border-radius: var(--avp-radius-full);
-  background: var(--avp-surface-sunken);
-  font-size: var(--avp-text-ui-xs);
-  line-height: var(--avp-leading-ui);
-  color: var(--avp-text-secondary);
-}
-.avp-report__meta-item--mono { font-family: var(--avp-font-mono); }
-.avp-report__meta-icon { display: inline-flex; flex: none; opacity: 0.65; }
-.avp-report__meta-icon > svg { width: 13px; height: 13px; }
+/* The byline's facts, each given a shape — Epic 16. Drawn by `.avp-chip`
+   (below, under MetaChip): the same token-only rule serves the paper scope
+   here and the Working screens, so there is nothing report-specific to
+   declare. The class stays so the document can be addressed as a document. */
 
 /* The score and its explanation as one framed unit — Epic 16. Two hairlines
    and two columns; the figure column is the numeral stack with the compact

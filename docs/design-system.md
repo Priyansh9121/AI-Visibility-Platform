@@ -838,6 +838,7 @@ a live browser.
 | `Card` + `CardHeader/Title/Body/Footer` | Print-safe elevations only. `selected` reads as lit from within. |
 | `Badge` | **System state only** — never a score. `live` (default off) adds a breathing dot for a state that is still happening. Tone crossfades over `200ms`. |
 | `VisibilityBadge` | The ordinal read of a score. Label colour resolved by luminance. |
+| `MetaChip` | **A fact, never a state and never a score** — Epic 16.1. Sentence case, an `aria-hidden` Lucide glyph, the seated tone and a hairline; no `tone`, no `accent`, so it cannot be tinted into either of the other two pills. One token-only rule draws it on the paper scope (`ReportMetaItem` is this with the report's class) and on both Working themes. Use it wherever several short facts would otherwise sit in one line at one weight. |
 | `DataTable<Row>` | Tabular figures, right-aligned numerics, hairline rules. Subject row accented *and* marked `aria-current`. |
 | `ScoreDisplay` | The composite at 112px. Dim-to-lit reveal. Renders `—` for null. `badge` (default off) renders the `VisibilityBadge` under the band from the **same rounded score** as the numeral — Epic 16. |
 | `ChartFrame` | Shared shell: title, caption, **required** `ariaLabel`, hidden data table. Recharts charts mount inside it too, inheriting the same a11y contract. |

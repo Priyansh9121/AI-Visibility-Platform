@@ -36,6 +36,7 @@ import {
   EmptyState,
   ErrorState,
   LuminanceLedger,
+  MetaChip,
   PageHead,
   ScoreHero,
   ScoreMeter,
@@ -45,6 +46,7 @@ import {
 } from '@avp/design-system';
 import type { BadgeTone, Column, LedgerDimension, ScoreAbsence } from '@avp/design-system';
 import type { Dashboard, ScanStatus, ScanSummary } from '@avp/shared-types';
+import { Layers, Users } from 'lucide-react';
 import { formatStamp } from '@/lib/dates';
 
 /**
@@ -243,10 +245,11 @@ export function DashboardView({
         eyebrow="Agency"
         title={agency.name}
         aside={
-          <p className="text-ui-sm text-text-secondary">
-            <span className="font-display font-semibold text-text-primary">{`${seats.used} / ${seats.limit}`}</span>
-            {' seats'}
-          </p>
+          // An account fact beside the title, in the shape a fact takes
+          // everywhere now — Epic 16.1. It was a sentence at one weight with
+          // the ratio bolded; the chip says the same thing without asking
+          // the display face to do a badge's job.
+          <MetaChip icon={<Users />}>{`${seats.used} / ${seats.limit} seats`}</MetaChip>
         }
       />
 
@@ -354,11 +357,17 @@ function PortfolioHero({ recentScans }: { recentScans: readonly ScanSummary[] })
           : `${visibilityBandLabel(median)} at the median`
       }
       meta={
-        <span>
-          {median == null
-            ? 'The median appears once a scan finishes and is scored.'
-            : `Across ${scored.length} scored ${scored.length === 1 ? 'scan' : 'scans'} below.`}
-        </span>
+        // The denominator as a chip, the absence as a sentence — Epic 16.1. A
+        // count is a fact and takes the fact's shape; "there is no median yet"
+        // is an explanation, and an explanation in a pill would read as a
+        // state the operator has to clear.
+        median == null ? (
+          <span>The median appears once a scan finishes and is scored.</span>
+        ) : (
+          <MetaChip icon={<Layers />}>
+            {`Across ${scored.length} scored ${scored.length === 1 ? 'scan' : 'scans'} below`}
+          </MetaChip>
+        )
       }
       aside={
         latestPerClient.length === 0 ? undefined : (
