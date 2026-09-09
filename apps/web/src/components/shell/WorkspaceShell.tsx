@@ -53,7 +53,7 @@
  * untouched, which `reportIsolation.test.ts` enforces rather than promises.
  */
 
-import { useCallback, useEffect, useState, type JSX, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type JSX, type ReactNode } from 'react';
 import { AppShell, Button } from '@avp/design-system';
 import { api } from '@/lib/api';
 import { latestScores, sidebarClients } from '@/lib/shell/clientList';
@@ -130,9 +130,36 @@ export function WorkspaceShell({
     if (current !== 'clients' && readOpen()) setClientsOpen(true);
   }, [current]);
 
+  /*
+   * THE LIST LOADS ONCE, AND THE FETCH OUTLIVES ITS OWN STATE CHANGE — Epic 14.2.
+   *
+   * As shipped in Epic 13 this effect depended on `[clientsOpen, list.kind]`
+   * and set `list.kind` to `loading` inside its own body. That is a cycle:
+   * the state change re-ran the effect, React first ran the previous run's
+   * cleanup — which flipped `cancelled` — and the second run returned early
+   * because the list was no longer `idle`. The response then arrived into a
+   * closure that had been told to discard it, and "Loading clients…" stayed
+   * on screen for every account, forever. A static render cannot show a
+   * state that never arrives, which is why nothing caught it until the
+   * founder opened the disclosure live; `WorkspaceShell.test.tsx` now mounts
+   * the real component and clicks.
+   *
+   * So the fetch is keyed on the disclosure OPENING and nothing else. A ref
+   * makes it fire once per mount, and the only thing that cancels it is the
+   * component going away.
+   */
+  const fetchStarted = useRef(false);
+  const unmounted = useRef(false);
+  useEffect(
+    () => () => {
+      unmounted.current = true;
+    },
+    [],
+  );
+
   useEffect(() => {
-    if (!clientsOpen || list.kind !== 'idle') return;
-    let cancelled = false;
+    if (!clientsOpen || fetchStarted.current) return;
+    fetchStarted.current = true;
     setList({ kind: 'loading' });
     void (async () => {
       try {
@@ -140,20 +167,17 @@ export function WorkspaceShell({
         // and the recent scans the scores are read off. See lib/shell/clientList
         // for what that derivation can and cannot claim.
         const [page, dashboard] = await Promise.all([api.clients(), api.dashboard(50)]);
-        if (cancelled) return;
+        if (unmounted.current) return;
         setList({
           kind: 'ready',
           rows: sidebarClients(page.data, latestScores(dashboard)),
           more: page.nextCursor !== null,
         });
       } catch {
-        if (!cancelled) setList({ kind: 'error' });
+        if (!unmounted.current) setList({ kind: 'error' });
       }
     })();
-    return () => {
-      cancelled = true;
-    };
-  }, [clientsOpen, list.kind]);
+  }, [clientsOpen]);
 
   const toggleClients = useCallback(() => {
     setClientsOpen((open) => {
