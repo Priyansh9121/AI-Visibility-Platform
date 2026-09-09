@@ -38,7 +38,8 @@ export type ClientSection =
   | 'gaps'
   | 'prompts'
   | 'alerts'
-  | 'crawler';
+  | 'crawler'
+  | 'competitors';
 
 export interface ClientNavItem {
   /** `null` for the Report, which is a link out rather than a section. */
@@ -113,6 +114,21 @@ export const CLIENT_NAV: readonly ClientNavCluster[] = [
     label: 'Investigation',
     items: [
       { section: 'gaps', label: 'Answer gaps', path: '/gaps', accent: 0 },
+      // Epic 13. The field compared dimension by dimension, from the latest
+      // scan's report. It is INVESTIGATION and not MEASUREMENT for the same
+      // reason Answer gaps is: no row it shows was written for it. The
+      // per-rival figures are derived on read from rows a scan already
+      // persisted (`CompetitorComparison` has no stored column), and this
+      // screen derives one step further — which rival leads on which
+      // dimension, and by how much. It sits beside Answer gaps because both
+      // read the same competitive picture: Rankings says who is ahead over
+      // time, Answer gaps says on which QUESTIONS, this says on which
+      // DIMENSIONS. Measurement is also full — `clientNav.test.ts` says so —
+      // but that is the constraint, not the reason.
+      //
+      // Inserted ABOVE Prompts and Alerts with accent 3, not 1: accents are
+      // identities, and Prompts stays the hue it has been since 9.24.
+      { section: 'competitors', label: 'Competitors', path: '/competitors', accent: 3 },
       { section: 'prompts', label: 'Prompts', path: '/prompts', accent: 1 },
       // Epic E. The seat B.1 reserved and `clientNav.test.ts` asserted would
       // fit — taken without touching any hue above it, which is the property
