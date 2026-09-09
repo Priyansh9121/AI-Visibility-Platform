@@ -104,19 +104,29 @@ export default function ReportPageRoute({
 
   return (
     /*
-      WIDE, and the document is placed on a desk — Epic 14.1.
+      The document is placed on a desk — Epic 14.1 — at the PRESENTING width.
 
       The report itself keeps its 52rem paper measure; that is the artefact
       and it is not up for debate. What was wrong on the live dark build was
       everything around it: a fixed-width white column dropped straight onto
-      the workspace ground read as a clipped phone screenshot. The shell now
-      runs to the app width and `.avp-report-frame` gives the page a light
-      neutral desk and a real edge, so it reads as a document sitting on a
-      surface. Route-level framing only — ReportView and the report's tokens
-      are untouched, which ReportView.test.tsx and reportIsolation.test.ts
-      keep asserting.
+      the workspace ground read as a clipped phone screenshot.
+      `.avp-report-frame` gives the page a light neutral desk and a real
+      edge, so it reads as a document sitting on a surface.
+
+      NOT widened. Epic 14.1 first shipped this route on the shell's Working
+      measure (`--avp-app-max`), and design-direction.md's width table has
+      governed this route to `--avp-report-width` since Epic 9.19. The desk
+      made the mistake visible: it spanned 90rem while the page inside it
+      capped at 52rem, and the gap was a dead coloured field either side.
+      On the shell's own default measure — report width plus padding — the
+      desk hugs the page. `reportWidth.test.ts` holds this; widening the
+      route again means amending the table first.
+
+      Route-level framing only — ReportView and the report's tokens are
+      untouched, which ReportView.test.tsx and reportIsolation.test.ts keep
+      asserting.
     */
-    <WorkspaceShell current="dashboard" wide>
+    <WorkspaceShell current="dashboard">
       {/*
         Operator chrome, deliberately ABOVE the report rather than inside it.
         ReportView is the document that gets sent; anything to do with sending
