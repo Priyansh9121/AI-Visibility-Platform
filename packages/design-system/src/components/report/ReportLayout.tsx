@@ -58,6 +58,72 @@ export function ReportHeader({ subject, subtitle, meta, className }: ReportHeade
   );
 }
 
+export interface ReportMetaItemProps {
+  /**
+   * A Lucide glyph (MIT) or nothing — the licensed-assets rule. Drawn at
+   * 13px by the stylesheet whatever size the element was given, and hidden
+   * from assistive tech: the text beside it is the fact, the glyph is only
+   * its shape.
+   */
+  icon?: ReactNode;
+  /** Set for a domain, so the one machine-readable fact reads as one. */
+  mono?: boolean;
+  children: ReactNode;
+  className?: string;
+}
+
+/**
+ * One fact in the report's byline — Epic 16.
+ *
+ * The byline carries five facts: domain, industry, prompt count, engine count,
+ * scan date. Set as a run of grey text at one weight they read as a log line
+ * under the title; given a shape each, they read as the document's
+ * credentials. That is the whole job of this element, and the shape is the
+ * cheapest one the paper system has: a hairline, the seated tone and the
+ * chip radius the shape lock already reserves for chips. No fill that would
+ * not survive greyscale, no colour that could be read as a score — a byline
+ * chip is never on the ramp, so `VisibilityBadge` and this cannot be confused.
+ */
+export function ReportMetaItem({ icon, mono = false, children, className }: ReportMetaItemProps): JSX.Element {
+  return (
+    <span className={cn('avp-report__meta-item', mono && 'avp-report__meta-item--mono', className)}>
+      {icon != null && (
+        <span className="avp-report__meta-icon" aria-hidden="true">
+          {icon}
+        </span>
+      )}
+      {children}
+    </span>
+  );
+}
+
+export interface ScoreBlockProps {
+  /** The figure: the composite, its badge and its small ledger. */
+  figure: ReactNode;
+  /** The explanation, in prose. */
+  children: ReactNode;
+  className?: string;
+}
+
+/**
+ * The score and its explanation, framed as one unit — Epic 16.
+ *
+ * A rule above and a rule below, and the figure and the prose in two columns
+ * between them. Before this the numeral sat beside its paragraph with nothing
+ * saying they belonged together, and the eye took the number and left the
+ * sentence. The rules are hairlines, so the frame prints; the columns collapse
+ * under 40rem so a phone reads the figure first and the explanation second,
+ * which is the order the beat argues in.
+ */
+export function ScoreBlock({ figure, children, className }: ScoreBlockProps): JSX.Element {
+  return (
+    <div className={cn('avp-scoreblock', className)}>
+      <div className="avp-scoreblock__figure">{figure}</div>
+      <div className="avp-scoreblock__explain">{children}</div>
+    </div>
+  );
+}
+
 export interface BeatProps {
   id: BeatId;
   /** The finding, stated as a claim. Not a section label. */

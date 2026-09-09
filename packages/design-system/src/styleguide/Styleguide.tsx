@@ -1,5 +1,5 @@
 import { useState, type JSX, type ReactNode } from 'react';
-import { ArrowRight, Download, Search, Trash2 } from 'lucide-react';
+import { ArrowRight, Bot, CalendarDays, Download, Globe, MessageSquare, Search, Trash2, Users } from 'lucide-react';
 import {
   Button,
   Card,
@@ -20,6 +20,8 @@ import {
   ChartPatterns,
   ReportPage,
   ReportHeader,
+  ReportMetaItem,
+  ScoreBlock,
   Beat,
   Prose,
   Evidence,
@@ -717,25 +719,41 @@ export function Styleguide(): JSX.Element {
               subtitle="How this practice appears when buyers ask AI assistants for a recommendation."
               meta={
                 <>
-                  <span>28 prompts</span>
-                  <span>2 engines</span>
-                  <span>3 competitors</span>
-                  <span>Scanned 20 Aug 2026</span>
+                  <ReportMetaItem icon={<Globe />} mono>
+                    example.com
+                  </ReportMetaItem>
+                  <ReportMetaItem icon={<MessageSquare />}>28 prompts</ReportMetaItem>
+                  <ReportMetaItem icon={<Bot />}>2 engines</ReportMetaItem>
+                  <ReportMetaItem icon={<Users />}>3 competitors</ReportMetaItem>
+                  <ReportMetaItem icon={<CalendarDays />}>Scanned 20 Aug 2026</ReportMetaItem>
                 </>
               }
             />
 
             <Beat id="score" heading="You appear in fewer than half the answers buyers see.">
-              <div className="sg-split">
-                <ScoreDisplay score={layout.composite} />
+              <ScoreBlock
+                figure={
+                  <>
+                    <ScoreDisplay score={layout.composite} badge />
+                    <LuminanceLedger
+                      subjectName={SUBJECT}
+                      dimensions={DIMENSIONS}
+                      compact
+                      annotateGap={false}
+                      animate={false}
+                    />
+                  </>
+                }
+              >
                 <Prose>
                   <p>
                     Across the tracked prompt set, this practice is named in a minority of answers, and
-                    is rarely the source those answers cite. The score below is the weighted composite
-                    of five measured dimensions.
+                    is rarely the source those answers cite. The score is the weighted composite of
+                    five measured dimensions, drawn as light beside it and in full in the next
+                    section.
                   </p>
                 </Prose>
-              </div>
+              </ScoreBlock>
             </Beat>
 
             <Beat

@@ -131,8 +131,12 @@ in `tokens/elevation.ts` is Epic 0's set, applied through the paper scope.
 
 `ReportView.test.tsx` asserts, for every report fixture, none of:
 `avp-ledger--working`, `avp-trend__area`, `avp-hero` — alongside the existing
-stagger / compact / partial guards. The report never opts in; it never opts
-out.
+stagger / partial guards. The report never opts in; it never opts out.
+
+The **compact** guard was amended in Epic 16, on purpose: the score beat now
+draws one compact column beside the numeral (§7), so the guard asserts the
+gap beat's full column is never compact and that no second compact column
+exists, rather than that the document carries none.
 
 ### Verified
 
@@ -835,7 +839,7 @@ a live browser.
 | `Badge` | **System state only** — never a score. `live` (default off) adds a breathing dot for a state that is still happening. Tone crossfades over `200ms`. |
 | `VisibilityBadge` | The ordinal read of a score. Label colour resolved by luminance. |
 | `DataTable<Row>` | Tabular figures, right-aligned numerics, hairline rules. Subject row accented *and* marked `aria-current`. |
-| `ScoreDisplay` | The composite at 112px. Dim-to-lit reveal. Renders `—` for null. |
+| `ScoreDisplay` | The composite at 112px. Dim-to-lit reveal. Renders `—` for null. `badge` (default off) renders the `VisibilityBadge` under the band from the **same rounded score** as the numeral — Epic 16. |
 | `ChartFrame` | Shared shell: title, caption, **required** `ariaLabel`, hidden data table. Recharts charts mount inside it too, inheriting the same a11y contract. |
 | `ChartPatterns` | SVG pattern defs for competitor series — the B&W fallback. |
 | `LuminanceLedger` | The hero. See §5. `unmeasured` (default off) draws the column as shape only and stops it claiming a score nobody took. |
@@ -845,6 +849,7 @@ a live browser.
 | `TrendChart` | One line per series across a client's scan history. The first time-series shape here. See §5d. |
 | `LocalNav` / `LocalNavItem` | Navigation scoped to ONE record, nested inside the agency shell. See §5e. |
 | `ReportPage` / `ReportHeader` / `Beat` / `Prose` / `Evidence` / `FixList` | Narrative report primitives. See §7. |
+| `ReportMetaItem` / `ScoreBlock` | The byline's shaped facts, and the framed score-plus-explanation unit — Epic 16. See §7. |
 
 ---
 
@@ -917,6 +922,28 @@ the structural label so the heading is free to argue.
 nothing else. There is no free-text body prop and no children, so **a paragraph
 of scraped answer text has nowhere to go.** The facts-only rule is enforced by the
 prop types rather than by a reviewer noticing.
+
+### The byline and the score beat — Epic 16
+
+**`<ReportMetaItem icon mono>`.** The header's five facts — domain, industry,
+prompt count, engine count, scan date — used to sit in one grey run at one
+weight and read as a log line under the title. Each now has a shape: the
+seated tone, a hairline and the chip radius the shape lock reserves for
+chips, with a Lucide glyph at 13px that is `aria-hidden` because the text is
+the fact. Level-1 elevation only, so it prints; never on the ramp, so it can
+never be read as a score. `mono` is for the domain.
+
+**`<ScoreBlock figure>`.** A rule above, a rule below, and the figure and
+its prose in two columns between them, collapsing to one under 40rem. The
+figure is `ScoreDisplay` with `badge` — the badge painted from the same
+rounded score as the digits, which is what makes the tie structural rather
+than a coincidence of two interpolations a fraction apart — and the Luminance
+Ledger drawn `compact` at its side. The full column still follows in the gap
+beat with its gutter labels and gap annotation; the compact one is the same
+chart at the size of the number, so the number is never seen without the
+shape that explains it. Drawn only when there is a score. Print-safe
+throughout: hairlines, the paper ramp, no fill that would not survive
+greyscale.
 
 ---
 

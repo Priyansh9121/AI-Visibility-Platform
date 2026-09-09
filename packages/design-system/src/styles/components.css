@@ -327,6 +327,9 @@
   max-width: 34ch;
 }
 
+/* The badge is a child of the flex column, so it must not stretch. */
+.avp-score__badge { align-self: flex-start; margin-top: var(--avp-space-1); }
+
 /* ============================== Hero ============================== */
 /*
  * The one figure at the top of a screen — Epic 14.
@@ -1497,11 +1500,52 @@
 .avp-report__meta {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--avp-space-4);
+  gap: var(--avp-space-2);
   margin-top: var(--avp-space-5);
   font-size: var(--avp-text-ui-sm);
   color: var(--avp-text-tertiary);
 }
+
+/* The byline's facts, each given a shape — Epic 16. Seated tone, hairline,
+   chip radius: level-1 elevation, so it prints. Never on the ramp. */
+.avp-report__meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--avp-space-2);
+  padding: var(--avp-space-1) var(--avp-space-3);
+  border: 1px solid var(--avp-line-hairline);
+  border-radius: var(--avp-radius-full);
+  background: var(--avp-surface-sunken);
+  font-size: var(--avp-text-ui-xs);
+  line-height: var(--avp-leading-ui);
+  color: var(--avp-text-secondary);
+}
+.avp-report__meta-item--mono { font-family: var(--avp-font-mono); }
+.avp-report__meta-icon { display: inline-flex; flex: none; opacity: 0.65; }
+.avp-report__meta-icon > svg { width: 13px; height: 13px; }
+
+/* The score and its explanation as one framed unit — Epic 16. Two hairlines
+   and two columns; the figure column is the numeral stack with the compact
+   ledger at its side, both on the baseline. */
+.avp-scoreblock {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--avp-space-8);
+  align-items: start;
+  padding: var(--avp-space-6) 0;
+  border-top: 1px solid var(--avp-line-hairline);
+  border-bottom: 1px solid var(--avp-line-hairline);
+}
+@media (min-width: 40rem) {
+  .avp-scoreblock { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--avp-space-10); }
+}
+.avp-scoreblock__figure {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--avp-space-6);
+}
+.avp-scoreblock__figure > .avp-score { flex: 1 1 auto; min-width: 0; }
+.avp-scoreblock__figure > .avp-ledger { flex: none; }
 
 /* Beats are separated by --avp-beat, which is larger than any intra-beat
    spacing, so the five-part structure is visible from the page thumbnail. */
