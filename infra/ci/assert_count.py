@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 PATTERNS: dict[str, tuple[str, re.Pattern[str]]] = {
     "api-pytest": ("floor", re.compile(r"(\d+) passed")),
     "workers-pytest": ("floor", re.compile(r"(\d+) passed")),
@@ -45,7 +46,10 @@ def main(argv: list[str]) -> int:
     kind, pattern = PATTERNS[key]
     config = json.loads((HERE / "floors.json").read_text())
     bound = config["floors" if kind == "floor" else "ceilings"][key]
-    text = log_path.read_text(errors="replace")
+    # vitest colours its summary when it thinks it has a TTY (it does on a
+    # GitHub runner): "Tests \x1b[22m \x1b[1m\x1b[32m606 passed". Strip escapes
+    # before matching so the count is read from the words, not the paint.
+    text = ANSI.sub("", log_path.read_text(errors="replace"))
 
     matches = pattern.findall(text)
     if not matches:

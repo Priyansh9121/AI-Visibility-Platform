@@ -42,6 +42,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # Plain summaries in the logs the count checker reads (it strips ANSI too).
+  NO_COLOR: "1"
+  FORCE_COLOR: "0"
   # The test suite's own discovery variables (apps/api/tests/conftest.py).
   # Service containers publish on the runner's localhost.
   AVP_TEST_DATABASE_URL: postgresql+asyncpg://avp:avp@127.0.0.1:5432/avp_test
