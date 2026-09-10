@@ -106,3 +106,6 @@ def is_valid(value: str, expected_prefix: str | None = None) -> bool:
     except InvalidIdError:
         return False
     return True
+
+
+import os
