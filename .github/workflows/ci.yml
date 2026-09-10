@@ -124,9 +124,11 @@ jobs:
           python3 ../../infra/ci/assert_count.py api-pytest "$RUNNER_TEMP/pytest.log"
 
       - name: OpenAPI contract is committed and current
+        # The exporter only writes inside the repo, so regenerate the committed
+        # file in place and let git say whether anything moved.
         run: |
-          uv run python scripts/export_openapi.py "$RUNNER_TEMP/openapi.json" > /dev/null
-          diff -u ../../packages/shared-types/openapi.json "$RUNNER_TEMP/openapi.json" \
+          uv run python scripts/export_openapi.py > /dev/null
+          git diff --exit-code -- ../../packages/shared-types/openapi.json \
             || { echo "::error::packages/shared-types/openapi.json is stale — run scripts/export_openapi.py and commit"; exit 1; }
 
   workers:
