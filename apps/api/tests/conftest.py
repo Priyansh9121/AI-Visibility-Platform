@@ -42,10 +42,25 @@ TEST_REDIS_URL = os.environ.get("AVP_TEST_REDIS_URL", "redis://127.0.0.1:6379/15
 @pytest.fixture(scope="session")
 def settings() -> Settings:
     return Settings(
+        # HERMETIC — Epic 18. `Settings` reads `.env` by default, so until the
+        # CI gate ran without one, this fixture silently inherited whatever
+        # keys the developer's `.env` held: fourteen tests passed locally only
+        # because a real ANTHROPIC_API_KEY was present for a code path whose
+        # provider call is mocked. The suite now supplies its own values and
+        # reads no file, so it sees the same world on every machine — and a
+        # test that needs a provider must mock the provider, never the key.
+        _env_file=None,
         environment="test",
         database_url=TEST_DATABASE_URL,
         redis_url=TEST_REDIS_URL,
         app_secret="test-secret-not-used-in-any-real-environment",
+        # Placeholders, so point-of-use checks pass and the mocks take over.
+        # Any test that reaches a real provider with these fails loudly.
+        anthropic_api_key="test-anthropic-key-not-real",
+        openai_api_key="test-openai-key-not-real",
+        serpapi_key="test-serpapi-key-not-real",
+        stripe_secret_key="sk_test_not_real",
+        stripe_price_id="price_test_not_real",
         # Argon2 at production cost makes a suite that logs in dozens of times
         # unbearably slow. These are the library minimums; every test that
         # cares about hashing correctness still exercises the real algorithm.
