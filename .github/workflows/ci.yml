@@ -1,158 +1,244 @@
 # ===========================================================================
-# Continuous integration
-# ===========================================================================
+# CI — the gate in front of `main`. Epic 18.
 #
-# Nothing previously enforced lint or tests before a push. Both halves of the
-# project were checked by hand, which is how a failing test and ~50 unused
-# exports survived.
+# north-star.md §4.3 named this as the first piece of physical architecture
+# that must exist, prior to any deploy target. It runs the FULL existing suite
+# on every push and pull request and fails on anything less than fully green.
 #
-# Three jobs:
+# Two rules, both from an incident this repository already had (§4.3):
 #
-#   frontend           lint + build. No services, no secrets.
-#   backend-lint       static analysis only. No database.
-#   backend-tests      the integration suite, against a PostgreSQL service
-#                      container created for the run and thrown away after.
+#   1. No test or lint command is piped. Each writes to a file, its OWN exit
+#      status is checked, and only then is the file read. A run piped through
+#      `tail` reports the pipe's exit code and reads as green when it is not.
+#   2. Counts are asserted, not only exit codes — infra/ci/assert_count.py
+#      against infra/ci/floors.json. Without a database 186 API tests ERROR
+#      and the passing count silently drops; an exit code cannot tell that
+#      from a full run.
 #
-# The split matters: backend-lint gives a fast signal that does not depend on
-# a database being reachable, so a syntax error is reported in seconds rather
-# than after the service container has spun up.
+# Three jobs, one per runtime, so a failure names its half in seconds:
 #
-# SECRETS: none are required, and none must be added. The test job talks to
-# an ephemeral container on localhost. It must NEVER be pointed at the real
-# Supabase project — see the DATABASE_URL below, which is hard-coded to the
-# service container precisely so nobody wires production credentials in.
+#   api       ruff, mypy (ceiling), alembic upgrade head against a real
+#             Postgres 17 service, then pytest against it and a real Redis;
+#             the OpenAPI export is diffed against the committed contract.
+#   workers   pytest, with the same services (it shares the API's models).
+#   web       shared-types, design-system and web: tests, typechecks, and the
+#             styleguide build; the generated TS contract is diffed too.
+#
+# SECRETS: none. The services are ephemeral containers on localhost and the
+# suite's `AVP_TEST_*` variables are pointed at them by name. No provider key
+# is needed — every third-party call in the suite is faked at the boundary.
 # ===========================================================================
 
 name: CI
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
-    branches: ["**"]
+    branches: [main]
 
-# Cancel an in-flight run when a newer commit lands on the same ref.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # The test suite's own discovery variables (apps/api/tests/conftest.py).
+  # Service containers publish on the runner's localhost.
+  AVP_TEST_DATABASE_URL: postgresql+asyncpg://avp:avp@127.0.0.1:5432/avp_test
+  AVP_TEST_REDIS_URL: redis://127.0.0.1:6379/15
+
 jobs:
-  frontend:
-    name: Frontend — lint and build
+  api:
+    name: api — ruff, mypy, migrations, pytest
     runs-on: ubuntu-latest
-
+    timeout-minutes: 20
     defaults:
       run:
-        working-directory: frontend
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - run: npm ci
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Build
-        run: npm run build
-
-      - name: Report bundle size
-        run: |
-          echo "### Frontend bundle" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          ls -lh dist/assets/*.js | awk '{print $5, $9}' >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-
-  backend-lint:
-    name: Backend — lint
-    runs-on: ubuntu-latest
-
-    defaults:
-      run:
-        working-directory: backend
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: backend/package-lock.json
-
-      - run: npm ci
-
-      - name: Lint
-        run: npm run lint
-
-  backend-tests:
-    name: Backend — integration tests
-    runs-on: ubuntu-latest
-
-    defaults:
-      run:
-        working-directory: backend
-
+        working-directory: apps/api
     services:
       postgres:
-        image: postgres:16
+        image: postgres:17
         env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: construction_portal_test
+          POSTGRES_USER: avp
+          POSTGRES_PASSWORD: avp
+          POSTGRES_DB: avp_test
         ports:
           - 5432:5432
-        # Do not start the suite until the database actually answers.
         options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 10s
+          --health-cmd "pg_isready -U avp -d avp_test"
+          --health-interval 5s
           --health-timeout 5s
-          --health-retries 10
-
-    env:
-      NODE_ENV: test
-
-      # Ephemeral service container on localhost. NEVER point this at the
-      # real Supabase project — the suite creates and deletes rows.
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/construction_portal_test
-
-      # No TLS to a container on localhost.
-      DB_SSL: "false"
-
-      # Test-only signing key. Must be >= 32 characters or the app refuses
-      # to boot. This is not a secret: it signs nothing outside this run.
-      JWT_SECRET: ci-only-not-a-secret-value-padded-to-length-abcdefgh
-
-      DEFAULT_TIMEZONE: Asia/Kolkata
-      DEFAULT_CURRENCY: INR
-
+          --health-retries 20
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     steps:
       - uses: actions/checkout@v4
 
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: apps/api/uv.lock
+
+      - name: Install (locked)
+        run: uv sync --frozen
+
+      - name: ruff (src and tests — scripts/ carries an accepted baseline)
+        run: uv run ruff check src tests
+
+      - name: mypy (must not exceed the ceiling in infra/ci/floors.json)
+        run: |
+          set +e
+          uv run mypy src > "$RUNNER_TEMP/mypy.log" 2>&1
+          echo "mypy exit: $?"
+          set -e
+          tail -1 "$RUNNER_TEMP/mypy.log"
+          python3 ../../infra/ci/assert_count.py api-mypy-errors "$RUNNER_TEMP/mypy.log"
+
+      - name: alembic upgrade head (real Postgres, before any test)
+        working-directory: infra/db
+        env:
+          DATABASE_URL: ${{ env.AVP_TEST_DATABASE_URL }}
+        run: |
+          ../../apps/api/.venv/bin/alembic upgrade head
+          ../../apps/api/.venv/bin/alembic check
+
+      - name: pytest
+        run: |
+          rc=0; uv run pytest -q -p no:cacheprovider > "$RUNNER_TEMP/pytest.log" 2>&1 || rc=$?
+          tail -3 "$RUNNER_TEMP/pytest.log"
+          if [ "$rc" != 0 ]; then
+            grep -E "^(FAILED|ERROR)" "$RUNNER_TEMP/pytest.log" | head -40
+            exit "$rc"
+          fi
+          python3 ../../infra/ci/assert_count.py api-pytest "$RUNNER_TEMP/pytest.log"
+
+      - name: OpenAPI contract is committed and current
+        run: |
+          uv run python scripts/export_openapi.py "$RUNNER_TEMP/openapi.json" > /dev/null
+          diff -u ../../packages/shared-types/openapi.json "$RUNNER_TEMP/openapi.json" \
+            || { echo "::error::packages/shared-types/openapi.json is stale — run scripts/export_openapi.py and commit"; exit 1; }
+
+  workers:
+    name: workers — pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/workers
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: avp
+          POSTGRES_PASSWORD: avp
+          POSTGRES_DB: avp_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U avp -d avp_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: apps/workers/uv.lock
+
+      - name: Install (locked)
+        run: uv sync --frozen
+
+      - name: pytest
+        run: |
+          rc=0; uv run pytest -q -p no:cacheprovider > "$RUNNER_TEMP/pytest.log" 2>&1 || rc=$?
+          tail -3 "$RUNNER_TEMP/pytest.log"
+          if [ "$rc" != 0 ]; then
+            grep -E "^(FAILED|ERROR)" "$RUNNER_TEMP/pytest.log" | head -40
+            exit "$rc"
+          fi
+          python3 ../../infra/ci/assert_count.py workers-pytest "$RUNNER_TEMP/pytest.log"
+
+  web:
+    name: web — shared-types, design-system, web
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # Reads `packageManager` from package.json (pnpm 9.12.0).
+      - uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v4
         with:
+          # Node 22: the repo's engines floor is 20.11, and Node 24 breaks
+          # esbuild's service process in this workspace.
           node-version: "22"
-          cache: npm
-          cache-dependency-path: backend/package-lock.json
+          cache: pnpm
 
-      - run: npm ci
+      - name: Install (locked)
+        run: pnpm install --frozen-lockfile
 
-      - name: Apply migrations
-        # Fresh database: 002 baseline, then RLS, then reference data, then
-        # the duplicate-table drop. See database/migrations/README.md for
-        # why 005 runs even on a fresh install.
+      - name: shared-types — tests
+        working-directory: packages/shared-types
         run: |
-          for f in 002_baseline_supabase 003_supabase_rls \
-                   004_seed_reference_data 005_drop_duplicate_assignment_table; do
-            echo "--- $f"
-            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "database/migrations/$f.sql"
-          done
+          rc=0; pnpm test > "$RUNNER_TEMP/st.log" 2>&1 || rc=$?
+          grep -E "^# (pass|fail)" "$RUNNER_TEMP/st.log"
+          [ "$rc" = 0 ] || { tail -60 "$RUNNER_TEMP/st.log"; exit "$rc"; }
+          python3 ../../infra/ci/assert_count.py shared-types-node-test "$RUNNER_TEMP/st.log"
 
-      - name: Test
-        run: npm test
+      - name: shared-types — typecheck
+        working-directory: packages/shared-types
+        run: pnpm typecheck
+
+      - name: shared-types — generated contract is committed and current
+        working-directory: packages/shared-types
+        run: |
+          pnpm generate > /dev/null
+          git diff --exit-code -- src/api.gen.ts \
+            || { echo "::error::packages/shared-types/src/api.gen.ts is stale — run pnpm generate and commit"; exit 1; }
+
+      - name: design-system — tests
+        working-directory: packages/design-system
+        run: |
+          rc=0; pnpm test > "$RUNNER_TEMP/ds.log" 2>&1 || rc=$?
+          grep -E "Tests |Test Files" "$RUNNER_TEMP/ds.log"
+          [ "$rc" = 0 ] || { grep -E "FAIL|AssertionError|Error:" "$RUNNER_TEMP/ds.log" | head -40; exit "$rc"; }
+          python3 ../../infra/ci/assert_count.py design-system-vitest "$RUNNER_TEMP/ds.log"
+
+      - name: design-system — typecheck
+        working-directory: packages/design-system
+        run: pnpm typecheck
+
+      - name: design-system — styleguide builds
+        working-directory: packages/design-system
+        run: pnpm build
+
+      - name: web — tests
+        working-directory: apps/web
+        run: |
+          rc=0; pnpm test > "$RUNNER_TEMP/web.log" 2>&1 || rc=$?
+          grep -E "Tests |Test Files" "$RUNNER_TEMP/web.log"
+          [ "$rc" = 0 ] || { grep -E "FAIL|AssertionError|Error:" "$RUNNER_TEMP/web.log" | head -40; exit "$rc"; }
+          python3 ../../infra/ci/assert_count.py web-vitest "$RUNNER_TEMP/web.log"
+
+      - name: web — typecheck
+        working-directory: apps/web
+        run: pnpm typecheck

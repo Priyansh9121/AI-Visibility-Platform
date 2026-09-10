@@ -32,7 +32,9 @@ environment is guaranteed to be wrong:
 - Managed Postgres and Redis provisioning
 - Secret storage wiring — Epic 1 uses `.env` locally; a deployed environment
   must inject the variables in `apps/api/.env.example` from a real secret store
-- CI pipeline definition
+
+**Built since:** the CI gate — `.github/workflows/ci.yml` with
+`infra/ci/` (Epic 18). It is a gate, not a deploy: nothing here deploys yet.
 
 ## Deployment-time requirements already fixed
 

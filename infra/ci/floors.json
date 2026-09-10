@@ -1,0 +1,13 @@
+{
+  "_why": "CI asserts COUNTS, not only exit codes. north-star.md §4.3 records the incident: without a database 186 API tests ERROR and the passing count silently drops from 605 to 398 while a piped run reads as green. A suite that quietly runs two-thirds of itself is the failure this file catches. Bump a floor when tests are legitimately added; never lower one without saying why in build-log.md. `mypy` is a CEILING: the count must not grow (it was 38 when north-star.md was written and 50 when Epic 18 measured it — the drift is the reason it is gated now).",
+  "floors": {
+    "api-pytest": 1194,
+    "workers-pytest": 13,
+    "shared-types-node-test": 53,
+    "design-system-vitest": 606,
+    "web-vitest": 818
+  },
+  "ceilings": {
+    "api-mypy-errors": 50
+  }
+}
