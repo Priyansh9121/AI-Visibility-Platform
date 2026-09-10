@@ -87,7 +87,7 @@ jobs:
           cache-dependency-glob: apps/api/uv.lock
 
       - name: Install (locked)
-        run: uv sync --frozen
+        run: uv sync --frozen --extra dev
 
       - name: ruff (src and tests — scripts/ carries an accepted baseline)
         run: uv run ruff check src tests
@@ -115,6 +115,7 @@ jobs:
           tail -3 "$RUNNER_TEMP/pytest.log"
           if [ "$rc" != 0 ]; then
             grep -E "^(FAILED|ERROR)" "$RUNNER_TEMP/pytest.log" | head -40
+            tail -80 "$RUNNER_TEMP/pytest.log"
             exit "$rc"
           fi
           python3 ../../infra/ci/assert_count.py api-pytest "$RUNNER_TEMP/pytest.log"
@@ -164,7 +165,7 @@ jobs:
           cache-dependency-glob: apps/workers/uv.lock
 
       - name: Install (locked)
-        run: uv sync --frozen
+        run: uv sync --frozen --extra dev
 
       - name: pytest
         run: |
@@ -172,6 +173,7 @@ jobs:
           tail -3 "$RUNNER_TEMP/pytest.log"
           if [ "$rc" != 0 ]; then
             grep -E "^(FAILED|ERROR)" "$RUNNER_TEMP/pytest.log" | head -40
+            tail -80 "$RUNNER_TEMP/pytest.log"
             exit "$rc"
           fi
           python3 ../../infra/ci/assert_count.py workers-pytest "$RUNNER_TEMP/pytest.log"
@@ -201,7 +203,7 @@ jobs:
         run: |
           rc=0; pnpm test > "$RUNNER_TEMP/st.log" 2>&1 || rc=$?
           grep -E "^# (pass|fail)" "$RUNNER_TEMP/st.log"
-          [ "$rc" = 0 ] || { tail -60 "$RUNNER_TEMP/st.log"; exit "$rc"; }
+          [ "$rc" = 0 ] || { tail -120 "$RUNNER_TEMP/st.log"; exit "$rc"; }
           python3 ../../infra/ci/assert_count.py shared-types-node-test "$RUNNER_TEMP/st.log"
 
       - name: shared-types — typecheck
@@ -220,7 +222,7 @@ jobs:
         run: |
           rc=0; pnpm test > "$RUNNER_TEMP/ds.log" 2>&1 || rc=$?
           grep -E "Tests |Test Files" "$RUNNER_TEMP/ds.log"
-          [ "$rc" = 0 ] || { grep -E "FAIL|AssertionError|Error:" "$RUNNER_TEMP/ds.log" | head -40; exit "$rc"; }
+          [ "$rc" = 0 ] || { tail -120 "$RUNNER_TEMP/ds.log"; exit "$rc"; }
           python3 ../../infra/ci/assert_count.py design-system-vitest "$RUNNER_TEMP/ds.log"
 
       - name: design-system — typecheck
@@ -236,7 +238,7 @@ jobs:
         run: |
           rc=0; pnpm test > "$RUNNER_TEMP/web.log" 2>&1 || rc=$?
           grep -E "Tests |Test Files" "$RUNNER_TEMP/web.log"
-          [ "$rc" = 0 ] || { grep -E "FAIL|AssertionError|Error:" "$RUNNER_TEMP/web.log" | head -40; exit "$rc"; }
+          [ "$rc" = 0 ] || { tail -120 "$RUNNER_TEMP/web.log"; exit "$rc"; }
           python3 ../../infra/ci/assert_count.py web-vitest "$RUNNER_TEMP/web.log"
 
       - name: web — typecheck
