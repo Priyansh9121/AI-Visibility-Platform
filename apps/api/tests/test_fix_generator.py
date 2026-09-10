@@ -383,13 +383,13 @@ class TestPrompt:
 
 
 class TestFailurePaths:
-    async def test_no_candidates_is_not_a_failure(self) -> None:
-        outcome = await fix_generator.generate_fixes(facts(), [])
+    async def test_no_candidates_is_not_a_failure(self, settings) -> None:
+        outcome = await fix_generator.generate_fixes(facts(), [], settings=settings)
         assert outcome.status == "empty"
         assert outcome.reason_code == "NO_CANDIDATES"
         assert outcome.fixes == []
 
-    async def test_a_provider_error_writes_nothing(self, monkeypatch) -> None:  # noqa: ANN001
+    async def test_a_provider_error_writes_nothing(self, settings, monkeypatch) -> None:  # noqa: ANN001
         import anthropic
 
         async def boom(**kwargs):  # noqa: ANN003, ARG001
@@ -399,13 +399,13 @@ class TestFailurePaths:
             anthropic.resources.messages.AsyncMessages, "parse", lambda self, **kw: boom(**kw)
         )
         candidates = build_candidates(HELPSCOUT, HELPSCOUT_FINDINGS)
-        outcome = await fix_generator.generate_fixes(facts(), candidates)
+        outcome = await fix_generator.generate_fixes(facts(), candidates, settings=settings)
         assert outcome.status == "failed"
         assert outcome.reason_code == "PROVIDER_UNREACHABLE"
         assert outcome.fixes == []
 
     async def test_an_overlong_title_degrades_rather_than_crashing(
-        self, monkeypatch
+        self, settings, monkeypatch
     ) -> None:  # noqa: ANN001
         """THE reproduction from Epic 9.17's live walkthrough.
 
@@ -458,14 +458,14 @@ class TestFailurePaths:
         )
         candidates = build_candidates(HELPSCOUT, HELPSCOUT_FINDINGS)
 
-        outcome = await fix_generator.generate_fixes(facts(), candidates)
+        outcome = await fix_generator.generate_fixes(facts(), candidates, settings=settings)
 
         assert outcome.status == "failed"
         assert outcome.reason_code == "PROVIDER_SCHEMA_VIOLATION"
         assert outcome.fixes == []
 
     async def test_the_schema_violation_is_reported_without_the_offending_copy(
-        self, monkeypatch, capsys
+        self, settings, monkeypatch, capsys
     ) -> None:  # noqa: ANN001
         """The log says which field and how long, never what it said.
 
@@ -502,7 +502,7 @@ class TestFailurePaths:
         )
         candidates = build_candidates(HELPSCOUT, HELPSCOUT_FINDINGS)
 
-        outcome = await fix_generator.generate_fixes(facts(), candidates)
+        outcome = await fix_generator.generate_fixes(facts(), candidates, settings=settings)
 
         assert outcome.reason_code == "PROVIDER_SCHEMA_VIOLATION"
         # structlog writes to stdout in this project, not through stdlib
@@ -514,7 +514,7 @@ class TestFailurePaths:
         assert secret not in logged, "model-authored copy must not reach the log"
 
     async def test_a_response_with_nothing_usable_is_a_failure_not_an_empty_list(
-        self, monkeypatch
+        self, settings, monkeypatch
     ) -> None:  # noqa: ANN001
         """An empty list and "we generated five inventions" are different states."""
         import anthropic
@@ -530,7 +530,7 @@ class TestFailurePaths:
             anthropic.resources.messages.AsyncMessages, "parse", lambda self, **kw: fake(**kw)
         )
         candidates = build_candidates(HELPSCOUT, HELPSCOUT_FINDINGS)
-        outcome = await fix_generator.generate_fixes(facts(), candidates)
+        outcome = await fix_generator.generate_fixes(facts(), candidates, settings=settings)
         assert outcome.status == "failed"
         assert outcome.reason_code == "NO_USABLE_FIXES"
 
