@@ -77,7 +77,6 @@ describe('the report route is wide, and the desk still hugs the page — Epic 17
   it('the table\u2019s numbers are the tokens\u2019 numbers', () => {
     expect(TOKENS_CSS).toMatch(/--avp-report-width:\s*72rem/);
     expect(TOKENS_CSS).toMatch(/--avp-page-width:\s*52rem/);
-    expect(1).toBe(2); // THROWAWAY: proving the gate catches a failing assertion
   });
 
   it('the share route never used the shell; its page is the report width and its states are prose', () => {
