@@ -41,6 +41,21 @@ logger = structlog.get_logger(__name__)
 # grounded engine can take 100s+ per prompt. Unbounded fan-out over 24 prompts x
 # 3 engines is 72 simultaneous requests, which buys rate limits, not speed.
 #
+# RAISED TO 12 — Epic 18.1, the scan-speed budget. Sized against measured
+# limits, not guessed: the answer models' accounts allow 10,000 requests a
+# minute (Anthropic) and 500 (OpenAI), read from the rate-limit headers on
+# 2026-09-10; twelve slots x three engines is 36 requests in flight, plus at
+# most twelve sentiment calls. Both SDK paths already name a 429 as
+# PROVIDER_RATE_LIMITED, and the Anthropic SDK retries one 429 within the
+# existing ENGINE_CALL_CEILING, which is untouched. Measured, not projected:
+# at c=4 Epic 9.2 saw a 288.5s loop in a 361.3s run; at c=8 Epic 18.1 saw
+# 200.4s in 308.9s — over by 8.9s, with a 59s tail the semaphore cannot
+# pack away (one 121s call at the ceiling holds its slot to the end); at
+# c=12 the numbers are in build-log.md's Epic 18.1 entry.
+#
+# The paragraph below is Epic 9.13's, kept because its reasoning about what
+# one slot costs still holds — only the count changed.
+#
 # STILL 4, AND DELIBERATELY UNMEASURED AT THREE ENGINES — Epic 9.13.
 #
 # This value has been 4 since Epic 4 and unraised since Epic 9.1 named raising
@@ -65,7 +80,7 @@ logger = structlog.get_logger(__name__)
 # What DID change and is not a prediction: per-scan COST. A 24-prompt scan goes
 # from 48 engine calls to 72, and sentiment (charged only where the subject is
 # named) from at most 48 to at most 72.
-PROMPT_CONCURRENCY = 4
+PROMPT_CONCURRENCY = 12
 
 
 def terminal_status_for(failures: int, total: int) -> tuple[ScanStatus, str | None]:
