@@ -14782,3 +14782,113 @@ No deploy step — that is item 3 of the brief, and it must be gated on this
 workflow passing first. No `mypy` clean-up. No coverage measurement.
 `playwright install` is not run in CI because no test launches a browser;
 the deploy image will need it, and that is where it will be installed.
+
+# Epic 18.2 — one real deploy: everything buildable without a vendor is built; the vendor is the founder's call
+
+**2026-09-10.** Item 3 of the pilot-ready brief. Nothing is deployed, and
+nothing here pretends to be: the brief is explicit that the host, the
+managed datastores, the SerpApi plan and error tracking are real accounts
+and real money, to be decided by the founder rather than picked on the
+project's behalf. What follows is every piece that is the same whichever
+host is chosen, built and **proven in CI**, and then the decision list.
+
+## Built and proven
+
+**`apps/api/Dockerfile`.** On Playwright's own Python image, pinned to
+`v1.62.0-noble` because `uv.lock` pins `playwright` 1.62.0 and the package
+looks for a browser build of exactly its own version — a mismatch is a
+container that boots and then fails its first technical audit. `uv` is
+copied from its own pinned image, dependencies are installed from the lock
+without the dev extra, the process runs as the image's non-root user, and
+the build context is the repo root because the migrations live in
+`infra/db`. `.dockerignore` admits only `apps/api` and `infra/db` and
+excludes `.env` by name, so a local secrets file can never be baked in.
+
+**Migrate on boot.** `docker-entrypoint.sh` runs `alembic upgrade head`
+as the first thing the container does and then `exec`s uvicorn. Chosen
+over a host "release phase" because a container that starts is the one
+mechanism every persistent-process host has; Alembic locks its version
+table, so two replicas starting together serialise rather than race, and a
+failed migration exits non-zero before a single request is served against
+a schema the code does not understand.
+
+**The non-negotiables, verified rather than assumed.** The README has said
+since Epic 1 that the app refuses to boot on the placeholder secret and
+forces the secure cookie in staging/production. The code did both
+(`config.py`'s `_harden_deployed_environments`); **no test covered
+either**. `test_deployed_settings.py` now asserts the refusal in both
+environments, the forced flag even when the host says `false`, and a rule
+that did not exist in code at all: `CORS_ALLOW_ORIGINS` may not be a
+wildcard or empty in a deployed environment — browsers reject
+wildcard-with-credentials, so `*` would not open the API, it would close it
+to every real frontend while looking permissive. Eleven tests; the API
+floor is 1205.
+
+**Proven against the container, not the module.** The CI gate gained an
+`image` job: it builds the Dockerfile on the runner, starts it with
+`ENVIRONMENT=production` and the placeholder secret and asserts a non-zero
+exit with the refusal in the log; then starts it with `staging` and a real
+secret against the service containers, waits for `/api/v1/health`, and
+asserts `/api/v1/ready` reports both datastores `ok` and that the entrypoint
+ran the migrations. Green on the first build
+(`run 34424782123`). Docker is not installed on the development machine,
+so the runner is where the image has ever been built — which is the right
+place for it to be true.
+
+**The health endpoint** already existed (`routers/health.py`): `/health`
+is liveness and touches nothing; `/ready` checks Postgres and Redis and
+returns 503 when either is down. A host's deploy check should poll
+`/ready`; the image's own `HEALTHCHECK` polls `/health`, for the reason the
+router gives — a liveness probe that fails on a database blip turns a
+partial outage into a restart loop.
+
+**`deploy.yml`.** Triggers on `workflow_run` when the `CI` workflow has
+*succeeded* on `main` — never on the push itself, so a red suite cannot
+deploy — and its one job is skipped until the repository variable
+`DEPLOY_TARGET` is set. It knows `fly` and `render` as names and fails
+loudly with what to add for each, so choosing a host is: set the variable,
+add the host's token as a repository secret, fill in one step, add the
+host's config file. Secrets go in the host's secret manager and the
+repository's encrypted secrets; nothing in either workflow carries a value.
+
+## Decisions needed from the founder before this can go further
+
+None of these is agent-buildable; each is an account, a bill, or a
+credential. The engineering above is the same whichever way they go.
+
+1. **Host for the API** — Fly.io or Render, or another persistent-process
+   host. It cannot be serverless: Playwright drives a browser process and
+   the scan executor runs in-process via `BackgroundTasks`, so a function
+   that returns and dies takes the scan with it. Both candidates run the
+   image above unchanged. Fly gives a `*.fly.dev` URL and a `fly.toml`;
+   Render a `*.onrender.com` URL and a `render.yaml`. Either needs one
+   secret in GitHub (`FLY_API_TOKEN` / `RENDER_API_KEY`) and
+   `DEPLOY_TARGET` set to `fly` or `render`.
+2. **Managed Postgres and Redis.** Any Postgres 17 that speaks the wire
+   protocol works through `asyncpg`; the one constraint is that the host
+   must not *require* `psycopg2`/`psycopg3` (LGPL, excluded). Fly Postgres,
+   Render Postgres, Neon and Supabase all work with asyncpg. Redis: the
+   host's managed Redis, or Upstash; `/0`, `/1`, `/2` must be one instance
+   or three coordinated ones (sessions, broker, results).
+3. **SerpApi plan.** The free tier is 250 searches a month, platform-wide,
+   and a scan uses 6 — about 41 scans a month across every agency. This
+   does not block standing the environment up; it blocks inviting several
+   agencies to scan. The two measured runs today used 12.
+4. **Error tracking.** Not required to deploy. Sentry's free tier is the
+   obvious default to propose, not adopt; the FastAPI and Next.js SDKs are
+   both MIT.
+5. **Web hosting.** Vercel is the path of least resistance for `apps/web`
+   and needs only `NEXT_PUBLIC_API_BASE_URL` at build time pointing at the
+   API's real URL, and the API's `CORS_ALLOW_ORIGINS` and
+   `PUBLIC_WEB_BASE_URL` pointing back. Confirm before the account is
+   created; it is the founder's org and billing either way.
+
+**Stripe stays in test mode** regardless (north-star.md §5.3.1).
+
+## What "done" still requires, and is waiting on the answers above
+
+One environment at a real platform URL; a merge to `main` that passes CI
+deploying without a human; and the actual acceptance test — sign up,
+submit a URL, watch a scan run to completion, see a scored report — on the
+deployed environment, watched live. The measured pipeline that acceptance
+test runs is Epic 18.1's.
