@@ -14892,3 +14892,83 @@ deploying without a human; and the actual acceptance test — sign up,
 submit a URL, watch a scan run to completion, see a scored report — on the
 deployed environment, watched live. The measured pipeline that acceptance
 test runs is Epic 18.1's.
+
+# Epic 18.1 — the scan-speed budget: 361.3s → 223.8s, under 300s, measured twice
+
+**2026-09-10.** Item 2 of the pilot-ready brief. A pure throughput change:
+`PROMPT_CONCURRENCY` in `scan_runner.py` from **4 to 12**. No change to
+scoring, engine count, `ENGINE_CALL_CEILING` (122.0s, still the same
+`asyncio.timeout`) or the report. Verified by the CI gate from Epic 18, not
+by a hand-run claim — the first change in this repository that gets to
+say that.
+
+## Sized against measured limits, not guessed
+
+Before raising anything, both answer models' account limits were read off
+the rate-limit headers of one minimal call each:
+
+| provider | model | requests / min | tokens / min |
+|---|---|---|---|
+| Anthropic | `claude-opus-5` | 10,000 | 10M in, 2M out |
+| OpenAI | `gpt-5.5` | 500 | 500k |
+
+Twelve slots × three engines is 36 requests in flight plus at most twelve
+sentiment calls — two orders of magnitude under Anthropic's limit and an
+order under OpenAI's. **Retry on 429:** the Anthropic path runs through the
+SDK with `max_retries=1`, and the SDK's retry set includes 429, inside the
+existing ceiling; the OpenAI path is raw `httpx` with no retry, and a 429
+is recorded as `PROVIDER_RATE_LIMITED` on that one engine result. At these
+limits that is optional, not necessary, and it stays as it is. Neither run
+below produced a single engine 429.
+
+## Measured, with `verify_e2e.py --prompts 24`, the harness Epics 9.1 and 9.2 used
+
+| | Epic 9.2 (c=4) | **c=8** | **c=12** |
+|---|---|---|---|
+| subject | linear.app | intercom.com | helpwise.io |
+| engines | 2 | 3 | 3 |
+| total | 361.3s | 308.9s | **223.8s** |
+| scan loop | 288.5s | 200.4s | **132.7s** |
+| engine-bound floor at c | — | 141.2s | 89.1s |
+| loop tail the semaphore cannot pack | — | 59.1s (30%) | 43.6s (33%) |
+| slowest single engine call | 91.5s | 121.4s | 121.9s |
+| everything outside the loop | 72.8s | 108.5s | 91.1s |
+| budget | over by 61.3s | **over by 8.9s** | **under by 76.2s** |
+| provider spend | — | $6.31 | $5.47 |
+
+**c=8 was tried first and missed by 8.9s.** The loop halved as projected,
+but the run's non-loop phases were 36s slower than 9.2's (competitor
+detection 40.0s against 20.9s — provider variance outside anything this
+knob touches), and the loop carries a tail the floor cannot express: one
+call at the 122s ceiling holds its slot to the end whatever the
+concurrency. So the knob went to 12, the smallest next step that projected
+under budget with the tail included, and it landed with 76s to spare.
+
+**Two honest caveats on the comparison.** The subjects differ, so the
+sentiment calls differ (59 on intercom, 24 on helpwise — charged only where
+the subject is named), which is part of why the c=12 loop is lower; the
+engine-bound floor normalises for that, and its ratio between the two runs
+(141.2 / 89.1 = 1.58) tracks the concurrency ratio (1.5). And 9.2 ran two
+engines where both runs today ran three, so today's runs did more work per
+prompt than the number they beat.
+
+## What the runs showed that is not this epic's to fix
+
+- **The ceiling was hit twice**, once per run: a 121s call is a 60s attempt,
+  a retry, and a timeout on both — `claude_search` answered 23 of 24 and
+  then 22 of 24. Whether 60s per attempt is still right is a separate,
+  explicit change (the brief's rule, and Epic 9.2's own reasoning); it is
+  not moved here as a side effect.
+- **SerpApi's free tier rate-limited three of six detection queries** on the
+  second run (`SERP_RATE_LIMITED`), so competitor detection came back
+  `weak_signal`. That is the free-tier throttle, not the platform, and it
+  is decision 3 in Epic 18.2's list.
+- The harness guards only its default subject (`basecamp.com`) against
+  reuse; any other existing domain is silently re-scanned as a new client.
+  Both runs today were fresh subjects regardless.
+
+## Verified
+
+API 1205, ruff clean, mypy at its 50 ceiling; the CI gate green on the
+commit. The two harness transcripts are in the session record; the tables
+above are copied from them verbatim.
