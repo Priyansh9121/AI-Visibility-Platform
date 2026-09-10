@@ -114,15 +114,19 @@ LEASE = timedelta(seconds=180)
 # level up — and unlike a reaper it actually STOPS the work rather than
 # relabelling the row while the spending carries on.
 #
-# 3,600s clears a maximal scan computed from the ceilings themselves: two
+# 2,400s clears a maximal scan computed from the ceilings themselves: two
 # co-citation waves and two SerpApi waves for detection, one prompt
 # generation, ceil(MAX_PROMPTS / PROMPT_CONCURRENCY) engine slots each costing
 # one engine ceiling plus one sentiment ceiling per engine, an audit page, and
-# fix generation — about 3,042s if every single call times out, which no real
+# fix generation — about 1,500s if every single call times out, which no real
 # scan does. `test_scan_executor.py` recomputes that sum from the constants, so
 # raising a ceiling anywhere fails a test here instead of quietly eating the
-# margin.
-MAX_SCAN_DURATION = timedelta(seconds=3_600)
+# margin — and LOWERING one does too, which is how this moved: it was 3,600s
+# against a 3,042s worst case at PROMPT_CONCURRENCY=4, and Epic 18.1's raise to
+# 12 halved the slot count, so the CI gate failed the "not more than twice the
+# worst case" half of that test. A backstop twice as loose as the thing it
+# backs is not a backstop. Same 1.6x margin as before, on the new number.
+MAX_SCAN_DURATION = timedelta(seconds=2_400)
 
 
 class ScanDeadlineError(Exception):

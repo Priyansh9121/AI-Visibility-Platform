@@ -14967,6 +14967,17 @@ prompt than the number they beat.
   reuse; any other existing domain is silently re-scanned as a new client.
   Both runs today were fresh subjects regardless.
 
+## What the gate caught on the first push
+
+`test_scan_executor.py` recomputes a maximal scan from the ceilings and
+asserts `MAX_SCAN_DURATION` clears it by less than 2x. Twelve slots halved
+the slot count, the worst case fell from 3,042s to about 1,500s, and the
+3,600s deadline failed the "not more than twice" half — a backstop twice as
+loose as the thing it backs is not a backstop. The deadline is **2,400s**
+now, the same 1.6x margin on the new number. That is exactly the coupling
+the test was written to enforce, and the reason the brief wanted this
+change to lean on the gate rather than on "I ran the tests".
+
 ## Verified
 
 API 1205, ruff clean, mypy at its 50 ceiling; the CI gate green on the
