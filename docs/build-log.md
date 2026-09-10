@@ -14688,3 +14688,97 @@ after on both routes at 1440 and 1920, plus the proof beat's tables at
 1440 using the width. Looked at rather than assumed: at 1440 the page now
 fills the content area with the sidebar beside it; at 1920 it is a
 document on a desk with an even margin, not a column in a field.
+
+# Epic 18 — the CI gate: every suite, every push, counts asserted, proven on a throwaway PR
+
+**2026-09-10.** `north-star.md` §4.3 named this as the first piece of physical
+architecture that must exist, prior to any deploy target. The brief listed
+it first for the same reason, and it went first.
+
+## What existed, honestly
+
+Not nothing: `.github/workflows/ci.yml` was committed on 2026-09-08 — a
+workflow for a different project (`frontend/`, `backend/`, a Supabase
+database called `construction_portal_test`), and its one run failed in 36
+seconds. Replaced wholesale. `north-star.md`'s "no `.github` directory"
+was true when written and stale by a week.
+
+## What was built
+
+`.github/workflows/ci.yml`, on every push and pull request against `main`,
+three jobs so a failure names its half in seconds:
+
+| job | runs |
+|---|---|
+| `api` | `ruff check src tests` (not `.` — `scripts/` carries an accepted baseline), `mypy` against a **ceiling**, `alembic upgrade head` and `alembic check` against a real **Postgres 17** service, `pytest` against it and a real **Redis 7**, then the OpenAPI export diffed against the committed contract |
+| `workers` | `pytest`, with the same services (it shares the API's models) |
+| `web` | shared-types tests, typecheck and the generated TS contract diffed; design-system tests, typecheck and the styleguide build; web tests and typecheck |
+
+The services publish on the runner's localhost and the suite finds them
+through its own `AVP_TEST_DATABASE_URL` / `AVP_TEST_REDIS_URL`
+(`conftest.py`), so nothing about the tests changed to run in CI. No
+secret is needed or set: every provider call in the suite is faked at the
+boundary.
+
+**The two rules from §4.3, both enforced structurally.** No test or lint
+command is piped: each writes a file, its own exit status is captured on
+the same line (`|| rc=$?`, because Actions runs `bash -e` and a plain
+`rc=$?` on the next line never executes), and only then is the file read.
+And the count is asserted: `infra/ci/assert_count.py` reads each suite's
+summary line and fails the job if it is under the floor in
+`infra/ci/floors.json` — api 1194, workers 13, shared-types 53,
+design-system 606, web 818. `mypy` is a ceiling at **50**, its measured
+count today; the doc's "pre-existing 38" had drifted by twelve without
+anyone deciding it could, which is the reason it is gated now. The choice
+was *not regress* rather than *zero*: forty-plus existing errors are their
+own piece of work, and a gate that fails on day one gates nothing.
+
+## What the gate found on its first honest runs
+
+Five red runs before green, and none of them was the workflow being wrong
+about the code:
+
+1. **`uv sync` needs `--extra dev`** — pytest, ruff and mypy live under the
+   dev extra in both Python projects.
+2. **vitest colours its summary on a runner**, so the count checker strips
+   ANSI before matching, and the workflow asks for no colour.
+3. **Fourteen API tests passed locally only because the developer's `.env`
+   held a real `ANTHROPIC_API_KEY`.** The settings fixture read `.env`
+   implicitly; the fixture is now hermetic (`_env_file=None`, placeholder
+   provider keys) so the suite sees the same world on every machine.
+4. **The generate-fixes endpoint dropped settings on the floor** — it called
+   the runner without them, so the runner fell back to the process getter
+   and `.env`. It takes `SettingsDep` now, the way the scan chain already
+   passed its own through. Four direct service calls in the failure-path
+   tests did the same and now take the fixture.
+5. The OpenAPI exporter refuses a path outside the repo; the check
+   regenerates the committed file in place and lets `git diff` decide.
+
+Items 3 and 4 are exactly the class of defect the gate exists for: the
+suite was green on one machine for a reason nobody had written down.
+
+## Proven, not assumed
+
+A throwaway branch (`ci/prove-the-gate`, PR #1, closed and deleted):
+
+- **Commit 1**: an unused import in `ids.py` and `expect(1).toBe(2)` in a web
+  test. The API job failed at ruff; the web job failed at the assertion;
+  the PR was blocked.
+- **Commit 2**: both reverted, and `ReportView.test.tsx` deleted. Every job
+  passed its tests — and the web job failed at the floor: *"729 passed,
+  floor is 818 — the suite silently shrank"*. The PR stayed blocked.
+
+The three jobs are **required status checks** on `main`
+(`strict: false`, `enforce_admins: false`). Admins are exempt on purpose:
+this repository's practice since Epic 0 is direct commits to `main` with
+the suites run by hand first, and a gate that rejected every such push
+would have been reverted within the day. A PR from anyone else cannot
+merge red; a push to `main` from the founder or this agent still runs the
+gate and still shows red on the commit.
+
+## Not built here, on purpose
+
+No deploy step — that is item 3 of the brief, and it must be gated on this
+workflow passing first. No `mypy` clean-up. No coverage measurement.
+`playwright install` is not run in CI because no test launches a browser;
+the deploy image will need it, and that is where it will be installed.
