@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Path, status
 from sqlalchemy import select
 
-from ..deps import DbDep, PrincipalDep
+from ..deps import DbDep, PrincipalDep, SettingsDep
 from ..errors import NotFound
 from ..models import Client, Scan
 from ..schemas.action_item import ActionItemListOut, ActionItemOut
@@ -48,6 +48,7 @@ def _out(scan_id: str, rows: list[Any], status_: str, reason_code: str | None) -
 async def generate_fixes(
     principal: PrincipalDep,
     db: DbDep,
+    settings: SettingsDep,
     scan_id: str = Path(alias="scanId"),
 ) -> Any:
     """Generate the scan's prioritised fix list.
@@ -73,7 +74,12 @@ async def generate_fixes(
     if client is None:
         raise NotFound(detail="The scan's client no longer exists.")
 
-    rows, outcome = await fix_runner.generate_for_scan(db, scan, client)
+    # Settings come from the request's dependency, the same way the scan
+    # chain passes its own through — never from the module-level getter,
+    # which reads the process environment and `.env`. The CI gate (Epic 18)
+    # found this: the endpoint's tests passed only where a developer's `.env`
+    # happened to hold a real key for a call the tests mock.
+    rows, outcome = await fix_runner.generate_for_scan(db, scan, client, settings=settings)
     await db.commit()
 
     refreshed = await fix_runner.latest_fixes(db, scan.id)
