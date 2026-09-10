@@ -1,0 +1,12 @@
+# Only apps/api and infra/db reach the API image; everything else is noise or
+# a secret. `.env` is excluded by name so a local file can never be baked in.
+*
+!apps/api
+!infra/db
+apps/api/.env
+apps/api/.venv
+apps/api/**/__pycache__
+apps/api/.pytest_cache
+apps/api/.mypy_cache
+apps/api/.ruff_cache
+infra/db/**/__pycache__

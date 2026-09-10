@@ -171,6 +171,16 @@ class Settings(BaseSettings):
                 )
             # A session cookie sent over plaintext HTTP is a stolen session.
             object.__setattr__(self, "session_cookie_secure", True)
+            # Browsers reject a wildcard origin when credentials are allowed,
+            # so "*" here does not open the API — it closes it to every real
+            # frontend while looking permissive. Refuse it at boot rather than
+            # discover it as a sign-in that never sticks. Epic 18.2.
+            origins = self.cors_allow_origins
+            if not origins or any(o.strip() == "*" for o in origins):
+                raise ValueError(
+                    "CORS_ALLOW_ORIGINS must name the deployed frontend's real origin(s); "
+                    "a wildcard or an empty list is rejected in staging/production."
+                )
         return self
 
     @property

@@ -23,6 +23,10 @@
 #   workers   pytest, with the same services (it shares the API's models).
 #   web       shared-types, design-system and web: tests, typechecks, and the
 #             styleguide build; the generated TS contract is diffed too.
+#   image     the API container builds (Epic 18.2), migrates and serves
+#             against the same services, answers /health and /ready, and
+#             REFUSES to boot on the placeholder secret — proven live, not
+#             read off a README.
 #
 # SECRETS: none. The services are ephemeral containers on localhost and the
 # suite's `AVP_TEST_*` variables are pointed at them by name. No provider key
@@ -249,3 +253,85 @@ jobs:
       - name: web — typecheck
         working-directory: apps/web
         run: pnpm typecheck
+
+  image:
+    name: image — build, migrate, serve, refuse the placeholder secret
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: avp
+          POSTGRES_PASSWORD: avp
+          POSTGRES_DB: avp_image
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U avp -d avp_image"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          load: true
+          tags: avp-api:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Refuses to boot on the placeholder secret (ENVIRONMENT=production)
+        run: |
+          set +e
+          docker run --rm --network host \
+            -e ENVIRONMENT=production \
+            -e APP_SECRET=dev-only-insecure-secret-change-me \
+            -e DATABASE_URL=postgresql+asyncpg://avp:avp@127.0.0.1:5432/avp_image \
+            -e REDIS_URL=redis://127.0.0.1:6379/0 \
+            -e CORS_ALLOW_ORIGINS=https://pilot.example.com \
+            avp-api:ci > "$RUNNER_TEMP/refuse.log" 2>&1
+          rc=$?
+          set -e
+          echo "exit: $rc"
+          grep -q "development placeholder" "$RUNNER_TEMP/refuse.log" \
+            || { echo "::error::expected the placeholder-secret refusal in the log"; tail -40 "$RUNNER_TEMP/refuse.log"; exit 1; }
+          [ "$rc" != 0 ] || { echo "::error::container served with the placeholder secret"; exit 1; }
+
+      - name: Migrates and serves (ENVIRONMENT=staging, real secret)
+        run: |
+          docker run -d --name api --network host \
+            -e ENVIRONMENT=staging \
+            -e APP_SECRET=ci-only-real-shaped-secret-0123456789abcdef \
+            -e DATABASE_URL=postgresql+asyncpg://avp:avp@127.0.0.1:5432/avp_image \
+            -e REDIS_URL=redis://127.0.0.1:6379/0 \
+            -e CORS_ALLOW_ORIGINS=https://pilot.example.com \
+            -e PUBLIC_WEB_BASE_URL=https://pilot.example.com \
+            avp-api:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/api/v1/health > "$RUNNER_TEMP/health.json" 2>/dev/null; then break; fi
+            sleep 2
+          done
+          echo "health: $(cat "$RUNNER_TEMP/health.json" 2>/dev/null || echo none)"
+          curl -fsS http://127.0.0.1:8000/api/v1/ready | tee "$RUNNER_TEMP/ready.json"
+          grep -q '"status":"ready"' "$RUNNER_TEMP/ready.json" || { echo "::error::/ready did not report ready"; docker logs api | tail -60; exit 1; }
+          docker logs api | grep -q "alembic upgrade head" || { echo "::error::entrypoint did not run migrations"; exit 1; }
+
+      - name: Container logs
+        if: always()
+        run: docker logs api 2>&1 | tail -60 || true

@@ -1,0 +1,67 @@
+# ===========================================================================
+# Deploy — gated on the CI gate, and inert until a host is chosen. Epic 18.2.
+#
+# Runs only after the `CI` workflow has SUCCEEDED on a push to `main`
+# (`workflow_run`), never on the push itself, so a red suite can never deploy.
+#
+# The deploy job is skipped until the repository variable DEPLOY_TARGET is
+# set — the host is a founder decision (north-star.md §4.1 names Fly.io and
+# Render and chooses neither), and a workflow that guessed one would be wrong
+# with credentials. Once chosen, the matching step below is filled in and
+# the host's token added as a repository SECRET, never here.
+# ===========================================================================
+
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: deploy-pilot
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy main to the pilot environment
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Both conditions: the gate passed, and a host has been chosen.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      vars.DEPLOY_TARGET != ''
+    environment:
+      name: pilot
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Which host
+        run: echo "DEPLOY_TARGET=${{ vars.DEPLOY_TARGET }}"
+
+      # --- Fly.io ---------------------------------------------------------
+      # Filled in when the founder chooses Fly: `flyctl deploy --remote-only`
+      # against apps/api/fly.toml, with FLY_API_TOKEN as a repository secret.
+      - name: Deploy (fly)
+        if: vars.DEPLOY_TARGET == 'fly'
+        run: |
+          echo "::error::Fly chosen but not yet wired — add apps/api/fly.toml and the flyctl step (Epic 18.2 build-log entry lists what goes here)."
+          exit 1
+
+      # --- Render ---------------------------------------------------------
+      # Filled in when the founder chooses Render: a deploy hook or the
+      # Render API against the service id, with RENDER_API_KEY as a secret.
+      - name: Deploy (render)
+        if: vars.DEPLOY_TARGET == 'render'
+        run: |
+          echo "::error::Render chosen but not yet wired — add render.yaml and the deploy-hook step (Epic 18.2 build-log entry lists what goes here)."
+          exit 1
+
+      - name: Unknown target
+        if: vars.DEPLOY_TARGET != 'fly' && vars.DEPLOY_TARGET != 'render'
+        run: |
+          echo "::error::DEPLOY_TARGET is '${{ vars.DEPLOY_TARGET }}'; this workflow knows 'fly' and 'render'."
+          exit 1
