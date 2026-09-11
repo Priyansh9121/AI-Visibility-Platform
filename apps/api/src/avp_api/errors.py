@@ -163,6 +163,34 @@ class BillingNotConfigured(ProblemError):
     title = "Billing is not configured on this server"
 
 
+class GoogleSignInNotConfigured(ProblemError):
+    """Google sign-in was asked for and no OAuth client is configured — Epic 20.
+
+    `503` rather than `404`, for the reason `BillingNotConfigured` gives: the
+    route exists and the feature is real; what is missing is a credential the
+    operator of this deployment has not supplied. The web app shows the
+    button regardless and this is what it gets until the founder creates the
+    Google Cloud client — a loud, named answer, not a dead link.
+    """
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    problem_type = "google-sign-in-not-configured"
+    title = "Google sign-in is not configured"
+
+
+class InvalidGoogleTicket(ProblemError):
+    """The sign-up ticket is unknown, used, or expired — Epic 20.
+
+    One response for all three, the way `InvalidInvitation` and
+    `InvalidResetToken` answer: the ticket is a bearer credential and which
+    way it failed is not the holder's business.
+    """
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    problem_type = "invalid-google-ticket"
+    title = "That Google sign-in has expired"
+
+
 class SeatLimitReached(ProblemError):
     status_code = status.HTTP_409_CONFLICT
     problem_type = "seat-limit-reached"

@@ -17,6 +17,7 @@ const OWNER = {
   role: 'owner' as const,
   status: 'active' as const,
   lastLoginAt: '2026-08-28T09:00:00Z',
+  signInMethods: ['email' as const],
   createdAt: '2026-08-20T05:29:02Z',
 };
 
@@ -27,6 +28,7 @@ const ADMIN = {
   role: 'admin' as const,
   status: 'active' as const,
   lastLoginAt: '2026-08-27T14:11:00Z',
+  signInMethods: ['email' as const],
   createdAt: '2026-08-24T11:02:00Z',
 };
 
@@ -38,6 +40,8 @@ const PENDING = {
   role: 'member' as const,
   status: 'invited' as const,
   lastLoginAt: null,
+  // No credential yet: the seat has been offered, not taken.
+  signInMethods: [] as ('email' | 'google')[],
   createdAt: '2026-08-28T09:12:00Z',
 };
 
@@ -88,6 +92,7 @@ export const memberMe: Me = {
     role: 'member',
     status: 'active',
     lastLoginAt: '2026-08-28T08:00:00Z',
+    signInMethods: ['email' as const],
     createdAt: '2026-08-26T09:00:00Z',
   },
 };

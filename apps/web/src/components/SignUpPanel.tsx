@@ -1,8 +1,16 @@
 'use client';
 
 import { useState, type FormEvent } from 'react';
-import { Button, Card, CardBody, ErrorState, Reveal, TextField } from '@avp/design-system';
-import { api, ApiProblem } from '@/lib/api';
+import {
+  Button,
+  Card,
+  CardBody,
+  ErrorState,
+  GoogleSignInButton,
+  Reveal,
+  TextField,
+} from '@avp/design-system';
+import { api, ApiProblem, GOOGLE_SIGN_IN_URL } from '@/lib/api';
 
 /**
  * Create an agency — Epic 9.12.
@@ -159,6 +167,16 @@ export function SignUpPanel({
             <Button type="submit" variant="primary" fullWidth disabled={busy}>
               {busy ? 'Creating your agency…' : 'Create agency'}
             </Button>
+
+            {/* Google — Epic 20. A new address is asked for the agency name next. */}
+            <div className="flex flex-col gap-4">
+              <p className="flex items-center gap-3 text-ui-xs text-text-tertiary">
+                <span className="h-px flex-1 bg-line-hairline" aria-hidden="true" />
+                or
+                <span className="h-px flex-1 bg-line-hairline" aria-hidden="true" />
+              </p>
+              <GoogleSignInButton href={GOOGLE_SIGN_IN_URL} label="Sign up with Google" fullWidth />
+            </div>
           </form>
         </CardBody>
       </Card>

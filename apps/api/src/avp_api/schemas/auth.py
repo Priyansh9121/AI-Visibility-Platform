@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import AfterValidator, EmailStr, Field
 
 from ..models import UserRole, UserStatus
 from .common import ApiModel
+
+SignInMethod = Literal["email", "google"]
 
 # NIST SP 800-63B: length is what matters; composition rules push users toward
 # predictable substitutions and are explicitly discouraged. So: a real minimum,
@@ -120,6 +122,38 @@ class UserOut(ApiModel):
     status: UserStatus
     last_login_at: datetime | None = None
     created_at: datetime
+    # How the account can be signed into — Epic 20: "email" (a password),
+    # "google", or both. An account created through Google that never set a password has
+    # only "google"; Settings uses that to say so instead of offering a
+    # password change that would refuse. (Not `hasPassword`: the contract
+    # test forbids any response field named after a credential.)
+    sign_in_methods: list[SignInMethod]
+
+
+class GooglePendingOut(ApiModel):
+    """What Google told us about a person who has no account yet — Epic 20.
+
+    Read by the sign-up completion page so it can show the address the
+    account will be under and pre-fill the name. Nothing here is a credential;
+    the ticket in the query string is.
+    """
+
+    email: str
+    suggested_name: str
+
+
+class CompleteGoogleSignUpRequest(ApiModel):
+    """Finish creating an agency after Google has verified the person — Epic 20.
+
+    The same two facts `SignUpRequest` asks for that Google cannot supply: what
+    the agency is called, and how the person writes their own name (Google's
+    `name` is a suggestion, not an answer). No email — it is the ticket's — and
+    no password, which is the point.
+    """
+
+    ticket: str = Field(min_length=1, max_length=512)
+    agency_name: str = Field(min_length=2, max_length=200)
+    full_name: str = Field(min_length=1, max_length=200)
 
 
 class AgencyOut(ApiModel):

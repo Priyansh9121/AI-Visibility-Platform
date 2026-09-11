@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Button, Card, CardBody, LoadingState } from '@avp/design-system';
+import { Button, Card, CardBody, ErrorState, LoadingState } from '@avp/design-system';
 import type { ClientDetail, Me } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
 import { ClassificationResult } from '@/components/ClassificationResult';
@@ -35,16 +35,51 @@ type View =
   | { kind: 'working' }
   | { kind: 'result'; client: ClientDetail };
 
+/**
+ * What the front door says when Google sent someone back without a session —
+ * Epic 20. The API puts one WORD in the URL and nothing else (no token, no
+ * email, no Google error text); this is where the word becomes a sentence.
+ */
+const GOOGLE_REASONS: Record<string, string> = {
+  denied: 'Google sign-in was cancelled. Nothing changed.',
+  'invalid-state':
+    'That Google sign-in had expired or was already used. Start it again from this page.',
+  'exchange-failed': 'Google did not confirm the sign-in. Try again in a moment.',
+  'email-unverified':
+    'Google has not verified that email address, so it cannot be used to sign in here.',
+  'account-unavailable':
+    'That Google account cannot sign in here. If it is yours, sign in with your email and password, or reset the password.',
+  'not-configured': 'Google sign-in is not set up on this server yet. Sign in with your email and password.',
+};
+
+function googleFailure(): string | null {
+  if (typeof window === 'undefined') return null;
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('google') !== 'error') return null;
+  const reason = params.get('reason') ?? '';
+  // Clear the query so a reload or a back-press does not re-show the notice.
+  window.history.replaceState(null, '', window.location.pathname);
+  return GOOGLE_REASONS[reason] ?? 'Google sign-in did not complete. Try again.';
+}
+
 export default function Home() {
   const [me, setMe] = useState<Me | null>(null);
   const [view, setView] = useState<View>({ kind: 'loading' });
+  const [googleNotice, setGoogleNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    // A Google failure lands here signed out; read the reason BEFORE the
+    // session check so the notice survives whichever view follows.
+    const failure = googleFailure();
+    if (failure != null) setGoogleNotice(failure);
     try {
       setMe(await api.me());
       setView({ kind: 'intake' });
     } catch (err) {
-      if (err instanceof ApiProblem && err.status === 401) {
+      if (failure != null) {
+        // Straight to the sign-in form, where the notice and the way forward are.
+        setView({ kind: 'sign-in' });
+      } else if (err instanceof ApiProblem && err.status === 401) {
         setView({ kind: 'signed-out' });
       } else {
         setView({ kind: 'signed-out' });
@@ -93,6 +128,11 @@ export default function Home() {
             Back
           </Button>
         </div>
+        {googleNotice != null && view.kind === 'sign-in' && (
+          <div className="mx-auto mt-4 max-w-form">
+            <ErrorState title="Google sign-in did not complete" detail={googleNotice} />
+          </div>
+        )}
         <div className="mt-4">
           {view.kind === 'forgot' ? (
             <ForgotPasswordPanel onBackToSignIn={() => setView({ kind: 'sign-in' })} />

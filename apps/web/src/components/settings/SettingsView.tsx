@@ -151,13 +151,31 @@ export function SettingsView({
             )}
           </PageSection>
 
-          <PageSection
-            eyebrow="Your account"
-            heading="Your password"
-            lead="Changing it here signs out every other device and leaves this one signed in."
-          >
-            <PasswordChangePanel />
-          </PageSection>
+          {/*
+            An account that signs in with Google and never set a password has
+            nothing to change here — Epic 20. Offering the form would refuse
+            with "that is not your current password", which is true and
+            useless. Say what is true instead, and name the way to add one.
+          */}
+          {state.me.user.signInMethods.includes('email') ? (
+            <PageSection
+              eyebrow="Your account"
+              heading="Your password"
+              lead="Changing it here signs out every other device and leaves this one signed in."
+            >
+              <PasswordChangePanel />
+            </PageSection>
+          ) : (
+            <PageSection
+              eyebrow="Your account"
+              heading="You sign in with Google"
+              lead="This account has no password. To add one, use the reset link on the sign-in page; Google keeps working either way."
+            >
+              <p className="text-ui-sm leading-prose text-text-tertiary">
+                Signed in as {state.me.user.email} through Google.
+              </p>
+            </PageSection>
+          )}
 
           <PageSection
             eyebrow="Billing"
