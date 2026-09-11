@@ -167,6 +167,28 @@ export default function DashboardRoute() {
     [load],
   );
 
+  /**
+   * Close the getting-started checklist — Epic 19.
+   *
+   * The card goes at once and the server is told after: a close control that
+   * waits on a round trip reads as broken. If the request fails the next poll
+   * or the next load re-reads the truth and the card returns, which is the
+   * honest outcome — the server did not record the decision — and better than
+   * a card that hides on this device and shows on the next.
+   */
+  const dismissGettingStarted = useCallback(async () => {
+    setView((current) =>
+      current.kind === 'ready'
+        ? { ...current, dashboard: { ...current.dashboard, gettingStartedDismissed: true } }
+        : current,
+    );
+    try {
+      await api.dismissGettingStarted();
+    } catch {
+      // Deliberately swallowed: see above. The poller's next read is the retry.
+    }
+  }, []);
+
   if (view.kind === 'loading') {
     return (
       <WorkspaceShell current="dashboard" wide>
@@ -208,6 +230,7 @@ export default function DashboardRoute() {
         rerunError={rerunError}
         live={live}
         pollProblem={pollProblem}
+        onDismissGettingStarted={dismissGettingStarted}
       />
     </WorkspaceShell>
   );

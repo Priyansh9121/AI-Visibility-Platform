@@ -48,6 +48,8 @@ import type { BadgeTone, Column, LedgerDimension, ScoreAbsence } from '@avp/desi
 import type { Dashboard, ScanStatus, ScanSummary } from '@avp/shared-types';
 import { Layers, Users } from 'lucide-react';
 import { formatStamp } from '@/lib/dates';
+import { deriveGettingStarted } from '@/lib/dashboard/gettingStarted';
+import { GettingStarted } from './GettingStarted';
 
 /**
  * Scan statuses that block a re-run.
@@ -135,6 +137,12 @@ export interface DashboardViewProps {
   live?: boolean;
   /** Polling has been failing. Surfaced, because a silently stale page lies. */
   pollProblem?: string | null;
+  /**
+   * Closes the getting-started checklist for the agency — Epic 19. Omitted in
+   * read-only renders and in tests, in which case the checklist has no close
+   * control rather than a dead one.
+   */
+  onDismissGettingStarted?: (() => void) | undefined;
 }
 
 export function DashboardView({
@@ -144,8 +152,22 @@ export function DashboardView({
   rerunError,
   live,
   pollProblem,
+  onDismissGettingStarted,
 }: DashboardViewProps): JSX.Element {
   const { agency, seats, clientCount, scanCount, recentScans, isEmpty } = dashboard;
+
+  /*
+    THE GETTING-STARTED CHECKLIST — Epic 19.
+
+    Derived from the response in hand, the way every figure on this screen is
+    (see `DashboardStats`). It renders in every state short of dismissed —
+    brand-new, part-way, and complete — because the three are one account at
+    three moments, not three screens. `EmptyAgency` and `NoScansYet` keep
+    their words and their figure but hand their button to the checklist while
+    it is showing: two buttons with the same intent in one viewport is not
+    emphasis, it is a screen that has not decided.
+  */
+  const gettingStarted = deriveGettingStarted(dashboard);
 
   // A client is busy if ANY of its scans is running — not just this row's. Two
   // rows for the same client must not offer a re-run because the older one
@@ -253,6 +275,10 @@ export function DashboardView({
         }
       />
 
+      {gettingStarted.visible && (
+        <GettingStarted model={gettingStarted} onDismiss={onDismissGettingStarted} />
+      )}
+
       {!isEmpty && (
         <>
           <PortfolioHero recentScans={recentScans} />
@@ -278,7 +304,7 @@ export function DashboardView({
         <ErrorState title="The scan could not be started" detail={rerunError} />
       )}
 
-      {isEmpty ? <EmptyAgency /> : (
+      {isEmpty ? <EmptyAgency withAction={!gettingStarted.visible} /> : (
         <Card elevation="seated">
           <CardHeader>
             <CardTitle>Recent scans</CardTitle>
@@ -296,7 +322,9 @@ export function DashboardView({
             rows={recentScans}
             rowKey={(scan) => scan.id}
             caption="Newest first."
-            emptyMessage={<NoScansYet clientCount={clientCount} />}
+            emptyMessage={
+              <NoScansYet clientCount={clientCount} withAction={!gettingStarted.visible} />
+            }
           />
         </Card>
       )}
@@ -547,8 +575,15 @@ const UNMEASURED_DIMENSIONS: readonly LedgerDimension[] = [
   { key: 'technical', label: 'Technical Foundation', weight: 10, subscore: 0 },
 ];
 
-/** A brand new agency: no clients, no scans, nothing to list. */
-function EmptyAgency(): JSX.Element {
+/**
+ * A brand new agency: no clients, no scans, nothing to list.
+ *
+ * `withAction` is false while the getting-started checklist is on the page
+ * above this — Epic 19 — because the checklist's first step IS this button.
+ * The figure and the words stay: they explain what a scan is, which the
+ * checklist does not.
+ */
+function EmptyAgency({ withAction }: { withAction: boolean }): JSX.Element {
   return (
     <EmptyState
       eyebrow="Nothing measured yet"
@@ -556,9 +591,11 @@ function EmptyAgency(): JSX.Element {
       body="A scan starts with a website. We read the site the way a buyer would, work out who it competes with, then ask AI assistants the questions its buyers ask — and record who they name."
       note="A full scan takes about six minutes. The five bars are the dimensions it fills in, sized by how much each is worth."
       action={
-        <Button variant="primary" onClick={() => window.location.assign('/')}>
-          Add your first client
-        </Button>
+        withAction ? (
+          <Button variant="primary" onClick={() => window.location.assign('/')}>
+            Add your first client
+          </Button>
+        ) : undefined
       }
       figure={
         <LuminanceLedger
@@ -583,7 +620,14 @@ function EmptyAgency(): JSX.Element {
  * agency has neither clients nor scans, so this gap is reachable and would
  * otherwise render as a blank table with no explanation.
  */
-function NoScansYet({ clientCount }: { clientCount: number }): JSX.Element {
+function NoScansYet({
+  clientCount,
+  withAction,
+}: {
+  clientCount: number;
+  /** False while the checklist above carries the same button — Epic 19. */
+  withAction: boolean;
+}): JSX.Element {
   return (
     <EmptyState
       // No eyebrow. This one sits directly under the "Recent scans" heading
@@ -596,9 +640,11 @@ function NoScansYet({ clientCount }: { clientCount: number }): JSX.Element {
       }
       body="A client is a website we know about; a scan is what measures it. Until one runs there is no score, no competitor set and no report to send."
       action={
-        <Button variant="secondary" onClick={() => window.location.assign('/')}>
-          Run the first scan
-        </Button>
+        withAction ? (
+          <Button variant="secondary" onClick={() => window.location.assign('/')}>
+            Run the first scan
+          </Button>
+        ) : undefined
       }
     />
   );

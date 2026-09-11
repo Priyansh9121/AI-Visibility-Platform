@@ -473,3 +473,79 @@ describe('accents mark categories, never measurements', () => {
     expect(html()).not.toContain('No scores yet');
   });
 });
+
+/**
+ * The getting-started checklist — Epic 19.
+ *
+ * Derivation is tested in `lib/dashboard/gettingStarted.test.ts`; what is
+ * asserted here is the screen: that the checklist is on the page in each of
+ * the account's three moments and gone when dismissed, that the empty states
+ * hand their button to it rather than repeating it, and that nothing on the
+ * page performs on first paint.
+ */
+import {
+  completeDashboard,
+  dismissedDashboard,
+  partialProgressDashboard,
+} from '@/lib/dashboard/__fixtures__/dashboards';
+
+describe('the getting-started checklist', () => {
+  it('is on a brand-new dashboard, above the empty state, with the count at none', () => {
+    const html = render(emptyDashboard);
+    expect(html).toContain('avp-checklist');
+    expect(html).toContain('None of five lit.');
+    expect(html.indexOf('avp-checklist')).toBeLessThan(html.indexOf('avp-empty'));
+  });
+
+  it('carries the one way forward, and the empty state below does not repeat it', () => {
+    const html = render(emptyDashboard);
+    expect(html.match(/Add your first client/g)).toHaveLength(1);
+    expect(html.indexOf('Add your first client')).toBeLessThan(html.indexOf('avp-empty'));
+    // The figure and the explanation stay.
+    expect(html).toContain('avp-ledger--unmeasured');
+    expect(html).toContain('about six minutes');
+  });
+
+  it('the no-scans-yet state likewise hands its button up', () => {
+    const html = render(noScansYetDashboard);
+    expect(html.match(/Run the first scan/g)).toHaveLength(1);
+    expect(html.indexOf('Run the first scan')).toBeLessThan(html.indexOf('avp-table'));
+  });
+
+  it('shows part-way progress with the current step marked and one primary button', () => {
+    const html = render(partialProgressDashboard);
+    expect(html).toContain('Two of five lit.');
+    expect(html.match(/aria-current="step"/g)).toHaveLength(1);
+    const checklist = html.slice(html.indexOf('avp-checklist'), html.indexOf('avp-hero'));
+    expect(checklist.match(/avp-btn--primary/g)).toHaveLength(1);
+    expect(checklist).toContain('Invite a teammate');
+  });
+
+  it('a complete account gets the completed card, and only a Done control on it', () => {
+    const html = render(completeDashboard, { onDismissGettingStarted: () => {} });
+    expect(html).toContain('is-complete');
+    expect(html).toContain('Up and running');
+    expect(html).toContain('>Done<');
+    expect(html).not.toContain('Hide this');
+  });
+
+  it('is gone once dismissed, and the empty states get their buttons back', () => {
+    expect(render(dismissedDashboard)).not.toContain('avp-checklist');
+    const empty = render({ ...emptyDashboard, gettingStartedDismissed: true });
+    expect(empty).not.toContain('avp-checklist');
+    expect(empty).toContain('Add your first client');
+  });
+
+  it('has no close control in a read-only render', () => {
+    expect(render(partialProgressDashboard)).not.toContain('avp-checklist__dismiss');
+    expect(render(partialProgressDashboard, { onDismissGettingStarted: () => {} })).toContain(
+      'avp-checklist__dismiss',
+    );
+  });
+
+  it('performs nothing on first paint — no completing class, no reveal', () => {
+    const html = render(completeDashboard);
+    expect(html).not.toContain('is-completing');
+    expect(html).not.toContain('avp-reveal');
+  });
+});
