@@ -66,8 +66,9 @@ AIClicks, Searchable, and PromptWatch.**
 **The competitor feature descriptions in section 2 come from the founder's own
 product research — navigating those products live — NOT from this project's own
 independently sourced or web-verified investigation.** No live competitor
-research was performed as part of writing this document, and none is recorded
-anywhere in `build-log.md`.
+research was performed as part of writing this document. It was performed
+later: `docs/competitor-research-2026-09-10.md` records the founder's own
+walkthroughs of all three products, dated 2026-09-10.
 
 Treat every competitor claim in section 2 as **"the founder's understanding as of
 2026-08-27"**, not as verified fact. Products change; a feature list read once
@@ -135,10 +136,14 @@ its own known weaknesses:
   describes a screen, a flow, or any code — only claimed capability, per the
   bucket definitions in §2.2.
 
-**Still open:** the founder's own live-navigation research, which would be the
-higher-trust source `2.1` was originally scoped for. If it's ever produced, it
-should sit alongside this table, not silently replace it — the two are
-different kinds of evidence and both are worth keeping.
+**Now produced — see `docs/competitor-research-2026-09-10.md`.** The founder's
+own live-navigation research, the higher-trust source `2.1` was originally
+scoped for, exists as of 2026-09-10: three walkthrough PDFs of the real
+products, audited and checked against the codebase. It sits alongside this
+table and does not replace it — the two are different kinds of evidence and
+both are worth keeping. Where they disagree (e.g. Searchable's report canvas
+and content tools are real and observed, resolving the §2.2 discrepancy), the
+live-navigation document wins.
 
 ### 2.2 The four categories the analysis is organised by — [DECIDED shape]
 
@@ -308,11 +313,20 @@ day it was found wrong, the way Layer 5's status was.
   analogue of `claude` — deliberately not of `claude_search`, because holding
   the mode constant is what makes "Claude names you, ChatGPT does not" a
   statement about the vendors rather than about browsing.
-- **Perplexity and Google remain unbuilt.** `Engine.PERPLEXITY`,
-  `Engine.GEMINI` and `Engine.GOOGLE_AI_OVERVIEW` exist in the enum and have no
-  adapter behind them; the router refuses any engine absent from
-  `ENGINE_REGISTRY` at the request, before a scan row exists. A grounded OpenAI
-  engine is a fourth adapter for a later brief, not a variant of this one.
+- **Perplexity and Gemini: BUILT, 2026-09-11 (Epic 21); AI Overview still
+  deferred.** This bullet used to read "Perplexity and Google remain unbuilt".
+  `Engine.PERPLEXITY` (grounded, Perplexity's `sonar` on the Agent API that
+  replaces the sunset Sonar endpoint) and `Engine.GEMINI` (parametric,
+  `gemini-3.8-flash`) now have adapters in `ENGINE_REGISTRY` and are in
+  `DEFAULT_ENGINES`; a scan runs whichever of the five have a key
+  (`configured_engines`). **Not yet measured:** neither key existed in the
+  build environment, so the per-attempt timeouts are provisional and the
+  five-engine scan budget and cost are projected, not run — build-log Epic 21
+  lists the debt and the two founder decisions (a Perplexity key; a billed
+  Google AI account, since the current Gemini is paid-tier only).
+  `Engine.GOOGLE_AI_OVERVIEW` still has no adapter, for the reason the next
+  bullet gives, and the router still refuses it at the request. A grounded
+  OpenAI engine remains a later adapter.
 - **AI Overviews via SerpApi: MEASURED AND DECLINED, not pending.** Two
   investigations on 2026-08-25 (`d39f70b`, `d2d5f40`): usable content was **0 of
   4** on this product's real prompt shapes, retrieval costs two SerpApi searches

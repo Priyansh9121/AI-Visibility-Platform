@@ -39,12 +39,15 @@ def scan_executor_factory(engines_only_executor):  # noqa: ANN201
     return engines_only_executor
 
 
-
 async def _sign_up(client: AsyncClient, email: str = "report@test.example") -> None:
     resp = await client.post(
         f"{BASE}/auth/sign-up",
-        json={"agencyName": "Report Test Agency", "fullName": "Op",
-              "email": email, "password": "correct-horse-battery-staple"},
+        json={
+            "agencyName": "Report Test Agency",
+            "fullName": "Op",
+            "email": email,
+            "password": "correct-horse-battery-staple",
+        },
     )
     assert resp.status_code == 201, resp.text
 
@@ -60,21 +63,35 @@ def stub_engines(monkeypatch):  # noqa: ANN001, ANN201
         async def fake_generate(**kwargs):  # noqa: ANN003, ARG001
             return generated, "stub"
 
-        answer_text = text if text is not None else (
-            "Zendesk is popular. Help Scout is simpler and well liked."
+        answer_text = (
+            text
+            if text is not None
+            else ("Zendesk is popular. Help Scout is simpler and well liked.")
         )
 
         async def fake_ask_all(prompt, *, engines, settings):  # noqa: ANN001, ARG001
             out = []
             for engine in engines:
                 citations = (
-                    [CitedSource(url="https://g2.com/x", domain="g2.com", position=1),
-                     CitedSource(url="https://helpscout.com/y", domain="helpscout.com", position=2)]
-                    if engine is Engine.CLAUDE_SEARCH else []
+                    [
+                        CitedSource(url="https://g2.com/x", domain="g2.com", position=1),
+                        CitedSource(
+                            url="https://helpscout.com/y", domain="helpscout.com", position=2
+                        ),
+                    ]
+                    if engine is Engine.CLAUDE_SEARCH
+                    else []
                 )
-                out.append(EngineAnswer(
-                    engine=engine, engine_version="stub", prompt_text=prompt,
-                    text=answer_text, citations=citations, latency_ms=5))
+                out.append(
+                    EngineAnswer(
+                        engine=engine,
+                        engine_version="stub",
+                        prompt_text=prompt,
+                        text=answer_text,
+                        citations=citations,
+                        latency_ms=5,
+                    )
+                )
             return out
 
         async def fake_sentiment(answer, *, subject_name, settings=None):  # noqa: ANN001, ARG001
@@ -132,8 +149,11 @@ class TestReportShape:
         dims = (await client.get(f"{BASE}/scans/{sid}/report")).json()["dimensions"]
 
         assert [d["key"] for d in dims] == [
-            "mention_rate", "share_of_voice", "citation_strength",
-            "sentiment", "technical_foundation",
+            "mention_rate",
+            "share_of_voice",
+            "citation_strength",
+            "sentiment",
+            "technical_foundation",
         ]
 
     async def test_included_weights_sum_to_100_so_the_ledger_is_honest(
@@ -179,7 +199,7 @@ class TestDegradedStates:
     async def test_unscored_scan_reports_a_null_score_not_a_zero(
         self, client: AsyncClient, stub_engines
     ) -> None:  # noqa: ANN001
-        """"Never scored" and "scored zero" are different things to show."""
+        """ "Never scored" and "scored zero" are different things to show."""
         await _sign_up(client)
         sid = await _scan(client, stub_engines)
 
@@ -238,17 +258,18 @@ class TestDegradedStates:
 
 class TestProofBeat:
     async def test_engine_coverage_counts_every_engine_separately(
-        self, client: AsyncClient, stub_engines
+        self, settings, client: AsyncClient, stub_engines
     ) -> None:  # noqa: ANN001
         await _sign_up(client)
         sid = await _scored_scan(client, stub_engines)
         proof = (await client.get(f"{BASE}/scans/{sid}/report")).json()["proof"]
 
         # Derived from the registry — see test_scan_endpoints.py's N_ENGINES.
-        from avp_api.services.engines import DEFAULT_ENGINES
+        from avp_api.services.engines import configured_engines
 
         engines = {c["engine"] for c in proof["engineCoverage"]}
-        assert engines == {e.value for e in DEFAULT_ENGINES}
+        # The keyed engines, not the five with an adapter — Epic 21.
+        assert engines == {e.value for e in configured_engines(settings)}
         for coverage in proof["engineCoverage"]:
             assert coverage["answered"] <= coverage["promptsRun"]
             assert coverage["mentioned"] <= coverage["answered"]
@@ -391,17 +412,26 @@ class TestAnsweredStatusUnit:
 
     @staticmethod
     def _result(  # noqa: ANN205, PLR0913
-        rid: str = "er1", pid: str = "p1", engine=Engine.CLAUDE,  # noqa: ANN001
-        mentioned: bool = True, position: int | None = 1,
-        mentions=(), citations=(), ok: bool = True,  # noqa: ANN001
+        rid: str = "er1",
+        pid: str = "p1",
+        engine=Engine.CLAUDE,  # noqa: ANN001
+        mentioned: bool = True,
+        position: int | None = 1,
+        mentions=(),
+        citations=(),
+        ok: bool = True,  # noqa: ANN001
     ):
         from avp_api.models import EngineResult
         from avp_api.models.engine_result import EngineResultStatus
 
         r = EngineResult(
-            id=rid, scan_id="s1", prompt_id=pid, engine=engine,
+            id=rid,
+            scan_id="s1",
+            prompt_id=pid,
+            engine=engine,
             status=EngineResultStatus.OK if ok else EngineResultStatus.ERROR,
-            mentioned=mentioned, position=position,
+            mentioned=mentioned,
+            position=position,
         )
         r.brand_mentions = list(mentions)
         r.citations = list(citations)
@@ -412,8 +442,12 @@ class TestAnsweredStatusUnit:
         from avp_api.models import BrandMention
 
         return BrandMention(
-            id=f"bm_{name}_{position}", engine_result_id="er1", entity_name=name,
-            entity_domain=domain, is_subject=is_subject, position=position,
+            id=f"bm_{name}_{position}",
+            engine_result_id="er1",
+            entity_name=name,
+            entity_domain=domain,
+            is_subject=is_subject,
+            position=position,
         )
 
     @staticmethod
@@ -425,13 +459,25 @@ class TestAnsweredStatusUnit:
         r = TestAnsweredStatusUnit._result(rid=rid, mentioned=False, position=None)
         r.status = status or EngineResultStatus.ANSWERED_NO_MENTION
         r.brand_mentions = [
-            BrandMention(id=f"bm{rid}", engine_result_id=rid, entity_name="Zendesk",
-                         entity_domain="zendesk.com", is_subject=False, position=1)
+            BrandMention(
+                id=f"bm{rid}",
+                engine_result_id=rid,
+                entity_name="Zendesk",
+                entity_domain="zendesk.com",
+                is_subject=False,
+                position=1,
+            )
         ]
         r.citations = [
-            Citation(id=f"c{rid}", engine_result_id=rid, source_domain="g2.com",
-                     source_url="https://g2.com/x", source_type=CitationType.REVIEW,
-                     position=1, cites_subject=False)
+            Citation(
+                id=f"c{rid}",
+                engine_result_id=rid,
+                source_domain="g2.com",
+                source_url="https://g2.com/x",
+                source_type=CitationType.REVIEW,
+                position=1,
+                cites_subject=False,
+            )
         ]
         return r
 
@@ -451,13 +497,21 @@ class TestAnsweredStatusUnit:
 
         rows = [
             self._result(
-                rid=f"ok{i}", mentioned=True, position=1,
+                rid=f"ok{i}",
+                mentioned=True,
+                position=1,
                 mentions=[self._mention("Help Scout", 1, is_subject=True)],
-                citations=[Citation(
-                    id=f"cok{i}", engine_result_id=f"ok{i}", source_domain="g2.com",
-                    source_url="https://g2.com/x", source_type=CitationType.REVIEW,
-                    position=1, cites_subject=False,
-                )],
+                citations=[
+                    Citation(
+                        id=f"cok{i}",
+                        engine_result_id=f"ok{i}",
+                        source_domain="g2.com",
+                        source_url="https://g2.com/x",
+                        source_type=CitationType.REVIEW,
+                        position=1,
+                        cites_subject=False,
+                    )
+                ],
             )
             for i in range(3)
         ]
@@ -488,8 +542,11 @@ class TestAnsweredStatusUnit:
         from avp_api.models.engine_result import EngineResultStatus
         from avp_api.services.report import _proof
 
-        for status in (EngineResultStatus.ERROR, EngineResultStatus.TIMEOUT,
-                       EngineResultStatus.RATE_LIMITED):
+        for status in (
+            EngineResultStatus.ERROR,
+            EngineResultStatus.TIMEOUT,
+            EngineResultStatus.RATE_LIMITED,
+        ):
             proof = _proof([self._absent(rid="e1", status=status)], None)
             assert proof.answered_results == 0, f"{status.value} is not an answer"
             assert proof.total_citations == 0, f"{status.value} carries no usable evidence"
@@ -539,8 +596,12 @@ class TestAnswerShelf:
         assert slots, "the stub answer names the subject"
         for slot in slots:
             assert set(slot) == {
-                "position", "entityName", "entityDomain", "isSubject",
-                "competitorName", "cited",
+                "position",
+                "entityName",
+                "entityDomain",
+                "isSubject",
+                "competitorName",
+                "cited",
             }
             assert slot["position"] >= 1
 
@@ -555,9 +616,9 @@ class TestAnswerShelf:
         behind it.
         """
         await _sign_up(client)
-        cid = (await client.post(
-            f"{BASE}/clients", json={"url": "helpscout.com", "classify": False}
-        )).json()["id"]
+        cid = (
+            await client.post(f"{BASE}/clients", json={"url": "helpscout.com", "classify": False})
+        ).json()["id"]
         stub_discovery(serp_domains=["zendesk.com"], cocit_brands=[("Zendesk", "zendesk.com")])
         await client.post(f"{BASE}/clients/{cid}/competitors/detect")
 
@@ -588,9 +649,9 @@ class TestAnswerShelf:
         holes IS the finding.
         """
         await _sign_up(client)
-        cid = (await client.post(
-            f"{BASE}/clients", json={"url": "helpscout.com", "classify": False}
-        )).json()["id"]
+        cid = (
+            await client.post(f"{BASE}/clients", json={"url": "helpscout.com", "classify": False})
+        ).json()["id"]
         stub_discovery(serp_domains=["zendesk.com"], cocit_brands=[("Zendesk", "zendesk.com")])
         await client.post(f"{BASE}/clients/{cid}/competitors/detect")
 
@@ -738,23 +799,35 @@ class TestProofProjectionUnit:
         from avp_api.models import Prompt
 
         return Prompt(
-            id=pid, prompt_set_id="ps1", text=f"generated question {position}",
-            intent=PromptIntent.COMPARISON, position=position,
+            id=pid,
+            prompt_set_id="ps1",
+            text=f"generated question {position}",
+            intent=PromptIntent.COMPARISON,
+            position=position,
         )
 
     @staticmethod
     def _result(  # noqa: ANN205, PLR0913
-        rid: str = "er1", pid: str = "p1", engine=Engine.CLAUDE,  # noqa: ANN001
-        mentioned: bool = True, position: int | None = 1,
-        mentions=(), citations=(), ok: bool = True,  # noqa: ANN001
+        rid: str = "er1",
+        pid: str = "p1",
+        engine=Engine.CLAUDE,  # noqa: ANN001
+        mentioned: bool = True,
+        position: int | None = 1,
+        mentions=(),
+        citations=(),
+        ok: bool = True,  # noqa: ANN001
     ):
         from avp_api.models import EngineResult
         from avp_api.models.engine_result import EngineResultStatus
 
         r = EngineResult(
-            id=rid, scan_id="s1", prompt_id=pid, engine=engine,
+            id=rid,
+            scan_id="s1",
+            prompt_id=pid,
+            engine=engine,
             status=EngineResultStatus.OK if ok else EngineResultStatus.ERROR,
-            mentioned=mentioned, position=position,
+            mentioned=mentioned,
+            position=position,
         )
         r.brand_mentions = list(mentions)
         r.citations = list(citations)
@@ -765,8 +838,12 @@ class TestProofProjectionUnit:
         from avp_api.models import BrandMention
 
         return BrandMention(
-            id=f"bm_{name}_{position}", engine_result_id="er1", entity_name=name,
-            entity_domain=domain, is_subject=is_subject, position=position,
+            id=f"bm_{name}_{position}",
+            engine_result_id="er1",
+            entity_name=name,
+            entity_domain=domain,
+            is_subject=is_subject,
+            position=position,
         )
 
     def test_a_positionless_mention_never_renders_as_an_absence(self) -> None:
@@ -828,6 +905,7 @@ class TestProofProjectionUnit:
         assert proof.prompt_shelf == []
         assert proof.engine_results == 1, "the aggregate still counts it"
 
+
 class TestUnclaimedRankingUnit:
     """The unclaimed list's ordering and floor, on data that can tell them apart.
 
@@ -842,9 +920,14 @@ class TestUnclaimedRankingUnit:
 
         return [
             Citation(
-                id=f"c_{domain}_{i}", engine_result_id="er1", source_domain=domain,
-                source_url=f"https://{domain}/p{i}", source_type=CitationType.REVIEW,
-                position=i, cites_subject=subject, competitor_id=competitor_id,
+                id=f"c_{domain}_{i}",
+                engine_result_id="er1",
+                source_domain=domain,
+                source_url=f"https://{domain}/p{i}",
+                source_type=CitationType.REVIEW,
+                position=i,
+                cites_subject=subject,
+                competitor_id=competitor_id,
             )
             for i in range(1, n + 1)
         ]
@@ -907,6 +990,7 @@ class TestTheCrossEngineReading:
     @pytest.fixture
     def disagreeing_engines(self, monkeypatch):  # noqa: ANN001, ANN201
         """One engine names the subject; another, answering the same prompt, does not."""
+
         def _install(*, failing: Engine | None = None):
             generated = [
                 GeneratedPrompt(text=f"question {i}", intent=list(PromptIntent)[i % 3])
@@ -920,21 +1004,32 @@ class TestTheCrossEngineReading:
                 out = []
                 for engine in engines:
                     if engine is failing:
-                        out.append(EngineAnswer(
-                            engine=engine, engine_version="stub", prompt_text=prompt,
-                            status=EngineResultStatus.TIMEOUT, error_code="TIMEOUT",
-                            latency_ms=5))
+                        out.append(
+                            EngineAnswer(
+                                engine=engine,
+                                engine_version="stub",
+                                prompt_text=prompt,
+                                status=EngineResultStatus.TIMEOUT,
+                                error_code="TIMEOUT",
+                                latency_ms=5,
+                            )
+                        )
                         continue
                     # chatgpt answers the same question without naming them.
                     names_subject = engine is not Engine.CHATGPT
-                    out.append(EngineAnswer(
-                        engine=engine, engine_version="stub", prompt_text=prompt,
-                        text=(
-                            "Zendesk is popular. Help Scout is simpler and well liked."
-                            if names_subject
-                            else "Zendesk is popular and Freshdesk is cheaper."
-                        ),
-                        latency_ms=5))
+                    out.append(
+                        EngineAnswer(
+                            engine=engine,
+                            engine_version="stub",
+                            prompt_text=prompt,
+                            text=(
+                                "Zendesk is popular. Help Scout is simpler and well liked."
+                                if names_subject
+                                else "Zendesk is popular and Freshdesk is cheaper."
+                            ),
+                            latency_ms=5,
+                        )
+                    )
                 return out
 
             async def fake_sentiment(answer, *, subject_name, settings=None):  # noqa: ANN001, ARG001
@@ -953,9 +1048,9 @@ class TestTheCrossEngineReading:
     ) -> None:  # noqa: ANN001
         await _sign_up(client, "cross1@test.example")
         disagreeing_engines()
-        cid = (await client.post(
-            f"{BASE}/clients", json={"url": "helpscout.com", "classify": False}
-        )).json()["id"]
+        cid = (
+            await client.post(f"{BASE}/clients", json={"url": "helpscout.com", "classify": False})
+        ).json()["id"]
         sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
 
         cross = (await client.get(f"{BASE}/scans/{sid}/report")).json()["proof"]["crossEngine"]
@@ -982,9 +1077,9 @@ class TestTheCrossEngineReading:
         """
         await _sign_up(client, "cross2@test.example")
         disagreeing_engines(failing=Engine.CHATGPT)
-        cid = (await client.post(
-            f"{BASE}/clients", json={"url": "helpscout.com", "classify": False}
-        )).json()["id"]
+        cid = (
+            await client.post(f"{BASE}/clients", json={"url": "helpscout.com", "classify": False})
+        ).json()["id"]
         sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
 
         cross = (await client.get(f"{BASE}/scans/{sid}/report")).json()["proof"]["crossEngine"]
@@ -1004,9 +1099,9 @@ class TestTheCrossEngineReading:
         """One projection, not two — the guarantee Epic 9.8 built the share path on."""
         await _sign_up(client, "cross3@test.example")
         disagreeing_engines()
-        cid = (await client.post(
-            f"{BASE}/clients", json={"url": "helpscout.com", "classify": False}
-        )).json()["id"]
+        cid = (
+            await client.post(f"{BASE}/clients", json={"url": "helpscout.com", "classify": False})
+        ).json()["id"]
         sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
 
         private = (await client.get(f"{BASE}/scans/{sid}/report")).json()
@@ -1029,25 +1124,29 @@ class TestVisibilityFindings:
         from avp_api.models.prompt import PromptIntent
         from avp_api.services.report import NAMED_ONLY_WHEN_PROMPTED, _visibility_flags
 
-        results, prompts = _rows([
-            (PromptIntent.AWARENESS, False),
-            (PromptIntent.AWARENESS, False),
-            (PromptIntent.COMPARISON, True),
-            (PromptIntent.BOTTOM_FUNNEL, True),
-        ])
+        results, prompts = _rows(
+            [
+                (PromptIntent.AWARENESS, False),
+                (PromptIntent.AWARENESS, False),
+                (PromptIntent.COMPARISON, True),
+                (PromptIntent.BOTTOM_FUNNEL, True),
+            ]
+        )
 
         assert _visibility_flags(results, prompts) == [NAMED_ONLY_WHEN_PROMPTED]
 
     def test_one_unprompted_mention_falsifies_it(self) -> None:
-        """"Never discovered" is the claim, so a single discovery ends it."""
+        """ "Never discovered" is the claim, so a single discovery ends it."""
         from avp_api.models.prompt import PromptIntent
         from avp_api.services.report import _visibility_flags
 
-        results, prompts = _rows([
-            (PromptIntent.AWARENESS, False),
-            (PromptIntent.AWARENESS, True),
-            (PromptIntent.COMPARISON, True),
-        ])
+        results, prompts = _rows(
+            [
+                (PromptIntent.AWARENESS, False),
+                (PromptIntent.AWARENESS, True),
+                (PromptIntent.COMPARISON, True),
+            ]
+        )
 
         assert _visibility_flags(results, prompts) == []
 
@@ -1060,10 +1159,12 @@ class TestVisibilityFindings:
         from avp_api.models.prompt import PromptIntent
         from avp_api.services.report import _visibility_flags
 
-        results, prompts = _rows([
-            (PromptIntent.AWARENESS, False),
-            (PromptIntent.COMPARISON, False),
-        ])
+        results, prompts = _rows(
+            [
+                (PromptIntent.AWARENESS, False),
+                (PromptIntent.COMPARISON, False),
+            ]
+        )
 
         assert _visibility_flags(results, prompts) == []
 
@@ -1072,10 +1173,12 @@ class TestVisibilityFindings:
         from avp_api.models.prompt import PromptIntent
         from avp_api.services.report import _visibility_flags
 
-        results, prompts = _rows([
-            (PromptIntent.COMPARISON, True),
-            (PromptIntent.BOTTOM_FUNNEL, True),
-        ])
+        results, prompts = _rows(
+            [
+                (PromptIntent.COMPARISON, True),
+                (PromptIntent.BOTTOM_FUNNEL, True),
+            ]
+        )
 
         assert _visibility_flags(results, prompts) == []
 
@@ -1088,16 +1191,16 @@ class TestVisibilityFindings:
         from avp_api.models.prompt import PromptIntent
         from avp_api.services.report import _visibility_flags
 
-        results, prompts = _rows([
-            (PromptIntent.AWARENESS, False, EngineResultStatus.TIMEOUT),
-            (PromptIntent.COMPARISON, True),
-        ])
+        results, prompts = _rows(
+            [
+                (PromptIntent.AWARENESS, False, EngineResultStatus.TIMEOUT),
+                (PromptIntent.COMPARISON, True),
+            ]
+        )
 
         assert _visibility_flags(results, prompts) == []
 
-    async def test_it_reaches_the_report_payload(
-        self, client: AsyncClient, monkeypatch
-    ) -> None:  # noqa: ANN001
+    async def test_it_reaches_the_report_payload(self, client: AsyncClient, monkeypatch) -> None:  # noqa: ANN001
         """End to end, on a scan where only the prompted questions name them."""
         from avp_api.services.prompts import GeneratedPrompt
 
@@ -1118,10 +1221,16 @@ class TestVisibilityFindings:
             named = "helpscout" in prompt
             return [
                 EngineAnswer(
-                    engine=e, engine_version="stub", prompt_text=prompt,
-                    text=("Help Scout is worth a look." if named
-                          else "Zendesk and Intercom are the usual choices."),
-                    latency_ms=5)
+                    engine=e,
+                    engine_version="stub",
+                    prompt_text=prompt,
+                    text=(
+                        "Help Scout is worth a look."
+                        if named
+                        else "Zendesk and Intercom are the usual choices."
+                    ),
+                    latency_ms=5,
+                )
                 for e in engines
             ]
 
@@ -1130,13 +1239,11 @@ class TestVisibilityFindings:
 
         monkeypatch.setattr(scan_runner.prompt_service, "generate_prompts", fake_generate)
         monkeypatch.setattr(scan_runner.engine_service, "ask_all", fake_ask_all)
-        monkeypatch.setattr(
-            scan_runner.extraction_service, "classify_sentiment", fake_sentiment
-        )
+        monkeypatch.setattr(scan_runner.extraction_service, "classify_sentiment", fake_sentiment)
 
-        cid = (await client.post(
-            f"{BASE}/clients", json={"url": "helpscout.com", "classify": False}
-        )).json()["id"]
+        cid = (
+            await client.post(f"{BASE}/clients", json={"url": "helpscout.com", "classify": False})
+        ).json()["id"]
         sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
         await client.post(f"{BASE}/scans/{sid}/score")
 
@@ -1155,13 +1262,21 @@ def _rows(spec):  # noqa: ANN001, ANN202
     results, prompts = [], {}
     for i, item in enumerate(spec):
         intent, mentioned = item[0], item[1]
-        status = item[2] if len(item) > 2 else (
-            EngineResultStatus.OK if mentioned else EngineResultStatus.ANSWERED_NO_MENTION
+        status = (
+            item[2]
+            if len(item) > 2
+            else (EngineResultStatus.OK if mentioned else EngineResultStatus.ANSWERED_NO_MENTION)
         )
         pid = f"prmt_{i:04d}"
         prompts[pid] = Prompt(id=pid, prompt_set_id="ps", text="q", intent=intent, position=i)
-        results.append(EngineResult(
-            id=f"eres_{i:04d}", scan_id="scan", prompt_id=pid, engine=Engine.CLAUDE,
-            status=status, mentioned=mentioned,
-        ))
+        results.append(
+            EngineResult(
+                id=f"eres_{i:04d}",
+                scan_id="scan",
+                prompt_id=pid,
+                engine=Engine.CLAUDE,
+                status=status,
+                mentioned=mentioned,
+            )
+        )
     return results, prompts

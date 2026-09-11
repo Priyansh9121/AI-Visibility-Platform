@@ -696,6 +696,22 @@ instant paint).
 > unchanged, and `ReportView.test.tsx` asserts both — plus a byte-identical
 > before/after screenshot in `docs/screenshots/epic-9-19/`.
 >
+> **Epic 19 put a first-impression element on a Working screen, and kept
+> both rules.** The getting-started checklist is seen rarely over an
+> account's life and often only once — the brief put it on the arrival
+> side of this section's line — but it renders on the dashboard, which is
+> opened many times in exactly the week it is showing. So it performs **no
+> entrance**, the dashboard's exclusion holding, and it moves only where the
+> account actually changes under the reader's eyes: a step's lamp dissolves
+> from void to lit on the reveal timing when its step completes (a polled
+> scan landing, a score arriving), and the last step completing — once per
+> agency — walks the live badge's breath down the five lamps a stagger step
+> apart and then lights the card on the reveal timing. That completion is
+> gated in JavaScript on a change *during the mount*, so a page that loads
+> already complete performs nothing. **Zero motion values were added**; the
+> breath, the reveal and the stagger are this section's own. See
+> `design-system.md` §6b and `build-log.md` Epic 19.
+>
 > **Corrected in Epic 9.16a.** The reveal originally defaulted to hidden and
 > was revealed by script. That is safe only on screens which are never
 > server-rendered, which the first four happened to be and the next two were

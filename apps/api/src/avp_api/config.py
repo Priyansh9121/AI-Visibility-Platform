@@ -153,6 +153,37 @@ class Settings(BaseSettings):
     # NOT fall back to trusting the payload.
     stripe_webhook_secret: SecretStr | None = None
 
+    # --- Google sign-in (Epic 20) ------------------------------------------
+    # All three optional, like every provider above: with any of them unset
+    # the button's target answers 503 `google-sign-in-not-configured` and the
+    # password flow is untouched. They come from a Google Cloud Console OAuth
+    # client the founder creates; nothing here can invent them.
+    #
+    # The client id is NOT a secret — it is sent to the browser in the
+    # authorization URL — and is deliberately a plain `str`, for the reason
+    # `stripe_price_id` gives. The client secret is.
+    google_oauth_client_id: str | None = None
+    google_oauth_client_secret: SecretStr | None = None
+    # The EXACT redirect URL registered in the Console, e.g.
+    # http://localhost:8000/api/v1/auth/google/callback. Configuration, never
+    # derived from the request's Host — the same argument `public_web_base_url`
+    # makes, and sharper here: a redirect URL built from a spoofed Host is a
+    # code sent to an attacker. It cannot be finalised for production until
+    # the deploy host is chosen (build-log Epic 18.2's open decision).
+    google_oauth_redirect_url: str | None = None
+    # How long the state (between /start and /callback) and the sign-up ticket
+    # (between /callback and /complete) live. Ten minutes is the time it takes
+    # a person to pick an account and type an agency name, not a standing key.
+    google_sign_in_ttl_seconds: int = 600
+
+    @property
+    def google_sign_in_configured(self) -> bool:
+        return (
+            self.google_oauth_client_id is not None
+            and self.google_oauth_client_secret is not None
+            and self.google_oauth_redirect_url is not None
+        )
+
     @field_validator("cors_allow_origins", mode="before")
     @classmethod
     def _split_origins(cls, value: object) -> object:

@@ -27,6 +27,9 @@ export const ENGINE_ACCENT: Readonly<Record<string, number>> = {
   claude: 0,
   claude_search: 2,
   chatgpt: 4,
+  // Epic 21. The gaps between the first three were left for exactly this.
+  perplexity: 1,
+  gemini: 3,
 };
 
 /**
@@ -41,6 +44,11 @@ export const ENGINE_LABEL: Readonly<Record<string, string>> = {
   claude: 'Claude — from memory',
   claude_search: 'Claude — with web search',
   chatgpt: 'ChatGPT — from memory',
+  // Epic 21. Perplexity is grounded by nature and says so the way the
+  // grounded Claude does; Gemini is run from memory, as ChatGPT is, so the
+  // three parametric vendors sit on one footing.
+  perplexity: 'Perplexity — with web search',
+  gemini: 'Gemini — from memory',
 };
 
 /**
@@ -53,6 +61,8 @@ export const ENGINE_SHORT: Readonly<Record<string, string>> = {
   claude: 'Claude',
   claude_search: 'Claude + search',
   chatgpt: 'ChatGPT',
+  perplexity: 'Perplexity',
+  gemini: 'Gemini',
 };
 
 export function engineLabel(engine: string): string {

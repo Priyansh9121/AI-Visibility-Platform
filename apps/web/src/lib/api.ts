@@ -34,11 +34,24 @@ import type {
   TechnicalAudit,
   UserRole,
   ValidationProblemDetail,
+  GooglePending,
+  CompleteGoogleSignUpRequest,
 } from '@avp/shared-types';
 import { isProblemDetail } from '@avp/shared-types';
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000/api/v1';
+
+/**
+ * Where "Sign in with Google" sends the browser — Epic 20.
+ *
+ * A NAVIGATION, not a request: the API answers with a redirect to Google,
+ * and a `fetch` cannot follow a cross-site redirect into a sign-in page. So
+ * the button is an anchor to this URL, and the API's own cookie rides back
+ * on the callback's redirect the same way it rides on a `/auth/login`
+ * response. Exported for exactly that anchor and nothing else.
+ */
+export const GOOGLE_SIGN_IN_URL = `${API_BASE}/auth/google/start`;
 
 /** An RFC 9457 problem returned by the API, carried as a throwable. */
 export class ApiProblem extends Error {
@@ -236,8 +249,41 @@ export const api = {
    * sidebar's client list reads its scores off this window — Epic 13 — and
    * asks for the widest one, so as few clients as possible fall outside it.
    */
+  /**
+   * Who a Google sign-in is for, before the agency is named — Epic 20.
+   *
+   * Read-only: the ticket is not spent by reading it, so the completion
+   * page survives a reload. `400 invalid-google-ticket` for unknown, used
+   * and expired alike.
+   */
+  googlePending: (ticket: string) =>
+    request<GooglePending>(`/auth/google/pending?ticket=${encodeURIComponent(ticket)}`),
+
+  /**
+   * Finish creating an agency from a verified Google identity — Epic 20.
+   *
+   * The Google half of `signUp`: same agency, same owner seat, signed in on
+   * creation, no password. The ticket is consumed. `400 invalid-google-ticket`,
+   * `409 email-already-registered`, `422`.
+   */
+  completeGoogleSignUp: (payload: CompleteGoogleSignUpRequest) =>
+    request<Me>('/auth/google/complete', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
   dashboard: (limit?: number) =>
     request<Dashboard>(limit == null ? '/dashboard' : `/dashboard?limit=${limit}`),
+
+  /**
+   * Hide the getting-started checklist for the whole agency — Epic 19.
+   *
+   * `204`, idempotent, any seat holder. Per agency rather than per browser
+   * because the checklist describes the account, and a teammate opening the
+   * same workspace should see the same answer.
+   */
+  dismissGettingStarted: () =>
+    request<void>('/dashboard/getting-started/dismiss', { method: 'POST' }),
 
   /**
    * Start a scan for a client — the dashboard's "re-run".

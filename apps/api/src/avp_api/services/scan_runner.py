@@ -41,6 +41,18 @@ logger = structlog.get_logger(__name__)
 # grounded engine can take 100s+ per prompt. Unbounded fan-out over 24 prompts x
 # 3 engines is 72 simultaneous requests, which buys rate limits, not speed.
 #
+# FIVE ENGINES, AND A SECOND KNOB — Epic 21. `perplexity` and `gemini` join
+# the default set when their keys are present, so a slot may now await five
+# concurrent calls and in-flight requests may reach 60 at c=12. That count is
+# not what bounds the two new vendors: their rate limits at a new account's
+# tier are far under Anthropic's and OpenAI's, so each adapter declares a
+# `max_in_flight` and `engines.ask_all` gates on it PER VENDOR, independent of
+# this value. A slot waiting on a vendor gate holds its slot, so the loop can
+# only get slower with five engines than with three; how much slower is
+# measured, not projected — and at the time of writing it could NOT be
+# measured, because neither key existed in this environment. build-log
+# Epic 21 records the debt and this number is unchanged until it is paid.
+#
 # RAISED TO 12 — Epic 18.1, the scan-speed budget. Sized against measured
 # limits, not guessed: the answer models' accounts allow 10,000 requests a
 # minute (Anthropic) and 500 (OpenAI), read from the rate-limit headers on

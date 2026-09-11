@@ -212,7 +212,7 @@ function Brand({ agency }: { agency: Report['agency'] }) {
 /**
  * Where the engines disagree — Epic 9.23, Layer 3.
  *
- * Every scan already ran each prompt against three engines across two vendors
+ * Every scan already ran each prompt against every configured engine (three across two vendors when this was written; up to five across four since Epic 21)
  * and stored a mention and a sentiment for each. Nothing read them
  * comparatively until this: the report gave one mention rate, one sentiment,
  * and per-engine counts with nothing said about the difference between them.

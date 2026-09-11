@@ -103,6 +103,10 @@ export type Effort = Schemas['Effort'];
 
 // --- request aliases ----------------------------------------------------
 export type SignUpRequest = Schemas['SignUpRequest'];
+// --- Google sign-in (Epic 20) --------------------------------------------
+export type GooglePending = Schemas['GooglePendingOut'];
+export type CompleteGoogleSignUpRequest = Schemas['CompleteGoogleSignUpRequest'];
+export type SignInMethod = Schemas['UserOut']['signInMethods'][number];
 // --- password reset (Epic 9.13) ------------------------------------------
 export type ResetPasswordRequest = Schemas['ResetPasswordRequest'];
 export type ResetPasswordConfirm = Schemas['ResetPasswordConfirm'];

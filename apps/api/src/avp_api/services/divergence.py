@@ -4,7 +4,8 @@
 
 WHAT THIS EXISTS TO SAY
 -----------------------
-A scan already runs every prompt against three engines across two vendors, and
+A scan already runs every prompt against every configured engine (three across
+two vendors when this was written; up to five across four since Epic 21), and
 stores a mention, a position and a sentiment for each. Until this module nothing
 read them COMPARATIVELY: the report gave one mention rate, one sentiment
 sub-score, and per-engine counts with nothing said about the difference between

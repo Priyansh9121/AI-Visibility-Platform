@@ -37,6 +37,12 @@ export {
 export { DataTable, type DataTableProps, type Column } from './components/Table.js';
 export { ScoreDisplay, type ScoreDisplayProps } from './components/ScoreDisplay.js';
 export { MetaChip, type MetaChipProps } from './components/MetaChip.js';
+export { Checklist, type ChecklistProps, type ChecklistStep } from './components/Checklist.js';
+export {
+  GoogleSignInButton,
+  type GoogleSignInButtonProps,
+  type GoogleSignInLabel,
+} from './components/GoogleSignInButton.js';
 export { ScoreHero, type ScoreHeroProps } from './components/ScoreHero.js';
 export { PageHead, type PageHeadProps } from './components/PageHead.js';
 export { ScoreMeter, type ScoreMeterProps, type ScoreAbsence } from './components/ScoreMeter.js';

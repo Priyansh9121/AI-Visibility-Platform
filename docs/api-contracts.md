@@ -325,7 +325,8 @@ shell does not need three round trips per page load.
     "role": "owner",
     "status": "active",
     "lastLoginAt": "2026-08-20T05:31:44Z",
-    "createdAt": "2026-08-20T05:29:02Z"
+    "createdAt": "2026-08-20T05:29:02Z",
+    "signInMethods": ["email"]
   },
   "agency": {
     "id": "agcy_01J...",
@@ -338,7 +339,71 @@ shell does not need three round trips per page load.
 }
 ```
 
+`signInMethods` — Epic 20 — is how the account can be signed into: `"email"`
+(a password), `"google"`, or both. An account created through Google that
+never set a password has only `"google"`, and Settings says so instead of
+offering a password change. Named for the door rather than the credential,
+because no auth response may carry the word "password" (`test_password_is_never_returned`).
+
 **Errors:** `401 authentication-required`.
+
+---
+
+#### Google sign-in — Epic 20
+
+"Sign in with Google" beside the password form, not instead of it. Sessions
+afterwards are the same httpOnly cookie; seat and tenancy rules are the
+password flow's. Authorization code with PKCE (S256), a server-side `state`
+and `nonce`, and the ID token verified server-side (signature against
+Google's JWKS, audience, issuer, expiry, nonce) even though it arrived over
+TLS from the token endpoint. All four routes are unauthenticated. All three
+settings — `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`,
+`GOOGLE_OAUTH_REDIRECT_URL` — must be set; unset, the button's target answers
+`503` and nothing else changes.
+
+**The account-linking policy**, decided and recorded in build-log Epic 20:
+a Google identity whose verified email matches an ACTIVE account **links
+automatically** and stores Google's `sub` on the row; thereafter the `sub`
+is matched first and the email second. Refused (`account-unavailable`) when
+the account is suspended or deleted, when the row already carries a
+different `sub`, or when an invited seat has no live invitation. An
+`email_verified: false` identity is refused (`email-unverified`). An INVITED
+seat with a live invitation is **accepted** by signing in with Google. A
+new address creates nothing until the agency is named.
+
+##### `GET /api/v1/auth/google/start`
+A browser navigation. **`302`** to Google's authorization endpoint carrying
+`state`, `nonce`, `code_challenge` (S256), `scope=openid email profile`,
+`prompt=select_account`. **Errors:** `503 google-sign-in-not-configured`.
+
+##### `GET /api/v1/auth/google/callback?code&state` (or `error`)
+Where Google returns the browser. **Always `302`**, never a problem
+document — a person, not a script, is standing here:
+
+| Outcome | Redirects to |
+|---|---|
+| existing account | `{PUBLIC_WEB_BASE_URL}/dashboard`, with the session cookie set |
+| new address | `{PUBLIC_WEB_BASE_URL}/sign-up/google?ticket=…` (ten minutes, single use) |
+| anything else | `{PUBLIC_WEB_BASE_URL}/?google=error&reason=…` |
+
+`reason` is one of `denied`, `invalid-state`, `exchange-failed`,
+`email-unverified`, `account-unavailable`, `not-configured`. The URL carries
+no token, no email and no Google error text.
+
+##### `GET /api/v1/auth/google/pending?ticket=…`
+**Response `200`** — `GooglePendingOut`: `{ "email": "…", "suggestedName": "…" }`.
+Read-only; the ticket is not spent. **Errors:** `400 invalid-google-ticket`
+for unknown, used and expired alike.
+
+##### `POST /api/v1/auth/google/complete`
+**Request:** `{ "ticket": "…", "agencyName": "…", "fullName": "…" }` —
+the two things `sign-up` asks that Google cannot answer. No email (the
+ticket's), no password.
+
+**Response `201`** — `MeOut`, with the session cookie set. The agency and
+its OWNER are created, `signInMethods: ["google"]`. The ticket is consumed.
+**Errors:** `400 invalid-google-ticket`, `409 email-already-registered`,
+`422 validation-failed`.
 
 ---
 
@@ -717,12 +782,41 @@ signature; also an unparseable body), `503 billing-not-configured`.
   "clientCount": 0,
   "scanCount": 0,
   "recentScans": [],
-  "isEmpty": true
+  "isEmpty": true,
+  "scoredScanCount": 0,
+  "sharedScanCount": 0,
+  "gettingStartedDismissed": false
 }
 ```
 
 `isEmpty` is true when the agency has no clients and no scans, so the frontend
 can show the onboarding path rather than an empty table.
+
+**The getting-started facts — Epic 19.** Three more fields in the shape of
+`clientCount` and `scanCount`, from which the dashboard derives its
+getting-started checklist rather than the server storing per-step flags:
+
+- `scoredScanCount` — scans of this agency with a `SCORED` score. Counted
+  over the whole history, not the `recentScans` page, so a scored scan that
+  has scrolled off the page still counts. `INSUFFICIENT_DATA` is not a score
+  and is not counted.
+- `sharedScanCount` — scans with a live share link (`share_token IS NOT
+  NULL`). Minting sets it, revocation clears it, expiry does not: the count
+  describes the account as it is, not a history of links that once existed.
+- `gettingStartedDismissed` — whether someone at the agency has closed the
+  checklist. The one stored fact; the rest are derived on read.
+
+#### `POST /api/v1/dashboard/getting-started/dismiss`
+**Auth required.** Any seat holder. Hides the getting-started checklist for
+the whole agency — per agency, not per browser, because the checklist
+describes the account and a teammate opening the same workspace should see
+the same answer. It is not behind the admin gate because it changes what
+nobody can do.
+
+**Response `204`**, empty. Idempotent: a second call does not move the
+timestamp and is not an error. There is no un-dismiss.
+
+**Errors:** `401 authentication-required`.
 
 Each entry in `recentScans` is a `ScanSummaryOut`:
 
@@ -1109,12 +1203,17 @@ one that loses the claim exits without touching the row.
 ```
 
 Both fields optional. `promptLimit` (1–30) caps the generated set for cost
-control; omit for a real scan. `engines` defaults to every engine that has an
-adapter (`claude`, `claude_search`, `chatgpt`). Duplicates are collapsed
-before anything is billed — `["claude", "claude"]` is one engine — and an
-engine the enum knows but no adapter backs (`perplexity`, `gemini`,
-`google_ai_overview`, `copilot`) is a `422` before any scan row exists, not a
-failed scan after competitor detection has been paid for.
+control; omit for a real scan. `engines` defaults to **every engine that has
+an adapter AND a key configured** — Epic 21. Five have adapters (`claude`,
+`claude_search`, `chatgpt`, `perplexity`, `gemini`); a deployment runs the
+subset whose provider key is set (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
+`PERPLEXITY_API_KEY`, `GOOGLE_AI_API_KEY`), in that order. Duplicates are
+collapsed before anything is billed — `["claude", "claude"]` is one engine.
+Two refusals, both `422 validation-failed` before any scan row exists rather
+than a failed scan after competitor detection has been paid for: an engine
+the enum knows but no adapter backs (`google_ai_overview`, `copilot`), and an
+engine with an adapter but no key, whose detail names the variable to set
+(`No key configured for engine(s): gemini (GOOGLE_AI_API_KEY)`).
 
 **Response `202`** — `ScanOut`. Identity and status only.
 

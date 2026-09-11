@@ -95,7 +95,8 @@ def _sentiment_counts(scan_id: str) -> Select[tuple[Engine, Sentiment | None, in
     """Per engine, per sentiment label, how many of this scan's answers — Epic A.
 
     Grouped in the DATABASE rather than by loading rows and counting in Python.
-    A scan is 24 prompts x 3 engines = 72 EngineResult rows, and this module
+    A scan is 24 prompts x E engines — 72 rows at the three engines this was
+    written against, 120 at the five Epic 21 allows — and this module
     already runs `score_scan` per scan; pulling 72 rows per scan across a
     client's whole history to compute four integers would be the kind of
     N+1 the module docstring says was the reason this service exists at all.

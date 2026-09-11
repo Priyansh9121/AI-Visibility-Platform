@@ -20,6 +20,8 @@ import {
   ChartPatterns,
   ReportPage,
   MetaChip,
+  Checklist,
+  GoogleSignInButton,
   ReportHeader,
   ReportMetaItem,
   ScoreBlock,
@@ -506,6 +508,70 @@ export function Styleguide(): JSX.Element {
             { key: 'score', header: 'Score', align: 'end', render: (r) => r.score },
           ]}
         />
+      </Section>
+
+      {/* ============================================================ */}
+      <Section
+        num="05a"
+        title="Sign in with Google — Google's button, to Google's spec"
+        note="The one element in this system not drawn from its tokens, by Google's own branding requirement: their mark, their three wordings, their colours and border, on both grounds. It is an anchor to the API, which redirects to Google."
+      >
+        <div className="sg-row">
+          <GoogleSignInButton href="#" />
+          <GoogleSignInButton href="#" label="Sign up with Google" />
+          <GoogleSignInButton href="#" label="Continue with Google" />
+        </div>
+      </Section>
+
+      {/* ============================================================ */}
+      <Section
+        num="07a"
+        title="Checklist — steps that light as an account becomes real"
+        note="Each step is a lamp: void and dashed until it is done, the beacon accent once it is. The count is the lit figure over the total. When every lamp is lit the card takes the selected treatment, because a complete account is the selected state of an agency. It performs no entrance; a lamp lights only when its step completes under the reader's eyes."
+      >
+        <div className="sg-row" style={{ alignItems: 'stretch' }}>
+          <Checklist
+            title="Getting started"
+            lead="Two of five lit."
+            onDismiss={() => {}}
+            steps={[
+              { key: 'client', label: 'Add a client', done: true, detail: '2 clients' },
+              { key: 'scan', label: 'Run a scan', done: true, detail: 'One is running now.' },
+              {
+                key: 'score',
+                label: 'Get a score',
+                done: false,
+                detail: 'A scan is running. Its score lands here when it finishes.',
+              },
+              {
+                key: 'teammate',
+                label: 'Invite a teammate',
+                done: false,
+                detail: '4 seats free.',
+                action: <Button size="sm" variant="secondary">Invite a teammate</Button>,
+              },
+              { key: 'share', label: 'Share a report', done: false, detail: 'After the first score.' },
+            ]}
+          />
+          <Checklist
+            title="Getting started"
+            completeTitle="Up and running"
+            completeLead="All five are lit. Close this and the dashboard is yours."
+            onDismiss={() => {}}
+            steps={[
+              { key: 'client', label: 'Add a client', done: true, detail: '3 clients' },
+              { key: 'scan', label: 'Run a scan', done: true, detail: '7 scans' },
+              { key: 'score', label: 'Get a score', done: true, detail: '5 scored' },
+              { key: 'teammate', label: 'Invite a teammate', done: true, detail: '2 of 5 seats in use' },
+              { key: 'share', label: 'Share a report', done: true, detail: 'One live link.' },
+            ]}
+          />
+        </div>
+        <p className="sg-section__note">
+          The completion breath — the five lamps taking one breath in sequence and the card
+          lighting after them — cannot be shown by a static page: it is gated on the last step
+          completing during the mount, so a page that loads already complete performs nothing.
+        </p>
       </Section>
 
       {/* ============================================================ */}

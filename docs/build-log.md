@@ -14983,3 +14983,688 @@ change to lean on the gate rather than on "I ran the tests".
 API 1205, ruff clean, mypy at its 50 ceiling; the CI gate green on the
 commit. The two harness transcripts are in the session record; the tables
 above are copied from them verbatim.
+
+# Epic 19 — the getting-started checklist: five steps derived from the account, lit as it becomes real
+
+**2026-09-10.** **Scope change, recorded rather than resumed silently:** the
+"no new features" line from the pilot-readiness push (Epics 18 through 18.2)
+is lifted, on the founder's decision. This is the first feature work since,
+and it is named as such here so the reversal has a line of its own the way
+every other scope change in this log does. The no-competitor-reference
+rules in `north-star.md` §1 were never part of that freeze and are unchanged;
+the brief restated them and this entry applies them.
+
+## What the research said, and what it did not
+
+`docs/competitor-research-2026-09-10.md` records that one competitor tracks
+onboarding as discrete milestones with a visible count, and that this
+product had only "empty vs. not empty". That is the evidence a checklist
+with a count is worth having. It is not where anything below comes from:
+the steps were read off what an agency does here between signing up and
+sending a client a report, every one is checkable against a column that
+exists, and the design is the Luminance Ledger's own idea at account scale.
+No competitor screen, markup or stylesheet was opened during this epic.
+
+## The steps: five kept from six candidates, one changed, one dropped
+
+The brief offered a starting list and asked that each be confirmed
+checkable before it was kept. Against the code:
+
+| Candidate | Checkable by | Kept as |
+|---|---|---|
+| Add your first client | `clientCount ≥ 1`, already on the dashboard | **Add a client** |
+| Run your first scan | `scanCount ≥ 1`, already on the dashboard | **Run a scan** |
+| View a scored report | A view is a `GET` and is recorded nowhere. What IS recorded is that a scan has a `SCORED` score. | **Get a score** — the fact behind the view, not the view |
+| Invite a teammate | `seats.used ≥ 2`; an invited seat counts, which is `User.occupies_seat`'s own rule | **Invite a teammate** |
+| Share or download a report | Minting a share link writes `scans.share_token`; a PDF download is a `GET` and is recorded nowhere. The "or download" half was dropped rather than a download-event table invented for a checkbox. | **Share a report** — a live share link |
+
+Two of the five needed facts the dashboard did not carry: `recentScans` is
+a page of ten, not a history, so "has any scan ever been scored" and "is
+any report shared" are new whole-agency counts on `GET /dashboard`
+(`scoredScanCount`, `sharedScanCount`). Derived on read, in the shape of
+`clientCount`; no `onboarding_progress` table and no per-step flag, so no
+scoring path, share path or seat path has to remember to write to the
+checklist. `INSUFFICIENT_DATA` is not a score and is not counted — the same
+rule the list applies when it renders that scan as null rather than zero.
+
+**The checklist is a reading of the account, not a diary.** Delete every
+client and the first step unlights; revoke a report's only share link and
+the last one does; let a link expire and it does not, because expiry leaves
+`share_token` in place and revocation clears it. That is the column's own
+meaning read honestly, and it is the same behaviour `clientCount` already
+has. Recorded as a consequence, and tested.
+
+## Dismissal: the one stored fact
+
+Everything above is derived; a decision to close the card cannot be. So
+`agencies.getting_started_dismissed_at`, one nullable timestamp (the
+`accepted_at` / `revoked_at` shape), migration `04652544a081`, applied to
+`avp_dev` with `alembic check` clean either side. Decided explicitly, as the
+brief asked:
+
+- **Per agency, not per browser.** The checklist describes the account, and
+  a teammate opening the same workspace should see the same answer. The
+  tenancy model already makes the agency the unit everything hangs off.
+- **Any seat holder may dismiss.** `POST /dashboard/getting-started/dismiss`
+  is not behind `RequireAdmin`, unlike everything under `/agencies/{id}`,
+  because it changes what nobody can do.
+- **Dismissible before completion; visible after it until dismissed.** A
+  solo operator who will never invite anyone would otherwise see it forever,
+  and a completed account deserves to see the completed card once. The
+  close control is a quiet ghost while steps remain and the screen's one
+  primary button ("Done") when they are all lit.
+- **Idempotent, no un-dismiss.** A second click on a stale page is not a
+  second decision. Clearing the column is a one-line endpoint if the
+  founder ever wants it back.
+- **The card closes at once and the server is told after.** If the request
+  fails the next poll re-reads the truth and the card returns, which is the
+  honest outcome and better than a card hidden on one device and showing
+  on the next.
+
+## Three states, one screen
+
+`DashboardView` renders the checklist in every state short of dismissed —
+brand-new, part-way, complete — because they are one account at three
+moments, not three screens. `EmptyAgency` and `NoScansYet` keep their words
+and the unmeasured Ledger but hand their button to the checklist while it
+shows: the checklist's first unlit step IS that button, and two buttons of
+one intent in a viewport is a screen that has not decided. The screen has
+exactly one primary action, the first unlit step with a way to do it; the
+rest are secondary. The empty states get their buttons back when the card
+is dismissed, which the tests assert both ways.
+
+## The primitive, and where "beyond" was actually earned
+
+`Checklist` in `@avp/design-system`, built the way every primitive here is:
+tokens only, the shape lock, both themes, a styleguide section, render
+tests, and the tokens guard extended to cover its one custom property. The
+five skills the brief named were read first. What they changed: the
+redesign audit's "no empty dashboard without a composed getting-started
+view" is this epic's reason to exist; `design-taste-frontend`'s bans on
+"Step 1" labels and on em dashes in UI copy are asserted in
+`gettingStarted.test.ts`; `high-end-visual-design`'s double-bezel and pill
+buttons were read and declined, because this system's shape lock and
+seated cards are the identity; `pick-ui-library` was consulted and nothing
+was installed, because a list of five rows is not a component problem;
+`animate`'s gate is applied below, in order.
+
+**The design, from the product's own vocabulary.** Each step is a lamp: a
+16px slab with the `sm` radius (not a dot — the tile's dot already means a
+category), void and dashed until done (the stroke that already means *an
+absence that is itself the finding*), beacon-600 with the live badge's halo
+once done. Beacon and never the ramp, because a step is not a score. The
+count is the lit figure over the total in the display face at the KPI size.
+When every lamp is lit the card takes the selected treatment — the beacon
+ring and the selected wash — because a complete account is the selected
+state of an agency.
+
+**Where the ambition went, and the discipline that held it.** The brief put
+the checklist on the arrival side of `design-direction.md` §4's line and
+said to push. The gate's first question — frequency — says a card on the
+dashboard is opened many times in exactly the week it is showing, so it
+performs **no entrance**, and §4's exclusion of the dashboard from arrival
+motion holds. The delight budget went where the account actually changes
+under the reader's eyes:
+
+- **A step completing** dissolves its lamp from void to lit on the reveal
+  duration and curve, as a transition on the `is-done` class. Lit at first
+  paint paints lit; a polled scan landing or a score arriving is seen to
+  light.
+- **The last step completing**, once per agency: the five lamps take one
+  breath in sequence, left to right — the live badge's own `avp-live-breath`
+  keyframe, run once, a reveal long, one stagger step apart — and then the
+  card lights, on the reveal timing, delayed by the stagger times the count.
+  Gated in JavaScript on the change from incomplete to complete *during the
+  mount*, so a page that loads already complete performs nothing; both
+  suites assert the completing class is absent from a static render.
+
+**Zero motion values were added.** Every duration, curve and delay is one of
+§4's own. §4 carries a paragraph recording this; `design-system.md` §6b
+documents the component.
+
+**One defect the browser found.** `--avp-selected-ring` is an inset shadow
+and the seated elevation is not; a shadow list cannot interpolate across
+that difference, so the ring snapped in while everything else dissolved.
+Caught by reading `document.getAnimations()` after flipping the classes in
+Chromium: every other property listed a 600ms transition and `box-shadow`
+was missing. The card's ring is now carried on `border-color` — the same
+1px of beacon-600 in every theme — which transitions. The timeline after
+the fix: five breaths at 0/70/140/210/280ms, the fifth lamp's dissolve at
+0ms, the card's border and wash at 350ms.
+
+## Verified
+
+Design system **618/618** (12 new), web **840/840** (22 new: the derivation
+and the screen), API **1212/1212** (7 new: the two counts, the whole-history
+case, the share-link round trip, tenancy scoping, dismissal), `ruff check`
+clean, shared-types contract **53/53** after regenerating `openapi.json`
+and `api.gen.ts`, all three typechecks clean, styleguide rebuilt, migration
+applied and `alembic check` clean.
+
+`docs/screenshots/epic-19/`: the dashboard in all four states (brand-new,
+two of five with a scan running, four of five with the report to open,
+complete) in both themes, from the repo's own fixtures wrapped in the real
+`WorkspaceShell` and rendered to static HTML with the app's compiled
+stylesheet and the real fonts — the Epic 14 harness, deleted before the
+counts above. The completion choreography cannot be shown by a static
+render, so Chromium loaded four-of-five, flipped the classes the way React
+does, and captured frames at roughly 120, 320, 600, 900 and 1400ms: the
+breath visibly walking down the lamps, then the card lit. **Still owed: a
+live look at a real scan landing under the poller and lighting the score
+step, and at a real last step completing with React's own state change** —
+the timeline above is the browser's, but the trigger was a scripted class
+flip, not the component's effect.
+
+## Not built here, on purpose
+
+- No `onboarding_progress` table, no per-step flags, no event log for
+  views or downloads. Stated above; the checklist is a reading.
+- No geographic step, no "connect your analytics" step, no video: this
+  product has none of those, and a padded checklist is worse than a short
+  honest one.
+- No un-dismiss endpoint. One line if wanted.
+
+# Epic 20 — Sign in with Google: beside the password, verified server-side, the linking policy written down
+
+**2026-09-10.** The second item of the brief that lifted the pilot-readiness
+feature freeze (recorded in Epic 19's first paragraph; this is the same
+reversal, not a second one). Built to the point a real Google Cloud client
+can be plugged in and tested end to end; that client is the founder's to
+create and is the one thing here no test can stand in for.
+
+## What was built
+
+**Backend.** `services/google_oauth.py`: authorization code with PKCE
+(S256), a server-side `state` and `nonce` parked in Redis for ten minutes
+and consumed in one MULTI/EXEC, the code exchanged over TLS with the client
+secret, and the ID token then VERIFIED ANYWAY — signature against Google's
+JWKS (PyJWT, RS256 pinned), audience, issuer, expiry, and the nonce this
+process minted. Google's own docs say the signature check is redundant for
+a token from the token endpoint; it is done regardless, because the brief
+asked and because a check that exists only when strictly necessary is the
+one that gets dropped in a refactor. Four routes on `/auth/google/*`:
+`start` (302 to Google; `503 google-sign-in-not-configured` without a
+client), `callback` (always a 302 — a person is standing there, not a
+script), `pending` (read the ticket without spending it) and `complete`
+(create the agency). The endpoints, the discovery constants and the failure
+reasons are in `api-contracts.md`. Two settings and a redirect URL in
+`.env.example`, the secret in the template guard's key list and its
+`GOCSPX-` shape in the credential-shape list.
+
+**The seam.** `deps.google_provider` is what the suite overrides with a fake
+that hands back whatever identity a test filed, exactly as the scan
+executor is faked. Everything else runs for real against it: the state
+store in the test Redis, the callback, the policy against Postgres, the
+cookie. **Verified against a real Google flow: nothing.** `LiveGoogleProvider`
+— the token exchange and the JWKS verification — has run against no
+endpoint but the fake. Said plainly, as the brief asked.
+
+**Model.** `users.google_sub`, unique and nullable, and the active-user
+credential CHECK widened from "has a password" to "has a password OR a
+Google link" — dropped and re-created under a new name
+(`active_user_has_credential`), because this environment's autogenerate
+compares CHECK constraints by name and a same-name change would have been
+invisible. Migration `1b1265465ea7`, applied to `avp_dev`, `alembic check`
+clean. Its downgrade refuses if any Google-only account exists, which is
+correct: a rollback cannot invent a password for a person who never set
+one. `UserOut.signInMethods` — `["email"]`, `["google"]`, or both — so
+Settings can say "you sign in with Google" instead of offering a password
+change that would refuse. Named for the door, not the credential, because
+`test_password_is_never_returned` forbids the word in any auth response
+and it caught `hasPassword` on the first run.
+
+**Frontend.** `GoogleSignInButton` in the design system, an anchor to the
+API. `SignInPanel` and `SignUpPanel` carry it under an "or" rule; the front
+door reads the callback's one-word `reason` and says a sentence; a new
+address lands on `/sign-up/google`, which shows the verified email, asks
+for the agency's name and the person's (pre-filled from Google), and asks
+for no password; Settings replaces the password section for a Google-only
+account with what is true and how to add one (the reset link).
+
+## The security decisions, recorded as decisions
+
+**Account linking: automatic on a verified email, gated four ways.** A
+Google identity whose `email_verified` address matches an ACTIVE account
+signs into it and stores the `sub`. The alternatives were weighed and
+refused in the module docstring: requiring the password first blocks the
+person the button is mostly for and proves nothing the reset flow does not
+already accept (control of the same inbox, vouched for by the same
+provider); refusing outright makes the button a decoy for every existing
+customer. The gates: `email_verified` must be true; the account must be
+active and not deleted; a row that already carries a different `sub` is
+refused (an address reassigned inside a Workspace to another Google account
+does not inherit the old account — that person uses the reset flow, which
+the prior holder's password would also have gated); an INVITED seat needs
+a live invitation. **Match by `sub` first, then email**: a `sub` is
+Google's stable id and an email is not, so a renamed Google address keeps
+its account and a reassigned one does not take it. Tested each way.
+
+**No password for a Google account, and the CHECK says so.** `password_hash`
+was already nullable (invited seats). What changed is the constraint that
+said an active user must have one; it now admits a Google link as the
+credential. `authenticate()` already answered `InvalidCredentials` for a
+row with no hash, so a password attempt on a Google-only account gets the
+same 401 as a wrong password, with no branch that says which — tested.
+Adding a password later is the reset flow, unchanged. **Re-inviting a seat
+clears the Google link** as it already cleared the password: a re-issued
+seat is not resumed.
+
+**The invite-accept page carries no Google button — deferred, and why.**
+Signing in with Google from the front door already accepts an invited seat:
+the emailed link proves control of an inbox by delivering a token to it,
+Google proves control of the same inbox by vouching for it, so the seat is
+activated and the live invitation stamped `accepted_at`, exactly as the link
+would have. The page itself was left alone because its form also asks for a
+password, which a Google acceptance would not set, and reconciling the two
+on one screen is a design question worth its own pass rather than a button
+bolted beside a password field. Recorded here so it is a decision.
+
+**The ticket in the query string** is the trade `/reset-password/{token}`
+and `/invite/{token}` already make: a bearer credential with a session
+token's entropy, ten minutes, single use, and no session yet to carry it
+any other way.
+
+## Founder decisions required before this can be exercised
+
+1. **A Google Cloud Console OAuth 2.0 client** — client ID, client secret,
+   and the exact authorized redirect URI(s). For development:
+   `http://localhost:8000/api/v1/auth/google/callback`. Nothing here can
+   invent these, and no placeholder was fabricated.
+2. **The consent screen's verification status.** An unverified app shows
+   Google's own warning to every person signing in, which looks alarming on
+   a real product. Verification takes real time with Google and wants a
+   privacy policy URL and a real domain — neither of which exists until a
+   deploy has happened.
+3. **Whether this ships before or after the deploy work.** The production
+   redirect URI must be a real, stable URL, so it cannot be finalised until
+   Epic 18.2's open deploy-host decision is made. Everything here works
+   against `localhost` the moment the client exists.
+
+## Read first, and what it changed
+
+The five skills from Epic 19 again. `pick-ui-library` was consulted for the
+one library decision — a JWT verifier — and answered nothing (it is a
+frontend list), so the choice was made on the licence audit: PyJWT (MIT)
+with the `crypto` extra (cryptography, Apache-2.0/BSD), both `ok` in
+`license_audit.py`; the five `REVIEW` lines it prints (cffi, certifi,
+email-validator, pathspec, the app itself) predate this epic. The button
+follows Google's branding guidelines as read on 2026-09-10 rather than
+recalled — their three wordings, 14/20 medium, the light and dark colours
+and 1px inside border, 12/10/12 padding, the mark unaltered on white — and
+records its one deviation: the wording is set in this product's UI face
+because Google Sans is not openly licensed. `design-system.md` §6 carries
+the row. No competitor's sign-in was looked at; Google is a platform being
+integrated with, not a rival, and the brief said so.
+
+## Verified
+
+API **1234/1234** (21 new in `test_google_sign_in.py`: the 503, the
+authorization URL's state/nonce/PKCE, single-use state, cancel, refused
+code, wrong nonce, PKCE verifier round trip, unverified email, the
+new-address ticket end to end with its single use and its 422, the linking
+of a password account, `sub` over email, a different `sub` refused,
+suspended refused, an invited seat accepted with the invitation stamped, an
+expired invitation refused, and that the failure URL carries no email, code
+or state), `ruff check` clean, migration applied and `alembic check` clean,
+shared-types contract **53/53** after regenerating `openapi.json` and
+`api.gen.ts`, design system **622/622** (4 new for the button, including
+the stylesheet's literals), web **843/843** (3 new for the completion
+panel; every `Me` fixture gained `signInMethods`), all three typechecks
+clean, styleguide rebuilt.
+
+`docs/screenshots/epic-20/`: sign-in and sign-up with the button, the
+front door carrying a failure reason, the Google completion page and its
+expired state, in both themes — the Epic 14 harness, deleted before the
+counts above. **Still owed, and only the founder's client can pay it:** a
+real round trip through Google's consent screen, the token exchange, and
+the JWKS verification of a real ID token.
+
+# Epic 21 — engine coverage: Perplexity and Gemini adapters, built and tested against mocks; measured against nothing, because no key exists
+
+**2026-09-11.** Third item of the post-freeze feature work (the reversal is
+recorded in Epic 19). Closes the gap `north-star.md` §2 named — two of the
+four planned vendors were an enum member with no adapter — as far as it can
+be closed without a credential, and says exactly where that line falls.
+
+## Step 0, confirmed
+
+`Engine.PERPLEXITY`, `Engine.GEMINI` and `Engine.GOOGLE_AI_OVERVIEW` were
+already in the enum; `ENGINE_REGISTRY` and `DEFAULT_ENGINES` held three.
+`Settings` already declared `perplexity_api_key` and `google_ai_api_key`,
+and `.env.example` and the template guard already listed both. **Both are
+empty in this environment.** No enum change was needed; the work is the
+adapters and the plumbing that turns them on.
+
+## Two things the brief's premises got wrong, found by reading the vendors
+
+**Perplexity's Sonar chat-completions endpoint is being sunset on
+2026-09-27** — seventeen days after this was written (docs.perplexity.ai,
+migrate-from-sonar, read 2026-09-11). Its replacement, the Agent API
+(`POST /v1/agent`), has a different request shape (`input`, an explicit
+`tools: [{type: web_search}]`) and a different response shape (an `output`
+array of typed items: `search_results`, then a `message` whose
+`output_text` parts carry `url_citation` annotations). The adapter speaks
+the Agent API. It names Perplexity's own model, `perplexity/sonar` ($0.25
+in / $2.50 out per million, plus $0.0025 per web_search invocation), rather
+than the documented "replacement for Sonar", the `fast` preset, which is
+`openai/gpt-5.6-luna` behind a Perplexity search — a row recorded as
+"Perplexity named you" has to mean Perplexity's model did. Sources are the
+answer's inline citations, falling back to what was retrieved only when
+nothing was cited inline; titles and snippets are dropped (facts-only).
+`store: false` so the answer text is transient at the vendor too.
+
+**The current stable Gemini is `gemini-3.8-flash`, and it is paid-tier
+only.** The brief's `gemini-2.5-flash` is two generations back
+(ai.google.dev/gemini-api/docs/models, read 2026-09-11). Chosen with the
+reason `ANSWER_MODEL` and `OPENAI_ANSWER_MODEL` each carry: "what Gemini
+answers today" has to mean the model Google ships today. $0.75 in / $3.75
+out per million through 2026-12-31, thinking billed as output. `thinking
+Level: "low"` — Gemini 3 cannot turn thinking off, defaults to high, and
+counts thinking against `maxOutputTokens`, which is the same empty-`length`
+failure gpt-5.5 produced at medium effort; low is the same footing the
+other two parametric engines answer on. The key rides in the
+`x-goog-api-key` header, never the query string.
+
+## The mode decision
+
+`perplexity` is grounded (search is what Perplexity is) — the second engine
+after `claude_search` that produces real `Citation` rows and the first from
+a second vendor. `gemini` is parametric, no Google Search grounding tool —
+the third vendor in the `claude` / `chatgpt` mode, so a disagreement among
+the three stays a statement about vendors (Epic 4.2's rule, applied a
+third time). A grounded Gemini is a later adapter, as a grounded OpenAI is.
+
+**AI Overview is deferred, and this entry says why in its own words.**
+Gemini is a model with an API. AI Overview is the box in Google Search,
+has no API, and is only reachable by scraping — a `google` SerpApi search
+and then a `google_ai_overview` follow-up on its `page_token`, run
+sequentially because the token expires. That is a two-step scrape, not a
+chat completion, and it draws on the same 250-search SerpApi quota that is
+already the binding constraint on competitor detection. It needs a quota
+decision first; it is not built here. (§2 of north-star also records that
+SerpApi AI Overview content was measured at 0 of N usable on 2026-08-25.)
+
+## What was built
+
+- `PerplexityAdapter` and `GeminiAdapter` in `services/engines.py`, raw
+  `httpx` like the OpenAI adapter, both under the shared outer
+  `asyncio.timeout(ENGINE_CALL_CEILING)` — reused, not forked.
+- `_map_transport_error`: the order-sensitive tail Epic 9.2 paid for
+  (`TimeoutException` subclasses `TransportError`) extracted into ONE
+  function the three httpx mappers share, so it cannot be got wrong a
+  third time. `_map_openai_error` now calls it; its tests are unchanged.
+- `_map_perplexity_error` and `_map_gemini_error` emit only codes that
+  already exist on the Claude path, asserted by the same set-inclusion
+  test the OpenAI mapper has. **The novel quota shape the brief asked
+  about exists and fits an existing code:** Google reports a per-minute
+  limit and the per-day quota both as `429 RESOURCE_EXHAUSTED` with the
+  same "check your plan and billing" sentence; the quota id in
+  `details[].violations[].quotaId` (`...PerMinute...` vs `...PerDay...`)
+  or the `quota_exceeded` code tells them apart, and the day one is
+  `PROVIDER_QUOTA_EXHAUSTED` because it will not clear until tomorrow.
+  Google also returns an invalid key as a **400** (`API_KEY_INVALID` /
+  `authentication`), mapped to `PROVIDER_AUTH_FAILED`, and a billing
+  precondition as a 400 `failed_precondition`, mapped to quota.
+- Stop vocabularies: `PERPLEXITY_STOPS` over the Agent API's run `status`
+  (`failed` / `cancelled` handled before classification with the
+  response's own `error`), `GEMINI_STOPS` over `finishReason` with the
+  blocked family (`SAFETY`, `RECITATION`, `BLOCKLIST`, `PROHIBITED_CONTENT`,
+  `SPII`, `IMAGE_SAFETY`) and `promptFeedback.blockReason` mapped to
+  `PROVIDER_REFUSED` first. `LANGUAGE`, `OTHER` and the tool-call family
+  land on `STOP_REASON_UNKNOWN` on purpose. Thought parts are excluded
+  from the answer even though none are requested.
+- **`configured_engines(settings)`** — the engines with a key behind them.
+  `DEFAULT_ENGINES` is the five this product measures; a scan that names
+  no engines runs the keyed subset, in that order, and a scan that names an
+  unkeyed engine is a `422` naming the variable to set. Without this, a
+  deployment with three keys would have persisted 48 `PROVIDER_ERROR` rows
+  per scan and reported "Gemini never named you". Wired into the scan
+  endpoint, ad-hoc prompt runs, and `verify_e2e.py`.
+- **Per-vendor gates.** Each adapter declares `max_in_flight`; `ask_all`
+  gates on it with one semaphore per engine, independent of the runner's
+  `PROMPT_CONCURRENCY`. As written here: Perplexity 3 in flight, Gemini 8.
+  **Superseded for Perplexity by Epic 21.1 the same day:** the real account
+  limits the START RATE (one a second), which an in-flight cap cannot
+  express, so Perplexity now has a start pacer (`PERPLEXITY_MIN_START_
+  INTERVAL`) and no in-flight cap; Gemini's 8 stands, tested. The reasoning
+  here is kept as what was argued from published limits before a key
+  existed; the measured story is in 21.1.
+- Web: `ENGINE_ACCENT`, `ENGINE_LABEL` and `ENGINE_SHORT` carry both
+  engines ("Perplexity — with web search", "Gemini — from memory") on the
+  two accent indices left free for them. `verify_e2e.py` meters Perplexity
+  usage (tokens and web_search invocations at $2.50/1k) and Gemini
+  `usageMetadata` (thought tokens folded into output), and prices both.
+  Copy that said "three engines" now says "every configured engine";
+  `api-contracts.md` documents the keyed default and the new 422;
+  `north-star.md` §2's bullet is amended in place.
+
+## Not measured, and why — the founder's two decisions
+
+The brief asked for a measured per-attempt timeout from a handful of real
+calls, a five-engine `verify_e2e.py` run against the 300s budget, and a
+cost re-baseline. **None of the three could be done: neither
+`PERPLEXITY_API_KEY` nor `GOOGLE_AI_API_KEY` exists in this environment,
+and fabricating a key or a number is not an option.** So:
+
+- `PERPLEXITY_TIMEOUT` and `GEMINI_TIMEOUT` are `DEFAULT_TIMEOUT` (60s),
+  **inherited on purpose and labelled provisional** in the constant's
+  comment — the one bound this module has ever measured, kept so the
+  shared 122s ceiling stays true for both, not a smaller number invented
+  from nothing. Both are asserted to fit under the ceiling. Gemini's is
+  expected to come down once measured and is not lowered on expectation.
+- The five-engine budget is **not** confirmed. What is known: at c=12 a
+  slot now awaits up to five calls and in-flight requests may reach 60; the
+  Perplexity gate (3) means a slot can wait on it, so the loop can only be
+  slower than Epic 18.1's 132.7s, and by how much is exactly the number
+  that needs a key. A three-engine re-run was not spent on ($5.47) because
+  it would answer nothing this epic asks. The executor's deadline
+  arithmetic was re-derived by its own test at five engines: one slot's
+  worst case is 432s, three waves, still inside `MAX_SCAN_DURATION`
+  (2,400s) with the same margin test passing.
+- **Cost, projected from published rates and Epic 9.24's measured
+  per-call token averages, and labelled a projection.** A 24-prompt scan
+  goes from 72 engine calls to 120. Gemini at ~25 in / ~1,200 out tokens
+  a call (gpt-5.5 measured 22 / 1,023; low thinking adds some) is about
+  $0.11 for 24 calls. Perplexity at a "low" search context (~5k retrieved
+  input tokens, ~500 out, ~2 searches) is about $0.19 for 24. Sentiment is
+  the larger term: up to 48 more Claude classification calls where the
+  subject is named, at the measured ~$0.039 each, up to ~$1.85. **A
+  five-engine scan therefore projects at roughly $5.8 to $7.6 against the
+  measured $5.47 at three** — which puts a $29/month agency at about four
+  scans a month before the unit economics `north-star.md` §5 calls
+  "decided, not validated" go negative. That is the founder's number to
+  weigh; it is a projection until a key lets `verify_e2e.py` print the
+  real one.
+
+**Founder decisions, stated plainly:**
+1. **A Perplexity API key** (Tier 0 at $0 spend; Tier 1 at $50 cumulative
+   lifts the limit to 150/min and would let the gate open to 12).
+2. **A billed Google AI account.** `gemini-3.8-flash` is not on the free
+   tier; the free tier's `gemini-3-flash-preview` at 10 requests a minute
+   and 1,500 a day would spend a fifth of a day's quota on one scan and
+   trip the per-minute limit at any concurrency above one. This is the
+   same category of external setup as Epic 20's OAuth client.
+3. **Whether AI Overview gets a SerpApi-quota decision** — a separate brief.
+
+## Verified
+
+API **1283/1283** (49 new: 47 across the two adapter files, 2 in the
+stop-reason allowlist extended to both vocabularies; the endpoint, history
+and report tests re-derived from the keyed set), `ruff check` clean, web **843/843** and typecheck
+clean (labels and accents), design system untouched at **622/622**. What
+the suite proves: the request each adapter genuinely builds (model,
+budgets, thinking level, header key, no preset, no tools for Gemini,
+`store: false` for Perplexity), every documented status and error shape
+mapped onto the existing vocabulary, refusals and truncations never read
+as answers, the answer text never reaching a log or a digest, the ceiling
+holding on a hanging call, and the gate holding under load. **What it
+does not prove: that either vendor answers a real request the way its
+documentation says.** The real providers were exercised zero times.
+
+# Epic 21.1 — the measurement pass: two guesses replaced by facts, one gate reshaped by a $0 probe, one scan run once
+
+**2026-09-11.** The follow-up Epic 21 owed: both keys arrived in `.env`,
+and the brief was to spend in stages, smallest first, stopping at the first
+sign of trouble. **Total real spend across the whole pass: about $6.60
+against the brief's under-$10 ceiling** — Stages 0 to 2 and two probes
+together came to roughly 7 cents; Stage 3 was $6.50. The frugal-spend
+instruction held, and it is recorded here as an outcome rather than a
+formality. The session dropped its connection right after Stage 3 printed;
+nothing was re-run, and everything below comes from that run's log and the
+rows it persisted in `avp_dev`.
+
+## Stage 0 — both accounts, confirmed as far as this machine can see
+
+No vendor dashboard is reachable from this environment, so the checks were
+the ones that cost nothing over the API. Both keys present in `.env`. A free
+`GET /v1beta/models` with the Google key returned 55 models including
+`gemini-3.8-flash`, so the key is valid; **billing was confirmed
+empirically at Stage 1**, when every real Gemini response carried
+`serviceTier: "standard"`, which the free tier does not get. Perplexity has
+no free endpoint; its first proof was Stage 1's single call, which the
+vendor does not bill if refused. Perplexity's tier could not be read off a
+dashboard, and its headers say something the documented tiers do not — see
+Stage 2.
+
+## Stage 1 — one minimal call each: both plumbed correctly
+
+"Reply with the single word OK." through each real adapter. Perplexity:
+`status: completed`, 2 characters, 1.5s, $0.00013 by the vendor's own
+`usage.cost`. Gemini: `finishReason: STOP`, 2 characters, 1.6s, 9 tokens.
+Auth header, request shape, response parsing and the run-status / finish-
+reason classification all held against the real providers on the first
+call. Nothing retried.
+
+## Stage 2 — four realistic calls each, and a $0 probe that found the real limit
+
+Sequential, prompts of the shape a scan sends:
+
+| engine | latencies | answers |
+|---|---|---|
+| Perplexity | 6.0s, 7.2s, 10.1s, 15.2s | 4 of 4 complete, 10–20 search results each, $0.005–0.008 a call |
+| Gemini | 5.5s, 6.0s, 6.5s, 6.8s | 4 of 4 complete, 780–1,114 output tokens at low thinking |
+
+**Every Perplexity response carried `x-ratelimit-limit: 1`, `remaining: 0`,
+reset one second out** — not the 50-a-minute Tier 0 figure the in-flight
+gate had been argued against. A probe of three concurrent calls (refused
+requests are unbilled, so $0 risk) drew two `429 request_rate_limit_
+exceeded` with `Retry-After: 1`. The account's real constraint is **one
+request start per second**, a token bucket, which no in-flight cap can
+express: three calls that start together trip it however few are running.
+
+**Fixed before spending more, as the brief's own rule allows for a
+correctness bug found at Stage 2.** `PERPLEXITY_MAX_IN_FLIGHT` is gone;
+`PERPLEXITY_MIN_START_INTERVAL = 1.25` (48 a minute, under both the
+documented 50 and the observed 1/s) drives a new `_Pacer` — a lock and a
+next-allowed timestamp, admitting arrivals in order — alongside the
+existing semaphore gate, and every adapter now declares both
+`max_in_flight` and `min_start_interval` explicitly. Re-probed at the same
+three concurrent calls: three 200s, starts 1.25s apart, calls overlapping.
+The old gate test was replaced by one that proves spacing without
+serialisation, plus one that proves Gemini's cap; a strict-zip length
+mismatch in the first draft of that test was the only other fix.
+
+**Timeouts, argued from these samples the way `DEFAULT_TIMEOUT` is:**
+`PERPLEXITY_TIMEOUT` 45s (three times the slowest of four, for a multi-step
+grounded call whose tail is the point); `GEMINI_TIMEOUT` 30s (five times
+the slowest of four — a wider multiple because a sample with no tail is a
+reason for more margin, not less). Both under `DEFAULT_TIMEOUT`, so the
+shared 122s ceiling is unchanged. The Gemini figure moved again after
+Stage 3; see below.
+
+## Stage 3 — the one 24-prompt run, against `hiverhq.com`
+
+`helpwise.io`, Epic 18.1's subject, was refused by the harness's own
+freshness guard (a client row already exists), so the run went against a
+fresh subject of the same shape, a small help-desk SaaS. Once, not
+re-run. `configured_engines(settings)` resolved to all five.
+
+| | Epic 18.1 (3 engines, helpwise) | **Epic 21.1 (5 engines, hiverhq)** |
+|---|---|---|
+| total | 223.8s | **239.0s** |
+| scan loop | 132.7s | **185.2s** (77.5%) |
+| engine-bound floor at c=12 | 89.1s | 106.9s |
+| slowest single engine call | 121.9s | 99.8s (`claude_search`) |
+| median engine call | — | 18.8s |
+| billed engine calls | 72 | **120** |
+| billed sentiment calls | 24 | **82** |
+| provider spend | $5.47 | **$6.5045** |
+| budget | under by 76.2s | **under by 61.0s** |
+
+**The budget held at five engines: 239.0s against 300s, 61 seconds to
+spare.** The loop grew by 52.5s for two more engines and 58 more sentiment
+calls — sentiment, charged only where the subject is named, is the term
+that scales, and this subject was named more often (82 calls against 24).
+Spend: `claude-opus-5` $5.17 (132 calls: 48 engine, 82 sentiment, 2
+pipeline), `gpt-5.5` $0.70, Gemini **$0.09** for 24 calls, Perplexity
+**$0.08** for 18 by its own reported cost, Anthropic web_search $0.47. The
+two new engines together added about 17 cents to a $6.50 scan; the
+projection Epic 21 made without a key ($5.8–7.6) contained the fact.
+
+**Per-engine latency, from the persisted rows** (`engine_results` for
+`scan_01M275ECT31X5SXEKKV7DEYSE5`, a free query), against the bounds
+chosen at Stage 2:
+
+| engine | answered | p50 | slowest | bound at Stage 2 | verdict |
+|---|---|---|---|---|---|
+| Perplexity | 18 of 24 | ~12s | 29.9s | 45s | inside, 1.5x headroom |
+| Gemini | 24 of 24 | 7.5s | 24.8s | 30s | inside, but **3.6x Stage 2's slowest and only 17% under** |
+
+The 99.8s slowest call in the summary was `claude_search`, as inferred,
+now checked. **`GEMINI_TIMEOUT` is re-argued from the n=24 sample to
+40s** — 1.6x the slowest success, the headroom `DEFAULT_TIMEOUT` keeps —
+because a bound chosen from four sequential calls was not built for eight
+in flight; raised on evidence, and the comment says so. Perplexity's 45s
+stands at 1.5x its slowest of 18, and its comment carries the fuller sample.
+
+**Perplexity: 6 of 24 calls answered 429, and the scan finished `partial`.**
+Two were refused within a second (the entry bucket); four came back after
+11–17s, which Perplexity's docs describe as an overloaded upstream model
+answering 429 with `Retry-After`. The error bodies are not persisted (facts
+only), so which of the six were which cannot be proved from the rows. A
+ten-call probe at the same 1.25s spacing with up to nine in flight then
+returned 10 of 10 clean for $0.055, so the pacing alone does not explain
+it. **Not tuned after the fact, per the brief:** the candidate fix is to
+honour `Retry-After` once inside the existing ceiling (refused requests are
+unbilled, so a retry costs nothing extra), and it is a decision to bring
+back rather than a change made here. Until then a busy Perplexity minute
+shows as `PROVIDER_RATE_LIMITED` rows and a `partial` scan, which is the
+honest reading.
+
+**Three things in the log that are the environment, not the adapters.** At
+12:44:49–52, as the loop ended, four sentiment calls failed with
+`APIConnectionError`, the audit's Playwright fetch errored, and fix
+generation reported `PROVIDER_UNREACHABLE` — the same moment this
+session's own connection to its API dropped. Technical foundation is
+therefore unmeasured on that scan and it carries no fix list; neither is a
+finding about the engines. SerpApi also refused all six detection queries
+(`SERP_RATE_LIMITED`), so the competitor set is `weak_signal` — the quota
+constraint north-star already names.
+
+## The harness printed one confidently wrong verdict, and it was this epic's own bug
+
+The log's summary said `total wall clock : 6.5s`, `UNDER budget by
+293.5s`, `dominant phase: scan loop (185.2s, 2847% of total)`, three lines
+under a phase table totalling 239.0s. Epic 21's edit to the cost table had
+written `total = priced + …` — the run's dollar figure — into the name the
+verdict reads for wall clock (`total = time.perf_counter() - overall`,
+120 lines earlier), so the verdict divided by $6.50. Renamed to
+`spend_total`, with a comment that states the corrected figures: **239.0s,
+61.0s under budget, the loop 77.5% of the run.** A "5x more margin than
+reality" line in a log anybody might trust is the same class of failure as
+the silent CI count drop, and it is corrected in place.
+
+## Verified
+
+Full API suite **1284/1284** and `ruff check` clean after the pacer touched
+the shared gating path; the engine suites with the new pacer and cap
+tests; the pacer against the real account twice (3 and 10 concurrent);
+and every number above traceable to `stage3.log` or to `engine_results`.
+The `engine-keys-and-measurement-debt` memory note is closed: both keys
+exist, both timeouts are measured, and the five-engine budget and cost are
+facts.
+
+**Still open, deliberately:** the Perplexity `Retry-After` decision; and
+whether five engines go into a pilot's live traffic at $6.50 a scan, which
+is about four scans a month inside the $29 plan — the founder's call,
+unchanged from Epic 21 except that the number is now real.
