@@ -845,6 +845,8 @@ a live browser.
 | `ChartPatterns` | SVG pattern defs for competitor series — the B&W fallback. |
 | `LuminanceLedger` | The hero. See §5. `unmeasured` (default off) draws the column as shape only and stops it claiming a score nobody took. |
 | `LoadingState` / `ErrorState` / `EmptyState` | The three things a screen says when it has no content to show. See §6a. |
+| `GoogleSignInButton` | "Sign in with Google" to Google's published spec — Epic 20. The one Working element not drawn from this system's tokens, by Google's own branding requirement: their mark unaltered, their three wordings, their light and dark colours and 1px inside border, 14/20 medium, 40px. An anchor to the API's `/auth/google/start`. One recorded deviation: the wording is set in this product's UI face because Google Sans is not openly licensed. |
+| `Checklist` | Steps that light as an account becomes real — Epic 19. Each step a lamp, void and dashed until done, beacon once done; the count in the display face; the card lit from within when every step is. Client-only. See §6b. |
 | `Reveal` / `RevealGroup` | Arrival motion. Client-only. See §5c. |
 | `AnswerShelf` | The proof beat's shelf of ordinal slots. See §5a. |
 | `TrendChart` | One line per series across a client's scan history. The first time-series shape here. See §5d. |
@@ -902,6 +904,71 @@ The figure is capped at `22rem`, near the Ledger's natural 344 units. A chart
 drawn from a viewBox scales its **type** with its box: 13px dimension labels
 become 30px stretched across a Working screen's full column, which is larger
 than the page's own headline.
+
+---
+
+## 6b. `Checklist` — steps that light, Epic 19
+
+The dashboard's getting-started card. Generic in the design system — a
+title, a list of `{label, done, detail, action}` steps, an optional close —
+and given its five steps by `apps/web/src/lib/dashboard/gettingStarted.ts`,
+which derives every one from the dashboard response. Nothing here knows
+what a scan is.
+
+### It is the Ledger's idea at account scale
+
+Visibility is luminance. The Ledger lights a bar to a score's height, the
+meter lights a track to its length, and this lights a lamp per step. A lamp
+is a small slab with the `sm` radius, not a dot: the tile's dot already
+means a category, and a dot would have said so. Unlit, it is the void
+surface with a dashed hairline — the stroke that already means *an absence
+that is itself the finding* (`EmptyState`, the shelf's notch, the ledger's
+gap zone). Lit, it is beacon-600 with the live badge's halo. The count at
+the head is the lit figure over the total, in the display face at the KPI
+size, with the same numeral-and-denominator shape the meter uses.
+
+**Beacon, never the ramp.** A step is not a score, and the ramp encodes
+scores only. Beacon is the accent for the subject and for the selected
+state, and a lit step is the account in its selected state.
+
+### When it moves, and when it deliberately does not
+
+No entrance. It sits on the dashboard, which §4 of `design-direction.md`
+excludes from arrival motion, and an operator opens that page many times in
+their first week. What moves is what actually changes under the reader's
+eyes — Epic 9.19's line, applied once more:
+
+- **A step completing** lights its lamp over the reveal duration and curve,
+  as a CSS transition on the `is-done` class. A lamp that is lit at first
+  paint paints lit and moves nothing; a polled scan landing, or a score
+  arriving, is seen to light.
+- **The last step completing** — once per agency — runs the five lamps
+  through one breath in sequence, left to right, and then lights the card:
+  the live badge's own `avp-live-breath` keyframe, run once, a reveal long,
+  one stagger step apart, and then the card's border and its selected wash
+  on the reveal timing, delayed by the stagger times the count. Gated in
+  JavaScript on the change from incomplete to complete *during this mount*,
+  so a page that loads already complete performs nothing. The design-system
+  test and `DashboardView.test.tsx` both assert the completing class is
+  absent from a static render.
+
+**Zero motion values were added.** Every duration, curve and delay is one
+of §4's four durations, three curves and one stagger.
+
+**One thing learned building it:** `--avp-selected-ring` is an inset shadow
+and the seated elevation is not, and a shadow list cannot interpolate across
+that difference — the ring snapped in while everything else dissolved
+(caught in the browser's own animation timeline: every other property
+listed a 600ms transition and `box-shadow` was missing). The card's ring is
+therefore carried on `border-color`, which is the same 1px of beacon-600 in
+every theme and does transition.
+
+### What it says to assistive tech
+
+The lamps are `aria-hidden`; each step carries "Done:" or "To do:" in
+visually hidden text before its label, the current step is
+`aria-current="step"`, and the numeral is hidden because the lead sentence
+("Two of five lit.") says the same thing in words.
 
 ---
 

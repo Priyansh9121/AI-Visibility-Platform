@@ -1621,6 +1621,36 @@
         "title": "CompetitorSetOut",
         "type": "object"
       },
+      "CompleteGoogleSignUpRequest": {
+        "description": "Finish creating an agency after Google has verified the person \u2014 Epic 20.\n\nThe same two facts `SignUpRequest` asks for that Google cannot supply: what\nthe agency is called, and how the person writes their own name (Google's\n`name` is a suggestion, not an answer). No email \u2014 it is the ticket's \u2014 and\nno password, which is the point.",
+        "properties": {
+          "agencyName": {
+            "maxLength": 200,
+            "minLength": 2,
+            "title": "Agencyname",
+            "type": "string"
+          },
+          "fullName": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Fullname",
+            "type": "string"
+          },
+          "ticket": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Ticket",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticket",
+          "agencyName",
+          "fullName"
+        ],
+        "title": "CompleteGoogleSignUpRequest",
+        "type": "object"
+      },
       "CrawlSummaryOut": {
         "description": "FACTS from the crawl. Never page content \u2014 see services/crawl.py.",
         "properties": {
@@ -1921,6 +1951,10 @@
             "title": "Clientcount",
             "type": "integer"
           },
+          "gettingStartedDismissed": {
+            "title": "Gettingstarteddismissed",
+            "type": "boolean"
+          },
           "isEmpty": {
             "title": "Isempty",
             "type": "boolean"
@@ -1936,8 +1970,16 @@
             "title": "Scancount",
             "type": "integer"
           },
+          "scoredScanCount": {
+            "title": "Scoredscancount",
+            "type": "integer"
+          },
           "seats": {
             "$ref": "#/components/schemas/SeatUsageOut"
+          },
+          "sharedScanCount": {
+            "title": "Sharedscancount",
+            "type": "integer"
           }
         },
         "required": [
@@ -1946,7 +1988,10 @@
           "clientCount",
           "scanCount",
           "recentScans",
-          "isEmpty"
+          "isEmpty",
+          "scoredScanCount",
+          "sharedScanCount",
+          "gettingStartedDismissed"
         ],
         "title": "DashboardOut",
         "type": "object"
@@ -2227,6 +2272,25 @@
         ],
         "title": "GapKind",
         "type": "string"
+      },
+      "GooglePendingOut": {
+        "description": "What Google told us about a person who has no account yet \u2014 Epic 20.\n\nRead by the sign-up completion page so it can show the address the\naccount will be under and pre-fill the name. Nothing here is a credential;\nthe ticket in the query string is.",
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "suggestedName": {
+            "title": "Suggestedname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "suggestedName"
+        ],
+        "title": "GooglePendingOut",
+        "type": "object"
       },
       "HTTPValidationError": {
         "properties": {
@@ -5008,6 +5072,17 @@
           "role": {
             "$ref": "#/components/schemas/UserRole"
           },
+          "signInMethods": {
+            "items": {
+              "enum": [
+                "email",
+                "google"
+              ],
+              "type": "string"
+            },
+            "title": "Signinmethods",
+            "type": "array"
+          },
           "status": {
             "$ref": "#/components/schemas/UserStatus"
           }
@@ -5018,7 +5093,8 @@
           "fullName",
           "role",
           "status",
-          "createdAt"
+          "createdAt",
+          "signInMethods"
         ],
         "title": "UserOut",
         "type": "object"
@@ -5441,6 +5517,183 @@
           }
         },
         "summary": "Change Password",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/google/callback": {
+      "get": {
+        "description": "Where Google sends the browser back. **No auth.** Always a 302.\n\nIn order: the state must be one this process minted and not yet used;\nthe code is exchanged and the ID token verified (signature, audience,\nissuer, expiry); the token's nonce must be the state's; then the\nlinking policy decides. Three destinations:\n\n- an existing account \u2192 the session cookie is set and the browser goes\n  to `/dashboard`;\n- a new address \u2192 a ten-minute ticket is minted and the browser goes to\n  `/sign-up/google?ticket=\u2026` to name the agency;\n- anything else \u2192 `/?google=error&reason=\u2026` with one of `denied`,\n  `invalid-state`, `exchange-failed`, `email-unverified`,\n  `account-unavailable`.\n\n**Errors:** none as status codes. A person arriving here is not a script\nand gets a page, not a problem document.",
+        "operationId": "google_callback_api_v1_auth_google_callback_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "in": "query",
+            "name": "code",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Code"
+            }
+          },
+          {
+            "in": "query",
+            "name": "error",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Error"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Google Callback",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/google/complete": {
+      "post": {
+        "description": "Create the agency and its owner from a verified Google identity. **No auth.**\n\nThe Google half of `/sign-up`: same agency, same owner seat, same\nsign-in-on-creation, no password. The ticket is consumed here, so the\npage it came from cannot create two agencies.\n\n**Errors:** `400 invalid-google-ticket`, `409 email-already-registered`\n(the address was registered in the minutes since the ticket was minted),\n`422`.",
+        "operationId": "google_complete_api_v1_auth_google_complete_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteGoogleSignUpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Google Complete",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/google/pending": {
+      "get": {
+        "description": "What the completion page shows before asking for an agency name. **No auth.**\n\nReads the ticket without consuming it, so a reload of the page is not a\nsecond sign-in. The ticket is a bearer credential with a session token's\nentropy and a reset link's lifetime; carrying it in a query string is the\nsame trade `/reset-password/{token}` makes, for the same reason \u2014 there\nis no session yet to carry it any other way.\n\n**Errors:** `400 invalid-google-ticket` for unknown, used and expired alike.",
+        "operationId": "google_pending_api_v1_auth_google_pending_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "ticket",
+            "required": true,
+            "schema": {
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Ticket",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GooglePendingOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Google Pending",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/google/start": {
+      "get": {
+        "description": "Send the browser to Google. **No auth.** A navigation, not an API call.\n\nMints a `state`, a `nonce` and a PKCE verifier, parks them in Redis for\nten minutes, and redirects to Google's authorization endpoint with the\nstate, the nonce and the S256 challenge. The state is the CSRF guard for\nthe callback \u2014 looked up server-side, never compared to a cookie.\n\n**Errors:** `503 google-sign-in-not-configured` when the deployment has\nno OAuth client. The web app shows the button regardless; this is what\nit gets until the founder creates one.",
+        "operationId": "google_start_api_v1_auth_google_start_get",
+        "responses": {
+          "302": {
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Google Start",
         "tags": [
           "auth"
         ]
@@ -6565,6 +6818,21 @@
           }
         },
         "summary": "Dashboard",
+        "tags": [
+          "dashboard"
+        ]
+      }
+    },
+    "/api/v1/dashboard/getting-started/dismiss": {
+      "post": {
+        "description": "Hide the getting-started checklist for this agency. **Auth required.**\n\n**Per agency, and any seat holder may do it.** The checklist describes the\nagency's account, so hiding it is an account-level choice, and it is not a\nsetting that changes what anyone can do \u2014 a member who dismisses it takes\nnothing from the owner except a card the owner could also have closed.\nThat is why this is not behind `RequireAdmin`, unlike everything under\n`/agencies/{id}`, which changes who holds a seat or who pays.\n\n**Idempotent.** Dismissing twice is not an error and does not move the\ntimestamp: the first dismissal is the fact, and a second click on a stale\npage is not a second decision.\n\n**There is no un-dismiss.** The checklist is a first-week affordance; an\nagency that closed it and wants it back has, by then, either done the\nsteps or decided not to. If that turns out to be wrong, clearing the\ncolumn is a one-line endpoint, not a design.\n\n**Errors:** `401 authentication-required`.",
+        "operationId": "dismiss_getting_started_api_v1_dashboard_getting_started_dismiss_post",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Dismiss Getting Started",
         "tags": [
           "dashboard"
         ]

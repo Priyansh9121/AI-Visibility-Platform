@@ -298,6 +298,127 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/google/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Google Callback
+         * @description Where Google sends the browser back. **No auth.** Always a 302.
+         *
+         *     In order: the state must be one this process minted and not yet used;
+         *     the code is exchanged and the ID token verified (signature, audience,
+         *     issuer, expiry); the token's nonce must be the state's; then the
+         *     linking policy decides. Three destinations:
+         *
+         *     - an existing account → the session cookie is set and the browser goes
+         *       to `/dashboard`;
+         *     - a new address → a ten-minute ticket is minted and the browser goes to
+         *       `/sign-up/google?ticket=…` to name the agency;
+         *     - anything else → `/?google=error&reason=…` with one of `denied`,
+         *       `invalid-state`, `exchange-failed`, `email-unverified`,
+         *       `account-unavailable`.
+         *
+         *     **Errors:** none as status codes. A person arriving here is not a script
+         *     and gets a page, not a problem document.
+         */
+        get: operations["google_callback_api_v1_auth_google_callback_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/google/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Google Complete
+         * @description Create the agency and its owner from a verified Google identity. **No auth.**
+         *
+         *     The Google half of `/sign-up`: same agency, same owner seat, same
+         *     sign-in-on-creation, no password. The ticket is consumed here, so the
+         *     page it came from cannot create two agencies.
+         *
+         *     **Errors:** `400 invalid-google-ticket`, `409 email-already-registered`
+         *     (the address was registered in the minutes since the ticket was minted),
+         *     `422`.
+         */
+        post: operations["google_complete_api_v1_auth_google_complete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/google/pending": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Google Pending
+         * @description What the completion page shows before asking for an agency name. **No auth.**
+         *
+         *     Reads the ticket without consuming it, so a reload of the page is not a
+         *     second sign-in. The ticket is a bearer credential with a session token's
+         *     entropy and a reset link's lifetime; carrying it in a query string is the
+         *     same trade `/reset-password/{token}` makes, for the same reason — there
+         *     is no session yet to carry it any other way.
+         *
+         *     **Errors:** `400 invalid-google-ticket` for unknown, used and expired alike.
+         */
+        get: operations["google_pending_api_v1_auth_google_pending_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/google/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Google Start
+         * @description Send the browser to Google. **No auth.** A navigation, not an API call.
+         *
+         *     Mints a `state`, a `nonce` and a PKCE verifier, parks them in Redis for
+         *     ten minutes, and redirects to Google's authorization endpoint with the
+         *     state, the nonce and the S256 challenge. The state is the CSRF guard for
+         *     the callback — looked up server-side, never compared to a cookie.
+         *
+         *     **Errors:** `503 google-sign-in-not-configured` when the deployment has
+         *     no OAuth client. The web app shows the button regardless; this is what
+         *     it gets until the founder creates one.
+         */
+        get: operations["google_start_api_v1_auth_google_start_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/invitations/accept": {
         parameters: {
             query?: never;
@@ -922,6 +1043,44 @@ export interface paths {
         get: operations["dashboard_api_v1_dashboard_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dashboard/getting-started/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dismiss Getting Started
+         * @description Hide the getting-started checklist for this agency. **Auth required.**
+         *
+         *     **Per agency, and any seat holder may do it.** The checklist describes the
+         *     agency's account, so hiding it is an account-level choice, and it is not a
+         *     setting that changes what anyone can do — a member who dismisses it takes
+         *     nothing from the owner except a card the owner could also have closed.
+         *     That is why this is not behind `RequireAdmin`, unlike everything under
+         *     `/agencies/{id}`, which changes who holds a seat or who pays.
+         *
+         *     **Idempotent.** Dismissing twice is not an error and does not move the
+         *     timestamp: the first dismissal is the fact, and a second click on a stale
+         *     page is not a second decision.
+         *
+         *     **There is no un-dismiss.** The checklist is a first-week affordance; an
+         *     agency that closed it and wants it back has, by then, either done the
+         *     steps or decided not to. If that turns out to be wrong, clearing the
+         *     column is a one-line endpoint, not a design.
+         *
+         *     **Errors:** `401 authentication-required`.
+         */
+        post: operations["dismiss_getting_started_api_v1_dashboard_getting_started_dismiss_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2144,6 +2303,23 @@ export interface components {
             usedIndustrySeed: boolean;
         };
         /**
+         * CompleteGoogleSignUpRequest
+         * @description Finish creating an agency after Google has verified the person — Epic 20.
+         *
+         *     The same two facts `SignUpRequest` asks for that Google cannot supply: what
+         *     the agency is called, and how the person writes their own name (Google's
+         *     `name` is a suggestion, not an answer). No email — it is the ticket's — and
+         *     no password, which is the point.
+         */
+        CompleteGoogleSignUpRequest: {
+            /** Agencyname */
+            agencyName: string;
+            /** Fullname */
+            fullName: string;
+            /** Ticket */
+            ticket: string;
+        };
+        /**
          * CrawlSummaryOut
          * @description FACTS from the crawl. Never page content — see services/crawl.py.
          */
@@ -2281,13 +2457,19 @@ export interface components {
             agency: components["schemas"]["AgencyOut"];
             /** Clientcount */
             clientCount: number;
+            /** Gettingstarteddismissed */
+            gettingStartedDismissed: boolean;
             /** Isempty */
             isEmpty: boolean;
             /** Recentscans */
             recentScans: components["schemas"]["ScanSummaryOut"][];
             /** Scancount */
             scanCount: number;
+            /** Scoredscancount */
+            scoredScanCount: number;
             seats: components["schemas"]["SeatUsageOut"];
+            /** Sharedscancount */
+            sharedScanCount: number;
         };
         /**
          * DetectionSource
@@ -2396,6 +2578,20 @@ export interface components {
          * @enum {string}
          */
         GapKind: "absent" | "partial" | "uncited" | "covered" | "no_brands" | "unanswered";
+        /**
+         * GooglePendingOut
+         * @description What Google told us about a person who has no account yet — Epic 20.
+         *
+         *     Read by the sign-up completion page so it can show the address the
+         *     account will be under and pre-fill the name. Nothing here is a credential;
+         *     the ticket in the query string is.
+         */
+        GooglePendingOut: {
+            /** Email */
+            email: string;
+            /** Suggestedname */
+            suggestedName: string;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -3583,6 +3779,8 @@ export interface components {
             /** Lastloginat */
             lastLoginAt?: string | null;
             role: components["schemas"]["UserRole"];
+            /** Signinmethods */
+            signInMethods: ("email" | "google")[];
             status: components["schemas"]["UserStatus"];
         };
         /**
@@ -3872,6 +4070,119 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    google_callback_api_v1_auth_google_callback_get: {
+        parameters: {
+            query?: {
+                state?: string | null;
+                code?: string | null;
+                error?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    google_complete_api_v1_auth_google_complete_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompleteGoogleSignUpRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    google_pending_api_v1_auth_google_pending_get: {
+        parameters: {
+            query: {
+                ticket: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GooglePendingOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    google_start_api_v1_auth_google_start_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -4648,6 +4959,24 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    dismiss_getting_started_api_v1_dashboard_getting_started_dismiss_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

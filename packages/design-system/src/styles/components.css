@@ -2471,3 +2471,259 @@
     transform: translateY(var(--avp-space-2));
   }
 }
+
+/* ============================ Checklist =========================== */
+/*
+ * Steps that light as an account becomes real — Epic 19. See Checklist.tsx
+ * for what it is and when it moves. Every duration, curve and delay below is
+ * one of design-direction.md §4's: the reveal, the stagger, the state tier.
+ *
+ * The container is a seated card with the selected treatment held in
+ * reserve: `::before` carries the selected wash at opacity 0 and the ring
+ * arrives on the reveal timing when the set completes. Opacity, not
+ * background-color, so the wash's own alpha is what shows and no new colour
+ * is mixed here.
+ */
+
+.avp-checklist {
+  --avp-checklist-count: 5;
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  gap: var(--avp-space-5);
+  padding: var(--avp-space-6);
+  border: 1px solid var(--avp-line-hairline);
+  border-radius: var(--avp-radius-2xl);
+  background: var(--avp-surface-seated);
+  box-shadow: var(--avp-elev-seated);
+  transition: border-color var(--avp-duration-reveal) var(--avp-ease-reveal);
+}
+
+.avp-checklist::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--avp-selected-wash);
+  opacity: 0;
+  transition: opacity var(--avp-duration-reveal) var(--avp-ease-reveal);
+}
+
+/* The selected ring, carried on the border rather than `--avp-selected-ring`:
+   that token is an INSET shadow, the seated elevation is not, and a shadow
+   list cannot interpolate across that difference — the ring would snap in
+   while everything else dissolved. The border is the same 1px of beacon-600
+   in every theme, and a border colour transitions. */
+.avp-checklist.is-complete { border-color: var(--avp-beacon-600); }
+.avp-checklist.is-complete::before { opacity: 1; }
+
+/* Completing IN FRONT OF THE READER: the card lights after the last lamp's
+   breath has passed down the row. The delay is the stagger times the count,
+   so a longer list waits longer and a shorter one less. */
+.avp-checklist.is-completing,
+.avp-checklist.is-completing::before {
+  transition-delay: calc(var(--avp-checklist-count) * var(--avp-stagger-reveal));
+}
+
+.avp-checklist__head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--avp-space-5);
+}
+
+/* The count: the display face at the KPI size, tabular, the lit figure and
+   the denominator at two weights — `.avp-meter__numeral`'s shape. */
+.avp-checklist__count {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  font-family: var(--avp-font-display);
+  font-size: var(--avp-text-kpi);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: var(--avp-tracking-display);
+  font-variant-numeric: tabular-nums;
+  color: var(--avp-text-primary);
+}
+.avp-checklist__lit {
+  transition: color var(--avp-duration-reveal) var(--avp-ease-reveal);
+}
+.avp-checklist.is-complete .avp-checklist__lit { color: var(--avp-beacon-600); }
+.avp-checklist__of {
+  font-size: var(--avp-text-ui-md);
+  font-weight: 500;
+  color: var(--avp-text-tertiary);
+}
+
+.avp-checklist__copy { display: flex; flex-direction: column; gap: var(--avp-space-1); min-width: 0; }
+
+.avp-checklist__title {
+  margin: 0;
+  font-family: var(--avp-font-display);
+  font-size: var(--avp-text-ui-lg);
+  font-weight: 600;
+  line-height: var(--avp-leading-display);
+  letter-spacing: var(--avp-tracking-display);
+  color: var(--avp-text-primary);
+}
+
+.avp-checklist__lead {
+  margin: 0;
+  font-size: var(--avp-text-ui-sm);
+  line-height: var(--avp-leading-prose);
+  color: var(--avp-text-secondary);
+  max-width: var(--avp-measure);
+}
+
+.avp-checklist__dismiss { display: flex; align-items: center; }
+
+.avp-checklist__steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--avp-space-2);
+}
+
+/* A row: lamp, words, the way to do it. One hairline under each, none under
+   the last — the table's rule, not a border-top-and-bottom on every row. */
+.avp-checklist__step {
+  /* Declared here for the reason `.avp-ledger--staggered` declares its index:
+     the component sets the real value inline, and the token guard requires
+     every custom property the stylesheet reads to be defined in a stylesheet. */
+  --avp-checklist-index: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--avp-space-4);
+  padding: var(--avp-space-3) 0;
+  border-bottom: 1px solid var(--avp-line-hairline);
+}
+.avp-checklist__step:last-child { border-bottom: 0; padding-bottom: 0; }
+
+/*
+ * THE LAMP. A slab with the ledger's small radius, not a dot: it is a segment
+ * of the account, and the tile's category dot already means something else.
+ * Unlit: the void surface and a dashed hairline — the absence that is itself
+ * the finding. Lit: the beacon accent with the live badge's halo. The change
+ * between them is the reveal — colour and shadow dissolving, never a scale.
+ */
+.avp-checklist__lamp {
+  flex: none;
+  width: var(--avp-space-4);
+  height: var(--avp-space-4);
+  border-radius: var(--avp-radius-sm);
+  background: var(--avp-surface-void);
+  border: 1px dashed var(--avp-line-strong);
+  box-shadow: 0 0 0 3px transparent;
+  transition: background-color var(--avp-duration-reveal) var(--avp-ease-reveal),
+    border-color var(--avp-duration-reveal) var(--avp-ease-reveal),
+    box-shadow var(--avp-duration-reveal) var(--avp-ease-reveal);
+}
+.avp-checklist__step.is-done .avp-checklist__lamp {
+  background: var(--avp-beacon-600);
+  border-color: var(--avp-beacon-600);
+  box-shadow: 0 0 0 3px var(--avp-beacon-100);
+}
+/* The current step's lamp keeps the void but firms the stroke: this is the
+   one being asked for, not one that is merely not yet. */
+.avp-checklist__step.is-current .avp-checklist__lamp { border-style: solid; }
+
+/* The completion breath: the live badge's keyframe, once, one reveal long,
+   walking down the row a stagger step at a time. */
+.avp-checklist.is-completing .avp-checklist__lamp {
+  animation: avp-live-breath var(--avp-duration-reveal) var(--avp-ease-standard) 1 both;
+  animation-delay: calc(var(--avp-checklist-index) * var(--avp-stagger-reveal));
+}
+
+.avp-checklist__body { display: flex; flex-direction: column; gap: var(--avp-space-0_5); min-width: 0; }
+
+.avp-checklist__label {
+  font-size: var(--avp-text-ui-base);
+  font-weight: 500;
+  color: var(--avp-text-primary);
+  transition: color var(--avp-duration-state) var(--avp-ease-out);
+}
+.avp-checklist__step.is-done .avp-checklist__label { color: var(--avp-text-secondary); }
+.avp-checklist__step.is-pending .avp-checklist__label { color: var(--avp-text-secondary); font-weight: 400; }
+
+.avp-checklist__detail {
+  font-size: var(--avp-text-ui-sm);
+  line-height: var(--avp-leading-ui);
+  color: var(--avp-text-tertiary);
+}
+
+.avp-checklist__action { display: flex; align-items: center; }
+
+@media (max-width: 40rem) {
+  .avp-checklist { padding: var(--avp-space-5); }
+  .avp-checklist__head { grid-template-columns: auto minmax(0, 1fr); }
+  .avp-checklist__dismiss { grid-column: 1 / -1; justify-content: flex-start; }
+  .avp-checklist__step { grid-template-columns: auto minmax(0, 1fr); }
+  .avp-checklist__action { grid-column: 2; }
+}
+
+/* ======================= Sign in with Google ====================== */
+/*
+ * Google's button, to Google's published spec — Epic 20. The literals below
+ * are theirs and are the ONLY colour literals a Working component carries:
+ * a third-party mark drawn in a third party's colours, not this system's.
+ * See GoogleSignInButton.tsx for what was followed and the one deviation.
+ * The dark values follow this product's theme attribute so the button sits
+ * on whichever ground it is given.
+ */
+
+.avp-google-btn {
+  display: inline-flex;
+  align-items: center;
+  height: 40px;
+  padding: 0 12px 0 12px;
+  border-radius: var(--avp-radius-sm);
+  background: #ffffff;
+  box-shadow: inset 0 0 0 1px #747775;
+  color: #1f1f1f;
+  font-family: var(--avp-font-ui);
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--avp-duration-hover) var(--avp-ease-out),
+    box-shadow var(--avp-duration-hover) var(--avp-ease-out);
+}
+.avp-google-btn--full { display: flex; width: 100%; justify-content: center; }
+
+.avp-google-btn__mark {
+  display: inline-flex;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin-right: 10px;
+}
+.avp-google-btn__mark svg { display: block; }
+
+@media (hover: hover) and (pointer: fine) {
+  .avp-google-btn:hover { background: #f8f9fa; }
+}
+.avp-google-btn:active { background: #f1f3f4; }
+.avp-google-btn:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px #747775, var(--avp-focus-ring);
+}
+
+[data-theme='dark'] .avp-google-btn {
+  background: #131314;
+  box-shadow: inset 0 0 0 1px #8e918f;
+  color: #e3e3e3;
+}
+@media (hover: hover) and (pointer: fine) {
+  [data-theme='dark'] .avp-google-btn:hover { background: #1e1f20; }
+}
+[data-theme='dark'] .avp-google-btn:active { background: #28292a; }
+[data-theme='dark'] .avp-google-btn:focus-visible {
+  box-shadow: inset 0 0 0 1px #8e918f, var(--avp-focus-ring);
+}

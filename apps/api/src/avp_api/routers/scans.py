@@ -23,7 +23,7 @@ from ..schemas.scan import (
     ScanOut,
 )
 from ..services import competitors as detection
-from ..services.engines import DEFAULT_ENGINES, ENGINE_REGISTRY
+from ..services.engines import ENGINE_REGISTRY, configured_engines
 from ..services.intake import get_client
 from ..services.scan_executor import ScanJob, reap_stale_scans
 
@@ -134,13 +134,32 @@ async def run_scan(
     # enum-only engine such as `perplexity` used to fail INSIDE the executor —
     # after competitor detection had been paid for — and land the scan at
     # FAILED / EXECUTION_FAILED. Now it is a 422 and no scan exists.
-    engines = tuple(payload.engines) if payload.engines else DEFAULT_ENGINES
+    # The default is the engines with a KEY, not the five with an adapter —
+    # Epic 21. An engine nobody has provisioned would run as 24 failures a
+    # scan and read as "Gemini never named you". Naming one explicitly is
+    # refused with the variable to set, the same 422 an adapter-less engine
+    # gets, and for the same reason: it cannot answer.
+    live = configured_engines(settings)
+    engines = tuple(payload.engines) if payload.engines else live
     unsupported = [e.value for e in engines if e not in ENGINE_REGISTRY]
     if unsupported:
         raise ValidationProblem(
             detail=(
                 f"No adapter for engine(s): {', '.join(unsupported)}. "
                 f"Supported: {', '.join(e.value for e in ENGINE_REGISTRY)}."
+            )
+        )
+    unkeyed = [e for e in engines if e not in live]
+    if unkeyed:
+        raise ValidationProblem(
+            detail=(
+                "No key configured for engine(s): "
+                + ", ".join(
+                    f"{e.value} ({ENGINE_REGISTRY[e].key_setting.upper()})" for e in unkeyed
+                )
+                + ". Configured: "
+                + (", ".join(e.value for e in live) or "none")
+                + "."
             )
         )
 

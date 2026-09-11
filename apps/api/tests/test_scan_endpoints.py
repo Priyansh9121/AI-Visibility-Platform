@@ -15,15 +15,26 @@ from avp_api.models.engine_result import Engine, EngineResultStatus, Sentiment
 from avp_api.models.prompt import PromptIntent
 from avp_api.schemas.scan import RunScanRequest
 from avp_api.services import scan_runner
-from avp_api.services.engines import DEFAULT_ENGINES, CitedSource, EngineAnswer
+from avp_api.services.engines import (
+    DEFAULT_ENGINES,
+    ENGINE_REGISTRY,
+    CitedSource,
+    EngineAnswer,
+)
 from avp_api.services.prompts import GeneratedPrompt
 
 # Derived, never hardcoded. These tests asserted "x 2" until Epic 9.13 added a
 # third engine and broke six of them at once. The count is a property of the
 # registry, so read it from the registry — a fourth engine should not cost
 # another afternoon of arithmetic.
-N_ENGINES = len(DEFAULT_ENGINES)
-ENGINE_NAMES = {e.value for e in DEFAULT_ENGINES}
+# The engines a scan RUNS under the suite's settings — Epic 21. conftest
+# supplies an Anthropic key and an OpenAI key and nothing for Perplexity or
+# Google, so the endpoint's default is the three keyed engines, not the five
+# with an adapter. Derived from the same two facts the endpoint reads, rather
+# than written as `3`, so a change to either fails here by name.
+_KEYED = {"anthropic_api_key", "openai_api_key"}
+N_ENGINES = len([e for e in DEFAULT_ENGINES if ENGINE_REGISTRY[e].key_setting in _KEYED])
+ENGINE_NAMES = {e.value for e in DEFAULT_ENGINES if ENGINE_REGISTRY[e].key_setting in _KEYED}
 
 BASE = "/api/v1"
 

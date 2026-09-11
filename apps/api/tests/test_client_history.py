@@ -348,17 +348,13 @@ class TestScopingAndSafety:
         before = (await session.execute(select(func.count()).select_from(Scan))).scalar()
         from avp_api.models.score import Score
 
-        scores_before = (
-            await session.execute(select(func.count()).select_from(Score))
-        ).scalar()
+        scores_before = (await session.execute(select(func.count()).select_from(Score))).scalar()
 
         for _ in range(3):
             assert (await client.get(f"{BASE}/clients/{cid}/history")).status_code == 200
 
         after = (await session.execute(select(func.count()).select_from(Scan))).scalar()
-        scores_after = (
-            await session.execute(select(func.count()).select_from(Score))
-        ).scalar()
+        scores_after = (await session.execute(select(func.count()).select_from(Score))).scalar()
         assert (before, scores_before) == (after, scores_after)
 
     async def test_carries_no_field_that_could_hold_engine_prose(
@@ -387,7 +383,7 @@ class TestSentimentTally:
     """
 
     async def test_every_engine_that_answered_gets_a_row(
-        self, client: AsyncClient, stub_engines, stub_discovery
+        self, settings, client: AsyncClient, stub_engines, stub_discovery
     ) -> None:
         stub_engines()
         await _sign_up(client)
@@ -397,7 +393,11 @@ class TestSentimentTally:
 
         history = (await client.get(f"{BASE}/clients/{cid}/history")).json()
         rows = history["scans"][0]["sentiment"]
-        assert {r["engine"] for r in rows} == {e.value for e in engine_service.DEFAULT_ENGINES}
+        # The engines a scan RUNS under the suite's settings — the keyed ones —
+        # not the five with an adapter (Epic 21).
+        assert {r["engine"] for r in rows} == {
+            e.value for e in engine_service.configured_engines(settings)
+        }
 
     async def test_the_buckets_account_for_every_answer(
         self, client: AsyncClient, stub_engines, stub_discovery

@@ -28,7 +28,7 @@ across Notion's two, 48 texts are 48 distinct. There is no prompt identity to
 recur ON.
 
 What does recur is the ENGINE. Every prompt is asked of every engine in the
-scan, so a gap holding on 3 of 3 engines is a categorically stronger finding
+scan, so a gap holding on every configured engine is a categorically stronger finding
 than one holding on 1 of 3 — that is a real recurrence axis, it is measured
 here as `absent_on` / `engines_answered`, and it is the default sort.
 

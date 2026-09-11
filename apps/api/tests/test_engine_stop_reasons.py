@@ -36,7 +36,10 @@ from avp_api.services.engines import (
     ANSWER_PAUSED,
     ANSWER_TRUNCATED,
     CLAUDE_STOPS,
+    GEMINI_BLOCKED,
+    GEMINI_STOPS,
     OPENAI_STOPS,
+    PERPLEXITY_STOPS,
     STOP_REASON_UNKNOWN,
     ChatGptAdapter,
     ClaudeParametricAdapter,
@@ -131,14 +134,48 @@ class TestTheClassifierIsAnAllowlist:
     def test_the_allowlist_is_exactly_the_finished_answers(self) -> None:
         assert CLAUDE_STOPS.complete == {"end_turn", "stop_sequence"}
         assert OPENAI_STOPS.complete == {"stop"}
-        for vocabulary in (CLAUDE_STOPS, OPENAI_STOPS):
+        assert PERPLEXITY_STOPS.complete == {"completed"}
+        assert GEMINI_STOPS.complete == {"STOP"}
+        for vocabulary in (CLAUDE_STOPS, OPENAI_STOPS, PERPLEXITY_STOPS, GEMINI_STOPS):
             for reason in vocabulary.complete:
                 assert classify_stop(reason, vocabulary) is None
+
+    # Read from the vendors' documentation on 2026-09-11 — Epic 21 — the way
+    # OPENAI_FINISH_REASONS is: a value here that the module has not sorted
+    # is a failure that names it.
+    PERPLEXITY_STATUSES = ("completed", "incomplete", "in_progress", "queued")
+    GEMINI_FINISH_REASONS = (
+        "STOP", "MAX_TOKENS", "SAFETY", "RECITATION", "LANGUAGE", "OTHER",
+        "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "MALFORMED_FUNCTION_CALL",
+        "UNEXPECTED_TOOL_CALL", "TOO_MANY_TOOL_CALLS", "IMAGE_SAFETY",
+    )
+
+    def test_every_documented_perplexity_status_has_been_sorted(self) -> None:
+        # `failed` and `cancelled` are handled before classification with the
+        # response's own error object, as OpenAI's content_filter is.
+        for status in self.PERPLEXITY_STATUSES:
+            verdict = classify_stop(status, PERPLEXITY_STOPS)
+            assert verdict is None or verdict[1] != STOP_REASON_UNKNOWN, status
+
+    def test_gemini_sorts_the_blocked_family_as_refusals_and_names_the_rest(self) -> None:
+        # Blocked reasons are refusals, handled before classification. The
+        # answer-shaped ones sort. LANGUAGE, OTHER and the tool-call family
+        # deliberately land on STOP_REASON_UNKNOWN: an answer Gemini did not
+        # finish for a reason it will not name is not an answer.
+        for reason in self.GEMINI_FINISH_REASONS:
+            if reason in GEMINI_BLOCKED:
+                assert classify_stop(reason, GEMINI_STOPS)[0] is EngineResultStatus.ERROR
+                continue
+            verdict = classify_stop(reason, GEMINI_STOPS)
+            if reason in ("STOP", "MAX_TOKENS"):
+                assert verdict is None or verdict[1] != STOP_REASON_UNKNOWN
+            else:
+                assert verdict == (EngineResultStatus.ERROR, STOP_REASON_UNKNOWN), reason
 
     @pytest.mark.parametrize("reason", [None, "", "something_new", "END_TURN"])
     def test_a_value_it_has_never_seen_is_not_an_answer(self, reason: str | None) -> None:
         """The allowlist property. A blocklist would let all four through."""
-        for vocabulary in (CLAUDE_STOPS, OPENAI_STOPS):
+        for vocabulary in (CLAUDE_STOPS, OPENAI_STOPS, PERPLEXITY_STOPS, GEMINI_STOPS):
             assert classify_stop(reason, vocabulary) == (
                 EngineResultStatus.ERROR,
                 STOP_REASON_UNKNOWN,
@@ -155,6 +192,11 @@ class TestTheClassifierIsAnAllowlist:
         # The property test_openai_engine.py guards for error codes, extended to
         # stop reasons: one vocabulary, read by one scoring path.
         assert classify_stop("max_tokens", CLAUDE_STOPS) == classify_stop("length", OPENAI_STOPS)
+        assert (
+            classify_stop("max_tokens", CLAUDE_STOPS)
+            == classify_stop("incomplete", PERPLEXITY_STOPS)
+            == classify_stop("MAX_TOKENS", GEMINI_STOPS)
+        )
         for claude_reason, openai_reason in (
             ("pause_turn", "tool_calls"),
             ("tool_use", "function_call"),

@@ -232,9 +232,20 @@ def install_meters() -> None:
 #
 # A model that answers and is NOT in this table is metered in tokens and shown
 # unpriced, so a model swap surfaces as a gap rather than as a silent zero.
+#   perplexity/sonar $0.25 / $2.50 docs.perplexity.ai/docs/agent-api/models,
+#                               read 2026-09-11. Plus a per-invocation
+#                               web_search fee, metered below.
+#   gemini-3.8-flash $0.75 / $3.75 ai.google.dev/gemini-api/docs/pricing, read
+#                               2026-09-11 — the promotional rate through
+#                               2026-12-31; thinking tokens are billed as
+#                               output and are counted in `candidatesToken
+#                               Count`'s sibling `thoughtsTokenCount`, added
+#                               into `output_tokens` below.
 RATES: dict[str, tuple[float, float]] = {
     "claude-opus-5": (5.00, 25.00),
     "gpt-5.5": (5.00, 30.00),
+    "perplexity/sonar": (0.25, 2.50),
+    "gemini-3.8-flash": (0.75, 3.75),
 }
 
 
@@ -260,6 +271,11 @@ def rate_for(model: str) -> tuple[float, float] | None:
 # A search that ERRORS is not billed, and this counts what the API reported
 # rather than what was attempted, so the two agree.
 WEB_SEARCH_PER_1K = 10.00
+# Perplexity bills its `web_search` tool per invocation — $0.0025 each, i.e.
+# $2.50 per 1,000 (docs/agent-api/models, read 2026-09-11) — reported back
+# in `usage.tool_calls_details.web_search.invocation`. Metered separately
+# from Anthropic's because the rate differs by 4x.
+PERPLEXITY_SEARCH_PER_1K = 2.50
 
 
 @dataclass
@@ -270,6 +286,13 @@ class TokenUsage:
     cache_read: int = 0
     cache_write: int = 0
     web_searches: int = 0
+    perplexity_searches: int = 0
+    # The vendor's OWN dollar figure, where one is reported. Perplexity's Agent
+    # API returns `usage.cost.total_cost` on every call — Epic 21.1 — and the
+    # billed figure beats any rate table: its input side is billed in tiers
+    # this table does not model (measured: 1,758 input tokens cost $0.00014,
+    # not the $0.00044 the published rate implies).
+    reported_cost: float = 0.0
 
     @property
     def total(self) -> int:
@@ -319,19 +342,49 @@ def install_token_meter() -> None:
 
     async def metered_post(self, url, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003, ANN202
         response = await real_post(self, url, *args, **kwargs)
-        if "openai.com" not in str(url):
+        host = str(url)
+        if not any(h in host for h in ("openai.com", "perplexity.ai", "googleapis.com")):
             return response
         try:
             payload = response.json()
         except Exception:  # noqa: BLE001 - a non-JSON body carries no usage
             return response
-        usage = payload.get("usage") or {}
-        entry = TOKENS[payload.get("model", "openai/unknown")]
-        entry.calls += 1
-        entry.input_tokens += int(usage.get("prompt_tokens") or 0)
-        entry.output_tokens += int(usage.get("completion_tokens") or 0)
-        details = usage.get("prompt_tokens_details") or {}
-        entry.cache_read += int(details.get("cached_tokens") or 0)
+        if "openai.com" in host:
+            usage = payload.get("usage") or {}
+            entry = TOKENS[payload.get("model", "openai/unknown")]
+            entry.calls += 1
+            entry.input_tokens += int(usage.get("prompt_tokens") or 0)
+            entry.output_tokens += int(usage.get("completion_tokens") or 0)
+            details = usage.get("prompt_tokens_details") or {}
+            entry.cache_read += int(details.get("cached_tokens") or 0)
+        elif "perplexity.ai" in host:
+            # Agent API usage — Epic 21. Tool invocations are billed per call
+            # and reported by tool name.
+            usage = payload.get("usage") or {}
+            entry = TOKENS[payload.get("model", "perplexity/unknown")]
+            entry.calls += 1
+            entry.input_tokens += int(usage.get("input_tokens") or 0)
+            entry.output_tokens += int(usage.get("output_tokens") or 0)
+            details = usage.get("input_tokens_details") or {}
+            entry.cache_read += int(details.get("cache_read_input_tokens") or 0)
+            tools = usage.get("tool_calls_details") or {}
+            entry.perplexity_searches += int(
+                (tools.get("web_search") or {}).get("invocation") or 0
+            )
+            entry.reported_cost += float((usage.get("cost") or {}).get("total_cost") or 0)
+        else:
+            # Gemini `usageMetadata` — Epic 21. The model is not echoed in the
+            # body, so it is read off the URL (`.../models/{model}:generate
+            # Content`). Thought tokens are billed as output.
+            usage = payload.get("usageMetadata") or {}
+            model = host.rsplit("/models/", 1)[-1].split(":", 1)[0] or "gemini/unknown"
+            entry = TOKENS[model]
+            entry.calls += 1
+            entry.input_tokens += int(usage.get("promptTokenCount") or 0)
+            entry.output_tokens += int(usage.get("candidatesTokenCount") or 0) + int(
+                usage.get("thoughtsTokenCount") or 0
+            )
+            entry.cache_read += int(usage.get("cachedContentTokenCount") or 0)
         return response
 
     httpx.AsyncClient.post = metered_post
@@ -508,7 +561,13 @@ async def main() -> int:  # noqa: C901
         try:
             async with METER.phase("scan loop", "4") as loop_phase:
                 scan = await scan_runner.run_scan(
-                    session, scan, client, settings=settings, prompt_limit=args.prompts
+                    session,
+                    scan,
+                    client,
+                    settings=settings,
+                    # The engines with a key, as the endpoint runs — Epic 21.
+                    engines=engine_service.configured_engines(settings),
+                    prompt_limit=args.prompts,
                 )
                 await session.commit()
         finally:
@@ -604,7 +663,11 @@ async def main() -> int:  # noqa: C901
     for model in sorted(TOKENS):
         u = TOKENS[model]
         rate = rate_for(model)
-        if rate is None:
+        if u.reported_cost > 0:
+            # The vendor said what it billed, tools included; that wins.
+            priced += u.reported_cost
+            cost_cell = f"{u.reported_cost:9.4f}*"
+        elif rate is None:
             cost_cell = "  unpriced"
             unpriced.append(model)
         else:
@@ -615,14 +678,29 @@ async def main() -> int:  # noqa: C901
               f" {u.cache_read:9,} {cost_cell}")
     searches = sum(u.web_searches for u in TOKENS.values())
     search_cost = searches * WEB_SEARCH_PER_1K / 1000
+    pplx_searches = sum(u.perplexity_searches for u in TOKENS.values())
+    pplx_cost = pplx_searches * PERPLEXITY_SEARCH_PER_1K / 1000
     print(f"\n  model spend         : ${priced:.4f}")
     if unpriced:
         print(f"  UNPRICED, tokens only: {', '.join(unpriced)}"
               "  (no published rate recorded here; not guessed)")
     print(f"  web_search requests : {searches:4}  ${search_cost:.4f}"
-          f"   at ${WEB_SEARCH_PER_1K:.2f}/1k")
+          f"   at ${WEB_SEARCH_PER_1K:.2f}/1k  (Anthropic)")
+    reported = any(u.reported_cost > 0 for u in TOKENS.values())
+    if reported:
+        print("  * vendor-reported cost, tool calls included — not the rate table")
+    print(f"  perplexity searches : {pplx_searches:4}  ${pplx_cost:.4f}"
+          f"   at ${PERPLEXITY_SEARCH_PER_1K:.2f}/1k"
+          + ("  (already inside the * figure; not added again)" if reported else ""))
     print("  ---------------------------------")
-    print(f"  TOTAL PROVIDER SPEND: ${priced + search_cost:.4f}")
+    # NOT `total`. That name is the run's wall clock, read by the VERDICT
+    # below; Epic 21.1's first draft of this line rebound it to dollars and
+    # the verdict then reported a $6.50 scan as 6.5 seconds, "UNDER budget by
+    # 293.5s", with the dominant phase at "2847% of total". Caught by reading
+    # the log against its own phase table, and recorded so a reviewer of that
+    # log knows the corrected figures: 239.0s total, 61.0s under budget.
+    spend_total = priced + search_cost + (0.0 if reported else pplx_cost)
+    print(f"  TOTAL PROVIDER SPEND: ${spend_total:.4f}")
     print(f"\n  SerpApi searches    : {by_provider['serpapi']} of a 250/month quota"
           "  (prepaid, no marginal charge)")
 

@@ -51,10 +51,12 @@ logger = structlog.get_logger(__name__)
 # measured cost rather than inherited from a default. The same discipline
 # applies to this ceiling, so here is the argument.
 #
-# THE UNIT. One run is 1 prompt x 3 engines = **3 paid engine calls**. One scan
-# is 24 prompts x 3 engines = **72**. So 24 runs cost exactly one scan.
+# THE UNIT. One run is 1 prompt x E engines, one scan is 24 prompts x E, for
+# whatever E engines are configured (three when this was written; up to five
+# since Epic 21). So 24 runs cost exactly one scan, at any E.
 #
-# THE NUMBER: 30 runs per client per hour = 90 engine calls = **1.25 scans**.
+# THE NUMBER: 30 runs per client per hour = 30 x E engine calls = **1.25
+# scans**. The ratio is what is argued for, and it does not move with E.
 #
 # WHY THAT IS THE RIGHT CEILING. The worst an unattended loop on one client's
 # Prompts screen can spend in an hour is a little over ONE SCAN — and a scan is
@@ -222,7 +224,9 @@ async def run_prompt(
 
     answers = await engine_service.ask_all(
         text,
-        engines=engines or engine_service.DEFAULT_ENGINES,
+        # The engines with a key behind them, not the five with an adapter —
+        # Epic 21, the same rule the scan endpoint applies.
+        engines=engines or engine_service.configured_engines(settings),
         settings=settings,
     )
 

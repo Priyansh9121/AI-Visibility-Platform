@@ -164,6 +164,25 @@ class Agency(Base, TimestampMixin, SoftDeleteMixin):
     # narrow on purpose and checked in both places rather than trusted from one.
     accent_color: Mapped[str | None] = mapped_column(String(7), nullable=True)
 
+    # --- the getting-started checklist (Epic 19) ---------------------------
+    #
+    # THE ONE STORED FACT ABOUT THE CHECKLIST. Every step it shows is derived
+    # on read from rows that already exist — clients, scans, scores, share
+    # tokens, seats — see `routers/dashboard.py`. Dismissal is the exception
+    # because it cannot be derived: it is a decision an operator made, not a
+    # state the data is in, so it is written down.
+    #
+    # A timestamp rather than a boolean, matching `accepted_at` / `revoked_at`
+    # on `Invitation`: "when" is one column and "whether" comes free.
+    #
+    # PER AGENCY, not per user and not per browser. The checklist describes the
+    # agency's account — its clients, its scans, its seats — so a teammate who
+    # opens the same workspace should see the same answer, and the tenancy
+    # model already makes the agency the unit everything else hangs off.
+    getting_started_dismissed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     users: Mapped[list[User]] = relationship(back_populates="agency")
     clients: Mapped[list[Client]] = relationship(back_populates="agency")
 
@@ -218,18 +237,63 @@ class User(Base, TimestampMixin, SoftDeleteMixin):
 
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # --- Google sign-in (Epic 20) ------------------------------------------
+    #
+    # Google's stable account identifier (`sub`), set the first time this
+    # account signs in with Google — whether that created the account or
+    # linked an existing password account by its verified email. NULL means
+    # the account has never used Google. It is the second credential a row
+    # may hold: `active_user_has_credential` below requires an ACTIVE user to
+    # have a password OR a Google link, so an account created through Google
+    # carries no password and is not a constraint violation.
+    #
+    # UNIQUE: one Google account is one person here. Without it a second row
+    # could claim the same `sub` and the sign-in lookup by `sub` would return
+    # whichever it found first. Postgres permits many NULLs under a unique
+    # index, which is what makes it usable on a column most rows leave empty.
+    #
+    # Matched FIRST on sign-in, then by email. A `sub` never changes for a
+    # Google account; an email can, and a lookup that trusted the email over
+    # the `sub` would let an email reassigned inside a Workspace inherit an
+    # account. See services/google_oauth.py for the whole policy.
+    google_sub: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
+
     agency: Mapped[Agency] = relationship(back_populates="users")
 
     __table_args__ = (
         UniqueConstraint("email", name="uq_users_email"),
         # Every seat-count query filters on exactly these three columns.
         Index("ix_users_agency_status", "agency_id", "status", "deleted_at"),
-        # An invited user has no password yet; an active one must have one.
+        # An invited user has no credential yet; an active one must have ONE
+        # of the two — a password, or a Google link (Epic 20). Renamed from
+        # `active_user_has_password` when the second credential arrived, so
+        # the migration is a visible drop-and-create rather than a same-name
+        # change the autogenerate comparison would not see.
         CheckConstraint(
-            "(status = 'invited' AND password_hash IS NULL) OR password_hash IS NOT NULL",
-            name="active_user_has_password",
+            "(status = 'invited' AND password_hash IS NULL) "
+            "OR password_hash IS NOT NULL OR google_sub IS NOT NULL",
+            name="active_user_has_credential",
         ),
     )
+
+    @property
+    def sign_in_methods(self) -> list[str]:
+        """How this account can be signed into: "email" (with a password), "google", or both.
+
+        Read by `UserOut` so the Settings screen can say "you sign in with
+        Google" instead of offering a password change that would refuse. A
+        list rather than a boolean because the question is "which", and an
+        account linked from a password one has two answers.
+        """
+        methods: list[str] = []
+        if self.password_hash is not None:
+            # Named for the door, not the credential: `test_password_is_never_returned`
+            # forbids the word in any auth response, and "email" is what the
+            # sign-in form is called.
+            methods.append("email")
+        if self.google_sub is not None:
+            methods.append("google")
+        return methods
 
     @property
     def occupies_seat(self) -> bool:
