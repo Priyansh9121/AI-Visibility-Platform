@@ -7,13 +7,14 @@ when there is nothing to show.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Response, status
 from sqlalchemy import func, select
 
 from ..deps import DbDep, PrincipalDep
-from ..models import Client, Scan, Score, ScoreStatus
+from ..models import Agency, Client, Scan, Score, ScoreStatus
 from ..schemas.auth import AgencyOut, SeatUsageOut
 from ..schemas.dashboard import DashboardOut, ScanSummaryOut
 from ..services import seats as seat_service
@@ -100,6 +101,49 @@ async def dashboard(
 
     used, limit_seats = await seat_service.seat_usage(db, agency_id)
 
+    # THE GETTING-STARTED FACTS — Epic 19. Derived, not stored.
+    #
+    # The checklist on the dashboard says whether the agency has a client, a
+    # scan, a score, a teammate and a shared report. Four of those five are
+    # already on this response (`client_count`, `scan_count`, `seats`), or
+    # would be if `recent_scans` were the whole history — which it is not: it
+    # is a page of ten, so "has any scan ever been scored?" needs its own
+    # count once the scored one has scrolled off. Same for "is any report
+    # shared?", which `recent_scans` does not carry at all.
+    #
+    # Two COUNT queries rather than an `onboarding_progress` table or a flag
+    # per step. A stored flag would have to be written by the scoring path,
+    # the share path and the seat path, each of which would then own a piece
+    # of the checklist's truth; a count reads the truth from where it already
+    # lives, and cannot disagree with it. The cost is two indexed counts per
+    # dashboard read, on the same `ix_scans_agency_created` the list uses.
+    #
+    # `share_token IS NOT NULL` is "a live link exists". Mint sets it, revoke
+    # clears it, expiry leaves it — so revoking a report's only share link
+    # un-does the step, and letting one expire does not. That is the honest
+    # reading of the column: the checklist describes the account's present
+    # state, not its history, the same way `client_count` drops when a client
+    # is deleted.
+    scored_scan_count = int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(Score)
+                .join(Scan, Scan.id == Score.scan_id)
+                .where(Scan.agency_id == agency_id, Score.status == ScoreStatus.SCORED)
+            )
+        ).scalar_one()
+    )
+    shared_scan_count = int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(Scan)
+                .where(Scan.agency_id == agency_id, Scan.share_token.is_not(None))
+            )
+        ).scalar_one()
+    )
+
     return DashboardOut(
         agency=AgencyOut.model_validate(principal.agency),
         seats=SeatUsageOut(used=used, limit=limit_seats),
@@ -107,4 +151,38 @@ async def dashboard(
         scan_count=scan_count,
         recent_scans=recent,
         is_empty=scan_count == 0 and client_count == 0,
+        scored_scan_count=scored_scan_count,
+        shared_scan_count=shared_scan_count,
+        getting_started_dismissed=principal.agency.getting_started_dismissed_at is not None,
     )
+
+
+@router.post("/dashboard/getting-started/dismiss", status_code=status.HTTP_204_NO_CONTENT)
+async def dismiss_getting_started(principal: PrincipalDep, db: DbDep) -> Response:
+    """Hide the getting-started checklist for this agency. **Auth required.**
+
+    **Per agency, and any seat holder may do it.** The checklist describes the
+    agency's account, so hiding it is an account-level choice, and it is not a
+    setting that changes what anyone can do — a member who dismisses it takes
+    nothing from the owner except a card the owner could also have closed.
+    That is why this is not behind `RequireAdmin`, unlike everything under
+    `/agencies/{id}`, which changes who holds a seat or who pays.
+
+    **Idempotent.** Dismissing twice is not an error and does not move the
+    timestamp: the first dismissal is the fact, and a second click on a stale
+    page is not a second decision.
+
+    **There is no un-dismiss.** The checklist is a first-week affordance; an
+    agency that closed it and wants it back has, by then, either done the
+    steps or decided not to. If that turns out to be wrong, clearing the
+    column is a one-line endpoint, not a design.
+
+    **Errors:** `401 authentication-required`.
+    """
+    agency = (
+        await db.execute(select(Agency).where(Agency.id == principal.agency_id))
+    ).scalar_one()
+    if agency.getting_started_dismissed_at is None:
+        agency.getting_started_dismissed_at = datetime.now(UTC)
+        await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

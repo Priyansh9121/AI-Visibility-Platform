@@ -37,3 +37,16 @@ class DashboardOut(ApiModel):
     # True when the agency has never run a scan. Lets the frontend show the
     # onboarding path rather than an empty table.
     is_empty: bool
+
+    # --- the getting-started checklist (Epic 19) ---------------------------
+    #
+    # Three more facts about the account, in the same shape as `client_count`
+    # and `scan_count`, so the screen can DERIVE whether each step is done
+    # rather than the server storing per-step flags. `recent_scans` is a
+    # bounded page and cannot answer "has any scan ever been scored" once the
+    # scored one falls off it, so the two counts are queried over the whole
+    # agency. `getting_started_dismissed` is the one fact that is stored, and
+    # the only one that is a decision rather than a state.
+    scored_scan_count: int
+    shared_scan_count: int
+    getting_started_dismissed: bool

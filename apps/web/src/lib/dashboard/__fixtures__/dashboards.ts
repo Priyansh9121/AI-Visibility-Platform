@@ -53,11 +53,18 @@ export function dashboard(
 ): Dashboard {
   return {
     agency: AGENCY,
-    seats: { used: 2, limit: 5 },
+    seats: extra.seats ?? { used: 2, limit: 5 },
     clientCount: extra.clientCount ?? Math.max(1, new Set(recentScans.map((s) => s.clientId)).size),
     scanCount: extra.scanCount ?? recentScans.length,
     recentScans,
     isEmpty: extra.isEmpty ?? false,
+    // The getting-started facts — Epic 19. Derived from the page by default,
+    // the way the endpoint derives them from the whole history; a fixture that
+    // needs the two to disagree (a scored scan off the page) says so.
+    scoredScanCount:
+      extra.scoredScanCount ?? recentScans.filter((s) => s.compositeScore != null).length,
+    sharedScanCount: extra.sharedScanCount ?? 0,
+    gettingStartedDismissed: extra.gettingStartedDismissed ?? false,
   };
 }
 
@@ -69,7 +76,49 @@ export const emptyDashboard: Dashboard = {
   scanCount: 0,
   recentScans: [],
   isEmpty: true,
+  scoredScanCount: 0,
+  sharedScanCount: 0,
+  gettingStartedDismissed: false,
 };
+
+// --- the getting-started checklist's three moments — Epic 19 ---------------
+
+/** One client, one scan in flight, nobody else invited: two of five lit. */
+export const partialProgressDashboard: Dashboard = dashboard(
+  [
+    scan({
+      status: 'running',
+      compositeScore: null,
+      finishedAt: null,
+      clientName: 'Northaven Dental',
+      clientDomain: 'northaven-dental.example',
+    }),
+  ],
+  { seats: { used: 1, limit: 5 } },
+);
+
+/** Every step lit and not yet closed: the completed card, once. */
+export const completeDashboard: Dashboard = dashboard([scan()], {
+  seats: { used: 2, limit: 5 },
+  sharedScanCount: 1,
+});
+
+/** Closed by someone at the agency. Nothing about the account changed. */
+export const dismissedDashboard: Dashboard = dashboard([scan()], {
+  seats: { used: 1, limit: 5 },
+  gettingStartedDismissed: true,
+});
+
+/**
+ * The scored scan has scrolled off the page. The step must still read as
+ * done — the count comes from the endpoint's whole-history query, not from
+ * the page — and the share step, with no scored scan ON the page to open,
+ * has words but no button.
+ */
+export const scoredOffPageDashboard: Dashboard = dashboard(
+  [scan({ status: 'queued', compositeScore: null, finishedAt: null })],
+  { scanCount: 12, scoredScanCount: 1, seats: { used: 1, limit: 5 } },
+);
 
 /** Clients exist but none has been scanned. `isEmpty` is false — a real gap. */
 export const noScansYetDashboard: Dashboard = dashboard([], {
