@@ -16,6 +16,7 @@ from .db import session_scope
 from .errors import AuthenticationRequired, NotFound, PermissionDenied
 from .models import Agency, User, UserRole, UserStatus
 from .redis_client import get_redis
+from .services.google_oauth import GoogleFlowStore, GoogleProvider, LiveGoogleProvider
 from .services.scan_executor import BackgroundScanExecutor, ScanExecutor
 from .sessions import SessionStore
 
@@ -57,6 +58,28 @@ def session_store(redis: RedisDep, settings: SettingsDep) -> SessionStore:
 
 
 SessionStoreDep = Annotated[SessionStore, Depends(session_store)]
+
+
+def google_provider(settings: SettingsDep) -> GoogleProvider:
+    """Who answers Google's side of the sign-in — Epic 20.
+
+    The seam the suite overrides with a fake, exactly as `scan_executor` is
+    overridden with an inline executor: the routes, the state store, the
+    account-linking policy and the cookie are all exercised against a
+    provider that never leaves the process. Nothing about the real one is
+    reachable from a test.
+    """
+    return LiveGoogleProvider(settings)
+
+
+GoogleProviderDep = Annotated[GoogleProvider, Depends(google_provider)]
+
+
+def google_flow_store(redis: RedisDep, settings: SettingsDep) -> GoogleFlowStore:
+    return GoogleFlowStore(redis, settings)
+
+
+GoogleFlowStoreDep = Annotated[GoogleFlowStore, Depends(google_flow_store)]
 
 
 @dataclass(frozen=True, slots=True)

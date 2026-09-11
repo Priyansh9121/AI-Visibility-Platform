@@ -4,17 +4,32 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Query, Response, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 
 from ..config import Settings
-from ..deps import DbDep, PrincipalDep, SessionStoreDep, SettingsDep
-from ..errors import InvalidInvitation, InvalidResetToken
+from ..deps import (
+    DbDep,
+    GoogleFlowStoreDep,
+    GoogleProviderDep,
+    PrincipalDep,
+    SessionStoreDep,
+    SettingsDep,
+)
+from ..errors import (
+    GoogleSignInNotConfigured,
+    InvalidGoogleTicket,
+    InvalidInvitation,
+    InvalidResetToken,
+)
 from ..models import Agency
 from ..schemas.auth import (
     AcceptInvitationRequest,
     AgencyOut,
     ChangePasswordRequest,
+    CompleteGoogleSignUpRequest,
+    GooglePendingOut,
     LoginRequest,
     MeOut,
     ResetPasswordConfirm,
@@ -25,6 +40,7 @@ from ..schemas.auth import (
 )
 from ..services import auth as auth_service
 from ..services import email as email_service
+from ..services import google_oauth
 from ..services import invitations as invitation_service
 from ..services import password_reset as reset_service
 from ..services import seats as seat_service
@@ -368,6 +384,198 @@ async def accept_invitation(
     _set_session_cookie(response, token, settings)
 
     used, limit = await seat_service.seat_usage(db, user.agency_id)
+    return MeOut(
+        user=UserOut.model_validate(user),
+        agency=AgencyOut.model_validate(agency),
+        seats=SeatUsageOut(used=used, limit=limit),
+    )
+
+
+# --- Google sign-in — Epic 20 ------------------------------------------------
+#
+# Four routes. The two GETs are browser navigations, not API calls: the button
+# is an `<a href>` to /start, Google sends the browser back to /callback, and
+# both answer with a 302 rather than JSON because there is no script on the
+# other end to read one. The cookie rides on the callback's redirect, which
+# is how the web app finds itself signed in when it lands.
+#
+# The policy — what happens when the email is known — lives in
+# `services/google_oauth.py`, not here. These routes move the browser and set
+# the cookie.
+
+
+def _google_failure(settings: Settings, reason: str) -> RedirectResponse:
+    """Send the browser back to the front door with one word about why.
+
+    Every failure lands on the same page with a `reason` the web app maps to
+    a sentence. No token, no email, and no Google error text in the URL: a
+    reason is a word this product chose, and the log carries the rest.
+    """
+    base = settings.public_web_base_url.rstrip("/")
+    return RedirectResponse(f"{base}/?google=error&reason={reason}", status_code=302)
+
+
+@router.get("/google/start", status_code=status.HTTP_302_FOUND, response_class=RedirectResponse)
+async def google_start(
+    settings: SettingsDep, flow: GoogleFlowStoreDep, google: GoogleProviderDep
+) -> RedirectResponse:
+    """Send the browser to Google. **No auth.** A navigation, not an API call.
+
+    Mints a `state`, a `nonce` and a PKCE verifier, parks them in Redis for
+    ten minutes, and redirects to Google's authorization endpoint with the
+    state, the nonce and the S256 challenge. The state is the CSRF guard for
+    the callback — looked up server-side, never compared to a cookie.
+
+    **Errors:** `503 google-sign-in-not-configured` when the deployment has
+    no OAuth client. The web app shows the button regardless; this is what
+    it gets until the founder creates one.
+    """
+    if not settings.google_sign_in_configured:
+        raise GoogleSignInNotConfigured(
+            detail=(
+                "Google sign-in needs GOOGLE_OAUTH_CLIENT_ID, "
+                "GOOGLE_OAUTH_CLIENT_SECRET and GOOGLE_OAUTH_REDIRECT_URL. "
+                "Sign in with your email and password instead."
+            )
+        )
+    state, nonce, challenge = await flow.begin()
+    return RedirectResponse(
+        google.authorization_url(state=state, nonce=nonce, code_challenge=challenge),
+        status_code=status.HTTP_302_FOUND,
+    )
+
+
+@router.get(
+    "/google/callback", status_code=status.HTTP_302_FOUND, response_class=RedirectResponse
+)
+async def google_callback(
+    response: Response,
+    db: DbDep,
+    store: SessionStoreDep,
+    settings: SettingsDep,
+    flow: GoogleFlowStoreDep,
+    google: GoogleProviderDep,
+    state: str | None = Query(default=None),
+    code: str | None = Query(default=None),
+    error: str | None = Query(default=None),
+) -> RedirectResponse:
+    """Where Google sends the browser back. **No auth.** Always a 302.
+
+    In order: the state must be one this process minted and not yet used;
+    the code is exchanged and the ID token verified (signature, audience,
+    issuer, expiry); the token's nonce must be the state's; then the
+    linking policy decides. Three destinations:
+
+    - an existing account → the session cookie is set and the browser goes
+      to `/dashboard`;
+    - a new address → a ten-minute ticket is minted and the browser goes to
+      `/sign-up/google?ticket=…` to name the agency;
+    - anything else → `/?google=error&reason=…` with one of `denied`,
+      `invalid-state`, `exchange-failed`, `email-unverified`,
+      `account-unavailable`.
+
+    **Errors:** none as status codes. A person arriving here is not a script
+    and gets a page, not a problem document.
+    """
+    if not settings.google_sign_in_configured:
+        return _google_failure(settings, "not-configured")
+    if state is None:
+        return _google_failure(settings, "invalid-state")
+    parked = await flow.consume_state(state)
+    if parked is None:
+        return _google_failure(settings, "invalid-state")
+    if error is not None or code is None:
+        # `access_denied` is the person pressing Cancel on Google's screen.
+        return _google_failure(settings, "denied")
+
+    try:
+        identity = await google.exchange(code=code, code_verifier=parked.code_verifier)
+    except google_oauth.GoogleExchangeError:
+        return _google_failure(settings, "exchange-failed")
+    if identity.nonce is None or identity.nonce != parked.nonce:
+        return _google_failure(settings, "invalid-state")
+
+    try:
+        user = await google_oauth.resolve_identity(db, identity, settings=settings)
+    except google_oauth.GoogleSignInRefusedError as refused:
+        await db.rollback()
+        return _google_failure(settings, refused.reason)
+
+    base = settings.public_web_base_url.rstrip("/")
+    if user is None:
+        ticket = await flow.issue_ticket(identity)
+        return RedirectResponse(f"{base}/sign-up/google?ticket={ticket}", status_code=302)
+
+    await db.commit()
+    token, _ = await store.create(user_id=user.id, agency_id=user.agency_id)
+    redirect = RedirectResponse(f"{base}/dashboard", status_code=status.HTTP_302_FOUND)
+    _set_session_cookie(redirect, token, settings)
+    return redirect
+
+
+@router.get("/google/pending", response_model=GooglePendingOut)
+async def google_pending(
+    flow: GoogleFlowStoreDep, ticket: str = Query(min_length=1, max_length=512)
+) -> Any:
+    """What the completion page shows before asking for an agency name. **No auth.**
+
+    Reads the ticket without consuming it, so a reload of the page is not a
+    second sign-in. The ticket is a bearer credential with a session token's
+    entropy and a reset link's lifetime; carrying it in a query string is the
+    same trade `/reset-password/{token}` makes, for the same reason — there
+    is no session yet to carry it any other way.
+
+    **Errors:** `400 invalid-google-ticket` for unknown, used and expired alike.
+    """
+    identity = await flow.peek_ticket(ticket)
+    if identity is None:
+        raise InvalidGoogleTicket(
+            detail="That Google sign-in has expired. Start again from the sign-in page."
+        )
+    return GooglePendingOut(email=identity.email, suggested_name=identity.name)
+
+
+@router.post(
+    "/google/complete", response_model=MeOut, status_code=status.HTTP_201_CREATED
+)
+async def google_complete(
+    payload: CompleteGoogleSignUpRequest,
+    response: Response,
+    db: DbDep,
+    store: SessionStoreDep,
+    settings: SettingsDep,
+    flow: GoogleFlowStoreDep,
+) -> Any:
+    """Create the agency and its owner from a verified Google identity. **No auth.**
+
+    The Google half of `/sign-up`: same agency, same owner seat, same
+    sign-in-on-creation, no password. The ticket is consumed here, so the
+    page it came from cannot create two agencies.
+
+    **Errors:** `400 invalid-google-ticket`, `409 email-already-registered`
+    (the address was registered in the minutes since the ticket was minted),
+    `422`.
+    """
+    identity = await flow.consume_ticket(payload.ticket)
+    if identity is None:
+        raise InvalidGoogleTicket(
+            detail="That Google sign-in has expired. Start again from the sign-in page."
+        )
+    agency, user = await google_oauth.complete_sign_up(
+        db,
+        identity,
+        agency_name=payload.agency_name,
+        full_name=payload.full_name,
+        settings=settings,
+    )
+    await db.commit()
+    await db.refresh(agency)
+    await db.refresh(user)
+
+    token, _ = await store.create(user_id=user.id, agency_id=agency.id)
+    _set_session_cookie(response, token, settings)
+
+    used, limit = await seat_service.seat_usage(db, agency.id)
     return MeOut(
         user=UserOut.model_validate(user),
         agency=AgencyOut.model_validate(agency),

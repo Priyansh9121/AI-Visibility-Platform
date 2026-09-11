@@ -149,7 +149,7 @@ async def invite_seat(
             id=ids.new_id(ids.USER),
             agency_id=agency_id,
             email=email,
-            # Null until acceptance. The `active_user_has_password` CHECK
+            # Null until acceptance. The `active_user_has_credential` CHECK
             # constraint permits exactly this pairing and no other.
             password_hash=None,
             # The invitee has not told us their name yet. The address is what
@@ -178,9 +178,12 @@ async def invite_seat(
         await seats.assert_seat_available(session, agency_id)
         existing.deleted_at = None
         existing.status = UserStatus.INVITED
-        # Required by `active_user_has_password`, and right on the merits: a
+        # Required by `active_user_has_credential`, and right on the merits: a
         # re-invited person sets a new password rather than resuming an old one.
+        # The Google link goes for the same reason (Epic 20): the seat is being
+        # re-issued, not resumed, and the new holder proves the address again.
         existing.password_hash = None
+        existing.google_sub = None
         existing.role = role
         user = existing
         seat_consumed = True

@@ -79,6 +79,7 @@ export const clientsMe: Me = {
     role: 'owner',
     status: 'active',
     lastLoginAt: '2026-08-28T09:00:00Z',
+    signInMethods: ['email' as const],
     createdAt: '2026-08-20T05:29:02Z',
   },
   agency: {

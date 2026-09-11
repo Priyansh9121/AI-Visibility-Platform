@@ -31,6 +31,9 @@ SECRET_KEYS = {
     # would be asserting something untrue about it.
     "STRIPE_SECRET_KEY",
     "STRIPE_WEBHOOK_SECRET",
+    # Epic 20. The client ID is deliberately NOT here — it is sent to the
+    # browser in every authorization URL and is not a credential.
+    "GOOGLE_OAUTH_CLIENT_SECRET",
 }
 
 # Shapes that are secrets regardless of which key they sit under.
@@ -46,6 +49,7 @@ SECRET_SHAPES = [
     re.compile(r"sk_(live|test)_[A-Za-z0-9]{20,}"),  # Stripe secret key
     re.compile(r"rk_(live|test)_[A-Za-z0-9]{20,}"),  # Stripe restricted key
     re.compile(r"whsec_[A-Za-z0-9]{20,}"),           # Stripe webhook secret
+    re.compile(r"GOCSPX-[A-Za-z0-9_\-]{20,}"),         # Google OAuth client secret
 ]
 
 

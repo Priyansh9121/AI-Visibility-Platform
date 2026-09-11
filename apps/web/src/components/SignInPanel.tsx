@@ -1,8 +1,16 @@
 'use client';
 
 import { useState, type FormEvent } from 'react';
-import { Button, Card, CardBody, ErrorState, Reveal, TextField } from '@avp/design-system';
-import { api, ApiProblem } from '@/lib/api';
+import {
+  Button,
+  Card,
+  CardBody,
+  ErrorState,
+  GoogleSignInButton,
+  Reveal,
+  TextField,
+} from '@avp/design-system';
+import { api, ApiProblem, GOOGLE_SIGN_IN_URL } from '@/lib/api';
 
 /**
  * Sign in.
@@ -131,6 +139,22 @@ export function SignInPanel({
               <Button variant="ghost" size="sm" onClick={onForgotPassword}>
                 Forgot your password?
               </Button>
+            </div>
+
+            {/*
+              Google, beside the password form and not instead of it — Epic 20.
+              An anchor to the API, which redirects to Google; the session
+              comes back on the callback's cookie and lands on the dashboard.
+              The one element here not drawn from this system's tokens, by
+              Google's own branding requirement — see GoogleSignInButton.
+            */}
+            <div className="flex flex-col gap-4">
+              <p className="flex items-center gap-3 text-ui-xs text-text-tertiary">
+                <span className="h-px flex-1 bg-line-hairline" aria-hidden="true" />
+                or
+                <span className="h-px flex-1 bg-line-hairline" aria-hidden="true" />
+              </p>
+              <GoogleSignInButton href={GOOGLE_SIGN_IN_URL} label="Sign in with Google" fullWidth />
             </div>
           </form>
         </CardBody>
