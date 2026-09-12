@@ -12,10 +12,12 @@ build-log.md and the checked-in web fixtures refer to are never touched.
     DATABASE_URL=postgresql+asyncpg://avp@127.0.0.1:55433/avp_dev \
         uv run python scripts/verify_e2e.py --prompts 24
 
-COSTS REAL MONEY AND TIME. At --prompts 24 that is 55-103 claude-opus-5 calls
-(48 engine calls, up to 48 sentiment calls, plus one classification, four
-co-citation, one prompt-generation and one fix-generation call) and 6 SerpApi
-searches against a 250/month quota. Run it once and read the table.
+COSTS REAL MONEY AND TIME. At --prompts 24 that is 55-103 Anthropic calls
+(48 engine calls on the engines' own flagship models, up to 48 sentiment calls
+on claude-haiku-4-5 since the cost brief — 82 when five engines all name the
+subject — plus one classification, four co-citation, one prompt-generation and
+one fix-generation call on claude-opus-5) and 6 SerpApi searches against a
+250/month quota. Run it once and read the table.
 
 WHY THIS TIMES PHASES RATHER THAN THE WHOLE RUN
 -----------------------------------------------
@@ -67,6 +69,7 @@ from avp_api.config import Settings  # noqa: E402
 from avp_api.models import Agency, Client, EngineResult  # noqa: E402
 from avp_api.services import (  # noqa: E402  # noqa: E402  # noqa: E402  # noqa: E402
     audit_runner,
+    classify,
     cocitation,
     competitors,
     extraction,
@@ -224,6 +227,10 @@ def install_meters() -> None:
 # project to put a real dollar figure on a scan.
 #
 #   claude-opus-5   $5 / $25    Anthropic's published rate.
+#   claude-haiku-4-5 $1 / $5    platform.claude.com/docs/en/about-claude/
+#                               pricing, read 2026-09-11 — the sentiment
+#                               classifier since the cost brief. Matched by
+#                               prefix: the API reports the dated snapshot.
 #   gpt-5.5         $5 / $30    developers.openai.com/api/docs/pricing, read
 #                               2026-09-08, for the <272K context tier this
 #                               product's prompts sit far inside. Cached input
@@ -243,6 +250,7 @@ def install_meters() -> None:
 #                               into `output_tokens` below.
 RATES: dict[str, tuple[float, float]] = {
     "claude-opus-5": (5.00, 25.00),
+    "claude-haiku-4-5": (1.00, 5.00),
     "gpt-5.5": (5.00, 30.00),
     "perplexity/sonar": (0.25, 2.50),
     "gemini-3.8-flash": (0.75, 3.75),
@@ -280,13 +288,27 @@ PERPLEXITY_SEARCH_PER_1K = 2.50
 
 @dataclass
 class TokenUsage:
+    """One LINE of the cost table — see `anthropic_line` for why not one model."""
+
+    # The model(s) that actually served the line, as the vendor reported them.
+    # A set because the API echoes dated snapshots and a line is defined by
+    # what the call is FOR, not by what served it.
+    models: set[str] = field(default_factory=set)
     calls: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
     cache_read: int = 0
     cache_write: int = 0
     web_searches: int = 0
+    # Anthropic web_search requests PER CALL, in call order — the cost brief's
+    # Step 3: whether `SEARCH_MAX_USES` is headroom or load-bearing is a
+    # distribution question the scan-wide sum above cannot answer.
+    search_uses: list[int] = field(default_factory=list)
     perplexity_searches: int = 0
+    # Token cost at the published rate, accumulated per call from the model
+    # that served it, so a line served by two snapshots is still priced.
+    token_cost: float = 0.0
+    unpriced_models: set[str] = field(default_factory=set)
     # The vendor's OWN dollar figure, where one is reported. Perplexity's Agent
     # API returns `usage.cost.total_cost` on every call — Epic 21.1 — and the
     # billed figure beats any rate table: its input side is billed in tiers
@@ -299,7 +321,78 @@ class TokenUsage:
         return self.input_tokens + self.output_tokens
 
 
+# Keyed by LINE — what the call is for — not by model (the cost brief's
+# Step 1, 2026-09-11). Both Claude engines share `claude-opus-5`, as do
+# classification, fix generation, co-citation and prompt generation, so a
+# per-model table could not say what the grounded engine costs on its own —
+# very likely the single most expensive thing in a scan, and invisible.
 TOKENS: dict[str, TokenUsage] = defaultdict(TokenUsage)
+
+# The ten things a scan pays a model for: five engines, five analysis calls.
+LINE_ORDER = (
+    "engine: claude",
+    "engine: claude_search",
+    "engine: chatgpt",
+    "engine: perplexity",
+    "engine: gemini",
+    "sentiment",
+    "classification",
+    "fix generation",
+    "co-citation",
+    "prompt generation",
+)
+
+# Every Anthropic analysis call goes through `messages.parse` with its own
+# output schema, so the schema IS the call site — matched by identity, the
+# way conftest's `dispatching_parse` already dispatches on `output_format`.
+_PARSE_LINES: dict[type, str] = {
+    extraction.SentimentJudgement: "sentiment",
+    classify.IndustryClassification: "classification",
+    fix_generator.GeneratedFixSet: "fix generation",
+    cocitation.CoCitationAnswer: "co-citation",
+    prompt_service.GeneratedPromptSet: "prompt generation",
+}
+
+
+def anthropic_line(kwargs: dict) -> str:
+    """Which line of the cost table an Anthropic request belongs to.
+
+    Read off the request's own shape rather than off a context variable set
+    by production code, so the pipeline is measured without being changed:
+    an `output_format` names an analysis call; a `web_search` tool names the
+    grounded engine; a bare `create` is the parametric engine (`_ClaudeBase`
+    is the only caller that sends neither).
+    """
+    fmt = kwargs.get("output_format")
+    if fmt is not None:
+        return _PARSE_LINES.get(fmt, f"parse: {getattr(fmt, '__name__', fmt)}")
+    tools = kwargs.get("tools") or []
+    if any(
+        isinstance(tool, dict) and str(tool.get("type", "")).startswith("web_search")
+        for tool in tools
+    ):
+        return "engine: claude_search"
+    return "engine: claude"
+
+
+def record_tokens(
+    line: str, model: str, *, input_tokens: int, output_tokens: int,
+    cache_read: int = 0, cache_write: int = 0,
+) -> TokenUsage:
+    """Add one call to a line, priced from the model that served it."""
+    entry = TOKENS[line]
+    entry.models.add(model)
+    entry.calls += 1
+    entry.input_tokens += input_tokens
+    entry.output_tokens += output_tokens
+    entry.cache_read += cache_read
+    entry.cache_write += cache_write
+    rate = rate_for(model)
+    if rate is None:
+        entry.unpriced_models.add(model)
+    else:
+        entry.token_cost += (input_tokens * rate[0] + output_tokens * rate[1]) / 1_000_000
+    return entry
 
 
 def install_token_meter() -> None:
@@ -314,16 +407,20 @@ def install_token_meter() -> None:
     import anthropic
     import httpx
 
-    def _record(model: str, usage: object) -> None:
-        entry = TOKENS[model]
-        entry.calls += 1
-        entry.input_tokens += int(getattr(usage, "input_tokens", 0) or 0)
-        entry.output_tokens += int(getattr(usage, "output_tokens", 0) or 0)
-        entry.cache_read += int(getattr(usage, "cache_read_input_tokens", 0) or 0)
-        entry.cache_write += int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
+    def _record(line: str, model: str, usage: object) -> None:
+        entry = record_tokens(
+            line, model,
+            input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
+            output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+            cache_read=int(getattr(usage, "cache_read_input_tokens", 0) or 0),
+            cache_write=int(getattr(usage, "cache_creation_input_tokens", 0) or 0),
+        )
         server = getattr(usage, "server_tool_use", None)
-        if server is not None:
-            entry.web_searches += int(getattr(server, "web_search_requests", 0) or 0)
+        searches = int(getattr(server, "web_search_requests", 0) or 0) if server else 0
+        entry.web_searches += searches
+        if line == "engine: claude_search":
+            # Zero is a data point: a grounded call that chose not to search.
+            entry.search_uses.append(searches)
 
     messages = anthropic.resources.messages.AsyncMessages
     for attr in ("create", "parse"):
@@ -333,7 +430,11 @@ def install_token_meter() -> None:
             response = await __original(self, *args, **kwargs)
             usage = getattr(response, "usage", None)
             if usage is not None:
-                _record(getattr(response, "model", "anthropic/unknown"), usage)
+                _record(
+                    anthropic_line(kwargs),
+                    getattr(response, "model", "anthropic/unknown"),
+                    usage,
+                )
             return response
 
         setattr(messages, attr, metered)
@@ -349,24 +450,31 @@ def install_token_meter() -> None:
             payload = response.json()
         except Exception:  # noqa: BLE001 - a non-JSON body carries no usage
             return response
+        # A refused request (429, 5xx) carries no usage and no model, and the
+        # vendor does not bill it; counting it as a call under an unknown
+        # model overstated Perplexity's calls by its two 429s on 2026-09-11.
+        if not (payload.get("usage") or payload.get("usageMetadata")):
+            return response
         if "openai.com" in host:
             usage = payload.get("usage") or {}
-            entry = TOKENS[payload.get("model", "openai/unknown")]
-            entry.calls += 1
-            entry.input_tokens += int(usage.get("prompt_tokens") or 0)
-            entry.output_tokens += int(usage.get("completion_tokens") or 0)
             details = usage.get("prompt_tokens_details") or {}
-            entry.cache_read += int(details.get("cached_tokens") or 0)
+            record_tokens(
+                "engine: chatgpt", payload.get("model", "openai/unknown"),
+                input_tokens=int(usage.get("prompt_tokens") or 0),
+                output_tokens=int(usage.get("completion_tokens") or 0),
+                cache_read=int(details.get("cached_tokens") or 0),
+            )
         elif "perplexity.ai" in host:
             # Agent API usage — Epic 21. Tool invocations are billed per call
             # and reported by tool name.
             usage = payload.get("usage") or {}
-            entry = TOKENS[payload.get("model", "perplexity/unknown")]
-            entry.calls += 1
-            entry.input_tokens += int(usage.get("input_tokens") or 0)
-            entry.output_tokens += int(usage.get("output_tokens") or 0)
             details = usage.get("input_tokens_details") or {}
-            entry.cache_read += int(details.get("cache_read_input_tokens") or 0)
+            entry = record_tokens(
+                "engine: perplexity", payload.get("model", "perplexity/unknown"),
+                input_tokens=int(usage.get("input_tokens") or 0),
+                output_tokens=int(usage.get("output_tokens") or 0),
+                cache_read=int(details.get("cache_read_input_tokens") or 0),
+            )
             tools = usage.get("tool_calls_details") or {}
             entry.perplexity_searches += int(
                 (tools.get("web_search") or {}).get("invocation") or 0
@@ -378,13 +486,13 @@ def install_token_meter() -> None:
             # Content`). Thought tokens are billed as output.
             usage = payload.get("usageMetadata") or {}
             model = host.rsplit("/models/", 1)[-1].split(":", 1)[0] or "gemini/unknown"
-            entry = TOKENS[model]
-            entry.calls += 1
-            entry.input_tokens += int(usage.get("promptTokenCount") or 0)
-            entry.output_tokens += int(usage.get("candidatesTokenCount") or 0) + int(
-                usage.get("thoughtsTokenCount") or 0
+            record_tokens(
+                "engine: gemini", model,
+                input_tokens=int(usage.get("promptTokenCount") or 0),
+                output_tokens=int(usage.get("candidatesTokenCount") or 0)
+                + int(usage.get("thoughtsTokenCount") or 0),
+                cache_read=int(usage.get("cachedContentTokenCount") or 0),
             )
-            entry.cache_read += int(usage.get("cachedContentTokenCount") or 0)
         return response
 
     httpx.AsyncClient.post = metered_post
@@ -656,42 +764,67 @@ async def main() -> int:  # noqa: C901
     # ------------------------------------------------------------------
     rule("TOKENS AND MONEY")
     # ------------------------------------------------------------------
+    # One row per LINE — what the call was for — with the model beside it,
+    # so the two Claude engines and the five analysis calls that share Opus 5
+    # are priced apart. `$ line` is what that line cost in full: tokens plus
+    # the per-request search fee for the grounded Claude engine, or the
+    # vendor's own reported figure (*) where one exists.
     print()
-    print(f"  {'model':22} {'calls':>6} {'in':>10} {'out':>10} {'cache rd':>9} {'$':>9}")
+    print(f"  {'line':22} {'model':27} {'calls':>5} {'in':>9} {'out':>8}"
+          f" {'cache rd':>8} {'srch':>5} {'$ tokens':>9} {'$ line':>9}")
     priced = 0.0
     unpriced: list[str] = []
-    for model in sorted(TOKENS):
-        u = TOKENS[model]
-        rate = rate_for(model)
+    ordered = [line for line in LINE_ORDER if line in TOKENS] + sorted(
+        line for line in TOKENS if line not in LINE_ORDER
+    )
+    for line in ordered:
+        u = TOKENS[line]
+        model = "+".join(sorted(u.models)) or "-"
+        fee = u.web_searches * WEB_SEARCH_PER_1K / 1000
         if u.reported_cost > 0:
             # The vendor said what it billed, tools included; that wins.
-            priced += u.reported_cost
-            cost_cell = f"{u.reported_cost:9.4f}*"
-        elif rate is None:
-            cost_cell = "  unpriced"
-            unpriced.append(model)
+            line_cost = u.reported_cost
+            line_cell = f"{line_cost:8.4f}*"
+        elif u.unpriced_models:
+            line_cost = 0.0
+            line_cell = " unpriced"
+            unpriced.extend(sorted(u.unpriced_models))
         else:
-            cost = (u.input_tokens * rate[0] + u.output_tokens * rate[1]) / 1_000_000
-            priced += cost
-            cost_cell = f"{cost:9.4f}"
-        print(f"  {model:22} {u.calls:6} {u.input_tokens:10,} {u.output_tokens:10,}"
-              f" {u.cache_read:9,} {cost_cell}")
+            line_cost = u.token_cost + fee
+            line_cell = f"{line_cost:9.4f}"
+        priced += line_cost
+        print(f"  {line:22} {model[:27]:27} {u.calls:5} {u.input_tokens:9,}"
+              f" {u.output_tokens:8,} {u.cache_read:8,} {u.web_searches:5}"
+              f" {u.token_cost:9.4f} {line_cell}")
+
     searches = sum(u.web_searches for u in TOKENS.values())
     search_cost = searches * WEB_SEARCH_PER_1K / 1000
     pplx_searches = sum(u.perplexity_searches for u in TOKENS.values())
     pplx_cost = pplx_searches * PERPLEXITY_SEARCH_PER_1K / 1000
-    print(f"\n  model spend         : ${priced:.4f}")
-    if unpriced:
-        print(f"  UNPRICED, tokens only: {', '.join(unpriced)}"
-              "  (no published rate recorded here; not guessed)")
-    print(f"  web_search requests : {searches:4}  ${search_cost:.4f}"
-          f"   at ${WEB_SEARCH_PER_1K:.2f}/1k  (Anthropic)")
     reported = any(u.reported_cost > 0 for u in TOKENS.values())
+    if unpriced:
+        print(f"\n  UNPRICED, tokens only: {', '.join(unpriced)}"
+              "  (no published rate recorded here; not guessed)")
+    print(f"\n  web_search requests : {searches:4}  ${search_cost:.4f}"
+          f"   at ${WEB_SEARCH_PER_1K:.2f}/1k  (Anthropic; inside the claude_search line)")
     if reported:
         print("  * vendor-reported cost, tool calls included — not the rate table")
     print(f"  perplexity searches : {pplx_searches:4}  ${pplx_cost:.4f}"
           f"   at ${PERPLEXITY_SEARCH_PER_1K:.2f}/1k"
-          + ("  (already inside the * figure; not added again)" if reported else ""))
+          + ("  (inside the * figure; not added again)" if reported else ""))
+
+    # Step 3 of the cost brief: is SEARCH_MAX_USES headroom or load-bearing?
+    grounded = TOKENS.get("engine: claude_search")
+    uses = sorted(grounded.search_uses) if grounded is not None else []
+    if uses:
+        n = len(uses)
+        cap = engine_service.SEARCH_MAX_USES
+        p90 = uses[max(0, -(-9 * n // 10) - 1)]
+        at_cap = sum(1 for x in uses if x >= cap)
+        print(f"\n  web_search per claude_search call ({n} calls, max_uses={cap}):"
+              f" median {uses[n // 2]}, p90 {p90}, max {uses[-1]},"
+              f" at the cap {at_cap} ({100 * at_cap / n:.0f}%), zero {uses.count(0)}")
+        print(f"  distribution        : {dict(Counter(uses))}")
     print("  ---------------------------------")
     # NOT `total`. That name is the run's wall clock, read by the VERDICT
     # below; Epic 21.1's first draft of this line rebound it to dollars and
@@ -699,7 +832,9 @@ async def main() -> int:  # noqa: C901
     # 293.5s", with the dominant phase at "2847% of total". Caught by reading
     # the log against its own phase table, and recorded so a reviewer of that
     # log knows the corrected figures: 239.0s total, 61.0s under budget.
-    spend_total = priced + search_cost + (0.0 if reported else pplx_cost)
+    # The search fee is already inside the claude_search line, and
+    # Perplexity's inside its reported figure; neither is added again.
+    spend_total = priced + (0.0 if reported else pplx_cost)
     print(f"  TOTAL PROVIDER SPEND: ${spend_total:.4f}")
     print(f"\n  SerpApi searches    : {by_provider['serpapi']} of a 250/month quota"
           "  (prepaid, no marginal charge)")

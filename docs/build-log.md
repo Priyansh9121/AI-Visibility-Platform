@@ -15668,3 +15668,305 @@ facts.
 whether five engines go into a pilot's live traffic at $6.50 a scan, which
 is about four scans a month inside the $29 plan — the founder's call,
 unchanged from Epic 21 except that the number is now real.
+
+# The cost brief — sentiment moved to Haiku 4.5 on a held-out set; classification and fix generation measured and kept; one crash found on the way
+
+**2026-09-11.** The brief acted on one number from Epic 21.1's measured
+five-engine scan: of its $6.50, sentiment classification was about $3.20 —
+82 `claude-opus-5` calls, more than any single answer engine — for a
+three-way categorisation that does not need flagship reasoning. The line
+that must not move was stated first and did not: the five answer-engine
+adapters keep `ANSWER_MODEL`, `OPENAI_ANSWER_MODEL`,
+`PERPLEXITY_ANSWER_MODEL`, `GEMINI_ANSWER_MODEL` and `SEARCH_MAX_USES`
+exactly as they were, and `tests/test_analysis_models.py` now pins all five
+as strings so a later cost pass cannot touch them by accident. Everything
+below is the internal analysis the pipeline runs on top of those answers.
+**Total real spend on the comparisons: about $3.50.**
+
+## The model, read from the vendor on the day, not recalled
+
+Anthropic's pricing page and models overview (read 2026-09-11): the cheapest
+current model is **Claude Haiku 4.5**, `claude-haiku-4-5-20251001`, at
+**$1 / $5 per MTok** against Opus 5's $5 / $25 and Sonnet 5's $2 / $10.
+Two things about it shape the request: it supports structured outputs
+(`output_config.format`, the SDK's `parse`), and it does **not** support
+`output_config.effort` — the effort page lists every model it works on and
+Haiku 4.5 is not among them, so the `effort: "low"` the sentiment call sent
+to Opus would be a 400. Thinking on Haiku 4.5 is the manual
+`budget_tokens` mode and is off unless asked for. The pinned snapshot id is
+used rather than the alias, because `classifier_model`-style provenance
+columns should not change meaning if an alias ever moves.
+
+## Sentiment: sixteen excerpts, three models, two runs each
+
+No live scan, per the brief and the facts-only rule: no answer text is ever
+persisted, so there is no corpus to re-classify. `scripts/verify_sentiment_
+models.py` holds sixteen excerpts about one subject (Help Scout) written to
+cover the rubric's own distinctions — five clearly positive, five clearly
+negative (including a caveat-as-reason-not-to-choose and an unfavourable
+direct comparison), four neutral (a plain listing, a factual description,
+praise for a competitor WITHOUT a comparison, a descriptor list) and two a
+reader could label either way. Every model saw the production system
+prompt, the production user-message shape, the production schema and the
+production `CallBound` client; only the model, and effort where the model
+takes it, differed.
+
+| | Opus 5, low (today) | Sonnet 5, low | **Haiku 4.5** |
+|---|---|---|---|
+| matches the reader's label | 16/16 | 15/16 | **15/16** |
+| … on the 14 clear cases | 14/14 | 14/14 | **14/14** |
+| agrees with Opus 5 | — | 15/16 | **15/16** |
+| same label on both runs | 16/16 | 16/16 | 15/16 |
+| $/call on these inputs (32 calls) | $0.0039 | $0.0015 | **$0.0005** |
+| input tokens, same text | 20,698 | 20,698 | 14,782 |
+| p50 / max latency | 2.0s / 3.6s | 1.8s / 2.7s | 1.3s / 1.6s |
+| cache read / write reported | 0 / 0 | 0 / 0 | 0 / 0 |
+
+**The one disagreement is the ambiguous case, and the cheaper answer is
+defensible.** Excerpt A1 says Help Scout is "loved for its simplicity, but
+that simplicity is also its ceiling … for fifty, probably not." Opus read
+it neutral at 0.60; Sonnet and Haiku read it negative at 0.70 — a caveat
+presented as a reason not to choose, which the rubric names as negative —
+and Haiku's second run said neutral. No clear case moved. There is no
+pattern of the cheaper model missing negative signal: all five negatives
+came back negative at 0.85 or above on every run. The fewer input tokens
+for identical text are the tokenizer — Opus 4.7 and later produce about
+30% more tokens for the same text (pricing page) — which is a second,
+unlooked-for saving on top of the rate.
+
+**Chosen: Haiku 4.5.** `SENTIMENT_MODEL` is `claude-haiku-4-5-20251001`,
+`SENTIMENT_EFFORT` is gone with the `output_config` kwarg, and
+`test_analysis_models.py` asserts the request carries neither `effort` nor
+`thinking`. `verify_e2e.py`'s rate table gains the Haiku row so the next
+measured scan prices it.
+
+**What this should do to a scan, labelled as the projection it is.** On the
+measured inputs Haiku's cost per call was 13% of Opus's; the real scan's
+calls are input-heavy (whole engine answers), where the ratio is the rate
+(1/5) times the tokenizer (0.71), about 14%. The brief's ~$3.20 of
+sentiment becomes roughly **$0.45**, and the $6.50 scan roughly **$3.75**.
+The real before/after belongs to the next `verify_e2e.py --prompts 24` run
+and is not claimed here.
+
+## Industry classification: measured, and kept on Opus 5
+
+`scripts/verify_classifier_models.py` is `tune_prompt.py`'s design with the
+model as the variable: the nine sites crawled once, the same in-memory
+crawl to each model, twice. Haiku's `industry` was defensible on all nine
+("project management software", "startup accelerator", "payment processing
+software", "plumbing and drain cleaning services") at $0.0039 a call
+against Opus's $0.0270. Its `niche` was thinner: none at all for Basecamp
+on both runs, where Opus named "team collaboration and project management
+tools for small businesses", and shorter everywhere else. The niche is the
+first seed competitor detection tries (`cocitation.py`: `niche or
+industry`), so a thinner niche changes which rivals a scan finds — and this
+is one call per **client**, not per scan, so the saving is about two cents
+per onboarding. The brief asked for the concrete reason rather than a
+default move, and that is it: the classifier's output seeds every prompt
+of every scan for that client, and the measurable difference was in the
+field the pipeline seeds from. Kept; the reasoning is beside the constant.
+
+## Fix generation: measured, and kept on Opus 5
+
+`scripts/verify_fix_models.py` sent one real scan's five candidates
+(helpwise.io, Epic 18.1's subject: three gaps, two audit warnings) through
+the production prompt and the production `accept()` filter on three
+configurations. Nothing was written to the database.
+
+| | accepted | $ | what it wrote |
+|---|---|---|---|
+| Opus 5, medium (today) | 5 / 5 | $0.051 | names page types, schema types and the cited domains; quotes the scan's counts (24 of 70 answers, 11 of 351 citations, G2 at 19); cross-references the FAQ markup to the content work |
+| Haiku 4.5 | 3 / 5 | $0.007 | `gap:sentiment` rejected by the banned-claim guard (it wrote "ROI"); `audit:cwv_lpc` rejected as an unknown candidate — a mistyped id |
+| Haiku 4.5, thinking (4,000) | 5 / 5 | $0.020 | past the filter, but "Improve brand perception in customer and analyst discussions" and "Publish technical content to increase AI model awareness" — the generic list the system prompt refuses in its own words, plus claims about training data the facts do not support |
+
+One call per scan at five cents: the most that could be saved is under a
+percent of the scan, for the list the client is actually handed. Kept; the
+reasoning is beside the constant.
+
+## Prompt caching: five minutes, and the answer is no
+
+`verify_e2e.py`'s `cache_read` / `cache_write` columns have never been
+nonzero, and could not be: nothing in the pipeline sends `cache_control`.
+Would the sentiment rubric cache if it did? `count_tokens` on the three
+static prefixes: sentiment **118** tokens on Haiku (184 on Opus), the
+classifier 364 (491), fix generation 463 (660). The minimum cacheable
+prefix is **4,096 tokens on Haiku 4.5** and 512 on Opus 5 (caching docs);
+below it the marker is silently ignored. None of the three is within an
+order of magnitude of cacheable on the model it now runs on, and every
+call in the comparisons above reported 0 for both cache fields. Not built.
+
+## The crash the comparison found, and its fix
+
+The classifier comparison's first run died on the **Opus 5 baseline**:
+for stripe.com it wrote a `rationale` over the field's 300-character cap,
+`messages.parse` validated the whole document inside the SDK and raised
+pydantic's `ValidationError` — not an `anthropic.APIError`, so none of
+`classify`'s six clauses caught it. In production that response is a 500
+from `POST /clients`. On the second run Haiku 4.5 overran the same cap on
+8 of 18 calls. Two changes, both the shape `fix_generator.py` already
+records for its titles: the cap is gone from `rationale`, which is read at
+debug level and never persisted, so a long one can no longer sink an
+otherwise sound industry, brand and score; and a `ValidationError` now
+degrades to `unclassifiable` / `PROVIDER_SCHEMA_VIOLATION`, logging the
+field and the length and never the value. `test_classify.py` covers both,
+and `api-contracts.md` lists the code.
+
+## Not touched, on purpose
+
+`TARGET_PROMPTS` stays at 24 (the floor is `MIN_PROMPTS` 20, the cap 30 — the
+next entry corrects this line, which first named the wrong constant): fewer
+prompts is a product trade-off about the
+score's meaning, not an optimisation, and the brief said so. OpenAI is not
+touched: `gpt-5.5` is only ever an answer engine. `GENERATOR_MODEL` and
+`CO_CITATION_MODEL` were outside the brief and stay on Opus 5 — co-citation
+is closer to measurement than analysis, since it asks Claude which brands
+it names.
+
+## Verified
+
+Before any change, exit codes read from files: the full API suite
+**1284/1284**, `ruff check src tests` clean, `mypy src` at **53 errors in 30
+files** — already over the 50 that `infra/ci/floors.json` names as the
+ceiling, which is a pre-existing drift and not this pass's. After: the suite
+**1289/1289** (two schema-violation tests in `test_classify.py`, three in
+`test_analysis_models.py`), ruff clean on `src`, `tests` and the three new
+scripts, and mypy at **52 errors in 29 files** — one fewer, because the
+`output_config` dict the sentiment call sent was one of the fifty-three.
+Every model call above was against the real account, with the vendor's own
+`usage` on each response; every figure in this entry is in
+`scripts/verify_*_models.py`'s output or in the code beside the constant.
+
+**Still open, deliberately:** the real before/after cost, which is the next
+measured 24-prompt scan's to report; and the mypy ceiling, which was over
+before this pass began.
+
+# The cost split — Claude's spend by engine and by call, one real scan with sentiment on Haiku, the search cap measured, the prompt floor read: facts to decide from, no decision made
+
+**2026-09-11.** The brief asked for the number that was missing before
+anyone chooses between cutting prompts and tiering engines: what each of
+the five engines costs on its own. It also asked for one real scan with
+the Haiku sentiment change in, the distribution of web searches a grounded
+Claude call actually uses, and what already bounds the prompt count. All
+four came back; one of them overturns the premise the previous entry was
+written on. **Real spend: one scan, $6.19, plus 6 SerpApi searches.**
+
+## Step 1 — the meter now attributes by what the call is FOR
+
+`verify_e2e.py`'s cost table was keyed by model, and `claude-opus-5`
+served both Claude engines and four of the five analysis calls, so the
+grounded engine's cost was invisible inside one row. The table is now
+keyed by **line**: five engines and five analysis calls. An Anthropic
+request is attributed from its own shape — an `output_format` names the
+analysis call (matched by schema identity, the way conftest's
+`dispatching_parse` already dispatches), a `web_search` tool names the
+grounded engine, and a bare `create` is the parametric one — so nothing in
+production changed to be measured. Each call is priced from the model that
+served it, the grounded line carries its own search fee, refused calls
+that the vendor does not bill are no longer counted, and every
+`claude_search` call's `web_search_requests` is kept individually.
+
+## Step 2 — one real scan, `groovehq.com` (which now redirects to Helply)
+
+A fresh subject of the usual shape, a small help-desk SaaS. 24 prompts,
+all five engines, 120 answers in **210.7s (89.3s under budget)**, `partial`
+because Perplexity answered 22 of 24 (the same 429 pattern Epic 21.1
+recorded; refused calls are unbilled and now uncounted). SerpApi refused
+all six detection queries again, so competitors are `weak_signal`. The
+subject was named in **3 of 120 answers**, so sentiment ran three times —
+which makes this run the wrong one to show sentiment's saving and the
+right one to show what a scan costs when sentiment is nearly free.
+
+| line | model | calls | in | out | searches | $ |
+|---|---|---|---|---|---|---|
+| **engine: claude_search** | claude-opus-5 | 24 | **505,132** | 37,339 | 53 | **3.99** (3.46 tokens + 0.53 fee) |
+| engine: claude | claude-opus-5 | 24 | 674 | 44,923 | — | 1.13 |
+| engine: chatgpt | gpt-5.5 | 24 | 511 | 23,557 | — | 0.71 |
+| engine: gemini | gemini-3.8-flash | 24 | 397 | 25,441 | — | 0.10 |
+| engine: perplexity | sonar | 22 | 34,623 | 15,157 | 0 | 0.09 (vendor-reported) |
+| sentiment | claude-haiku-4-5 | 3 | 3,694 | 51 | — | 0.004 |
+| classification | claude-opus-5 | 1 | 5,842 | 121 | — | 0.03 |
+| fix generation | claude-opus-5 | 1 | 2,681 | 1,466 | — | 0.05 |
+| co-citation | claude-opus-5 | 4 | 3,732 | 1,496 | — | 0.06 |
+| prompt generation | claude-opus-5 | 1 | 1,023 | 917 | — | 0.03 |
+| **total** | | | | | | **6.19** |
+
+**The engines are 97% of the scan, and the grounded Claude engine alone is
+64%.** A `claude_search` call reads about 21,000 input tokens of retrieved
+pages against 28 for the parametric call, and costs $0.166 against $0.047;
+the five engines together are **$0.25 per prompt**. The analysis calls —
+all five of them — are 17 cents.
+
+## The previous entry's premise, corrected by the split
+
+That entry acted on "sentiment was about $3.20 of $6.50". The split shows
+where that number came from: 82 of the 132 Opus calls were sentiment, and
+82/132 of the $5.17 Opus line is $3.21 — **a proration by call count**,
+which charges a 1,200-token sentiment call the same as a 21,000-token
+grounded one. At this run's measured token shape, a sentiment call on Opus
+would have been about $0.009 (1,600 input tokens at the Opus tokenizer, 25
+output), so the 82 calls of Epic 21.1's scan were roughly **$0.70, not
+$3.20**, and the grounded engine was the largest line in that scan too.
+The Haiku change stands on its own evidence — the same call now costs
+**$0.0013**, a seventh of that, and the held-out agreement is unchanged —
+but the saving it buys a scan is about sixty cents at 82 mentions and
+under a cent at three, not the $2.75 the last entry projected. The
+projection is withdrawn; this table is what replaces it.
+
+## Step 3 — `SEARCH_MAX_USES` is load-bearing; it stays at 4
+
+Per `claude_search` call, from the API's own `web_search_requests`:
+**median 2, p90 4, max 4**; distribution `{0: 5, 1: 2, 2: 6, 3: 5,
+4: 6}`. **Six of 24 calls — 25% — used the full four**, and five used
+none. The brief's rule was explicit: a meaningful share at the ceiling
+means real answers are shaped by it, and lowering it would be a capability
+cut dressed as an optimisation. The constant is unchanged. The web search
+tool's documentation, fetched today, exposes `max_uses`, `allowed_domains`,
+`blocked_domains` and `user_location` and nothing that bounds retrieved
+content, so there is no other lever on this line that leaves the answer
+what a buyer's Claude session would have said. Even had the cap been slack
+the trim would have been the $0.53 fee's tail, not the $3.46 of pages.
+
+## Step 4 — what bounds the prompt count today
+
+- **The floor is `MIN_PROMPTS = 20`**, the cap 30, the target 24
+  (`prompts.py`, "§7: 20-30 prompts per scan"; the previous entry called
+  the target `MAX_PROMPTS`, corrected there). `enforce_intent_mix` clamps
+  any target into [20, 30], and a generation that comes back under 20 is
+  topped up from the deterministic fallback to exactly 20.
+- **The intent mix at each size**, 45/35/20 rounded: 20 → 9 awareness /
+  7 comparison / 4 bottom-funnel; 24 → 11 / 8 / 5; 30 → 14 / 10 / 6.
+- **Scoring v2 (2026-09-08) counts awareness prompts only** for Mention
+  Rate and Share of Voice, so the population behind the two headline
+  dimensions is 11 prompts × 5 engines = 55 answers at 24, and 45 at the
+  floor — that is the sample any lower number would shrink, and it is the
+  denominator of every mention rate on the report.
+- **Why 24**: no measured argument exists in this log. Epic 4.1 chose it
+  inside the spec's 20-30 without a statistical rationale, and it has
+  since become a customer-facing promise: the pricing card says
+  "Twenty-four intent-tagged questions per scan", the landing page says it
+  twice, and `LandingView.test.tsx` asserts it. Changing the number is a
+  copy change and a promise change, not only a constant.
+- **What a prompt costs**, from this run: $0.25 across five engines, so 24
+  → 20 is about **$1.00** a scan and 24 → 30 about **+$1.50**. Arithmetic,
+  not a recommendation.
+
+## What the founder now has, and what is not decided here
+
+Per scan at 24 prompts: the grounded Claude engine ~$4.0, the parametric
+Claude engine ~$1.1, ChatGPT ~$0.7, Gemini and Perplexity ~$0.1 each, and
+all analysis ~$0.2 (plus ~$0.6 of sentiment on a well-known subject). A
+"$1 scan" is not reachable by any lever this log has measured except the
+composition of engines and the prompt count, and both are product-scope
+calls. Not made here.
+
+## Verified
+
+Before touching the harness and after, exit codes read from files: the
+full API suite **1289/1289** both times, `ruff check src tests` clean both
+times, `mypy src` at **52 errors in 29 files** both times (the ceiling
+drift the previous entry recorded, unchanged). The harness itself: ruff
+clean, `py_compile` clean, and its line attribution exercised offline
+against all seven Anthropic request shapes before the paid run. Every
+figure above is in the run's own output, `scan_01M285WHT33F9DRKGWGEAFNQ8H`
+in `avp_dev`, or the arithmetic shown beside it.
+

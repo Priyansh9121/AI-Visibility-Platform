@@ -41,18 +41,39 @@ from .serp import NON_COMPETITOR_DOMAINS
 
 logger = structlog.get_logger(__name__)
 
-SENTIMENT_MODEL = "claude-opus-5"
-SENTIMENT_EFFORT = "low"
+# Haiku 4.5, pinned snapshot — the cheapest current model ($1 / $5 per MTok
+# against Opus 5's $5 / $25; platform.claude.com/docs/en/about-claude/pricing,
+# read 2026-09-11). This call is NOT the product: the engines being measured
+# keep their flagship models (`engines.py`), and this is the three-way
+# categorisation the pipeline runs on top of their answers — the highest-
+# volume paid call in a scan (82 of the 132 Anthropic calls in the measured
+# five-engine run, build log Epic 21.1) and, per the cost brief, more of its
+# $6.50 than any single engine. Chosen on a held-out set, not on price alone:
+# `scripts/verify_sentiment_models.py`, sixteen excerpts written to cover the
+# rubric's own distinctions, on which Haiku 4.5 agreed with Opus 5 on 15/16
+# (the one split a genuinely ambiguous case), matched the reader's label on
+# every clear case, and was self-consistent on 15/16 across two runs. The
+# build log entry for the brief carries the table.
+SENTIMENT_MODEL = "claude-haiku-4-5-20251001"
+# Haiku 4.5 has no `effort` parameter — `output_config.effort` is a 400 on it
+# (docs, effort page, read 2026-09-11) — and no thinking unless asked for, so
+# the request carries neither. Its output is the ~30-token structured
+# judgement and nothing else; 1,500 stays as a ceiling a truncated response
+# could never reach, since a truncation here is a lost label rather than a
+# saved token.
 SENTIMENT_MAX_TOKENS = 1_500
 # --- The call's bound (API key discipline audit, 2026-09-07) -----------------
 # Inherited both SDK defaults until this audit — a 600s read timeout across
 # three attempts — and is awaited serially inside a PROMPT_CONCURRENCY slot
 # AFTER the engine calls, so one hung sentiment call was thirty minutes and
 # three billed generations on top of the slot's engine ceiling. No latency
-# column records this call, so the numbers are shape rather than data: the
-# same model and effort as the parametric engine with a shorter output budget
-# (1,500 tokens against 4,000), given half its per-attempt bound and the same
-# single retry, kept for the reason `engines.py` gives.
+# column records this call, so the numbers are shape rather than data: chosen
+# when this was Opus 5 at low effort, as half the parametric engine's
+# per-attempt bound with the same single retry, kept for the reason
+# `engines.py` gives. Haiku 4.5 answered the held-out set in 1.3s median,
+# 1.6s worst, so the bound is now generous rather than tight; it is left
+# where it is because the lease length is derived from it and a lower ceiling
+# buys nothing a scan can feel.
 #
 # It matters more than its size suggests. `run_scan` awaits one of these per
 # ENGINE whose answer named the subject, serially, inside the prompt slot, so
@@ -337,7 +358,6 @@ async def classify_sentiment(
             response = await client.messages.parse(
                 model=SENTIMENT_MODEL,
                 max_tokens=SENTIMENT_MAX_TOKENS,
-                output_config={"effort": SENTIMENT_EFFORT},
                 system=SENTIMENT_SYSTEM,
                 messages=[
                     {

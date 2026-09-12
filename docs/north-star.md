@@ -639,8 +639,10 @@ Two consequences for the CI definition in §4.3, both concrete:
 | SerpApi searches per scan | **6** | Epic 9.1 and 9.2, both — *"exactly what `build_queries()` emits"* |
 | SerpApi plan today | **Free Plan, $0.00/month, 250 searches/month** | read from `account.json`, not inferred (Epic 9.0 / investigation `d39f70b`) |
 | Wall-clock per scan | **361.3s** best measured | Epic 9.2 |
+| **Provider spend per scan, 24 prompts × 5 engines** | **$6.19** | 2026-09-11, `groovehq.com`, `verify_e2e.py`'s token meter reading each vendor's own `usage` (build log, "the cost split"): grounded Claude $3.99 (64%), parametric Claude $1.13, ChatGPT $0.71, Gemini $0.10, Perplexity $0.09, all analysis calls $0.17 |
 
-**NOT MEASURED — [UNVERIFIED]:**
+**NOT MEASURED — [UNVERIFIED]:** *(the block below predates the two rows above
+and is kept as the record of why they were needed)*
 
 > **No per-scan dollar cost has ever been recorded in this project.** A
 > `~$4–7/scan` figure was asserted in the source conversation. Grepping every
