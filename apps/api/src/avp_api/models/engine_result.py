@@ -223,7 +223,13 @@ class EngineResult(Base, TimestampMixin):
 
 
 class Citation(Base, TimestampMixin):
-    """A source the engine cited.
+    """A source the answer cited — scoring-spec v2.2.
+
+    On every engine, the answer's own inline citations; the results a search
+    retrieved stand in only when the answer cited nothing inline. Rows from
+    the grounded Claude engine dated before 2026-09-12 (an `engine_version`
+    without `/direct`) hold every retrieved result instead — about twice the
+    cited set — and are not rewritten (the changelog's rule 5).
 
     Domain and URL only. There is deliberately NO `title` or `snippet` column:
     a page title is the publisher's words, and the facts-only rule permits "URLs and

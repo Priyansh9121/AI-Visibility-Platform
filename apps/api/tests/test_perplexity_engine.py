@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC
 
 import httpx
 import pytest
@@ -421,3 +422,112 @@ def engine_settings_with(*, anthropic: bool, openai: bool, perplexity: bool) -> 
         openai_api_key="k" if openai else None,
         perplexity_api_key="k" if perplexity else None,
     )
+
+
+class TestRetryAfter:
+    """One retry on a 429 that names its wait — 2026-09-12, the fix Epic
+    21.1 deferred. Inside the ceiling, through the pacer, never twice."""
+
+    def _sleeps(self, monkeypatch: pytest.MonkeyPatch) -> list[float]:
+        slept: list[float] = []
+
+        async def fake_sleep(seconds: float) -> None:
+            slept.append(seconds)
+
+        # Catches the retry's wait AND the pacer's spacing sleep, both of
+        # which are `engines.asyncio.sleep`.
+        monkeypatch.setattr(engines.asyncio, "sleep", fake_sleep)
+        return slept
+
+    async def test_a_429_with_a_wait_is_retried_once_and_then_answers(
+        self, engine_settings: Settings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        slept = self._sleeps(monkeypatch)
+        calls: list[int] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(1)
+            if len(calls) == 1:
+                return httpx.Response(429, json={}, headers={"Retry-After": "1"})
+            return httpx.Response(200, json=_completed("Zendesk."))
+
+        _install(monkeypatch, httpx.MockTransport(handler))
+        answer = await PerplexityAdapter().ask("q", settings=engine_settings)
+
+        assert answer.status is EngineResultStatus.OK
+        assert answer.text == "Zendesk."
+        assert len(calls) == 2
+        assert 1.0 in slept, "the vendor's own wait was honoured"
+
+    async def test_a_second_429_is_recorded_not_retried_again(
+        self, engine_settings: Settings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._sleeps(monkeypatch)
+        calls: list[int] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(1)
+            return httpx.Response(429, json={}, headers={"Retry-After": "1"})
+
+        _install(monkeypatch, httpx.MockTransport(handler))
+        answer = await PerplexityAdapter().ask("q", settings=engine_settings)
+
+        assert answer.status is EngineResultStatus.RATE_LIMITED
+        assert answer.error_code == "PROVIDER_RATE_LIMITED"
+        assert len(calls) == 2
+
+    async def test_a_429_without_a_wait_is_recorded_at_once(
+        self, engine_settings: Settings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        slept = self._sleeps(monkeypatch)
+        calls: list[int] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(1)
+            return httpx.Response(429, json={})
+
+        _install(monkeypatch, httpx.MockTransport(handler))
+        answer = await PerplexityAdapter().ask("q", settings=engine_settings)
+
+        assert answer.status is EngineResultStatus.RATE_LIMITED
+        assert len(calls) == 1
+        assert slept == []
+
+    async def test_a_wait_that_cannot_fit_the_ceiling_is_not_taken(
+        self, engine_settings: Settings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        slept = self._sleeps(monkeypatch)
+        calls: list[int] = []
+        too_long = str(int(engines.PERPLEXITY_RETRY_AFTER_MAX) + 1)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(1)
+            return httpx.Response(429, json={}, headers={"Retry-After": too_long})
+
+        _install(monkeypatch, httpx.MockTransport(handler))
+        answer = await PerplexityAdapter().ask("q", settings=engine_settings)
+
+        assert answer.status is EngineResultStatus.RATE_LIMITED
+        assert len(calls) == 1
+        assert slept == []
+
+    def test_the_longest_wait_still_leaves_room_for_the_retry_itself(self) -> None:
+        # wait + one more attempt at PERPLEXITY_TIMEOUT must fit the ceiling
+        # from a call that already spent one attempt getting the 429.
+        assert engines.PERPLEXITY_RETRY_AFTER_MAX + 2 * engines.PERPLEXITY_TIMEOUT <= (
+            engines.ENGINE_CALL_CEILING
+        )
+        assert engines.PERPLEXITY_RETRY_AFTER_MAX > 17, "the observed 11-17s overload waits fit"
+
+    def test_retry_after_is_read_as_seconds_or_a_date(self) -> None:
+        from datetime import datetime, timedelta
+        from email.utils import format_datetime
+
+        assert engines._retry_after_seconds("1") == 1.0
+        assert engines._retry_after_seconds(" 2.5 ") == 2.5
+        assert engines._retry_after_seconds(None) is None
+        assert engines._retry_after_seconds("soon") is None
+        assert engines._retry_after_seconds("-3") is None
+        later = format_datetime(datetime.now(UTC) + timedelta(seconds=30))
+        parsed = engines._retry_after_seconds(later)
+        assert parsed is not None and 25 < parsed <= 30

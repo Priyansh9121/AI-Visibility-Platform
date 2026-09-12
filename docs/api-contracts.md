@@ -1261,7 +1261,7 @@ one `results` entry per **prompt × engine pair**.
   "promptCount": 6, "engineResultCount": 12,
   "engineVersions": {
     "claude": "claude-opus-5/parametric",
-    "claude_search": "claude-opus-5/web_search_20260209"
+    "claude_search": "claude-opus-5/web_search_20260209/direct"
   },
   "promptSet": {
     "generatedBy": "claude-opus-5",
@@ -2062,7 +2062,7 @@ Ask ONE prompt an operator typed, against every engine, now. Facts persisted.
   "createdAt": "2026-09-01T05:44:00.109593Z",
   "results": [{
     "id": "prre_01M1D…", "engine": "claude_search",
-    "engineVersion": "claude-opus-5/web_search_20260209",
+    "engineVersion": "claude-opus-5/web_search_20260209/direct",
     "status": "ok", "errorCode": null, "latencyMs": 28335,
     "mentioned": true, "position": 1, "prominence": "0.984", "brandsMentioned": 3,
     "brands":    [{ "name": "Plausible Analytics", "domain": "plausible.io",
