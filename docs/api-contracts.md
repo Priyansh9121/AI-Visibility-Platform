@@ -928,6 +928,7 @@ the database by `ck_clients_industry_matches_classification_status`.
 | `PROVIDER_QUOTA_EXHAUSTED` | Anthropic credit balance exhausted |
 | `PROVIDER_RATE_LIMITED` / `PROVIDER_UNREACHABLE` / `PROVIDER_ERROR` | Upstream model call failed |
 | `PROVIDER_REFUSED` | Model declined to answer |
+| `PROVIDER_SCHEMA_VIOLATION` | Model answered, but its answer did not fit the classifier's schema (2026-09-11) |
 
 `industryConfidenceScore` is a **string-encoded decimal or `null`**
 (`NUMERIC(4,3)`), for the same reason as `compositeScore`: a JSON number is an

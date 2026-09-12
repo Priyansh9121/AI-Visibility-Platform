@@ -15970,3 +15970,129 @@ against all seven Anthropic request shapes before the paid run. Every
 figure above is in the run's own output, `scan_01M285WHT33F9DRKGWGEAFNQ8H`
 in `avp_dev`, or the arithmetic shown beside it.
 
+# The last lever — co-citation and prompt generation measured against cheaper models, and both kept on Opus 5
+
+**2026-09-11.** Sentiment, classification and fix generation had each been
+put to a held-out comparison; co-citation discovery and prompt generation
+had been set aside as "probably too close to measurement" — an instinct,
+not a measurement. This pass gives them the same treatment. **The two
+calls together were nine cents of the last measured scan**, so nothing
+here changes the shape of the cost problem whichever way it went; it is
+recorded because it was the last stone. **Real spend: about $1.05**, most
+of it the Opus baselines.
+
+## Co-citation: the cheaper models mostly return nothing
+
+`scripts/verify_cocitation_models.py` builds the twenty seed prompts
+`build_seed_prompts` produces for five subjects in five industries (Help
+Scout, Basecamp, Roto-Rooter, Allbirds, Ooni) and sends each through the
+production system prompt and schema on Opus 5 at low effort (today),
+Sonnet 5 at low effort, and Haiku 4.5; twice each. The comparison is which
+brands come back, since those names seed competitor detection.
+
+| | Opus 5, low (today) | Sonnet 5, low | Haiku 4.5 |
+|---|---|---|---|
+| brands per seed | 9.9 | **1.4** | **1.4** |
+| Opus's brands recalled | 199/199 | 22/199 | 11/199 |
+| seeds answered with an empty list (run 1) | 0/20 | 15/20 | 17/20 |
+| `subject_named` agrees with Opus | — | 19/20 | 10/20 |
+| same answer on the second run (mean Jaccard) | 0.75 | 0.65 | 0.74 |
+| failed calls | 0/40 | 3/40 | 0/40 |
+| $/call | 0.0133 | 0.0024 | 0.0010 |
+
+The system prompt says to return an empty list rather than invent
+companies when unsure; Sonnet and Haiku take that exit on most seeds, for
+categories where Opus names ten real rivals with domains. When Haiku did
+answer, it put the subject brand in `brands` (the rule says never), named
+Slack and Microsoft Teams as help-desk rivals and Terminix as a drain
+company, and listed Angie's List, which the rule forbids by name. A
+competitor set seeded from either model would be mostly empty, which is
+the `weak_signal` state this product already refuses to dress up. **Kept
+on Opus 5.**
+
+**A baseline observation, not a decision.** Opus's second run for
+Roto-Rooter returned brand names with its own second thoughts in them —
+"Bio-One? no", "Rotech? no", "Thumbtack-listed local plumbers? no" — and
+Opus named Angi and Thumbtack (marketplaces the rule forbids) four times in
+199. Those strings reach competitor detection as candidates. Left open
+here, recorded so it is not rediscovered.
+
+## Prompt generation: plausible sets that would move the score
+
+`scripts/verify_prompt_models.py` generates sets for four subjects (a SaaS
+with a detected competitor list, a plumbing chain, a pizza-oven maker, a
+dental practice with none) through the production prompt, schema and
+`enforce_intent_mix` on Opus 5 at medium effort (today), Sonnet 5 at
+medium, and Haiku 4.5; twice each. Every set parsed, every set was 24
+after the mix. The judgement is about what a parsed set can still get
+wrong, and the full sets are in the script's output.
+
+**Haiku 4.5, disqualified on three of the brief's three checks.**
+
+- *Intent labels.* Discovery questions labelled `comparison`: "24 hour
+  emergency drain cleaning near me", "best drain cleaning company in my
+  area", "cosmetic dentist near me that does same-day crowns" — four in one
+  Roto-Rooter set, four in one dental set. Scoring v2 counts awareness
+  prompts only for Mention Rate and Share of Voice, so a mislabel like that
+  silently removes exactly the discovery questions from the population the
+  headline dimensions are scored on. And one Helply set came back 7/9/8
+  where the quota wants 11/8/5: the model under-produced awareness, the mix
+  cannot pad, and the awareness share fell to 29%.
+- *The brand-name rule.* Awareness never named the brand, on any model.
+  But one Haiku set named it in 14 of 24, where the rule says most must
+  not.
+- *Quality.* Awareness questions no company could be named in — "how do i
+  fix a clogged drain in my bathroom", "can drain cleaning prevent future
+  clogs", "how long do dental implants last", "can you whiten teeth that
+  have had root canals" — which sit in the awareness population and can
+  only lower a mention rate without saying anything about visibility; and
+  keyword strings in place of questions: "buy ooni pizza oven online",
+  "roto-rooter service area coverage my city", "all on four implants
+  explained", "dental implant specialists compared local". Mean length 42–50
+  characters against Opus's 59–76.
+
+**Sonnet 5, closer, and still not zero loss.** The brand appears in 11–13
+of 24 on four of eight sets (13 once, over the line); a competitor is named
+in an awareness question ("what's a good alternative to zendesk that's more
+ai-focused", which is a comparison); and knowledge questions sit in
+awareness here too ("why are dental implants so expensive", "is it normal
+for tree roots to grow into sewer pipes"). Its questions read like a
+buyer's, and it would be the candidate if the bar were "close".
+
+**Opus 5 at medium, for the record:** brand named in 4–8 of 24, awareness
+named the brand once in eight sets (a street name, "near northaven road"),
+zero to one comparison flagged per set and each of those a fair comparison
+in spirit, mean pairwise word overlap 0.05–0.10, no near-duplicate pairs.
+Its awareness questions are consistently "who should I call / which tool"
+shaped — questions an answer engine answers with names.
+
+**Kept on Opus 5.** The prompt set is what every number is a statement
+about, and the cheaper sets would change the population Mention Rate is
+computed over — the exact failure the brief named as disqualifying.
+
+| | Opus 5, medium | Sonnet 5, medium | Haiku 4.5 |
+|---|---|---|---|
+| $/call | 0.0285 | 0.0124 | 0.0035 |
+| output tokens/call | 933 | 1,031 | 540 |
+| p50 latency | 13.3s | 10.5s | 7.2s |
+
+## What this closes
+
+Every Anthropic analysis call has now been measured against the cheapest
+current model on a held-out set with a written bar: sentiment moved;
+classification, fix generation, co-citation and prompt generation stayed,
+each with the specific output that failed recorded beside its constant.
+The analysis calls are about 17 cents of a scan. The engines are the rest,
+and that is a product decision, not a model one.
+
+## Verified
+
+Before and after, exit codes read from files: the full API suite
+**1289/1289** both times, `ruff check src tests` clean both times, `mypy
+src` at **52 errors in 29 files** both times (the pre-existing drift over
+the CI ceiling, unchanged). The production change is two comments; the
+two comparison scripts are ruff-clean. Every figure above is in
+`scripts/verify_cocitation_models.py`'s and `scripts/verify_prompt_
+models.py`'s output from this run, and the full brand lists and prompt
+sets are what the decisions were read from.
+

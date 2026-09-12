@@ -36,6 +36,24 @@ from .call_bounds import CallBound
 
 logger = structlog.get_logger(__name__)
 
+# Opus 5, measured against cheaper models under the last-lever brief
+# (2026-09-11) and kept. `scripts/verify_prompt_models.py` generated sets for
+# four subjects with this model, Sonnet 5 and Haiku 4.5, twice each, through
+# the production prompt, schema and `enforce_intent_mix`, and read them
+# against three rules the schema cannot check. Haiku 4.5: awareness questions
+# a company could never be named in ("how do i fix a clogged drain in my
+# bathroom", "how long do dental implants last"), which sit in the population
+# Mention Rate is scored on and can only lower it; discovery questions
+# labelled `comparison` ("24 hour emergency drain cleaning near me", "best
+# drain cleaning company in my area" — four in one set), which moves them
+# OUT of that population; one set with 7 of 24 awareness where the quota
+# wants 11; one set naming the brand in 14 of 24 where the rule says most
+# must not; and keyword strings rather than questions ("buy ooni pizza oven
+# online", "all on four implants explained"). Sonnet 5 was closer but named
+# the brand in 11–13 of 24 on four of eight sets and put knowledge questions
+# in awareness too. Neither is zero loss on the instrument every score is a
+# statement about. One call a scan at three cents; the saving on offer was
+# two and a half.
 GENERATOR_MODEL = "claude-opus-5"
 GENERATOR_EFFORT = "medium"
 GENERATOR_MAX_TOKENS = 8_000

@@ -211,3 +211,65 @@ class TestCrawlErrorCodes:
         )
         out = await classify(crawl)
         assert out.reason_code == "FETCH_FAILED"
+
+
+class TestSchemaViolation:
+    """The model answered, and its answer did not fit the schema.
+
+    Found on 2026-09-11 while comparing classifier models
+    (`scripts/verify_classifier_models.py`): Opus 5 wrote a rationale over the
+    field's 300-character cap for stripe.com, the SDK's `parse` validated the
+    whole document and raised pydantic's `ValidationError` — not an
+    `anthropic.APIError` — and it escaped `classify` entirely. `POST /clients`
+    would have answered 500. Same shape of bug `fix_generator.py` records.
+    """
+
+    async def test_a_schema_violation_is_unclassifiable_not_a_crash(
+        self, settings, monkeypatch, capsys
+    ) -> None:  # noqa: ANN001
+        import json
+
+        import anthropic
+        from pydantic import TypeAdapter
+
+        secret = "a label long enough to overflow the industry field's own cap " * 3
+        assert len(secret) > 120
+        payload = {
+            "is_classifiable": True,
+            "industry": secret,
+            "niche": None,
+            "brand_name": "Stripe",
+            "confidence": "high",
+            "confidence_score": 0.95,
+            "rationale": "Short.",
+        }
+
+        async def fake(**kwargs):  # noqa: ANN003, ARG001
+            # Exactly what the SDK does: validate the whole document at once.
+            TypeAdapter(IndustryClassification).validate_json(json.dumps(payload))
+            raise AssertionError("the schema should have rejected that industry")
+
+        monkeypatch.setattr(
+            anthropic.resources.messages.AsyncMessages, "parse", lambda self, **kw: fake(**kw)
+        )
+
+        out = await classify(_crawl(), settings=settings)
+
+        assert out.status == "unclassifiable"
+        assert out.reason_code == "PROVIDER_SCHEMA_VIOLATION"
+        assert out.industry is None
+        # The log says which field and how long, never what it said: the
+        # offending value is model-authored prose.
+        logged = capsys.readouterr().out
+        assert "classify.schema_violation" in logged
+        assert "industry" in logged
+        assert str(len(secret)) in logged
+        assert secret not in logged
+
+    def test_a_long_rationale_is_not_a_violation(self) -> None:
+        """`rationale` is debug-only and never persisted; a cap on it was the
+        only thing that could sink an otherwise sound classification. Opus 5
+        overran 300 characters once in 27 calls, Haiku 4.5 on 8 of 18."""
+        parsed = _parsed(rationale="the site describes clinical dental services " * 12)
+        assert len(parsed.rationale) > 300
+        assert decide(parsed).status == "classified"
