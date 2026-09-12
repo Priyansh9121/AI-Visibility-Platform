@@ -640,6 +640,7 @@ Two consequences for the CI definition in §4.3, both concrete:
 | SerpApi plan today | **Free Plan, $0.00/month, 250 searches/month** | read from `account.json`, not inferred (Epic 9.0 / investigation `d39f70b`) |
 | Wall-clock per scan | **361.3s** best measured | Epic 9.2 |
 | **Provider spend per scan, 24 prompts × 5 engines** | **$6.19** | 2026-09-11, `groovehq.com`, `verify_e2e.py`'s token meter reading each vendor's own `usage` (build log, "the cost split"): grounded Claude $3.99 (64%), parametric Claude $1.13, ChatGPT $0.71, Gemini $0.10, Perplexity $0.09, all analysis calls $0.17 |
+| **Provider spend per scan, 20 prompts × 4 engines — the default since 2026-09-12** | **$1.70** | 2026-09-12, `reamaze.com`, same meter (build log, "dropping grounded Claude and cutting to 20 prompts"): Claude $0.85, ChatGPT $0.49, Perplexity $0.08, Gemini $0.07, sentiment $0.05 (37 calls on Haiku 4.5), the four other analysis calls $0.17. Wall clock 135.3s |
 
 **NOT MEASURED — [UNVERIFIED]:** *(the block below predates the two rows above
 and is kept as the record of why they were needed)*

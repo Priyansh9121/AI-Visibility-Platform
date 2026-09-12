@@ -56,7 +56,7 @@ describe('the steps are read off the account, one fact each', () => {
     expect(steps.client!.action).toBeUndefined();
     expect(steps.scan!.done).toBe(false);
     expect(steps.scan!.action).toEqual({ label: 'Run the first scan', href: '/' });
-    expect(steps.scan!.detail).toBe('About six minutes from start to score.');
+    expect(steps.scan!.detail).toBe('Under five minutes from start to score.');
   });
 
   it('a running scan lights the scan step and tells the score step to wait', () => {

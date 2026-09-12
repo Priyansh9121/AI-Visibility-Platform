@@ -64,7 +64,7 @@ describe('the empty state is written, not blank', () => {
   });
 
   it('is honest about the wait rather than silent about it', () => {
-    expect(render(emptyDashboard)).toContain('about six minutes');
+    expect(render(emptyDashboard)).toContain('under five minutes');
   });
 
   it('clients but no scans is its own state, not the empty agency one', () => {
@@ -365,7 +365,7 @@ describe('a brand-new agency is shown the shape of a scan, not a graphic', () =>
   it('still says everything it said before, and still offers the way out', () => {
     const html = render(emptyDashboard);
     expect(html).toContain('No scans yet');
-    expect(html).toContain('about six minutes');
+    expect(html).toContain('under five minutes');
     expect(html).toContain('Add your first client');
   });
 });
@@ -503,7 +503,7 @@ describe('the getting-started checklist', () => {
     expect(html.indexOf('Add your first client')).toBeLessThan(html.indexOf('avp-empty'));
     // The figure and the explanation stay.
     expect(html).toContain('avp-ledger--unmeasured');
-    expect(html).toContain('about six minutes');
+    expect(html).toContain('under five minutes');
   });
 
   it('the no-scans-yet state likewise hands its button up', () => {

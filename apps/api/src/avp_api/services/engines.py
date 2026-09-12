@@ -80,8 +80,10 @@ discipline Epic 4.2 set:
   has no API at all and would be a two-step SerpApi scrape competing with
   competitor detection for that quota. Deferred, in build-log Epic 21.
 
-An engine with no key is not live. `DEFAULT_ENGINES` names the five this
-product measures; `configured_engines(settings)` is the subset with a key
+An engine with no key is not live. `DEFAULT_ENGINES` names the four a scan
+runs by default (five until 2026-09-12 — the grounded Claude engine is still
+registered and runnable by name, but no longer a default; see the note on the
+tuple); `configured_engines(settings)` is the subset with a key
 behind it, and it is what a scan actually runs — see the note on it below.
 Each adapter also declares how many of its calls may be in flight at once
 (`max_in_flight`), because Perplexity's and Google's rate limits at the
@@ -1137,12 +1139,24 @@ ENGINE_REGISTRY: dict[Engine, EngineAdapter] = {
     Engine.GEMINI: GeminiAdapter(),
 }
 
-# The five this product measures — Epic 21. Order is the order results are
-# gathered and reported in; parametric engines before grounded ones within a
-# vendor, vendors in the order they arrived.
+# The four a scan runs by default. Order is the order results are gathered
+# and reported in; vendors in the order they arrived.
+#
+# `CLAUDE_SEARCH` LEFT THIS TUPLE ON 2026-09-12 — THE FOUNDER'S DECISION, not
+# a tuning. It was five from Epic 21 to then. The grounded Claude engine was
+# 64% of a measured $6.19 scan (build log, "the cost split": $3.99 of it,
+# about 21,000 input tokens of retrieved pages a call plus the per-search
+# fee), and the founder chose to stop measuring how a Claude session that
+# can search the web treats the brand rather than carry that cost into a
+# $29 plan. The adapter, its key handling and its tests are untouched and it
+# stays in `ENGINE_REGISTRY`: a scan that names `claude_search` in its
+# `engines` list still runs it (`routers/scans.py`, `payload.engines`), and
+# stored `claude_search` rows still render. What a customer loses is the
+# default report's second Claude column and its cited sources; ChatGPT and
+# Gemini remain parametric, Perplexity remains grounded by its own nature.
+# Build log, "dropping grounded Claude and cutting to 20 prompts".
 DEFAULT_ENGINES: tuple[Engine, ...] = (
     Engine.CLAUDE,
-    Engine.CLAUDE_SEARCH,
     Engine.CHATGPT,
     Engine.PERPLEXITY,
     Engine.GEMINI,
@@ -1164,9 +1178,25 @@ def configured_engines(settings: Settings | None = None) -> tuple[Engine, ...]:
     developer's `.env`.
     """
     settings = settings or get_settings()
-    return tuple(
+    keyed = keyed_engines(settings)
+    return tuple(e for e in DEFAULT_ENGINES if e in keyed)
+
+
+def keyed_engines(settings: Settings | None = None) -> frozenset[Engine]:
+    """Every REGISTERED engine with a key behind it — default or not.
+
+    This is what a scan may NAME. `configured_engines` is what it runs when
+    it names nothing, and until 2026-09-12 the two were the same set because
+    every registered engine was a default. They parted when `claude_search`
+    left `DEFAULT_ENGINES`: the door `payload.engines` opens for it is only a
+    door if the check at that door asks "is there a key", not "is it a
+    default" — the suite caught the router asking the second question and
+    refusing the engine the decision had promised to keep runnable.
+    """
+    settings = settings or get_settings()
+    return frozenset(
         e
-        for e in DEFAULT_ENGINES
+        for e in ENGINE_REGISTRY
         if getattr(settings, ENGINE_REGISTRY[e].key_setting, None) is not None
     )
 

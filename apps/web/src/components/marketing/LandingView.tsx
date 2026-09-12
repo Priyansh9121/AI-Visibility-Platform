@@ -12,12 +12,14 @@
  *
  *   - the scan pipeline's duration          — see the note beside the copy;
  *                                            the old "~6 minutes" was stale
- *   - 24 prompts, intent-tagged            — Epic 4.1
+ *   - 20 prompts, intent-tagged            — Epic 4.1; 24 until 2026-09-12, when the
+ *                                            founder cut to the spec's floor (build log)
  *   - the five weighted dimensions         — scoring-spec.md, Epic 5.2
  *   - per-answer ordinality (Answer Shelf) — Epic 7.1
  *   - facts-only storage, test-enforced    — test_facts_only.py
  *   - named fixes with priority + effort   — Epic 8.0
- *   - one vendor, two modes, today         — Epic 4.2's own stated limitation
+ *   - four vendors, one of them searching  — Epic 21 (five engines) narrowed to four
+ *                                            defaults on 2026-09-12 (build log)
  *   - PDF export and a share link          — Epic 9.8 and 9.14, both shipped
  *   - $29/month, 3 seats                   — Epic 9.15, a real Stripe Price
  *
@@ -158,28 +160,20 @@ export function LandingView({
             </Button>
             <p className="text-ui-sm text-text-tertiary">
               {/*
-                "About six minutes" was true of Epic 9.2's measurement and
-                stopped being true at Epic 9.17, which made the UI-triggered
-                path run the whole nine-phase chain. `product-spec.md` already
-                records the 300s budget as missed "and by more" since then, and
-                the pilot dry run measured 286s for a HALF-LENGTH scan — so the
-                default 24-prompt scan is roughly nine minutes, not six.
-
-                NO PRECISE NUMBER IS COMMITTED TO, deliberately. Three
-                12-prompt runs came in at 286s, 306s and 331s — a 16% spread on
-                identical work, because the time is dominated by engine latency
-                this product does not control. And there is no post-9.17
-                measurement of a 24-prompt scan at all; nine minutes is an
-                extrapolation from the loop, not an observation. Printing a
-                figure that precise on a marketing page would repeat the
-                original mistake at a different number.
-
-                So: a round central figure, hedged, and one that a scan running
-                long does not falsify. The failure this replaces is a prospect
-                told six minutes who waits nine and assumes it broke.
+                "Under five minutes" — 2026-09-12. Five minutes is the 300s
+                scan budget (§7 Epic 9), the one figure this product commits
+                to, and measured scans now sit well inside it: 135s at the
+                current default (20 questions, four engines, reamaze.com), and
+                211–239s at the previous default of 24 questions and five
+                engines. The earlier "about ten minutes" was a hedge from
+                before any full scan had been timed since Epic 9.17; three full
+                scans later it overstated the wait four-fold. A bound rather
+                than a central figure, because engine latency this product does
+                not control still spreads runs by tens of seconds, and a bound
+                the budget enforces is the one claim a slow scan cannot falsify.
               */}
-              A scan usually takes about ten minutes — twenty-four questions, put to three
-              AI engines, one at a time. ${PLAN_PRICE_USD}/month when you are ready to
+              A scan usually takes under five minutes — twenty questions, put to four
+              AI answer engines, one at a time. ${PLAN_PRICE_USD}/month when you are ready to
               pay for it.
             </p>
           </div>
@@ -223,7 +217,7 @@ export function LandingView({
                 index={2}
                 n="03"
                 animate={animate}
-                title="Twenty-four questions, tagged by buying stage"
+                title="Twenty questions, tagged by buying stage"
                 body="Generated for that specific business — awareness, comparison and bottom-of-funnel — so the result is not one lucky prompt but a spread across how people actually shop."
               />
               <Step
@@ -231,7 +225,7 @@ export function LandingView({
                 n="04"
                 animate={animate}
                 title="Each question, put to AI answer engines"
-                body="Today that is Claude in two modes: what it recalls unprompted, and what it says when it searches the live web and cites sources. Those disagree more often than you would expect, and the difference is itself a finding."
+                body="Today that is Claude, ChatGPT and Gemini answering from what they recall, and Perplexity searching the live web and citing sources. They disagree more often than you would expect, and the disagreement is itself a finding."
               />
               <Step
                 index={4}
@@ -362,7 +356,7 @@ export function LandingView({
           }
         >
           <ul className="flex flex-col gap-3">
-            <Limit body="It measures one vendor's models today, in two modes. Cross-vendor comparison is the obvious next thing and is not built yet." />
+            <Limit body="It measures four vendors' models today — Claude, ChatGPT, Gemini and Perplexity — and only Perplexity searches the web as it answers. Google's AI Overviews and Copilot are not measured." />
             <Limit body="White-labelling covers your agency name. Logo and colour control are not built yet." />
             <Limit body="Scan volume is not metered or capped, in either direction. There is no usage limit to hit and no usage figure to look at." />
             <Limit body="Nothing tracks whether a fix was actually done, or re-measures what it changed. The report ends at the recommendation." />

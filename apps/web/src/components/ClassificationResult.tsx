@@ -171,7 +171,7 @@ export function ClassificationResult({
           {scan.kind === 'started' ? (
             /*
               Confirmation in place rather than an immediate redirect. A scan
-              runs for about six minutes, so navigating away instantly would put
+              runs for a few minutes, so navigating away instantly would put
               the action and its consequence on two different screens, with the
               result one row among many. Saying what happened where it happened
               is the same reasoning Epic 9.7 used to make the dashboard announce
@@ -185,7 +185,7 @@ export function ClassificationResult({
                   'Generating the questions its buyers ask',
                   'Putting each question to the AI answer engines',
                 ]}
-                hint="This takes about six minutes. You can leave this page — it keeps running."
+                hint="This takes under five minutes. You can leave this page — it keeps running."
               />
               <div className="flex flex-wrap gap-2">
                 <Button

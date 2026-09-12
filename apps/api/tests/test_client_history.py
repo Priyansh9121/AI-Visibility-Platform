@@ -17,12 +17,19 @@ from sqlalchemy import func, select
 from avp_api.models.engine_result import Citation, Engine, EngineResult, Sentiment
 from avp_api.models.prompt import PromptIntent
 from avp_api.models.scan import Scan
-from avp_api.services import engines as engine_service
 from avp_api.services import scan_runner
 from avp_api.services.engines import CitedSource, EngineAnswer
 from avp_api.services.prompts import GeneratedPrompt
 
 BASE = "/api/v1"
+
+# The engines these scans name EXPLICITLY — 2026-09-12. Until then the suite's
+# scans posted `{}` and ran the keyed defaults, which included the grounded
+# Claude engine, the only one the stub below gives citations to. The founder's
+# decision took `claude_search` out of `DEFAULT_ENGINES` (it stays registered
+# and runnable by name — the door `payload.engines` opens), so these tests now
+# open that door and run the same three engines they always did.
+SCAN_PAYLOAD = {"engines": ["claude", "claude_search", "chatgpt"]}
 
 
 @pytest.fixture
@@ -138,7 +145,7 @@ async def _detect(client: AsyncClient, cid: str, stub_discovery, rivals: tuple[s
 
 async def _run_scan(client: AsyncClient, cid: str) -> str:
     """Start a scan. **202, not 201** — the endpoint accepts rather than creates."""
-    resp = await client.post(f"{BASE}/clients/{cid}/scans", json={})
+    resp = await client.post(f"{BASE}/clients/{cid}/scans", json=SCAN_PAYLOAD)
     assert resp.status_code == 202, resp.text
     return resp.json()["id"]
 
@@ -393,11 +400,9 @@ class TestSentimentTally:
 
         history = (await client.get(f"{BASE}/clients/{cid}/history")).json()
         rows = history["scans"][0]["sentiment"]
-        # The engines a scan RUNS under the suite's settings — the keyed ones —
-        # not the five with an adapter (Epic 21).
-        assert {r["engine"] for r in rows} == {
-            e.value for e in engine_service.configured_engines(settings)
-        }
+        # The engines this scan NAMED (`SCAN_PAYLOAD`), one row each. Until
+        # 2026-09-12 this read `configured_engines`, which the payload matched.
+        assert {r["engine"] for r in rows} == set(SCAN_PAYLOAD["engines"])
 
     async def test_the_buckets_account_for_every_answer(
         self, client: AsyncClient, stub_engines, stub_discovery

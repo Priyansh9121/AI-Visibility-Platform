@@ -106,7 +106,7 @@ export function deriveGettingStarted(dashboard: Dashboard): GettingStarted {
           ? 'One is running now.'
           : plural(scanCount, 'scan')
         : clientCount >= 1
-          ? 'About six minutes from start to score.'
+          ? 'Under five minutes from start to score.'
           : 'After a client is added.',
     ...(scanCount >= 1 || clientCount === 0
       ? {}

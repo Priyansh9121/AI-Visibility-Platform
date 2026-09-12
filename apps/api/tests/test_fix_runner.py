@@ -43,6 +43,14 @@ from avp_api.services.report import build_report
 
 BASE = "/api/v1"
 
+# The engines these scans name EXPLICITLY — 2026-09-12. Until then the suite's
+# scans posted `{}` and ran the keyed defaults, which included the grounded
+# Claude engine, the only one the stub below gives citations to. The founder's
+# decision took `claude_search` out of `DEFAULT_ENGINES` (it stays registered
+# and runnable by name — the door `payload.engines` opens), so these tests now
+# open that door and run the same three engines they always did.
+SCAN_PAYLOAD = {"engines": ["claude", "claude_search", "chatgpt"]}
+
 NAMES_THE_BRAND = "Zendesk is popular. Help Scout is simpler and well liked."
 DOES_NOT = "Zendesk is popular. Front is fine for larger teams."
 
@@ -107,7 +115,7 @@ async def _mixed_scan(client: AsyncClient) -> str:
         json={"url": "helpscout.com", "name": "Help Scout", "classify": False},
     )
     cid = resp.json()["id"]
-    return (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+    return (await client.post(f"{BASE}/clients/{cid}/scans", json=SCAN_PAYLOAD)).json()["id"]
 
 
 class TestCollectFactsPopulation:
