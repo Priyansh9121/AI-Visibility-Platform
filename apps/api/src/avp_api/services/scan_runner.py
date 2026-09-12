@@ -37,11 +37,25 @@ from . import prompts as prompt_service
 
 logger = structlog.get_logger(__name__)
 
-# Bounded because every unit of concurrency is a paid model call, and the
-# grounded engine can take 100s+ per prompt. Unbounded fan-out over 24 prompts x
-# 3 engines is 72 simultaneous requests, which buys rate limits, not speed.
+# Bounded because every unit of concurrency is a paid model call, and a
+# grounded engine can take 100s+ per prompt. Unbounded fan-out over 20 prompts x
+# 4 engines is 80 simultaneous requests, which buys rate limits, not speed.
 #
-# FIVE ENGINES, AND A SECOND KNOB — Epic 21. `perplexity` and `gemini` join
+# FOUR ENGINES AND TWENTY PROMPTS — 2026-09-12, the founder's decision (see
+# `engines.DEFAULT_ENGINES` and `prompts.TARGET_PROMPTS`). Re-derived, not
+# edited: a slot now awaits four concurrent calls, so at c=12 in-flight
+# requests are at most 48 — 12 Anthropic, 12 OpenAI, and Perplexity's and
+# Gemini's own gates below that (their `max_in_flight` and Perplexity's
+# 1.25s start interval bound them regardless of this value) — plus at most
+# 12 sentiment calls, now on Haiku. Twenty prompts at c=12 is two waves
+# (12 + 8) instead of 24's two (12 + 12), so the loop's shape is unchanged
+# and its tail is shorter: the grounded Claude call was the slowest single
+# call in every measured scan (121.9s, 99.8s, 94.2s), and it is no longer
+# in the default set. This value stays at 12; nothing measured argues for
+# moving it, and the next `verify_e2e.py` run is what would.
+#
+# FIVE ENGINES, AND A SECOND KNOB — Epic 21 (superseded above, kept for its
+# reasoning about the per-vendor gates). `perplexity` and `gemini` join
 # the default set when their keys are present, so a slot may now await five
 # concurrent calls and in-flight requests may reach 60 at c=12. That count is
 # not what bounds the two new vendors: their rate limits at a new account's

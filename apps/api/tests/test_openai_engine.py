@@ -195,8 +195,12 @@ class TestTheAdapterItself:
         # the assertion that would have caught forgetting DEFAULT_ENGINES.
         assert engines.ENGINE_REGISTRY[Engine.CHATGPT].__class__ is ChatGptAdapter
         assert Engine.CHATGPT in engines.DEFAULT_ENGINES
-        # Five since Epic 21: the two Claude modes, ChatGPT, Perplexity, Gemini.
-        assert len(engines.DEFAULT_ENGINES) == 5
+        # Four since 2026-09-12: Claude, ChatGPT, Perplexity, Gemini. Five from
+        # Epic 21 until then; the grounded Claude engine left the default set
+        # by the founder's decision and stays registered — see the tuple.
+        assert len(engines.DEFAULT_ENGINES) == 4
+        assert Engine.CLAUDE_SEARCH not in engines.DEFAULT_ENGINES
+        assert Engine.CLAUDE_SEARCH in engines.ENGINE_REGISTRY
 
     def test_every_default_engine_has_an_adapter(self) -> None:
         # `ask_all` subscripts ENGINE_REGISTRY bare, so a default engine with no

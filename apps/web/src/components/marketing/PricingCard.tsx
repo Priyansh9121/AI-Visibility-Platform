@@ -113,7 +113,7 @@ export function PricingCard({
           <ul className="flex flex-col gap-3">
             <Includes text={`${PLAN_SEATS} seats — the same seat limit every agency already gets, so this plan is not selling you the seats you have.`} />
             <Includes text="Every prospect you want to scan, with industry and competitors detected for you rather than typed in." />
-            <Includes text="Twenty-four intent-tagged questions per scan, put to AI answer engines and read for facts." />
+            <Includes text="Twenty intent-tagged questions per scan, put to four AI answer engines and read for facts." />
             <Includes text="The full narrative report — on screen, as a share link, and as a PDF." />
             <Includes text="Named fixes, ordered by what they would move and what they would cost you." />
           </ul>

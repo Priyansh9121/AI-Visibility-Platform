@@ -41,12 +41,20 @@ describe('the page explains the product', () => {
 
   it('describes the scan in terms of what is actually built', () => {
     const out = html();
-    expect(out).toContain('Twenty-four questions, tagged by buying stage');
-    // "six minutes" was Epic 9.2's measurement and went stale at 9.17. The
-    // copy now says "about ten minutes", hedged, because three 12-prompt runs
-    // spread 286-331s and no 24-prompt scan has been timed since 9.17.
-    expect(out).toContain('about ten minutes');
+    // Twenty since 2026-09-12 (twenty-four from Epic 4.1 until then): the
+    // founder cut to the spec's floor, and the copy moved with the constant.
+    expect(out).toContain('Twenty questions, tagged by buying stage');
+    expect(out).not.toContain('Twenty-four');
+    // Four default engines since the same day; the grounded Claude engine is
+    // no longer a default, so the copy must not promise Claude "in two modes".
+    expect(out).toContain('Claude, ChatGPT and Gemini');
+    expect(out).not.toContain('two modes');
+    // "Under five minutes" since 2026-09-12: the 300s budget, which measured
+    // scans now sit well inside (135s at the current default). "six minutes"
+    // was Epic 9.2's figure and "about ten minutes" a pre-measurement hedge.
+    expect(out).toContain('under five minutes');
     expect(out).not.toContain('six minutes');
+    expect(out).not.toContain('ten minutes');
   });
 
   it('walks the whole pipeline, not only the parts that photograph well', () => {
@@ -226,9 +234,12 @@ describe('nothing on this page is fabricated', () => {
   it('states what the product cannot do, not only what it can', () => {
     const out = html();
     expect(out).toContain('What it does not do yet');
-    // React escapes the apostrophe in static markup, so match around it.
-    expect(out).toContain('measures one vendor');
+    // Four vendors since Epic 21 (the copy said "one vendor" until 2026-09-12,
+    // stale by then); React escapes the apostrophe, so match around it.
+    expect(out).toContain('measures four vendors');
     expect(out).toContain('models today');
+    expect(out).toContain('only Perplexity searches the web');
+    expect(out).not.toContain('one vendor');
     expect(out).toContain('Nothing tracks whether a fix was actually done');
   });
 

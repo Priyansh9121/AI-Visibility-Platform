@@ -10,14 +10,16 @@ reused: the subject is created by this script so the Help Scout rows that
 build-log.md and the checked-in web fixtures refer to are never touched.
 
     DATABASE_URL=postgresql+asyncpg://avp@127.0.0.1:55433/avp_dev \
-        uv run python scripts/verify_e2e.py --prompts 24
+        uv run python scripts/verify_e2e.py --prompts 20
 
-COSTS REAL MONEY AND TIME. At --prompts 24 that is 55-103 Anthropic calls
-(48 engine calls on the engines' own flagship models, up to 48 sentiment calls
-on claude-haiku-4-5 since the cost brief — 82 when five engines all name the
-subject — plus one classification, four co-citation, one prompt-generation and
-one fix-generation call on claude-opus-5) and 6 SerpApi searches against a
-250/month quota. Run it once and read the table.
+COSTS REAL MONEY AND TIME. At --prompts 20 on the four default engines that
+is 27-107 Anthropic calls (20 parametric Claude engine calls, up to 80
+sentiment calls on claude-haiku-4-5 — one per answer that names the subject,
+across all four engines — plus one classification, four co-citation, one
+prompt-generation and one fix-generation call on claude-opus-5), 60 calls to
+the other three vendors, and 6 SerpApi searches against a 250/month quota.
+Run it once and read the table. (Until 2026-09-12 the default was 24 prompts
+on five engines, the grounded Claude engine included; see the build log.)
 
 WHY THIS TIMES PHASES RATHER THAN THE WHOLE RUN
 -----------------------------------------------

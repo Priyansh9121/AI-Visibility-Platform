@@ -1204,17 +1204,26 @@ one that loses the claim exits without touching the row.
 ```
 
 Both fields optional. `promptLimit` (1–30) caps the generated set for cost
-control; omit for a real scan. `engines` defaults to **every engine that has
-an adapter AND a key configured** — Epic 21. Five have adapters (`claude`,
-`claude_search`, `chatgpt`, `perplexity`, `gemini`); a deployment runs the
-subset whose provider key is set (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
-`PERPLEXITY_API_KEY`, `GOOGLE_AI_API_KEY`), in that order. Duplicates are
-collapsed before anything is billed — `["claude", "claude"]` is one engine.
+control; omit for a real scan. `engines` defaults to **every DEFAULT engine
+that has a key configured** — Epic 21, narrowed 2026-09-12. Five have adapters
+(`claude`, `claude_search`, `chatgpt`, `perplexity`, `gemini`); **four are
+defaults** (`claude`, `chatgpt`, `perplexity`, `gemini`), and a deployment runs
+the subset of those whose provider key is set (`ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY`, `PERPLEXITY_API_KEY`, `GOOGLE_AI_API_KEY`), in that order.
+`claude_search` — Claude with web search — left the default set on 2026-09-12
+by the founder's decision (it was 64% of a measured scan's cost); it still runs
+when named explicitly in `engines`, and stored `claude_search` rows still
+render. Duplicates are collapsed before anything is billed — `["claude",
+"claude"]` is one engine.
 Two refusals, both `422 validation-failed` before any scan row exists rather
 than a failed scan after competitor detection has been paid for: an engine
 the enum knows but no adapter backs (`google_ai_overview`, `copilot`), and an
 engine with an adapter but no key, whose detail names the variable to set
-(`No key configured for engine(s): gemini (GOOGLE_AI_API_KEY)`).
+(`No key configured for engine(s): gemini (GOOGLE_AI_API_KEY). Keyed: …`).
+A registered engine WITH a key may be named even when it is not a default —
+that is how `claude_search` runs since 2026-09-12. (The key check read the
+default set until that day, when the two sets were the same; the suite
+caught it refusing the engine the decision had kept runnable.)
 
 **Response `202`** — `ScanOut`. Identity and status only.
 
@@ -2157,9 +2166,10 @@ took.
 outside `OK` / `ANSWERED_NO_MENTION`, so an outage cannot be counted as
 indifference. `terminal_status_for` draws the same line.
 
-Grouped in SQL rather than in Python: a scan is 24 prompts × 3 engines = 72
-`EngineResult` rows, and pulling all of them per scan across a whole history to
-compute four integers is the N+1 this service exists to avoid.
+Grouped in SQL rather than in Python: a scan is 20 prompts × 4 engines = 80
+`EngineResult` rows (24 × 3 = 72 when this was written), and pulling all of
+them per scan across a whole history to compute four integers is the N+1 this
+service exists to avoid.
 
 ### `POST /api/v1/clients/{clientId}/prompt-runs` — gains tone, Epic A
 

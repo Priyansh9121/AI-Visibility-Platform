@@ -20,6 +20,14 @@ from avp_api.services.prompts import GeneratedPrompt
 
 BASE = "/api/v1"
 
+# The engines these scans name EXPLICITLY — 2026-09-12. Until then the suite's
+# scans posted `{}` and ran the keyed defaults, which included the grounded
+# Claude engine, the only one the stub below gives citations to. The founder's
+# decision took `claude_search` out of `DEFAULT_ENGINES` (it stays registered
+# and runnable by name — the door `payload.engines` opens), so these tests now
+# open that door and run the same three engines they always did.
+SCAN_PAYLOAD = {"engines": ["claude", "claude_search", "chatgpt"]}
+
 
 @pytest.fixture
 def scan_executor_factory(engines_only_executor):  # noqa: ANN201
@@ -108,7 +116,7 @@ async def _scan(client: AsyncClient, stub_engines, n: int = 4) -> str:  # noqa: 
     resp = await client.post(f"{BASE}/clients", json={"url": "helpscout.com", "classify": False})
     cid = resp.json()["id"]
     stub_engines(n_prompts=n)
-    return (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+    return (await client.post(f"{BASE}/clients/{cid}/scans", json=SCAN_PAYLOAD)).json()["id"]
 
 
 async def _scored_scan(client: AsyncClient, stub_engines, n: int = 4) -> str:  # noqa: ANN001
@@ -264,12 +272,11 @@ class TestProofBeat:
         sid = await _scored_scan(client, stub_engines)
         proof = (await client.get(f"{BASE}/scans/{sid}/report")).json()["proof"]
 
-        # Derived from the registry — see test_scan_endpoints.py's N_ENGINES.
-        from avp_api.services.engines import configured_engines
-
         engines = {c["engine"] for c in proof["engineCoverage"]}
-        # The keyed engines, not the five with an adapter — Epic 21.
-        assert engines == {e.value for e in configured_engines(settings)}
+        # The engines this scan NAMED (`SCAN_PAYLOAD`), one coverage row each.
+        # Until 2026-09-12 this read `configured_engines`, which the payload
+        # matched; `claude_search` is no longer a default but is still named.
+        assert engines == set(SCAN_PAYLOAD["engines"])
         for coverage in proof["engineCoverage"]:
             assert coverage["answered"] <= coverage["promptsRun"]
             assert coverage["mentioned"] <= coverage["answered"]
@@ -387,7 +394,7 @@ class TestCompetitorSetScope:
         await client.post(f"{BASE}/clients/{cid}/competitors/detect")
 
         stub_engines(n_prompts=4)
-        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json=SCAN_PAYLOAD)).json()["id"]
         assert (await client.post(f"{BASE}/scans/{sid}/score")).status_code == 201
 
         cset = (await client.get(f"{BASE}/scans/{sid}/report")).json()["competitorSet"]
@@ -623,7 +630,7 @@ class TestAnswerShelf:
         await client.post(f"{BASE}/clients/{cid}/competitors/detect")
 
         stub_engines(n_prompts=3)
-        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json=SCAN_PAYLOAD)).json()["id"]
         assert (await client.post(f"{BASE}/scans/{sid}/score")).status_code == 201
         proof = (await client.get(f"{BASE}/scans/{sid}/report")).json()["proof"]
 
@@ -657,7 +664,7 @@ class TestAnswerShelf:
 
         # A real answer that names a rival and never names the subject.
         stub_engines(n_prompts=3, text="Zendesk is popular and widely recommended.")
-        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json=SCAN_PAYLOAD)).json()["id"]
         assert (await client.post(f"{BASE}/scans/{sid}/score")).status_code == 201
         proof = (await client.get(f"{BASE}/scans/{sid}/report")).json()["proof"]
 
@@ -1051,7 +1058,7 @@ class TestTheCrossEngineReading:
         cid = (
             await client.post(f"{BASE}/clients", json={"url": "helpscout.com", "classify": False})
         ).json()["id"]
-        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json=SCAN_PAYLOAD)).json()["id"]
 
         cross = (await client.get(f"{BASE}/scans/{sid}/report")).json()["proof"]["crossEngine"]
 
@@ -1080,7 +1087,7 @@ class TestTheCrossEngineReading:
         cid = (
             await client.post(f"{BASE}/clients", json={"url": "helpscout.com", "classify": False})
         ).json()["id"]
-        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json=SCAN_PAYLOAD)).json()["id"]
 
         cross = (await client.get(f"{BASE}/scans/{sid}/report")).json()["proof"]["crossEngine"]
 
@@ -1102,7 +1109,7 @@ class TestTheCrossEngineReading:
         cid = (
             await client.post(f"{BASE}/clients", json={"url": "helpscout.com", "classify": False})
         ).json()["id"]
-        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json=SCAN_PAYLOAD)).json()["id"]
 
         private = (await client.get(f"{BASE}/scans/{sid}/report")).json()
         token = (await client.post(f"{BASE}/scans/{sid}/share")).json()["token"]
@@ -1244,7 +1251,7 @@ class TestVisibilityFindings:
         cid = (
             await client.post(f"{BASE}/clients", json={"url": "helpscout.com", "classify": False})
         ).json()["id"]
-        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json=SCAN_PAYLOAD)).json()["id"]
         await client.post(f"{BASE}/scans/{sid}/score")
 
         report = (await client.get(f"{BASE}/scans/{sid}/report")).json()

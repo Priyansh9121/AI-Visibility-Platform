@@ -12,9 +12,10 @@
  *
  * WHY IT IS NOT A SCAN
  * --------------------
- * A scan generates ~24 prompts from the client's industry, runs each against
- * every configured engine (three when this was written, up to five since Epic 21), scores the result and writes a report — six minutes and 72
- * engine calls. An operator who wants to know whether ONE question names their
+ * A scan generates ~20 prompts from the client's industry (24 until
+ * 2026-09-12), runs each against every configured default engine (four since
+ * 2026-09-12; the grounded Claude engine runs only when named), scores the
+ * result and writes a report — several minutes and 80 engine calls. An operator who wants to know whether ONE question names their
  * client has, until now, had to buy all of that. A run is three engine calls
  * and no score, and `test_prompt_runs.py` asserts it writes no `Scan` row: a
  * question an operator asked must never appear in a trend or a dashboard figure

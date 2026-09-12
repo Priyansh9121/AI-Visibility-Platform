@@ -73,7 +73,18 @@ GENERATOR_BOUND = CallBound(timeout=60.0, max_retries=1)  # ceiling: 122.0s
 # §7: "20-30 prompts per scan".
 MIN_PROMPTS = 20
 MAX_PROMPTS = 30
-TARGET_PROMPTS = 24
+# 20 SINCE 2026-09-12 — THE FOUNDER'S DECISION, not a tuning. It was 24 from
+# Epic 4.1 to then. The spec's floor and this target now coincide: the four
+# default engines cost about $0.25 a prompt (build log, "the cost split"),
+# and the founder took the spec's own minimum rather than a number below it.
+# What it changes for a customer is the sample: the 45/35/20 quotas of 20
+# round to 9 awareness / 7 comparison / 4 bottom-funnel prompts (against
+# 11 / 8 / 5 at 24), and scoring v2 computes Mention Rate and Share of Voice
+# over the awareness prompts only — so the population behind the two
+# headline numbers is 9 questions per engine, down from 11. The pricing
+# card and the landing page were changed with this constant. Build log,
+# "dropping grounded Claude and cutting to 20 prompts".
+TARGET_PROMPTS = 20
 
 # Buyer-journey mix, as a share of the set. Awareness is weighted highest
 # because that is where invisibility actually costs a business: a buyer who

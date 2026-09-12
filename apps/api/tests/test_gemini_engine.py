@@ -299,9 +299,9 @@ class TestTheAdapterItself:
         assert Engine.GEMINI not in configured_engines(Settings(**base))
         assert Engine.GEMINI in configured_engines(Settings(**base, google_ai_api_key="k"))
         # Order is DEFAULT_ENGINES' order, whichever keys are present.
+        # `claude_search` left the default set on 2026-09-12 (still registered).
         assert configured_engines(Settings(**base, google_ai_api_key="k")) == (
             Engine.CLAUDE,
-            Engine.CLAUDE_SEARCH,
             Engine.GEMINI,
         )
 

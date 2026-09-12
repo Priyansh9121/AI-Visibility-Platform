@@ -22,6 +22,14 @@ from avp_api.services.prompts import GeneratedPrompt
 
 BASE = "/api/v1"
 
+# The engines these scans name EXPLICITLY — 2026-09-12. Until then the suite's
+# scans posted `{}` and ran the keyed defaults, which included the grounded
+# Claude engine, the only one the stub below gives citations to. The founder's
+# decision took `claude_search` out of `DEFAULT_ENGINES` (it stays registered
+# and runnable by name — the door `payload.engines` opens), so these tests now
+# open that door and run the same three engines they always did.
+SCAN_PAYLOAD = {"engines": ["claude", "claude_search", "chatgpt"]}
+
 # The four prompts every scan in this suite asks. Named rather than numbered so
 # a failing assertion says which SITUATION broke, not which index.
 COVERED = "covered question"
@@ -151,7 +159,7 @@ async def _detect(client: AsyncClient, cid: str, stub_discovery, rivals: tuple[s
 
 
 async def _run_scan(client: AsyncClient, cid: str) -> str:
-    resp = await client.post(f"{BASE}/clients/{cid}/scans", json={})
+    resp = await client.post(f"{BASE}/clients/{cid}/scans", json=SCAN_PAYLOAD)
     assert resp.status_code == 202, resp.text
     return resp.json()["id"]
 

@@ -27,16 +27,64 @@ from avp_api.services.prompts import GeneratedPrompt
 # third engine and broke six of them at once. The count is a property of the
 # registry, so read it from the registry — a fourth engine should not cost
 # another afternoon of arithmetic.
-# The engines a scan RUNS under the suite's settings — Epic 21. conftest
-# supplies an Anthropic key and an OpenAI key and nothing for Perplexity or
-# Google, so the endpoint's default is the three keyed engines, not the five
-# with an adapter. Derived from the same two facts the endpoint reads, rather
-# than written as `3`, so a change to either fails here by name.
+# The engines these scans name EXPLICITLY — 2026-09-12. Until then the suite's
+# scans posted `{}` and ran the keyed defaults, which included the grounded
+# Claude engine, the only one the stub below gives citations to. The founder's
+# decision took `claude_search` out of `DEFAULT_ENGINES` (it stays registered
+# and runnable by name — the door `payload.engines` opens), so these tests now
+# open that door and run the same three engines they always did.
+SCAN_PAYLOAD = {"engines": ["claude", "claude_search", "chatgpt"]}
+
+# The engines these scans run — the three `SCAN_PAYLOAD` names, every one
+# keyed under the suite's settings (conftest supplies an Anthropic key and an
+# OpenAI key). Until 2026-09-12 this was derived from `DEFAULT_ENGINES` and the
+# keyed set; the payload is now explicit (see the note beside it), so the
+# count is derived from the payload and asserted to be registered and keyed.
 _KEYED = {"anthropic_api_key", "openai_api_key"}
-N_ENGINES = len([e for e in DEFAULT_ENGINES if ENGINE_REGISTRY[e].key_setting in _KEYED])
-ENGINE_NAMES = {e.value for e in DEFAULT_ENGINES if ENGINE_REGISTRY[e].key_setting in _KEYED}
+ENGINE_NAMES = set(SCAN_PAYLOAD["engines"])
+N_ENGINES = len(ENGINE_NAMES)
+assert all(
+    ENGINE_REGISTRY[Engine(name)].key_setting in _KEYED for name in ENGINE_NAMES
+), "every engine the suite's scans name must have a key under the suite's settings"
+assert Engine.CLAUDE_SEARCH.value in ENGINE_NAMES and Engine.CLAUDE_SEARCH not in DEFAULT_ENGINES
+
+
+class TestTheDoorForANonDefaultEngine:
+    """`claude_search` is registered, keyed under the suite, and not a default
+    since 2026-09-12. Naming it must run it; naming an unkeyed one must not."""
+
+    async def test_a_registered_keyed_non_default_engine_runs_when_named(
+        self, client: AsyncClient, stub_engines
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_engines(n_prompts=1)
+        body = await _run_scan(client, cid, {"engines": ["claude_search"]})
+        assert {r["engine"] for r in body["results"]} == {"claude_search"}
+
+    async def test_a_scan_that_names_nothing_runs_the_keyed_defaults_only(
+        self, client: AsyncClient, stub_engines
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_engines(n_prompts=1)
+        resp = await client.post(f"{BASE}/clients/{cid}/scans", json={})
+        assert resp.status_code == 202, resp.text
+        detail = (await client.get(f"{BASE}/scans/{resp.json()['id']}")).json()
+        assert {r["engine"] for r in detail["results"]} == {"claude", "chatgpt"}
+
+    async def test_an_unkeyed_engine_is_still_refused_by_name(
+        self, client: AsyncClient, stub_engines
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_engines(n_prompts=1)
+        resp = await client.post(f"{BASE}/clients/{cid}/scans", json={"engines": ["gemini"]})
+        assert resp.status_code == 422, resp.text
+        assert "GOOGLE_AI_API_KEY" in resp.json()["detail"]
 
 BASE = "/api/v1"
+
 
 
 async def _sign_up(client: AsyncClient, email: str = "scan@test.example") -> None:
@@ -67,7 +115,9 @@ async def _run_scan(
     it. The `202` is asserted here so every caller of this helper covers the new
     contract without restating it.
     """
-    resp = await client.post(f"{BASE}/clients/{cid}/scans", json=payload or {})
+    resp = await client.post(
+        f"{BASE}/clients/{cid}/scans", json={**SCAN_PAYLOAD, **(payload or {})}
+    )
     assert resp.status_code == 202, resp.text
     assert resp.json()["status"] == "queued"
     detail = await client.get(f"{BASE}/scans/{resp.json()['id']}")
@@ -262,7 +312,7 @@ class TestRunScan:
         cid = await _make_client(client)
         stub_engines(n_prompts=2, answer_text="UNIQUE ENGINE PROSE MARKER 12345")
 
-        queued = await client.post(f"{BASE}/clients/{cid}/scans", json={})
+        queued = await client.post(f"{BASE}/clients/{cid}/scans", json=SCAN_PAYLOAD)
         assert "UNIQUE ENGINE PROSE MARKER" not in queued.text
         sid = queued.json()["id"]
 
@@ -364,7 +414,9 @@ class TestRunScan:
     async def test_requires_authentication(self, client: AsyncClient) -> None:
         from avp_api import ids
 
-        resp = await client.post(f"{BASE}/clients/{ids.new_id(ids.CLIENT)}/scans", json={})
+        resp = await client.post(
+            f"{BASE}/clients/{ids.new_id(ids.CLIENT)}/scans", json=SCAN_PAYLOAD
+        )
         assert resp.status_code == 401
 
 
@@ -375,7 +427,7 @@ class TestScanReads:
         await _sign_up(client)
         cid = await _make_client(client)
         stub_engines(n_prompts=3)
-        created = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()
+        created = (await client.post(f"{BASE}/clients/{cid}/scans", json=SCAN_PAYLOAD)).json()
         sid = created["id"]
 
         assert (await client.get(f"{BASE}/scans/{sid}")).status_code == 200
@@ -409,7 +461,7 @@ class TestScanReads:
         await _sign_up(client)
         cid = await _make_client(client)
         stub_engines(n_prompts=5)
-        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json=SCAN_PAYLOAD)).json()["id"]
         body = (await client.get(f"{BASE}/scans/{sid}/prompts")).json()
         positions = [p["position"] for p in body["prompts"]]
         assert positions == sorted(positions) == [1, 2, 3, 4, 5]
@@ -420,7 +472,7 @@ class TestScanReads:
         await _sign_up(client)
         cid = await _make_client(client)
         stub_engines(n_prompts=1)
-        await client.post(f"{BASE}/clients/{cid}/scans", json={})
+        await client.post(f"{BASE}/clients/{cid}/scans", json=SCAN_PAYLOAD)
         body = (await client.get(f"{BASE}/clients/{cid}/scans")).json()
         assert len(body["data"]) == 1
 
@@ -439,7 +491,7 @@ class TestScanReads:
         await _sign_up(client, "one@scaniso.example")
         cid = await _make_client(client)
         stub_engines(n_prompts=1)
-        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json=SCAN_PAYLOAD)).json()["id"]
         await client.post(f"{BASE}/auth/logout")
 
         transport = ASGITransport(app=client._transport.app)  # noqa: SLF001
@@ -483,7 +535,7 @@ class TestScanIsQueued:
         stub_engines(n_prompts=2)
         self._defer(client)
 
-        resp = await client.post(f"{BASE}/clients/{cid}/scans", json={})
+        resp = await client.post(f"{BASE}/clients/{cid}/scans", json=SCAN_PAYLOAD)
 
         assert resp.status_code == 202, resp.text
         body = resp.json()
@@ -512,7 +564,7 @@ class TestScanIsQueued:
         stub_engines(n_prompts=2)
         jobs = self._defer(client)
 
-        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json=SCAN_PAYLOAD)).json()["id"]
 
         # The executor was handed the job and has not run it.
         assert len(jobs) == 1
@@ -533,7 +585,7 @@ class TestScanIsQueued:
         stub_engines(n_prompts=2)
         self._defer(client)
 
-        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json=SCAN_PAYLOAD)).json()["id"]
 
         board = (await client.get(f"{BASE}/dashboard")).json()
         row = next(s for s in board["recentScans"] if s["id"] == sid)
@@ -643,7 +695,7 @@ class TestScanIsQueued:
         await session.commit()
         jobs = self._defer(client)
 
-        resp = await client.post(f"{BASE}/clients/{cid}/scans", json={})
+        resp = await client.post(f"{BASE}/clients/{cid}/scans", json=SCAN_PAYLOAD)
 
         assert resp.status_code == 202, resp.text
         assert resp.json()["id"] == running.id
@@ -667,8 +719,8 @@ class TestScanIsQueued:
         stub_engines(n_prompts=2)
         self._defer(client)
 
-        first = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
-        second = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+        first = (await client.post(f"{BASE}/clients/{cid}/scans", json=SCAN_PAYLOAD)).json()["id"]
+        second = (await client.post(f"{BASE}/clients/{cid}/scans", json=SCAN_PAYLOAD)).json()["id"]
 
         assert first == second
         assert len((await client.get(f"{BASE}/clients/{cid}/scans")).json()["data"]) == 1

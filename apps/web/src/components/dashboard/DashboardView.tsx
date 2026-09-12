@@ -589,7 +589,7 @@ function EmptyAgency({ withAction }: { withAction: boolean }): JSX.Element {
       eyebrow="Nothing measured yet"
       title="No scans yet"
       body="A scan starts with a website. We read the site the way a buyer would, work out who it competes with, then ask AI assistants the questions its buyers ask — and record who they name."
-      note="A full scan takes about six minutes. The five bars are the dimensions it fills in, sized by how much each is worth."
+      note="A full scan takes under five minutes. The five bars are the dimensions it fills in, sized by how much each is worth."
       action={
         withAction ? (
           <Button variant="primary" onClick={() => window.location.assign('/')}>

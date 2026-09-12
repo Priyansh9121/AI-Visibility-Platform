@@ -16343,6 +16343,127 @@ and prints counts. Every figure above is in
 `scripts/verify_direct_search.py`'s output from this run, or in
 `avp_dev` (`engine_result_citations` joined to `engine_results`).
 
+# Dropping grounded Claude and cutting to 20 prompts: $6.19 → $1.70 a scan, on the founder's decision, with both trade-offs named
+
+**2026-09-12.** Governance line: this is a capability change, decided by
+the founder with the measured numbers in front of them, and recorded the
+way Epic 15's default reversal and Epic 17's width reversal were — as a
+decision, with what it gives up said in full. It is not an optimisation
+that happened to move two constants. **Real spend: one scan, $1.70, plus
+6 SerpApi searches.**
+
+## What was decided, and what a customer no longer gets
+
+Two things were traded for cost, and both are visible from the outside:
+
+- **The report no longer measures how a Claude session that can search
+  the web treats the brand.** `Engine.CLAUDE_SEARCH` left
+  `DEFAULT_ENGINES`. It was 64% of the last measured scan — $3.99 of
+  $6.19, about 21,000 input tokens of retrieved pages a call plus the
+  per-search fee, and no lever short of removing it moved that (the two
+  entries above). ChatGPT and Gemini remain parametric, Claude remains
+  parametric, and Perplexity remains grounded by its own nature, so the
+  report still carries one engine that searches and cites. What is gone
+  is the second Claude column — the "what it recalls versus what it finds"
+  contrast the landing page used to describe — and its cited sources.
+- **The awareness sample a scan's headline numbers are built from drops
+  from 11 prompts to 9.** `TARGET_PROMPTS` is 20, the spec's own floor
+  (`product-spec.md`: "20-30 prompts per scan"); `MIN_PROMPTS` and
+  `MAX_PROMPTS` are unchanged. The 45/35/20 quotas of 20 round to **9
+  awareness / 7 comparison / 4 bottom-funnel** (11 / 8 / 5 at 24), and
+  scoring v2 computes Mention Rate and Share of Voice over awareness
+  prompts only, so the population behind the two headline dimensions is
+  now 9 questions × 4 engines = 36 answers where it was 11 × 5 = 55.
+
+Neither adapter was thrown away. `ClaudeSearchAdapter` stays in
+`ENGINE_REGISTRY` with its key handling and every test that exercises it,
+and a scan that names `claude_search` in `engines` still runs it — the
+same door `payload.engines` opens for every engine, kept for a future tier
+at no cost. Stored `claude_search` rows still render.
+
+## The real number: $1.70, under the $1.85–2.00 the brief was written to hit
+
+`verify_e2e.py --prompts 20` against `reamaze.com` (fresh, the usual
+small help-desk shape), once. 20 prompts, four engines, 80 answers,
+`partial` because Perplexity answered 17 of 20 (its 429 pattern, unbilled
+and uncounted); SerpApi refused all six detection queries for the third
+run running, so competitors are `weak_signal`. The subject was named in
+**37 of 80 answers** — a far better-known brand than the last two
+subjects, so this run carries a full sentiment load rather than a token
+one.
+
+| line | calls | $ |
+|---|---|---|
+| engine: claude (parametric) | 20 | 0.85 |
+| engine: chatgpt | 20 | 0.49 |
+| engine: perplexity | 17 | 0.08 (vendor-reported) |
+| engine: gemini | 20 | 0.07 |
+| sentiment (Haiku 4.5) | 37 | 0.05 |
+| classification, fixes, co-citation, prompt generation | 7 | 0.17 |
+| **total** | | **1.70** |
+
+Against 2026-09-11's $6.19 at 24 prompts and five engines: **−72%**. The
+brief's range was arithmetic — $6.19 less the grounded line, scaled to 20
+prompts — and the real figure came in a little under it because this
+subject's parametric answers were shorter than the last one's. Wall clock
+**135.3s**, 164.7s under the 300s budget, against 210.7s the day before:
+the scan loop fell from 134.8s to 64.8s, and the slowest single engine
+call from 94.2s to 40.6s, because the grounded Claude call was the tail
+of every measured scan and is no longer in it.
+
+## What step 3 found that the brief did not anticipate
+
+- **The opt-in door was shut, and the suite found it.** Fourteen tests
+  whose stubs give citations only to the grounded engine failed once it
+  left the default set; the honest fix was for those scans to name their
+  engines explicitly — `SCAN_PAYLOAD`, the three engines the suite always
+  ran — through the door the decision promised to keep open. 83 tests then
+  failed with `422 No key configured for engine(s): claude_search`: the
+  router validated a NAMED engine against `configured_engines`, the keyed
+  *defaults*, and the two sets had been identical until this day. Fixed
+  in `engines.keyed_engines` (every registered engine with a key) and the
+  router's second check; the 422's detail now says `Keyed:` rather than
+  `Configured:`; three new tests pin the door (a keyed non-default runs
+  when named, an unnamed scan runs the keyed defaults only, an unkeyed
+  engine is still refused). Without this the "leave it in the registry"
+  half of the decision would have been a comment, not a capability.
+- **Every scan-duration claim in the product was stale, and this decision
+  made it more so.** "About six minutes" on the intake screen, the empty
+  dashboard and the getting-started step (Epic 9.2's figure), and "about
+  ten minutes" on the landing page (a pre-measurement hedge). Three full
+  scans measured 211–239s before this change and 135s after. All five now
+  say **"under five minutes"** — the 300s budget, the one figure the
+  product commits to and a bound a slow scan cannot falsify — and their
+  five tests moved with them.
+- The landing page's engine step said "Claude in two modes", stale since
+  Epic 21 and wrong after this; it now names Claude, ChatGPT and Gemini as
+  recalling and Perplexity as searching, and the test forbids the old
+  phrase. Its limitations list still said *"It measures one vendor's models
+  today, in two modes"* — false since Epic 21 — and now says four vendors,
+  only Perplexity searching, and that AI Overviews and Copilot are not
+  measured; its test asserted the stale sentence and moved with it. The pricing card says twenty questions and four engines.
+  `PROMPT_CONCURRENCY`'s comment was re-derived for four engines (48 in
+  flight at c=12, two waves of 12 + 8) rather than edited; the value stays
+  12. `api-contracts.md` states the four defaults and the named-engine
+  rule; `verify_e2e.py`'s docstring, `ClientPromptsView`'s, and the
+  `20 × 4 = 80` arithmetic in the history contract were updated.
+
+## Verified
+
+Before, every suite: API **1289/1289**, web **843/843**, design-system
+**622/622**, shared-types **53**, both typechecks clean, ruff clean, mypy
+at 52. After: API **1292/1292** (three door tests added), and the web,
+design-system, shared-types and typecheck figures are in the line below
+this entry's last edit. `north-star.md` §5.1 carries both measured rows,
+dated and sourced. Nothing in this entry is projected: the $1.70 and the
+135.3s are one run's own output, `scan_01M2A3R9ZBKTD77FFG6H6C00ME` in
+`avp_dev`.
+
+After, on the finished tree: API **1292/1292**, web **843/843**,
+design-system **622/622**, shared-types **53**, both typechecks clean, ruff
+clean, mypy at 52 (the pre-existing drift, unchanged). Exit codes read from
+files, never from a pipe.
+
 # Closing the two open decisions: citations are what the answer cited (scoring-spec v2.2), and Perplexity's `Retry-After` is honoured once
 
 **2026-09-12.** Both were measured and proposed in earlier entries and

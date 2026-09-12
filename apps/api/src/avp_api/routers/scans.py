@@ -23,7 +23,7 @@ from ..schemas.scan import (
     ScanOut,
 )
 from ..services import competitors as detection
-from ..services.engines import ENGINE_REGISTRY, configured_engines
+from ..services.engines import ENGINE_REGISTRY, configured_engines, keyed_engines
 from ..services.intake import get_client
 from ..services.scan_executor import ScanJob, reap_stale_scans
 
@@ -134,12 +134,18 @@ async def run_scan(
     # enum-only engine such as `perplexity` used to fail INSIDE the executor —
     # after competitor detection had been paid for — and land the scan at
     # FAILED / EXECUTION_FAILED. Now it is a 422 and no scan exists.
-    # The default is the engines with a KEY, not the five with an adapter —
-    # Epic 21. An engine nobody has provisioned would run as 24 failures a
-    # scan and read as "Gemini never named you". Naming one explicitly is
-    # refused with the variable to set, the same 422 an adapter-less engine
-    # gets, and for the same reason: it cannot answer.
+    # The default is the DEFAULT engines with a KEY, not the five with an
+    # adapter — Epic 21. An engine nobody has provisioned would run as 20
+    # failures a scan and read as "Gemini never named you". Naming one
+    # explicitly is refused with the variable to set, the same 422 an
+    # adapter-less engine gets, and for the same reason: it cannot answer.
+    # Naming a REGISTERED, KEYED engine that is not a default is allowed —
+    # that is how `claude_search` runs since it left the default set on
+    # 2026-09-12 — so the second check below asks `keyed_engines`, not the
+    # default set. (Before that date the two sets were identical and the
+    # check read the default set; the suite caught the difference.)
     live = configured_engines(settings)
+    keyed = keyed_engines(settings)
     engines = tuple(payload.engines) if payload.engines else live
     unsupported = [e.value for e in engines if e not in ENGINE_REGISTRY]
     if unsupported:
@@ -149,7 +155,7 @@ async def run_scan(
                 f"Supported: {', '.join(e.value for e in ENGINE_REGISTRY)}."
             )
         )
-    unkeyed = [e for e in engines if e not in live]
+    unkeyed = [e for e in engines if e not in keyed]
     if unkeyed:
         raise ValidationProblem(
             detail=(
@@ -157,8 +163,8 @@ async def run_scan(
                 + ", ".join(
                     f"{e.value} ({ENGINE_REGISTRY[e].key_setting.upper()})" for e in unkeyed
                 )
-                + ". Configured: "
-                + (", ".join(e.value for e in live) or "none")
+                + ". Keyed: "
+                + (", ".join(e.value for e in ENGINE_REGISTRY if e in keyed) or "none")
                 + "."
             )
         )
