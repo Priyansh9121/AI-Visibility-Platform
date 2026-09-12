@@ -64,6 +64,20 @@ from .call_bounds import CallBound
 
 logger = structlog.get_logger(__name__)
 
+# Opus 5, re-argued with a measurement under the cost brief (2026-09-11) and
+# kept. `scripts/verify_fix_models.py` sent one real scan's five candidates
+# (helpwise.io, Epic 18.1's subject) to this model and to Haiku 4.5 with and
+# without extended thinking. Opus: five of five accepted, each naming a page
+# type, a schema type or a listed domain and citing the scan's own counts.
+# Haiku without thinking: three of five — one lost to a mistyped candidate id
+# (`cwv_lpc`), one to the banned-claim guard (it wrote "ROI"). Haiku with
+# thinking (a 4,000-token budget): five of five past the
+# filter, but the generic list the system prompt refuses in its own words —
+# "Improve brand perception in customer and analyst discussions", "Publish
+# technical content to increase AI model awareness" — and claims about
+# training data the facts do not support. This is one call per scan at about
+# five cents; the most that could be saved is under a percent of the scan,
+# for the list the client is actually handed.
 FIX_MODEL = "claude-opus-5"
 # Medium, not low: this is a judgement task over the whole scan at once, and
 # the whole point of the epic is that the reasoning is real. Not high — the

@@ -34,7 +34,7 @@ from typing import Literal
 
 import anthropic
 import structlog
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from ..config import Settings, get_settings
 from .call_bounds import CallBound
@@ -44,6 +44,19 @@ logger = structlog.get_logger(__name__)
 
 # Opus 5. Classification quality here determines the input quality of three
 # downstream epics, so this is not a place to economise on model tier.
+#
+# Re-argued with a measurement under the cost brief (2026-09-11), and kept.
+# `scripts/verify_classifier_models.py` fed one crawl of each of the nine
+# `tune_prompt.py` sites to this model and to Haiku 4.5, twice each. Haiku's
+# `industry` was defensible on all nine, at a seventh of the cost per call
+# ($0.0039 against $0.0270) — but its `niche` was thinner: none at all for
+# Basecamp on both runs where Opus named one, and shorter everywhere else.
+# The niche is the FIRST seed competitor detection tries (`cocitation.py`,
+# `niche or industry`), so a thinner niche changes which rivals a scan finds.
+# Against that, this is one call per CLIENT, not per scan: the saving is about
+# two cents per onboarding, under half a percent of one scan. Sentiment, the
+# per-answer call, is where the brief's saving was and where it was taken
+# (`extraction.py`).
 CLASSIFIER_MODEL = "claude-opus-5"
 
 # Classification from page text is a simple extraction task. Low effort keeps
@@ -125,8 +138,17 @@ class IndustryClassification(BaseModel):
             "reader could reasonably disagree with this classification."
         ),
     )
+    # No `max_length`. This field is read at debug level and never persisted
+    # or returned, and a cap on it was the only thing that could sink a
+    # classification: `messages.parse` validates the whole document inside
+    # the SDK, so a 301-character rationale rejected the industry, brand and
+    # score alongside it. Seen live on 2026-09-11 (`scripts/verify_classifier_
+    # models.py`): Opus 5 wrote a long rationale for stripe.com and the
+    # ValidationError escaped `classify` entirely — nothing below caught it,
+    # and `POST /clients` would have answered 500. The `maxLength` had not
+    # held the model to 300 anyway; `fix_generator.py` records the same
+    # lesson about its own titles.
     rationale: str = Field(
-        max_length=300,
         description=(
             "One sentence, in your own words, on what led to this call. "
             "Do not quote the page."
@@ -269,6 +291,25 @@ async def classify(
     except anthropic.APIError as exc:
         logger.error("classify.api_error", status=getattr(exc, "status_code", None))
         return ClassificationOutcome(status="unclassifiable", reason_code="PROVIDER_ERROR")
+    except ValidationError as exc:
+        # The model answered and its answer did not fit the schema — a
+        # pydantic error raised inside the SDK's `parse`, not an
+        # `anthropic.APIError`, so none of the clauses above see it. Before
+        # 2026-09-11 it escaped this function (see `rationale` above for the
+        # case that found it). Same handling as `fix_generator.py`: which
+        # field and how long, never the value, which is model-authored prose.
+        errors = [
+            {
+                "field": ".".join(str(part) for part in err.get("loc", ())),
+                "type": err.get("type"),
+                "length": len(v) if isinstance(v := err.get("input"), str) else None,
+            }
+            for err in exc.errors()[:5]
+        ]
+        logger.error("classify.schema_violation", errors=errors)
+        return ClassificationOutcome(
+            status="unclassifiable", reason_code="PROVIDER_SCHEMA_VIOLATION"
+        )
 
     # A refusal is not a classification. Surfacing it as one would store an
     # empty industry as though it were a finding.

@@ -39,6 +39,18 @@ from .crawl import registrable_domain
 
 logger = structlog.get_logger(__name__)
 
+# Opus 5, measured against cheaper models under the last-lever brief
+# (2026-09-11) and kept. `scripts/verify_cocitation_models.py` ran the twenty
+# seed prompts `build_seed_prompts` builds for five subjects in five
+# industries through this model, Sonnet 5 and Haiku 4.5, twice each, and
+# compared WHICH brands came back. Opus named 9.9 brands a seed with a domain
+# on all but one. Sonnet and Haiku returned an EMPTY list on most seeds —
+# 1.4 brands a seed on average, 11% and 3% of Opus's names recalled — and
+# when Haiku did answer it put the subject itself in `brands` (the rule says
+# never), named Slack, Microsoft Teams and Terminix as help-desk and drain
+# rivals, and listed Angie's List, which the rule forbids by name. A
+# competitor set seeded from either would be mostly empty. This call is four
+# a scan at about six cents; the saving on offer was five.
 CO_CITATION_MODEL = "claude-opus-5"
 # Discovery, not analysis — low effort keeps a multi-prompt run affordable.
 CO_CITATION_EFFORT = "low"
