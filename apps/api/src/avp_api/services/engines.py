@@ -96,6 +96,8 @@ import asyncio
 import hashlib
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Protocol
 
 import anthropic
@@ -218,9 +220,20 @@ PERPLEXITY_TIMEOUT = 45.0
 # same spacing, up to nine in flight, then came back 10 of 10 clean, so the
 # pacing is not the whole story and the error bodies were not persisted to
 # say which kind each was. Refused requests are not billed. The candidate
-# fix — honour `Retry-After` once, inside the ceiling — is a deliberate
-# decision recorded in build-log Epic 21.1, not made here.
+# fix — honour `Retry-After` once, inside the ceiling — was a deliberate
+# decision recorded in build-log Epic 21.1, and was made on 2026-09-12: see
+# `PerplexityAdapter.ask` and `PERPLEXITY_RETRY_AFTER_MAX`.
 PERPLEXITY_MIN_START_INTERVAL = 1.25
+# The longest `Retry-After` a call will honour — 2026-09-12. One retry, only
+# when the vendor names a wait, and only if that wait plus one more attempt
+# still fits inside ENGINE_CALL_CEILING (122s) from the call's start:
+# 122 - 45 - 45 = 32s of wait is the most that can. The two kinds of 429
+# seen live said `Retry-After: 1` (the entry bucket) and came back after
+# 11–17s (an overloaded upstream); both fit. A wait longer than this is
+# recorded as PROVIDER_RATE_LIMITED at once, unbilled, as before. The retry
+# re-enters the start pacer so it is spaced like any other start rather
+# than fighting the 1.25s interval.
+PERPLEXITY_RETRY_AFTER_MAX = ENGINE_CALL_CEILING - 2 * PERPLEXITY_TIMEOUT
 
 # --- Gemini (Epic 21) --------------------------------------------------------
 # The Generative Language API over raw httpx, keyed by the `x-goog-api-key`
@@ -499,11 +512,25 @@ class _ClaudeBase:
             "messages": [{"role": "user", "content": prompt}],
         }
         if self.uses_search:
+            # DIRECT, not dynamically filtered — scoring-spec v2.2, 2026-09-12.
+            # This tool version filters search results through code execution
+            # by default, and measured twice (build log, "dynamic filtering"
+            # and "what a citation is") that path saves nothing — 22,326
+            # input tokens a call against 20,977 direct, $0.174 against
+            # $0.161 — is slower (p90 50.7s against 23.1s), and, the reason
+            # that decided it, returns NO inline citations: on the filtered
+            # path the text blocks carry none, so "cited" and "retrieved"
+            # cannot be told apart. Direct calls carry the answer's own
+            # `web_search_result_location` citations, which
+            # `_extract_citations` now reads first. `response_inclusion:
+            # "excluded"` (a later tool version) would remove the result
+            # blocks the fallback reads — not to be used.
             kwargs["tools"] = [
                 {
                     "type": "web_search_20260209",
                     "name": "web_search",
                     "max_uses": SEARCH_MAX_USES,
+                    "allowed_callers": ["direct"],
                 }
             ]
 
@@ -537,20 +564,56 @@ class _ClaudeBase:
         return answer
 
 
-def _extract_citations(response) -> list[CitedSource]:  # noqa: ANN001
-    """Pull cited URLs out of a response.
+def _extract_citations(response: anthropic.types.Message) -> list[CitedSource]:
+    """The sources the answer CITED — scoring-spec v2.2, 2026-09-12.
 
-    Reads the structured `web_search_tool_result` blocks rather than parsing
-    URLs out of prose: the blocks are already facts, and regexing the answer
-    text would pick up whatever the model happened to type.
+    Read off the text blocks' own `web_search_result_location` citations,
+    which the direct search path returns. Only when the answer cited nothing
+    inline do the raw `web_search_tool_result` blocks — every result the
+    search retrieved — stand in, which is exactly `_read_agent_output`'s
+    rule for Perplexity, so the two engines' rows mean the same thing.
 
-    **Titles and page snippets in those blocks are deliberately ignored.** They
-    are publisher copy (the facts-only rule). Only the URL and its registrable
-    domain are kept.
+    Until this date the raw blocks were read first and only, so a stored
+    `claude_search` row without `/direct` in its `engine_version` holds the
+    retrieved set, about twice the cited one (measured: 16.2 retrieved
+    against 7.5 cited per answer). Those rows are not rewritten.
+
+    **Titles and page snippets are deliberately ignored** in both sources.
+    They are publisher copy (the facts-only rule). Only the URL and its
+    registrable domain are kept.
     """
+    urls = _urls_cited_inline(response) or _urls_retrieved(response)
     citations: list[CitedSource] = []
     seen: set[str] = set()
+    for url in urls:
+        if url in seen:
+            continue
+        domain = registrable_domain(url)
+        if not domain:
+            continue
+        seen.add(url)
+        citations.append(CitedSource(url=url[:2048], domain=domain, position=len(citations) + 1))
+    return citations
 
+
+def _urls_cited_inline(response: anthropic.types.Message) -> list[str]:
+    """URLs the answer's text blocks cite, in order of first citation."""
+    urls: list[str] = []
+    for block in response.content:
+        if getattr(block, "type", None) != "text":
+            continue
+        for citation in getattr(block, "citations", None) or []:
+            if getattr(citation, "type", None) != "web_search_result_location":
+                continue
+            url = getattr(citation, "url", None)
+            if url:
+                urls.append(url)
+    return urls
+
+
+def _urls_retrieved(response: anthropic.types.Message) -> list[str]:
+    """Every URL the search returned, in result order — the fallback."""
+    urls: list[str] = []
     for block in response.content:
         if getattr(block, "type", None) != "web_search_tool_result":
             continue
@@ -561,16 +624,9 @@ def _extract_citations(response) -> list[CitedSource]:  # noqa: ANN001
             continue
         for item in content:
             url = getattr(item, "url", None)
-            if not url or url in seen:
-                continue
-            domain = registrable_domain(url)
-            if not domain:
-                continue
-            seen.add(url)
-            citations.append(
-                CitedSource(url=url[:2048], domain=domain, position=len(citations) + 1)
-            )
-    return citations
+            if url:
+                urls.append(url)
+    return urls
 
 
 class ClaudeParametricAdapter(_ClaudeBase):
@@ -582,10 +638,17 @@ class ClaudeParametricAdapter(_ClaudeBase):
 
 
 class ClaudeSearchAdapter(_ClaudeBase):
-    """Answers with live retrieval. Produces real cited URLs."""
+    """Answers with live retrieval. Produces real cited URLs.
+
+    Not a default engine since 2026-09-12 (see `DEFAULT_ENGINES`); runs when
+    a scan names it.
+    """
 
     engine = Engine.CLAUDE_SEARCH
-    version = f"{ANSWER_MODEL}/web_search_20260209"
+    # `/direct` — provenance for scoring-spec v2.2: rows carrying this
+    # version hold what the answer CITED; rows without the suffix, written
+    # before 2026-09-12, hold every result the search RETRIEVED.
+    version = f"{ANSWER_MODEL}/web_search_20260209/direct"
     uses_search = True
 
 
@@ -845,31 +908,45 @@ class PerplexityAdapter:
         )
         started = time.perf_counter()
 
+        request = {
+            "model": PERPLEXITY_ANSWER_MODEL,
+            "input": prompt,
+            "max_output_tokens": PERPLEXITY_MAX_OUTPUT_TOKENS,
+            "store": False,
+            "tools": [
+                {
+                    "type": "web_search",
+                    "search_context_size": PERPLEXITY_SEARCH_CONTEXT,
+                    "max_results": PERPLEXITY_MAX_RESULTS,
+                }
+            ],
+        }
+        headers = {
+            "Authorization": f"Bearer {settings.provider_key('perplexity_api_key')}",
+            "Content-Type": "application/json",
+        }
         try:
             async with asyncio.timeout(ENGINE_CALL_CEILING):
                 async with httpx.AsyncClient(timeout=PERPLEXITY_TIMEOUT) as client:
                     response = await client.post(
-                        f"{PERPLEXITY_BASE_URL}/v1/agent",
-                        headers={
-                            "Authorization": (
-                                f"Bearer {settings.provider_key('perplexity_api_key')}"
-                            ),
-                            "Content-Type": "application/json",
-                        },
-                        json={
-                            "model": PERPLEXITY_ANSWER_MODEL,
-                            "input": prompt,
-                            "max_output_tokens": PERPLEXITY_MAX_OUTPUT_TOKENS,
-                            "store": False,
-                            "tools": [
-                                {
-                                    "type": "web_search",
-                                    "search_context_size": PERPLEXITY_SEARCH_CONTEXT,
-                                    "max_results": PERPLEXITY_MAX_RESULTS,
-                                }
-                            ],
-                        },
+                        f"{PERPLEXITY_BASE_URL}/v1/agent", headers=headers, json=request
                     )
+                    # ONE retry on a 429 that names its wait — 2026-09-12,
+                    # the fix Epic 21.1 deferred. Refused requests are not
+                    # billed, so the retry is free; it is taken only when the
+                    # vendor says how long, only when that fits the ceiling,
+                    # and through the start pacer like any other start.
+                    if response.status_code == 429:
+                        wait = _retry_after_seconds(response.headers.get("retry-after"))
+                        if wait is not None and wait <= PERPLEXITY_RETRY_AFTER_MAX:
+                            logger.info("engines.perplexity_retry_after", seconds=wait)
+                            await asyncio.sleep(wait)
+                            pacer = _pacer(self.engine)
+                            if pacer is not None:
+                                await pacer.admit()
+                            response = await client.post(
+                                f"{PERPLEXITY_BASE_URL}/v1/agent", headers=headers, json=request
+                            )
                     response.raise_for_status()
                     payload = response.json()
         except Exception as exc:  # noqa: BLE001 - mapped to a status, never raised
@@ -901,6 +978,27 @@ class PerplexityAdapter:
 
         answer.text, answer.citations = _read_agent_output(payload.get("output") or [])
         return answer
+
+
+def _retry_after_seconds(header: str | None) -> float | None:
+    """Seconds to wait from a `Retry-After` header, or None if it names none.
+
+    Perplexity sends the integer-seconds form (`Retry-After: 1`, measured in
+    Epic 21.1). The HTTP-date form is accepted too, as a delta from now; a
+    value that cannot be read, or is negative, is None — no retry.
+    """
+    if not header:
+        return None
+    text = header.strip()
+    try:
+        seconds = float(text)
+    except ValueError:
+        try:
+            when = parsedate_to_datetime(text)
+        except (TypeError, ValueError):
+            return None
+        seconds = (when - datetime.now(UTC)).total_seconds()
+    return seconds if seconds >= 0 else None
 
 
 def _read_agent_output(output: list) -> tuple[str, list[CitedSource]]:

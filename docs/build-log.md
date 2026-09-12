@@ -16096,3 +16096,310 @@ two comparison scripts are ruff-clean. Every figure above is in
 models.py`'s output from this run, and the full brand lists and prompt
 sets are what the decisions were read from.
 
+# Dynamic filtering is running and saves nothing; `response_inclusion` would zero the citations — both settled by real responses, nothing changed
+
+**2026-09-12.** The grounded Claude engine reads about 21,000 input
+tokens a call, and its tool version, `web_search_20260209`, is documented
+to filter search results through code execution before they reach the
+context. The brief asked whether that filtering is actually engaging and,
+separately, whether `response_inclusion: "excluded"` is safe for the
+citations this product measures. Both were answered from raw responses,
+not documentation. **Real spend: 21 grounded calls, about $3.60.** No
+production behaviour changed; the adapter carries the measurement as a
+comment beside the tool definition.
+
+## Step 1 — filtering is on, and it is not where the tokens go
+
+`scripts/verify_search_filtering.py` sends exactly what `_ClaudeBase.ask`
+sends — no system prompt, the tool with `max_uses: 4`, low effort — for
+three awareness prompts from the last measured scan, in four shapes, and
+records every block's type and `caller`, usage, and citations both ways
+the adapter could read them.
+
+| shape | calls | input / call | output / call | searches | $ / call | search blocks' `caller` |
+|---|---|---|---|---|---|---|
+| **production** (`20260209`, defaults) | 6 | **19,763** | 1,396 | 10 | **0.150** | `code_execution_20260120`, every one |
+| direct (`allowed_callers: ["direct"]`) | 6 | 20,217 | 1,389 | 12 | 0.156 | `direct`, every one |
+| `20260318`, `response_inclusion: full` | 3 | 25,260 | 1,688 | 9 | 0.199 | `code_execution_20260120` |
+| `20260318`, `response_inclusion: excluded` | 6 | 25,293 | 1,731 | 19 | 0.201 | (blocks absent) |
+
+**Dynamic filtering is engaged in production.** Every
+`web_search_tool_result` in the six production responses carries
+`caller.type == "code_execution_20260120"`, and each has a
+`code_execution_tool_result` beside it; the pinned SDK (0.125.0) types the
+`caller` field and the `20260318` parameters, so nothing in the request
+shape forces direct. The forced-direct calls show the other structure —
+`caller: direct`, no code-execution blocks — so the two paths are
+distinguishable and the production one is the filtered one.
+
+**And it makes no measurable difference.** Filtered, 19,763 input tokens
+a call; direct, 20,217. Three percent, inside the noise of a six-call
+sample whose production runs ranged from 5,905 tokens (a call that chose
+not to search) to 34,732 (four searches). The retrieved pages are read
+either way; what filtering changes is the block structure, not the bill.
+The honest answer to the brief's question is the smaller one: the ~21k
+tokens a grounded call costs is what these prompts cost on this tool,
+filtered or not. This lever is not the fix — it is not a lever.
+
+## Step 2 — `response_inclusion` is not safe here: citations would be zero
+
+Two facts from the raw responses, either of which settles it:
+
+- With `response_inclusion: "excluded"` the `web_search_tool_result`
+  blocks are gone from all six responses, and `_extract_citations` reads
+  only those blocks. **0 citations in 6 of 6 calls**, against 80 in the
+  six production calls.
+- The documentation's fallback — inline `web_search_result_location`
+  citations on the text blocks, which persist regardless of the setting —
+  **does not exist on the filtered pathway.** In all fifteen filtered
+  responses (`20260209` production and both `20260318` shapes) every text
+  block has `citations: null`. Only the six forced-direct responses carry
+  inline citations (5–8 unique URLs each, on roughly half their text
+  blocks). So there is nothing for `_extract_citations` to be rewritten to
+  read; the raw result blocks are the only citation source this pipeline
+  has.
+
+**Rejected.** It also needs `web_search_20260318`, which would change
+`engine_version` provenance on every grounded row, and the `20260318`
+shapes cost more in this sample, not less (25k input, 1.7k output, and
+more searches per call), so there was no saving to weigh the citations
+against in the first place.
+
+## Two observations for later, not acted on
+
+- **The product's "citations" are the search results retrieved, not the
+  answer's citations.** `_extract_citations` records every URL in every
+  result block — 7 to 32 a call here — whether or not the answer cited it.
+  On the direct path, where inline citations exist, the answer actually
+  cited about half of what was retrieved (block 14–17, inline 5–8). On the
+  production path there is no way to tell which retrieved results the
+  answer used. That is a definition question for the citation dimension,
+  recorded so it is asked deliberately.
+- **Input tokens scale with searches, not pages read once.** A four-search
+  call cost 34,732 input tokens and a one-search call 13,764: each search
+  iteration re-reads the growing context. The scan-level distribution
+  (median 2, 25% at the cap) is therefore also the cost distribution.
+
+## Verified
+
+Before and after, exit codes read from files: the full API suite
+**1289/1289** both times, `ruff check src tests` clean both times, `mypy
+src` at **52 errors in 29 files** both times (the pre-existing drift over
+the CI ceiling, unchanged). The only production edit is the comment
+beside the tool definition in `engines.py`; the probe script is
+ruff-clean. The raw responses were written to a session scratch
+directory for inspection and deleted after — they hold answer text and
+are not kept anywhere. Every figure above is in
+`scripts/verify_search_filtering.py`'s output from this run.
+
+# What a citation is — the grounded Claude engine records what it retrieved, the product says "cited", and the fix is measured but not shipped: a founder decision
+
+**2026-09-12.** The dynamic-filtering entry above left one observation
+open: `_extract_citations` records every URL in every
+`web_search_tool_result` block, and on the path production runs the
+answer's own citations never appear, so "cited" and "retrieved" cannot be
+told apart. This entry reads what the product promises a citation is,
+measures the only fix at a representative sample, and stops there —
+because changing it changes what a `Citation` row means, which is a
+scoring-definition decision with a changelog, not a patch. **Real spend:
+48 grounded calls, about $8.**
+
+## Step 1 — what Citation Strength, and a citation, are supposed to mean
+
+**The spec.** `scoring-spec.md`'s table: *"Citation Strength | 20% |
+Number + authority of domains **citing** the brand"*. Its v2.1 section:
+*"The stand-in that filled the dimension since Epic 5 divided the distinct
+domains **citing** the subject … by every distinct third-party domain the
+engines **cited** in the scan."* And: *"The citations themselves are
+unaffected: the proof beat's citation tables and the unclaimed-domain fix
+read the persisted `engine_result_citations` rows directly."* The word is
+"cited" throughout; nowhere does the spec say retrieved, associated, or
+in support of.
+
+**The customer-facing side says the same thing, everywhere.** The report:
+*"Sources these answers cited"*, *"Cited Helply"* / *"Cited instead"*,
+*"Answers cite 45 sources. None of them are Helply."*, and on the prompt
+shelf *"a tick beneath a marker means that same answer cited it."* The
+dimension's own description (`strings.ts`): *"How often the brand's own
+pages are the source an answer cites."* The client page: *"Every time an
+engine answered one of this client's prompts it cited sources."* Answer
+gaps: *"Named, but this scan cited someone else's page for it."* The
+landing page: *"Which sources were cited, and who owns them?"* The
+`Citation` model's docstring: *"A source the engine cited."*
+
+**What the mechanism does.** For `ClaudeSearchAdapter`, every result the
+search returned — 15.3 rows per answer across the 344 stored grounded
+answers that have any. For `PerplexityAdapter`, by its own docstring,
+*"the message's `url_citation` annotations — what the answer actually
+cited — and, only when it cited nothing inline, the `search_results` items
+it retrieved"* — 10.0 rows per answer. **Two engines write two different
+things into one table, and 5,277 of the 5,617 stored citation rows (94%,
+across 23 scans) are the retrieved kind.** The gap between promise and
+mechanism is real and it is not a wording nit.
+
+**What it has cost so far, precisely.** Citation Strength has been
+excluded from the composite since v2.1 (2026-09-08), so no score computed
+since then used these rows; the 32 earlier scores (14 v1.1, 18 v2) used
+them through a stand-in the spec already retired as unearnable, so the
+composite impact is bounded by that dimension's ≤3.70 and is water under
+the bridge. The live cost is the proof beat: *"Answers cite N sources"*
+overstates N by roughly two on Claude rows, and *"Cited Helply"* can be
+true of a page the search returned and the answer never used — three of
+the 23 production answers below counted the subject as cited on the
+retrieved definition; on the direct path, where the answer's real
+citations are visible, it cited the subject in none of 24.
+
+## Step 2 — the fix, measured at twelve prompts, twice
+
+`scripts/verify_direct_search.py`: the first twelve prompts of the last
+scan's set (four per intent, as the round-robin order guarantees), each
+sent as the adapter sends it, on the production shape and with
+`allowed_callers: ["direct"]`, twice each — 48 calls — and each answer run
+through `extract_facts` with the scan's own subject and competitor set,
+so any change shows in the pipeline's terms.
+
+| | production (filtered) | direct |
+|---|---|---|
+| calls / failures | 24 / **1** (`APITimeoutError` at the 120s ceiling) | 24 / 0 |
+| input tokens / call | 22,326 | 20,977 |
+| output tokens / call | 1,626 | 1,444 |
+| searches / call (range) | 2.17 (0–4) | 1.96 (1–2) |
+| $ / call | 0.174 | **0.161** (−7.7%) |
+| latency p50 / p90 / max | 30.9s / 50.7s / 89.2s | **19.3s / 23.1s / 26.6s** |
+| answer length (chars) | 3,065 | 2,795 |
+| subject named | 2 / 23 | 4 / 24 |
+| brands per answer | 2.7 | 2.7 |
+| results retrieved / answer | 16.2 | 16.2 |
+| answer's own citations / answer | not exposed | **7.5** (46% of retrieved) |
+
+**The cost lead holds and is a little better than the six-call figure:**
+direct is 7.7% cheaper, with a far tighter distribution (every direct call
+20–23k input tokens; production ranged 5,904 to 71,684). It is also the
+faster and more reliable path: p90 latency less than half, no call near
+the ceiling, and the only failure in 48 calls was a filtered call timing
+out. The scan loop is bound by its slowest engine call (Epic 18.1), and
+`claude_search` has been that call in every measured scan; a 23s p90
+against 51s would move the loop, not just the bill.
+
+**Side effects, checked against Anthropic's stated reason for
+filtering.** The tool documentation gives one: *"much of that content can
+be irrelevant … so only relevant content reaches the context window. This
+reduces token use on search-heavy requests."* On these prompts it does not
+reduce token use (this entry and the one above), and the product-level
+facts are unchanged — same brands per answer, the subject named on the
+same two prompts on the direct runs and on one of them on the filtered
+runs, similar answer length. What direct changes is that the model
+searches a steady two times instead of zero to four; whether that is
+closer to or further from what a buyer's own Claude session does is not
+something this harness can measure, and it is the one honest caveat.
+
+**Nothing shipped.** The adapter and `_extract_citations` are unchanged
+except for a docstring sentence stating the measured fact. The change, if
+taken, is small and specific: `allowed_callers: ["direct"]` on the tool,
+and `_extract_citations` reading `web_search_result_location` citations
+off the text blocks — with the retrieved results as the fallback only when
+the answer cited nothing inline, which is exactly `PerplexityAdapter`'s
+rule, so the two engines would finally mean the same thing.
+
+## Step 3 — for the founder, recorded the way past scoring changes were
+
+This is a real finding, not a documentation-clarity issue: the spec means
+"cited", the product says "cited", and the grounded Claude engine has
+never delivered "cited" on the path it ships. What needs deciding, in the
+order `scoring-spec.md`'s changelog would record it:
+
+1. **Definition.** A `Citation` row is a source the answer cited (the
+   Perplexity rule, applied to Claude). Alternative: keep "retrieved" and
+   change every customer-facing string above to say so — which is the
+   weaker product, since "who gets cited" is the differentiator the
+   competitor research names.
+2. **Stored data.** 5,277 Claude rows across 23 scans are the retrieved
+   kind. Precedent (v2, v2.1): **not re-scored, not rewritten**; the
+   change is dated and rows before it are read knowing what they were.
+   Citation Strength is excluded anyway, so no stored composite moves;
+   the proof beat's counts on old scans stay as they were, labelled by
+   date.
+3. **Version.** A `v2.2` changelog line: *"Citations are what the answer
+   cited, on every engine. The grounded Claude engine calls search
+   directly so the answer's citations are exposed, and records them; the
+   retrieved results are the fallback only when it cited nothing inline,
+   as Perplexity already does. Rows before this date on `claude_search`
+   are every result retrieved, about twice the cited set. Not rewritten."*
+4. **Whether to take the direct path at all**, given the one caveat above.
+   The measured trade is 7.7% cheaper, half the tail latency, no
+   filtering, and citations that mean what the report says.
+
+Proposed, not applied. The measurement is in the script and this entry.
+
+## Verified
+
+Before and after, exit codes read from files: the full API suite
+**1289/1289** both times, `ruff check src tests` clean both times, `mypy
+src` at **52 errors in 29 files** both times (the pre-existing drift over
+the CI ceiling, unchanged). The only production edit is the docstring
+sentence on `_extract_citations`; the measurement script is ruff-clean.
+No answer text was written anywhere: the script extracts facts in memory
+and prints counts. Every figure above is in
+`scripts/verify_direct_search.py`'s output from this run, or in
+`avp_dev` (`engine_result_citations` joined to `engine_results`).
+
+# Closing the two open decisions: citations are what the answer cited (scoring-spec v2.2), and Perplexity's `Retry-After` is honoured once
+
+**2026-09-12.** Both were measured and proposed in earlier entries and
+left for a decision; this entry implements them. **Real spend: ten
+Perplexity calls, under five cents.**
+
+## Citations, v2.2 — implemented as proposed
+
+`ClaudeSearchAdapter` now sends `allowed_callers: ["direct"]`, the only
+path on which the answer's own `web_search_result_location` citations
+come back (the "what a citation is" entry: none in fifteen filtered
+responses, 7.5 an answer on direct). `_extract_citations` reads those
+first and falls back to the retrieved `web_search_tool_result` blocks only
+when the answer cited nothing inline — `_read_agent_output`'s rule for
+Perplexity, so the two engines' rows now mean one thing. The adapter's
+version is `claude-opus-5/web_search_20260209/direct`: the tool version
+did not change, but what a row means did, so the suffix is the provenance
+a reader of old rows needs — a `claude_search` row without it holds every
+result retrieved. **The 5,277 stored rows across 23 scans are not
+rewritten**, per rule 5; `scoring-spec.md` carries the `v2.2` changelog
+line and a body paragraph stating the definition, and the `Citation`
+model's docstring says the same. Measured cost of the direct path, from
+the earlier entry: 7.7% cheaper and half the tail latency at twelve
+prompts, twice. `tests/test_claude_citations.py` pins the request shape,
+the cited-first rule, the fallback, and that none of the three readers
+touches publisher copy. The engine is not a default since this morning,
+so no customer sees this until a scan names it — fixed now anyway, while
+the measurement and the context both hold.
+
+## `Retry-After`, honoured once — the fix Epic 21.1 deferred
+
+On a 429, `PerplexityAdapter.ask` now reads the vendor's `Retry-After`,
+and if it names a wait that still leaves room for one more attempt inside
+`ENGINE_CALL_CEILING` — at most 32s, `PERPLEXITY_RETRY_AFTER_MAX` — sleeps
+it, **re-enters the start pacer**, and tries once more. A 429 with no
+wait, a wait too long, or a second 429 is recorded as
+`PROVIDER_RATE_LIMITED` exactly as before; refused requests are unbilled,
+so the retry is free. Both 429 kinds Epic 21.1 saw fit: the entry bucket's
+`Retry-After: 1` and the 11–17s overload waits.
+
+**Probed against the real account** (`scripts/verify_perplexity_retry.py`),
+the way the pacer itself was verified:
+
+| | 429s | answered |
+|---|---|---|
+| five starts together, pacer bypassed (the shape that drew 429s in Epic 21.1) | **4**, each `Retry-After: 1`, each retried once | **5 / 5** |
+| five through `ask_all` — pacer and gate, the production path | 0 | 5 / 5 |
+
+The retries in part 1 came back 1.5s to 6.5s after the start, spaced by
+the pacer they re-entered rather than fired together, and part 2 shows
+the pacer alone still prevents the bucket 429 — the two do not fight. Six
+tests cover the retry, the no-header and too-long cases, the second 429,
+the ceiling arithmetic, and both header forms.
+
+## Verified
+
+API **1303/1303** (eleven tests added), ruff clean, mypy at **51** — it
+rose to 54 on two unannotated helpers, and annotating them and the
+extractor took it one below where it started — with the web, design-system and shared-types figures unchanged
+from the entry above (no web file touched here).
