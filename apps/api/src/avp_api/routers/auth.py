@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
+import structlog
 from fastapi import APIRouter, Query, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
@@ -44,6 +46,8 @@ from ..services import google_oauth
 from ..services import invitations as invitation_service
 from ..services import password_reset as reset_service
 from ..services import seats as seat_service
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -470,9 +474,13 @@ async def google_callback(
       to `/dashboard`;
     - a new address → a ten-minute ticket is minted and the browser goes to
       `/sign-up/google?ticket=…` to name the agency;
-    - anything else → `/?google=error&reason=…` with one of `denied`,
-      `invalid-state`, `exchange-failed`, `email-unverified`,
-      `account-unavailable`.
+    - anything else → `/?google=error&reason=…` with one of `not-configured`,
+      `denied`, `invalid-state`, `exchange-failed`, `email-unverified`,
+      `account-suspended`, `email-claimed`, `invitation-expired`,
+      `account-unavailable`, or `unavailable` when something this route
+      depends on — Redis, Postgres, the session store — failed underneath it
+      (2026-09-21; until then that was the one way this route showed a raw
+      500 page).
 
     **Errors:** none as status codes. A person arriving here is not a script
     and gets a page, not a problem document.
@@ -481,6 +489,30 @@ async def google_callback(
         return _google_failure(settings, "not-configured")
     if state is None:
         return _google_failure(settings, "invalid-state")
+    try:
+        return await _google_callback(
+            response, db, store, settings, flow, google, state=state, code=code, error=error
+        )
+    except Exception:  # noqa: BLE001 - a person is standing here, not a script
+        logger.exception("google.callback.failed")
+        with contextlib.suppress(Exception):  # the connection may be what failed
+            await db.rollback()
+        return _google_failure(settings, "unavailable")
+
+
+async def _google_callback(
+    response: Response,
+    db: DbDep,
+    store: SessionStoreDep,
+    settings: Settings,
+    flow: GoogleFlowStoreDep,
+    google: GoogleProviderDep,
+    *,
+    state: str,
+    code: str | None,
+    error: str | None,
+) -> RedirectResponse:
+    """The callback proper; `google_callback` wraps it so nothing escapes as a 500."""
     parked = await flow.consume_state(state)
     if parked is None:
         return _google_failure(settings, "invalid-state")

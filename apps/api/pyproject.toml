@@ -27,7 +27,8 @@ dependencies = [
     "tldextract>=5.1,<6",           # BSD-3-Clause — registrable-domain parsing
     "httpx>=0.28,<0.29",            # BSD-3-Clause — SerpApi calls (Epic 3)
     "stripe>=15.6,<16",             # MIT — subscription billing (Epic 9.15)
-    "pyjwt[crypto]>=2.10,<3",
+    "pyjwt[crypto]>=2.10,<3",       # MIT; crypto pulls cryptography (Apache-2.0 OR BSD-3-Clause),
+                                    # cffi (MIT-0), pycparser (BSD-3-Clause) — Google ID tokens (Epic 20)
 ]
 
 [project.optional-dependencies]

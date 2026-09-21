@@ -21,6 +21,11 @@ ALLOWED = {
     "ISC", "ISC License (ISCL)",
     "0BSD", "Unlicense", "CC0-1.0", "CC0 1.0 Universal",
     "PSF-2.0", "Python Software Foundation License",
+    # MIT No Attribution — MIT with the attribution clause removed, so it is
+    # strictly more permissive than MIT. `cffi`, which `cryptography` (PyJWT's
+    # `crypto` extra, Epic 20) depends on, moved to it; it sat on the REVIEW
+    # list from Epic 20 until the 2026-09-21 audit made the decision.
+    "MIT-0",
 }
 
 # MPL-2.0 is deliberately NOT in ALLOWED. It is weak (file-level) copyleft, so it

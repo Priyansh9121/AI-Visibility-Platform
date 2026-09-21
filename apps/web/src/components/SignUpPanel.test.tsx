@@ -9,6 +9,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { GOOGLE_SIGN_IN_URL } from '@/lib/api';
 import { SignUpPanel } from './SignUpPanel';
 
 const render = () =>
@@ -126,5 +127,17 @@ describe('the card arrives — Epic 9.16', () => {
     const out = live();
     expect(out).toContain('Agency name');
     expect(out).toContain('Create agency');
+  });
+});
+
+describe('Google is beside the password, not instead of it', () => {
+  it('carries the Google button, under an "or" rule, with the form still there', () => {
+    const out = render();
+    expect(out).toContain(`href="${GOOGLE_SIGN_IN_URL}"`);
+    expect(out).toContain('Sign up with Google');
+    expect(out).toContain('avp-google-btn');
+    expect(out).toMatch(/aria-hidden="true"><\/span>or<span/);
+    expect(out).toContain('>Email<');
+    expect(out).toContain('>Password<');
   });
 });

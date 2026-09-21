@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { googleFailureFromSearch } from '@/lib/auth/googleFailure';
 import { Button, Card, CardBody, ErrorState, LoadingState } from '@avp/design-system';
 import type { ClientDetail, Me } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
@@ -36,30 +37,16 @@ type View =
   | { kind: 'result'; client: ClientDetail };
 
 /**
- * What the front door says when Google sent someone back without a session —
- * Epic 20. The API puts one WORD in the URL and nothing else (no token, no
- * email, no Google error text); this is where the word becomes a sentence.
+ * The Google failure notice — Epic 20. The word-to-sentence mapping lives
+ * in `lib/auth/googleFailure.ts`, where it is tested; this reads the query
+ * and clears it so a reload or a back-press does not re-show the notice.
  */
-const GOOGLE_REASONS: Record<string, string> = {
-  denied: 'Google sign-in was cancelled. Nothing changed.',
-  'invalid-state':
-    'That Google sign-in had expired or was already used. Start it again from this page.',
-  'exchange-failed': 'Google did not confirm the sign-in. Try again in a moment.',
-  'email-unverified':
-    'Google has not verified that email address, so it cannot be used to sign in here.',
-  'account-unavailable':
-    'That Google account cannot sign in here. If it is yours, sign in with your email and password, or reset the password.',
-  'not-configured': 'Google sign-in is not set up on this server yet. Sign in with your email and password.',
-};
-
 function googleFailure(): string | null {
   if (typeof window === 'undefined') return null;
-  const params = new URLSearchParams(window.location.search);
-  if (params.get('google') !== 'error') return null;
-  const reason = params.get('reason') ?? '';
-  // Clear the query so a reload or a back-press does not re-show the notice.
+  const sentence = googleFailureFromSearch(window.location.search);
+  if (sentence === null) return null;
   window.history.replaceState(null, '', window.location.pathname);
-  return GOOGLE_REASONS[reason] ?? 'Google sign-in did not complete. Try again.';
+  return sentence;
 }
 
 export default function Home() {
