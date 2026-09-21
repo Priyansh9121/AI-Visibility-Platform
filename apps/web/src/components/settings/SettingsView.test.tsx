@@ -290,3 +290,24 @@ describe('what is still missing is a numbered list, not small print', () => {
     expect(html).toContain('there is no cap to hit and no figure to look at');
   });
 });
+
+describe('how the account signs in decides what the account section offers', () => {
+  it('a password account gets the password form', () => {
+    const html = render(READY);
+    expect(html).toContain('Change your password');
+    expect(html).not.toContain('You sign in with Google');
+  });
+
+  it('a Google-only account is told so, and how to add a password, instead of a form that would refuse', () => {
+    const googleOnly: SettingsState = {
+      ...READY,
+      me: { ...ownerMe, user: { ...ownerMe.user, signInMethods: ['google'] } },
+    };
+    const html = render(googleOnly);
+    expect(html).toContain('You sign in with Google');
+    expect(html).toContain('This account has no password');
+    expect(html).toContain(`Signed in as ${ownerMe.user.email} through Google.`);
+    expect(html).not.toContain('Change your password');
+    expect(html).not.toContain('type="password"');
+  });
+});

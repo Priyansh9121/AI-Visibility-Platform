@@ -189,8 +189,14 @@ async def invite_seat(
         seat_consumed = True
 
     elif existing.status is UserStatus.INVITED:
-        # The seat is already occupied by this very row. Re-issue only.
+        # The seat is already occupied by this very row. Re-issue only — and
+        # the same rule as the revive branch above: a re-sent invitation is
+        # not resumed, so a Google link the row carries goes with it. Nothing
+        # writes a sub onto an INVITED row today (Google acceptance activates
+        # it in the same statement), but the rule is "re-sending clears it",
+        # unconditionally, and was only half implemented until 2026-09-21.
         existing.role = role
+        existing.google_sub = None
         user = existing
         seat_consumed = False
 

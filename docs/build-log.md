@@ -16524,3 +16524,132 @@ API **1303/1303** (eleven tests added), ruff clean, mypy at **51** — it
 rose to 54 on two unannotated helpers, and annotating them and the
 extractor took it one below where it started — with the web, design-system and shared-types figures unchanged
 from the entry above (no web file touched here).
+
+# Google Sign-In, second pass: the feature already existed; audited against the new brief, seven gaps closed, first contact with real Google made, the consent-screen step still the founder's
+
+**2026-09-21.** The brief opened with "there is no Google OAuth code
+anywhere in this repository", confirmed by search. The search was of some
+other tree: Epic 20 (commit `34084a1`, 2026-09-10) built the feature on
+both sides — the three settings, PKCE with Redis state and nonce, JWKS
+verification through PyJWT, the four routes, the linking policy, the
+migration with the renamed credential CHECK, `signInMethods`, the branded
+button on both panels, the completion page, the front-door sentences and
+the Settings copy — with 21 API tests. What Epic 20 never had, and said
+so, was a real Google round trip. So this pass did what the brief actually
+needed: audited the existing implementation against every sentence of
+the new spec, closed what fell short, and took the live provider as far
+toward real Google as a script can go.
+
+## The audit, and what it found
+
+Eight readers, one per requirement group, each returning file:line
+verdicts against the brief's literal text (68 requirements); a
+second round of two skeptics per verdict was cut short by an API session
+limit after 23 of 149 votes, all of which agreed with the readers. Of the
+68: 57 met, 9 partial, 2 missing. The gaps, and what was done:
+
+1. **A blank Google setting counted as configured.** `cp .env.example
+   .env` leaves `GOOGLE_OAUTH_CLIENT_ID=` present and empty; the check was
+   `is not None`, so the button sent a browser to Google with an empty
+   client id instead of answering the 503 `.env.example` promises. A
+   validator now reads a blank as unset; tested. The other provider keys
+   keep their `is None` reading (`provider_key`), noted, not changed.
+2. **The refusal reasons were deliberately coarse, and the brief asks
+   for them told apart.** Suspended, claimed-by-a-different-Google-account
+   and no-live-invitation all read `account-unavailable`, on Epic 20's
+   argument that the front door should not say which. Reversed, on the
+   brief's instruction and a better reading of who is standing there: the
+   person has just proven, through Google, that they hold the very email
+   address in question, so `account-suspended`, `email-claimed` and
+   `invitation-expired` each tell the address's own holder about their own
+   seat and nobody else anything. A soft-deleted account stays
+   `account-unavailable`. The front door has a sentence for each; the
+   contract lists them; the module docstring records the reversal.
+3. **The callback could still show a raw 500.** "Always a 302" held for
+   every refusal the route knew about, not for Redis or Postgres failing
+   underneath it. The route body is wrapped; anything unexpected is logged
+   and becomes `reason=unavailable` with a rollback attempted; tested by
+   breaking the flow store.
+4. **Re-sending an invitation cleared the Google link on one branch of
+   two.** The revive branch nulled `google_sub`; the INVITED re-issue
+   branch did not. Nothing writes a sub onto an INVITED row today, but the
+   rule is unconditional and is now implemented and tested that way.
+5. **The licence audit had never decided `cffi`.** PyJWT's `crypto` extra
+   pulls `cryptography` (Apache-2.0 OR BSD-3-Clause), `cffi` and
+   `pycparser` (BSD-3-Clause); `cffi` is MIT-0 — MIT with the attribution
+   clause removed, strictly more permissive — and sat on the audit's
+   REVIEW list from Epic 20 until now. `MIT-0` is in the allowed set with
+   the reasoning beside it, the dependency line in `pyproject.toml` says
+   what it pulls in, and the audit now prints four REVIEW lines, all of
+   them older than Epic 20.
+6. **`verify_id_token` ran on the event loop.** PyJWT fetches the JWKS
+   with urllib on a cold cache (a 30s default timeout) and the RSA verify
+   is CPU work; `exchange` now runs it in a thread, so a slow first fetch
+   stalls one sign-in and not every request in the process.
+7. **The live provider had zero tests, and the web side had none for the
+   button's presence, the sentences, or the Settings copy.** Added:
+   `test_google_live_provider.py` (the authorization URL's every
+   parameter; a good token; the legacy issuer form; wrong audience,
+   wrong issuer, expired, missing claims; a token signed by a key Google
+   never issued; HS256 over the public key and `alg: none`, both built by
+   hand because PyJWT's own encoder refuses them; the exchange's form
+   fields; a refused exchange, a 200 without a token, a transport
+   failure, a bad token from a good exchange); in the integration file, a
+   deleted account, a revoked invitation, the re-send rule, the blank
+   setting, the infrastructure failure, and ticket expiry driven by a
+   one-second TTL rather than inferred from `ex=`; on the web, the
+   sentence mapping (extracted to `lib/auth/googleFailure.ts` so a static
+   render can test what `Home` reads in an effect), the button on each
+   panel under its "or" rule with the form still present, and the Settings
+   section for a Google-only account against a password one.
+
+**Judged met as built, with the difference named.** The completion page
+asks for the agency name and the person's name, pre-filled from Google;
+the brief says "the one thing this flow can't get from Google". Google's
+`name` claim can be empty or a handle, and `POST /complete` requires a
+name, so the field stays: pre-filled, and a person who agrees with Google
+types only the agency. The completion panel's submit and error paths have
+static tests only, per the repo's Epic 9.11 rule of no DOM-driving
+harness, which the brief's "fetch-driven" tests would have needed.
+
+## First contact with real Google, without anyone's account
+
+`scripts/verify_google_live.py`, step 0, against Google's live
+infrastructure through the module's own code — the first time
+`LiveGoogleProvider` has touched anything but the suite's fake:
+
+| | result |
+|---|---|
+| discovery document vs the pinned authorization, token and JWKS endpoints and issuer | all four match |
+| `id_token_signing_alg_values_supported` | `["RS256"]`, the verifier's pin |
+| the real JWKS through the verifier's own `jwt.PyJWKClient` | 2 signing keys, both RS256 |
+| a token signed by a key Google never issued | refused (`PyJWKClientError` → `GoogleExchangeError`) |
+| a bogus code at the real token endpoint, through `exchange` | 400 → `GoogleExchangeError` → `exchange-failed` |
+
+Steps 1–4 of the same script run against the deployed API: the 302 to
+`accounts.google.com` with the client id, this deployment's redirect URI,
+S256, state, nonce, the three scopes and `prompt=select_account`; the
+Cancel path consuming the state; the same state refused a second time;
+`/pending` refusing a bogus ticket. They print the exact consent-screen
+URL the API minted for a person to open.
+
+## What is not done, and why it is not this pass's to do
+
+**The deployed URL is not in this repository** — no `render.yaml`, no
+hostname in any config or doc; the brief's Render service and its three
+environment variables live in the founder's account. And **the consent
+screen needs the founder's own Google account**, the test user on the
+OAuth client. Steps 1–4 run the moment the base URL is given, and the
+round trip is proven by landing on `/dashboard` signed in after the
+person consents. Neither can be substituted by a script, and this entry
+does not claim either.
+
+## Verified
+
+Before: API **1303/1303**, web **843/843**, design-system **622/622**,
+shared-types **53**, both typechecks clean, ruff clean, mypy at 51.
+After: API **1324/1324** (21 tests added across the two Google files),
+web **853/853** (10 added), design-system and shared-types unchanged,
+both typechecks clean, ruff clean, mypy at 51. The licence audit: four
+REVIEW lines (`certifi`, `pathspec` on MPL-2.0; `email-validator` on the
+Unlicense; the app itself), none from this feature.

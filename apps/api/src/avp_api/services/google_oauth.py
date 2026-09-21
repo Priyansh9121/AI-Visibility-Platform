@@ -79,6 +79,7 @@ of this epic that only a real Google Cloud client can verify end to end.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -225,7 +226,12 @@ class LiveGoogleProvider:
         id_token = response.json().get("id_token")
         if not isinstance(id_token, str) or not id_token:
             raise GoogleExchangeError
-        return self.verify_id_token(id_token)
+        # `verify_id_token` is synchronous: PyJWT fetches the JWKS with urllib
+        # on a cold cache (a 30s default timeout) and the RSA verify is CPU
+        # work. Off the event loop, so a slow first fetch stalls this sign-in
+        # and not every other request in the process — found by the
+        # 2026-09-21 audit.
+        return await asyncio.to_thread(self.verify_id_token, id_token)
 
     def verify_id_token(self, id_token: str) -> GoogleIdentity:
         """Signature, audience, issuer, expiry. The nonce is checked by the caller.
@@ -346,9 +352,19 @@ class GoogleSignInRefusedError(Exception):
     """The identity verified, and this product will not sign it in.
 
     `reason` is one of a small closed set the web app maps to a sentence:
-    `email-unverified`, `account-unavailable`. Deliberately coarse — which of
-    suspended, deleted, sub-mismatched or invitation-expired applied is not
-    something the front door should say to whoever is standing at it.
+    `email-unverified`, `account-suspended`, `email-claimed`,
+    `invitation-expired`, `account-unavailable`.
+
+    Distinct since 2026-09-21; coarse (one `account-unavailable` for all
+    four) from Epic 20 until then, on the argument that which one applied
+    was not something to say to whoever stood at the front door. Reversed
+    on the brief's instruction and on a better reading of who is standing
+    there: Google has just vouched that this person holds the very email
+    address in question, so "your account is suspended", "this address is
+    linked to a different Google account" and "your invitation has expired"
+    each tell the address's own holder about their own seat and nobody
+    else anything. A soft-deleted account stays `account-unavailable`: a
+    removed seat is the one case where the honest sentence is the same.
     """
 
     def __init__(self, reason: str) -> None:
@@ -378,11 +394,13 @@ async def resolve_identity(
     if user is None:
         return None
 
-    if user.deleted_at is not None or user.status is UserStatus.SUSPENDED:
+    if user.deleted_at is not None:
         raise GoogleSignInRefusedError("account-unavailable")
+    if user.status is UserStatus.SUSPENDED:
+        raise GoogleSignInRefusedError("account-suspended")
     if user.google_sub is not None and user.google_sub != identity.sub:
         # The address now belongs to a different Google account. Not theirs.
-        raise GoogleSignInRefusedError("account-unavailable")
+        raise GoogleSignInRefusedError("email-claimed")
 
     now = datetime.now(UTC)
     if user.status is UserStatus.INVITED:
@@ -404,7 +422,7 @@ async def resolve_identity(
             .first()
         )
         if invitation is None:
-            raise GoogleSignInRefusedError("account-unavailable")
+            raise GoogleSignInRefusedError("invitation-expired")
         invitation.accepted_at = now
         user.status = UserStatus.ACTIVE
         # The roster showed the address until now; Google's name is the first

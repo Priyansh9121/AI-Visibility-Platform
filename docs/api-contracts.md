@@ -364,9 +364,11 @@ settings — `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`,
 **The account-linking policy**, decided and recorded in build-log Epic 20:
 a Google identity whose verified email matches an ACTIVE account **links
 automatically** and stores Google's `sub` on the row; thereafter the `sub`
-is matched first and the email second. Refused (`account-unavailable`) when
-the account is suspended or deleted, when the row already carries a
-different `sub`, or when an invited seat has no live invitation. An
+is matched first and the email second. Refused when the row already carries
+a different `sub` (`email-claimed`), when the account is suspended
+(`account-suspended`), when an invited seat has no live invitation
+(`invitation-expired`), or when the account was soft-deleted
+(`account-unavailable`). An
 `email_verified: false` identity is refused (`email-unverified`). An INVITED
 seat with a live invitation is **accepted** by signing in with Google. A
 new address creates nothing until the agency is named.
@@ -387,8 +389,16 @@ document — a person, not a script, is standing here:
 | anything else | `{PUBLIC_WEB_BASE_URL}/?google=error&reason=…` |
 
 `reason` is one of `denied`, `invalid-state`, `exchange-failed`,
-`email-unverified`, `account-unavailable`, `not-configured`. The URL carries
-no token, no email and no Google error text.
+`email-unverified`, `account-suspended`, `email-claimed`,
+`invitation-expired`, `account-unavailable`, `not-configured`, or
+`unavailable` (something under the route — Redis, Postgres, the session
+store — failed; the person still gets a page, never a 500). The URL carries
+no token, no email and no Google error text. **Distinct since 2026-09-21**:
+until then suspended, claimed-by-another-Google-account and no-live-
+invitation all read `account-unavailable`; they are told apart now because
+the person reading the sentence has just proven, through Google, that they
+hold the very address in question. A soft-deleted account is the one that
+stays `account-unavailable`.
 
 ##### `GET /api/v1/auth/google/pending?ticket=…`
 **Response `200`** — `GooglePendingOut`: `{ "email": "…", "suggestedName": "…" }`.

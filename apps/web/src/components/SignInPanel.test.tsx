@@ -8,6 +8,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { GOOGLE_SIGN_IN_URL } from '@/lib/api';
 import { SignInPanel } from './SignInPanel';
 
 const render = () =>
@@ -112,5 +113,19 @@ describe('the card arrives — Epic 9.16', () => {
     const out = live();
     expect(out).toContain('Sign in');
     expect(out).toContain('Forgot your password?');
+  });
+});
+
+describe('Google is beside the password, not instead of it', () => {
+  it('carries the Google button, under an "or" rule, with the form still there', () => {
+    const out = render();
+    // The button is an anchor to the API, which redirects to Google.
+    expect(out).toContain(`href="${GOOGLE_SIGN_IN_URL}"`);
+    expect(out).toContain('Sign in with Google');
+    expect(out).toContain('avp-google-btn');
+    expect(out).toMatch(/aria-hidden="true"><\/span>or<span/);
+    // The password form is not replaced by it.
+    expect(out).toContain('>Email<');
+    expect(out).toContain('>Password<');
   });
 });

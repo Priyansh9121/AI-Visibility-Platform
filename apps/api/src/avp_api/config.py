@@ -176,6 +176,22 @@ class Settings(BaseSettings):
     # a person to pick an account and type an agency name, not a standing key.
     google_sign_in_ttl_seconds: int = 600
 
+    @field_validator(
+        "google_oauth_client_id", "google_oauth_client_secret", "google_oauth_redirect_url",
+        mode="before",
+    )
+    @classmethod
+    def _blank_google_setting_is_unset(cls, value: object) -> object:
+        # `cp .env.example .env` leaves `GOOGLE_OAUTH_CLIENT_ID=` — present and
+        # empty — and until 2026-09-21 that counted as configured: the button
+        # then sent a browser to Google with an empty client id instead of
+        # answering the 503 `.env.example` promises. A blank is unset. Found
+        # by the Google Sign-In audit; the other provider keys keep their
+        # `is None` reading and are noted in that build-log entry.
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     @property
     def google_sign_in_configured(self) -> bool:
         return (

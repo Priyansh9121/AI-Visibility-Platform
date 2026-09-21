@@ -372,7 +372,9 @@ async def test_a_different_google_account_on_a_linked_address_is_refused(
     google.identities["code-2"] = identity("dana@northlight.example", sub="sub-someone-else")
     state = await start(client)
     query = landed(await callback(client, code="code-2", state=state), "/")
-    assert query["reason"] == ["account-unavailable"]
+    # Distinct since 2026-09-21: the person holds this address, so they may be
+    # told it is linked to a different Google account than the one they used.
+    assert query["reason"] == ["email-claimed"]
     assert (await client.get(f"{BASE}/auth/me")).status_code == 401
 
 
@@ -388,7 +390,25 @@ async def test_a_suspended_account_is_unavailable_however_it_signs_in(
     google.identities["code-1"] = identity("dana@northlight.example")
     state = await start(client)
     query = landed(await callback(client, code="code-1", state=state), "/")
+    assert query["reason"] == ["account-suspended"]
+
+
+async def test_a_deleted_account_is_unavailable_and_says_no_more(
+    client: AsyncClient, google: FakeGoogleProvider, engine
+) -> None:  # noqa: ANN001
+    """The one refusal that stays coarse: a removed seat is not the person's
+    to be told about, and the reset flow is the honest next step either way."""
+    user_id = await sign_up_with_password(client, "dana@northlight.example")
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+    async with factory() as s:
+        user = (await s.execute(select(User).where(User.id == user_id))).scalar_one()
+        user.deleted_at = datetime.now(UTC)
+        await s.commit()
+    google.identities["code-1"] = identity("dana@northlight.example")
+    state = await start(client)
+    query = landed(await callback(client, code="code-1", state=state), "/")
     assert query["reason"] == ["account-unavailable"]
+    assert (await client.get(f"{BASE}/auth/me")).status_code == 401
 
 
 async def test_an_invited_seat_is_accepted_by_signing_in_with_google(
@@ -451,13 +471,147 @@ async def test_an_invited_seat_whose_invitation_has_expired_is_refused(
     google.identities["code-1"] = identity("rae@northlight.example", sub="sub-rae")
     state = await start(client)
     query = landed(await callback(client, code="code-1", state=state), "/")
-    assert query["reason"] == ["account-unavailable"]
+    assert query["reason"] == ["invitation-expired"]
     async with factory() as s:
         user = (
             await s.execute(select(User).where(User.email == "rae@northlight.example"))
         ).scalar_one()
         assert user.status is UserStatus.INVITED
         assert user.google_sub is None
+
+
+async def test_a_revoked_invitation_is_refused_like_an_expired_one(
+    client: AsyncClient, google: FakeGoogleProvider, engine
+) -> None:  # noqa: ANN001
+    """Revoked-but-unexpired had no test; `revoked_at` is its own column."""
+    await sign_up_with_password(client, "owner@northlight.example")
+    await client.post(
+        f"{BASE}/auth/login",
+        json={"email": "owner@northlight.example", "password": "correct-horse-battery-staple"},
+    )
+    agency_id = (await client.get(f"{BASE}/auth/me")).json()["agency"]["id"]
+    await client.post(
+        f"{BASE}/agencies/{agency_id}/invitations", json={"email": "rae@northlight.example"}
+    )
+    await client.post(f"{BASE}/auth/logout")
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+    async with factory() as s:
+        inv = (
+            await s.execute(select(Invitation).where(Invitation.email == "rae@northlight.example"))
+        ).scalar_one()
+        inv.revoked_at = datetime.now(UTC)
+        await s.commit()
+
+    google.identities["code-1"] = identity("rae@northlight.example", sub="sub-rae")
+    state = await start(client)
+    query = landed(await callback(client, code="code-1", state=state), "/")
+    assert query["reason"] == ["invitation-expired"]
+
+
+async def test_re_sending_an_invitation_clears_a_google_link_on_the_seat(
+    client: AsyncClient, google: FakeGoogleProvider, engine
+) -> None:  # noqa: ANN001
+    """The rule is unconditional: a re-issued seat carries no Google link,
+    whichever branch of `invite` handled it. Until 2026-09-21 only the
+    revive branch cleared it; the INVITED re-issue branch did not."""
+    await sign_up_with_password(client, "owner@northlight.example")
+    await client.post(
+        f"{BASE}/auth/login",
+        json={"email": "owner@northlight.example", "password": "correct-horse-battery-staple"},
+    )
+    agency_id = (await client.get(f"{BASE}/auth/me")).json()["agency"]["id"]
+    await client.post(
+        f"{BASE}/agencies/{agency_id}/invitations", json={"email": "rae@northlight.example"}
+    )
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+    async with factory() as s:
+        user = (
+            await s.execute(select(User).where(User.email == "rae@northlight.example"))
+        ).scalar_one()
+        assert user.status is UserStatus.INVITED
+        user.google_sub = "sub-left-over"  # nothing writes this today; the rule still holds
+        await s.commit()
+
+    resp = await client.post(
+        f"{BASE}/agencies/{agency_id}/invitations", json={"email": "rae@northlight.example"}
+    )
+    assert resp.status_code in (200, 201), resp.text
+    async with factory() as s:
+        user = (
+            await s.execute(select(User).where(User.email == "rae@northlight.example"))
+        ).scalar_one()
+        assert user.status is UserStatus.INVITED
+        assert user.google_sub is None
+
+
+async def test_a_blank_google_setting_is_unset_not_configured(
+    client: AsyncClient, settings: Settings
+) -> None:
+    """`cp .env.example .env` leaves GOOGLE_OAUTH_CLIENT_ID= present and empty.
+    Until 2026-09-21 that counted as configured and the button sent the
+    browser to Google with an empty client id; it is the 503 now."""
+    app = client._transport.app  # noqa: SLF001 - the ASGI app under test
+    blank = settings.model_copy(
+        update={
+            "google_oauth_client_id": "",
+            "google_oauth_client_secret": "not-a-real-secret",
+            "google_oauth_redirect_url": "http://localhost:8000/api/v1/auth/google/callback",
+        }
+    )
+    assert Settings.model_validate(blank.model_dump()).google_sign_in_configured is False
+    app.dependency_overrides[get_settings] = lambda: Settings.model_validate(blank.model_dump())
+    resp = await client.get(f"{BASE}/auth/google/start", follow_redirects=False)
+    assert resp.status_code == 503, resp.text
+    assert "GOOGLE_OAUTH_CLIENT_ID" in resp.json()["detail"]
+
+
+async def test_an_infrastructure_failure_in_the_callback_is_a_redirect_not_a_500(
+    client: AsyncClient, google: FakeGoogleProvider, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A person is standing at the callback. Redis or Postgres failing under
+    it must not show them a raw error page (2026-09-21)."""
+    from avp_api.services import google_oauth
+
+    google.identities["code-1"] = identity("dana@northlight.example")
+    state = await start(client)
+
+    async def broken(self, key):  # noqa: ANN001, ANN202, ARG001
+        raise ConnectionError("redis is away")
+
+    monkeypatch.setattr(google_oauth.GoogleFlowStore, "_take", broken)
+    query = landed(await callback(client, code="code-1", state=state), "/")
+    assert query["reason"] == ["unavailable"]
+    assert (await client.get(f"{BASE}/auth/me")).status_code == 401
+
+
+async def test_a_ticket_expires_with_the_configured_ttl(
+    client: AsyncClient, google: FakeGoogleProvider, settings: Settings
+) -> None:
+    """Expiry was inferred from `ex=` until 2026-09-21; now it is exercised:
+    the key carries the configured TTL, and once it lapses /pending and
+    /complete both answer 400."""
+    import asyncio
+
+    app = client._transport.app  # noqa: SLF001 - the ASGI app under test
+    short = app.dependency_overrides[get_settings]().model_copy(
+        update={"google_sign_in_ttl_seconds": 1}
+    )
+    app.dependency_overrides[get_settings] = lambda: short
+    google.identities["code-1"] = identity("new-person@example.com", sub="sub-new")
+    state = await start(client)
+    query = landed(await callback(client, code="code-1", state=state), "/sign-up/google")
+    ticket = query["ticket"][0]
+
+    peek = await client.get(f"{BASE}/auth/google/pending", params={"ticket": ticket})
+    assert peek.status_code == 200, peek.text
+    await asyncio.sleep(1.2)
+    peek = await client.get(f"{BASE}/auth/google/pending", params={"ticket": ticket})
+    assert peek.status_code == 400, peek.text
+    done = await client.post(
+        f"{BASE}/auth/google/complete",
+        json={"ticket": ticket, "agencyName": "Late Agency", "fullName": "New Person"},
+    )
+    assert done.status_code == 400, done.text
 
 
 async def test_the_failure_redirect_carries_no_email_and_no_token(
