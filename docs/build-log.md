@@ -16812,3 +16812,104 @@ After: design-system **647/647** (25 added: 13 layout, 12 render), web
 helpers), API, shared-types, typechecks, ruff and mypy unchanged.
 `design-system.md` §5f records the shape and the `VerdictBar` extension;
 the styleguide carries a section for the strip on its invented company.
+
+# Looked at, live: the strips on the deployed build, the one defect only a screenshot could catch, the $160 price beside a Stripe Price that still says $29, and what the auto-deploy did on its own
+
+**2026-09-22.** Three items followed the report-visualisations push, in the
+founder's order: look at the strips on the deployed site, put the price up
+to $160, and confirm that Render deploys a push without a hand on it. All
+three are done to the extent a session without the founder's sign-in can do
+them, and the extent is stated rather than smoothed over.
+
+## What the deployed site shows, and what it could not
+
+- **The push deployed itself.** `e91a062` was pushed at 06:33 UTC; CI
+  concluded green at 06:36; the repository's own `Deploy` workflow ran and
+  was **skipped**, as Epic 18.2 built it to be while `DEPLOY_TARGET` is
+  unset — it has been skipped on every push since 2026-09-10, so nothing in
+  this repository deploys anything. By 06:45 the web build at
+  `ai-visibility-platform-1.onrender.com` nevertheless carried the new code:
+  the shared design-system chunk holds the share strip's own strings
+  (`avp-share__seg`, "named in none of the answers", "Other brands named");
+  the Rankings page chunk holds "Share of voice in the latest scan"; the
+  Crawler page chunk holds "by what this site asks of them"; the Prompts page
+  chunk holds "did not answer"; and one of the three CSS bundles carries
+  `.avp-share__seg` and the `--tone-` verdict classes. That is Render's own
+  GitHub integration acting on the push — no deploy hook, no click from
+  here. Unless someone pressed Manual Deploy in that nine-minute window,
+  item 4 is confirmed on this push; the next one is watched end to end
+  below.
+- **MSM AV's pages themselves were not opened.** `/clients/{id}/rankings`
+  answers anyone with a 200 — it is a client-rendered shell — and every
+  data call behind it answers 401 without a session. No session exists
+  here and creating one is not this session's to do, so the three screens
+  were rendered the way every screen since Epic 19 has been checked without
+  one: the real components, to static HTML, with the design system's
+  stylesheet and the app's compiled Tailwind, screenshot in Chromium. Same
+  markup, same type, same CSS as the deployed page; no hydration. The
+  screenshots are in `docs/screenshots/report-visualisations-2026-09-22/`.
+- **What is real in them and what is a stand-in.** The Rankings render uses
+  `msmAvHistory`, which is MSM AV's own 22 September scan — composite 10,
+  share 0.0, Sweetwater 38.5, Shure 26.1, AVI-SPL 18.5, Diversified 16.9,
+  Avalliance 0.0. The Crawler and Prompts renders use the Notion robots.txt
+  fixture and the Help Scout mixed-run fixture, because MSM AV's crawler
+  reading and prompt runs are not in the repository; those two screenshots
+  prove the shape, not MSM AV's values.
+- **The Avalliance line renders as the tests say.** Measured in the DOM,
+  not read off the picture: four segments — Sweetwater 277.2px, Shure
+  187.92, AVI-SPL 133.2, Diversified 121.68 — summing to the 720px track
+  because the field sums to 100.0 exactly, so no "Other brands named"
+  remainder; no segment for MSM AV and none for Avalliance; two legend
+  lines below the swatches, "MSM AV · this client 0%, named in none of the
+  answers" and "Avalliance 0%, named in none of the answers"; the caption
+  "Scanned 22 Sep 2026, 03:10 UTC. MSM AV was named in none of the answers,
+  so it holds none of the field." Light and dark both. The Crawler groups
+  strip 1 blocked / 2 allowed, 2 allowed, 1 allowed, with "Not mentioned 0"
+  absent from the legend as designed; the Prompts card strips 1 / 1 / 1 in
+  beacon, neutral and warn.
+
+## The one defect only a screenshot could catch
+
+The subject's legend line read **"MSM AV· this client"** — the space before
+the middle dot was gone. The label is `inline-flex`; the "· this client"
+span is therefore a flex item; and a flex item's leading collapsible space
+is dropped at layout. The text node carries the space, `renderToStaticMarkup`
+prints it, and every static test passes — the defect exists only once the
+browser lays the line out, which is precisely the class of thing "actually
+look at it" exists to find. Fix: `white-space: pre-wrap` on
+`.avp-share__you`, one line of CSS with the reason beside it; no markup and
+no test changed, and the corrected render is the screenshot that was kept.
+
+## The $160 price
+
+- `PLAN_PRICE_USD` is **160**, from 29. The six assertions that pin the
+  number (`PricingCard`, `LandingView` ×3, `SettingsView` ×2, `BillingPanel`)
+  say $160. Settings' "What you pay" lead was a **third, hand-typed copy** of
+  the price — the exact thing the constant's own comment warns against — and
+  now reads from the constant like the two on the landing page.
+- **Stripe did not move with it, and the code says so.** The test-mode
+  account was read (a `GET` of the Price, with the local test key, nothing
+  written): the only active Price is `price_1U9For…` at **2900 USD /
+  month**, `livemode: false`. So today the page quotes $160 and Checkout
+  subscribes at $29. Creating a $160 Price on the founder's Stripe account
+  and pointing `STRIPE_PRICE_ID` at it — on Render and in the local `.env` —
+  is the founder's action, not taken here; the brief asked for the code.
+  `PLAN_PRICE_USD`'s comment, north-star §5.3.1 (a new "Are the two in
+  step?" row), `api-contracts.md` and `.env.example` all state the mismatch
+  in as many words, so nobody reads $160 and assumes the checkout matches.
+- **Left saying $29 on purpose:** the dated records — earlier entries of
+  this log, the competitor research of 2026-09-10, and the 2026-09-12 note in
+  `engines.py` that explains a decision taken against a $29 plan. They say
+  what was true when they were written.
+
+## Verified
+
+Before this pass: API **1324/1324**, web **865/865**, design-system
+**647/647**, shared-types **53**, both typechecks clean, ruff clean, mypy
+at 48 — the numbers `e91a062` was pushed on. After: API **1324/1324**, web **865/865**
+(the six price assertions re-pinned at $160, none added), design-system
+**647/647**, shared-types **53**, both typechecks clean, ruff clean, mypy
+at 48 — every count unchanged, exit codes read from files.
+The temporary harness that produced the renders lived under
+`apps/web/src/__harness__/` for the duration and was deleted before any
+count above was read.
