@@ -318,9 +318,13 @@ export interface paths {
          *       to `/dashboard`;
          *     - a new address → a ten-minute ticket is minted and the browser goes to
          *       `/sign-up/google?ticket=…` to name the agency;
-         *     - anything else → `/?google=error&reason=…` with one of `denied`,
-         *       `invalid-state`, `exchange-failed`, `email-unverified`,
-         *       `account-unavailable`.
+         *     - anything else → `/?google=error&reason=…` with one of `not-configured`,
+         *       `denied`, `invalid-state`, `exchange-failed`, `email-unverified`,
+         *       `account-suspended`, `email-claimed`, `invitation-expired`,
+         *       `account-unavailable`, or `unavailable` when something this route
+         *       depends on — Redis, Postgres, the session store — failed underneath it
+         *       (2026-09-21; until then that was the one way this route showed a raw
+         *       500 page).
          *
          *     **Errors:** none as status codes. A person arriving here is not a script
          *     and gets a page, not a problem document.
