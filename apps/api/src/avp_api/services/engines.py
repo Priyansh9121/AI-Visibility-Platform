@@ -100,7 +100,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
-from typing import Protocol
+from typing import Any, Protocol
 
 import anthropic
 import httpx
@@ -507,7 +507,7 @@ class _ClaudeBase:
         )
         started = time.perf_counter()
 
-        kwargs: dict = {
+        kwargs: dict[str, Any] = {
             "model": ANSWER_MODEL,
             "max_tokens": ANSWER_MAX_TOKENS,
             "output_config": {"effort": ANSWER_EFFORT},
@@ -711,7 +711,7 @@ def _map_transport_error(exc: Exception) -> tuple[EngineResultStatus, str]:
     return EngineResultStatus.ERROR, "PROVIDER_ERROR"
 
 
-def _error_body(exc: httpx.HTTPStatusError) -> dict:
+def _error_body(exc: httpx.HTTPStatusError) -> dict[str, Any]:
     """The vendor's `error` object, or `{}` — a non-JSON body is not an error
     handler's problem to raise about."""
     try:
@@ -1003,7 +1003,7 @@ def _retry_after_seconds(header: str | None) -> float | None:
     return seconds if seconds >= 0 else None
 
 
-def _read_agent_output(output: list) -> tuple[str, list[CitedSource]]:
+def _read_agent_output(output: list[Any]) -> tuple[str, list[CitedSource]]:
     """The answer and its sources out of an Agent API `output` array.
 
     Text is every `output_text` part of every `message` item, in order.

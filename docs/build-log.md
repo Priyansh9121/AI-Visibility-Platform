@@ -16653,3 +16653,45 @@ web **853/853** (10 added), design-system and shared-types unchanged,
 both typechecks clean, ruff clean, mypy at 51. The licence audit: four
 REVIEW lines (`certifi`, `pathspec` on MPL-2.0; `email-validator` on the
 Unlicense; the app itself), none from this feature.
+
+**Pushed, and CI said no — 2026-09-22.** Nine commits had accumulated
+since Epic 18.2's last green run without a push, so the gate had not run
+on any of them; on `ed33208` it failed one step: `api-mypy-errors: 51
+errors, ceiling is 50`. The ceiling was set at 50 by Epic 18 and the count
+drifted to 53 through Epics 19–21, which every cost-pass entry recorded
+and none was allowed to fix as its own scope. Fixed here by typing three
+bare generics in `engines.py` (`dict[str, Any]` twice, `list[Any]` once):
+**48**, under the ceiling by two, and the ceiling itself is untouched — it
+is a ceiling. The same local run then showed one failure the hour-earlier
+run had not: the Perplexity pacer test measured a 27ms gap under a 50ms
+interval. Not the pacer: the test timed request ARRIVALS at a fake
+transport, and a loaded machine scheduled one admitted task late. It now
+reads the pacer's own admission instants (`_next_allowed - interval`),
+exact by construction; five runs alone and one full suite, all green. The
+consent-screen probe against the real deployment, run the same day, is
+the next entry's subject.
+
+# Google Sign-In against the real deployment: every step a script can take passes; the consent screen is the founder's next click
+
+**2026-09-22.** The founder gave the deployed API's base URL,
+`https://ai-visibility-platform-5gk4.onrender.com/api/v1`, and
+`scripts/verify_google_live.py` ran against it. No credential was sent
+and nothing was created.
+
+| step | against | result |
+|---|---|---|
+| 0 | Google's discovery document, JWKS, and token endpoint, through the module's own code | endpoints and issuer match, JWKS yields 2 RS256 keys, a forged token is refused, a bogus code is `exchange-failed` |
+| 1 | `GET /auth/google/start` on the deployment | **302** to `accounts.google.com`, carrying the real client id (`192749258566-…apps.googleusercontent.com`), `redirect_uri` = this deployment's own callback, `state`, `nonce`, `code_challenge`, `S256`, `openid email profile`, `prompt=select_account` — so all three `GOOGLE_OAUTH_*` variables are set on the host and read |
+| 2 | the callback with Google's Cancel (`error=access_denied`) and that state | 302 to `https://ai-visibility-platform-1.onrender.com/?google=error&reason=denied` — the state store (Redis on the host) consumed it |
+| 3 | the same state again | 302 with `reason=invalid-state` — single use holds on the real store |
+| 4 | `GET /auth/google/pending?ticket=bogus` | `400 invalid-google-ticket` |
+
+The failure redirects land on the web app's host,
+`ai-visibility-platform-1.onrender.com`, which is `PUBLIC_WEB_BASE_URL`
+on the API service; that front door and its `/sign-up/google` page both
+answer 200, and the API's `/health` does. **Not yet done, and only the
+founder can do it:** open the consent URL the script prints (or press
+the button on the deployed front door, which mints a fresh one — the
+printed one is single-use and ten minutes), choose the test-user account,
+consent, and land on `/dashboard` signed in. That landing is the round
+trip; nothing here claims it.

@@ -342,34 +342,45 @@ class TestTheGate:
         """The pacer — Epic 21.1. Six concurrent asks: starts at least the
         interval apart, yet several in flight at once, because the vendor's
         bucket limits the start rate and nothing else."""
-        import time
-
-        starts: list[float] = []
         in_flight = 0
         peak = 0
 
         class _Timing(httpx.AsyncBaseTransport):
             async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
                 nonlocal in_flight, peak
-                starts.append(time.monotonic())
                 in_flight += 1
                 peak = max(peak, in_flight)
                 await asyncio.sleep(0.2)
                 in_flight -= 1
                 return httpx.Response(200, json=_completed("x"))
 
+        # The spacing is read off the pacer's OWN bookkeeping — the instant it
+        # admitted each start, `_next_allowed - interval` — not off the moment
+        # the request later reached the transport. Until 2026-09-22 it was the
+        # latter, and a loaded machine (the full suite running) scheduled one
+        # admitted task late enough to compress a measured gap to 27ms under a
+        # 50ms interval; the pacer had spaced the starts exactly, and the test
+        # was measuring the scheduler. The contract under test is the pacer's.
+        admitted: list[float] = []
+        real_admit = engines._Pacer.admit
+
+        async def timed_admit(self: engines._Pacer) -> None:
+            await real_admit(self)
+            admitted.append(self._next_allowed - self.interval)
+
         _install(monkeypatch, _Timing())
         monkeypatch.setattr(engines, "_PACERS", {})
         monkeypatch.setattr(engines, "PERPLEXITY_MIN_START_INTERVAL", 0.05)
         monkeypatch.setattr(engines.PerplexityAdapter, "min_start_interval", 0.05)
+        monkeypatch.setattr(engines._Pacer, "admit", timed_admit)
         await asyncio.gather(
             *(
                 engines.ask_all("q", engines=(Engine.PERPLEXITY,), settings=engine_settings)
                 for _ in range(6)
             )
         )
-        ordered = sorted(starts)
-        gaps = [b - a for a, b in zip(ordered[:-1], ordered[1:], strict=True)]
+        assert len(admitted) == 6
+        gaps = [b - a for a, b in zip(admitted[:-1], admitted[1:], strict=True)]
         assert min(gaps) >= 0.045, gaps
         assert peak > 1, "spacing starts must not serialise the calls"
 
