@@ -48,8 +48,9 @@ import {
   StatRow,
   StatTile,
   TextField,
+  VerdictBar,
 } from '@avp/design-system';
-import type { BadgeTone } from '@avp/design-system';
+import type { BadgeTone, VerdictSegment } from '@avp/design-system';
 import { CalendarDays } from 'lucide-react';
 import type {
   Client,
@@ -334,11 +335,46 @@ export function PromptsPanel({
   );
 }
 
+/**
+ * What each engine did with the question, as one strip — 2026-09-22.
+ *
+ * The same three-way distinction the cards below draw, summed: named the
+ * client (the client's own colour, because that segment IS the client), did
+ * not name it (neutral — the finding, not a failure), did not answer (warn —
+ * the failure, kept apart from the finding). Inline, in the run's own header,
+ * because this table's whole idea is density: the split is readable before
+ * the three cards are.
+ */
+export function runSegments(run: PromptRun): VerdictSegment[] {
+  const answered = (r: PromptRunResult) => r.status === 'ok' || r.status === 'answered_no_mention';
+  return [
+    {
+      key: 'named',
+      label: 'Named you',
+      value: run.results.filter((r) => answered(r) && r.mentioned).length,
+      tone: 'beacon',
+    },
+    {
+      key: 'unnamed',
+      label: 'Did not name you',
+      value: run.results.filter((r) => answered(r) && !r.mentioned).length,
+      tone: 'neutral',
+    },
+    {
+      key: 'failed',
+      label: 'Did not answer',
+      value: run.results.filter((r) => !answered(r)).length,
+      tone: 'warn',
+    },
+  ];
+}
+
 function RunCard({ run, fresh = false }: { run: PromptRun; fresh?: boolean }): JSX.Element {
   const named = run.results.filter((r) => r.mentioned).length;
   const best = run.results
     .map((r) => r.position)
     .filter((p): p is number => p != null);
+  const segments = runSegments(run);
 
   return (
     <article
@@ -358,6 +394,10 @@ function RunCard({ run, fresh = false }: { run: PromptRun; fresh?: boolean }): J
         <p>
           <MetaChip icon={<CalendarDays />}>{formatStamp(run.createdAt)}</MetaChip>
         </p>
+        <VerdictBar
+          segments={segments}
+          ariaLabel={`Of ${run.results.length} engines, ${segments[0]!.value} named ${run.subjectName}, ${segments[1]!.value} did not, and ${segments[2]!.value} did not answer.`}
+        />
       </header>
 
       <StatRow min="9rem">

@@ -6,6 +6,7 @@
  * Prompts are original strings written for this guide.
  */
 
+import type { ShareInput } from '../components/chart/shareLayout.js';
 import type { LedgerDimension, LedgerCompetitor } from '../components/chart/ledgerLayout.js';
 import type { ShelfRowInput } from '../components/chart/answerShelfLayout.js';
 
@@ -202,4 +203,18 @@ export const TREND_SERIES = [
   { key: 'fathom', label: 'Fathom Analytics', values: [11.2, null, 10.4, 10.6] },
   // Detected only in the last scan.
   { key: 'seline', label: 'Seline', values: [null, null, null, 0.5] },
+];
+
+/**
+ * The share strip's field: the invented company and its invented rivals, in
+ * every state the strip can show — a real share, a rival named in no answer,
+ * a rival that was not in this scan's set, and a remainder held by brands
+ * nobody tracks.
+ */
+export const SHARE_FIELD: ShareInput[] = [
+  { key: 'northaven', label: SUBJECT, value: 22.4, isSubject: true },
+  { key: 'brightsmile', label: 'BrightSmile Studios', value: 31.0 },
+  { key: 'harbour', label: 'Harbour Dental Group', value: 18.6 },
+  { key: 'lumen', label: 'Lumen Orthodontics', value: 0 },
+  { key: 'northshore', label: 'Northshore Family Dental', value: null },
 ];

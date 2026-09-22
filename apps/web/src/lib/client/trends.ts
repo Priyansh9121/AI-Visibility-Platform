@@ -29,7 +29,7 @@ import type {
   ClientHistory,
   HistoryScan,
 } from '@avp/shared-types';
-import type { TidePointInput, TrendPoint, TrendSeriesInput } from '@avp/design-system';
+import type { ShareInput, TidePointInput, TrendPoint, TrendSeriesInput } from '@avp/design-system';
 
 /** How many lines a trend will draw before it stops. */
 export const MAX_SERIES = 6;
@@ -192,6 +192,43 @@ export function rankingSeries(history: ClientHistory, limit = MAX_SERIES): Trend
       }),
     })),
   ];
+}
+
+/**
+ * The field's share of the answers at ONE scan — 2026-09-22.
+ *
+ * The latest scan with any share-of-voice reading, subject first. It is the
+ * snapshot the Rankings trend has never had: the trend needs two scans, and a
+ * client scanned once has a share of voice but no direction. Here that share
+ * is the finding, not a missing chart.
+ *
+ * A rival's `null` share is passed through as null — not measured — and a
+ * measured `0.00` is passed through as zero; `ShareBar` draws neither and says
+ * which is which. The one thing this refuses to do is invent a reading for a
+ * rival the scan did not report.
+ */
+export function shareSplit(
+  history: ClientHistory,
+): { scanId: string; scannedAt: string; shares: ShareInput[] } | null {
+  const measured = (s: HistoryScan) =>
+    num(s.shareOfVoice) !== null || s.competitors.some((c) => num(c.shareOfVoice) !== null);
+  const latest = [...history.scans]
+    .filter(measured)
+    .sort((a, b) => a.scannedAt.localeCompare(b.scannedAt))
+    .pop();
+  if (!latest) return null;
+  return {
+    scanId: latest.scanId,
+    scannedAt: latest.scannedAt,
+    shares: [
+      { key: '__subject__', label: history.name, value: num(latest.shareOfVoice), isSubject: true },
+      ...latest.competitors.map((c) => ({
+        key: c.competitorId,
+        label: c.name,
+        value: num(c.shareOfVoice),
+      })),
+    ],
+  };
 }
 
 /**

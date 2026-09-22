@@ -9,7 +9,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { PromptsPanel } from './ClientPromptsView';
+import { PromptsPanel, runSegments } from './ClientPromptsView';
 import {
   EXHAUSTED,
   LIMITS,
@@ -181,5 +181,35 @@ describe('empty and error states', () => {
     const html = panel({ problem: 'The engines could not be reached.' });
     expect(html).toContain('That prompt did not run');
     expect(html).toContain('The engines could not be reached.');
+  });
+});
+
+
+/**
+ * The per-run strip — 2026-09-22. Named you / did not name you / did not
+ * answer, summed inline; the three-way distinction the cards already draw,
+ * readable before the cards are.
+ */
+describe('each run carries a strip of what the engines did', () => {
+  it('keeps "did not name you" apart from "did not answer" on the strip', () => {
+    // mixedRun: one engine named the client, one answered without naming it,
+    // one timed out.
+    const segments = runSegments(mixedRun);
+    expect(segments.map((s) => `${s.key}=${s.value}`)).toEqual([
+      'named=1',
+      'unnamed=1',
+      'failed=1',
+    ]);
+    const html = panel();
+    expect(html).toContain('avp-verdict__seg--tone-beacon');
+    expect(html).toContain('avp-verdict__seg--tone-neutral');
+    expect(html).toContain('avp-verdict__seg--tone-warn');
+    expect(html).toContain('did not answer');
+  });
+
+  it('a run nobody named is a strip with no beacon segment, not an error', () => {
+    const html = panel({ runs: [absentRun] });
+    expect(html).not.toContain('avp-verdict__seg--tone-beacon');
+    expect(html).toContain('Did not name you');
   });
 });

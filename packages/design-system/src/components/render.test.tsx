@@ -17,12 +17,14 @@ import { EmptyState } from './state/EmptyState.js';
 import { LuminanceLedger } from './chart/LuminanceLedger.js';
 import { AnswerShelf } from './chart/AnswerShelf.js';
 import { TrendChart } from './chart/TrendChart.js';
+import { ShareBar } from './chart/ShareBar.js';
 import { SentimentTide, negativePatternId } from './chart/SentimentTide.js';
 import { LocalNav, LocalNavItem } from './shell/LocalNav.js';
 import type { ShelfRowInput } from './chart/answerShelfLayout.js';
 import { Beat, Evidence, ReportPage, BEAT_SEQUENCE } from './report/ReportLayout.js';
 import { visibility, beacon, competitor, oklch, benchColor, benchColorDark, dark } from '../tokens/color.js';
 import { DIMENSIONS, COMPETITORS, SUBJECT } from '../styleguide/fixtures.js';
+import { MSM_AV_FIELD } from './chart/shareLayout.fixtures.js';
 
 const html = (node: Parameters<typeof renderToStaticMarkup>[0]) => renderToStaticMarkup(node);
 
@@ -1298,5 +1300,147 @@ describe('LuminanceLedger, partial — a rival is measured on three of five', ()
     expect(out).not.toContain('avp-ledger--partial');
     expect(out).not.toContain('ledger-hatch');
     expect(out).not.toContain('Not measured');
+  });
+});
+
+
+/**
+ * VerdictBar's generalised strip — 2026-09-22. Same honesty as the pass /
+ * warn / fail path: a zero is a legend line, never a sliver; `none` is a
+ * counted segment, not a gap; and the client's own colour is the only thing
+ * on it that is not system state.
+ */
+describe('VerdictBar with named segments', () => {
+  const strip = (segments: Parameters<typeof VerdictBar>[0]['segments']) =>
+    html(<VerdictBar segments={segments as never} ariaLabel="crawlers by verdict" />);
+
+  it('paints each segment by its tone and lists every one, zero included', () => {
+    const out = strip([
+      { key: 'blocked', label: 'Blocked', value: 1, tone: 'danger' },
+      { key: 'allowed', label: 'Allowed', value: 2, tone: 'neutral' },
+      { key: 'unknown', label: 'Not readable', value: 0, tone: 'warn' },
+      { key: 'unspecified', label: 'Not mentioned', value: 1, tone: 'none' },
+    ]);
+    expect(out).toContain('avp-verdict__seg--tone-danger');
+    expect(out).toContain('avp-verdict__seg--tone-neutral');
+    expect(out).toContain('avp-verdict__seg--tone-none');
+    // Zero: in the legend, not on the track.
+    expect(out).not.toContain('avp-verdict__seg--tone-warn');
+    expect(out).toContain('Not readable');
+    expect(out).toContain('width:25%');
+    expect(out).toContain('width:50%');
+  });
+
+  it('never paints a segment from the visibility ramp', () => {
+    const out = strip([
+      { key: 'y', label: 'Named you', value: 2, tone: 'beacon' },
+      { key: 'n', label: 'Did not name you', value: 1, tone: 'neutral' },
+    ]);
+    for (const stop of Object.values(visibility)) {
+      expect(out).not.toContain(oklch(stop));
+    }
+    expect(out).toContain('avp-verdict__seg--tone-beacon');
+  });
+
+  it('draws an empty track when every count is zero', () => {
+    const out = strip([{ key: 'a', label: 'A', value: 0, tone: 'success' }]);
+    expect(out).toContain('avp-verdict__empty');
+  });
+
+  it('leaves the counts path exactly as it was', () => {
+    const out = html(<VerdictBar counts={{ pass: 1, warn: 0, fail: 1 }} ariaLabel="verdicts" />);
+    expect(out).toContain('avp-verdict__seg--pass');
+    expect(out).not.toContain('avp-verdict__seg--tone-');
+  });
+});
+
+/**
+ * ShareBar — share of voice at one moment, 2026-09-22. Built against a real
+ * scan (MSM AV, 22 Sept 2026) whose field has the subject at zero, a rival at
+ * zero, and four real shares. The zero-data rival is the case a happy-path
+ * strip gets wrong silently, so it is asserted first.
+ */
+describe('ShareBar', () => {
+  const bar = (extra: Record<string, unknown> = {}) =>
+    html(<ShareBar shares={MSM_AV_FIELD} ariaLabel="Share of voice in the latest scan" {...extra} />);
+
+  it('gives a zero-share rival no segment and a stated line instead', () => {
+    const out = bar();
+    // Four rects for four real shares — Avalliance is not among them.
+    const rects = out.match(/<rect class="avp-share__seg[^"]*"/g) ?? [];
+    expect(rects).toHaveLength(4);
+    expect(out).toContain('Avalliance');
+    expect(out).toContain('0%, named in none of the answers');
+  });
+
+  it('says the subject holds nothing, marked as this client, rather than hiding it', () => {
+    const out = bar();
+    expect(out).toContain('MSM AV');
+    expect(out).toContain('this client');
+    expect(out).not.toContain('avp-share__seg--subject');
+  });
+
+  it('draws the client in the brand accent when it does hold a share', () => {
+    const out = html(
+      <ShareBar
+        shares={[{ key: 'me', label: 'Plausible', value: 36.3, isSubject: true }, ...MSM_AV_FIELD.slice(1)]}
+        ariaLabel="share"
+      />,
+    );
+    expect(out).toContain('avp-share__seg--subject');
+    expect(out).toContain(oklch(beacon['600']));
+  });
+
+  it('never paints a rival from the visibility ramp, and separates rivals by pattern', () => {
+    const out = bar();
+    for (const stop of Object.values(visibility)) {
+      expect(out).not.toContain(oklch(stop));
+    }
+    expect(out).toContain('url(#avp-');
+  });
+
+  it('segment widths are the shares — the strip is the number', () => {
+    const out = bar();
+    // 38.5% of a 720-unit strip.
+    expect(out).toContain(`width="${(38.5 / 100) * 720}"`);
+  });
+
+  it('carries the accessibility contract every chart here carries, absences included', () => {
+    const out = bar({ title: 'Share of voice' });
+    expect(out).toContain('aria-label="Share of voice in the latest scan"');
+    expect(out).toContain('<table>');
+    expect(out).toContain('Sweetwater');
+    expect(out).toContain('named in none of the answers');
+  });
+
+  it('says "not measured" for a null, distinct from a zero', () => {
+    const out = html(
+      <ShareBar
+        shares={[
+          { key: 'me', label: 'Me', value: 40, isSubject: true },
+          { key: 'r', label: 'Gone', value: null },
+        ]}
+        ariaLabel="share"
+      />,
+    );
+    expect(out).toContain('not measured');
+    expect(out).not.toContain('named in none');
+  });
+
+  it('draws what nobody tracks as an outlined remainder, and names it', () => {
+    const out = html(
+      <ShareBar
+        shares={[{ key: 'me', label: 'Me', value: 40, isSubject: true }]}
+        ariaLabel="share"
+      />,
+    );
+    expect(out).toContain('avp-share__seg--remainder');
+    expect(out).toContain('Other brands named');
+    expect(out).toContain('>60%<');
+  });
+
+  it('renders identically on the Working palette apart from the rivals\' hues', () => {
+    const strip = (o: string) => o.replace(/fill="[^"]*"/g, '').replace(/stroke="[^"]*"/g, '');
+    expect(strip(bar({ palette: 'working' }))).toBe(strip(bar()));
   });
 });

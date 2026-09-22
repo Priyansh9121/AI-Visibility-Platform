@@ -17,6 +17,7 @@ import {
   LuminanceLedger,
   AnswerShelf,
   TrendChart,
+  ShareBar,
   ChartPatterns,
   ReportPage,
   MetaChip,
@@ -57,6 +58,7 @@ import {
   EVIDENCE,
   FIXES,
   SHELF_ROWS,
+  SHARE_FIELD,
   TREND_POINTS,
   TREND_SERIES,
   type CompetitorRow,
@@ -773,6 +775,30 @@ export function Styleguide(): JSX.Element {
           and rendered its 11px axis labels at 17.6px, larger than the body copy beside them. The
           figure is bounded at <code>layout.width</code>, so one unit is at most one pixel. Widen
           this window: the chart stops growing, and the labels stay the size they are here.
+        </p>
+      </Section>
+      {/* ============================================================ */}
+      <Section
+        num="09c"
+        title="The Share — one moment, divided"
+        note="Share of voice at a single scan, as one strip whose segment widths are the shares. It stacks under the Trend of the same figure without changing language: length, not angle, as everywhere else here."
+      >
+        <div className="sg-panel">
+          <ShareBar
+            shares={SHARE_FIELD}
+            title="Share of voice, latest scan"
+            caption="A real scan: MSM AV holds none of the field, Avalliance was in the set and named nowhere, and four rivals hold the whole."
+            ariaLabel="Share of voice in the latest scan of MSM AV."
+          />
+        </div>
+        <p className="sg-section__note">
+          <strong>A zero is a sentence, not a sliver.</strong> Both products this one is measured
+          against lead with a donut split by competitor, and a donut wants a wedge for every
+          brand — so a brand named in no answer either vanishes or gets a default-sized slice
+          beside a real 38.5%. Here it is never drawn: the legend and the hidden table say{' '}
+          <em>&ldquo;0%, named in none of the answers&rdquo;</em>, and a brand that was not in the
+          set says <em>&ldquo;not measured&rdquo;</em>. Brands the engines named that nobody
+          tracks are an outlined remainder, so the strip still sums to the whole.
         </p>
       </Section>
 

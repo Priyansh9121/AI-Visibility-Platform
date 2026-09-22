@@ -66,7 +66,9 @@ import {
   SelectField,
   StatRow,
   StatTile,
+  VerdictBar,
 } from '@avp/design-system';
+import type { VerdictSegment } from '@avp/design-system';
 import type { CrawlerAccess, CrawlerAgent, Me } from '@avp/shared-types';
 import { ClientSpace } from '@/components/client/ClientSpace';
 import { accentFor } from '@/components/client/clientNav';
@@ -388,6 +390,28 @@ function Policy({
   );
 }
 
+/**
+ * The group's rows as one strip, by verdict — 2026-09-22.
+ *
+ * The same `VerdictBar` the technical audit uses, given named segments. The
+ * tones follow the badges exactly: `blocked` is the one state with a cost and
+ * is danger; `unknown` is warn; `allowed` is NEUTRAL, deliberately not
+ * success, for the reason `VERDICT` gives; and `unspecified` — no rule names
+ * the crawler — is `none`, unpainted track with an inset line, because it is
+ * the state nobody decided and must read as a counted absence rather than a
+ * gap. Every label is a word this screen already uses, so the vocabulary the
+ * test guards is unchanged: this is what the site ASKS, per crawler, summed.
+ */
+export function verdictSegments(rows: readonly CrawlerAgent[]): VerdictSegment[] {
+  const count = (verdict: string) => rows.filter((r) => r.verdict === verdict).length;
+  return [
+    { key: 'blocked', label: 'Blocked', value: count('blocked'), tone: 'danger' },
+    { key: 'unknown', label: 'Not readable', value: count('unknown'), tone: 'warn' },
+    { key: 'allowed', label: 'Allowed', value: count('allowed'), tone: 'neutral' },
+    { key: 'unspecified', label: 'Not mentioned', value: count('unspecified'), tone: 'none' },
+  ];
+}
+
 function PurposeGroup({
   group,
   rows,
@@ -396,6 +420,11 @@ function PurposeGroup({
   rows: readonly CrawlerAgent[];
 }): JSX.Element {
   const captionId = `avp-crawler-${group.key}`;
+  const segments = verdictSegments(rows);
+  const summary = segments
+    .filter((s) => s.value > 0)
+    .map((s) => `${s.value} ${s.label.toLowerCase()}`)
+    .join(', ');
   return (
     <section className="flex flex-col gap-2">
       <h3
@@ -408,6 +437,22 @@ function PurposeGroup({
       <p className="max-w-measure text-ui-xs leading-prose text-text-secondary">
         {group.cost}
       </p>
+      {/*
+        The group at a glance, before the rows: on a real client the one
+        blocked crawler among fourteen is a thin danger segment in its own
+        group's strip, which is the finding the whole grouping exists to
+        surface. A strip, not a chart — the rows beneath it are its data
+        table, exactly as `VerdictBar`'s own note says.
+      */}
+      <VerdictBar
+        className="max-w-page"
+        // Only the verdicts this group actually holds. A legend line reading
+        // "Not mentioned 0" under an unreadable robots.txt is the permissive
+        // claim the vocabulary test forbids, and a zero here is not a finding
+        // the way the tiles' zeros are — the rows beneath are the full list.
+        segments={segments.filter((s) => s.value > 0)}
+        ariaLabel={`${group.label} crawlers, by what this site asks of them: ${summary || 'none'}.`}
+      />
       {/*
         `max-w-page` on the LIST, not on the section — found by driving this
         at 1440px. The rows put the agent's name hard left and its badge hard

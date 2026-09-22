@@ -735,6 +735,62 @@ hidden data table is rendered, both via `ChartFrame`.
 
 ---
 
+## 5f. ShareBar — the field at one moment, 2026-09-22
+
+`<ShareBar shares ariaLabel title caption unit palette zeroNote remainderLabel />`
+
+### Why a strip and not a donut
+
+Both products this one is measured against lead their dashboards with a donut
+split by competitor. A donut encodes by **angle**, and every shape in this
+system already agrees on **length**: the Ledger's lit height is the composite,
+`ScoreMeter`'s lit fraction is the score, `VerdictBar`'s widths are the counts,
+`TrendChart` plots the same share on a length axis over time. A strip whose
+segment widths *are* the shares is that identity again, and it sits above the
+Rankings trend of the same figure without changing language halfway down the
+page.
+
+### A zero is a sentence, never a sliver
+
+The reason it had to be its own shape. A donut with N brands wants N wedges,
+and a brand with a zero share or no reading either vanishes or gets a
+default-sized wedge beside a real 38.5% — which is the silent lie a
+happy-path implementation tells first. Here a **measured zero** is never drawn:
+it is a line in the legend and the hidden table, *"0%, named in none of the
+answers"*. An **unmeasured** share (`null`) says *"not measured"*. The two are
+different facts and the layout keeps them apart (`shareLayout.ts`, tested
+against the MSM AV scan of 22 Sept 2026, whose subject holds none of the
+field and whose rival Avalliance sits at exactly 0.0 beside four real shares).
+
+Brands the engines named that nobody tracks are an **outlined remainder**, so
+the strip still sums to the whole and the gap reads as "someone else" rather
+than as empty — but only when at least one share was measured. Nothing
+measured, nothing claimed about the rest of the field either.
+
+### The colour rule is §1's, unchanged
+
+The subject is beacon, solid. Rivals come from `seriesStyle('competitor')` —
+neutral slate on the report, bench hues on a Working screen — with a fill
+pattern per rival, so a greyscale print keeps five brands as five segments. The
+visibility ramp is never touched; a rival's share is not a score.
+
+Same accessibility contract as every chart here: `ariaLabel` required, a
+hidden data table with every brand and every absence, via `ChartFrame`. Bounded
+at its drawn width, for Epic 9.21's reason.
+
+### `VerdictBar` gained named segments the same day
+
+The technical audit's pass / warn / fail strip now also accepts `segments`: any
+ordered list of named integers with a tone — `success` / `warn` / `danger` for
+system state, `neutral` for a state with no charge, `beacon` for the one
+segment that *is* the client, and `none` for "nothing decided", drawn as
+unpainted track with an inset line so it is counted rather than mistaken for a
+gap. It summarises a robots.txt policy per crawler group (the Crawler screen)
+and what each engine did with a question (the Prompts screen) without a second
+component that draws the same thing. The `counts` path is unchanged.
+
+---
+
 ## 5e. LocalNav — navigation scoped to one record, Epic 9.20
 
 `AppShell`'s sidebar is **agency-wide**: every item in it is about the whole

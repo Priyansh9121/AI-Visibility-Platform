@@ -1891,6 +1891,85 @@
   box-shadow: inset 0 0 0 1px var(--avp-line-strong);
 }
 
+/* The generalised strip's tones — 2026-09-22. Semantic for state, neutral for
+   a state with no charge, beacon for the one segment that is the client, and
+   `none` for "nothing decided": unpainted track with an inset line, so it is
+   counted as a segment rather than mistaken for a gap. */
+.avp-verdict__seg--tone-success, .avp-verdict__dot--tone-success { background: var(--avp-success); }
+.avp-verdict__seg--tone-warn, .avp-verdict__dot--tone-warn { background: var(--avp-warn); }
+.avp-verdict__seg--tone-danger, .avp-verdict__dot--tone-danger { background: var(--avp-danger); }
+.avp-verdict__seg--tone-neutral, .avp-verdict__dot--tone-neutral { background: var(--avp-text-tertiary); }
+.avp-verdict__seg--tone-beacon, .avp-verdict__dot--tone-beacon { background: var(--avp-beacon-600); }
+.avp-verdict__seg--tone-none, .avp-verdict__dot--tone-none {
+  background: var(--avp-surface-void);
+  box-shadow: inset 0 0 0 1px var(--avp-line-strong);
+}
+
+/* ============================ ShareBar ============================ */
+/* Share of voice at one moment, as one divided strip — 2026-09-22. Segment
+   widths ARE the shares; a zero share and an unmeasured one are lines in the
+   legend, never slivers. Series colours come from tokens/color.ts in the
+   component; this only draws the seams, the remainder and the legend. */
+
+.avp-share__svg { display: block; width: 100%; height: auto; overflow: visible; }
+
+/* A paper-coloured seam between segments, so adjacent patterns stay apart. */
+.avp-share__seg { stroke: var(--avp-surface-ground); stroke-width: 1; }
+.avp-share__seg--outline { fill: transparent; stroke-width: 1.5; }
+
+/* Brands the engines named that nobody tracks: an outline, not a colour. */
+.avp-share__seg--remainder {
+  fill: var(--avp-surface-void);
+  stroke: var(--avp-line-strong);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.avp-share__seg--empty { fill: var(--avp-surface-void); stroke: none; opacity: 0.55; }
+
+.avp-share__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--avp-space-2) var(--avp-space-5);
+  margin: var(--avp-space-3) 0 0;
+}
+
+.avp-share__item { display: flex; align-items: baseline; gap: var(--avp-space-2); }
+
+.avp-share__swatch {
+  width: var(--avp-space-3);
+  height: var(--avp-space-2);
+  flex: none;
+  align-self: center;
+  display: inline-block;
+  margin-right: var(--avp-space-1_5);
+  vertical-align: middle;
+}
+
+.avp-share__label {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--avp-text-ui-xs);
+  color: var(--avp-text-secondary);
+}
+
+.avp-share__label--subject { font-weight: 600; color: var(--avp-text-primary); }
+.avp-share__you { font-weight: 400; color: var(--avp-text-tertiary); }
+
+.avp-share__value {
+  margin: 0;
+  font-size: var(--avp-text-ui-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--avp-text-primary);
+}
+
+/* An absence is quieter than a share, and it is words, not a swatch. */
+.avp-share__absent {
+  margin: 0;
+  font-size: var(--avp-text-ui-xs);
+  color: var(--avp-text-tertiary);
+}
+
 /* ============================ Trend ============================== */
 /* The first time-series shape in this system — Epic 9.20. The SERIES colours
    are painted from tokens/color.ts in the component. */

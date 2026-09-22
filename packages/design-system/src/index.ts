@@ -49,6 +49,8 @@ export { ScoreMeter, type ScoreMeterProps, type ScoreAbsence } from './component
 export {
   VerdictBar,
   type VerdictBarProps,
+  type VerdictSegment,
+  type VerdictTone,
   type VerdictCounts,
 } from './components/VerdictBar.js';
 export { TextField, type TextFieldProps } from './components/TextField.js';
@@ -63,6 +65,19 @@ export { ChartPatterns, patternPaint } from './components/chart/ChartPatterns.js
 export { LuminanceLedger, type LuminanceLedgerProps } from './components/chart/LuminanceLedger.js';
 export { AnswerShelf, type AnswerShelfProps } from './components/chart/AnswerShelf.js';
 export { TrendChart, type TrendChartProps } from './components/chart/TrendChart.js';
+export { ShareBar, type ShareBarProps } from './components/chart/ShareBar.js';
+export {
+  layoutShare,
+  SHARE_WIDTH,
+  SHARE_HEIGHT,
+  REMAINDER_FLOOR,
+  type ShareInput,
+  type ShareSegment,
+  type ShareAbsent,
+  type ShareAbsence,
+  type ShareLayout,
+  type ShareLayoutOptions,
+} from './components/chart/shareLayout.js';
 export {
   SentimentTide,
   negativePatternId,
