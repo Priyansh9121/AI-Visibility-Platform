@@ -145,9 +145,9 @@ describe('the header is on page one, before any scrolling or clicking', () => {
 });
 
 describe('the price is published, deliberately', () => {
-  it('states $29 a month on the pricing card', () => {
+  it('states $160 a month on the pricing card', () => {
     const out = html();
-    expect(out).toContain('$29');
+    expect(out).toContain('$160');
     expect(out).toContain('per month');
   });
 
@@ -159,12 +159,12 @@ describe('the price is published, deliberately', () => {
 
   it('agrees with itself everywhere a number appears', () => {
     const out = html();
-    // A page that says $29 in one place and something else in another is worse
+    // A page that says $160 in one place and something else in another is worse
     // than a page with no price. Both mentions come from one constant; this
     // asserts no third, hand-typed one crept in.
     const prices = out.match(/\$\d+/g) ?? [];
     expect(prices.length).toBeGreaterThan(0);
-    expect(new Set(prices)).toEqual(new Set(['$29']));
+    expect(new Set(prices)).toEqual(new Set(['$160']));
   });
 
   it('offers sign-up, not checkout, to a visitor with no account', () => {
@@ -341,7 +341,7 @@ describe('the page arrives rather than being already there — Epic 9.16', () =>
     // until it arrives; it must never remove it from the document.
     const out = live();
     expect(out).toContain('For SEO and digital marketing agencies');
-    expect(out).toContain('$29');
+    expect(out).toContain('$160');
     expect(out).toContain('One URL in, and nothing else to fill in');
     expect(out).toContain('Signing up is free and stays free');
   });

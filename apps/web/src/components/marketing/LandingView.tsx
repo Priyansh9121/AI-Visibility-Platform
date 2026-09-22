@@ -21,7 +21,9 @@
  *   - four vendors, one of them searching  — Epic 21 (five engines) narrowed to four
  *                                            defaults on 2026-09-12 (build log)
  *   - PDF export and a share link          — Epic 9.8 and 9.14, both shipped
- *   - $29/month, 3 seats                   — Epic 9.15, a real Stripe Price
+ *   - $160/month, 3 seats                  — Epic 9.15 at $29, repriced 2026-09-22;
+ *                                            the Stripe Price is still the $29 one
+ *                                            (see `PLAN_PRICE_USD`)
  *
  * NOTHING ELSE IS CLAIMED. There are no testimonials, no customer logos, no
  * user counts, no press mentions and no funding line on this page, because

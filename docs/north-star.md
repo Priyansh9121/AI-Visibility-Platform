@@ -702,14 +702,16 @@ recognising one that exists.**
 
 #### 5.3.1 What is now real — [DECIDED, on the founder's explicit instruction]
 
-**One plan, $29/month, 3 seats, published on the public landing page.**
+**One plan, $160/month, 3 seats, published on the public landing page.** ($29
+from Epic 9.15 until 2026-09-22, when the founder repriced it.)
 
 | | |
 |---|---|
-| Price | **$29.00 USD / month**, recurring, no annual option |
+| Price | **$160.00 USD / month**, recurring, no annual option — $29.00 until 2026-09-22 |
 | Seats | **3** — `Agency.seat_limit`'s existing default, not a new entitlement |
 | Where it is published | `apps/web/src/components/marketing/LandingView.tsx`, Pricing section |
 | Where the number lives in code | `PricingCard.tsx`'s `PLAN_PRICE_USD`, and the Stripe Price object |
+| Are the two in step? | **Not since 2026-09-22.** `PLAN_PRICE_USD` is 160; the only active Price on the test-mode Stripe account is still `price_1U9For…` at **$29.00** (read 2026-09-22). Creating a $160 Price and pointing `STRIPE_PRICE_ID` at it is the founder's action; until then the page quotes $160 and checkout subscribes at $29 |
 | Payment processor | **Stripe** — chosen and built, Epic 9.15 |
 | Stripe mode | **TEST MODE.** `sk_test_…` / `price_…` with `livemode: false` |
 | Real money moved | **None. Not one cent.** See the caveat below |
@@ -718,7 +720,7 @@ recognising one that exists.**
 did so by founder decision rather than by evidence.** The re-validation trigger
 at §0 has NOT fired: no pilot conversation has happened, no pricing objection
 has been heard, and §5.1's per-scan dollar cost is still unmeasured. So the
-$29 figure is **decided, not validated** — those are different things, and the
+$160 figure — and the $29 before it — is **decided, not validated** — those are different things, and the
 distinction is the whole reason this document has labels. What changed is that
 the founder chose to publish a number and charge against it; what did not
 change is that nobody has yet paid it or argued about it.
@@ -745,7 +747,7 @@ decision and must say so.
 code.** Only ONE plan is built and sold. These three rows remain shape, not
 price. **Do not quote them.** They also rest on a per-scan cost that has never
 been measured (§5.1) — so the margin implied by any of them is currently
-unknowable, which is equally true of the $29 above.
+unknowable, which is equally true of the $160 above.
 
 | Tier | Seats | Scans / month | Intended buyer |
 |---|---|---|---|

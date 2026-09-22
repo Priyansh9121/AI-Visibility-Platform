@@ -27,6 +27,7 @@ import { WorkspaceShell } from '@/components/shell/WorkspaceShell';
 import { SeatsPanel } from '@/components/settings/SeatsPanel';
 import { PasswordChangePanel } from '@/components/settings/PasswordChangePanel';
 import { BillingPanel } from '@/components/settings/BillingPanel';
+import { PLAN_PRICE_USD } from '@/components/marketing/PricingCard';
 import { ThemeControl } from '@/components/settings/ThemeControl';
 
 /** Roles that may invite and remove. A member holds a seat; they do not grant them. */
@@ -180,7 +181,7 @@ export function SettingsView({
           <PageSection
             eyebrow="Billing"
             heading="What you pay"
-            lead="One plan, $29 a month, 3 seats. Nothing in the product is behind it — subscribing is how you pay for this, not how you unlock it."
+            lead={`One plan, $${PLAN_PRICE_USD} a month, 3 seats. Nothing in the product is behind it — subscribing is how you pay for this, not how you unlock it.`}
           >
             <BillingPanel
               agencyId={state.me.agency.id}

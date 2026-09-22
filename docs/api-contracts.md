@@ -553,7 +553,11 @@ Three refusals:
 
 ### Billing (subscriptions) — Epic 9.15
 
-**One plan, $29/month, 3 seats.** Stripe, in **TEST MODE**: the keys are
+**One plan, $160/month, 3 seats** — $29 from Epic 9.15 until 2026-09-22. The
+test-mode Stripe Price behind `STRIPE_PRICE_ID` is still the $29.00 one (the
+only active Price on the account, read 2026-09-22); until the founder creates a
+$160 Price and names it, checkout subscribes at $29 (build log, 2026-09-22).
+Stripe, in **TEST MODE**: the keys are
 `sk_test_…` and `price_…` with `livemode: false`, and **no code anywhere behaves
 differently on a live key.** Going live is swapping two environment variables.
 
