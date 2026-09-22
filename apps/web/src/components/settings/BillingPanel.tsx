@@ -7,7 +7,7 @@
  * built yet" list since Epic 9.13, with the reason attached: north-star.md §5.3
  * recorded pricing as undecided, and "showing a plan picker would imply a
  * decision nobody has made". A decision has now been made — one plan, $29/month
- * — so the line comes off and the real thing takes its place. That is the same
+ * (then; $160 since 2026-09-22, through the same `PLAN_PRICE_USD`) — so the line comes off and the real thing takes its place. That is the same
  * rule 9.14 applied when seat management shipped, cutting in the same
  * direction.
  *

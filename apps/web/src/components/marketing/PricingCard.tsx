@@ -10,8 +10,9 @@
  * tiers were [HYPOTHESIS] and publishing one would have turned a working
  * assumption into a public promise.
  *
- * That changed by founder decision, not by drift. $29/month is now a real,
- * published price backed by a real Stripe Price object, and §5.3 has been
+ * That changed by founder decision, not by drift. $29/month became a real,
+ * published price backed by a real Stripe Price object (repriced to $160 on
+ * 2026-09-22 — `PLAN_PRICE_USD` below says what did and did not move), and §5.3 has been
  * updated to say so rather than left to contradict this page. The rest of Epic
  * 9.10's rule is untouched: no testimonial, no logo wall, no user count, no
  * invented scale. A price the founder decided to charge is a fact about us; a
@@ -56,8 +57,17 @@ import { Button, Card, CardBody } from '@avp/design-system';
  * page's copy of it, and the two are kept in step by hand today. If a second
  * price ever exists, this stops being tenable and the value has to come from
  * the API.
+ *
+ * Repriced $29 → $160 on 2026-09-22, again by founder decision. The number
+ * moved here and in every test that pins it; the Stripe Price object did NOT
+ * move with it. `STRIPE_PRICE_ID` still names the $29.00 Price
+ * (`price_1U9For…`, the only active Price on the test-mode account, read on
+ * 2026-09-22), so until the founder creates a $160 Price and points the
+ * environment at it, this page quotes $160 and checkout subscribes at $29.
+ * That is exactly the "kept in step by hand" deal the paragraph above
+ * describes, and today the two are out of step. Build log, 2026-09-22.
  */
-export const PLAN_PRICE_USD = 29;
+export const PLAN_PRICE_USD = 160;
 
 /**
  * Seats included, matching `Settings.default_seat_limit` (3) and

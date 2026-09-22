@@ -132,7 +132,7 @@ describe('the "not built yet" list is maintained in both directions', () => {
     expect(html).not.toContain('records pricing as undecided');
     // The real thing is there instead.
     expect(html).toContain('What you pay');
-    expect(html).toContain('$29 a month');
+    expect(html).toContain('$160 a month');
   });
 
   it('still names the things that genuinely are missing', () => {
@@ -161,7 +161,7 @@ describe('billing', () => {
     const html = render(READY);
     expect(html).toContain('No subscription');
     expect(html).toContain('Subscribe');
-    expect(html).toContain('$29');
+    expect(html).toContain('$160');
   });
 
   it('states the renewal date when a subscription is live', () => {

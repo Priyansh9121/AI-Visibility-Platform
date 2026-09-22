@@ -41,7 +41,7 @@ describe('no subscription — the state every agency is in today', () => {
     // The SAME component the landing page renders, in its signed-in state, so
     // the price someone was quoted on the way in is the price they see on the
     // way to paying it.
-    expect(html).toContain('$29');
+    expect(html).toContain('$160');
     expect(html).toContain('per month');
     expect(html).toContain('Subscribe');
   });
