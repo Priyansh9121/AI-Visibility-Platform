@@ -1954,7 +1954,10 @@
 }
 
 .avp-share__label--subject { font-weight: 600; color: var(--avp-text-primary); }
-.avp-share__you { font-weight: 400; color: var(--avp-text-tertiary); }
+/* A flex item's leading space collapses, and the label is inline-flex; `pre-wrap`
+   keeps the " · " that separates the brand from "this client" — caught in the
+   2026-09-22 screenshots as "MSM AV· this client". */
+.avp-share__you { font-weight: 400; color: var(--avp-text-tertiary); white-space: pre-wrap; }
 
 .avp-share__value {
   margin: 0;
