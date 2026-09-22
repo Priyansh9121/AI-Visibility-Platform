@@ -24,6 +24,7 @@ import {
   ScoreMeter,
   StatRow,
   StatTile,
+  ShareBar,
   TrendChart,
 } from '@avp/design-system';
 import type { BadgeTone, Column, ScoreAbsence, TrendSeriesInput } from '@avp/design-system';
@@ -43,6 +44,7 @@ import {
   hasTrend,
   intermittentRivals,
   rankingSeries,
+  shareSplit,
   sourceSeries,
   trendPoints,
 } from '@/lib/client/trends';
@@ -476,16 +478,51 @@ export function ClientRankingsView({
   return (
     <Frame state={state} me={me} current="rankings">
       {({ history }) => {
-        if (!hasTrend(history)) return <NoTrendYet history={history} what="rankings" />;
-        const points = trendPoints(history);
-        const series = rankingSeries(history);
-        const intermittent = intermittentRivals(history);
+        const split = shareSplit(history);
+        const trend = hasTrend(history);
+        if (!split && !trend) return <NoTrendYet history={history} what="rankings" />;
+        const points = trend ? trendPoints(history) : [];
+        const series = trend ? rankingSeries(history) : [];
+        const intermittent = trend ? intermittentRivals(history) : [];
+        const subjectShare = split?.shares[0]?.value ?? null;
         return (
           <section className="flex flex-col gap-6">
             <Intro
               heading="How the field is sharing the answers"
               lead="Share of voice is this client's mentions as a fraction of every brand named in the same answers — so a rival's rise is this client's fall, and the lines sum across the field."
             />
+            {split && (
+              /*
+                THE SPLIT, BEFORE THE DIRECTION — 2026-09-22.
+                The trend below needs two scans; a client scanned once has a
+                share of voice but nothing to compare it against, and until
+                now this screen answered that with an empty state. The strip
+                is the snapshot: one scan, the field divided, widths that ARE
+                the shares. A zero — the subject's, or a rival's like
+                Avalliance on the MSM AV scan this was built against — is a
+                sentence in its legend, never a segment.
+              */
+              <Card elevation="seated" className="p-6">
+                <ShareBar
+                  shares={split.shares}
+                  palette="working"
+                  title="Share of voice in the latest scan"
+                  caption={
+                    subjectShare === null
+                      ? `Scanned ${formatStamp(split.scannedAt)}. This client's own share was not measured in this scan.`
+                      : subjectShare === 0
+                        ? `Scanned ${formatStamp(split.scannedAt)}. ${history.name} was named in none of the answers, so it holds none of the field.`
+                        : `Scanned ${formatStamp(split.scannedAt)}. ${history.name} holds ${subjectShare}% of every brand mention in the answers.`
+                  }
+                  zeroNote="named in none of the answers"
+                  ariaLabel={`Share of voice in the scan of ${formatStamp(split.scannedAt)}. ${split.shares
+                    .map((s) => `${s.label}: ${s.value === null ? 'not measured' : `${s.value}%`}`)
+                    .join('. ')}`}
+                />
+              </Card>
+            )}
+            {!trend && <NoTrendYet history={history} what="rankings" />}
+            {trend && (
             <Card elevation="seated" className="grid items-start gap-8 p-6 lg:grid-cols-[auto_minmax(16rem,1fr)]">
                 <TrendChart
                   points={points}
@@ -520,6 +557,7 @@ export function ClientRankingsView({
                 />
               <SeriesLedger series={series} unit={"%"} />
             </Card>
+            )}
             {intermittent.length > 0 && (
               // The gaps in the chart, explained rather than left to be
               // noticed. A rival missing from one scan's set is a real event —

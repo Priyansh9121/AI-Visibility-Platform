@@ -16695,3 +16695,120 @@ the button on the deployed front door, which mints a fresh one — the
 printed one is single-use and ten minutes), choose the test-user account,
 consent, and land on `/dashboard` signed in. That landing is the round
 trip; nothing here claims it.
+
+# The report visualisations, extended: a share strip for the one gap that was real, the verdict strip generalised for the two thin pages, and what the brief assumed that the tree did not bear out
+
+**2026-09-22.** The brief came with a market catalogue of chart shapes, a
+real scan to build against, and an instruction to verify the tree before
+trusting any of it. Verified first; three of its premises did not hold,
+one gap was genuine, and the two thin pages needed a different shape from
+the one it expected. No chart library was imported; everything below is
+the house's own SVG and CSS, under the same rules as every shape before it.
+
+## What was found to exist, against what the brief assumed
+
+- **`/clients/{id}/rankings` and `/sources` are real pages**, not
+  unbuilt ones: both routes render `ClientRankingsView` and
+  `ClientSourcesView`, exported from `ClientDetailView.tsx` since Epic
+  9.20 — a naming mismatch, not missing work. Rankings is share of voice
+  over time as a `TrendChart`; Sources is citations per domain over time.
+- **Share of voice at ONE moment was the genuine gap.** It existed only as
+  lines over time (Rankings) and as numbers in each rival's card
+  (Competitors). Nothing drew the field divided at a single scan, and a
+  client scanned once — the state every new client is in — got an empty
+  state on Rankings, because a trend needs two points. `LuminanceLedger`
+  was checked and is not it: it is one brand's dimensions, not a field's
+  shares.
+- **The Prompts page has no time series to draw.** It is the operator's
+  prompt-run screen (Epic 9.24), and its own docstring forbids a run from
+  ever appearing in a trend, because a question an operator typed is not
+  a measurement. `TrendChart` would have been the wrong claim, not the
+  wrong chart.
+- **The Crawler page has no activity to draw.** It reads a robots.txt
+  policy — what the site *asks* each crawler — and `ClientCrawlerView.test`
+  forbids the words "activity", "visits", "traffic", "hits", because no
+  crawl log is ingested anywhere. A bar chart of crawl activity by day,
+  the PromptWatch shape the brief pointed at, cannot exist here honestly.
+- **A competitor-by-engine sentiment heatmap cannot exist either.**
+  Sentiment is classified toward the subject only (scoring-spec rule 4);
+  rivals have no tone. The subject-by-engine row already exists in the
+  report's cross-engine reading. Not built, and this says why.
+- **`VerdictBar` already was a proportional strip.** Pass / warn / fail as
+  one bar with semantic tones and a legend that is its own data table —
+  the shape the two thin pages needed, with different categories.
+
+## Built
+
+**`ShareBar`** (`packages/design-system/src/components/chart/ShareBar.tsx`,
+`shareLayout.ts`): share of voice at one scan as one divided strip whose
+segment widths *are* the shares. A strip and not the donut both rivals
+lead with, for two reasons recorded in `design-system.md` §5f: every shape
+in this system encodes by length, and a donut wants a wedge for every
+brand — which is exactly how a zero-share rival becomes a confident slice.
+Here a **measured zero is never drawn**; it is a line in the legend and
+the hidden table, *"0%, named in none of the answers"*, and an
+**unmeasured** share says *"not measured"*. The layout keeps the two
+apart. Brands the engines named that nobody tracks are an **outlined
+remainder** so the strip still sums to the whole — but only when at least
+one share was measured; nothing measured, nothing claimed. Subject beacon,
+rivals from `seriesStyle` with a fill pattern each, the visibility ramp
+never touched, `ChartFrame`'s accessibility contract, bounded at its drawn
+width.
+
+**Tested against the real scan, not invented numbers.** The MSM AV field
+of 22 Sept 2026 (subject 0.0; Sweetwater 38.5, Shure 26.1, AVI-SPL 18.5,
+Diversified 16.9, Avalliance 0.0) is the layout's fixture
+(`shareLayout.fixtures.ts`, real data kept out of the styleguide's
+fictional fixtures on purpose): four segments, largest first; Avalliance
+no segment and a stated absence; the subject listed first as absent and
+marked as this client; widths equal to the shares; no remainder because
+the four sum to the whole. Twelve more cases cover null, the remainder,
+the rounding floor, overshoot scaled back, subject-first ordering, and the
+all-zero field.
+
+**`VerdictBar` gained `segments`**: any ordered list of named integers with
+a tone — the semantic three, `neutral`, `beacon` for the one segment that
+is the client, and `none` for "nothing decided", unpainted track with an
+inset line so it counts as a segment and does not read as a gap. The
+`counts` path is byte-for-byte unchanged, asserted.
+
+**Wired:**
+
+- **Rankings** shows the strip above the trend — the split, then the
+  direction — and a client scanned once now gets the split *and* the
+  "one scan is not a trend yet" note instead of the note alone.
+  `shareSplit()` in `lib/client/trends.ts` reads the latest scan with a
+  reading, subject first, passing a measured `0.00` as zero and an absent
+  reading as null. The caption states the subject's share in words, and
+  for MSM AV says it was named in none of the answers.
+- **Crawler**: one strip per purpose group, by verdict, with the group's
+  existing vocabulary — blocked (danger), not readable (warn), allowed
+  (neutral, deliberately not success), not mentioned (`none`). Only the
+  verdicts a group holds are listed: the existing guard caught the first
+  draft printing "Not mentioned 0" under an unreadable robots.txt, which
+  is the permissive claim that test exists to refuse.
+- **Prompts**: one strip per run in its header — named you (beacon), did
+  not name you (neutral, the finding), did not answer (warn, the failure),
+  kept apart as the cards below already keep them. The PromptWatch-style
+  inline indicator the brief suggested, rather than a chart the data
+  could not support.
+
+## Not built, and why
+
+The Competitors page did not get a second copy of the split; Rankings is
+share of voice's home and one shape in one place is the rule. The report
+document was not touched: its beats are the design review's, and adding a
+shape to a printed document is a pass of its own. Positional scoring, the
+citation authority taxonomy and query fan-out are scoring and product
+changes the brief itself put out of scope; the Prompts strip leaves the
+position where the cards already print it.
+
+## Verified
+
+Before: API **1324/1324**, web **843/843**, design-system **622/622**,
+shared-types **53**, both typechecks clean, ruff clean, mypy at 48.
+After: design-system **647/647** (25 added: 13 layout, 12 render), web
+**865/865** (12 added across Rankings, Crawler, Prompts and the trend
+helpers), API, shared-types, typechecks, ruff and mypy unchanged.
+`design-system.md` §5f records the shape and the `VerdictBar` extension;
+the styleguide carries a section for the strip on its invented company.

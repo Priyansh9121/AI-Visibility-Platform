@@ -15,7 +15,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { ClientCrawlerView, type CrawlerAccessState } from './ClientCrawlerView';
+import { ClientCrawlerView, verdictSegments, type CrawlerAccessState } from './ClientCrawlerView';
 import type { ClientDetailState } from './ClientDetailView';
 import type { Client, ClientHistory, CrawlerAccess } from '@avp/shared-types';
 import { BENCH_ACCENTS } from '@avp/design-system';
@@ -334,5 +334,34 @@ describe('states', () => {
       detail: 'The request did not complete.',
     });
     expect(html).toContain('This crawler policy could not be loaded');
+  });
+});
+
+
+/**
+ * The per-group strip — 2026-09-22. What the site ASKS, per crawler, summed:
+ * the one blocked crawler is a danger segment in its own group; a silent
+ * robots.txt is a strip of "not mentioned" and nothing painted.
+ */
+describe('each purpose group is summarised as a strip of verdicts', () => {
+  it('a blocked crawler is a danger segment in its group, and the rest are neutral or unpainted', () => {
+    const html = render(shown(notionAccess));
+    expect(html).toContain('avp-verdict__seg--tone-danger');
+    expect(html).toContain('by what this site asks of them');
+    expect(html).toContain('Not mentioned');
+  });
+
+  it('a site that names nobody paints nothing — every segment is the unpainted "none"', () => {
+    const html = render(shown(silentAccess));
+    expect(html).toContain('avp-verdict__seg--tone-none');
+    expect(html).not.toContain('avp-verdict__seg--tone-danger');
+    expect(html).not.toContain('avp-verdict__seg--tone-neutral');
+  });
+
+  it('counts by verdict, listing zeros in the legend without drawing them', () => {
+    const rows = notionAccess.agents.filter((a) => a.purpose === 'search');
+    const segments = verdictSegments(rows);
+    expect(segments.map((s) => s.key)).toEqual(['blocked', 'unknown', 'allowed', 'unspecified']);
+    expect(segments.reduce((n, s) => n + s.value, 0)).toBe(rows.length);
   });
 });

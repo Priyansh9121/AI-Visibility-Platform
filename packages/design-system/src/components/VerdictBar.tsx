@@ -9,14 +9,44 @@ export interface VerdictCounts {
   notApplicable?: number;
 }
 
-export interface VerdictBarProps {
-  counts: VerdictCounts;
+/**
+ * A tone is SYSTEM STATE or STRUCTURE, never a score — the rule the whole
+ * component rests on. `success`/`warn`/`danger` are the semantic set;
+ * `neutral` is a state with no charge ("allowed", "did not name you");
+ * `beacon` is the client's own colour, for the one segment that IS the client
+ * ("engines naming you"); `none` is the absence of any state at all — no rule
+ * applies, nothing was decided — drawn as unpainted track with an inset line
+ * so it is a segment you can count and not a gap you might miss.
+ */
+export type VerdictTone = 'success' | 'warn' | 'danger' | 'neutral' | 'beacon' | 'none';
+
+export interface VerdictSegment {
+  key: string;
+  label: string;
+  value: number;
+  tone: VerdictTone;
+}
+
+interface VerdictBarCommon {
   /** Required, like every data mark in this system. */
   ariaLabel: string;
   /** Show the counts as text beside the bar. */
   showLegend?: boolean;
   className?: string;
 }
+
+/**
+ * Two input shapes, one strip. `counts` is the original — the technical
+ * audit's pass / warn / fail. `segments` (2026-09-22) is any ordered list of
+ * named integers with a tone each, so the same strip can summarise a
+ * robots.txt policy by verdict or a prompt run by what each engine did,
+ * without a second component that draws the same thing.
+ */
+export type VerdictBarProps = VerdictBarCommon &
+  (
+    | { counts: VerdictCounts; segments?: undefined }
+    | { segments: readonly VerdictSegment[]; counts?: undefined }
+  );
 
 /**
  * VerdictBar — pass / warn / fail as one proportional strip.
@@ -46,11 +76,22 @@ export interface VerdictBarProps {
  * Pure and hook-free, so it stays server-renderable.
  */
 export function VerdictBar({
-  counts,
   ariaLabel,
   showLegend = true,
   className,
+  ...input
 }: VerdictBarProps): JSX.Element {
+  if (input.segments !== undefined) {
+    return (
+      <SegmentStrip
+        segments={input.segments}
+        ariaLabel={ariaLabel}
+        showLegend={showLegend}
+        className={className}
+      />
+    );
+  }
+  const counts = input.counts;
   const notApplicable = counts.notApplicable ?? 0;
   // `not_applicable` is EXCLUDED from the denominator on purpose. A check that
   // does not apply to this site is not a check it passed, and folding it in
@@ -99,6 +140,51 @@ export function VerdictBar({
   );
 }
 
+/**
+ * The generalised strip. Same track, same legend-is-the-data-table contract,
+ * same rule that a zero is listed and never drawn as a sliver of colour.
+ */
+function SegmentStrip({
+  segments,
+  ariaLabel,
+  showLegend,
+  className,
+}: {
+  segments: readonly VerdictSegment[];
+  ariaLabel: string;
+  showLegend: boolean;
+  className: string | undefined;
+}): JSX.Element {
+  const measured = segments.reduce((n, s) => n + s.value, 0);
+  const pct = (n: number) => (measured === 0 ? 0 : (n / measured) * 100);
+  return (
+    <div className={cn('avp-verdict', className)}>
+      <div className="avp-verdict__track" role="img" aria-label={ariaLabel}>
+        {measured === 0 ? (
+          <div className="avp-verdict__empty" />
+        ) : (
+          segments
+            .filter((s) => s.value > 0)
+            .map((s) => (
+              <div
+                key={s.key}
+                className={cn('avp-verdict__seg', `avp-verdict__seg--tone-${s.tone}`)}
+                style={{ width: `${pct(s.value)}%` }}
+              />
+            ))
+        )}
+      </div>
+      {showLegend && (
+        <dl className="avp-verdict__legend">
+          {segments.map((s) => (
+            <Item key={s.key} label={s.label} value={s.value} tone={`tone-${s.tone}`} />
+          ))}
+        </dl>
+      )}
+    </div>
+  );
+}
+
 function Item({
   label,
   value,
@@ -106,7 +192,7 @@ function Item({
 }: {
   label: string;
   value: number;
-  tone: 'pass' | 'warn' | 'fail' | 'na';
+  tone: 'pass' | 'warn' | 'fail' | 'na' | `tone-${VerdictTone}`;
 }): JSX.Element {
   return (
     <div className="avp-verdict__item">

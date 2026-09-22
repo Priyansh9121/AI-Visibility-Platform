@@ -24,6 +24,7 @@ import {
   oneScanPlusDeadHistory,
   shiftingSetHistory,
   threeScanHistory,
+  msmAvHistory,
 } from '@/lib/client/__fixtures__/history';
 
 const CLIENT = identifiedClient as Client;
@@ -237,5 +238,37 @@ describe('loading and failure', () => {
     expect(html).toContain('No such client');
     expect(html).toContain('role="alert"');
     expect(html).toContain('Back to clients');
+  });
+});
+
+
+/**
+ * The split at one scan — 2026-09-22, built against the MSM AV scan whose
+ * field has the subject at zero, a rival at zero, and four real shares.
+ */
+describe('Rankings shows the field divided at the latest scan', () => {
+  it('draws the four real shares and lists the two zeros as sentences, never segments', () => {
+    const html = rankings(msmAvHistory);
+    expect(html).toContain('Share of voice in the latest scan');
+    const segments = html.match(/<rect class="avp-share__seg[^"]*"/g) ?? [];
+    expect(segments).toHaveLength(4);
+    expect(html).toContain('Sweetwater');
+    expect(html).toContain('Avalliance');
+    expect(html).toContain('0%, named in none of the answers');
+    expect(html).toContain('MSM AV was named in none of the answers, so it holds none of the field.');
+  });
+
+  it('a single scan gets the split AND the note that it is not yet a trend', () => {
+    const html = rankings(msmAvHistory);
+    expect(html).toContain('avp-share__svg');
+    expect(html).toContain('One scan is not a trend yet');
+    expect(html).not.toContain('avp-trend__svg');
+  });
+
+  it('three scans get the split above the trend', () => {
+    const html = rankings(threeScanHistory);
+    expect(html).toContain('avp-share__svg');
+    expect(html).toContain('avp-trend__svg');
+    expect(html.indexOf('avp-share__svg')).toBeLessThan(html.indexOf('avp-trend__svg'));
   });
 });

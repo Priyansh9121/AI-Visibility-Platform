@@ -15,11 +15,13 @@ import {
   hasTrend,
   intermittentRivals,
   rankingSeries,
+  shareSplit,
   sourceSeries,
   trendPoints,
 } from './trends';
 import type { ClientHistory } from '@avp/shared-types';
 import {
+  msmAvHistory,
   noScanHistory,
   oneScanHistory,
   oneScanPlusDeadHistory,
@@ -266,5 +268,55 @@ describe('alertAnnotations — Epic E', () => {
   it('is empty rather than throwing when the feed never loaded', () => {
     // A failed alert request must cost the markers, never the chart.
     expect(alertAnnotations(null)).toEqual({});
+  });
+});
+
+describe('the split at one scan — 2026-09-22', () => {
+  it('reads the latest scan with a reading, subject first, rivals as reported', () => {
+    const split = shareSplit(msmAvHistory);
+    expect(split).not.toBeNull();
+    expect(split!.scanId).toBe('scan_msmav_1');
+    expect(split!.shares[0]).toEqual({
+      key: '__subject__',
+      label: 'MSM AV',
+      value: 0,
+      isSubject: true,
+    });
+    expect(split!.shares.map((s) => `${s.label}=${s.value}`)).toEqual([
+      'MSM AV=0',
+      'Sweetwater=38.5',
+      'AVI-SPL=18.5',
+      'Avalliance=0',
+      'Diversified=16.9',
+      'Shure=26.1',
+    ]);
+  });
+
+  it('passes a measured zero through as zero and an absent reading as null', () => {
+    // Avalliance at 0.00 is a measurement. A rival the scan did not report is
+    // not, and the two must reach the strip as different things.
+    const split = shareSplit(msmAvHistory)!;
+    expect(split.shares.find((s) => s.label === 'Avalliance')!.value).toBe(0);
+    const nulled: ClientHistory = {
+      ...msmAvHistory,
+      scans: [
+        {
+          ...msmAvHistory.scans[0]!,
+          competitors: msmAvHistory.scans[0]!.competitors.map((c) =>
+            c.name === 'Shure' ? { ...c, shareOfVoice: null } : c,
+          ),
+        },
+      ],
+    };
+    expect(shareSplit(nulled)!.shares.find((s) => s.label === 'Shure')!.value).toBeNull();
+  });
+
+  it('exists for a single scan — the split is the finding when there is no trend', () => {
+    expect(hasTrend(oneScanHistory)).toBe(false);
+    expect(shareSplit(oneScanHistory)).not.toBeNull();
+  });
+
+  it('is null when no scan produced a reading', () => {
+    expect(shareSplit(noScanHistory)).toBeNull();
   });
 });

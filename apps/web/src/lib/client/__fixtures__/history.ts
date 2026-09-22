@@ -35,7 +35,8 @@ function scan(
     composite?: string | null;
     sov?: string | null;
     domains?: HistoryCitedDomain[];
-    rivals?: [string, string][];
+    /** `[name, share of voice, mention rate?]` — the rate defaults to a plausible figure. */
+    rivals?: [string, string | null, string?][];
     /**
      * Per-engine tone — Epic A. `[engine, positive, neutral, negative,
      * unclassified]`. Omitted entirely for a scan predating the field, which
@@ -53,10 +54,10 @@ function scan(
     composite: opts.composite ?? '58.50',
     shareOfVoice: opts.sov ?? '36.27',
     citedDomains: opts.domains ?? [],
-    competitors: (opts.rivals ?? []).map(([name, sov], i) => ({
+    competitors: (opts.rivals ?? []).map(([name, sov, rate], i) => ({
       competitorId: `cmp_${name.toLowerCase().replace(/\W/g, '')}`,
       name,
-      mentionRate: '40.00',
+      mentionRate: rate ?? '40.00',
       shareOfVoice: sov,
       citationStrength: '10.00',
     })),
@@ -250,3 +251,43 @@ export const oneScanTonedHistory: ClientHistory = {
     }),
   ],
 };
+
+/**
+ * A REAL scan — MSM AV (msmav.com.au), a professional audio-visual retailer,
+ * 20 prompts across four engines on 22 Sept 2026 — with the competitor table
+ * exactly as the report showed it. Composite 10; Mention Rate and Share of
+ * Voice at zero for the subject; Citation Strength excluded, so every
+ * `citationStrength` here is null. One rival, Avalliance, sits at 0.0/0.0
+ * beside four with real shares: the row a happy-path share strip gets wrong
+ * silently, which is why this fixture exists.
+ */
+export const msmAvHistory: ClientHistory = {
+  clientId: 'clnt_msmav',
+  name: 'MSM AV',
+  domain: 'msmav.com.au',
+  scansWithoutData: 0,
+  scans: [
+    {
+      ...scan('scan_msmav_1', '2026-09-22T03:10:00Z', {
+        composite: '10.00',
+        sov: '0.00',
+        rivals: [
+          ['Sweetwater', '38.50', '44.60'],
+          ['AVI-SPL', '18.50', '21.40'],
+          ['Avalliance', '0.00', '0.00'],
+          ['Diversified', '16.90', '19.60'],
+          ['Shure', '26.10', '30.40'],
+        ],
+        tone: [
+          ['chatgpt', 2, 3, 0, 0],
+          ['claude', 1, 4, 0, 0],
+          ['gemini', 2, 3, 0, 0],
+          ['perplexity', 2, 3, 0, 0],
+        ],
+      }),
+    },
+  ],
+};
+msmAvHistory.scans[0]!.competitors.forEach((c) => {
+  c.citationStrength = null;
+});
