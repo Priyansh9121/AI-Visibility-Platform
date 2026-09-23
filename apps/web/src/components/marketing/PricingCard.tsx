@@ -60,12 +60,11 @@ import { Button, Card, CardBody } from '@avp/design-system';
  *
  * Repriced $29 → $160 on 2026-09-22, again by founder decision. The number
  * moved here and in every test that pins it; the Stripe Price object did NOT
- * move with it. `STRIPE_PRICE_ID` still names the $29.00 Price
- * (`price_1U9For…`, the only active Price on the test-mode account, read on
- * 2026-09-22), so until the founder creates a $160 Price and points the
- * environment at it, this page quotes $160 and checkout subscribes at $29.
- * That is exactly the "kept in step by hand" deal the paragraph above
- * describes, and today the two are out of step. Build log, 2026-09-22.
+ * move with it that day. On 2026-09-23 a $160.00 Price (`price_1UIh3b…`) was
+ * on the test-mode account and the local `STRIPE_PRICE_ID` was pointed at it;
+ * the $29.00 Price (`price_1U9For…`) is still active, and Render's variable
+ * still has to be changed by hand. That is exactly the "kept in step by hand"
+ * deal the paragraph above describes. Build log, 2026-09-22 and 2026-09-23.
  */
 export const PLAN_PRICE_USD = 160;
 

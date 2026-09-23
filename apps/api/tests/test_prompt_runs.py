@@ -62,7 +62,7 @@ def stub_sentiment(monkeypatch):  # noqa: ANN001, ANN201
 
 @pytest.fixture
 def stub_engines(monkeypatch):  # noqa: ANN001, ANN201
-    """Answer as the three real engines would, without calling them."""
+    """Answer as the real default engines would, without calling them."""
 
     def _install(
         *,
@@ -125,7 +125,7 @@ def stub_engines(monkeypatch):  # noqa: ANN001, ANN201
 async def test_a_run_asks_every_engine_and_reports_each_separately(
     client: AsyncClient, stub_engines
 ) -> None:
-    """Three engines, three rows. The disagreement between them IS the product."""
+    """One row per default engine. The disagreement between them IS the product."""
     stub_engines()
     await _sign_up(client)
     cid = await _a_client(client)
@@ -390,17 +390,22 @@ def test_the_ceiling_is_sized_against_a_scan() -> None:
     """The number, and the arithmetic that justifies it.
 
     `RUNS_PER_CLIENT_PER_HOUR`'s note argues the ceiling from what a scan costs:
-    a run is 3 engine calls, a scan is 72, so the hourly ceiling must stay near
-    one scan's worth of spend. This asserts that relationship rather than the
+    a run is E engine calls, a scan is `TARGET_PROMPTS` x E (4 and 80 today, so
+    30 runs an hour is 1.5 scans), and the hourly ceiling must stay near one
+    scan's worth of spend. This asserts that relationship rather than the
     literal 30 — if someone raises the ceiling to 500, this fails and they have
     to come back and re-argue it, which is the whole point of writing the
-    argument down.
+    argument down. Both factors are read from the constants that set them
+    (2026-09-23: the prompt count was a literal 24 here for eleven days after
+    the founder cut the default to 20, so the test was arguing from a scan
+    that no longer ran).
     """
+    from avp_api.services.prompts import TARGET_PROMPTS
     from avp_api.services.scan_runner import PROMPT_CONCURRENCY
 
     engines_per_run = len(engine_service.DEFAULT_ENGINES)
     calls_per_run = engines_per_run
-    calls_per_scan = 24 * engines_per_run
+    calls_per_scan = TARGET_PROMPTS * engines_per_run
 
     hourly_calls = service.RUNS_PER_CLIENT_PER_HOUR * calls_per_run
     assert hourly_calls / calls_per_scan <= 2, (

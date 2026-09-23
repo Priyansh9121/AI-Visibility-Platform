@@ -1347,6 +1347,25 @@ describe('VerdictBar with named segments', () => {
     expect(out).toContain('avp-verdict__empty');
   });
 
+  it('keeps segments that share one tone distinct — the legend tells them apart', () => {
+    // The Alerts screen's by-kind strip (2026-09-23): three kinds, all `warn`.
+    // On the track that is three same-coloured segments side by side; what
+    // makes them three things and not one is the legend, which is the data
+    // table. So every segment is drawn at its own width and every label is
+    // listed, and nothing is merged because the colour repeats.
+    const out = strip([
+      { key: 'visibility_drop', label: 'Visibility fell', value: 1, tone: 'warn' },
+      { key: 'sentiment_decline', label: 'Tone declined', value: 2, tone: 'warn' },
+      { key: 'owned_citation_lost', label: 'Own citation lost', value: 1, tone: 'warn' },
+    ]);
+    expect(out.match(/avp-verdict__seg--tone-warn/g)?.length).toBe(3);
+    expect(out).toContain('width:25%');
+    expect(out).toContain('width:50%');
+    for (const label of ['Visibility fell', 'Tone declined', 'Own citation lost']) {
+      expect(out).toContain(`${label}</dt>`);
+    }
+  });
+
   it('leaves the counts path exactly as it was', () => {
     const out = html(<VerdictBar counts={{ pass: 1, warn: 0, fail: 1 }} ariaLabel="verdicts" />);
     expect(out).toContain('avp-verdict__seg--pass');

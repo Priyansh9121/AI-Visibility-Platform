@@ -16913,3 +16913,159 @@ at 48 — every count unchanged, exit codes read from files.
 The temporary harness that produced the renders lived under
 `apps/web/src/__harness__/` for the duration and was deleted before any
 count above was read.
+
+# Four remaining items: the Alerts pile broken down by kind, the Dashboard finding written rather than built, the $160 Price that already existed pointed at, and two documents corrected against the tree
+
+**2026-09-23.** The brief listed four items left over from the report
+visualisations and the repricing. Two were built, one was deliberately
+written up instead of built, and one turned out to be half done already by
+someone else's hand before this session opened. Each is stated as found.
+
+## What was found, against what the brief assumed
+
+- **`HEAD` was `cc2ef10`, equal to `origin/main`, tree clean** apart from
+  four untracked directories at the root (`agent-skills/`,
+  `bencium-claude-code-design-skill/`, `claude-marketplace/`,
+  `open-higgsfield/`) — cloned skill repositories, not project files, left
+  alone and not committed.
+- **A $160 Stripe Price already existed.** The brief asked for one to be
+  created against `prod_V9Yw45K4FDE6N6`. Listing the product's Prices before
+  writing anything found two, both active, both `livemode: false`:
+  `price_1U9For…` at 2900 USD/month from 2026-08-28, and
+  **`price_1UIh3b7Qi3nSzCKcFcm2XG6Z` at 16000 USD/month, created
+  2026-09-23 03:41 UTC**, nicknamed "One plan, $160/month, 3 seats
+  (2026-09-23)" — the founder's, made this morning before this session
+  started. So no Price was created here: a second identical active Price
+  would have left checkout with two "right" answers and nobody able to say
+  which one Render should name. The local `STRIPE_PRICE_ID` was pointed at
+  the existing one instead, and the read-back is below.
+- **`DashboardOut` still carries no history and no cross-client
+  aggregation.** Re-read rather than assumed: `recent_scans` is a bounded
+  list of `ScanSummaryOut`, one `composite_score` per scan; the rest is
+  identity, seats, three counts and the getting-started flag. The finding
+  is written under its own heading below, and nothing was built for it.
+- **`test_prompt_runs.py` tracked the engine count but not the prompt
+  count.** `test_the_ceiling_is_sized_against_a_scan` read
+  `len(DEFAULT_ENGINES)` — dynamic, as the contract says — but multiplied it
+  by a literal `24`, eleven days after the founder cut the default to 20
+  (`TARGET_PROMPTS`, 2026-09-12). It could not have failed on the change,
+  because the ratio is asserted with a `<= 2` margin, but it was arguing from
+  a scan that no longer ran.
+- **`AlertKind` is the three values the brief said and no more**
+  (`visibility_drop`, `sentiment_decline`, `owned_citation_lost`); the view's
+  `KIND` record maps each to a label and `warn`. `VerdictBar`'s `segments`
+  prop is `readonly VerdictSegment[]` of `{ key, label, value, tone }` with
+  `tone` in `success | warn | danger | neutral | beacon | none` — the brief's
+  description held.
+
+## Built
+
+- **The Alerts screen's outstanding pile, by kind.** Between the three
+  `StatTile`s and the log, while anything is outstanding: a small caps
+  heading "Outstanding, by kind" and a `VerdictBar` in `segments` mode, one
+  segment per `AlertKind` in the enum's order, counted over the OUTSTANDING
+  alerts only — the tiles already split outstanding from acknowledged, and a
+  strip that counted the whole feed would double-report. Every kind is
+  listed in the legend even at zero ("Own citation lost 0" is a fact about
+  the pile, which is `VerdictBar`'s own rule for a listed zero) and only
+  non-zero segments are painted. A kind the enum grows later counts as
+  "Other" rather than vanishing, so the legend's total is the pile's total.
+  The `aria-label` reads the non-zero counts aloud ("4 outstanding alerts, by
+  kind: 1 visibility fell, 2 tone declined, 1 own citation lost."). With
+  nothing outstanding the strip is absent: the "Outstanding 0" tile has said
+  it, and an empty track under it would say it again. All three kinds share
+  `warn`, so on the track the strip is one bar; the legend is what tells the
+  segments apart, as it does on every strip in this system. **No
+  `TrendChart`**: the screen's own note says it is a log, and the tests now
+  assert `avp-trend` is absent.
+- **Two fixtures** in `__fixtures__/alerts.ts`: `mixedKindFeed` (every kind
+  at once, 1 / 2 / 1 outstanding plus an ACKNOWLEDGED second visibility
+  drop, so a strip that counted the feed instead of the pile would read
+  2 / 2 / 1 and fail) and `allAcknowledgedFeed` (alerts exist, none
+  outstanding, strip absent).
+- **Eight view tests** in the existing file's style: outstanding-not-feed
+  counting with the 25% / 50% widths, every kind listed and only the
+  non-zero painted on Notion's three-tone-declines feed, enum order, three
+  `warn` segments and no `danger`, the aria-label verbatim, position between
+  tiles and log, absence when nothing is outstanding, no trend.
+- **One design-system test** in `render.test.tsx`'s segments block: three
+  segments sharing one tone are drawn as three segments at their own widths
+  with all three labels listed. The existing block covered mixed tones and
+  zeros; nothing covered a repeated tone, which is the pattern this strip
+  relies on, so it is pinned where the rule lives rather than only in the
+  view that uses it.
+- **`STRIPE_PRICE_ID` in the local `apps/api/.env`** now names
+  `price_1UIh3b7Qi3nSzCKcFcm2XG6Z`. Verified by a fresh `GET` of that id
+  with the value read back out of the edited file: `unit_amount` 16000,
+  `usd`, `recurring.interval` `month`, `active`, `livemode: false`, product
+  `prod_V9Yw45K4FDE6N6`. The $29 Price is left active, as the brief allowed.
+  **Local only:** the same variable on Render's dashboard was not touched
+  from here and the checkout test was not re-run — both are the founder's,
+  and until the Render value changes the deployed checkout still subscribes
+  at $29 while the page says $160. The five places that stated yesterday's
+  mismatch in as many words — north-star §5.3's "Are the two in step?" row,
+  `api-contracts.md`'s Billing lead, `.env.example`, `PLAN_PRICE_USD`'s
+  comment and `LandingView`'s header — now state today's: a $160 Price
+  exists, the local file names it, Render is not confirmed.
+- **`test_the_ceiling_is_sized_against_a_scan`** now multiplies by
+  `TARGET_PROMPTS` from `services/prompts.py`, so both factors come from the
+  constants that set them; its docstring says 4 and 80 today, 1.5 scans, and
+  why the literal was wrong. Two docstrings in the same file that said
+  "three engines" now say "the default engines" — they were describing a
+  world that ended on 2026-09-12. The `RUNS_PER_CLIENT_PER_HOUR` note in
+  `services/prompt_runs.py` carries the same corrected arithmetic (one scan
+  is `TARGET_PROMPTS` runs; 30 runs = 120 calls = 1.5 scans at E = 4; 1.25
+  when a scan was 24 prompts) and its two "1.25x" lines say 1.5.
+- **`api-contracts.md`'s throttle paragraph**: 4 engine calls a run, 20 × 4
+  = 80 a scan, 30 runs = 120 calls = 1.5 scans, "one and a half scans" in the
+  prose, with the 2026 original's 3 × 24 = 72 / 90 / 1.25 kept in one
+  parenthesis as what it was sized against — the ceiling has not moved, the
+  scan under it has. The closing sentence now says the test reads both
+  factors from constants.
+- **`north-star.md` §5.1, fact 2** no longer reads as "a hard prerequisite
+  before any real pilot billing begins", which framed the Free tier as a gap.
+  It now says the Free Plan (250 searches/month, $0) is **chosen for now**,
+  why (every scan today is the founder's own, so the 41-scan ceiling is spent
+  on development), and that the trigger for upgrading is **"before the first
+  real prospect or pilot agency runs a scan"** — a named event, not "once
+  the project is live", because the product is live and deployed already and
+  that phrasing would read as met with nothing done. The free tier's in-run
+  rate limiting (three of six detection queries refused in a second run of
+  the day, 2026-09-10) is named as what becomes customer-facing at that
+  point.
+
+## Not built, and why — the Dashboard
+
+- **An agency-wide visibility trend cannot be built today.** `DashboardOut`
+  is `recent_scans` — a bounded list, one composite per scan, in no
+  particular window — plus counts. Nothing in the API aggregates composite
+  scores across the client book over time: no endpoint, no schema field, no
+  service that reads `client_history` for more than one client. A trend
+  drawn from `recent_scans` would be a line through whichever scans happen
+  to be on the first page, of whichever clients happen to have run, and
+  would read as the agency's trajectory when it is a page of a table. It
+  needs new backend work — an aggregation endpoint or a schema addition —
+  and that is a separate decision, not scoped or designed here.
+- **An agency-wide Share of Voice is not a coherent figure as things
+  stand.** Share of Voice is a division of one field: the subject against
+  ITS competitors, detected independently per client. Two clients have two
+  different fields with no shared denominator — MSM AV's Sweetwater and
+  Shure are not in a dental practice's field — so there is no single field
+  to divide at the agency level, and a strip that showed one would imply a
+  distribution that does not exist. This is the same call the report
+  visualisations pass made against a competitor-by-engine sentiment
+  heatmap, when sentiment is classified toward the subject only: the number
+  the chart would need is not one the system measures. Said here rather
+  than approximated.
+
+## Verified
+
+Before this pass: API **1324/1324**, web **865/865**, design-system
+**647/647**, shared-types **53**, both typechecks clean, ruff clean, mypy
+at 48 — the numbers `cc2ef10` was pushed on. After: API **1324/1324**, web
+**873/873** (eight added), design-system **648/648** (one added), shared-types
+**53**, both typechecks clean, ruff clean, mypy at **48** under the
+ceiling of 50 — exit codes read from files, not from a pipe. No route
+docstring changed, so the OpenAPI export was not regenerated. CI on the
+push is polled to its conclusion before any of this is reported done; a red run gets a follow-up commit and a line here, as the
+two earlier ones did.

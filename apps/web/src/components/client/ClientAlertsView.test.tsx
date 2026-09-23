@@ -15,7 +15,9 @@ import { accentFor } from './clientNav';
 import { clientsMe, identifiedClient } from '@/lib/clients/__fixtures__/clients';
 import { threeScanHistory } from '@/lib/client/__fixtures__/history';
 import {
+  allAcknowledgedFeed,
   allClearFeed,
+  mixedKindFeed,
   neverComparedFeed,
   partlyAcknowledgedFeed,
   toneDeclineFeed,
@@ -144,6 +146,75 @@ describe('the feed', () => {
 
   it('offers no acknowledge action when the screen was given no handler', () => {
     expect(render(feed(toneDeclineFeed))).not.toContain('>Acknowledge<');
+  });
+});
+
+describe('the outstanding pile, by kind — 2026-09-23', () => {
+  it('counts the OUTSTANDING alerts under each kind, not the whole feed', () => {
+    // 1 visibility / 2 tone / 1 citation outstanding; the acknowledged alert
+    // is a second visibility drop, so counting the feed would read 2 here.
+    const html = render(feed(mixedKindFeed));
+    expect(html).toMatch(/Visibility fell<\/dt><dd[^>]*>1</);
+    expect(html).toMatch(/Tone declined<\/dt><dd[^>]*>2</);
+    expect(html).toMatch(/Own citation lost<\/dt><dd[^>]*>1</);
+    expect(html).toContain('width:25%');
+    expect(html).toContain('width:50%');
+  });
+
+  it('lists every kind in the legend, zero included, and paints only the non-zero', () => {
+    // Notion's real event: three tone declines and nothing else. The legend
+    // says the other two kinds are absent rather than leaving it to inference,
+    // and the track is one segment, not one segment and two hairlines.
+    const html = render(feed(toneDeclineFeed));
+    expect(html).toMatch(/Visibility fell<\/dt><dd[^>]*>0</);
+    expect(html).toMatch(/Tone declined<\/dt><dd[^>]*>3</);
+    expect(html).toMatch(/Own citation lost<\/dt><dd[^>]*>0</);
+    expect(html.match(/class="avp-verdict__seg /g)?.length).toBe(1);
+    expect(html).toContain('width:100%');
+  });
+
+  it('keeps the kinds in the enum’s order', () => {
+    const html = render(feed(mixedKindFeed));
+    const legend = html.slice(html.indexOf('avp-verdict__legend'));
+    const order = ['Visibility fell', 'Tone declined', 'Own citation lost'].map((l) =>
+      legend.indexOf(l),
+    );
+    expect(order.every((i) => i >= 0)).toBe(true);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+  });
+
+  it('is told apart by its legend, since all three kinds share one tone today', () => {
+    const html = render(feed(mixedKindFeed));
+    expect(html.match(/avp-verdict__seg--tone-warn/g)?.length).toBe(3);
+    expect(html).not.toContain('avp-verdict__seg--tone-danger');
+  });
+
+  it('reads the counts aloud', () => {
+    const html = render(feed(mixedKindFeed));
+    expect(html).toContain(
+      'aria-label="4 outstanding alerts, by kind: 1 visibility fell, 2 tone declined, 1 own citation lost."',
+    );
+  });
+
+  it('sits between the tiles and the log', () => {
+    const html = render(feed(mixedKindFeed));
+    const tiles = html.indexOf('Scans compared');
+    const strip = html.indexOf('Outstanding, by kind');
+    const log = html.indexOf('<ol');
+    expect(tiles).toBeGreaterThan(-1);
+    expect(strip).toBeGreaterThan(tiles);
+    expect(log).toBeGreaterThan(strip);
+  });
+
+  it('is absent when nothing is outstanding — the tile has already said 0', () => {
+    const html = render(feed(allAcknowledgedFeed));
+    expect(html).toMatch(/Outstanding<\/dt><dd[^>]*>0</);
+    expect(html).not.toContain('avp-verdict');
+    expect(html).toContain('Show 3 acknowledged');
+  });
+
+  it('is a strip over a log, never a trend — this screen’s own rule', () => {
+    expect(render(feed(mixedKindFeed))).not.toContain('avp-trend');
   });
 });
 

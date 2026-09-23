@@ -51,19 +51,23 @@ logger = structlog.get_logger(__name__)
 # measured cost rather than inherited from a default. The same discipline
 # applies to this ceiling, so here is the argument.
 #
-# THE UNIT. One run is 1 prompt x E engines, one scan is 24 prompts x E, for
-# whatever E engines are configured (three when this was written; up to five
-# since Epic 21). So 24 runs cost exactly one scan, at any E.
+# THE UNIT. One run is 1 prompt x E engines, one scan is `TARGET_PROMPTS` x E,
+# for whatever E engines are configured (three when this was written; four by
+# default since 2026-09-12, five runnable by name since Epic 21). So one scan's
+# worth of runs is `TARGET_PROMPTS` runs, at any E — 20 today, 24 when this
+# note was first written.
 #
-# THE NUMBER: 30 runs per client per hour = 30 x E engine calls = **1.25
-# scans**. The ratio is what is argued for, and it does not move with E.
+# THE NUMBER: 30 runs per client per hour = 30 x E engine calls = **1.5
+# scans** at 20 prompts (120 calls against a scan's 80 at E = 4; it was 1.25
+# scans when a scan was 24 prompts). The ratio is what is argued for, and it
+# does not move with E.
 #
 # WHY THAT IS THE RIGHT CEILING. The worst an unattended loop on one client's
 # Prompts screen can spend in an hour is a little over ONE SCAN — and a scan is
 # spend this product already absorbs routinely, from a single click on the
 # dashboard's Re-run button. The throttle's job is to keep an ad-hoc run from
 # becoming a cheaper way to spend more than the expensive thing it sits beside,
-# and 1.25x clears that with no room for argument.
+# and 1.5x clears that with no room for argument.
 #
 # WHY NOT LOWER. An operator working out why a client scores badly genuinely
 # iterates on phrasing — "best dentist in Leeds" against "top rated dentist
@@ -72,7 +76,7 @@ logger = structlog.get_logger(__name__)
 # time blocking the exact work the feature exists for. 30/hour leaves that
 # entirely unobstructed while still bounding the hour.
 #
-# WHY NOT HIGHER. Above ~1.25 scans an hour the ad-hoc path stops being a
+# WHY NOT HIGHER. Above ~1.5 scans an hour the ad-hoc path stops being a
 # rounding error against scan spend and starts being its own line item, which is
 # a pricing decision this epic has no business making on its own.
 #

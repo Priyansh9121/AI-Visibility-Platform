@@ -69,6 +69,93 @@ export const partlyAcknowledgedFeed: AlertFeed = {
 };
 
 /**
+ * Every kind at once, with one of them already acknowledged — the case the
+ * by-kind strip exists for. Outstanding: one visibility drop, two tone
+ * declines, one own-citation loss (1 / 2 / 1). The acknowledged alert is a
+ * SECOND visibility drop, so a strip that counted the whole feed instead of
+ * the outstanding pile would read 2 / 2 / 1 and be caught.
+ */
+export const mixedKindFeed: AlertFeed = {
+  clientId: 'clnt_01AAA',
+  minBaselineHours: 20,
+  scansTotal: 3,
+  scansCompared: 2,
+  unacknowledged: 4,
+  alerts: [
+    {
+      id: 'alrt_15',
+      kind: 'owned_citation_lost',
+      detail: 'Your own domain was cited in the baseline and is not cited now.',
+      engine: null,
+      scanId: 'scan_03',
+      baselineScanId: 'scan_02',
+      scannedAt: '2026-09-02T02:10:00.000Z',
+      baselineScannedAt: SCAN,
+      createdAt: '2026-09-02T02:10:00.000Z',
+      acknowledgedAt: null,
+    },
+    {
+      id: 'alrt_14',
+      kind: 'visibility_drop',
+      detail: 'Composite fell 31%, from 42.0 to 29.0.',
+      engine: null,
+      scanId: 'scan_03',
+      baselineScanId: 'scan_02',
+      scannedAt: '2026-09-02T02:10:00.000Z',
+      baselineScannedAt: SCAN,
+      createdAt: '2026-09-02T02:10:00.000Z',
+      acknowledgedAt: null,
+    },
+    {
+      id: 'alrt_13',
+      kind: 'sentiment_decline',
+      detail: 'Net tone fell 60%, from +10 to +4.',
+      engine: 'claude',
+      scanId: 'scan_02',
+      baselineScanId: 'scan_01',
+      scannedAt: SCAN,
+      baselineScannedAt: BASELINE,
+      createdAt: SCAN,
+      acknowledgedAt: null,
+    },
+    {
+      id: 'alrt_12',
+      kind: 'sentiment_decline',
+      detail: 'Net tone fell 54%, from +13 to +6.',
+      engine: 'chatgpt',
+      scanId: 'scan_02',
+      baselineScanId: 'scan_01',
+      scannedAt: SCAN,
+      baselineScannedAt: BASELINE,
+      createdAt: SCAN,
+      acknowledgedAt: null,
+    },
+    {
+      id: 'alrt_11',
+      kind: 'visibility_drop',
+      detail: 'Composite fell 25%, from 56.0 to 42.0.',
+      engine: null,
+      scanId: 'scan_02',
+      baselineScanId: 'scan_01',
+      scannedAt: SCAN,
+      baselineScannedAt: BASELINE,
+      createdAt: SCAN,
+      acknowledgedAt: '2026-09-01T09:00:00.000Z',
+    },
+  ],
+};
+
+/** Everything seen. Alerts exist, none outstanding — nothing to break down. */
+export const allAcknowledgedFeed: AlertFeed = {
+  ...toneDeclineFeed,
+  unacknowledged: 0,
+  alerts: toneDeclineFeed.alerts.map((a) => ({
+    ...a,
+    acknowledgedAt: '2026-09-01T09:00:00.000Z',
+  })),
+};
+
+/**
  * Checked, and genuinely clear. `scansCompared` is 1 — a comparison happened
  * and produced nothing.
  */
