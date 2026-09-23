@@ -40,6 +40,8 @@ import {
   LoadingState,
   StatRow,
   StatTile,
+  VerdictBar,
+  type VerdictSegment,
 } from '@avp/design-system';
 import type { Alert, AlertFeed, Me } from '@avp/shared-types';
 import { ClientSpace } from '@/components/client/ClientSpace';
@@ -70,6 +72,36 @@ const KIND: Record<string, { label: string; tone: 'warn' | 'danger' | 'neutral' 
   sentiment_decline: { label: 'Tone declined', tone: 'warn' },
   owned_citation_lost: { label: 'Own citation lost', tone: 'warn' },
 };
+
+/**
+ * The outstanding pile, by kind — 2026-09-23.
+ *
+ * The tiles above the log say HOW MANY alerts are waiting; nothing said WHAT
+ * they are before the operator reads the log itself. This counts the
+ * outstanding alerts — only those; the acknowledged split is already the
+ * tiles' job — under each `AlertKind`, in the enum's order, every kind listed
+ * even at zero: "Own citation lost 0" is a finding about the pile, the way
+ * `VerdictBar`'s own contract says a listed zero is. All three kinds share the
+ * `warn` tone today, so on the track the strip reads as one bar; the legend is
+ * what tells the segments apart, which is how every strip in this system
+ * already works. A kind the enum has grown since this was written is counted
+ * as "Other" rather than dropped, so the legend's total is the pile's total.
+ *
+ * Not a trend. This screen's own note says it is a log, and a chart over
+ * time would be the trends' job, not this screen's.
+ */
+export function kindSegments(outstanding: readonly Alert[]): VerdictSegment[] {
+  const known = Object.entries(KIND).map(([key, k]) => ({
+    key,
+    label: k.label,
+    value: outstanding.filter((a) => a.kind === key).length,
+    tone: k.tone,
+  }));
+  const other = outstanding.filter((a) => !(a.kind in KIND)).length;
+  return other > 0
+    ? [...known, { key: 'other', label: 'Other', value: other, tone: 'neutral' }]
+    : known;
+}
 
 export type AlertsState =
   | { kind: 'loading' }
@@ -193,6 +225,11 @@ function Feed({
         (a) => a.acknowledgedAt == null || justAcknowledged.has(a.id),
       );
   const settled = feed.alerts.length - outstanding.length;
+  const byKind = kindSegments(outstanding);
+  const byKindSummary = byKind
+    .filter((s) => s.value > 0)
+    .map((s) => `${s.value} ${s.label.toLowerCase()}`)
+    .join(', ');
 
   return (
     <section className="flex flex-col gap-6">
@@ -230,6 +267,26 @@ function Feed({
           note="Scans that had an old enough baseline to compare against."
         />
       </StatRow>
+
+      {/*
+        What is in the pile, before the pile. Only while something is
+        outstanding: with nothing waiting there is nothing to break down, and
+        the "Outstanding 0" tile has already said so.
+      */}
+      {outstanding.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <h3 className="text-ui-sm font-medium uppercase tracking-caps text-text-primary">
+            Outstanding, by kind
+          </h3>
+          <VerdictBar
+            className="max-w-page"
+            segments={byKind}
+            ariaLabel={`${outstanding.length} outstanding alert${
+              outstanding.length === 1 ? '' : 's'
+            }, by kind: ${byKindSummary}.`}
+          />
+        </div>
+      )}
 
       {settled > 0 && (
         <div>

@@ -664,11 +664,22 @@ and is kept as the record of why they were needed)*
    something near another 48 calls plus its sentiment pass. **Any pricing model
    built on today's single-vendor cost will be wrong in the direction that
    hurts.**
-2. **The SerpApi free tier is NOT viable for paying customers.** 250
-   searches/month ÷ 6 per scan ≈ **41 scans per month across the entire
-   platform** — not per agency, *total*. **A paid SerpApi plan is a hard
-   prerequisite before any real pilot billing begins**, and its cost is a COGS
-   line that does not exist in any estimate today.
+2. **SerpApi stays on the Free tier for now — a decision, not an oversight.**
+   The Free Plan (250 searches/month, $0) is what the project is on, and it is
+   what the founder has chosen to stay on while there are no customers: 250
+   searches ÷ 6 per scan ≈ **41 scans per month across the entire platform**
+   — not per agency, *total* — and today every scan run is the founder's own,
+   against subjects picked to test the product, so the ceiling is being spent
+   on development and nothing else. Upgrading now would buy capacity nobody
+   is using. **The trigger for upgrading is "before the first real prospect or
+   pilot agency runs a scan"** — a named event, not "once the project is
+   live", because the product is already live and deployed and that phrasing
+   would read as already met without the upgrade having happened. When that
+   scan is about to happen, a paid SerpApi plan becomes a COGS line the
+   estimates in this section do not yet carry, and the free tier's
+   in-run rate limiting (`SERP_RATE_LIMITED` on three of six detection
+   queries in a second run of the day, build log 2026-09-10) becomes a
+   customer-facing `weak_signal` rather than a development inconvenience.
 
 ### 5.2 The pricing model — [HYPOTHESIS]
 
@@ -711,7 +722,7 @@ from Epic 9.15 until 2026-09-22, when the founder repriced it.)
 | Seats | **3** — `Agency.seat_limit`'s existing default, not a new entitlement |
 | Where it is published | `apps/web/src/components/marketing/LandingView.tsx`, Pricing section |
 | Where the number lives in code | `PricingCard.tsx`'s `PLAN_PRICE_USD`, and the Stripe Price object |
-| Are the two in step? | **Not since 2026-09-22.** `PLAN_PRICE_USD` is 160; the only active Price on the test-mode Stripe account is still `price_1U9For…` at **$29.00** (read 2026-09-22). Creating a $160 Price and pointing `STRIPE_PRICE_ID` at it is the founder's action; until then the page quotes $160 and checkout subscribes at $29 |
+| Are the two in step? | **Locally, since 2026-09-23; on Render, not confirmed.** `PLAN_PRICE_USD` is 160; a $160.00/month Price now exists on the test-mode account (`price_1UIh3b…`, created 2026-09-23, read back and confirmed at 16000 USD) and the local `STRIPE_PRICE_ID` names it. The $29.00 Price (`price_1U9For…`) is still active and is what Render's `STRIPE_PRICE_ID` named when last set — until that variable is changed on the Render dashboard and a checkout re-run, the deployed checkout still subscribes at $29 |
 | Payment processor | **Stripe** — chosen and built, Epic 9.15 |
 | Stripe mode | **TEST MODE.** `sk_test_…` / `price_…` with `livemode: false` |
 | Real money moved | **None. Not one cent.** See the caveat below |

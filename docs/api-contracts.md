@@ -553,10 +553,12 @@ Three refusals:
 
 ### Billing (subscriptions) — Epic 9.15
 
-**One plan, $160/month, 3 seats** — $29 from Epic 9.15 until 2026-09-22. The
-test-mode Stripe Price behind `STRIPE_PRICE_ID` is still the $29.00 one (the
-only active Price on the account, read 2026-09-22); until the founder creates a
-$160 Price and names it, checkout subscribes at $29 (build log, 2026-09-22).
+**One plan, $160/month, 3 seats** — $29 from Epic 9.15 until 2026-09-22. A
+$160.00/month test-mode Price exists since 2026-09-23 (`price_1UIh3b…`, read
+back at 16000 USD) and the local `STRIPE_PRICE_ID` names it; the $29.00 Price
+(`price_1U9For…`) is still active. Render's `STRIPE_PRICE_ID` was not changed
+from here, so the deployed checkout subscribes at $29 until it is (build log,
+2026-09-23).
 Stripe, in **TEST MODE**: the keys are
 `sk_test_…` and `price_…` with `livemode: false`, and **no code anywhere behaves
 differently on a live key.** Going live is swapping two environment variables.
@@ -2120,11 +2122,14 @@ for the throttle. `404` for another agency's client — never `403`, which would
 confirm the id exists.
 
 **The throttle: 30 runs per client per hour.** Sized against what a scan
-already costs rather than picked. One run is 3 engine calls; one scan is 24
-prompts × 3 engines = 72. So 30 runs/hour = 90 calls = **1.25 scans**, and the
-worst an unattended loop on one client's screen can spend in an hour is a
-little over one scan — spend this product already absorbs from a single click
-on the dashboard's Re-run button. Lower would obstruct the real work (an
+already costs rather than picked. One run is 4 engine calls (the default
+engines since 2026-09-12); one scan is 20 prompts × 4 engines = 80. So 30
+runs/hour = 120 calls = **1.5 scans**, and the worst an unattended loop on one
+client's screen can spend in an hour is one and a half scans — spend this
+product already absorbs from a single click on the dashboard's Re-run button.
+(When this was written a scan was 24 prompts × 3 engines = 72 calls and the
+same 30 runs were 90 calls, 1.25 scans; the ceiling has not moved, the scan
+under it has.) Lower would obstruct the real work (an
 operator iterating on phrasing legitimately fires 5–10 in minutes); higher and
 the ad-hoc path stops being a rounding error against scan spend and becomes its
 own line item, which is a pricing decision, not a tuning one. **Per client, not
@@ -2133,7 +2138,9 @@ per-agency ceiling would let one busy client exhaust every other client's
 allowance. Counted from the rows, not Redis: the rows are written anyway, the
 count is exact, and a counter that resets on restart is useless exactly when a
 runaway loop is still running. `test_prompt_runs.py` asserts the ratio rather
-than the literal 30, so raising it forces the argument to be made again.
+than the literal 30 — and reads both the engine count and the prompt count
+from the constants that set them, so a change to either re-runs the arithmetic
+— which means raising the ceiling forces the argument to be made again.
 
 **Facts only.** `promptText` is the operator's own words — the same
 deliberate exception `prompts.text` is. No field in `results` can carry an
