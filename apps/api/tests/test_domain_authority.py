@@ -18,13 +18,15 @@ from avp_api.models import (
     Agency,
     Citation,
     Client,
+    Competitor,
+    CompetitorSet,
     EngineResult,
     Prompt,
     PromptSet,
     Scan,
 )
 from avp_api.models.client import ClassificationStatus
-from avp_api.models.competitor import DetectionStatus
+from avp_api.models.competitor import DetectionSource, DetectionStatus
 from avp_api.models.engine_result import CitationType, Engine, EngineResultStatus
 from avp_api.models.prompt import PromptIntent
 from avp_api.models.scan import ScanStatus, ScanTrigger
@@ -195,15 +197,22 @@ async def _seed_scan_citing(
     industry: str | None,
     domains: list[str],
     deleted: bool = False,
+    client_domain: str | None = None,
+    competitor_domain: str | None = None,
 ) -> None:
-    """One client, one scan, one answered result citing `domains`."""
+    """One client, one scan, one answered result citing `domains`.
+
+    `client_domain` makes this client's own site that domain; `competitor_domain`
+    gives the scan a competitor set with one detected rival at that domain.
+    Both are the v4 market-participant controls.
+    """
     from datetime import UTC, datetime
 
     client = Client(
         id=ids.new_id(ids.CLIENT),
         agency_id=agency.id,
         name=f"Client {n}",
-        domain=f"client-{n}.example",
+        domain=client_domain or f"client-{n}.example",
         industry=industry,
         classification_status=(
             ClassificationStatus.CLASSIFIED if industry else ClassificationStatus.PENDING
@@ -224,6 +233,23 @@ async def _seed_scan_citing(
     )
     session.add(scan)
     await session.flush()
+    if competitor_domain:
+        cset = CompetitorSet(
+            id=ids.new_id(ids.COMPETITOR_SET), scan_id=scan.id, status=DetectionStatus.OK
+        )
+        session.add(cset)
+        await session.flush()
+        session.add(
+            Competitor(
+                id=ids.new_id(ids.COMPETITOR),
+                competitor_set_id=cset.id,
+                name="Rival",
+                domain=competitor_domain,
+                rank=1,
+                detection_source=DetectionSource.BOTH,
+            )
+        )
+        await session.flush()
     prompt_set = PromptSet(id=ids.new_id(ids.PROMPT_SET), scan_id=scan.id)
     session.add(prompt_set)
     await session.flush()
@@ -272,6 +298,11 @@ async def seeded(session: AsyncSession) -> AsyncSession:
     has the industries but four clients. `unknown.example` is cited only by
     clients with no industry, and `gone.example` only by a deleted one; each
     would clear the thresholds if those rows were counted.
+
+    v4 controls: `vendor.example` clears 3 / 5 and is one client's own domain;
+    `rival.example` clears 3 / 5 and is a detected competitor's domain on one
+    scan; `g2.com` clears 3 / 5 AND is a detected competitor, and must stay
+    curated. Each is cited by the same five qualifying clients as `wide.example`.
     """
     agency = Agency(id=ids.new_id(ids.AGENCY), name="Authority Test", slug="authority-test")
     session.add(agency)
@@ -284,8 +315,18 @@ async def seeded(session: AsyncSession) -> AsyncSession:
             agency,
             n=n,
             industry=industries[n % 3],  # 0,1,2,0,1 -> three industries, five clients
-            domains=["wide.example", "few.example" if n < 4 else "other.example"],
+            domains=[
+                "wide.example", "few.example" if n < 4 else "other.example",
+                "vendor.example", "rival.example", "g2.com",
+            ],
+            client_domain="vendor.example" if n == 0 else None,
+            competitor_domain="rival.example" if n == 1 else None,
         )
+    # g2.com detected as a competitor on a sixth client's scan, with no industry
+    # so it adds nothing to any count.
+    await _seed_scan_citing(
+        session, agency, n=20, industry=None, domains=[], competitor_domain="g2.com"
+    )
     # narrow: five clients, two industries
     for n in range(5, 10):
         await _seed_scan_citing(
@@ -325,6 +366,25 @@ class TestPlatformTier:
         assert await load_platform_domains(
             seeded, min_clients=authority.MIN_PLATFORM_CLIENTS - 1
         ) >= frozenset({"wide.example", "few.example"})
+
+    async def test_a_clients_own_domain_cannot_be_platform_tier(
+        self, seeded: AsyncSession
+    ) -> None:
+        """v4 — a market participant is an option, not a reference."""
+        assert "vendor.example" not in await load_platform_domains(seeded)
+
+    async def test_a_detected_competitors_domain_cannot_be_platform_tier(
+        self, seeded: AsyncSession
+    ) -> None:
+        assert "rival.example" not in await load_platform_domains(seeded)
+
+    async def test_a_curated_domain_detected_as_a_competitor_stays_curated(
+        self, seeded: AsyncSession
+    ) -> None:
+        """Tier A is unaffected: a structural fact is never downgraded."""
+        lookup = await load_domain_authority(seeded)
+        assert "g2.com" not in lookup.platform_domains
+        assert lookup.tier_of("g2.com") is Tier.CURATED
 
     async def test_the_production_lookup_carries_both_tiers(self, seeded: AsyncSession) -> None:
         lookup = await load_domain_authority(seeded)
@@ -371,3 +431,37 @@ class TestTheLoadedLookupReachesTheScore:
         assert scored.value(Dimension.CITATION_STRENGTH) is not None
         assert scored.sub_scores[Dimension.CITATION_STRENGTH].included
         assert scored.inputs_digest != excluded.inputs_digest
+
+    async def test_the_digest_moves_when_a_domain_in_the_scan_changes_tier(
+        self, seeded: AsyncSession
+    ) -> None:
+        """The v4 exclusion changes tiers, and `domain_tiers` carries that.
+
+        Same results, two lookups: the loaded one (where `vendor.example` is
+        refused) and one in which it had qualified. The digest differs, so a
+        score that moved because the exclusion landed is attributable — rule 1
+        — rather than assumed to be.
+        """
+        loaded = await load_domain_authority(seeded)
+        assert "vendor.example" not in loaded.platform_domains
+        as_if_admitted = DomainAuthority(
+            platform_domains=loaded.platform_domains | {"vendor.example"}
+        )
+        results = [
+            ResultFacts(
+                result_id="eres_0001", engine="claude_search", status=EngineResultStatus.OK,
+                mentioned=True, sentiment=None, intent=PromptIntent.AWARENESS,
+                brands=(("Subject", True), ("Rival", False)),
+                citations=(("vendor.example", False), ("wide.example", False)),
+            )
+        ]
+        rival = [CompetitorFacts(competitor_id="comp_0001", name="Rival", domain="rival.example")]
+        before = compute_score(results, rival, competitor_set_status=DetectionStatus.OK,
+                               authority=as_if_admitted)
+        after = compute_score(results, rival, competitor_set_status=DetectionStatus.OK,
+                              authority=loaded)
+        assert before.inputs_digest != after.inputs_digest
+        # And a lookup change that touches no domain in the scan leaves it alone.
+        elsewhere = DomainAuthority(platform_domains=loaded.platform_domains | {"far.example"})
+        assert compute_score(results, rival, competitor_set_status=DetectionStatus.OK,
+                             authority=elsewhere).inputs_digest == after.inputs_digest

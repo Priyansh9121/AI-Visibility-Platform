@@ -69,7 +69,10 @@ def test_citation_strength_copy_says_what_the_proxy_cannot_do() -> None:
         assert "uncalibrated" in text
         assert "coarse proxy" in text
         assert "mis-classified" in text
-    # And that the measured case says which answers it was measured on.
-    assert "including answers to questions that named the brand" in (
-        narrative.DIMENSION_NOTE["citation_strength"]
-    )
+    # And that the measured case says which answers it was measured on (v4:
+    # awareness only) and that market participants are out of the second tier.
+    note = narrative.DIMENSION_NOTE["citation_strength"]
+    assert "only answers to questions that did not name the brand" in note
+    assert "including answers to questions that named the brand" not in note
+    for text in (note, narrative.EXCLUSION_DETAIL["NO_AUTHORITY_DATA"]):
+        assert "brands in a scanned market" in text

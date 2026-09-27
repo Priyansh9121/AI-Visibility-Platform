@@ -197,7 +197,7 @@ describe('degraded data renders as degraded, never as bad', () => {
     const html = render(helpscoutReport);
     expect(html).toContain('Sources count on two tiers');
     expect(html).toContain('confidence score is uncalibrated');
-    expect(html).toContain('including answers to questions that named the brand');
+    expect(html).toContain('only answers to questions that did not name the brand');
   });
 });
 
