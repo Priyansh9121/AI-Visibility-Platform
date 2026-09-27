@@ -70,9 +70,21 @@ describe('the Citation Strength copy says what the proxy cannot do', () => {
     expect(text).toContain('mis-classified');
   });
 
-  it('the measured case says which answers it was measured on', () => {
+  it('the measured case says which answers it was measured on — v4, awareness only', () => {
     expect(DIMENSION_NOTE['citation_strength']).toContain(
+      'only answers to questions that did not name the brand',
+    );
+    expect(DIMENSION_NOTE['citation_strength']).not.toContain(
       'including answers to questions that named the brand',
     );
+  });
+
+  it('both texts say market participants are out of the second tier', () => {
+    for (const text of [
+      DIMENSION_NOTE['citation_strength']!,
+      EXCLUSION_REASON['NO_AUTHORITY_DATA']!.detail,
+    ]) {
+      expect(text).toContain('brands in a scanned market');
+    }
   });
 });

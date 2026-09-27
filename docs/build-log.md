@@ -17567,3 +17567,130 @@ three discovery dimensions under one code; the precedence holds on a fixture
 where all three conditions apply, then two, then one; and
 `NO_CITATIONS_IN_SCAN` travels beside `NO_AWARENESS_POPULATION`. The full
 API bar and the commit follow from the log's exit code.
+
+# Market participants out of Tier B — section 2 of three: the exclusion, its cost re-measured, the admitted list before and after, and what v4 does to every stored scan
+
+**2026-09-27.** Second checkpoint. Section 1 and this one ship under `v4`.
+
+## The change
+
+`load_platform_domains()` refuses, before grouping, any domain that is a
+non-deleted `Client.domain` or a non-null `Competitor.domain` anywhere on
+the platform — one `UNION` subquery, `NOT IN`. The NULL competitor domains
+are filtered out of the subquery explicitly, because `NOT IN` against a set
+containing NULL matches nothing, which would have emptied Tier B silently.
+Tier A is untouched by construction: `DomainAuthority.tier_of` checks the
+curated rule first and never downgrades it, and a test seeds g2.com as a
+detected competitor to prove it stays curated. Thresholds unchanged at
+3 / 5.
+
+## Cost, re-measured rather than assumed
+
+Three warm `EXPLAIN ANALYZE` runs with the exclusion: **planning 1.1–1.9 ms,
+execution 4.6–6.1 ms.** Two warm runs without it, same session: 5.4 and 5.5
+ms. So the two anti-joins cost nothing visible — and the 15 ms recorded in
+part one was a cold first run, not the steady state. The docstring now says
+both.
+
+## The admitted list, before and after
+
+**70 → 57.** Of the 13 removed, one was a client's own domain
+(hiverhq.com) and twelve were detected competitors' domains. Top twenty
+before, with what the exclusion did to each:
+
+| domain | industries | clients | v4 |
+|---|---|---|---|
+| g2.com | 10 | 21 | stays (curated anyway) |
+| capterra.com | 10 | 17 | stays (curated anyway) |
+| checkthat.ai | 9 | 14 | stays |
+| softwareadvice.com | 8 | 12 | stays |
+| trustradius.com | 8 | 11 | stays |
+| eesel.ai | 7 | 14 | **out — competitor** |
+| get-alfred.ai | 7 | 13 | stays |
+| featurebase.app | 7 | 12 | stays |
+| getapp.com | 7 | 12 | stays |
+| softwarefinder.com | 7 | 10 | stays |
+| cbinsights.com | 7 | 7 | stays |
+| getmacha.com | 6 | 12 | stays |
+| hiverhq.com | 6 | 12 | **out — client** |
+| chatarmin.com | 6 | 9 | stays |
+| vendr.com | 6 | 9 | stays |
+| github.com | 6 | 8 | stays |
+| clonepartner.com | 6 | 7 | stays |
+| efficient.app | 6 | 7 | stays |
+| toolradar.com | 6 | 7 | stays |
+| costbench.com | 6 | 6 | stays |
+
+Top twenty after: the eighteen "stays" rows above in the same order, then
+medium.com (6, 6) and saleshive.com (5, 12). Further down the list zendesk.com
+(4, 8), helpscout.com and the other detected help-desk rivals went out.
+
+**What the exclusion did not do, said plainly for whoever revisits the
+thresholds.** featurebase.app, get-alfred.ai, getmacha.com, checkthat.ai and
+chatarmin.com are vendors — AI support tools that engines list as options —
+and they stay, because nobody has scanned them and detection has not named
+them. The exclusion is structural, which is its virtue and its limit: it
+knows only the market participants the platform has recorded. The list is
+cleaner, not clean.
+
+## What v4 does to every stored scan — measured, not persisted
+
+`score_scan(persist=False)` over the 26 scored scans, against the live
+lookup (57 platform domains). v3 columns are from part two's run this
+morning; no v3 row was ever persisted. Composite is the recomputed one.
+
+| client | v3 CS | v4 CS | v3 comp | v4 comp |
+|---|---|---|---|---|
+| helpscout.com | 100.00 | 100.00 | 78.33 | 78.33 |
+| basecamp.com | 100.00 | 100.00 | 67.68 | 67.68 |
+| linear.app | 100.00 | 100.00 | 74.12 | 74.12 |
+| psmdigitalagency.com | 33.33 | 0.00 | 23.33 | 16.67 |
+| ghost.org | excluded (no rivals) | excluded (no rivals) | 96.67 | 96.67 |
+| plausible.io ×3 | 100.00 | 100.00 | 77.47 / 76.29 / 76.03 | unchanged |
+| notion.so ×2 | 100.00 | 100.00 | 73.56 / 70.99 | unchanged |
+| psmdigitalagency.com.au | 25.00 | excluded (NO_AUTHORITY_DATA) | 20.13 | 18.91 |
+| front.com | 100.00 | 100.00 | 73.33 | 73.33 |
+| missiveapp.com | 100.00 | 100.00 | 74.37 | 74.37 |
+| zammad.com | 89.47 | 40.00 | 58.75 | 48.86 |
+| **helpwise.io** | 90.63 | 0.00 | 27.95 | **7.81** |
+| pirsch.io | 55.00 | 40.00 | 38.15 | 35.15 |
+| helpwise.io | 33.33 | 0.00 | 23.54 | 16.88 |
+| helpwise.io | excluded | excluded | 14.42 | 14.42 |
+| **psmdigitalagency.com.au** | 62.50 | 0.00 | 26.76 | **14.26** |
+| psmdigitalagency.com.au | 50.00 | 0.00 | 23.12 | 13.12 |
+| intercom.com | 100.00 | 100.00 | 77.00 | 77.00 |
+| **helpwise.io** | 82.61 | 0.00 | 33.09 | **16.56** |
+| hiverhq.com | 100.00 | 95.00 | 60.80 | 59.69 |
+| groovehq.com | 32.00 | 0.00 | 19.87 | 13.47 |
+| **reamaze.com** | 61.90 | 0.00 | 34.40 | **22.02** |
+
+**Moved by more than 10 points:** helpwise.io −20.14 (27.95 → 7.81),
+helpwise.io −16.53 (33.09 → 16.56), psmdigitalagency.com.au −12.50
+(26.76 → 14.26), reamaze.com −12.38 (34.40 → 22.02). A third
+psmdigitalagency.com.au scan moved exactly −10.00. Every one of them is a
+brand no unprompted question named; every one of them read 25 to 90 on
+Citation Strength under v3 from answers to questions that supplied the
+name. The eleven brands with an awareness Mention Rate at or near 100 did
+not move at all. That is the shape the change was meant to have.
+
+## Copy
+
+`DIMENSION_NOTE` and the `NO_AUTHORITY_DATA` detail, both sides: the second
+tier "leaves out domains that are themselves brands in a scanned market — a
+client's own site, or a rival detected in any scan"; the exclusion detail
+now says nothing cited in the scan's *unprompted* answers is on either tier;
+and the sentence "It is measured on every answer, including answers to
+questions that named the brand" is gone, replaced by one that says it counts
+only answers to questions that did not name the brand, and why. The three
+words the tests assert are still in both texts. `report-copy.json`
+regenerated from the TypeScript side; the tests that pinned the old sentence
+(`test_report_copy.py`, `copyContract.test.ts`, `ReportView.test.tsx`) pin
+the new one and the market-participant phrase.
+
+## Verified
+
+API **1419/1419** (+4: client-domain control, competitor-domain control,
+curated-and-competitor stays curated, digest moves when a domain in the scan
+changes tier and not when one outside it does), ruff clean, mypy **48**
+under 50 via `assert_count.py`. Web **883/883** (+1). Both typechecks clean.
+Exit codes from files.

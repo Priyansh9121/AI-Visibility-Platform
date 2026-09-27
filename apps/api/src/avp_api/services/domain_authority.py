@@ -59,6 +59,20 @@ The label itself is more workable — the earlier over-generalisation problem
 coarse proxy that cannot currently filter out a bad classification, and
 `report_narrative.EXCLUSION_DETAIL` and `strings.ts` say so to the reader.
 
+**Market participants are excluded — v4.** A domain that is, anywhere on the
+platform, a non-deleted `Client.domain` or a `Competitor.domain` in any
+competitor set cannot be platform-tier, however many industries cite it. An
+engine cites a vendor because it is an OPTION in the market, not a reference
+about it; under v3 the 70 admitted domains included eesel.ai, hiverhq.com and
+zendesk.com on exactly that basis. This is structural in the way Tier A is —
+it rests on a fact already stored, not a judgement — and it leaves Tier A
+untouched: a curated domain that is also detected as a competitor stays
+curated, because `DomainAuthority.tier_of` never downgrades a structural
+fact. Measured on the day: 70 → 57 admitted, and the query still runs in
+about 5 ms warm (below). What the exclusion does NOT catch is a vendor
+nobody has scanned or detected — featurebase.app, get-alfred.ai, getmacha.com
+and checkthat.ai remain in the top twenty — and the build log says so.
+
 Everything else is UNCLASSIFIED: no tier, zero authority weight, the same as
 today's absence. The tier VALUES live in `scoring.AUTHORITY_VALUES`, beside
 WEIGHTS and SENTIMENT_VALUES, where the reasoning for the numbers is.
@@ -94,6 +108,7 @@ from sqlalchemy import distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.client import Client
+from ..models.competitor import Competitor
 from ..models.engine_result import Citation, EngineResult
 from ..models.scan import Scan
 
@@ -254,14 +269,30 @@ async def load_platform_domains(
     is unknown. Soft-deleted clients are left out for the same reason a
     deleted prospect is left out of everything else.
 
-    Cost is in the module docstring: 15 ms on 5,787 rows, measured.
+    Market participants — any non-deleted client's own domain, any detected
+    competitor's domain — are refused before grouping (v4; the module
+    docstring has the reason). `Competitor.domain` is nullable and the NULL
+    rows are left out of the subquery explicitly, because `NOT IN` against a
+    set containing NULL matches nothing.
+
+    Cost, re-measured with the exclusion on 2026-09-27: 5,787 rows, planning
+    1.1–1.9 ms, execution 4.6–6.1 ms over three warm runs; the query without
+    it measured 5.4 ms warm on the same day (the 15 ms in the module docstring
+    was a cold run). The two anti-joins cost nothing visible.
     """
+    market_participants = select(Client.domain).where(Client.deleted_at.is_(None)).union(
+        select(Competitor.domain).where(Competitor.domain.is_not(None))
+    )
     stmt = (
         select(Citation.source_domain)
         .join(EngineResult, EngineResult.id == Citation.engine_result_id)
         .join(Scan, Scan.id == EngineResult.scan_id)
         .join(Client, Client.id == Scan.client_id)
-        .where(Client.industry.is_not(None), Client.deleted_at.is_(None))
+        .where(
+            Client.industry.is_not(None),
+            Client.deleted_at.is_(None),
+            Citation.source_domain.not_in(market_participants),
+        )
         .group_by(Citation.source_domain)
         .having(
             func.count(distinct(Client.industry)) >= min_industries,
