@@ -40,7 +40,10 @@ export const DIMENSION_MEANING: Record<string, string> = {
   mention_rate: 'How often the brand is named when a buyer asks without naming it first.',
   share_of_voice:
     'How much of the conversation the brand holds against its rivals, in those same unprompted answers.',
-  citation_strength: 'How often the brand’s own pages are the source an answer cites.',
+  // v3: authority of the sources cited alongside the brand — not "the brand's
+  // own pages", which described the retired 1/N stand-in.
+  citation_strength:
+    'How authoritative the sources are that answers cite when they name the brand, against the best-cited brand in the scan.',
   sentiment: 'How favourably the brand is described when it is named.',
   technical_foundation: 'How readable the site is to the systems that build those answers.',
 };
@@ -67,7 +70,7 @@ export const EXCLUSION_REASON: Record<string, { label: string; detail: string }>
   NO_COMPETITOR_SET: {
     label: 'No comparison was made',
     detail:
-      'No competitor set was detected for this scan, so there is nothing to measure a share against. The dimension is excluded and its weight spread across the others, rather than awarding points for a detection that did not happen.',
+      'No competitor set was detected for this scan, so there is no rival to measure a share of voice or a citation comparison against. The dimension is excluded and its weight spread across the others, rather than awarding points for a detection that did not happen.',
   },
   NO_AWARENESS_POPULATION: {
     label: 'Nothing unprompted to measure',
@@ -82,11 +85,31 @@ export const EXCLUSION_REASON: Record<string, { label: string; detail: string }>
   // v2.1 — 2026-09-08. Not NOT_YET_MEASURED: that says a capability is on its
   // way; this says an input does not exist. Mirrored word for word in
   // `report_narrative.EXCLUSION_DETAIL`, so the PDF says the same.
+  //
+  // v3 — 2026-09-27. The dimension is measured now, so this fires only when a
+  // scan's citations are all unclassified. The second tier's limitation is
+  // stated here, to the reader, and not only in a docstring.
   NO_AUTHORITY_DATA: {
     label: 'No authority source',
     detail:
-      'Citation Strength needs a measure of how authoritative a citing domain is, and this system has no source for one. The only stand-in available — whether the brand’s own domain was cited, against every domain the engines cited — cannot rise above about a point for any site, so it is left out and its weight spread across the others rather than held against the brand. The citations themselves are still shown in the evidence below.',
+      'Citation Strength weighs the sources an answer cites when it names the brand, on two tiers: a short structural list — government and university domains, Wikipedia, the AP and Reuters wire services, and the cross-industry review platforms (Better Business Bureau, Trustpilot, G2, Capterra) — and the domains engines cite across at least three client industries and five clients on this platform. Nothing cited in this scan is on either tier, so there is no authority to measure and the dimension is left out with its weight spread across the others, rather than scored as zero. The second tier counts industries through an automatic classification whose confidence score is uncalibrated, so it is a coarse proxy that cannot screen out a mis-classified client; that is said here so the tier is not read as more precise than it is. The citations themselves are still shown in the evidence below.',
   },
+};
+
+/**
+ * What a MEASURED dimension is measured from, where a reader needs telling.
+ *
+ * Only Citation Strength has one: the other four say what they are in their
+ * label. Shown under the score on screen and under the score table in the
+ * PDF (`report_narrative.DIMENSION_NOTE`, word for word), so a three-tier
+ * proxy is never presented as more precise than it is — the second tier is
+ * counted through an industry classification whose confidence score is
+ * uncalibrated (build-log Epic 2.6/2.8, Finding 2, still open), and the
+ * sentence says so.
+ */
+export const DIMENSION_NOTE: Record<string, string> = {
+  citation_strength:
+    'Citation Strength weighs the third-party sources an answer cites when it names the brand, against the best-cited brand in the same scan, so the leader reads 100. Sources count on two tiers: a short structural list — government and university domains, Wikipedia, the AP and Reuters wire services, and the cross-industry review platforms (Better Business Bureau, Trustpilot, G2, Capterra) — at full weight, and domains that engines cite across at least three client industries and five clients on this platform at half weight. Everything else counts for nothing. The second tier is a coarse proxy: it counts industries through an automatic classification whose confidence score is uncalibrated, so a mis-classified client cannot be screened out of it, and its thresholds are first guesses to be revisited with more scans. It is measured on every answer, including answers to questions that named the brand.',
 };
 
 /**
@@ -306,10 +329,13 @@ export const FIX_FOR_DIMENSION: Record<string, FixCopy> = {
       'Rivals are named more often than the brand in the same answers. Comparison and alternatives pages are the surfaces those answers are assembled from.',
     effort: 'L',
   },
+  // v3: the dimension is the authority of the sources cited alongside the
+  // brand, so the lever is presence on the sources engines already treat as
+  // authorities — not the brand's own pages, which was the retired reading.
   citation_strength: {
-    title: 'Make the site the source an answer cites, not just a name it mentions',
+    title: 'Get onto the sources that answers already cite as authorities',
     detail:
-      'The brand is named more often than its own pages are cited. Citation follows structure: pages that state a claim plainly, mark it up, and are crawlable get quoted; pages that bury it in prose get paraphrased without attribution.',
+      'Answers that name the brand draw on sources with less authority than those that name the best-placed rival. The lever is presence on the review platforms and reference sources engines already cite — a current listing on G2, Capterra and Trustpilot, a Better Business Bureau profile, a Wikipedia entry where one is warranted — and coverage by the sources engines reach for across every industry.',
     effort: 'M',
   },
   sentiment: {

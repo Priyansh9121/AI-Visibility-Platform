@@ -180,6 +180,13 @@ def _score_beat(
             ],
             widths=[220, 80, 90, 93],
         )
+        # What a measured dimension is measured FROM, where the label alone
+        # would let a reader assume more precision than the input has — v3.
+        # The same sentence the screen shows, from the mirrored table.
+        for segment in story.segments:
+            note = narrative.DIMENSION_NOTE.get(segment.key)
+            if note:
+                doc.text(f"{segment.label}. {note}", size=9, leading=12.5, space_after=4)
 
     if story.exclusions:
         doc.subheading("Left out of the score, and why")
@@ -200,7 +207,7 @@ def _score_beat(
     if flags:
         doc.subheading("Why some numbers are rougher than others")
         for flag in flags:
-            doc.bullet(_DEGRADATION.get(flag, flag))
+            doc.bullet(narrative.DEGRADATION_FLAG.get(flag, flag))
 
 
 # ---------------------------------------------------------------------------
@@ -548,29 +555,9 @@ _BEATS = ("score", "gap", "proof", "fix", "pitch")
 _PRIORITY = {"high": "High priority", "medium": "Medium priority", "low": "Low priority"}
 _EFFORT = {"S": "Small effort", "M": "Medium effort", "L": "Large effort"}
 
-_DEGRADATION = {
-    # Carried only by scores computed before v2.1. The sentence describes what
-    # that formula actually did, which its predecessor did not: it claimed a
-    # comparison against the best-cited brand that the arithmetic never made.
-    "NO_AUTHORITY_DATA": (
-        "Citation Strength was measured as whether the brand's own domain was cited, "
-        "against every domain the engines cited, because this system has no external "
-        "authority source. That measure cannot rise above about a point for any site, "
-        "and later scores leave the dimension out instead."
-    ),
-    "WEAK_COMPETITOR_SET": (
-        "The competitor set was only weakly corroborated — some rivals were surfaced by a "
-        "single signal. Share of Voice should be read as indicative rather than exact."
-    ),
-    "NO_CITATIONS_IN_SCAN": "No engine cited any source in this scan, for any brand.",
-    "NO_COMPETITOR_SET": (
-        "No competitors were detected, so no share comparison was possible."
-    ),
-    "TECHNICAL_FOUNDATION_NOT_MEASURED": (
-        "The site had not been audited when this score was computed."
-    ),
-    "NO_ANSWERED_RESULTS": "No engine returned an answer for this scan.",
-}
+# Degradation copy lives in `report_narrative.DEGRADATION_FLAG` since
+# 2026-09-27, mirrored from `strings.ts` and tested against it. It lived here
+# first, and shipped without two of the codes the screen had sentences for.
 
 _DETECTION_STATUS = {
     "ok": "Search results and AI answers independently surfaced this set of rivals.",

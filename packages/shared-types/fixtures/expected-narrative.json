@@ -8,8 +8,8 @@
     "fixes": [
       {
         "id": "gap:citation_strength",
-        "title": "Make the site the source an answer cites, not just a name it mentions",
-        "detail": "The brand is named more often than its own pages are cited. Citation follows structure: pages that state a claim plainly, mark it up, and are crawlable get quoted; pages that bury it in prose get paraphrased without attribution.",
+        "title": "Get onto the sources that answers already cite as authorities",
+        "detail": "Answers that name the brand draw on sources with less authority than those that name the best-placed rival. The lever is presence on the review platforms and reference sources engines already cite — a current listing on G2, Capterra and Trustpilot, a Better Business Bureau profile, a Wikipedia entry where one is warranted — and coverage by the sources engines reach for across every industry.",
         "priority": "high",
         "effort": "M",
         "pointsUpside": 19.3,
@@ -185,8 +185,8 @@
     "fixes": [
       {
         "id": "gap:citation_strength",
-        "title": "Make the site the source an answer cites, not just a name it mentions",
-        "detail": "The brand is named more often than its own pages are cited. Citation follows structure: pages that state a claim plainly, mark it up, and are crawlable get quoted; pages that bury it in prose get paraphrased without attribution.",
+        "title": "Get onto the sources that answers already cite as authorities",
+        "detail": "Answers that name the brand draw on sources with less authority than those that name the best-placed rival. The lever is presence on the review platforms and reference sources engines already cite — a current listing on G2, Capterra and Trustpilot, a Better Business Bureau profile, a Wikipedia entry where one is warranted — and coverage by the sources engines reach for across every industry.",
         "priority": "high",
         "effort": "M",
         "pointsUpside": 25.7,
@@ -303,8 +303,8 @@
     "fixes": [
       {
         "id": "gap:citation_strength",
-        "title": "Make the site the source an answer cites, not just a name it mentions",
-        "detail": "The brand is named more often than its own pages are cited. Citation follows structure: pages that state a claim plainly, mark it up, and are crawlable get quoted; pages that bury it in prose get paraphrased without attribution.",
+        "title": "Get onto the sources that answers already cite as authorities",
+        "detail": "Answers that name the brand draw on sources with less authority than those that name the best-placed rival. The lever is presence on the review platforms and reference sources engines already cite — a current listing on G2, Capterra and Trustpilot, a Better Business Bureau profile, a Wikipedia entry where one is warranted — and coverage by the sources engines reach for across every industry.",
         "priority": "high",
         "effort": "M",
         "pointsUpside": 19.3,

@@ -190,6 +190,15 @@ describe('degraded data renders as degraded, never as bad', () => {
     expect(html).toContain('cannot rise above about a point for any site');
     expect(html).not.toContain('NO_AUTHORITY_DATA');
   });
+
+  it('says what Citation Strength is measured from, limitation included', () => {
+    // v3. The Help Scout fixture carries the dimension as included, so the
+    // note prints; it must name the second tier's proxy for what it is.
+    const html = render(helpscoutReport);
+    expect(html).toContain('Sources count on two tiers');
+    expect(html).toContain('confidence score is uncalibrated');
+    expect(html).toContain('including answers to questions that named the brand');
+  });
 });
 
 describe('the fix beat names specific changes', () => {

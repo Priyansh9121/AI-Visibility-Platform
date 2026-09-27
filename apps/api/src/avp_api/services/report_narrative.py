@@ -87,9 +87,10 @@ EXCLUSION_DETAIL: dict[str, str] = {
         "is excluded rather than scored zero."
     ),
     "NO_COMPETITOR_SET": (
-        "No competitor set was detected for this scan, so there is nothing to measure "
-        "a share against. The dimension is excluded and its weight spread across the "
-        "others, rather than awarding points for a detection that did not happen."
+        "No competitor set was detected for this scan, so there is no rival to measure "
+        "a share of voice or a citation comparison against. The dimension is excluded "
+        "and its weight spread across the others, rather than awarding points for a "
+        "detection that did not happen."
     ),
     "NO_AWARENESS_POPULATION": (
         "Mention Rate counts only questions that did not name the brand — the ones "
@@ -102,13 +103,81 @@ EXCLUSION_DETAIL: dict[str, str] = {
         "No engine returned an answer for this scan, so there is nothing to measure. "
         "This is a scan that did not run, not a brand that scored badly."
     ),
+    # v3 — 2026-09-27. The dimension is measured now, so this fires only when a
+    # scan's citations are all unclassified. The second tier's limitation is
+    # stated here, to the reader, and not only in a docstring.
     "NO_AUTHORITY_DATA": (
-        "Citation Strength needs a measure of how authoritative a citing domain is, "
-        "and this system has no source for one. The only stand-in available — "
-        "whether the brand's own domain was cited, against every domain the engines "
-        "cited — cannot rise above about a point for any site, so it is left out and "
-        "its weight spread across the others rather than held against the brand. The "
-        "citations themselves are still shown in the evidence below."
+        "Citation Strength weighs the sources an answer cites when it names the brand, "
+        "on two tiers: a short structural list — government and university domains, "
+        "Wikipedia, the AP and Reuters wire services, and the cross-industry review "
+        "platforms (Better Business Bureau, Trustpilot, G2, Capterra) — and the domains "
+        "engines cite across at least three client industries and five clients on this "
+        "platform. Nothing cited in this scan is on either tier, so there is no "
+        "authority to measure and the dimension is left out with its weight spread "
+        "across the others, rather than scored as zero. The second tier counts "
+        "industries through an automatic classification whose confidence score is "
+        "uncalibrated, so it is a coarse proxy that cannot screen out a mis-classified "
+        "client; that is said here so the tier is not read as more precise than it is. "
+        "The citations themselves are still shown in the evidence below."
+    ),
+}
+
+# What a MEASURED dimension is measured from, where a reader needs telling —
+# `strings.ts`'s `DIMENSION_NOTE`, word for word. Only Citation Strength has
+# one: the other four say what they are in their label. Printed under the
+# score table in the PDF and under the score on screen, so a three-tier proxy
+# is never presented as more precise than it is.
+DIMENSION_NOTE: dict[str, str] = {
+    "citation_strength": (
+        "Citation Strength weighs the third-party sources an answer cites when it names "
+        "the brand, against the best-cited brand in the same scan, so the leader reads "
+        "100. Sources count on two tiers: a short structural list — government and "
+        "university domains, Wikipedia, the AP and Reuters wire services, and the "
+        "cross-industry review platforms (Better Business Bureau, Trustpilot, G2, "
+        "Capterra) — at full weight, and domains that engines cite across at least "
+        "three client industries and five clients on this platform at half weight. "
+        "Everything else counts for nothing. The second tier is a coarse proxy: it "
+        "counts industries through an automatic classification whose confidence score "
+        "is uncalibrated, so a mis-classified client cannot be screened out of it, and "
+        "its thresholds are first guesses to be revisited with more scans. It is "
+        "measured on every answer, including answers to questions that named the brand."
+    ),
+}
+
+# Why a number is lower or rougher than it would otherwise be — `strings.ts`'s
+# `DEGRADATION_FLAG`, word for word. Lived in `report_pdf.py` until 2026-09-27
+# with two codes missing (NO_AWARENESS_POPULATION, NO_SENTIMENT_POPULATION), so
+# the PDF printed those identifiers raw while the screen said a sentence.
+# Moved here, beside the other mirrored tables, and covered by the
+# cross-language copy test.
+DEGRADATION_FLAG: dict[str, str] = {
+    # Carried only by scores computed before v2.1. The sentence describes what
+    # that formula actually did; its predecessor claimed a comparison against
+    # the best-cited brand that the arithmetic never made.
+    "NO_AUTHORITY_DATA": (
+        "Citation Strength was measured as whether the brand’s own domain was cited, "
+        "against every domain the engines cited, because this system has no external "
+        "authority source. That measure cannot rise above about a point for any site, "
+        "and later scores leave the dimension out instead."
+    ),
+    "WEAK_COMPETITOR_SET": (
+        "The competitor set was only weakly corroborated — some rivals were surfaced by a "
+        "single signal. Share of Voice should be read as indicative rather than exact."
+    ),
+    "NO_CITATIONS_IN_SCAN": "No engine cited any source in this scan, for any brand.",
+    "NO_COMPETITOR_SET": "No competitors were detected, so no share comparison was possible.",
+    "TECHNICAL_FOUNDATION_NOT_MEASURED": (
+        "The site had not been audited when this score was computed."
+    ),
+    "NO_ANSWERED_RESULTS": "No engine returned an answer for this scan.",
+    "NO_AWARENESS_POPULATION": (
+        "This prompt set contained no unprompted questions, which are the only ones "
+        "Mention Rate and Share of Voice count. Both were left out of the score rather "
+        "than measured on questions that named the brand."
+    ),
+    "NO_SENTIMENT_POPULATION": (
+        "The brand was not named often enough for sentiment to mean anything, so that "
+        "dimension was left out of the score rather than counted as a bad result."
     ),
 }
 
@@ -156,11 +225,16 @@ FIX_FOR_DIMENSION: dict[str, tuple[str, str, str]] = {
         "alternatives pages are the surfaces those answers are assembled from.",
         "L",
     ),
+    # v3: the dimension is the authority of the sources cited alongside the
+    # brand, so the lever is presence on the sources engines already treat as
+    # authorities — not the brand's own pages, which was the retired reading.
     "citation_strength": (
-        "Make the site the source an answer cites, not just a name it mentions",
-        "The brand is named more often than its own pages are cited. Citation follows "
-        "structure: pages that state a claim plainly, mark it up, and are crawlable get "
-        "quoted; pages that bury it in prose get paraphrased without attribution.",
+        "Get onto the sources that answers already cite as authorities",
+        "Answers that name the brand draw on sources with less authority than those "
+        "that name the best-placed rival. The lever is presence on the review platforms "
+        "and reference sources engines already cite — a current listing on G2, Capterra "
+        "and Trustpilot, a Better Business Bureau profile, a Wikipedia entry where one is "
+        "warranted — and coverage by the sources engines reach for across every industry.",
         "M",
     ),
     "sentiment": (

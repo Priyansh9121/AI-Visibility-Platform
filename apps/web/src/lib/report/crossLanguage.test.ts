@@ -22,7 +22,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { deriveNarrative } from './derive';
 import type { Report } from '@avp/shared-types';
@@ -59,6 +59,19 @@ function project(report: Report) {
       generated: f.generated ?? false,
     })),
   };
+}
+
+// The regeneration path the header describes, made a command rather than a
+// hand edit: `AVP_WRITE_FIXTURES=1 pnpm test -- crossLanguage` rewrites the
+// expectation from THIS implementation, and the Python suite then says what
+// it costs. Added 2026-09-27, when the citation fix copy changed for v3.
+if (process.env['AVP_WRITE_FIXTURES']) {
+  // In the file's existing order, so a regeneration diffs as the strings
+  // that moved and not as a reordering of every case.
+  const order = [...Object.keys(expected), ...Object.keys(cases).filter((k) => !(k in expected))];
+  const regenerated = Object.fromEntries(order.map((name) => [name, project(cases[name]!)]));
+  writeFileSync(`${FIXTURES}expected-narrative.json`, `${JSON.stringify(regenerated, null, 2)}\n`);
+  Object.assign(expected, regenerated);
 }
 
 describe('the shared fixtures still describe this implementation', () => {
