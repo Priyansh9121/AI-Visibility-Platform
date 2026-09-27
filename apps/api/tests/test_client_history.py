@@ -248,10 +248,11 @@ class TestRankingsMaterial:
         for r in rivals:
             assert r["mentionRate"] is not None
             assert r["shareOfVoice"] is not None
-            # v2.1: the subject's Citation Strength is excluded under
-            # NO_AUTHORITY_DATA, so the rivals' is null too — a column means
-            # one thing, and a stand-in nobody can earn is not a comparison.
-            assert r["citationStrength"] is None
+            # v3: the stub answers cite g2.com, a curated-tier domain, so the
+            # subject's Citation Strength is measured and the rivals' column
+            # carries a number against the same best-in-scan. A column means
+            # one thing; since v3 that thing is a figure.
+            assert r["citationStrength"] is not None
 
     async def test_no_rival_carries_a_composite_and_none_ever_will(
         self, client: AsyncClient, stub_engines, stub_discovery

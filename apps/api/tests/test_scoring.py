@@ -13,13 +13,16 @@ import pytest
 from avp_api.models.competitor import DetectionStatus
 from avp_api.models.engine_result import EngineResultStatus, Sentiment
 from avp_api.models.prompt import PromptIntent
+from avp_api.services.domain_authority import CURATED_ONLY, DomainAuthority, Tier
 from avp_api.services.scoring import (
+    AUTHORITY_VALUES,
     FORMULA_VERSION,
     WEIGHTS,
     CompetitorFacts,
     Dimension,
     ResultFacts,
     SubScoreOutOfRangeError,
+    authority_sums,
     awareness_only,
     citation_strength,
     compare_competitors,
@@ -84,7 +87,20 @@ class TestFormulaConstants:
         # what rule 5 exists to keep true. v2.1 when Citation Strength was
         # excluded under NO_AUTHORITY_DATA: a stand-in no brand could score
         # above 1/N on left the composite, and its weight was redistributed.
-        assert FORMULA_VERSION == "v2.1"
+        # v3 when Citation Strength came back as a measurement, from a
+        # citing-domain authority input that did not exist before: a
+        # dimension re-entering the weighting moves every composite with a
+        # classifiable citation, which is a major bump by v2's precedent.
+        assert FORMULA_VERSION == "v3"
+
+    def test_authority_values_say_the_ordering_and_nothing_more_precise(self) -> None:
+        # The ratios are what the normalisation reads. Curated is the ceiling
+        # by construction; unclassified is zero because no tier is no evidence;
+        # platform sits at the midpoint for the reason neutral sentiment does —
+        # it states the ordering without claiming a measurement nobody made.
+        assert AUTHORITY_VALUES[Tier.CURATED] == Decimal("100")
+        assert AUTHORITY_VALUES[None] == Decimal("0")
+        assert AUTHORITY_VALUES[Tier.PLATFORM] * 2 == AUTHORITY_VALUES[Tier.CURATED]
 
 
 class TestMentionRate:
@@ -173,107 +189,241 @@ class TestSentiment:
         assert sentiment_score(results) == Decimal("100")
 
 
-class TestCitationStrength:
-    def test_normalised_against_the_best_cited_in_the_scan(self) -> None:
-        results = [res(1, mentioned=True, citations=(
-            ("helpscout.com", True), ("g2.com", False), ("capterra.com", False)))]
-        value, flags = citation_strength(results)
-        # subject 1 distinct domain, others 2 -> 1/2
-        assert value == Decimal("50")
-        assert "NO_AUTHORITY_DATA" in flags
+# A platform tier for the pure tests: `wide.example` is what a domain that
+# crossed the Tier B thresholds looks like once loaded. The thresholds
+# themselves are tested against seeded rows in test_domain_authority.py.
+PLATFORM = DomainAuthority(platform_domains=frozenset({"wide.example"}))
+RIVAL = comp(1, "Zendesk", "zendesk.com")
 
-    def test_always_flags_missing_authority_data(self) -> None:
-        """§6 asks for 'number AND authority'. No authority source exists."""
-        _, flags = citation_strength([res(1, citations=(("x.com", True),))])
-        assert "NO_AUTHORITY_DATA" in flags
+
+class TestCitationStrength:
+    """v3 — authority of the domains citing the brand, against the scan's best.
+
+    A brand's citing domains are the third-party sources cited in answers
+    that name it, less its own domain. Each carries its tier's value; the
+    subject's sum is normalised against the largest sum in the scan.
+    """
+
+    def test_a_curated_domain_scores_without_any_platform_data(self) -> None:
+        """Tier A is a fact about the string. No database, no lookup."""
+        results = [res(1, mentioned=True, brands=(SUBJECT,),
+                       citations=(("nih.gov", False),))]
+        value, flags = citation_strength(results, [RIVAL], authority=CURATED_ONLY)
+        assert value == Decimal("100")
+        assert "NO_AUTHORITY_DATA" not in flags
+
+    def test_a_platform_domain_scores_at_its_tier(self) -> None:
+        """Tier B — a domain the loader found across enough industries and clients."""
+        results = [
+            res(1, mentioned=True, brands=(SUBJECT,), citations=(("wide.example", False),)),
+            res(2, mentioned=False, brands=(("Zendesk", False),),
+                citations=(("nih.gov", False),)),
+        ]
+        value, _ = citation_strength(results, [RIVAL], authority=PLATFORM)
+        # subject 50 (platform) against the rival's 100 (curated)
+        assert value == Decimal("50")
+
+    def test_an_unclassified_domain_carries_zero_weight(self) -> None:
+        results = [
+            res(1, mentioned=True, brands=(SUBJECT,),
+                citations=(("blog.example", False), ("forum.example", False))),
+            res(2, mentioned=False, brands=(("Zendesk", False),),
+                citations=(("nih.gov", False),)),
+        ]
+        value, _ = citation_strength(results, [RIVAL], authority=PLATFORM)
+        assert value == Decimal("0")
+        subject, rivals = authority_sums(results, [RIVAL], PLATFORM.tiers_for(
+            {"blog.example", "forum.example", "nih.gov"}))
+        assert subject == Decimal("0") and rivals["comp_0001"] == Decimal("100")
+
+    def test_nothing_classifiable_flags_no_authority_data_exactly_as_before(self) -> None:
+        """A scan with no tiered domain keeps v2.1's behaviour to the letter."""
+        results = [res(1, mentioned=True, brands=(SUBJECT,),
+                       citations=(("helpscout.com", True), ("blog.example", False)))]
+        value, flags = citation_strength(results, [RIVAL], authority=PLATFORM)
+        assert value == Decimal("0")
+        assert flags == ["NO_AUTHORITY_DATA"]
 
     def test_no_citations_anywhere_is_flagged_distinctly(self) -> None:
         """'Nobody cited anything' differs from 'cited others, not you'."""
-        value, flags = citation_strength([res(1, mentioned=True)])
+        value, flags = citation_strength([res(1, mentioned=True)], [RIVAL], authority=PLATFORM)
         assert value == Decimal("0")
-        assert "NO_CITATIONS_IN_SCAN" in flags
+        assert set(flags) == {"NO_AUTHORITY_DATA", "NO_CITATIONS_IN_SCAN"}
 
-    def test_distinct_domains_not_raw_citation_count(self) -> None:
-        results = [res(1, citations=(("a.com", True), ("a.com", True), ("b.com", True)))]
-        value, _ = citation_strength(results)
+    def test_normalised_against_the_best_rival_in_the_scan(self) -> None:
+        """The spec's rule, implemented for the first time — not 1/N."""
+        results = [
+            res(1, mentioned=True, brands=(SUBJECT,),
+                citations=(("g2.com", False), ("wide.example", False))),  # 150
+            res(2, mentioned=False, brands=(("Zendesk", False),),
+                citations=(("g2.com", False), ("capterra.com", False),
+                           ("wide.example", False))),  # 250
+        ]
+        value, _ = citation_strength(results, [RIVAL], authority=PLATFORM)
+        assert value == Decimal("60")
+
+    def test_the_best_cited_brand_reads_one_hundred_whoever_it_is(self) -> None:
+        results = [
+            res(1, mentioned=True, brands=(SUBJECT,),
+                citations=(("g2.com", False), ("capterra.com", False))),
+            res(2, mentioned=False, brands=(("Zendesk", False),),
+                citations=(("g2.com", False),)),
+        ]
+        value, _ = citation_strength(results, [RIVAL], authority=CURATED_ONLY)
         assert value == Decimal("100")
 
+    def test_distinct_domains_not_raw_citation_count(self) -> None:
+        results = [
+            res(1, mentioned=True, brands=(SUBJECT,),
+                citations=(("g2.com", False), ("g2.com", False))),
+            res(2, mentioned=True, brands=(SUBJECT,), citations=(("g2.com", False),)),
+            res(3, mentioned=False, brands=(("Zendesk", False),),
+                citations=(("g2.com", False), ("capterra.com", False))),
+        ]
+        value, _ = citation_strength(results, [RIVAL], authority=CURATED_ONLY)
+        assert value == Decimal("50")  # one domain against two, however often cited
 
-class TestCitationStrengthIsExcluded:
-    """v2.1 — a dimension nobody can earn is left out, not scored.
+    def test_a_brand_is_not_a_third_party_to_itself(self) -> None:
+        """Own-domain citations earn nothing — for the subject or for a rival."""
+        platform = DomainAuthority(platform_domains=frozenset({"helpscout.com", "zendesk.com"}))
+        results = [
+            res(1, mentioned=True, brands=(SUBJECT,), citations=(("helpscout.com", True),)),
+            res(2, mentioned=False, brands=(("Zendesk", False),),
+                citations=(("zendesk.com", False),)),
+        ]
+        tiers = platform.tiers_for({"helpscout.com", "zendesk.com"})
+        subject, rivals = authority_sums(results, [RIVAL], tiers)
+        assert subject == Decimal("0") and rivals["comp_0001"] == Decimal("0")
 
-    The stand-in `citation_strength` computes divides the subject's own domain
-    (0 or 1) by every distinct third-party domain in the scan, so its ceiling
-    is 1/N. On the second pilot dry run's 24-prompt scan N was 152: the
-    subject and all five rivals scored 0.66, and across every stored score the
-    maximum was 3.70. Scoring that kept depressing every composite by up to 20
-    points while the pitch beat promised those points back.
-    """
+    def test_attribution_is_by_co_occurrence_in_the_answer(self) -> None:
+        """An answer naming two brands credits its sources to both — a known limit."""
+        results = [res(1, mentioned=True, brands=(SUBJECT, ("Zendesk", False)),
+                       citations=(("g2.com", False),))]
+        subject, rivals = authority_sums(results, [RIVAL], CURATED_ONLY.tiers_for({"g2.com"}))
+        assert subject == rivals["comp_0001"] == Decimal("100")
+
+    def test_only_answered_results_and_only_answers_naming_the_brand_count(self) -> None:
+        results = [
+            res(1, mentioned=False, brands=(), citations=(("g2.com", False),)),
+            res(2, mentioned=True, brands=(SUBJECT,), citations=(("nih.gov", False),),
+                status=EngineResultStatus.TIMEOUT),
+        ]
+        subject, _ = authority_sums(results, [RIVAL], CURATED_ONLY.tiers_for({"g2.com", "nih.gov"}))
+        assert subject == Decimal("0")
+
+    def test_tiered_sources_cited_in_answers_naming_nobody_score_zero(self) -> None:
+        results = [res(1, mentioned=False, brands=(), citations=(("nih.gov", False),))]
+        value, flags = citation_strength(results, [RIVAL], authority=CURATED_ONLY)
+        assert value == Decimal("0") and flags == []
+
+
+class TestCitationStrengthInTheComposite:
+    """How `compute_score` treats the dimension since v3."""
 
     @staticmethod
-    def _scored():  # noqa: ANN205
-        results = [
+    def _results():  # noqa: ANN205
+        return [
             res(1, mentioned=True, sentiment=Sentiment.POSITIVE,
-                brands=(("Help Scout", True), ("Zendesk", False)),
-                citations=(("helpscout.com", True), ("g2.com", False), ("capterra.com", False))),
+                brands=(SUBJECT, ("Zendesk", False)),
+                citations=(("helpscout.com", True), ("g2.com", False),
+                           ("capterra.com", False))),
             res(2, mentioned=False, brands=(("Zendesk", False),),
                 citations=(("g2.com", False), ("zendesk.com", False))),
         ]
+
+    def _scored(self, results=None, **kwargs):  # noqa: ANN001, ANN003, ANN202
         return compute_score(
-            results, [comp(1, "Zendesk", "zendesk.com")],
+            results or self._results(), [RIVAL],
             competitor_set_status=DetectionStatus.OK, technical_foundation=Decimal("80"),
+            authority=CURATED_ONLY, **kwargs,
         )
 
-    def test_excluded_with_the_reason_that_names_the_missing_input(self) -> None:
+    def test_measured_and_included_with_five_dimensions_weighted(self) -> None:
         out = self._scored()
+        assert "citation_strength" not in out.excluded_dimensions
+        assert out.value(Dimension.CITATION_STRENGTH) == Decimal("100.00")
+        included = {d: s for d, s in out.sub_scores.items() if s.included}
+        assert set(included) == set(Dimension)
+        assert {d: s.weight for d, s in included.items()} == WEIGHTS
+        rebuilt = sum(s.weight * s.value for s in included.values()) / Decimal(100)
+        assert rebuilt.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) == out.composite
+
+    def test_rivals_carry_a_figure_against_the_same_best(self) -> None:
+        """A column means one thing — and now that thing is a number."""
+        out = self._scored()
+        # Subject: g2 + capterra = 200. Zendesk: g2 + capterra (answer 1) + g2
+        # (answer 2), zendesk.com excluded = 200. Both read 100 of the best.
+        assert [c.citation_strength for c in out.competitors] == [Decimal("100.00")]
+
+    def test_nothing_classifiable_is_excluded_exactly_as_v2_1_did(self) -> None:
+        results = [
+            res(1, mentioned=True, sentiment=Sentiment.POSITIVE,
+                brands=(SUBJECT, ("Zendesk", False)),
+                citations=(("helpscout.com", True), ("blog.example", False))),
+        ]
+        out = self._scored(results)
         assert out.excluded_dimensions["citation_strength"] == "NO_AUTHORITY_DATA"
         assert out.value(Dimension.CITATION_STRENGTH) is None
         assert not out.sub_scores[Dimension.CITATION_STRENGTH].included
         # Not NOT_YET_MEASURED: that says a capability is on its way.
         assert "NOT_YET_MEASURED" not in out.excluded_dimensions.values()
-
-    def test_its_weight_is_redistributed_and_the_composite_re_sums(self) -> None:
-        out = self._scored()
-        included = {d: s for d, s in out.sub_scores.items() if s.included}
-        assert Dimension.CITATION_STRENGTH not in included
-        assert set(included) == {
-            Dimension.MENTION_RATE, Dimension.SHARE_OF_VOICE,
-            Dimension.SENTIMENT, Dimension.TECHNICAL_FOUNDATION,
-        }
-        assert sum(s.weight for s in included.values()) == Decimal("100.00")
-        rebuilt = sum(s.weight * s.value for s in included.values()) / Decimal(100)
-        assert rebuilt.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) == out.composite
-
-    def test_no_authority_data_is_the_exclusion_and_not_also_a_degradation(self) -> None:
-        """A dimension that is left out is not "rougher". One fact, said once."""
-        out = self._scored()
+        # One fact, said once: a dimension that is left out is not "rougher".
         assert "NO_AUTHORITY_DATA" not in out.degradation_flags
+        # Weight redistributed over the other four, re-summing exactly.
+        included = {d: s for d, s in out.sub_scores.items() if s.included}
+        assert sum(s.weight for s in included.values()) == Decimal("100.00")
+        # And the rivals' column is empty while the subject's is.
+        assert all(c.citation_strength is None for c in out.competitors)
 
     def test_no_citations_in_scan_is_still_a_fact_about_the_scan(self) -> None:
         out = compute_score([res(1, mentioned=True)], [], competitor_set_status=None)
         assert "NO_CITATIONS_IN_SCAN" in out.degradation_flags
         assert out.excluded_dimensions["citation_strength"] == "NO_AUTHORITY_DATA"
 
-    def test_rivals_carry_no_citation_strength_while_the_subject_does_not(self) -> None:
-        """A column means one thing — `compare_competitors`'s own rule."""
-        out = self._scored()
-        assert out.competitors
-        assert all(c.citation_strength is None for c in out.competitors)
-        assert all(c.mention_rate is not None and c.share_of_voice is not None
-                   for c in out.competitors)
+    def test_no_competitor_set_excludes_rather_than_scoring_the_subject_against_itself(
+        self,
+    ) -> None:
+        """A full mark for a detection failure is the v1 defect; v1.1's answer applies."""
+        out = compute_score(
+            self._results(), [], competitor_set_status=None, authority=CURATED_ONLY,
+        )
+        assert out.excluded_dimensions["citation_strength"] == "NO_COMPETITOR_SET"
+        assert out.excluded_dimensions["share_of_voice"] == "NO_COMPETITOR_SET"
+        assert out.value(Dimension.CITATION_STRENGTH) is None
 
-    def test_the_stand_in_is_still_computed_for_the_day_an_authority_source_exists(self) -> None:
-        # Not asserted in the composite, but not thrown away either: the
-        # function and its flags are what a real source plugs into.
-        value, flags = citation_strength([res(1, citations=(("x.com", True), ("y.com", False)))])
-        assert value == Decimal("100") and "NO_AUTHORITY_DATA" in flags
+    def test_no_authority_data_takes_precedence_over_no_competitor_set(self) -> None:
+        results = [res(1, mentioned=True, brands=(SUBJECT,),
+                       citations=(("blog.example", False),))]
+        out = compute_score(results, [], competitor_set_status=None)
+        assert out.excluded_dimensions["citation_strength"] == "NO_AUTHORITY_DATA"
+
+    def test_the_tiers_are_in_the_digest(self) -> None:
+        """Tier B moves as scans accumulate; a score that moves with it must say why."""
+        results = [res(1, mentioned=True, brands=(SUBJECT,),
+                       citations=(("wide.example", False),))]
+        without = compute_score(results, [RIVAL], competitor_set_status=DetectionStatus.OK,
+                                authority=CURATED_ONLY)
+        with_platform = compute_score(results, [RIVAL], competitor_set_status=DetectionStatus.OK,
+                                      authority=PLATFORM)
+        assert without.inputs_digest != with_platform.inputs_digest
+        assert without.excluded_dimensions.get("citation_strength") == "NO_AUTHORITY_DATA"
+        assert with_platform.value(Dimension.CITATION_STRENGTH) == Decimal("100.00")
+
+    def test_a_domain_outside_the_scan_entering_tier_b_does_not_move_the_digest(self) -> None:
+        results = [res(1, mentioned=True, brands=(SUBJECT,), citations=(("g2.com", False),))]
+        a = compute_score(results, [RIVAL], competitor_set_status=DetectionStatus.OK,
+                          authority=CURATED_ONLY)
+        b = compute_score(results, [RIVAL], competitor_set_status=DetectionStatus.OK,
+                          authority=PLATFORM)
+        assert a.inputs_digest == b.inputs_digest
 
     def test_the_dry_run_scan_would_have_read_33_93_rather_than_27_28(self) -> None:
         """pirsch.io's stored v2 sub-scores, re-summed over the four that remain.
 
-        Effective weights are the §6 weights over the 80 points that survive:
-        30/80, 25/80, 15/80, 10/80 — exact at two places, so no rounding
-        question arises in the re-sum.
+        Kept from v2.1: the arithmetic of a four-dimension redistribution, which
+        is still what a NO_AUTHORITY_DATA scan gets. Effective weights are the
+        §6 weights over the 80 points that survive: 30/80, 25/80, 15/80,
+        10/80 — exact at two places, so no rounding question arises.
         """
         dims = [
             Dimension.MENTION_RATE, Dimension.SHARE_OF_VOICE,

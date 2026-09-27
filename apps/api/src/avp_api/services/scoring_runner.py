@@ -41,6 +41,7 @@ from ..models import (
 from ..models.prompt import PromptIntent
 from ..models.score import ScoreStatus
 from ..models.technical_audit import AuditStatus
+from .domain_authority import load_domain_authority
 from .scoring import (
     CompetitorComparison,
     CompetitorFacts,
@@ -202,11 +203,18 @@ async def score_scan(
     # Decimal. Epic 6 produces one; scoring consumes it exactly as before.
     technical_foundation = await load_technical_foundation(session, scan.id)
 
+    # v3 — the citing-domain authority lookup. Tier A needs no data; Tier B is
+    # a platform-wide aggregate over stored citations (15 ms, measured — see
+    # `domain_authority.py`), loaded fresh for every scoring so the digest
+    # records the tiers this score was actually computed with.
+    authority = await load_domain_authority(session)
+
     computed = compute_score(
         results,
         competitors,
         competitor_set_status=competitor_set.status if competitor_set else None,
         technical_foundation=technical_foundation,
+        authority=authority,
     )
 
     row: Score | None = None

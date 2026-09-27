@@ -21,7 +21,7 @@ score = Σ (weight_i × subscore_i) / 100
 |---|---|---|---|
 | 1 | **Mention Rate** | 30% | % of **awareness** prompts where the brand appears (v2) |
 | 2 | **Share of Voice** | 25% | Brand mentions ÷ total mentions, over **awareness** prompts (v2) |
-| 3 | **Citation Strength** | 20% | Number + authority of domains citing the brand — **excluded since v2.1** (`NO_AUTHORITY_DATA`), weight redistributed, until an authority source exists |
+| 3 | **Citation Strength** | 20% | Authority of the domains cited in answers that name the brand, against the best-cited brand in the same scan — **measured since v3** from a two-tier authority input; excluded (`NO_AUTHORITY_DATA`) only when no cited domain in the scan has a tier, and (`NO_COMPETITOR_SET`) when there is no rival to normalise against |
 | 4 | **Sentiment** | 15% | Weighted positive/neutral/negative across all mentions |
 | 5 | **Technical Foundation** | 10% | Schema presence, structured data, content freshness |
 
@@ -85,11 +85,81 @@ set. Unreachable through the generator (45% awareness quota) and through
 Full numbers and method: `build-log.md`, *"Mention Rate may be measuring the
 prompt, not the engine — sized, not fixed"*.
 
-### Citation Strength — excluded until there is an authority source (v2.1)
+### Citation Strength — measured from a two-tier authority input (v3)
 
-**Citation Strength is excluded from the composite with reason
-`NO_AUTHORITY_DATA`, and its 20 points redistributed across the other
-dimensions.** The table above asks for "number **and** authority" of citing
+**Since v3 (2026-09-27) Citation Strength is scored.** The input v2.1 was
+waiting for is `services/domain_authority.py`, and it comes in two tiers
+that are honest about their limits in different ways:
+
+- **Tier A — curated, structural.** `.gov`, `.edu`, `.mil` and their country
+  forms (`.gov.uk`, `.ac.uk`, `.gov.au`, `.gc.ca`, `.go.jp`, `.gouv.fr`, …)
+  by suffix; Wikipedia and Wikidata by name; the two major wire services, AP
+  and Reuters, because most other outlets draw from them — a structural fact,
+  not a trust ranking; and the cross-industry trust and review infrastructure
+  that exists to aggregate signals about businesses: Better Business Bureau,
+  Trustpilot, G2, Capterra. Deliberately **not** on the list: any general
+  "credible news" set, Reddit and forums, and industry-specific authorities
+  (WebMD, IEEE, a bar association) — a generic list cannot do those well,
+  and Tier B is what is meant to catch them.
+- **Tier B — platform frequency.** A domain qualifies when scans have cited
+  it across at least **3 distinct client industries** and at least **5
+  distinct clients**, with `Client.industry` as the grouping key. Both
+  thresholds are **first guesses, not measured ones** — 27 clients across 12
+  labels is not a base to derive them from — and are to be revisited once
+  real scan volume exists. It is a live aggregate, not a table: 15 ms on
+  5,787 citation rows, measured before deciding.
+- **Everything else is unclassified**: no tier, zero authority weight, the
+  same as its absence before v3.
+
+**The limitation, stated plainly and in the report copy, not only here.**
+`Client.industry`'s classification confidence score was found uncalibrated
+(build-log Epic 2.6/2.8, Finding 2 — five real sites scored 0.97, 0.97,
+0.97, 0.97, 0.96, effectively one value) and remains unfixed, so there is no
+reliable way to screen a mis-classified client's industry out of the Tier B
+count. The label itself is more workable — the earlier over-generalisation
+(Finding 1) was addressed with prompt tuning — but industry-spread is a
+coarse proxy that cannot currently filter out a bad classification. On the
+day v3 shipped the rule admitted 70 domains, a good part of them help-desk
+vendors that the fine-grained labels count as seven industries.
+
+**The formula.** A brand's *citing domains* are the distinct third-party
+sources cited in answered results that name it, less its own domain (a
+brand is not a third party to itself). Each carries its tier's value —
+`AUTHORITY_VALUES`: **curated 100, platform 50, unclassified 0**, ratios
+chosen to state the ordering and no more precision than the proxy has, the
+way neutral sentiment sits at 50. The subject's sum is normalised against
+the largest sum in the scan, its own or a rival's:
+
+```
+citation_strength = 100 × Σ tier(subject's citing domains)
+                          / max over brands in the scan of Σ tier(citing domains)
+```
+
+Attribution is by co-occurrence — an answer naming two brands credits its
+sources to both — which is the limit of what facts-only storage supports.
+Every rival's comparison figure is its own sum against the same denominator,
+so the best-cited brand in the table reads 100.
+
+**Two exclusions, distinct facts.** `NO_AUTHORITY_DATA` now fires only when
+no cited domain in the scan has a tier — there is no input to measure with,
+and such a scan behaves exactly as under v2.1. `NO_COMPETITOR_SET` fires
+when tiered domains were cited but no competitor set exists: with no rival,
+"the best in the scan" is the subject itself and any classifiable citation
+would score 100 — the v1 Share of Voice defect, given the v1.1 answer.
+`NO_AUTHORITY_DATA` takes precedence when both hold.
+
+**The tiers are inputs and are in the digest.** Tier B moves as scans
+accumulate, so the same results re-scored later can score differently under
+the same formula; `inputs_digest` records the tier of every cited domain
+that has one, so the change is attributable (rule 1).
+
+**Stored `v2.1`, `v2` and `v1.1` rows are not re-scored** (rule 5).
+
+### Citation Strength — excluded until there was an authority source (v2.1)
+
+**From 2026-09-08 to v3, Citation Strength was excluded from the composite
+with reason `NO_AUTHORITY_DATA`, and its 20 points redistributed across the
+other dimensions.** The table above asks for "number **and** authority" of citing
 domains, and this system has no authority source. The stand-in that filled the
 dimension since Epic 5 divided the distinct domains citing the subject — in
 practice the subject's own domain, 0 or 1 — by every distinct third-party
@@ -109,11 +179,11 @@ nothing inline. Rows written by the grounded Claude engine before that date
 hold the retrieved set instead, and say so through their `engine_version`
 (no `/direct` suffix). They are not rewritten; see the changelog.
 
-**This is an interim, not a redesign.** What Citation Strength should measure
+**This was an interim, not a redesign.** What Citation Strength should measure
 — citation share against the best-cited *single* brand, the rate of answers
 that cite the subject at all, or something an authority feed makes possible —
-is its own decision with its own brief. Until then a stand-in that cannot be
-earned is left out, the same treatment v1.1 gave Technical Foundation before
+was its own decision with its own brief, and v3 above is that decision. Until
+then a stand-in that could not be earned was left out, the same treatment v1.1 gave Technical Foundation before
 Epic 6 could measure it. The citations themselves are unaffected: the proof
 beat's citation tables and the unclaimed-domain fix read the persisted
 `engine_result_citations` rows directly and never depended on this score.
@@ -200,13 +270,15 @@ These are the unit-test targets named by the Epic 5 acceptance criterion.
 | All competitors tied with brand | Share of Voice = 100 / (1 + n_competitors), exactly. |
 | No competitors detected | **v1.1:** Share of Voice is **excluded and its weight redistributed**, with `NO_COMPETITOR_SET` on `degradation_flags`. (v1 said "Share of Voice = 100, flag the scan" — see the changelog for why that changed.) |
 | Zero prompts in set | Score is **not** 0 — it is `null` with reason `INSUFFICIENT_DATA`. An unrunnable scan must never render as a bad score. |
-| Citations present but zero authority data | Fall back to raw domain count, normalised against the competitor max in the same scan. Record the degradation on the score row. |
+| Citations present but no cited domain has an authority tier | **v3:** excluded under `NO_AUTHORITY_DATA` and the weight redistributed — there is no input to measure with. (v1–v2 fell back to a raw domain count that in practice was the subject's own domain over every domain cited, and could not exceed 1/N; v2.1 excluded it.) |
+| Tiered domains cited, no competitor set | **v3:** excluded under `NO_COMPETITOR_SET` — normalised against nobody, the subject would score 100 for any classifiable citation, which is the v1 Share of Voice defect. |
 | Sub-score > 100 from an input bug | Clamp to 100 **and** raise — a silent clamp hides pipeline defects. |
 
 ## Tuning changelog
 
 | Date | Version | Change |
 |---|---|---|
+| 2026-09-27 | `v3` | **Citation Strength is measured again, from a two-tier citing-domain authority input.** `services/domain_authority.py`: Tier A is a curated structural list (gov/edu/mil suffixes and country forms, Wikipedia, Wikidata, AP, Reuters, BBB, Trustpilot, G2, Capterra); Tier B is a live aggregate over stored citations — cited across ≥ 3 `Client.industry` values and ≥ 5 clients, both thresholds first guesses. Values 100 / 50 / 0. A brand's citing domains are the third-party sources cited in answers that name it, less its own; the subject's sum is normalised against the best in the scan, as this spec always said and the v1–v2 stand-in never did. `NO_AUTHORITY_DATA` now fires only when no cited domain has a tier; `NO_COMPETITOR_SET` when there is no rival to normalise against. The tiers are in the digest. **Honest limit, in the report copy:** Tier B counts through an industry label whose confidence is uncalibrated (Finding 2, open), so it cannot screen out a mis-classified client. Major bump by v2's precedent: a dimension re-entering the weighting moves every composite with a classifiable citation. **Stored `v2.1` rows are not re-scored.** See the section above and `build-log.md`, 2026-09-27. |
 | 2026-08-20 | `v1` | Initial weights from product-spec.md §6. Not yet data-tuned. |
 | 2026-08-21 | `v1.1` | **No-competitor Share of Voice now excluded, not scored 100.** v1 awarded a full 25 points when competitor detection returned nothing, which hands a quarter of the composite to a *detection failure* — a technically-computable but meaningless number, and exactly the outcome this project refuses everywhere else (null classification, null score, `INSUFFICIENT_DATA`). It is now excluded and redistributed, the same treatment v1 already prescribed for sentiment with no population. Weights themselves are unchanged. See `build-log.md` Epic 5.2. |
 | 2026-09-12 | `v2.2` | **A citation is a source the answer cited, on every engine.** The grounded Claude engine now calls search directly (`allowed_callers: ["direct"]`), which is the only path on which the answer's own `web_search_result_location` citations are returned, and records those; the results the search retrieved are the fallback only when the answer cited nothing inline — the rule `PerplexityAdapter` already applied. Until this date `claude_search` rows held **every result the search retrieved**, about twice the cited set (measured: 16.2 retrieved against 7.5 cited per answer), while Perplexity rows held the cited set — two definitions in one table, under copy that said "cited" throughout. **The 5,277 stored `claude_search` citation rows across 23 scans are the retrieved kind and are not rewritten**; a row's `engine_version` says which it is (`…/web_search_20260209/direct` is cited; without the suffix, retrieved). No stored score moves — Citation Strength has been excluded since v2.1. Measured on the way (build log, "what a citation is"): direct calls were 7.7% cheaper and had half the tail latency; the engine is not a default since the same day. See `build-log.md`. |

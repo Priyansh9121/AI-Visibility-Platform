@@ -24,6 +24,7 @@ from avp_api.models import (
     Scan,
 )
 from avp_api.models.client import ClassificationStatus
+from avp_api.models.competitor import DetectionStatus
 from avp_api.models.engine_result import CitationType, Engine, EngineResultStatus
 from avp_api.models.prompt import PromptIntent
 from avp_api.models.scan import ScanStatus, ScanTrigger
@@ -37,6 +38,7 @@ from avp_api.services.domain_authority import (
     load_platform_domains,
     normalise_domain,
 )
+from avp_api.services.scoring import CompetitorFacts, Dimension, ResultFacts, compute_score
 
 # ---------------------------------------------------------------------------
 # Tier A — the curated, structural list
@@ -336,3 +338,36 @@ class TestPlatformTier:
         lookup = await load_domain_authority(session)
         assert lookup.platform_domains == frozenset()
         assert lookup.tier_of("g2.com") is Tier.CURATED
+
+
+class TestTheLoadedLookupReachesTheScore:
+    async def test_a_domain_that_crossed_the_thresholds_scores_the_dimension(
+        self, seeded: AsyncSession
+    ) -> None:
+        """Fixture rows → Tier B → a measured Citation Strength, end to end.
+
+        The same answer scored under the curated tier alone is excluded under
+        NO_AUTHORITY_DATA; under the loaded lookup the platform domain gives
+        the dimension its signal and five dimensions carry weight.
+        """
+        lookup = await load_domain_authority(seeded)
+        results = [
+            ResultFacts(
+                result_id="eres_0001", engine="claude_search", status=EngineResultStatus.OK,
+                mentioned=True, sentiment=None, intent=PromptIntent.AWARENESS,
+                brands=(("Subject", True), ("Rival", False)),
+                citations=(("wide.example", False), ("narrow.example", False)),
+            )
+        ]
+        rival = [CompetitorFacts(competitor_id="comp_0001", name="Rival", domain="rival.example")]
+
+        excluded = compute_score(results, rival, competitor_set_status=DetectionStatus.OK,
+                                 authority=CURATED_ONLY)
+        assert excluded.excluded_dimensions["citation_strength"] == "NO_AUTHORITY_DATA"
+
+        scored = compute_score(results, rival, competitor_set_status=DetectionStatus.OK,
+                               authority=lookup)
+        assert "citation_strength" not in scored.excluded_dimensions
+        assert scored.value(Dimension.CITATION_STRENGTH) is not None
+        assert scored.sub_scores[Dimension.CITATION_STRENGTH].included
+        assert scored.inputs_digest != excluded.inputs_digest

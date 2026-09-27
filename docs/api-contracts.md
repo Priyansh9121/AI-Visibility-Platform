@@ -1379,14 +1379,14 @@ reproducible.
   "id": "scor_01J...", "scanId": "scan_01J...", "status": "scored",
   "composite": "66.49",
   "mentionRate": "83.33", "shareOfVoice": "41.18",
-  "citationStrength": null, "sentiment": "75.00",
+  "citationStrength": "60.00", "sentiment": "75.00",
   "technicalFoundation": null,
-  "formulaVersion": "v2.1",
+  "formulaVersion": "v3",
   "weights": {
-    "mention_rate": "42.86", "sentiment": "21.43", "share_of_voice": "35.71"
+    "citation_strength": "22.22", "mention_rate": "33.33",
+    "sentiment": "16.67", "share_of_voice": "27.78"
   },
   "excludedDimensions": {
-    "citation_strength": "NO_AUTHORITY_DATA",
     "technical_foundation": "NOT_YET_MEASURED"
   },
   "degradationFlags": ["TECHNICAL_FOUNDATION_NOT_MEASURED"],
@@ -1394,7 +1394,7 @@ reproducible.
   "inputsDigest": "1f3a422c367d9c3f...",
   "competitors": [
     { "competitorId": "comp_01J...", "name": "Zendesk",
-      "mentionRate": "100.00", "shareOfVoice": "35.29", "citationStrength": null }
+      "mentionRate": "100.00", "shareOfVoice": "35.29", "citationStrength": "100.00" }
   ]
 }
 ```
@@ -1415,7 +1415,8 @@ interchangeable:
 | `NO_POPULATION` | Nothing to measure for this brand (no mentions → no sentiment) | "nothing to measure" |
 | `NO_COMPETITOR_SET` | Competitor detection returned nothing | "no comparison was made" |
 | `NO_AWARENESS_POPULATION` | The prompt set had no unprompted questions (v2) | "nothing unprompted to measure" |
-| `NO_AUTHORITY_DATA` | No source of citing-domain authority exists, and the stand-in cannot be earned — Citation Strength, since v2.1 | "no authority source" |
+| `NO_AUTHORITY_DATA` | No cited domain in this scan has an authority tier, so there is no input to measure Citation Strength with. v2.1–v2.2: fired on every scan, because no authority source existed at all; since v3 only when the scan's citations are all unclassified | "no authority source" |
+| `NO_COMPETITOR_SET` (Citation Strength, v3) | Tiered domains were cited but no competitor set exists to normalise against — same code, same reason as Share of Voice | "no comparison was made" |
 
 An excluded dimension's weight is redistributed proportionally across the rest.
 **A null sub-score is never a zero** — a brand nobody mentioned has not been
@@ -1427,9 +1428,13 @@ corroborated — SERP-only precision measured ~58%), `NO_CITATIONS_IN_SCAN`,
 `NO_COMPETITOR_SET`. `NO_AUTHORITY_DATA` appears as a flag only on scores
 computed before `v2.1`, where Citation Strength was scored on a stand-in
 (whether the brand's own domain was cited, against every domain cited in the
-scan); since `v2.1` the dimension is excluded under that code instead, and
-**`competitors[].citationStrength` is `null`** while it is — a column means one
-thing.
+scan); from `v2.1` the dimension is excluded under that code instead, and
+**`competitors[].citationStrength` is `null`** whenever the subject's is
+excluded — a column means one thing. Since `v3` (scoring-spec.md) the
+dimension is measured from a two-tier citing-domain authority input, and
+each rival's `citationStrength` is its authority sum against the same
+best-in-scan denominator as the subject's, so the best-cited brand in the
+table reads `100.00`.
 
 **`status: "insufficient_data"`** with `composite: null` and
 `reasonCode: "INSUFFICIENT_DATA"` when no engine call answered. An unrunnable
