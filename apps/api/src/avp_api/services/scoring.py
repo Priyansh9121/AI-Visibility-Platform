@@ -76,7 +76,19 @@ logger = structlog.get_logger(__name__)
 # now fires only when no cited domain in the scan has a tier at all. A major
 # bump, like v2: every composite with a classifiable citation moves, because a
 # dimension re-enters the weighting. Rows carrying v2.1 keep their numbers.
-FORMULA_VERSION = "v3"
+# v4 — Citation Strength is scored on AWARENESS prompts only, the population
+# Mention Rate and Share of Voice have used since v2 (2026-09-27, the same
+# day as v3, from v3's own measurement). v3 credited a brand every tiered
+# source cited in any answer that named it, and a brand-named question
+# manufactures that co-occurrence: 14 of 23 scored scans read 100 and
+# helpwise.io read 90.63 with an awareness Mention Rate of 0. Rivals are
+# scored on the same population, so the column keeps one meaning. Ships with
+# domain_authority's market-participant exclusion from Tier B (a client's or
+# a detected competitor's domain cannot be a platform-tier source), which
+# changes tiers and is carried by the digest. A major bump, by v2's precedent:
+# a population change moves every composite that has the dimension. Rows
+# carrying v3 keep their numbers.
+FORMULA_VERSION = "v4"
 
 TWO_PLACES = Decimal("0.01")
 HUNDRED = Decimal("100")
@@ -471,6 +483,15 @@ def authority_sums(
     cites three sources credits all three to both. That is the limit of what
     facts-only storage can support — nothing here knows what a cited page is
     ABOUT — and it is a limit worth knowing when reading the comparison.
+
+    **Which results — v4.** This function sums over whatever it is handed;
+    `citation_strength` and `compare_competitors` hand it the AWARENESS
+    results, for the reason `awareness_only` gives and one more of this
+    dimension's own: co-occurrence is manufactured by a question that names
+    the brand. 55% of a prompt set does, so under v3 the subject accumulated
+    nearly the whole scan's tiered sources whatever its standing — 14 of 23
+    stored scans read 100, and helpwise.io read 90.63 on a scan where no
+    unprompted question named it at all.
     """
     answered = [r for r in results if r.answered]
     subject_domains = {
@@ -517,30 +538,42 @@ def citation_strength(
     good" is not answerable from what we have; "how close is the subject to
     the best-cited player here" is.
 
-    **Flags.** NO_AUTHORITY_DATA now means what it says: no cited domain in
-    this scan has a tier, so there is no authority input to measure with —
-    `compute_score` excludes the dimension exactly as v2.1 did, and a scan
-    with nothing classifiable behaves as before. NO_CITATIONS_IN_SCAN stays a
-    fact about the scan. Whether a competitor set exists is `compute_score`'s
-    call, not this function's: with no rivals the subject is compared with
-    itself here, and the caller decides that is not a score.
+    **Population — v4: awareness prompts only**, the same as Mention Rate and
+    Share of Voice. scoring-spec.md closed this question for Citation
+    Strength in v2 and said reopening it needed a reason of its own; v3's
+    measurement is that reason, and `authority_sums` states it. Sentiment
+    keeps every answered result — portrayal is a signal whoever raised the
+    brand — and the two dimensions now differ on purpose.
+
+    **Flags.** NO_AWARENESS_POPULATION when the set has no awareness prompts:
+    nothing can evidence discovery, the same exclusion the other two
+    discovery dimensions get. NO_AUTHORITY_DATA when the awareness answers
+    cite nothing tiered — no authority input to measure with, so
+    `compute_score` excludes the dimension exactly as v2.1 did. Brand-named
+    answers citing tiered sources do not rescue it: that is the co-occurrence
+    the population change exists to stop counting. NO_CITATIONS_IN_SCAN stays
+    a fact about the WHOLE scan. Whether a competitor set exists is
+    `compute_score`'s call, not this function's: with no rivals the subject
+    is compared with itself here, and the caller decides that is not a score.
     """
     flags: list[str] = []
     answered = [r for r in results if r.answered]
-    cited = _cited_domains(answered)
-
-    if not cited:
+    if not _cited_domains(answered):
         # No engine in this scan cited anything at all — typically because no
         # grounded engine ran. Distinct from "cited others but not you".
-        flags.extend(["NO_AUTHORITY_DATA", "NO_CITATIONS_IN_SCAN"])
+        flags.append("NO_CITATIONS_IN_SCAN")
+
+    aware = awareness_only(answered)
+    if not aware:
+        flags.append("NO_AWARENESS_POPULATION")
         return Decimal("0"), flags
 
-    tiers = authority.tiers_for(cited)
+    tiers = authority.tiers_for(_cited_domains(aware))
     if not tiers:
         flags.append("NO_AUTHORITY_DATA")
         return Decimal("0"), flags
 
-    subject, rivals = authority_sums(answered, competitors, tiers)
+    subject, rivals = authority_sums(aware, competitors, tiers)
     best = max([subject, *rivals.values()])
     if best == 0:
         # Tiered sources were cited, but in answers that named nobody. There
@@ -606,7 +639,8 @@ def compare_competitors(
     **When it is included — v3 — each rival's figure is its authority sum
     against the SAME best-in-scan the subject was normalised against**, so
     the best-cited brand in the table reads 100 and everyone else reads their
-    distance from it. One denominator for one column.
+    distance from it. One denominator for one column — and since v4 one
+    population for it too: awareness results, exactly as the subject's.
     """
     answered = [r for r in results if r.answered]
     if not answered or not competitors:
@@ -617,8 +651,8 @@ def compare_competitors(
     # excluded, so these fall to zero and the report has no comparison to draw.
     aware = awareness_only(answered)
     total_mentions = sum(len(r.brands) for r in aware)
-    tiers = authority.tiers_for(_cited_domains(answered))
-    subject_authority, rival_authority = authority_sums(answered, competitors, tiers)
+    tiers = authority.tiers_for(_cited_domains(aware))
+    subject_authority, rival_authority = authority_sums(aware, competitors, tiers)
     best_authority = max([subject_authority, *rival_authority.values()])
 
     out: list[CompetitorComparison] = []
@@ -747,26 +781,37 @@ def compute_score(
     # now reads tiers from `authority` and normalises the subject's authority
     # sum against the best in the scan; its docstring has the whole account.
     #
-    # Two exclusions, and they are different facts:
+    # Since v4 it is measured on AWARENESS results, like the two discovery
+    # dimensions — `authority_sums` has the measurement that forced it.
     #
-    # NO_AUTHORITY_DATA — no cited domain in this scan has a tier. There is no
-    # input to measure with, which is exactly what the code meant in v2.1, so
-    # a scan with nothing classifiable behaves precisely as it did then. Not
-    # NOT_YET_MEASURED: that says a capability is on its way; this says an
-    # input is absent for this scan. Still not ALSO a degradation flag: a
-    # dimension that is left out is not "rougher".
+    # Three exclusions, different facts, in a fixed order of precedence:
     #
-    # NO_COMPETITOR_SET — tiered sources were cited but nobody was looked for
-    # to compare against. The figure is the subject against the best in the
-    # scan, and with no rivals "the best in the scan" is the subject itself,
-    # which would score 100 for any classifiable citation at all. That is the
-    # v1 Share of Voice defect — a full mark for a detection failure — and it
-    # gets the v1.1 answer: excluded and redistributed, under the same code
-    # Share of Voice uses for the same absence. NO_AUTHORITY_DATA takes
-    # precedence when both hold, so the no-input case stays as it was.
+    # 1. NO_AWARENESS_POPULATION — the prompt set has no awareness questions.
+    #    First because it is a fact about the POPULATION: with nothing in it,
+    #    "did it cite anything tiered" and "is there a rival" have no subject
+    #    to be asked of. The same code and the same reason Mention Rate and
+    #    Share of Voice already use, so a report says one thing about a set
+    #    that cannot evidence discovery.
+    # 2. NO_AUTHORITY_DATA — the awareness answers cite no domain with a tier.
+    #    Second because it is a fact about the INPUT: there is nothing to
+    #    measure with, which is exactly what the code meant in v2.1, so a scan
+    #    with nothing classifiable behaves precisely as it did then. Not
+    #    NOT_YET_MEASURED: that says a capability is on its way; this says an
+    #    input is absent for this scan. Still not ALSO a degradation flag: a
+    #    dimension that is left out is not "rougher".
+    # 3. NO_COMPETITOR_SET — tiered sources were cited but nobody was looked
+    #    for to compare against. Last because it is a fact about the
+    #    COMPARISON, which only arises once there is something to compare.
+    #    The figure is the subject against the best in the scan, and with no
+    #    rivals "the best in the scan" is the subject itself, which would
+    #    score 100 for any classifiable citation at all. That is the v1 Share
+    #    of Voice defect — a full mark for a detection failure — and it gets
+    #    the v1.1 answer: excluded and redistributed, under the same code
+    #    Share of Voice uses for the same absence.
     #
-    # NO_CITATIONS_IN_SCAN remains a fact about the scan and travels as a flag
-    # whichever way the dimension goes.
+    # Population, then input, then comparison: each later question presumes
+    # the earlier one had an answer. NO_CITATIONS_IN_SCAN remains a fact about
+    # the whole scan and travels as a flag whichever way the dimension goes.
     no_competitors = (
         not competitors
         or competitor_set_status is None
@@ -774,7 +819,11 @@ def compute_score(
     )
     cs_raw, citation_flags = citation_strength(results, competitors, authority=authority)
     cs: Decimal | None
-    if "NO_AUTHORITY_DATA" in citation_flags:
+    if "NO_AWARENESS_POPULATION" in citation_flags:
+        cs = None
+        excluded[Dimension.CITATION_STRENGTH.value] = "NO_AWARENESS_POPULATION"
+        flags.extend(citation_flags)
+    elif "NO_AUTHORITY_DATA" in citation_flags:
         cs = None
         excluded[Dimension.CITATION_STRENGTH.value] = "NO_AUTHORITY_DATA"
         flags.extend(f for f in citation_flags if f != "NO_AUTHORITY_DATA")
