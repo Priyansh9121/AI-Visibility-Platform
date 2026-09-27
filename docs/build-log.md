@@ -17069,3 +17069,98 @@ ceiling of 50 — exit codes read from files, not from a pipe. No route
 docstring changed, so the OpenAPI export was not regenerated. CI on the
 push is polled to its conclusion before any of this is reported done; a red run gets a follow-up commit and a line here, as the
 two earlier ones did.
+
+# Citation Strength gets an authority input, part one: the lookup — a curated tier, a platform-frequency tier, and the measurement that decided against a table
+
+**2026-09-27.** The first of three checkpoints on one brief. Citation
+Strength has been excluded from the composite since v2.1 because §6 asks
+for "number AND authority of domains citing the brand" and nothing in the
+system produced authority. This checkpoint adds the input and nothing
+else: the scoring change and the report copy follow in their own commits.
+
+## What was verified before writing
+
+- **`HEAD` was `7f83161`, equal to `origin/main`, tree clean** apart from
+  the same four untracked skill-repository directories as the last pass.
+- **`citation_strength()` still divides the subject's own domain by every
+  distinct third-party domain in the scan**, and `compute_score` still
+  excludes it under `NO_AUTHORITY_DATA` with the `else` branch marked
+  "unreachable today". The 33-scores / 3.70-maximum figure in the constant's
+  comment describes the day of v2.1 and still holds for what it describes:
+  `avp_dev` now carries 41 score rows — 15 `v1.1`, 18 `v2`, 8 `v2.1` — and
+  the maximum `citation_strength` on the 32 rows that have one is 3.70. The
+  eight `v2.1` rows carry null, as the exclusion says they should.
+- **`competitors.py`'s docstring still names Finding 2 as open**, and the
+  build log's Epic 2.8 entry still records the post-tuning confidence run as
+  0.95, 0.97, 0.97, 0.96, 0.96 — clustered, uncalibrated, untouched since.
+
+## Built — `services/domain_authority.py`
+
+**Tier A, curated and structural.** Matched by suffix for `.gov`, `.edu`,
+`.mil` and their country forms (`gov`/`edu`/`ac`/`mil`/`gouv`/`gob`/
+`govt`/`gc`/`go` under a two-letter code, with a name in front — so
+`go.com` and a bare `gov.uk` are not caught); by name for Wikipedia,
+Wikidata, AP (`apnews.com`, `ap.org`), Reuters, BBB, Trustpilot, G2 and
+Capterra, each as itself or a subdomain; and Capterra additionally on its
+first label with a public-suffix-shaped tail, because its country editions
+(`capterra.co.uk`, `capterra.ca`, `capterra.com.de`) were all cited in real
+scans. `capterra.example.com` does not match. Nothing is on the list for
+being judged reliable; each entry is there for a structural reason the
+module docstring states. General news, forums and industry-specific
+authorities are excluded on purpose — the last group is Tier B's job.
+
+**Tier B, platform frequency.** A domain qualifies when cited across at
+least **3** distinct `Client.industry` values and at least **5** distinct
+clients. One `GROUP BY ... HAVING` over `engine_result_citations` joined
+through `engine_results` and `scans` to `clients`, industry non-null,
+client not soft-deleted. **Both thresholds are first guesses**, said so in
+the code comment: three because two industries can be one market under two
+labels, five so that no single source-heavy scan can qualify a domain
+alone. Neither was derived from data because there is not yet enough data
+to derive from.
+
+**What Tier A finds in the stored rows today:** g2.com (145 citations),
+capterra.com (112), trustpilot.com (17), wikipedia.org (9), bbb.org (4),
+three Capterra country editions and two `.edu` domains at one each. No
+`.gov`, no wire service — the stored scans are software-buyer questions.
+
+## Live aggregate, not a materialised table — measured
+
+`avp_dev` on the day: **5,787 citation rows, 1,552 distinct domains, 395
+engine results, 27 clients, 12 industry labels.** `EXPLAIN (ANALYZE,
+BUFFERS)` on the exact Tier B statement: **planning 7.3 ms, execution 15.2
+ms**, 3,589 shared buffers hit, the citations side an index-only scan on
+`ix_citations_result_domain`. Scoring runs once per scan chain and once per
+explicit re-score; a 15 ms aggregate on that path does not justify a
+refresh schedule, a staleness window and a migration. The docstring names
+the size at which to revisit and what to try first.
+
+## What the thresholds admit today — recorded, not softened
+
+Run against the real rows, the 3-industry / 5-client rule admits **70
+domains**. The top of the list is what the tier is for — g2.com across 10
+industries and 21 clients, capterra.com 10 and 17, softwareadvice.com 8
+and 12, trustradius.com 8 and 11, getapp.com 7 and 12 — but a good part of
+it is vendors in one market: eesel.ai (7 industries, 14 clients),
+get-alfred.ai (7, 13), featurebase.app (7, 12), getmacha.com (6, 12),
+hiverhq.com (6, 12), zendesk.com (4, 8). They clear "seven industries"
+because the labels split help-desk software into "customer service
+software" (6 clients), "customer support software" (2), "help desk
+software" (1), "customer support helpdesk software" (1) and "team
+collaboration and email software" (1). That is the coarse-proxy limitation
+in the flesh, and it is exactly what an uncalibrated classification cannot
+screen out. The thresholds stay where the brief put them; this paragraph is
+the evidence for the revisit.
+
+## Verified
+
+`tests/test_domain_authority.py`: **65 tests** — 30 domains that must be
+Tier A, 22 that must not (including `go.com`, a bare `gov.uk`,
+`capterra.example.com` and `wikipedia.org.evil.com`), precedence of the
+curated tier over the platform tier, the thresholds pinned to their
+argument rather than their literals, and Tier B against seeded rows: five
+clients in three industries citing one domain that qualifies, beside four
+controls — five clients in two industries, four clients in three, five
+unclassified clients, five soft-deleted clients — none of which does, and a
+check that lowering either threshold by one lets the matching control in.
+ruff and mypy clean on the two files.
