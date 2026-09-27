@@ -49,6 +49,7 @@ import { deriveNarrative, gapHeading, scoreHeading } from '@/lib/report/derive';
 import {
   DEGRADATION_FLAG,
   DETECTION_STATUS,
+  DIMENSION_NOTE,
   EXCLUSION_REASON,
   VISIBILITY_FLAG,
   checkLabel,
@@ -419,6 +420,20 @@ function ScoreBeat({
               score.
             </p>
           )}
+          {/*
+            What a measured dimension is measured FROM, where the label alone
+            would let a reader assume more precision than the input has — v3.
+            Only Citation Strength carries a note; the PDF prints the same
+            sentence under its score table, from the mirrored table.
+          */}
+          {narrative.status === 'scored' &&
+            narrative.dimensions
+              .filter((d) => DIMENSION_NOTE[d.key])
+              .map((d) => (
+                <p key={d.key} className="mt-4 text-ui-sm leading-prose text-text-secondary">
+                  <strong>{dimensionLabel(d.key)}.</strong> {DIMENSION_NOTE[d.key]}
+                </p>
+              ))}
           {/*
             A SCORE THAT MOVED BECAUSE THE FORMULA MOVED — scoring v2.
 

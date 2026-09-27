@@ -17329,3 +17329,86 @@ turn into a measurement. `test_client_history.py`'s "rivals carry null"
 assertion now says the opposite, with the reason. ruff clean; mypy 48
 before and after (the two errors mypy reports in scoring.py are on lines
 this change did not touch, and the count did not move).
+
+# Citation Strength gets an authority input, part three: the copy on both sides of the language boundary, the caveat said to the reader, and the test that stops the PDF and the screen drifting
+
+**2026-09-27.** Third checkpoint. The scoring now produces a number; this
+is what the report says about it, in the PDF and on screen, held to the
+same bytes by a fixture the way the gap arithmetic already is.
+
+## What was found
+
+- **The two sides had already drifted.** `report_narrative.EXCLUSION_DETAIL`
+  was documented as `strings.ts` "word for word" and differed by an
+  apostrophe (`brand's` against `brand’s`) on the very NO_AUTHORITY_DATA
+  sentence this brief replaces. Nothing checked the mirror.
+- **The PDF's degradation table was two codes short.** `report_pdf.py`
+  carried its own `_DEGRADATION` dict without `NO_AWARENESS_POPULATION` or
+  `NO_SENTIMENT_POPULATION`, both of which the screen has sentences for
+  (`copyCoverage.test.ts` caught them on that side on 2026-09-08). A scan
+  with no unprompted questions printed the identifier raw in the document
+  a client is sent. `pdf.py` maps `’` and `—` to WinAnsi, so aligning the
+  Python bytes to the TypeScript ones costs nothing in the render.
+- **`DIMENSION_MEANING` in `strings.ts` is rendered nowhere** — no
+  component imports it. Its Citation Strength line still described the
+  retired reading ("the brand's own pages"); corrected, and left out of
+  the fixture because a string nobody renders cannot drift between two
+  documents.
+
+## Built
+
+**Copy, both sides identical.** `NO_AUTHORITY_DATA`'s detail now says what
+the two tiers are, that nothing cited in this scan is on either, and —
+because the brief asked for it to be here and not only in a docstring —
+that the second tier counts industries through an automatic classification
+whose confidence score is uncalibrated, so it is a coarse proxy that
+cannot screen out a mis-classified client. `NO_COMPETITOR_SET`'s detail
+now covers "a share of voice or a citation comparison", since the code is
+Citation Strength's too as of part two. A new `DIMENSION_NOTE` table
+(`strings.ts` and `report_narrative.py`) carries the sentence for the
+MEASURED case: what is weighed, against what, the two tiers and their
+weights, "everything else counts for nothing", the same uncalibrated-
+classification caveat, that the thresholds are first guesses, and that it
+is measured on every answer including answers to questions that named the
+brand — part two's finding, said to the reader rather than only to the
+founder. `ReportView` prints it under the score for every included
+dimension that has one; `report_pdf._score_beat` prints the same sentence
+under the score table. Only Citation Strength has one.
+
+**The fix copy for the dimension.** `FIX_FOR_DIMENSION.citation_strength`
+described the retired reading — "the brand is named more often than its own
+pages are cited" — which is no longer what a gap on this dimension means.
+It now reads "Get onto the sources that answers already cite as
+authorities", with the lever stated as presence on the review platforms
+and reference sources engines already cite. `expected-narrative.json` was
+regenerated from the TypeScript derivation, and the diff is the six lines
+of that title and detail in the three cases that carry the fix — the
+regeneration now preserves the file's case order so that is all it is.
+
+**Degradation copy moved** from `report_pdf._DEGRADATION` to
+`report_narrative.DEGRADATION_FLAG`, beside the other mirrored tables,
+with the two missing codes added.
+
+**The test.** `packages/shared-types/fixtures/report-copy.json` holds five
+tables — dimension labels, dimension notes, exclusion reasons with
+details, degradation flags, fix-for-dimension — projected from
+`strings.ts`, which stays the source of truth.
+`apps/web/src/lib/report/copyContract.test.ts` asserts the file still
+describes `strings.ts` and writes it when `AVP_WRITE_FIXTURES=1` is set;
+`apps/api/tests/test_report_copy.py` asserts `report_narrative`'s five
+tables equal the same file. The same switch on `crossLanguage.test.ts`
+regenerates `expected-narrative.json`, which until now was a hand step the
+docstring described. Both sides also assert the Citation Strength copy
+contains "uncalibrated", "coarse proxy" and "mis-classified", so the caveat
+cannot be edited out of one document quietly.
+
+## Verified
+
+API **1408/1408** (was 1401 after part two; +7: five table comparisons and
+two property tests in `test_report_copy.py`), ruff clean, mypy **48** under
+the ceiling of 50 — exit codes read from files. Web **882/882** (was 873
+before this brief; +8 copy-contract tests, +1 view test that the note and
+its caveat render on the Help Scout fixture). design-system **648/648**,
+shared-types **53**, both typechecks clean, the styleguide builds.
+`test_report_pdf.py`'s two assertions on the old fix title now pin the new
+one.

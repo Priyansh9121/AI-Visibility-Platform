@@ -1,0 +1,75 @@
+{
+  "dimensionLabel": {
+    "mention_rate": "Mention Rate",
+    "share_of_voice": "Share of Voice",
+    "citation_strength": "Citation Strength",
+    "sentiment": "Sentiment",
+    "technical_foundation": "Technical Foundation"
+  },
+  "dimensionNote": {
+    "citation_strength": "Citation Strength weighs the third-party sources an answer cites when it names the brand, against the best-cited brand in the same scan, so the leader reads 100. Sources count on two tiers: a short structural list — government and university domains, Wikipedia, the AP and Reuters wire services, and the cross-industry review platforms (Better Business Bureau, Trustpilot, G2, Capterra) — at full weight, and domains that engines cite across at least three client industries and five clients on this platform at half weight. Everything else counts for nothing. The second tier is a coarse proxy: it counts industries through an automatic classification whose confidence score is uncalibrated, so a mis-classified client cannot be screened out of it, and its thresholds are first guesses to be revisited with more scans. It is measured on every answer, including answers to questions that named the brand."
+  },
+  "exclusionReason": {
+    "NOT_YET_MEASURED": {
+      "label": "Not yet checked",
+      "detail": "This dimension has not been measured for this scan. It is left out of the score rather than counted as zero, so nothing here is held against the site for a check that never ran."
+    },
+    "NO_POPULATION": {
+      "label": "Nothing to measure",
+      "detail": "There was no data to score this on — the brand was not named often enough for this measurement to mean anything. An absence is not a bad result, so it is excluded rather than scored zero."
+    },
+    "NO_COMPETITOR_SET": {
+      "label": "No comparison was made",
+      "detail": "No competitor set was detected for this scan, so there is no rival to measure a share of voice or a citation comparison against. The dimension is excluded and its weight spread across the others, rather than awarding points for a detection that did not happen."
+    },
+    "NO_AWARENESS_POPULATION": {
+      "label": "Nothing unprompted to measure",
+      "detail": "Mention Rate counts only questions that did not name the brand — the ones that can show whether a buyer would discover it. This prompt set had none, so there was nothing to measure discovery with. It is left out and its weight spread across the others rather than scored as an absence the brand did not earn."
+    },
+    "NO_ANSWERED_RESULTS": {
+      "label": "No answers came back",
+      "detail": "No engine returned an answer for this scan, so there is nothing to measure. This is a scan that did not run, not a brand that scored badly."
+    },
+    "NO_AUTHORITY_DATA": {
+      "label": "No authority source",
+      "detail": "Citation Strength weighs the sources an answer cites when it names the brand, on two tiers: a short structural list — government and university domains, Wikipedia, the AP and Reuters wire services, and the cross-industry review platforms (Better Business Bureau, Trustpilot, G2, Capterra) — and the domains engines cite across at least three client industries and five clients on this platform. Nothing cited in this scan is on either tier, so there is no authority to measure and the dimension is left out with its weight spread across the others, rather than scored as zero. The second tier counts industries through an automatic classification whose confidence score is uncalibrated, so it is a coarse proxy that cannot screen out a mis-classified client; that is said here so the tier is not read as more precise than it is. The citations themselves are still shown in the evidence below."
+    }
+  },
+  "degradationFlag": {
+    "NO_AUTHORITY_DATA": "Citation Strength was measured as whether the brand’s own domain was cited, against every domain the engines cited, because this system has no external authority source. That measure cannot rise above about a point for any site, and later scores leave the dimension out instead.",
+    "WEAK_COMPETITOR_SET": "The competitor set was only weakly corroborated — some rivals were surfaced by a single signal. Share of Voice should be read as indicative rather than exact.",
+    "NO_CITATIONS_IN_SCAN": "No engine cited any source in this scan, for any brand.",
+    "NO_COMPETITOR_SET": "No competitors were detected, so no share comparison was possible.",
+    "TECHNICAL_FOUNDATION_NOT_MEASURED": "The site had not been audited when this score was computed.",
+    "NO_ANSWERED_RESULTS": "No engine returned an answer for this scan.",
+    "NO_AWARENESS_POPULATION": "This prompt set contained no unprompted questions, which are the only ones Mention Rate and Share of Voice count. Both were left out of the score rather than measured on questions that named the brand.",
+    "NO_SENTIMENT_POPULATION": "The brand was not named often enough for sentiment to mean anything, so that dimension was left out of the score rather than counted as a bad result."
+  },
+  "fixForDimension": {
+    "mention_rate": {
+      "title": "Publish pages that answer the questions buyers actually ask",
+      "detail": "The brand is missing from answers to prompts in its own category. The lever is coverage: a page that directly answers a buying question is a page an engine can name you from.",
+      "effort": "L"
+    },
+    "share_of_voice": {
+      "title": "Compete on the comparisons where rivals currently appear alone",
+      "detail": "Rivals are named more often than the brand in the same answers. Comparison and alternatives pages are the surfaces those answers are assembled from.",
+      "effort": "L"
+    },
+    "citation_strength": {
+      "title": "Get onto the sources that answers already cite as authorities",
+      "detail": "Answers that name the brand draw on sources with less authority than those that name the best-placed rival. The lever is presence on the review platforms and reference sources engines already cite — a current listing on G2, Capterra and Trustpilot, a Better Business Bureau profile, a Wikipedia entry where one is warranted — and coverage by the sources engines reach for across every industry.",
+      "effort": "M"
+    },
+    "sentiment": {
+      "title": "Address how the brand is characterised where it is described unfavourably",
+      "detail": "Where the brand is named, the surrounding characterisation is not consistently positive. The lever is the third-party material those answers draw on — reviews, comparisons and documentation.",
+      "effort": "M"
+    },
+    "technical_foundation": {
+      "title": "Fix the structural signals that make the site machine-readable",
+      "detail": "Structured data, crawlability and freshness are the inputs this dimension measures, and each is a concrete change rather than a judgement call.",
+      "effort": "M"
+    }
+  }
+}

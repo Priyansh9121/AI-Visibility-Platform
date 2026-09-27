@@ -229,7 +229,7 @@ def test_empty_action_items_render_the_deterministic_derivation() -> None:
     text = _visible_text(_render("scored-no-generated-fixes"))
     assert not (CASES["scored-no-generated-fixes"].get("actionItems") or [])
     assert "changes, worth 40.6 points." in text
-    assert "Make the site the source an answer cites, not just a name it mentions" in text
+    assert "Get onto the sources that answers already cite as authorities" in text
     assert "Get onto eesel.ai" in text
 
 
@@ -248,7 +248,7 @@ def test_a_fix_with_no_measurable_value_says_so_rather_than_inventing_one() -> N
 def test_a_dimension_we_have_not_measured_never_becomes_a_fix() -> None:
     text = _visible_text(_render("not-yet-measured"))
     assert "Not yet checked" in text
-    assert "Make the site the source an answer cites" not in text
+    assert "Get onto the sources that answers already cite" not in text
 
 
 def test_the_five_beats_appear_in_order() -> None:
