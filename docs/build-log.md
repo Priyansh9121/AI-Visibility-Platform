@@ -17784,3 +17784,94 @@ ruff clean, mypy **47** — one fewer than before, from typing the route's
 clean after one cast in a test. shared-types **53**, typecheck clean, the
 generated contract current. design-system **648/648**, typecheck clean.
 Every exit code read from a file; every count through `assert_count.py`.
+
+# Citation Strength on the awareness population, market participants out of Tier B, average position measured but not scored — the whole pass in one place
+
+**2026-09-27.** Three checkpoints (`87cad13` section 1, `ed3fa5f` section
+2, `824d357` section 3) and this summary, pushed together. A reader who
+opens only this entry should have every number.
+
+## The formula version: `v4`, and why major
+
+Sections 1 and 2 ship under one bump. The precedent in scoring-spec.md's
+changelog is that a population change (v2) was major and an exclusion
+(v2.1) minor. Section 1 is a population change — Citation Strength moves to
+`awareness_only`, the population Mention Rate and Share of Voice have used
+since v2 — and it moves every composite that carries the dimension, by up
+to 20 points on the stored scans. Section 2 changes which domains hold a
+tier, which the inputs digest already carried through `domain_tiers`; a
+test in `test_domain_authority.py` now proves that rather than assumes it.
+Major, because the population change is the larger of the two and would be
+major alone. `v3` rows are not re-scored (rule 5); no `v3` row was ever
+persisted in `avp_dev`, so the comparison below is against this morning's
+`v3` computation. Section 3 changes no score and needed no bump.
+
+## The Tier B admitted list, before and after
+
+**70 → 57.** One client's own domain out (hiverhq.com), twelve detected
+competitors' domains out (eesel.ai, zendesk.com, helpscout.com among them).
+The top twenty before and after are in section 2's entry; in short, the
+five at the top (g2.com 10/21, capterra.com 10/17, checkthat.ai 9/14,
+softwareadvice.com 8/12, trustradius.com 8/11) are unchanged, eesel.ai
+(7/14) and hiverhq.com (6/12) left the top twenty, and medium.com (6/6) and
+saleshive.com (5/12) entered it. **The list is cleaner, not clean**:
+featurebase.app, get-alfred.ai, getmacha.com, checkthat.ai and chatarmin.com
+are vendors that stay, because nobody has scanned or detected them, and a
+structural exclusion can only know the participants the platform has
+recorded. Thresholds unchanged at 3 / 5; query cost re-measured at 4.6–6.1
+ms warm (the 15 ms in part one of the previous pass was a cold run).
+
+## Citation Strength, v3 → v4, on every stored scan
+
+| client | v3 CS | v4 CS | v3 comp | v4 comp |
+|---|---|---|---|---|
+| helpscout.com | 100.00 | 100.00 | 78.33 | 78.33 |
+| basecamp.com | 100.00 | 100.00 | 67.68 | 67.68 |
+| linear.app | 100.00 | 100.00 | 74.12 | 74.12 |
+| psmdigitalagency.com | 33.33 | 0.00 | 23.33 | 16.67 |
+| ghost.org | excluded (no rivals) | excluded (no rivals) | 96.67 | 96.67 |
+| plausible.io ×3 | 100.00 | 100.00 | 77.47 / 76.29 / 76.03 | unchanged |
+| notion.so ×2 | 100.00 | 100.00 | 73.56 / 70.99 | unchanged |
+| psmdigitalagency.com.au | 25.00 | excluded (NO_AUTHORITY_DATA) | 20.13 | 18.91 |
+| front.com | 100.00 | 100.00 | 73.33 | 73.33 |
+| missiveapp.com | 100.00 | 100.00 | 74.37 | 74.37 |
+| zammad.com | 89.47 | 40.00 | 58.75 | 48.86 |
+| helpwise.io | 90.63 | 0.00 | 27.95 | 7.81 |
+| pirsch.io | 55.00 | 40.00 | 38.15 | 35.15 |
+| helpwise.io | 33.33 | 0.00 | 23.54 | 16.88 |
+| helpwise.io | excluded | excluded | 14.42 | 14.42 |
+| psmdigitalagency.com.au | 62.50 | 0.00 | 26.76 | 14.26 |
+| psmdigitalagency.com.au | 50.00 | 0.00 | 23.12 | 13.12 |
+| intercom.com | 100.00 | 100.00 | 77.00 | 77.00 |
+| helpwise.io | 82.61 | 0.00 | 33.09 | 16.56 |
+| hiverhq.com | 100.00 | 95.00 | 60.80 | 59.69 |
+| groovehq.com | 32.00 | 0.00 | 19.87 | 13.47 |
+| reamaze.com | 61.90 | 0.00 | 34.40 | 22.02 |
+
+Moved by more than 10 points: helpwise.io −20.14 and −16.53,
+psmdigitalagency.com.au −12.50, reamaze.com −12.38 (a further
+psmdigitalagency.com.au scan moved exactly −10.00). Every one is a brand no
+unprompted question named. The eleven brands with an awareness Mention Rate
+at or near 100 did not move.
+
+## Average position: the measured spread
+
+On the re-run pairs in `avp_dev`, awareness answers only: the subject moved
+**1.23 → 1.36 across three plausible.io runs (range 0.13) and 1.08 → 1.12
+across two notion.so runs (range 0.04)**, on 31–36 answers — stable, at
+position one. Rivals on 9–22 answers moved by **up to 0.61** (Airtable 3.17
+→ 2.56, PostHog 3.31 → 3.89, Slite 2.85 → 2.40), and a rival named three
+times read 5.00 in one run and was absent from the next two. The figure is
+reported on both sides with its count, reads "Not named" and never 0 for a
+brand with no awareness mention, and enters no composite. Stable for the
+subject, said so in this entry; still unscored, because the rival column is
+the one that moves and weighting it is a decision for the founder.
+
+## Verified, final
+
+API **1429/1429**, web **888/888**, design-system **648/648**,
+shared-types **53**, both typechecks clean, ruff clean, mypy **47** under
+the ceiling of 50, the OpenAPI export and the generated contract confirmed
+current by a second regeneration — every count through
+`infra/ci/assert_count.py`, every exit code read from a file. CI: see the
+push.
