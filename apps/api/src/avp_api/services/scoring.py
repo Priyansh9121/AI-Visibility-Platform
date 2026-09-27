@@ -39,6 +39,7 @@ import structlog
 from ..models.competitor import DetectionStatus
 from ..models.engine_result import EngineResultStatus, Sentiment
 from ..models.prompt import PromptIntent
+from .domain_authority import CURATED_ONLY, DomainAuthority, Tier, describe
 
 logger = structlog.get_logger(__name__)
 
@@ -65,7 +66,17 @@ logger = structlog.get_logger(__name__)
 # points from a dimension nobody could earn (build-log, second pilot dry run,
 # 2026-09-08). An interim, not a redesign — scoring-spec.md's changelog has the
 # numbers. Rows carrying v2 keep the number they were scored with.
-FORMULA_VERSION = "v2.1"
+# v3 — Citation Strength is MEASURED again, from an authority input that did
+# not exist before: `services/domain_authority.py`, a curated structural tier
+# and a platform-frequency tier (2026-09-27). A brand's citing domains are the
+# third-party sources cited in answers that name it; each carries its tier's
+# value from AUTHORITY_VALUES; the subject's sum is normalised against the
+# best-scoring rival in the same scan, which is what scoring-spec.md said this
+# dimension should do and what the v1-v2 stand-in never did. NO_AUTHORITY_DATA
+# now fires only when no cited domain in the scan has a tier at all. A major
+# bump, like v2: every composite with a classifiable citation moves, because a
+# dimension re-enters the weighting. Rows carrying v2.1 keep their numbers.
+FORMULA_VERSION = "v3"
 
 TWO_PLACES = Decimal("0.01")
 HUNDRED = Decimal("100")
@@ -97,6 +108,36 @@ SENTIMENT_VALUES: dict[Sentiment, Decimal] = {
     Sentiment.POSITIVE: Decimal("100"),
     Sentiment.NEUTRAL: Decimal("50"),
     Sentiment.NEGATIVE: Decimal("0"),
+}
+
+# What a citing domain is worth by authority tier — v3. Only the RATIOS matter,
+# because the subject's sum is normalised against the best rival's in the same
+# scan; the numbers are chosen to say exactly what the evidence supports and
+# nothing more precise.
+#
+#   CURATED  100  The tier with a structural basis: a `.gov`, a university, a
+#                 reference work, a wire service, a cross-industry review
+#                 platform. It is the ceiling by construction — there is no
+#                 stronger kind of evidence in this system.
+#   PLATFORM  50  A domain engines cite across at least three client industries
+#                 and five clients. That is real evidence of breadth, and it is
+#                 measured through `Client.industry`, whose classification
+#                 confidence is uncalibrated (build-log Epic 2.6/2.8, Finding
+#                 2) and whose fine-grained labels already admit single-market
+#                 vendors as "seven industries". The midpoint says the ordering
+#                 — worth more than nothing, less than a structural fact — and
+#                 makes no claim about where between the two it falls, in the
+#                 same spirit as SENTIMENT_VALUES putting neutral at 50. Any
+#                 other number would imply a measurement nobody has made.
+#   None       0  Unclassified. No tier is no evidence, and no evidence
+#                 contributes nothing — the same as its absence did before v3.
+#                 A brand cited by forty domains none of which is classifiable
+#                 scores zero on authority, which is the honest reading of
+#                 "number AND authority" when only the number is known.
+AUTHORITY_VALUES: dict[Tier | None, Decimal] = {
+    Tier.CURATED: Decimal("100"),
+    Tier.PLATFORM: Decimal("50"),
+    None: Decimal("0"),
 }
 
 # Only these statuses mean "the engine answered". A rate-limited or timed-out
@@ -194,8 +235,9 @@ class CompetitorComparison:
     name: str
     mention_rate: Decimal
     share_of_voice: Decimal
-    # None when the subject's own Citation Strength is excluded (v2.1): a
-    # column means one thing, and a stand-in nobody can earn is not it.
+    # None when the subject's own Citation Strength is excluded: a column
+    # means one thing (v2.1). Since v3 it is a number whenever the subject's
+    # is — the rival's authority sum against the same best-in-scan.
     citation_strength: Decimal | None
 
 
@@ -261,6 +303,7 @@ def compute_inputs_digest(
     results: list[ResultFacts],
     competitors: list[CompetitorFacts],
     technical_foundation: Decimal | None = None,
+    domain_tiers: dict[str, str] | None = None,
 ) -> str:
     """Fingerprint the exact inputs a score was computed from.
 
@@ -283,6 +326,14 @@ def compute_inputs_digest(
     It is serialised as a string rather than a float for the reason
     scoring-spec.md rule 3 gives everywhere else: `str(Decimal)` is exact, and
     a binary float would make the fingerprint itself platform-fragile.
+
+    `domain_tiers` — v3 — is the tier of every cited domain that has one, at
+    the moment of scoring. Tier B is a frequency over the whole platform's
+    stored scans, so it moves as scans accumulate: the same results re-scored
+    a month later can carry a different Citation Strength under the same
+    formula. That is an input change, and rule 1 says an input that can move
+    the composite must be in the digest or the change is unattributable —
+    the third time this function has been widened for that reason.
     """
     payload = {
         "formula_version": FORMULA_VERSION,
@@ -312,6 +363,7 @@ def compute_inputs_digest(
         "technical_foundation": (
             str(technical_foundation) if technical_foundation is not None else None
         ),
+        "domain_tiers": dict(sorted((domain_tiers or {}).items())),
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -385,57 +437,117 @@ def share_of_voice(results: list[ResultFacts]) -> Decimal:
     )
 
 
-def citation_strength(results: list[ResultFacts]) -> tuple[Decimal, list[str]]:
-    """Distinct domains citing the subject, normalised against the scan's best.
+def _cited_domains(results: list[ResultFacts]) -> set[str]:
+    return {d for r in results if r.answered for d, _ in r.citations}
 
-    §6 asks for "number AND authority of domains". **There is no authority data
-    in this system** — no Domain Authority feed, no backlink source, and nothing
-    upstream produces one. scoring-spec.md anticipates this: fall back to raw
-    domain count normalised against the competitor maximum in the same scan, and
-    record the degradation.
 
-    Normalising against the best-cited brand in the same scan rather than an
-    absolute target keeps the number meaningful: "how close is the subject to
-    the most-cited player here" is answerable from what we have, whereas "is 7
-    citing domains good" is not.
+def _authority_credit(domains: set[str], tiers: dict[str, Tier]) -> Decimal:
+    """Sum of tier values over the domains that have a tier. Sorted, Decimal."""
+    return sum(
+        (AUTHORITY_VALUES[tiers[d]] for d in sorted(domains) if d in tiers),
+        Decimal("0"),
+    )
 
-    **That was the intent; it is not what the arithmetic does, and since v2.1
-    the value is not in the composite.** `competitor_domain_counts` is the
-    count of every distinct third-party domain in the scan, not the best
-    single rival's, and `subject_domains` is in practice the subject's own
-    domain — so the result is 1/N for any brand cited at all, and 3.70 was the
-    most any of 33 stored scores reached. `compute_score` excludes the
-    dimension under NO_AUTHORITY_DATA. The function stays for the
-    NO_CITATIONS_IN_SCAN flag, and as the number an authority source will one
-    day replace.
+
+def authority_sums(
+    results: list[ResultFacts],
+    competitors: list[CompetitorFacts],
+    tiers: dict[str, Tier],
+) -> tuple[Decimal, dict[str, Decimal]]:
+    """Authority credited to the subject and to each competitor — v3.
+
+    **What "domains citing the brand" means in this data.** A `Citation` is a
+    source the answer cited, and `cites_subject` says only whether it points
+    at the subject's own site — so read literally, the subject's citations
+    were its own domain, 0 or 1, which is why the v1-v2 stand-in could never
+    exceed 1/N. The reading that carries information is the other one: a
+    brand's citing domains are the third-party sources an engine cited IN
+    ANSWERS THAT NAMED THE BRAND — what the engine drew on when it talked
+    about the brand — less the brand's own domain, which is not a third party
+    to itself. The same rule for the subject (`mentioned`, `cites_subject`)
+    and for each rival (named in `brands`, `domain` from the competitor set).
+
+    The attribution is by co-occurrence: an answer that names two brands and
+    cites three sources credits all three to both. That is the limit of what
+    facts-only storage can support — nothing here knows what a cited page is
+    ABOUT — and it is a limit worth knowing when reading the comparison.
     """
-    flags: list[str] = ["NO_AUTHORITY_DATA"]
     answered = [r for r in results if r.answered]
+    subject_domains = {
+        d for r in answered if r.mentioned for d, cites_subject in r.citations if not cites_subject
+    }
+    by_competitor: dict[str, Decimal] = {}
+    for competitor in sorted(competitors, key=lambda c: c.competitor_id):
+        named = [
+            r for r in answered
+            if any(name == competitor.name and not is_subject for name, is_subject in r.brands)
+        ]
+        domains = {d for r in named for d, _ in r.citations if d != competitor.domain}
+        by_competitor[competitor.competitor_id] = _authority_credit(domains, tiers)
+    return _authority_credit(subject_domains, tiers), by_competitor
 
-    subject_domains: set[str] = set()
-    domains_by_brand: dict[str, set[str]] = {}
-    for r in answered:
-        for domain, cites_subject in r.citations:
-            if cites_subject:
-                subject_domains.add(domain)
-        # Attribute non-subject citations to the scan as a whole; per-competitor
-        # attribution needs Citation.competitor_id, handled in the comparison.
-        for name, is_subject in r.brands:
-            if not is_subject:
-                domains_by_brand.setdefault(name, set())
 
-    if not subject_domains and not any(r.citations for r in answered):
+def citation_strength(
+    results: list[ResultFacts],
+    competitors: list[CompetitorFacts],
+    *,
+    authority: DomainAuthority,
+) -> tuple[Decimal, list[str]]:
+    """Authority of the domains citing the subject, against the scan's best — v3.
+
+    §6 asks for "number AND authority of domains citing the brand". Until v3
+    **there was no authority data in this system** — no Domain Authority feed,
+    no backlink source, nothing upstream — and the stand-in that filled the
+    dimension divided the subject's own domain (0 or 1) by every distinct
+    third-party domain the engines cited. That is 1/N for any brand cited at
+    all: 3.70 was the most any of 33 stored scores reached, every rival on a
+    comparison table showed the identical figure, and v2.1 excluded the
+    dimension under NO_AUTHORITY_DATA rather than score it. The intent the
+    old docstring stated — normalise against the best-cited brand in the same
+    scan, so "how close is the subject to the most-cited player here" is the
+    question — was never what its arithmetic did.
+
+    **What replaced it.** `authority` (`services/domain_authority.py`) gives
+    each cited domain a tier: curated-structural, platform-frequency, or none.
+    `authority_sums` credits each brand the AUTHORITY_VALUES of its citing
+    domains, and the subject's total is normalised against the best total in
+    the scan — its own or a rival's — exactly as scoring-spec.md specifies.
+    Normalising against the scan's best rather than an absolute target is the
+    reason the old docstring gave and it still holds: "is 7 citing domains
+    good" is not answerable from what we have; "how close is the subject to
+    the best-cited player here" is.
+
+    **Flags.** NO_AUTHORITY_DATA now means what it says: no cited domain in
+    this scan has a tier, so there is no authority input to measure with —
+    `compute_score` excludes the dimension exactly as v2.1 did, and a scan
+    with nothing classifiable behaves as before. NO_CITATIONS_IN_SCAN stays a
+    fact about the scan. Whether a competitor set exists is `compute_score`'s
+    call, not this function's: with no rivals the subject is compared with
+    itself here, and the caller decides that is not a score.
+    """
+    flags: list[str] = []
+    answered = [r for r in results if r.answered]
+    cited = _cited_domains(answered)
+
+    if not cited:
         # No engine in this scan cited anything at all — typically because no
         # grounded engine ran. Distinct from "cited others but not you".
-        flags.append("NO_CITATIONS_IN_SCAN")
+        flags.extend(["NO_AUTHORITY_DATA", "NO_CITATIONS_IN_SCAN"])
         return Decimal("0"), flags
 
-    competitor_domain_counts = [
-        len({d for r in answered for d, cites_subject in r.citations if not cites_subject})
-    ]
-    best = max([len(subject_domains), *competitor_domain_counts]) or 1
-    raw = Decimal(len(subject_domains)) / Decimal(best) * HUNDRED
-    return _guard(Dimension.CITATION_STRENGTH, raw), flags
+    tiers = authority.tiers_for(cited)
+    if not tiers:
+        flags.append("NO_AUTHORITY_DATA")
+        return Decimal("0"), flags
+
+    subject, rivals = authority_sums(answered, competitors, tiers)
+    best = max([subject, *rivals.values()])
+    if best == 0:
+        # Tiered sources were cited, but in answers that named nobody. There
+        # is a scan-level input and no brand-level signal: 0, as Share of
+        # Voice returns 0 when no brand at all was named.
+        return Decimal("0"), flags
+    return _guard(Dimension.CITATION_STRENGTH, subject / best * HUNDRED), flags
 
 
 def sentiment_score(results: list[ResultFacts]) -> Decimal | None:
@@ -464,6 +576,7 @@ def compare_competitors(
     competitors: list[CompetitorFacts],
     *,
     include_citation_strength: bool = True,
+    authority: DomainAuthority = CURATED_ONLY,
 ) -> list[CompetitorComparison]:
     """Per-competitor figures for the three measurable dimensions.
 
@@ -489,6 +602,11 @@ def compare_competitors(
     all five rivals. A column of identical numbers under a dimension the score
     itself leaves out is the same accounting mismatch this docstring already
     refuses, from the other side.
+
+    **When it is included — v3 — each rival's figure is its authority sum
+    against the SAME best-in-scan the subject was normalised against**, so
+    the best-cited brand in the table reads 100 and everyone else reads their
+    distance from it. One denominator for one column.
     """
     answered = [r for r in results if r.answered]
     if not answered or not competitors:
@@ -499,14 +617,9 @@ def compare_competitors(
     # excluded, so these fall to zero and the report has no comparison to draw.
     aware = awareness_only(answered)
     total_mentions = sum(len(r.brands) for r in aware)
-    all_citation_domains = {
-        d for r in answered for d, cites_subject in r.citations if not cites_subject
-    }
-    best_citations = max(
-        len({d for r in answered for d, cs in r.citations if cs}),
-        len(all_citation_domains),
-        1,
-    )
+    tiers = authority.tiers_for(_cited_domains(answered))
+    subject_authority, rival_authority = authority_sums(answered, competitors, tiers)
+    best_authority = max([subject_authority, *rival_authority.values()])
 
     out: list[CompetitorComparison] = []
     for competitor in sorted(competitors, key=lambda c: c.competitor_id):
@@ -518,10 +631,6 @@ def compare_competitors(
             1 for r in aware
             if any(name == competitor.name and not is_subject for name, is_subject in r.brands)
         )
-        cited = len({
-            d for r in answered for d, cs in r.citations
-            if not cs and competitor.domain and d == competitor.domain
-        })
         out.append(
             CompetitorComparison(
                 competitor_id=competitor.competitor_id,
@@ -535,7 +644,11 @@ def compare_competitors(
                     if total_mentions else Decimal("0")
                 ),
                 citation_strength=(
-                    _round2(Decimal(cited) / Decimal(best_citations) * HUNDRED)
+                    _round2(
+                        rival_authority[competitor.competitor_id] / best_authority * HUNDRED
+                        if best_authority
+                        else Decimal("0")
+                    )
                     if include_citation_strength
                     else None
                 ),
@@ -550,14 +663,24 @@ def compute_score(
     *,
     competitor_set_status: DetectionStatus | None,
     technical_foundation: Decimal | None = None,
+    authority: DomainAuthority = CURATED_ONLY,
 ) -> ScoreResult:
     """Compute the composite and its breakdown.
 
     `technical_foundation` is a parameter rather than a computation because
     TechnicalAudit is Epic 6. Passing None excludes the dimension and
     redistributes its weight — see the exclusion logic below.
+
+    `authority` — v3 — is the citing-domain tier lookup. The default carries
+    the curated tier only, which is right for a unit test and wrong for
+    production: `scoring_runner.score_scan` loads the platform tier from the
+    database and passes it, and that is the only place this is called with
+    real rows.
     """
-    digest = compute_inputs_digest(results, competitors, technical_foundation)
+    tiers = authority.tiers_for({d for r in results for d, _ in r.citations})
+    digest = compute_inputs_digest(
+        results, competitors, technical_foundation, domain_tiers=describe(tiers)
+    )
     weights_recorded = {
         d.value: str(w) for d, w in sorted(WEIGHTS.items(), key=lambda kv: kv[0].value)
     }
@@ -613,37 +736,53 @@ def compute_score(
     else:
         mr = _round2(mention_rate(aware))
 
-    # --- Citation Strength — EXCLUDED under NO_AUTHORITY_DATA, v2.1 ---------
+    # --- Citation Strength — measured since v3; excluded on two conditions --
     #
-    # §6 asks for "number AND authority of domains citing the brand", and there
-    # is no authority source in this system. The stand-in `citation_strength`
-    # computes in its place divides the subject's own domain (0 or 1) by every
-    # distinct third-party domain the engines cited, so the most any brand can
-    # score is 1/N: on a real 24-prompt scan N was 152, and the subject and all
-    # five rivals scored 0.66. Across every stored score the maximum was 3.70.
-    # A dimension nobody can earn is not a measurement, and scoring it kept
-    # depressing every composite by up to 20 points while the pitch beat
-    # promised those points back as recoverable.
+    # §6 asks for "number AND authority of domains citing the brand". v2.1
+    # excluded the dimension because there was no authority source and the
+    # stand-in in its place could not be earned: the subject's own domain (0
+    # or 1) over every distinct third-party domain cited, so 1/N — on a real
+    # 24-prompt scan N was 152, the subject and all five rivals scored 0.66,
+    # and across every stored score the maximum was 3.70. `citation_strength`
+    # now reads tiers from `authority` and normalises the subject's authority
+    # sum against the best in the scan; its docstring has the whole account.
     #
-    # So it is excluded and its weight redistributed — the treatment v1.1 gave
-    # Technical Foundation before Epic 6 could measure it — and the reason
-    # names the missing input, as the other reasons do. NOT_YET_MEASURED would
-    # be wrong: that says a capability is on its way; this says an input does
-    # not exist. The raw figure is still computed, because NO_CITATIONS_IN_SCAN
-    # remains true and cheap and is a fact about the scan rather than about
-    # this formula. NO_AUTHORITY_DATA is no longer ALSO a degradation flag on a
-    # new score: a dimension that is left out is not "rougher", and saying both
-    # would say two things. Rows scored under v2 still carry it as a flag, with
-    # copy that now describes what that formula actually did.
-    cs_raw, citation_flags = citation_strength(results)
+    # Two exclusions, and they are different facts:
+    #
+    # NO_AUTHORITY_DATA — no cited domain in this scan has a tier. There is no
+    # input to measure with, which is exactly what the code meant in v2.1, so
+    # a scan with nothing classifiable behaves precisely as it did then. Not
+    # NOT_YET_MEASURED: that says a capability is on its way; this says an
+    # input is absent for this scan. Still not ALSO a degradation flag: a
+    # dimension that is left out is not "rougher".
+    #
+    # NO_COMPETITOR_SET — tiered sources were cited but nobody was looked for
+    # to compare against. The figure is the subject against the best in the
+    # scan, and with no rivals "the best in the scan" is the subject itself,
+    # which would score 100 for any classifiable citation at all. That is the
+    # v1 Share of Voice defect — a full mark for a detection failure — and it
+    # gets the v1.1 answer: excluded and redistributed, under the same code
+    # Share of Voice uses for the same absence. NO_AUTHORITY_DATA takes
+    # precedence when both hold, so the no-input case stays as it was.
+    #
+    # NO_CITATIONS_IN_SCAN remains a fact about the scan and travels as a flag
+    # whichever way the dimension goes.
+    no_competitors = (
+        not competitors
+        or competitor_set_status is None
+        or competitor_set_status is DetectionStatus.NO_SIGNAL
+    )
+    cs_raw, citation_flags = citation_strength(results, competitors, authority=authority)
     cs: Decimal | None
     if "NO_AUTHORITY_DATA" in citation_flags:
         cs = None
         excluded[Dimension.CITATION_STRENGTH.value] = "NO_AUTHORITY_DATA"
         flags.extend(f for f in citation_flags if f != "NO_AUTHORITY_DATA")
+    elif no_competitors:
+        cs = None
+        excluded[Dimension.CITATION_STRENGTH.value] = "NO_COMPETITOR_SET"
+        flags.extend(citation_flags)
     else:
-        # Unreachable today — `citation_strength` always flags the missing
-        # source. The branch is what an authority feed plugs into.
         cs = _round2(cs_raw)
         flags.extend(citation_flags)
 
@@ -670,11 +809,8 @@ def compute_score(
     # says — so a comparison prompt contributes the fact that two named parties
     # were named, which is a fact about the question. An airtime-weighted Share
     # of Voice would deserve this argument re-opened; presence-counting does not.
-    no_competitors = (
-        not competitors
-        or competitor_set_status is None
-        or competitor_set_status is DetectionStatus.NO_SIGNAL
-    )
+    #
+    # `no_competitors` is computed above, where Citation Strength first needs it.
     sov: Decimal | None
     if no_competitors:
         sov = None
@@ -779,5 +915,6 @@ def compute_score(
             results,
             competitors,
             include_citation_strength=Dimension.CITATION_STRENGTH.value not in excluded,
+            authority=authority,
         ),
     )

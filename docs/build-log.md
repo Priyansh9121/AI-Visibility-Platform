@@ -17164,3 +17164,168 @@ controls — five clients in two industries, four clients in three, five
 unclassified clients, five soft-deleted clients — none of which does, and a
 check that lowering either threshold by one lets the matching control in.
 ruff and mypy clean on the two files.
+
+# Citation Strength gets an authority input, part two: the scoring change — v3, the tier values argued, the no-rival case decided, and what the new number does to every stored scan
+
+**2026-09-27.** Second checkpoint. `citation_strength()` now reads the
+lookup part one built; `compute_score` includes the dimension whenever the
+scan has a classifiable citation and a rival to compare against;
+`FORMULA_VERSION` is `v3`. The report copy that explains all this to a
+reader is part three.
+
+## What changed in `services/scoring.py`
+
+- **`citation_strength(results, competitors, *, authority)`.** A brand's
+  citing domains are the distinct third-party sources cited in answered
+  results that NAME the brand — `mentioned` for the subject, the rival's
+  name in `brands` for a competitor — less the brand's own domain, which is
+  not a third party to itself. Each carries its tier's value; the subject's
+  sum is normalised against the largest sum in the scan. That is the rule
+  scoring-spec.md stated for this dimension from the start and the thing
+  the v1–v2 stand-in never did: its "subject's citations" were the
+  `cites_subject` rows, which are the subject's own domain, 0 or 1, over
+  every domain cited — hence 1/N and the 3.70 ceiling. The docstring keeps
+  that account and says what replaced it.
+- **`AUTHORITY_VALUES` — curated 100, platform 50, unclassified 0.** Only
+  the ratios matter under normalisation. Curated is the ceiling by
+  construction: nothing in this system is stronger evidence than a `.gov`,
+  a university, a reference work, a wire service or a cross-industry review
+  platform. Unclassified is zero because no tier is no evidence, the same
+  as its absence before v3. Platform sits at the midpoint for the reason
+  neutral sentiment does: it states the ordering — worth more than nothing,
+  less than a structural fact — and claims nothing about where between the
+  two it falls, because the tier is measured through an uncalibrated
+  industry label and any other number would imply a measurement nobody has
+  made. The 100/60/25 in the brief were placeholders; 25 for unclassified
+  would have contradicted the brief's own tier definition ("contributes
+  zero authority weight") and made a scan of forty blogs score, which is
+  not what "number AND authority" means when only the number is known.
+- **Two exclusions.** `NO_AUTHORITY_DATA` fires only when no cited domain
+  in the scan has a tier — no input, exactly v2.1's situation, exactly
+  v2.1's behaviour, and the test that says so asserts the flag list is
+  `["NO_AUTHORITY_DATA"]` and nothing else. **`NO_COMPETITOR_SET` fires
+  when tiered domains were cited but no competitor set exists**, a case
+  the brief did not name and the code had to decide. The figure is the
+  subject against the best in the scan; with no rival the best in the scan
+  is the subject, and any classifiable citation would read 100 — a full
+  mark for a detection failure, which is the v1 Share of Voice defect and
+  gets the v1.1 answer, under the same code Share of Voice already uses.
+  `NO_AUTHORITY_DATA` takes precedence when both hold, so the no-input
+  case is untouched. `NO_CITATIONS_IN_SCAN` is still a flag either way.
+- **Rivals' column.** `compare_competitors` gives each rival its own sum
+  against the same denominator, so the best-cited brand in the table reads
+  100 and the rest read their distance from it. Still `None` whenever the
+  subject's is excluded — a column means one thing.
+- **The tiers are in the digest.** Tier B is a frequency over the whole
+  platform's stored scans and moves as they accumulate; the same results
+  re-scored a month on can carry a different number under the same
+  formula. `compute_inputs_digest` now takes `domain_tiers` — the tier of
+  every cited domain in the scan that has one, and only those, so a
+  domain outside the scan entering Tier B does not move the digest. The
+  third time that function has been widened for rule 1, after
+  `technical_foundation` and `intent`.
+- **`v3`, not `v2.3`.** v2 was a major bump because the population change
+  moved every composite. A dimension re-entering the weighting moves every
+  composite with a classifiable citation, by up to its full 20 points. Same
+  precedent, same size of bump. Rows carrying `v2.1` keep their numbers.
+- **`scoring_runner.score_scan` loads the lookup** with
+  `load_domain_authority(session)` on every scoring and passes it through;
+  `compute_score`'s default is the curated tier alone and its docstring
+  says that default is for unit tests and wrong for production.
+
+## What the new number does to the stored scans — measured, not persisted
+
+`score_scan(persist=False)` over the 26 scans in `avp_dev` that carry a
+score, against the live lookup (70 platform domains). **Citation Strength
+is measured on 23**; one is `NO_ANSWERED_RESULTS`, one `NO_AUTHORITY_DATA`
+(a helpwise.io scan whose 11 answers cited nothing tiered), one
+`NO_COMPETITOR_SET` (ghost.org, 96.67 composite with no rival set). The
+composite moves **+3.04 to +20.00** against the latest stored row on every
+measured scan, because a dimension came back at a value of 25 to 100.
+
+**And the value is 100 on 14 of the 23.** helpscout.com, basecamp.com,
+linear.app, three plausible.io runs, two notion.so runs, front.com,
+missiveapp.com, intercom.com, hiverhq.com — all 100. The rest: zammad.com
+89.47, helpwise.io 90.63 / 82.61 / 33.33, pirsch.io 55.00, reamaze.com
+61.90, groovehq.com 32.00, psmdigitalagency 25.00 to 62.50. Median 100.
+
+## The mechanism, and a finding for a decision rather than a fix
+
+The subject is credited every tiered domain cited in any answer that
+names it. Citation Strength keeps EVERY answered result — scoring-spec.md
+says so, "decided, not pending", and gives sentiment's reasoning: how an
+answer portrays a brand is a real signal whether the buyer named it or
+not. But co-occurrence attribution makes this dimension different from
+sentiment in exactly the way v2 found Mention Rate was: **a question that
+names the brand guarantees the brand co-occurs with whatever that answer
+cites.** 55% of a prompt set names the subject by construction, so the
+subject accumulates the union of the scan's tiered sources almost
+regardless of standing, while each rival accumulates only what was cited
+where an engine chose to name it.
+
+Measured the other way, on awareness prompts only, per scan
+(all-answered → awareness-only, with the awareness-only Mention Rate):
+
+| client | all answered | awareness only | awareness MR |
+|---|---|---|---|
+| helpwise.io | 90.63 | **0** | 0 |
+| helpwise.io | 82.61 | **0** | 0 |
+| helpwise.io | 33.33 | **0** | 0 |
+| groovehq.com | 32.00 | **0** | 0 |
+| psmdigitalagency.com | 33.33 | **0** | 0 |
+| psmdigitalagency.com.au (×3) | 25.00 / 62.50 / 50.00 | excluded / 0 / 0 | 0 |
+| zammad.com | 89.47 | 18.18 | 63.64 |
+| reamaze.com | 61.90 | 7.14 | 25.64 |
+| pirsch.io | 55.00 | 40.00 | 30.56 |
+| hiverhq.com | 100 | 93.10 | 68.42 |
+| missiveapp.com | 100 | 90.91 | 91.67 |
+| the nine at 100 with MR ≥ 94 | 100 | 100 | 94–100 |
+
+helpwise.io reads 90.63 on a scan where no unprompted question named it at
+all: every point of that 90 came from answers to questions that supplied
+the name. That is the v2 tautology, arriving through a different door.
+
+**Not changed here.** The population is a scoring POLICY the spec closed
+with a stated reason and said would need "a reason of its own" to reopen.
+This is that reason, and it is recorded for the founder to decide, not
+applied on the way past: the brief specified the formula, said nothing
+about the population, and a second unrequested policy change inside a
+formula bump would be exactly the silent restating of history rule 5
+forbids. What the table shows is that the choice is material — on the
+five clients who are invisible unprompted, it is the difference between a
+Citation Strength of 25–90 and one of 0 — and that the dimension as
+shipped will read as strong on any brand a prompt set names by
+construction. The copy in part three says the figure is measured on every
+answered result, so a reader is at least not told otherwise.
+
+## Docs
+
+scoring-spec.md: table row 3, a new "measured from a two-tier authority
+input (v3)" section above the v2.1 section (which now reads in the past
+tense), two edge-case rows, and a `v3` changelog entry in the format the
+v2/v2.1 rows use. api-contracts.md: the `ScoreDetailOut` example is a v3
+score with five weights and a rival at `100.00`, the reasons table has the
+new meaning of `NO_AUTHORITY_DATA` and the Citation Strength
+`NO_COMPETITOR_SET` row, and the paragraph on the rivals' column says what
+it carries now.
+
+## Verified
+
+API **1401/1401** (was 1324; +65 lookup tests in part one, +12 here),
+exit code read from a file. `test_scoring.py`'s citation classes rewritten
+for v3: a curated domain scoring with no platform data, a platform domain
+at its tier, an unclassified domain at zero, nothing classifiable flagging
+`NO_AUTHORITY_DATA` and nothing else, no citations flagged distinctly,
+normalisation against the best rival (150 against 250 → 60), the best
+brand reading 100 whoever it is, distinct domains not raw counts, own
+domains earning nothing for subject or rival, co-occurrence credited to
+both, unanswered and unnaming results not counted, five dimensions
+weighted and re-summing exactly when scored, rivals against the same best,
+`NO_COMPETITOR_SET` for the no-rival case, precedence of `NO_AUTHORITY_DATA`,
+the tiers moving the digest and an out-of-scan domain not moving it. One
+end-to-end test in `test_domain_authority.py` takes seeded rows through
+`load_domain_authority` into `compute_score` and watches the exclusion
+turn into a measurement. `test_client_history.py`'s "rivals carry null"
+assertion now says the opposite, with the reason. ruff clean; mypy 48
+before and after (the two errors mypy reports in scoring.py are on lines
+this change did not touch, and the count did not move).
