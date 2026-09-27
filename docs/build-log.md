@@ -17412,3 +17412,88 @@ its caveat render on the Help Scout fixture). design-system **648/648**,
 shared-types **53**, both typechecks clean, the styleguide builds.
 `test_report_pdf.py`'s two assertions on the old fix title now pin the new
 one.
+
+# Citation Strength gets an authority input — the whole pass in one place: the thresholds chosen, the tier values chosen, and the limitation stated in full
+
+**2026-09-27.** Three checkpoints (`6a8ff38` the lookup, `7689528` the
+scoring, `3f234b9` the copy) and this summary, pushed together. A reader
+who opens only this entry should have every number and every caveat.
+
+## The thresholds — Tier B
+
+A domain is platform-tier when stored scans have cited it across **at
+least 3 distinct `Client.industry` values and at least 5 distinct
+clients**, industry non-null, client not soft-deleted, computed live (15 ms
+on 5,787 rows, measured; no table). **Both are first guesses.** Three
+industries because two can be one market under two labels; five clients so
+no single source-heavy scan qualifies a domain alone. Neither was derived
+from data: 27 clients over 12 labels is not a base to derive from. On
+those 27 clients the rule admits **70 domains**, and the list is honest
+about what that means — g2.com (10 industries, 21 clients) and
+softwareadvice.com (8, 12) at the top, and eesel.ai (7, 14), featurebase.app
+(7, 12), hiverhq.com (6, 12), zendesk.com (4, 8) further down: help-desk
+vendors that count as "seven industries" because the labels split one
+market five ways. Revisit with real volume; the docstring says where to
+look first.
+
+## The tier values — `AUTHORITY_VALUES`
+
+**Curated 100, platform 50, unclassified 0.** Only the ratios matter, since
+the subject's sum is normalised against the best in the scan. Curated is
+the ceiling by construction. Unclassified is zero because no tier is no
+evidence, the same as its absence before v3. Platform is the midpoint for
+the reason neutral sentiment is: it states the ordering and claims no
+precision the proxy does not have. The brief's 100 / 60 / 25 were
+placeholders; 25 for unclassified would have contradicted the brief's own
+tier definition and scored a scan of forty blogs.
+
+## What the score is
+
+A brand's citing domains are the third-party sources cited in answered
+results that name it, less its own domain; each carries its tier value;
+`citation_strength = 100 × subject's sum / best sum in the scan`, rivals
+against the same denominator. `NO_AUTHORITY_DATA` when no cited domain has
+a tier (unchanged behaviour from v2.1); `NO_COMPETITOR_SET` when tiered
+domains were cited but there is no rival to normalise against. Formula
+`v3`; `v2.1` rows are not re-scored; the tiers are in the inputs digest.
+
+## The limitation, in full and unsoftened
+
+Tier B counts industries through `Client.industry`, and that label's
+classification confidence score was found uncalibrated in Epic 2.6 —
+**five real sites scored 0.97, 0.97, 0.97, 0.97, 0.96**, effectively one
+value against a prompt that asked for the full range — re-measured after
+Epic 2.8's tuning at 0.95, 0.97, 0.97, 0.96, 0.96, and **never fixed
+since**. The `CONFIDENCE_THRESHOLD = 0.70` ambiguity path has never fired
+on a real site. So there is **no reliable way to screen a mis-classified
+client's industry out of the Tier B count**: a client the classifier put
+in the wrong industry contributes a wrong industry to every domain its
+scans cite, with a confidence score that says 0.97 either way. The label
+itself is more workable than the number — Finding 1's over-generalisation
+("b2b saas", "technology company") was addressed with prompt tuning — but
+the fragmentation the 70-domain list shows is the other face of the same
+coin: labels fine enough to be specific are fine enough to split one
+market into several "industries". Industry-spread is therefore a **coarse
+proxy that cannot currently filter out a bad classification**, and it is
+weighted at half the curated tier for that reason. The report says this
+to the reader in `DIMENSION_NOTE` and in the `NO_AUTHORITY_DATA` detail,
+in the PDF and on screen, and both suites assert the words "uncalibrated",
+"coarse proxy" and "mis-classified" are present.
+
+## The second finding, for a decision
+
+Measured on the 23 stored scans the dimension now scores: **100 on 14**,
+composites up **+3.04 to +20.00**. The mechanism is co-occurrence plus
+the every-answered-result population: a question that names the brand
+guarantees the brand co-occurs with whatever the answer cites, and 55% of
+a prompt set names it by construction. helpwise.io reads 90.63 on a scan
+where no unprompted question named it; on awareness prompts alone five
+clients drop to 0. Part two has the table. Not changed — the population
+is a policy the spec closed with a reason and this is the reason of its
+own it asked for — and recorded here so the choice is made deliberately.
+
+## Verified, final
+
+API **1408/1408**, web **882/882**, design-system **648/648**,
+shared-types **53**, both typechecks clean, ruff clean, mypy **48** under
+the ceiling of 50, every exit code read from a file. CI: see the push.
