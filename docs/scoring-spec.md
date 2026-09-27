@@ -21,7 +21,7 @@ score = Σ (weight_i × subscore_i) / 100
 |---|---|---|---|
 | 1 | **Mention Rate** | 30% | % of **awareness** prompts where the brand appears (v2) |
 | 2 | **Share of Voice** | 25% | Brand mentions ÷ total mentions, over **awareness** prompts (v2) |
-| 3 | **Citation Strength** | 20% | Authority of the domains cited in answers that name the brand, against the best-cited brand in the same scan — **measured since v3** from a two-tier authority input; excluded (`NO_AUTHORITY_DATA`) only when no cited domain in the scan has a tier, and (`NO_COMPETITOR_SET`) when there is no rival to normalise against |
+| 3 | **Citation Strength** | 20% | Authority of the domains cited in **awareness** answers that name the brand (v4), against the best-cited brand in the same scan — measured since v3 from a two-tier authority input; excluded (`NO_AWARENESS_POPULATION`) when the set has no awareness prompts, (`NO_AUTHORITY_DATA`) when the awareness answers cite nothing tiered, and (`NO_COMPETITOR_SET`) when there is no rival to normalise against |
 | 4 | **Sentiment** | 15% | Weighted positive/neutral/negative across all mentions |
 | 5 | **Technical Foundation** | 10% | Schema presence, structured data, content freshness |
 
@@ -55,13 +55,32 @@ objection that a buyer weighing named options is itself a competitive signal is
 real but does not apply to this implementation, which counts PRESENCE rather
 than airtime; an airtime-weighted Share of Voice would deserve it reconsidered.
 
-**Sentiment and Citation Strength keep every answered result. Decided, not
-pending.** Sentiment asks how an answer PORTRAYS the brand, which is a real
-signal whether the buyer named it or not — unlike Mention Rate and Share of
-Voice, which answer *"was this discovered"*, a claim a brand-named question
-cannot support. The two dimensions were scoped because the tautology made them
-measure the question instead of the engine; sentiment has no such defect,
-because the thing it measures does not depend on who raised the subject.
+**Sentiment keeps every answered result. Decided, not pending.** Sentiment
+asks how an answer PORTRAYS the brand, which is a real signal whether the
+buyer named it or not — unlike Mention Rate and Share of Voice, which answer
+*"was this discovered"*, a claim a brand-named question cannot support. The
+two dimensions were scoped because the tautology made them measure the
+question instead of the engine; sentiment has no such defect, because the
+thing it measures does not depend on who raised the subject.
+
+**Citation Strength keeps every answered result — v2 through v3; awareness
+only since v4.** v2 closed this question for both dimensions together and
+said reopening it needed a reason of its own. This is that reason, and it is
+Citation Strength's alone. Sentiment's argument does not carry over: since v3
+Citation Strength is attribution by co-occurrence — a brand is credited the
+tiered sources cited in answers that name it — and a brand-named question
+MANUFACTURES the co-occurrence. 55% of a set names the subject by
+instruction, so under v3 the subject accumulated nearly the whole scan's
+tiered sources whatever its standing. Measured on the 23 stored scans v3
+scored: **14 read 100; helpwise.io read 90.63 with an awareness Mention Rate
+of 0**; on awareness prompts alone five clients fell to 0 (`build-log.md`,
+2026-09-27, part two). Portrayal is a property of the answer; co-occurrence
+with a source is a property of the question that produced the answer. So the
+two dimensions differ on purpose: sentiment measures what an engine says
+about a brand it was made to discuss, which is real; Citation Strength on a
+brand-named prompt measures what a search returned for the brand's own name,
+which is not authority. Rivals are scored on the same population, so the
+comparison column keeps one meaning.
 
 The measurement backs that up and is worth stating, because it points the other
 way from the fix: awareness-only sentiment is **higher** on every scan with a
@@ -75,8 +94,9 @@ on whether it chose to bring it up — and it is the subject of its own question
 not of this one. **Closed for v2.** Reopening it needs a reason of its own, not
 consistency with a fix aimed at a different defect.
 
-**No awareness prompts in a set excludes Mention Rate and Share of Voice and
-redistributes their weight**, with `NO_AWARENESS_POPULATION`. Scoring the
+**No awareness prompts in a set excludes Mention Rate, Share of Voice and
+(since v4) Citation Strength and redistributes their weight**, with
+`NO_AWARENESS_POPULATION`. Scoring the
 absence 0 would punish a client for the shape of a prompt set they did not
 choose — the same reasoning v1.1 applied to Share of Voice with no competitor
 set. Unreachable through the generator (45% awareness quota) and through
@@ -123,8 +143,8 @@ day v3 shipped the rule admitted 70 domains, a good part of them help-desk
 vendors that the fine-grained labels count as seven industries.
 
 **The formula.** A brand's *citing domains* are the distinct third-party
-sources cited in answered results that name it, less its own domain (a
-brand is not a third party to itself). Each carries its tier's value —
+sources cited in **awareness** results (v4; every answered result under v3)
+that name it, less its own domain (a brand is not a third party to itself). Each carries its tier's value —
 `AUTHORITY_VALUES`: **curated 100, platform 50, unclassified 0**, ratios
 chosen to state the ordering and no more precision than the proxy has, the
 way neutral sentiment sits at 50. The subject's sum is normalised against
@@ -140,13 +160,18 @@ sources to both — which is the limit of what facts-only storage supports.
 Every rival's comparison figure is its own sum against the same denominator,
 so the best-cited brand in the table reads 100.
 
-**Two exclusions, distinct facts.** `NO_AUTHORITY_DATA` now fires only when
-no cited domain in the scan has a tier — there is no input to measure with,
-and such a scan behaves exactly as under v2.1. `NO_COMPETITOR_SET` fires
-when tiered domains were cited but no competitor set exists: with no rival,
-"the best in the scan" is the subject itself and any classifiable citation
-would score 100 — the v1 Share of Voice defect, given the v1.1 answer.
-`NO_AUTHORITY_DATA` takes precedence when both hold.
+**Three exclusions, distinct facts, in order of precedence (v4).**
+`NO_AWARENESS_POPULATION` when the set has no awareness prompts — a fact
+about the population, and the code the other discovery dimensions use.
+`NO_AUTHORITY_DATA` when the awareness answers cite no domain with a tier —
+a fact about the input; there is nothing to measure with, and such a scan
+behaves exactly as under v2.1. Brand-named answers citing tiered sources do
+not rescue it. `NO_COMPETITOR_SET` when tiered domains were cited but no
+competitor set exists — a fact about the comparison: with no rival, "the
+best in the scan" is the subject itself and any classifiable citation would
+score 100 — the v1 Share of Voice defect, given the v1.1 answer. Population,
+then input, then comparison: each later question presumes the earlier had
+an answer.
 
 **The tiers are inputs and are in the digest.** Tier B moves as scans
 accumulate, so the same results re-scored later can score differently under
@@ -278,6 +303,7 @@ These are the unit-test targets named by the Epic 5 acceptance criterion.
 
 | Date | Version | Change |
 |---|---|---|
+| 2026-09-27 | `v4` | **Citation Strength is scored on awareness prompts only, and market participants are excluded from Tier B.** Two changes, one bump. (1) The population moves to `awareness_only`, the one Mention Rate and Share of Voice have used since v2, for a reason of this dimension's own: attribution is by co-occurrence, and a brand-named question manufactures it — under v3, 14 of 23 stored scans read 100 and helpwise.io read 90.63 with an awareness Mention Rate of 0. Rivals are scored on the same population. Sentiment stays on every answered result, and the population section says why the two now differ. `NO_AWARENESS_POPULATION` joins the exclusions, ahead of `NO_AUTHORITY_DATA` and `NO_COMPETITOR_SET`. (2) `load_platform_domains` refuses any domain that is a non-deleted `Client.domain` or a `Competitor.domain` anywhere on the platform: an engine cites a market participant because it is an option, not a reference. Structural, like Tier A; Tier A is unaffected. The admitted list went 70 → 57 on the day. **Major, not minor**, by the precedent: v2's population change was major and v2.1's exclusion minor, and this is a population change first — it moves every composite that carries the dimension, by up to 20 points on the stored scans. The tier change rides on the digest through `domain_tiers`, which a test confirms. **Stored `v3` rows are not re-scored.** See `build-log.md`, 2026-09-27, sections 1 and 2. |
 | 2026-09-27 | `v3` | **Citation Strength is measured again, from a two-tier citing-domain authority input.** `services/domain_authority.py`: Tier A is a curated structural list (gov/edu/mil suffixes and country forms, Wikipedia, Wikidata, AP, Reuters, BBB, Trustpilot, G2, Capterra); Tier B is a live aggregate over stored citations — cited across ≥ 3 `Client.industry` values and ≥ 5 clients, both thresholds first guesses. Values 100 / 50 / 0. A brand's citing domains are the third-party sources cited in answers that name it, less its own; the subject's sum is normalised against the best in the scan, as this spec always said and the v1–v2 stand-in never did. `NO_AUTHORITY_DATA` now fires only when no cited domain has a tier; `NO_COMPETITOR_SET` when there is no rival to normalise against. The tiers are in the digest. **Honest limit, in the report copy:** Tier B counts through an industry label whose confidence is uncalibrated (Finding 2, open), so it cannot screen out a mis-classified client. Major bump by v2's precedent: a dimension re-entering the weighting moves every composite with a classifiable citation. **Stored `v2.1` rows are not re-scored.** See the section above and `build-log.md`, 2026-09-27. |
 | 2026-08-20 | `v1` | Initial weights from product-spec.md §6. Not yet data-tuned. |
 | 2026-08-21 | `v1.1` | **No-competitor Share of Voice now excluded, not scored 100.** v1 awarded a full 25 points when competitor detection returned nothing, which hands a quarter of the composite to a *detection failure* — a technically-computable but meaningless number, and exactly the outcome this project refuses everywhere else (null classification, null score, `INSUFFICIENT_DATA`). It is now excluded and redistributed, the same treatment v1 already prescribed for sentiment with no population. Weights themselves are unchanged. See `build-log.md` Epic 5.2. |

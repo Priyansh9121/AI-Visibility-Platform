@@ -91,7 +91,10 @@ class TestFormulaConstants:
         # citing-domain authority input that did not exist before: a
         # dimension re-entering the weighting moves every composite with a
         # classifiable citation, which is a major bump by v2's precedent.
-        assert FORMULA_VERSION == "v3"
+        # v4 when Citation Strength moved to the awareness population — a
+        # population change, v2's precedent again — shipping with the
+        # market-participant exclusion from Tier B.
+        assert FORMULA_VERSION == "v4"
 
     def test_authority_values_say_the_ordering_and_nothing_more_precise(self) -> None:
         # The ratios are what the normalisation reads. Curated is the ceiling
@@ -315,6 +318,112 @@ class TestCitationStrength:
         results = [res(1, mentioned=False, brands=(), citations=(("nih.gov", False),))]
         value, flags = citation_strength(results, [RIVAL], authority=CURATED_ONLY)
         assert value == Decimal("0") and flags == []
+
+
+class TestCitationStrengthPopulation:
+    """v4 — awareness prompts only, for this dimension's own reason.
+
+    Co-occurrence is manufactured by a question that names the brand. Under
+    v3 helpwise.io read 90.63 on a scan where no unprompted question named
+    it; 14 of 23 stored scans read 100.
+    """
+
+    @staticmethod
+    def _helpwise_shaped():  # noqa: ANN205
+        """Awareness Mention Rate 0; every brand-named answer cites curated sources."""
+        return [
+            res(1, mentioned=False, brands=(("Zendesk", False),),
+                citations=(("blog.example", False),), intent=PromptIntent.AWARENESS),
+            res(2, mentioned=False, brands=(), intent=PromptIntent.AWARENESS),
+            res(3, mentioned=True, brands=(SUBJECT, ("Zendesk", False)),
+                citations=(("g2.com", False), ("capterra.com", False)),
+                intent=PromptIntent.COMPARISON),
+            res(4, mentioned=True, brands=(SUBJECT,),
+                citations=(("nih.gov", False),), intent=PromptIntent.BOTTOM_FUNNEL),
+        ]
+
+    def test_brand_named_answers_citing_tiered_sources_do_not_rescue_the_dimension(
+        self,
+    ) -> None:
+        """Awareness answers cite nothing tiered → NO_AUTHORITY_DATA, not a number."""
+        value, flags = citation_strength(self._helpwise_shaped(), [RIVAL], authority=CURATED_ONLY)
+        assert value == Decimal("0")
+        assert flags == ["NO_AUTHORITY_DATA"]
+
+    def test_a_helpwise_shaped_scan_cannot_score_above_zero(self) -> None:
+        results = self._helpwise_shaped() + [
+            res(5, mentioned=False, brands=(("Zendesk", False),),
+                citations=(("g2.com", False),), intent=PromptIntent.AWARENESS),
+        ]
+        value, flags = citation_strength(results, [RIVAL], authority=CURATED_ONLY)
+        assert value == Decimal("0") and flags == []
+        out = compute_score(results, [RIVAL], competitor_set_status=DetectionStatus.OK,
+                            authority=CURATED_ONLY)
+        assert out.value(Dimension.CITATION_STRENGTH) == Decimal("0.00")
+        assert out.value(Dimension.MENTION_RATE) == Decimal("0.00")
+
+    def test_rivals_are_measured_on_the_same_population(self) -> None:
+        """A rival's tiered sources on a comparison prompt count for nothing either."""
+        results = [
+            res(1, mentioned=True, brands=(SUBJECT,), citations=(("g2.com", False),),
+                intent=PromptIntent.AWARENESS),
+            res(2, mentioned=True, brands=(SUBJECT, ("Zendesk", False)),
+                citations=(("g2.com", False), ("capterra.com", False), ("nih.gov", False)),
+                intent=PromptIntent.COMPARISON),
+        ]
+        out = compute_score(results, [RIVAL], competitor_set_status=DetectionStatus.OK,
+                            authority=CURATED_ONLY)
+        assert out.value(Dimension.CITATION_STRENGTH) == Decimal("100.00")
+        assert [c.citation_strength for c in out.competitors] == [Decimal("0.00")]
+        aware_only = compare_competitors(awareness_only(results), [RIVAL], authority=CURATED_ONLY)
+        assert [c.citation_strength for c in out.competitors] == [
+            c.citation_strength for c in aware_only
+        ]
+
+    def test_sentiment_keeps_every_answered_result(self) -> None:
+        """The paragraph the spec keeps: portrayal is a signal whoever raised the brand."""
+        results = [
+            res(1, mentioned=True, sentiment=Sentiment.NEGATIVE, intent=PromptIntent.AWARENESS),
+            res(2, mentioned=True, sentiment=Sentiment.POSITIVE, intent=PromptIntent.COMPARISON),
+            res(3, mentioned=True, sentiment=Sentiment.POSITIVE, intent=PromptIntent.BOTTOM_FUNNEL),
+        ]
+        assert sentiment_score(results) == Decimal("200") / Decimal("3")
+        out = compute_score(results, [], competitor_set_status=None)
+        assert out.value(Dimension.SENTIMENT) == Decimal("66.67")
+
+    def test_no_awareness_prompts_excludes_with_the_discovery_code(self) -> None:
+        results = [res(1, mentioned=True, brands=(SUBJECT,), citations=(("g2.com", False),),
+                       intent=PromptIntent.COMPARISON)]
+        out = compute_score(results, [RIVAL], competitor_set_status=DetectionStatus.OK,
+                            authority=CURATED_ONLY)
+        assert out.excluded_dimensions["citation_strength"] == "NO_AWARENESS_POPULATION"
+        assert out.excluded_dimensions["mention_rate"] == "NO_AWARENESS_POPULATION"
+        assert out.excluded_dimensions["share_of_voice"] == "NO_AWARENESS_POPULATION"
+        assert "NO_AWARENESS_POPULATION" in out.degradation_flags
+
+    def test_precedence_population_then_input_then_comparison(self) -> None:
+        # All three hold: no awareness prompts, nothing tiered, no rivals.
+        none_of_it = [res(1, mentioned=True, brands=(SUBJECT,),
+                          citations=(("blog.example", False),), intent=PromptIntent.COMPARISON)]
+        out = compute_score(none_of_it, [], competitor_set_status=None)
+        assert out.excluded_dimensions["citation_strength"] == "NO_AWARENESS_POPULATION"
+        # Input and comparison both missing: the input wins.
+        no_input = [res(1, mentioned=True, brands=(SUBJECT,),
+                        citations=(("blog.example", False),), intent=PromptIntent.AWARENESS)]
+        out = compute_score(no_input, [], competitor_set_status=None)
+        assert out.excluded_dimensions["citation_strength"] == "NO_AUTHORITY_DATA"
+        # Only the comparison missing.
+        no_rival = [res(1, mentioned=True, brands=(SUBJECT,),
+                        citations=(("g2.com", False),), intent=PromptIntent.AWARENESS)]
+        out = compute_score(no_rival, [], competitor_set_status=None)
+        assert out.excluded_dimensions["citation_strength"] == "NO_COMPETITOR_SET"
+
+    def test_no_citations_in_scan_is_a_fact_about_the_whole_scan(self) -> None:
+        # No awareness prompts AND nothing cited anywhere: both flags travel.
+        out = compute_score([res(1, mentioned=True, intent=PromptIntent.COMPARISON)], [],
+                            competitor_set_status=None)
+        assert "NO_CITATIONS_IN_SCAN" in out.degradation_flags
+        assert out.excluded_dimensions["citation_strength"] == "NO_AWARENESS_POPULATION"
 
 
 class TestCitationStrengthInTheComposite:
