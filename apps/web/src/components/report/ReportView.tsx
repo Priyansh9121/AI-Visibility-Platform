@@ -51,10 +51,12 @@ import {
   DETECTION_STATUS,
   DIMENSION_NOTE,
   EXCLUSION_REASON,
+  POSITION_COPY,
   VISIBILITY_FLAG,
   checkLabel,
   dimensionLabel,
   engineLabel,
+  positionCell,
 } from '@/lib/report/strings';
 
 export interface ReportViewProps {
@@ -780,8 +782,18 @@ function ProofBeat({
                   align: 'end',
                   render: (row) => fmt(row.citationStrength),
                 },
+                {
+                  // Measured, not scored — v4. Where the brand appeared among
+                  // the brands named, on unprompted answers only. "Not named"
+                  // for a brand with no such answer, never 0.
+                  key: 'position',
+                  header: POSITION_COPY['heading']!,
+                  align: 'end',
+                  render: (row) => positionCell(row.averagePosition, row.positionCount),
+                },
               ]}
             />
+            <p className="mt-3 text-ui-sm leading-prose text-text-tertiary">{POSITION_COPY['note']}</p>
             {ahead.length > 0 && (
               <p className="mt-3 text-ui-sm leading-prose text-text-secondary">
                 {ahead
@@ -1286,6 +1298,8 @@ function competitorRows(report: Report, subjectName: string) {
       mentionRate: subject?.mentionRate ?? null,
       shareOfVoice: subject?.shareOfVoice ?? null,
       citationStrength: subject?.citationStrength ?? null,
+      averagePosition: subject?.averagePosition ?? null,
+      positionCount: subject?.positionCount ?? 0,
     },
     ...(report.competitorSet?.competitors ?? []).map((competitor) => ({
       id: competitor.id,
@@ -1299,6 +1313,8 @@ function competitorRows(report: Report, subjectName: string) {
       mentionRate: competitor.mentionRate ?? null,
       shareOfVoice: competitor.shareOfVoice ?? null,
       citationStrength: competitor.citationStrength ?? null,
+      averagePosition: competitor.averagePosition ?? null,
+      positionCount: competitor.positionCount ?? 0,
     })),
   ];
   return rows;

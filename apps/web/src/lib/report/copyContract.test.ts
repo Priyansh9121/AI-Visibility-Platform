@@ -26,6 +26,8 @@ import {
   DIMENSION_NOTE,
   EXCLUSION_REASON,
   FIX_FOR_DIMENSION,
+  POSITION_COPY,
+  positionCell,
 } from './strings';
 
 const FIXTURE = fileURLToPath(
@@ -40,6 +42,7 @@ function projection() {
     exclusionReason: EXCLUSION_REASON,
     degradationFlag: DEGRADATION_FLAG,
     fixForDimension: FIX_FOR_DIMENSION,
+    positionCopy: POSITION_COPY,
   };
 }
 
@@ -86,5 +89,23 @@ describe('the Citation Strength copy says what the proxy cannot do', () => {
     ]) {
       expect(text).toContain('brands in a scanned market');
     }
+  });
+});
+
+describe('average position is reported, never scored, never zero', () => {
+  it('a brand never named on an unprompted question reads as not named', () => {
+    expect(positionCell(null, 0)).toBe('Not named');
+    expect(positionCell(undefined, undefined)).toBe('Not named');
+    expect(positionCell('0', 0)).toBe('Not named');
+    expect(positionCell(null, 0)).not.toMatch(/\d/);
+  });
+
+  it('carries the count it is averaged over', () => {
+    expect(positionCell('2.40', 9)).toBe('2.4 across 9 answers');
+    expect(positionCell('1.00', 1)).toBe('1.0 across 1 answer');
+  });
+
+  it('the note says it does not enter the score', () => {
+    expect(POSITION_COPY['note']).toContain('does not enter the score');
   });
 });

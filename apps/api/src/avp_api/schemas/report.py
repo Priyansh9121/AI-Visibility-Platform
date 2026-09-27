@@ -148,11 +148,16 @@ class ReportCompetitorOut(CompetitorOut):
     instead, on the three dimensions that genuinely have both sides.
 
     Null sub-scores mean the scan produced no comparison for this competitor.
+
+    `average_position` / `position_count` are reported, not scored — see
+    `CompetitorScoreOut`. Null when never named on an awareness prompt.
     """
 
     mention_rate: Decimal | None = None
     share_of_voice: Decimal | None = None
     citation_strength: Decimal | None = None
+    average_position: Decimal | None = None
+    position_count: int = 0
 
 
 class ReportCompetitorSetOut(ApiModel):

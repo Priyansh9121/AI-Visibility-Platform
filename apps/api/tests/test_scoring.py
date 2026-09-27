@@ -23,6 +23,7 @@ from avp_api.services.scoring import (
     ResultFacts,
     SubScoreOutOfRangeError,
     authority_sums,
+    average_position,
     awareness_only,
     citation_strength,
     compare_competitors,
@@ -42,6 +43,8 @@ def res(
     status: EngineResultStatus = EngineResultStatus.OK,
     engine: str = "claude",
     intent: PromptIntent = PromptIntent.AWARENESS,
+    position: int | None = None,
+    brand_positions: tuple[tuple[str, int], ...] = (),
 ) -> ResultFacts:
     """One result. **`intent` defaults to AWARENESS here and NOWHERE ELSE.**
 
@@ -55,6 +58,7 @@ def res(
     return ResultFacts(
         result_id=f"eres_{i:04d}", engine=engine, status=status, mentioned=mentioned,
         sentiment=sentiment, brands=brands, citations=citations, intent=intent,
+        position=position, brand_positions=brand_positions,
     )
 
 
@@ -1101,3 +1105,76 @@ class TestTheScoringPopulationIsAwarenessOnly:
         b = [res(1, mentioned=True, intent=PromptIntent.COMPARISON)]
 
         assert compute_inputs_digest(a, []) != compute_inputs_digest(b, [])
+
+
+class TestAveragePosition:
+    """Measured and reported, never scored — v4, section 3."""
+
+    def test_mean_and_count_on_a_hand_built_fixture(self) -> None:
+        results = [
+            res(1, mentioned=True, position=1, brands=(SUBJECT,)),
+            res(2, mentioned=True, position=3, brands=(SUBJECT,)),
+            res(3, mentioned=True, position=2, brands=(SUBJECT,)),
+            res(4, mentioned=False),  # not named: not in the mean
+        ]
+        assert average_position(results) == (Decimal("2.00"), 3)
+
+    def test_a_brand_never_named_has_no_position_and_never_zero(self) -> None:
+        value, count = average_position([res(1, mentioned=False), res(2, mentioned=False)])
+        assert value is None and count == 0
+        assert value != Decimal("0")
+
+    def test_a_rival_is_measured_from_brand_positions(self) -> None:
+        results = [
+            res(1, mentioned=True, position=2, brands=(SUBJECT, ("Zendesk", False)),
+                brand_positions=(("Help Scout", 2), ("Zendesk", 1))),
+            res(2, mentioned=False, brands=(("Zendesk", False),),
+                brand_positions=(("Zendesk", 2),)),
+        ]
+        assert average_position(results, brand="Zendesk") == (Decimal("1.50"), 2)
+        assert average_position(results, brand="Freshdesk") == (None, 0)
+
+    def test_unanswered_results_do_not_count(self) -> None:
+        results = [res(1, mentioned=True, position=1, status=EngineResultStatus.TIMEOUT)]
+        assert average_position(results) == (None, 0)
+
+    def test_compute_score_measures_it_on_awareness_prompts_only(self) -> None:
+        """A brand-named prompt puts the brand at 1 almost by construction."""
+        results = [
+            res(1, mentioned=True, position=3, brands=(SUBJECT, ("Zendesk", False)),
+                brand_positions=(("Help Scout", 3), ("Zendesk", 1)),
+                intent=PromptIntent.AWARENESS),
+            res(2, mentioned=True, position=1, brands=(SUBJECT, ("Zendesk", False)),
+                brand_positions=(("Help Scout", 1), ("Zendesk", 2)),
+                intent=PromptIntent.COMPARISON),
+        ]
+        out = compute_score(results, [RIVAL], competitor_set_status=DetectionStatus.OK)
+        assert (out.average_position, out.position_count) == (Decimal("3.00"), 1)
+        assert [(c.average_position, c.position_count) for c in out.competitors] == [
+            (Decimal("1.00"), 1)
+        ]
+
+    def test_it_moves_no_score_and_is_not_in_the_digest(self) -> None:
+        base = [res(1, mentioned=True, sentiment=Sentiment.POSITIVE, brands=(SUBJECT,),
+                    citations=(("g2.com", False),))]
+        moved = [res(1, mentioned=True, sentiment=Sentiment.POSITIVE, brands=(SUBJECT,),
+                     citations=(("g2.com", False),), position=4,
+                     brand_positions=(("Help Scout", 4),))]
+        a = compute_score(base, [RIVAL], competitor_set_status=DetectionStatus.OK)
+        b = compute_score(moved, [RIVAL], competitor_set_status=DetectionStatus.OK)
+        assert a.composite == b.composite
+        assert a.sub_scores == b.sub_scores
+        assert a.inputs_digest == b.inputs_digest
+        assert (a.average_position, b.average_position) == (None, Decimal("4.00"))
+        # Not a dimension, not a weight.
+        assert "average_position" not in {d.value for d in Dimension}
+        assert "average_position" not in a.weights
+
+    def test_the_subject_never_named_on_awareness_prompts_reads_none_in_the_composite(
+        self,
+    ) -> None:
+        results = [res(1, mentioned=True, position=1, brands=(SUBJECT,),
+                       intent=PromptIntent.COMPARISON),
+                   res(2, mentioned=False, intent=PromptIntent.AWARENESS)]
+        out = compute_score(results, [RIVAL], competitor_set_status=DetectionStatus.OK)
+        assert out.average_position is None and out.position_count == 0

@@ -2268,6 +2268,8 @@ export interface components {
          *     the entire purpose of a comparison.
          */
         CompetitorScoreOut: {
+            /** Averageposition */
+            averagePosition?: string | null;
             /** Citationstrength */
             citationStrength?: string | null;
             /** Competitorid */
@@ -2276,6 +2278,11 @@ export interface components {
             mentionRate: string;
             /** Name */
             name: string;
+            /**
+             * Positioncount
+             * @default 0
+             */
+            positionCount: number;
             /** Shareofvoice */
             shareOfVoice: string;
         };
@@ -2637,6 +2644,8 @@ export interface components {
          *     a rival "composite" would not be comparable to the subject's.
          */
         HistoryCompetitorOut: {
+            /** Averageposition */
+            averagePosition?: string | null;
             /** Citationstrength */
             citationStrength?: string | null;
             /** Competitorid */
@@ -2645,6 +2654,11 @@ export interface components {
             mentionRate?: string | null;
             /** Name */
             name: string;
+            /**
+             * Positioncount
+             * @default 0
+             */
+            positionCount: number;
             /** Shareofvoice */
             shareOfVoice?: string | null;
         };
@@ -3150,8 +3164,13 @@ export interface components {
          *     instead, on the three dimensions that genuinely have both sides.
          *
          *     Null sub-scores mean the scan produced no comparison for this competitor.
+         *
+         *     `average_position` / `position_count` are reported, not scored — see
+         *     `CompetitorScoreOut`. Null when never named on an awareness prompt.
          */
         ReportCompetitorOut: {
+            /** Averageposition */
+            averagePosition?: string | null;
             /** Citationstrength */
             citationStrength?: string | null;
             /** Cocitationmentions */
@@ -3169,6 +3188,11 @@ export interface components {
             mentionRate?: string | null;
             /** Name */
             name: string;
+            /**
+             * Positioncount
+             * @default 0
+             */
+            positionCount: number;
             /** Rank */
             rank: number;
             /** Score */
@@ -3464,6 +3488,8 @@ export interface components {
         ScanTrigger: "manual" | "scheduled" | "bulk";
         /** ScoreDetailOut */
         ScoreDetailOut: {
+            /** Averageposition */
+            averagePosition?: string | null;
             /** Citationstrength */
             citationStrength?: string | null;
             /** Competitors */
@@ -3491,6 +3517,11 @@ export interface components {
             inputsDigest?: string | null;
             /** Mentionrate */
             mentionRate?: string | null;
+            /**
+             * Positioncount
+             * @default 0
+             */
+            positionCount: number;
             /**
              * Previousformulaversions
              * @default []

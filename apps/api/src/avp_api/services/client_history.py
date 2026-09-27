@@ -223,6 +223,8 @@ async def build_history(
                         mention_rate=c.mention_rate,
                         share_of_voice=c.share_of_voice,
                         citation_strength=c.citation_strength,
+                        average_position=c.average_position,
+                        position_count=c.position_count,
                     )
                     for c in comparisons
                 ],

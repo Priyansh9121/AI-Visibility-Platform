@@ -13,6 +13,7 @@ import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { BEAT_SEQUENCE } from '@avp/design-system';
 import { ReportView } from './ReportView';
+import type { Report } from '@avp/shared-types';
 import { deriveNarrative } from '@/lib/report/derive';
 import {
   failedAuditReport,
@@ -189,6 +190,20 @@ describe('degraded data renders as degraded, never as bad', () => {
     expect(html).toContain('no external authority source');
     expect(html).toContain('cannot rise above about a point for any site');
     expect(html).not.toContain('NO_AUTHORITY_DATA');
+  });
+
+  it('shows average position beside the rivals, not named for a brand with none, never 0', () => {
+    // v4. The Help Scout fixture predates the field, so every row is "not
+    // named" — which is exactly the cell that must never read as 0.
+    const html = render(helpscoutReport);
+    expect(html).toContain('Average position');
+    expect(html).toContain('Not named');
+    expect(html).toContain('does not enter the score');
+    const withPositions = {
+      ...helpscoutReport,
+      score: { ...helpscoutReport.score, averagePosition: '2.40', positionCount: 9 },
+    } as unknown as Report;
+    expect(render(withPositions)).toContain('2.4 across 9 answers');
   });
 
   it('says what Citation Strength is measured from, limitation included', () => {

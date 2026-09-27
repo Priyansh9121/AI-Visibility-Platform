@@ -1503,6 +1503,18 @@
       "CompetitorScoreOut": {
         "description": "Per-competitor figures for the three measurable dimensions.\n\n**There is deliberately no `composite`.** Sentiment is classified toward the\nsubject only (Epic 4.3) and Technical Foundation arrives in Epic 6, so 25%\nof the weight has no per-competitor input. A composite computed over a\ndifferent weight basis would not be comparable to the subject's, which is\nthe entire purpose of a comparison.",
         "properties": {
+          "averagePosition": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Averageposition"
+          },
           "citationStrength": {
             "anyOf": [
               {
@@ -1527,6 +1539,11 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "positionCount": {
+            "default": 0,
+            "title": "Positioncount",
+            "type": "integer"
           },
           "shareOfVoice": {
             "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
@@ -2361,6 +2378,18 @@
       "HistoryCompetitorOut": {
         "description": "One rival's comparable figures for one scan.\n\nNo composite, for the reason `ReportCompetitorOut` gives at length:\nsentiment is classified toward the subject only and technical foundation is\nthe subject's own site, so 25% of the weight has no per-competitor input and\na rival \"composite\" would not be comparable to the subject's.",
         "properties": {
+          "averagePosition": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Averageposition"
+          },
           "citationStrength": {
             "anyOf": [
               {
@@ -2392,6 +2421,11 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "positionCount": {
+            "default": 0,
+            "title": "Positioncount",
+            "type": "integer"
           },
           "shareOfVoice": {
             "anyOf": [
@@ -3455,8 +3489,20 @@
         "type": "object"
       },
       "ReportCompetitorOut": {
-        "description": "A detected competitor plus its comparable sub-scores.\n\n**No composite, deliberately.** Sentiment is classified toward the subject\nonly and Technical Foundation is the subject's own site, so 25% of the\nweight has no per-competitor input. A \"competitor composite\" over the\nremaining 75% would not be comparable to the subject's \u2014 it would read as a\ncompetitor scoring lower than they do. The report compares per-dimension\ninstead, on the three dimensions that genuinely have both sides.\n\nNull sub-scores mean the scan produced no comparison for this competitor.",
+        "description": "A detected competitor plus its comparable sub-scores.\n\n**No composite, deliberately.** Sentiment is classified toward the subject\nonly and Technical Foundation is the subject's own site, so 25% of the\nweight has no per-competitor input. A \"competitor composite\" over the\nremaining 75% would not be comparable to the subject's \u2014 it would read as a\ncompetitor scoring lower than they do. The report compares per-dimension\ninstead, on the three dimensions that genuinely have both sides.\n\nNull sub-scores mean the scan produced no comparison for this competitor.\n\n`average_position` / `position_count` are reported, not scored \u2014 see\n`CompetitorScoreOut`. Null when never named on an awareness prompt.",
         "properties": {
+          "averagePosition": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Averageposition"
+          },
           "citationStrength": {
             "anyOf": [
               {
@@ -3514,6 +3560,11 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "positionCount": {
+            "default": 0,
+            "title": "Positioncount",
+            "type": "integer"
           },
           "rank": {
             "title": "Rank",
@@ -4274,6 +4325,18 @@
       },
       "ScoreDetailOut": {
         "properties": {
+          "averagePosition": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Averageposition"
+          },
           "citationStrength": {
             "anyOf": [
               {
@@ -4364,6 +4427,11 @@
               }
             ],
             "title": "Mentionrate"
+          },
+          "positionCount": {
+            "default": 0,
+            "title": "Positioncount",
+            "type": "integer"
           },
           "previousFormulaVersions": {
             "default": [],

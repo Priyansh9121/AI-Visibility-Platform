@@ -104,6 +104,15 @@ async def load_result_facts(session: AsyncSession, scan_id: str) -> list[ResultF
         citations = tuple(
             sorted((c.source_domain, c.cites_subject) for c in row.citations)
         )
+        # Where each brand appeared — for `average_position`, reported and
+        # never scored, so deliberately outside the digest.
+        brand_positions = tuple(
+            sorted(
+                (m.entity_name, m.position)
+                for m in row.brand_mentions
+                if m.position is not None
+            )
+        )
         facts.append(
             ResultFacts(
                 result_id=row.id,
@@ -115,6 +124,8 @@ async def load_result_facts(session: AsyncSession, scan_id: str) -> list[ResultF
                 sentiment=row.sentiment,
                 brands=brands,
                 citations=citations,
+                position=row.position,
+                brand_positions=brand_positions,
             )
         )
     return facts
