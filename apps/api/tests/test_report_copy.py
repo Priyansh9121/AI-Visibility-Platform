@@ -42,6 +42,7 @@ def _python_side() -> dict[str, Any]:
             key: {"title": title, "detail": detail, "effort": effort}
             for key, (title, detail, effort) in narrative.FIX_FOR_DIMENSION.items()
         },
+        "positionCopy": narrative.POSITION_COPY,
     }
 
 
@@ -76,3 +77,13 @@ def test_citation_strength_copy_says_what_the_proxy_cannot_do() -> None:
     assert "including answers to questions that named the brand" not in note
     for text in (note, narrative.EXCLUSION_DETAIL["NO_AUTHORITY_DATA"]):
         assert "brands in a scanned market" in text
+
+
+def test_average_position_is_never_rendered_as_zero() -> None:
+    """A brand never named on an unprompted question has no position."""
+    assert narrative.position_cell(None, 0) == "Not named"
+    assert narrative.position_cell("0", 0) == "Not named"
+    assert not any(ch.isdigit() for ch in narrative.position_cell(None, 0))
+    assert narrative.position_cell("2.40", 9) == "2.4 across 9 answers"
+    assert narrative.position_cell("1.00", 1) == "1.0 across 1 answer"
+    assert "does not enter the score" in narrative.POSITION_COPY["note"]

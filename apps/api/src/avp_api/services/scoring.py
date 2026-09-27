@@ -210,6 +210,14 @@ class ResultFacts:
     brands: tuple[tuple[str, bool], ...] = ()
     # Distinct cited domains and whether each cites the subject.
     citations: tuple[tuple[str, bool], ...] = ()
+    # WHERE in the answer the brands appeared — measured, not scored (v4).
+    # `position` is the subject's 1-based ordinal among the brands named
+    # (EngineResult.position; None when absent); `brand_positions` is the same
+    # per named brand (BrandMention.position). Neither is in the inputs
+    # digest, because neither moves a score: `average_position` reports them
+    # the way the technical audit reports Core Web Vitals — shown, unweighted.
+    position: int | None = None
+    brand_positions: tuple[tuple[str, int], ...] = ()
 
     @property
     def answered(self) -> bool:
@@ -251,6 +259,12 @@ class CompetitorComparison:
     # means one thing (v2.1). Since v3 it is a number whenever the subject's
     # is — the rival's authority sum against the same best-in-scan.
     citation_strength: Decimal | None
+    # Mean ordinal among the brands named, over awareness answers that named
+    # this rival, and how many answers that is. None / 0 when never named on
+    # an awareness prompt — never 0.0, which would read as "first". Reported,
+    # not scored: see `average_position`.
+    average_position: Decimal | None = None
+    position_count: int = 0
 
 
 @dataclass(slots=True)
@@ -265,6 +279,11 @@ class ScoreResult:
     inputs_digest: str = ""
     formula_version: str = FORMULA_VERSION
     competitors: list[CompetitorComparison] = field(default_factory=list)
+    # Measured, not scored — the subject's `average_position` and the count
+    # it is averaged over. Not a sub-score, not in `sub_scores`, not in the
+    # weights, not on the Score row: derived on read like the comparison.
+    average_position: Decimal | None = None
+    position_count: int = 0
 
     def value(self, dimension: Dimension) -> Decimal | None:
         return self.sub_scores[dimension].value
@@ -583,6 +602,61 @@ def citation_strength(
     return _guard(Dimension.CITATION_STRENGTH, subject / best * HUNDRED), flags
 
 
+def average_position(
+    results: list[ResultFacts], *, brand: str | None = None
+) -> tuple[Decimal | None, int]:
+    """Mean position of a brand across the answers that named it — measured, NOT scored.
+
+    **What it is.** For the subject (`brand=None`): `EngineResult.position`,
+    the 1-based ordinal of the subject among the brands the answer named,
+    averaged over answered results where `mentioned` is true. For a rival:
+    `BrandMention.position` for that name, averaged over the results that
+    named it. Returned with the count it is averaged over, because "2.4" and
+    "2.4 across 9 answers" are different claims and the report shows the
+    second. Rounded half-up to 2dp, Decimal, like everything else here.
+
+    **A brand never named has NO average position** — None and a count of 0.
+    Never 0, which is a better position than first; never a large number,
+    which is a position it did not hold. The report renders "not named".
+
+    **Which answers.** The caller passes the population, and `compute_score`
+    passes `awareness_only(answered)`, for the reason section 1 of the v4
+    brief gives about co-occurrence and this dimension's own sharper form of
+    it: a question that names the brand puts the brand at position 1 almost
+    by construction. Measured before this was written: on the stored scans,
+    694 of 931 subject mentions are at position 1 overall.
+
+    **Why it is not in the composite.** The Core Web Vitals precedent
+    (`technical_audit.py`): a measurement that varies between runs is stored
+    and shown, and it moves no score. Measured on the re-run pairs in
+    `avp_dev` before writing this: the subject's awareness average moved
+    1.23 → 1.36 across three plausible.io runs and 1.08 → 1.12 across two
+    notion.so runs — stable, at position one — while rivals on 9 to 22
+    answers moved by up to 0.6 of a position (Airtable 3.17 → 2.56, PostHog
+    3.31 → 3.89, Slite 2.85 → 2.40), and a rival named three times appeared
+    at 5.00 in one run and not at all in the next. A mean over a handful of
+    answers moves a lot between runs; whether to weight it is a decision for
+    the founder, not for the pass that added the figure. It is deliberately
+    absent from `compute_inputs_digest`, `Dimension`, `WEIGHTS` and the
+    Score row, so nothing can mistake it for a sub-score.
+    """
+    if brand is None:
+        positions = [
+            r.position for r in results if r.answered and r.mentioned and r.position is not None
+        ]
+    else:
+        positions = [
+            position
+            for r in results if r.answered
+            for name, position in r.brand_positions
+            if name == brand
+        ]
+    if not positions:
+        return None, 0
+    mean = sum((Decimal(p) for p in sorted(positions)), Decimal("0")) / Decimal(len(positions))
+    return _round2(mean), len(positions)
+
+
 def sentiment_score(results: list[ResultFacts]) -> Decimal | None:
     """Mean of stored sentiment labels across results that named the subject.
 
@@ -665,10 +739,13 @@ def compare_competitors(
             1 for r in aware
             if any(name == competitor.name and not is_subject for name, is_subject in r.brands)
         )
+        rival_position, rival_position_count = average_position(aware, brand=competitor.name)
         out.append(
             CompetitorComparison(
                 competitor_id=competitor.competitor_id,
                 name=competitor.name,
+                average_position=rival_position,
+                position_count=rival_position_count,
                 mention_rate=_round2(
                     Decimal(answered_with) / Decimal(len(aware)) * HUNDRED
                     if aware else Decimal("0")
@@ -951,6 +1028,7 @@ def compute_score(
         for d in Dimension
     }
 
+    subject_position, subject_position_count = average_position(aware)
     return ScoreResult(
         status="scored",
         composite=_round2(composite),
@@ -960,6 +1038,8 @@ def compute_score(
         degradation_flags=sorted(set(flags)),
         reason_code=None,
         inputs_digest=digest,
+        average_position=subject_position,
+        position_count=subject_position_count,
         competitors=compare_competitors(
             results,
             competitors,

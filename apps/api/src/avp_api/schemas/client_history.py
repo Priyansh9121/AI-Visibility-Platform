@@ -44,6 +44,9 @@ class HistoryCompetitorOut(ApiModel):
     mention_rate: Decimal | None = None
     share_of_voice: Decimal | None = None
     citation_strength: Decimal | None = None
+    # Reported, not scored — `CompetitorScoreOut` has the account.
+    average_position: Decimal | None = None
+    position_count: int = 0
 
 
 class HistorySentimentOut(ApiModel):

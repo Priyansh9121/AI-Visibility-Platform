@@ -149,6 +149,35 @@ DIMENSION_NOTE: dict[str, str] = {
     ),
 }
 
+# Average position — reported, not scored (v4). `strings.ts`'s `POSITION_COPY`,
+# word for word. `note` is the one line the report prints beside the figure;
+# `not_named` is the cell for a brand never named on an unprompted question,
+# which is NEVER rendered as 0 (ahead of first) or as a large number (a
+# position it did not hold).
+POSITION_COPY: dict[str, str] = {
+    "heading": "Average position",
+    "not_named": "Not named",
+    "note": (
+        "Average position is where the brand appeared among the brands an answer "
+        "named, averaged over unprompted answers that named it, with the number of "
+        "answers that is. It is shown for comparison and does not enter the score: "
+        "a mean over a handful of answers moves a lot between runs — on re-runs of "
+        "the same scan, rivals named in under twenty-five answers moved by up to "
+        "six-tenths of a position — so it is a figure to read beside the score, not "
+        "part of it."
+    ),
+}
+
+
+def position_cell(average: Any, count: Any) -> str:
+    """`2.4 across 9 answers`, or the not-named cell — the same on both sides."""
+    parsed = num(average)
+    n = int(count or 0)
+    if parsed is None or n == 0:
+        return POSITION_COPY["not_named"]
+    return f"{parsed:.1f} across {n} {'answer' if n == 1 else 'answers'}"
+
+
 # Why a number is lower or rougher than it would otherwise be — `strings.ts`'s
 # `DEGRADATION_FLAG`, word for word. Lived in `report_pdf.py` until 2026-09-27
 # with two codes missing (NO_AWARENESS_POPULATION, NO_SENTIMENT_POPULATION), so

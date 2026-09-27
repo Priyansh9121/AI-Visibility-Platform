@@ -71,5 +71,10 @@
       "detail": "Structured data, crawlability and freshness are the inputs this dimension measures, and each is a concrete change rather than a judgement call.",
       "effort": "M"
     }
+  },
+  "positionCopy": {
+    "heading": "Average position",
+    "not_named": "Not named",
+    "note": "Average position is where the brand appeared among the brands an answer named, averaged over unprompted answers that named it, with the number of answers that is. It is shown for comparison and does not enter the score: a mean over a handful of answers moves a lot between runs — on re-runs of the same scan, rivals named in under twenty-five answers moved by up to six-tenths of a position — so it is a figure to read beside the score, not part of it."
   }
 }

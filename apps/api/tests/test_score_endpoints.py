@@ -132,6 +132,24 @@ class TestComputeScore:
         assert body["excludedDimensions"]["citation_strength"] == "NO_AUTHORITY_DATA"
         assert all(c["citationStrength"] is None for c in body["competitors"])
 
+    async def test_average_position_is_reported_beside_the_score_and_not_in_it(
+        self, client: AsyncClient, stub_engines
+    ) -> None:  # noqa: ANN001
+        """v4 section 3. The stub answer names Zendesk first and Help Scout second."""
+        await _sign_up(client)
+        sid = await _scan(client, stub_engines)
+        body = (await client.post(f"{BASE}/scans/{sid}/score")).json()
+        assert body["averagePosition"] is not None
+        assert isinstance(body["averagePosition"], str)  # a decimal, as strings
+        assert body["positionCount"] > 0
+        # Not a dimension: no weight, no sub-score, not excluded either.
+        assert "average_position" not in body["weights"]
+        assert "average_position" not in body["excludedDimensions"]
+        # And the same figures come back on the read path, derived on read.
+        again = (await client.get(f"{BASE}/scans/{sid}/score")).json()
+        assert again["averagePosition"] == body["averagePosition"]
+        assert again["positionCount"] == body["positionCount"]
+
     async def test_technical_foundation_excluded_with_its_own_reason(
         self, client: AsyncClient, stub_engines
     ) -> None:  # noqa: ANN001

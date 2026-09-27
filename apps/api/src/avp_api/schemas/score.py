@@ -35,6 +35,13 @@ class CompetitorScoreOut(ApiModel):
     # measured on a stand-in the subject is not scored on. Rendered as a dash,
     # never a zero.
     citation_strength: Decimal | None = None
+    # Mean ordinal among the brands named, over awareness answers that named
+    # this rival, with the count it is averaged over. **Reported, not scored**
+    # — it enters no composite, on either side of the table. Null when the
+    # rival was never named on an awareness prompt: never 0, which would read
+    # as ahead of first.
+    average_position: Decimal | None = None
+    position_count: int = 0
 
 
 class ScoreOut(ApiModel):
@@ -80,3 +87,12 @@ class ScoreOut(ApiModel):
 
 class ScoreDetailOut(ScoreOut):
     competitors: list[CompetitorScoreOut] = Field(default_factory=list)
+    # The subject's mean position among the brands named, over awareness
+    # answers that named it, with the count. **Measured, not scored**: not a
+    # sub-score, not in `weights`, not on the stored row — derived on read
+    # like `competitors`, which is why it is on the detail and not on the
+    # list. Null when the subject was never named on an awareness prompt.
+    # The precedent is Core Web Vitals in the technical audit: a noisy
+    # measurement is shown and moves no score.
+    average_position: Decimal | None = None
+    position_count: int = 0

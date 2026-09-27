@@ -17694,3 +17694,93 @@ curated-and-competitor stays curated, digest moves when a domain in the scan
 changes tier and not when one outside it does), ruff clean, mypy **48**
 under 50 via `assert_count.py`. Web **883/883** (+1). Both typechecks clean.
 Exit codes from files.
+
+# Average position — section 3 of three: measured on awareness answers, reported beside the score on both sides, and kept out of the composite on a measured spread
+
+**2026-09-27.** Third checkpoint. No score changes here; `v4` is unchanged.
+
+## What was found before writing
+
+- **The facts were already there and consistent.** 931 `EngineResult`
+  rows are `mentioned`, all 931 carry a `position`; 3,369 `BrandMention`
+  rows, all with a position; and on every mentioned result the subject's
+  `EngineResult.position` equals its own `BrandMention.position` (694 at 1,
+  165 at 2, 43 at 3, 17 at 4, 9 at 5, 3 at 6). Nothing read them into a
+  figure.
+- **The run-to-run spread, measured on the re-run pairs before the copy
+  was written.** Awareness answers only, answered results, per brand:
+
+  | client | brand | run 1 | run 2 | run 3 | answers |
+  |---|---|---|---|---|---|
+  | plausible.io | Plausible Analytics (subject) | 1.28 | 1.36 | 1.23 | 36 / 36 / 31 |
+  | plausible.io | Fathom Analytics | 2.40 | 2.41 | 2.20 | 20 / 17 / 15 |
+  | plausible.io | Matomo | 2.65 | 2.65 | 2.91 | 23 / 31 / 22 |
+  | plausible.io | PostHog | 3.64 | 3.89 | 3.31 | 14 / 18 / 13 |
+  | plausible.io | Simple Analytics | 3.00 | 2.74 | 2.84 | 23 / 27 / 19 |
+  | plausible.io | Seline | 5.00 | — | — | 3 / 0 / 0 |
+  | notion.so | Notion (subject) | 1.08 | 1.12 | | 36 / 34 |
+  | notion.so | Airtable | 3.17 | 2.56 | | 12 / 9 |
+  | notion.so | ClickUp | 2.77 | 2.40 | | 22 / 15 |
+  | notion.so | Coda | 2.50 | 2.47 | | 24 / 19 |
+  | notion.so | Slite | 2.85 | 2.40 | | 13 / 10 |
+
+  **The subject is stable** — a range of 0.13 and 0.04 of a position, at
+  position one, on 31–36 answers. **Rivals are not**: on 9–22 answers they
+  move by up to 0.61 (Airtable), 0.58 (PostHog), 0.45 (Slite), and a rival
+  named three times appeared at 5.00 in one run and not at all in the next
+  two. That is the number the copy cites — "rivals named in under
+  twenty-five answers moved by up to six-tenths of a position" — and the
+  reason the figure stays out of the composite in this pass. Stable for the
+  subject, said so; still out, because scoring it is a weights decision for
+  the founder and the rival column is the one that moves.
+
+## Built
+
+**`scoring.average_position(results, *, brand=None)`** — mean 1-based
+ordinal with the count it is averaged over, Decimal, 2dp. Subject from
+`ResultFacts.position` over answered results where `mentioned`; a rival from
+the new `ResultFacts.brand_positions` for its name. `(None, 0)` when never
+named — never 0, never a large number. `compute_score` calls it on
+`awareness_only(answered)` for the subject and `compare_competitors` does
+the same per rival; both carry the pair on `ScoreResult` /
+`CompetitorComparison`. **Deliberately outside** `compute_inputs_digest`,
+`Dimension`, `WEIGHTS` and the Score row, and a test proves a changed
+position moves neither the composite, nor a sub-score, nor the digest.
+
+**Derived on read, not stored.** The comparison already is, and for the
+same reason: a pure function of rows the database holds, whose second copy
+could only fall out of step. So the fields are on `ScoreDetailOut` and
+`CompetitorScoreOut` (and their report and history mirrors), set by the
+route and the report from `computed`, and not on `ScoreOut`'s list — no
+migration, and nothing on the row that could be mistaken for a sub-score.
+
+**Report, both sides.** The rivals table gains an "Average position"
+column — `2.4 across 9 answers`, or `Not named` — from `positionCell` /
+`position_cell`, one formatter per side producing the same string; the PDF
+table now leads with the subject's own row, as the screen's does, so the
+column has the comparison it exists for. One line under the table on both
+sides says the figure is shown for comparison and does not enter the score,
+with the measured reason. `POSITION_COPY` is the sixth table in
+`report-copy.json`, regenerated from the TypeScript side.
+
+**Contract.** `scripts/export_openapi.py` then `pnpm generate`: 69 lines in
+`openapi.json`, 31 in `api.gen.ts`, both regenerated a second time after
+staging to confirm nothing further moves. `api-contracts.md`'s
+`ScoreDetailOut` example is a `v4` score carrying the fields, and a
+paragraph states what they are, what null means, and why they are not
+scored.
+
+## Verified
+
+API **1429/1429** (+10: seven unit tests — mean and count on a hand-built
+fixture, never-named is None and never 0, a rival from brand positions,
+unanswered results excluded, awareness only in the composite with a
+brand-named position-1 answer ignored, no score and no digest movement,
+subject never named on awareness reads None; one endpoint test that the
+figure is on the detail as a decimal string, absent from `weights` and
+`excludedDimensions`, and identical on the read path; two copy tests),
+ruff clean, mypy **47** — one fewer than before, from typing the route's
+`_detail` — under 50 via `assert_count.py`. Web **888/888** (+5), typecheck
+clean after one cast in a test. shared-types **53**, typecheck clean, the
+generated contract current. design-system **648/648**, typecheck clean.
+Every exit code read from a file; every count through `assert_count.py`.

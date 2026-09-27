@@ -15,6 +15,7 @@ from ..errors import NotFound
 from ..models import Scan, Score
 from ..schemas.score import CompetitorScoreOut, ScoreDetailOut, ScoreOut
 from ..services import scoring_runner
+from ..services.scoring import ScoreResult
 
 router = APIRouter(tags=["scores"])
 
@@ -32,17 +33,22 @@ async def _load_scan(db: Any, scan_id: str, agency_id: str) -> Scan:
 
 
 def _detail(
-    row: Score, competitors: list, previous_versions: list[str] | None = None
-) -> ScoreDetailOut:  # noqa: ANN001
+    row: Score, computed: ScoreResult, previous_versions: list[str] | None = None
+) -> ScoreDetailOut:
+    """The stored row plus what is derived on read: the comparison and the
+    subject's average position, both pure functions of persisted rows."""
     out = ScoreDetailOut.model_validate(row)
     out.previous_formula_versions = previous_versions or []
+    out.average_position = computed.average_position
+    out.position_count = computed.position_count
     out.competitors = [
         CompetitorScoreOut(
             competitor_id=c.competitor_id, name=c.name,
             mention_rate=c.mention_rate, share_of_voice=c.share_of_voice,
             citation_strength=c.citation_strength,
+            average_position=c.average_position, position_count=c.position_count,
         )
-        for c in competitors
+        for c in computed.competitors
     ]
     return out
 
@@ -69,11 +75,11 @@ async def compute_scan_score(
     before/after reporting depends on.
     """
     scan = await _load_scan(db, scan_id, principal.agency_id)
-    row, _computed, competitors = await scoring_runner.score_scan(db, scan)
+    row, computed, _competitors = await scoring_runner.score_scan(db, scan)
     await db.commit()
     await db.refresh(row)
     return _detail(
-        row, competitors,
+        row, computed,
         await scoring_runner.prior_formula_versions(db, scan.id, row.formula_version),
     )
 
@@ -94,9 +100,9 @@ async def get_scan_score(
     row = await scoring_runner.latest_score(db, scan.id)
     if row is None:
         raise NotFound(detail="This scan has not been scored yet.")
-    _, _computed, competitors = await scoring_runner.score_scan(db, scan, persist=False)
+    _, computed, _competitors = await scoring_runner.score_scan(db, scan, persist=False)
     return _detail(
-        row, competitors,
+        row, computed,
         await scoring_runner.prior_formula_versions(db, scan.id, row.formula_version),
     )
 

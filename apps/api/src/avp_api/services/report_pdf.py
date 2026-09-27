@@ -299,19 +299,40 @@ def _proof_beat(doc: PdfDocument, data: dict[str, Any], subject_name: str) -> No
             grey=True,
             space_after=2,
         )
+        subject_score = data.get("score") or {}
         doc.table(
-            ["Brand", "Mention rate", "Share of voice", "Citation strength"],
             [
-                [
-                    competitor["name"],
-                    _decimal(competitor.get("mentionRate")),
-                    _decimal(competitor.get("shareOfVoice")),
-                    _decimal(competitor.get("citationStrength")),
-                ]
-                for competitor in competitor_set["competitors"]
+                "Brand", "Mention rate", "Share of voice", "Citation strength",
+                narrative.POSITION_COPY["heading"],
             ],
-            widths=[200, 95, 95, 93],
+            [
+                # The subject's own row first, so the position column has the
+                # comparison it exists for — the screen's table does the same.
+                [
+                    subject_name,
+                    _decimal(subject_score.get("mentionRate")),
+                    _decimal(subject_score.get("shareOfVoice")),
+                    _decimal(subject_score.get("citationStrength")),
+                    narrative.position_cell(
+                        subject_score.get("averagePosition"), subject_score.get("positionCount")
+                    ),
+                ],
+                *[
+                    [
+                        competitor["name"],
+                        _decimal(competitor.get("mentionRate")),
+                        _decimal(competitor.get("shareOfVoice")),
+                        _decimal(competitor.get("citationStrength")),
+                        narrative.position_cell(
+                            competitor.get("averagePosition"), competitor.get("positionCount")
+                        ),
+                    ]
+                    for competitor in competitor_set["competitors"]
+                ],
+            ],
+            widths=[135, 72, 78, 82, 116],
         )
+        doc.text(narrative.POSITION_COPY["note"], size=8.5, leading=12, grey=True)
         doc.text(
             "Compared per dimension rather than on a composite: sentiment is classified "
             "toward the subject only and technical foundation is the subject's own site, "

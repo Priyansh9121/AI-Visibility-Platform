@@ -1381,7 +1381,7 @@ reproducible.
   "mentionRate": "83.33", "shareOfVoice": "41.18",
   "citationStrength": "60.00", "sentiment": "75.00",
   "technicalFoundation": null,
-  "formulaVersion": "v3",
+  "formulaVersion": "v4",
   "weights": {
     "citation_strength": "22.22", "mention_rate": "33.33",
     "sentiment": "16.67", "share_of_voice": "27.78"
@@ -1389,18 +1389,34 @@ reproducible.
   "excludedDimensions": {
     "technical_foundation": "NOT_YET_MEASURED"
   },
+  "averagePosition": "1.28", "positionCount": 36,
   "degradationFlags": ["TECHNICAL_FOUNDATION_NOT_MEASURED"],
   "reasonCode": null,
   "inputsDigest": "1f3a422c367d9c3f...",
   "competitors": [
     { "competitorId": "comp_01J...", "name": "Zendesk",
-      "mentionRate": "100.00", "shareOfVoice": "35.29", "citationStrength": "100.00" }
+      "mentionRate": "100.00", "shareOfVoice": "35.29", "citationStrength": "100.00",
+      "averagePosition": "2.65", "positionCount": 23 }
   ]
 }
 ```
 
 **All score values are string-encoded decimals.** A JSON number is an IEEE
 double, which is precisely what scoring-spec.md rule 3 forbids.
+
+**`averagePosition` / `positionCount` are reported, not scored** (v4,
+2026-09-27). The mean 1-based ordinal of the brand among the brands an answer
+named, over **awareness** answers that named it, and the count it is
+averaged over — the subject's from `EngineResult.position`, each rival's
+from `BrandMention.position`. Not a dimension: no weight, no sub-score, not
+in `inputsDigest`, not on the stored row; derived on read like
+`competitors`, so it is on `ScoreDetailOut` and not on the `ScoreOut` list.
+**`null` with count `0` when the brand was never named on an awareness
+prompt** — never `0`, which would read as ahead of first. The precedent is
+Core Web Vitals in the technical audit: a measurement that varies between
+runs is shown and moves no score. Measured on the `avp_dev` re-run pairs:
+the subject moved 0.04–0.13 of a position; rivals on 9–22 answers moved by
+up to 0.6.
 
 **`weights` are the EFFECTIVE weights after exclusions**, not the §6 table.
 They always sum to 100, so a stored breakdown re-sums against its own weights.
@@ -1589,7 +1605,8 @@ place that `tests/test_facts_only.py` can assert over.
     "status": "ok", "detectionConfidence": "0.800",
     "competitors": [ { "name": "Zendesk", "domain": "zendesk.com", "rank": 1,
                        "mentionRate": "83.33", "shareOfVoice": "25.00",
-                       "citationStrength": "3.70" } ]
+                       "citationStrength": "3.70",
+                       "averagePosition": "2.65", "positionCount": 23 } ]
   },
   "proof": {
     "promptsRun": 3, "engineResults": 6, "answeredResults": 6,
