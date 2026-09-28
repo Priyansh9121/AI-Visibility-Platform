@@ -42,6 +42,19 @@ committed scan, then gets its 402. Counting without the lock — even inside one
 transaction — is a check-then-act at READ COMMITTED, which is exactly the
 shape Epic 9.6 found and closed for the per-client case.
 
+THE PLATFORM OPERATOR IS EXEMPT
+-------------------------------
+`Settings.scan_allowance_exempt_emails` names the sign-ins the gate does not
+apply to — the founder's own, by default — so the person who runs the
+platform can scan without paying the platform. Matched on the requesting
+USER's email, lower-cased, whichever way they signed in (password or
+Google: both land on `User.email`). Per user, not per agency: a teammate
+seated in the same agency is gated like anyone else. An exempt user's
+billing response reads `scan_limit: null`, the same shape an ungated
+deployment has, so nothing on screen shows a count that does not apply.
+Configuration, not a hard-coded branch: the default is one address, and
+`SCAN_ALLOWANCE_EXEMPT_EMAILS` replaces it.
+
 FAILED-OPEN, DELIBERATELY, WHEN BILLING IS NOT CONFIGURED
 ---------------------------------------------------------
 With `STRIPE_SECRET_KEY` or `STRIPE_PRICE_ID` unset — local development and
@@ -96,6 +109,13 @@ CODE_MONTHLY = "SCAN_LIMIT_MONTHLY"
 def gate_enabled(settings: Settings) -> bool:
     """On when billing is configured; off — deliberately — when it is not."""
     return bool(settings.stripe_secret_key and settings.stripe_price_id)
+
+
+def is_exempt(settings: Settings, email: str | None) -> bool:
+    """Whether this sign-in is a platform operator the gate does not apply to."""
+    if not email:
+        return False
+    return email.strip().lower() in settings.scan_allowance_exempt_emails
 
 
 def period_bounds(now: datetime) -> tuple[datetime, datetime]:
@@ -156,16 +176,18 @@ async def allowance(
     *,
     now: datetime | None = None,
     exclude_scan_id: str | None = None,
+    user_email: str | None = None,
 ) -> Allowance:
-    """The agency's allowance as of `now`. Pure read; takes no lock.
+    """The agency's allowance as of `now`, for `user_email`. Pure read; no lock.
 
     `exclude_scan_id` is the open QUEUED scan a run is about to adopt rather
     than create (`get_or_create_scan` reuses it): it is the scan being started,
     not a scan already started, so it must not count against starting it.
+    `user_email` is the requesting sign-in, for the operator exemption.
     """
     now = now or datetime.now(UTC)
     paid = billing.is_active(agency)
-    if not gate_enabled(settings):
+    if not gate_enabled(settings) or is_exempt(settings, user_email):
         used = await count_scans(db, agency.id, exclude_scan_id=exclude_scan_id)
         return Allowance(scans_used=used, scan_limit=None, period_resets_at=None, is_paid=paid)
     if paid:
@@ -190,6 +212,7 @@ async def assert_can_start(
     *,
     exclude_scan_id: str | None = None,
     now: datetime | None = None,
+    user_email: str | None = None,
 ) -> Allowance:
     """Lock the agency row, count, and refuse with 402 if the allowance is spent.
 
@@ -202,7 +225,9 @@ async def assert_can_start(
     agency = (
         await db.execute(select(Agency).where(Agency.id == agency_id).with_for_update())
     ).scalar_one()
-    current = await allowance(db, agency, settings, now=now, exclude_scan_id=exclude_scan_id)
+    current = await allowance(
+        db, agency, settings, now=now, exclude_scan_id=exclude_scan_id, user_email=user_email
+    )
     if not current.exhausted:
         return current
     assert current.scan_limit is not None

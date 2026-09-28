@@ -18032,3 +18032,37 @@ scan, and re-runs moving nothing). ruff clean; mypy **47** under 50 via
 `assert_count.py`. Web **903/903** (+13), typecheck clean. shared-types
 **53**, typecheck clean, generated contract current. design-system
 **648/648**, typecheck clean. Exit codes from files.
+
+# The platform operator is exempt from the scan allowance
+
+**2026-09-28.** Asked for the same day as the gate: the founder's own
+sign-in, `priyansh.ranpura9@gmail.com` through Google, should scan without
+limit. Done as configuration rather than a hard-coded branch.
+
+## Built
+
+- **`Settings.scan_allowance_exempt_emails`**, default
+  `["priyansh.ranpura9@gmail.com"]`, overridden by
+  `SCAN_ALLOWANCE_EXEMPT_EMAILS` as a comma-separated list (empty exempts
+  nobody). A validator lower-cases and strips each entry — the same
+  normalisation `services/auth.normalise_email` applies to `User.email` —
+  so an exemption cannot fail on a capital letter. Recorded in
+  `.env.example` as not a secret.
+- **`scan_allowance.is_exempt(settings, email)`**, read by both
+  `assert_can_start` and `allowance`. The scan route passes
+  `principal.user.email`; so does the billing route, so an exempt user's
+  billing response reads `scanLimit: null` — the same shape an ungated
+  deployment has — and the web shows no count that does not apply.
+- **Per user, not per agency**, and whichever way the person signed in:
+  Google sign-in and password sign-in both land on `User.email`, and that
+  is what is matched. A teammate seated in the founder's agency is gated
+  like anyone else.
+
+## Verified
+
+Five new tests: the default names the founder and nobody else; the
+environment replaces it, lower-cased, and an empty value exempts nobody;
+matching is case-insensitive and `None` is not exempt; signed in as the
+exempt address with 45 scans already counted, the 46th starts and billing
+reads no limit; anyone else at one scan still gets the 402. Full API bar
+and CI recorded on the commit.

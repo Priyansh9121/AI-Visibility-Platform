@@ -614,7 +614,9 @@ or `STRIPE_PRICE_ID`): the gate is off there, matching checkout's
 `503 billing-not-configured`. `periodResetsAt` is the first instant of next
 month for a paid agency and null for free. The web reads all three from
 here and carries no copy of the numbers. `canceled`, `past_due`, `unpaid`
-and `paused` are free.
+and `paused` are free. **The platform operator is exempt**: sign-ins listed
+in `SCAN_ALLOWANCE_EXEMPT_EMAILS` (default: the founder's address) are not
+gated, per user, and read `scanLimit: null` here.
 
 **This endpoint never calls Stripe.** Every field is read from the `agencies`
 row that the webhook maintains. That is a deliberate property rather than an

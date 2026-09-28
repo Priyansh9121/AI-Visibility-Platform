@@ -452,3 +452,57 @@ class TestPromptReRunsAreNotScans:
         body = (await client.get(f"{BASE}/agencies/{agency_id}/billing")).json()
         assert body["scansUsedThisPeriod"] == 1
         assert await _counted(engine, agency_id) == 1
+
+
+# ---------------------------------------------------------------------------
+# the platform operator is exempt
+# ---------------------------------------------------------------------------
+
+
+class TestTheOperatorIsExempt:
+    FOUNDER = "priyansh.ranpura9@gmail.com"
+
+    def test_the_default_names_the_founder_and_nobody_else(self) -> None:
+        from avp_api.config import Settings
+
+        cfg = Settings(_env_file=None)
+        assert cfg.scan_allowance_exempt_emails == [self.FOUNDER]
+
+    def test_the_environment_replaces_the_default_lower_cased(self, monkeypatch) -> None:  # noqa: ANN001
+        from avp_api.config import Settings
+
+        monkeypatch.setenv("SCAN_ALLOWANCE_EXEMPT_EMAILS", " Ops@Example.com, second@example.com ,")
+        cfg = Settings(_env_file=None)
+        assert cfg.scan_allowance_exempt_emails == ["ops@example.com", "second@example.com"]
+        monkeypatch.setenv("SCAN_ALLOWANCE_EXEMPT_EMAILS", "")
+        assert Settings(_env_file=None).scan_allowance_exempt_emails == []
+
+    def test_matching_is_case_insensitive(self, settings, monkeypatch) -> None:  # noqa: ANN001
+        monkeypatch.setattr(settings, "scan_allowance_exempt_emails", [self.FOUNDER])
+        assert allowance.is_exempt(settings, "Priyansh.Ranpura9@Gmail.com")
+        assert not allowance.is_exempt(settings, "someone@example.com")
+        assert not allowance.is_exempt(settings, None)
+
+    async def test_the_founder_scans_past_the_free_allowance(
+        self, client: AsyncClient, billing_on, engine, settings, monkeypatch
+    ) -> None:  # noqa: ANN001
+        """Signed in as the exempt address, with the free scan long used."""
+        monkeypatch.setattr(settings, "scan_allowance_exempt_emails", [self.FOUNDER])
+        agency_id = await _sign_up(client, email=self.FOUNDER)
+        _defer(client)
+        cid = await _make_client(client, "helpscout.com")
+        await _seed_scans(engine, agency_id=agency_id, client_id=cid, n=45)
+        assert (await _start(client, cid)).status_code == 202
+        body = (await client.get(f"{BASE}/agencies/{agency_id}/billing")).json()
+        assert body["scanLimit"] is None and body["periodResetsAt"] is None
+        assert body["scansUsedThisPeriod"] == 46
+
+    async def test_anyone_else_is_still_gated(
+        self, client: AsyncClient, billing_on, engine, settings, monkeypatch
+    ) -> None:  # noqa: ANN001
+        monkeypatch.setattr(settings, "scan_allowance_exempt_emails", [self.FOUNDER])
+        agency_id = await _sign_up(client, email="someone@example.com")
+        _defer(client)
+        cid = await _make_client(client, "helpscout.com")
+        await _seed_scans(engine, agency_id=agency_id, client_id=cid, n=1)
+        assert (await _start(client, cid)).status_code == 402
