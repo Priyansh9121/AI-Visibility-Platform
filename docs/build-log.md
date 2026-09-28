@@ -18066,3 +18066,131 @@ matching is case-insensitive and `None` is not exempt; signed in as the
 exempt address with 45 scans already counted, the 46th starts and billing
 reads no limit; anyone else at one scan still gets the 402. Full API bar
 and CI recorded on the commit.
+
+# Two holes in the scan allowance: stranded scans, and an exemption on an unverified string
+
+**2026-09-28.** The gate shipped earlier the same day. Two ways it refuses
+the wrong person, both closed here.
+
+## The measurement first
+
+`avp_dev`: **27 scans across 6 agencies — 14 `partial`, 12 `succeeded`, 1
+`failed`. Zero QUEUED and zero RUNNING**, stranded or otherwise. So the
+count per agency is zero for all six, and the local database shows the
+defect not at all. That is expected rather than reassuring: local scans run
+through `InlineScanExecutor` or `scripts/verify_e2e.py`, both of which drive
+a scan to a terminal status in-process, and nothing here restarts a web
+process mid-queue. The defect is a property of the deployed executor, not of
+the data.
+
+**Production was not measured: the repository holds no credential that
+reaches it.** `apps/api/.env` points at a local 5432 server; the Render
+Postgres URL lives only in Render's own environment. The two deployed hosts
+recorded on 2026-09-22 are the API and web services, not the database. The
+count there is therefore unknown, and this entry does not guess it. What can
+be said without the data: every Render deploy restarts the API process, a
+deploy happens on every push, and this repository has pushed 5 commits today
+alone — so any scan queued in those windows was stranded by construction.
+
+## 1. A stranded QUEUED or RUNNING scan no longer holds a slot forever
+
+`COUNTED_STATUSES` counted QUEUED and RUNNING unconditionally. Counting them
+is right — it is what makes the row lock mean anything, and without it two
+requests at the cap both see room. Counting them *forever* was the bug, and
+there are two ways a scan reaches that state and stays:
+
+- **Lost executor.** The executor is a per-request `BackgroundTasks` job and
+  Render restarts on every deploy. A scan queued seconds before a restart is
+  never picked up.
+- **Detection-only scans.** Epic 3's competitor detection leaves an open
+  QUEUED row for a later run to adopt (`get_or_create_scan`), which is
+  deliberate and correct. But a free agency that ran detection on client A
+  and then started a scan on client B was counted for A's row and refused
+  `SCAN_LIMIT_FREE_USED` with no scan ever having run.
+
+Either way the one free scan was burned by a scan that produced nothing,
+which is precisely the rule the gate was built on — a failure never burns
+the allowance.
+
+**Now:** SUCCEEDED and PARTIAL count for good; QUEUED and RUNNING count only
+while `created_at` is within `IN_FLIGHT_WINDOW = timedelta(minutes=15)`.
+Fifteen minutes is three times the 300-second scan budget, the one duration
+this product commits to. Three times rather than one so a slow but live scan
+is never written off mid-flight — and the margin is real rather than
+nominal, because that budget is currently **missed**: north-star.md records
+the best measured run at 361.3s, so the window is still ~2.5x the slowest
+scan actually observed. The race protection is untouched: two requests
+contending for the last slot arrive milliseconds apart, deep inside the
+window.
+
+## Separate finding, not fixed here: QUEUED rows are never reaped
+
+`reap_stale_scans` is **RUNNING-only, and deliberately so** — its docstring
+says QUEUED means "open, nobody has claimed it", which is the state
+detect-now-scan-tomorrow depends on. It also reaps only RUNNING rows that
+hold a non-NULL expired lease, so a scan driven straight through
+`scan_runner.run_scan` (the verify scripts, `conftest.py`) is never reaped
+either. **Nothing in this system ever clears a stranded QUEUED row.** The
+reaper was left alone as the brief directed; the 15-minute window makes the
+allowance correct regardless of whether such a row is ever cleaned up, but
+the row itself still sits there, and `get_or_create_scan` will still adopt
+it however old it is. Worth its own pass.
+
+## 2. The operator exemption now requires a Google-verified identity
+
+`is_exempt` matched `User.email`, a string. **Password sign-up never
+verifies that address**: `services/auth.sign_up_agency` hashes a password
+and writes the user `ACTIVE` in one transaction, there is no confirmation
+step anywhere in the flow, and there is no `email_verified` column on
+`User` at all. So on any database where the founder's row does not already
+exist — a new environment, a restore, a deleted account — the first person
+to sign up by password with that address would have been handed unlimited
+scans at about $1.70 each. Today's production row happens to be the
+founder's, which is luck, not a control.
+
+**Now:** exempt requires the listed address **and** a non-NULL
+`User.google_sub`. That column is written only by `services/google_oauth`,
+against a token Google signed, so it is the one fact here that an outside
+party has vouched for. A password-only account on a listed address is gated
+like everyone else. The Google-link path is covered by the same condition:
+`google_sub` is unique, and it is set either by a Google-created account or
+by linking an existing account through its Google-verified email, so the
+exemption cannot be reached by anyone Google has not vouched for.
+
+**The address is out of the code.** `Settings.scan_allowance_exempt_emails`
+now defaults to `[]` — a personal address does not belong in source, and an
+empty default means a fresh deployment exempts nobody until someone decides
+otherwise. `.env.example` leaves the value empty. The live value belongs in
+`SCAN_ALLOWANCE_EXEMPT_EMAILS` on the **Render API service**; until it is
+set there, the founder is gated like any other user.
+
+`is_exempt`, `allowance` and `assert_can_start` now take the `User` row
+rather than an email string, because the question is about the account and
+not about one of its columns. Both call sites already had `principal.user`
+in hand.
+
+## Verified
+
+API **1471/1471** (+14 on this pass). New: the in-flight window clears the
+scan budget several times over; a QUEUED and a RUNNING scan 16 minutes old
+each hand their slot back and the next scan starts 202; the same two one
+minute old still hold it and the next scan gets its 402 with
+`SCAN_LIMIT_FREE_USED`; a detection-only QUEUED row built through the real
+`get_or_create_scan` and aged past the window does not block a free
+agency's first scan on a second client; a listed address with no Google link
+is not exempt as a unit and gets the 402 end to end with the billing
+response showing the real limit; an unlisted Google user is not exempt; the
+default exempts nobody. The 39/40 concurrency test still produces exactly
+one scan, unchanged.
+
+Negative control run rather than assumed: with `IN_FLIGHT_WINDOW` widened to
+ten years, exactly the three stranded-scan tests fail and the two
+inside-the-window tests pass — the new tests measure the new behaviour.
+
+ruff clean; mypy **47** under its 50 ceiling via `assert_count.py`. Web
+**903/903**, typecheck clean. design-system **648/648**, typecheck clean.
+shared-types **53**, typecheck clean. workers **13/13**. All six of CI's
+count gates run locally against their logs before the push, floors and the
+mypy ceiling alike. No schema or route docstring changed;
+`export_openapi.py` re-run and the generated contract confirmed current
+(no diff). Exit codes read from files.

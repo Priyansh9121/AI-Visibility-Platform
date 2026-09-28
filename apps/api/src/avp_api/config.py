@@ -102,13 +102,18 @@ class Settings(BaseSettings):
 
     # --- the scan allowance (2026-09-28) ------------------------------------
     # Sign-ins the one-free-then-forty-a-month gate does not apply to: the
-    # platform operator, by default, so the founder can scan without paying
-    # the platform. Matched on `User.email`, lower-cased, whichever way the
-    # person signed in. Per user, not per agency. `SCAN_ALLOWANCE_EXEMPT_EMAILS`
-    # as a comma-separated list replaces the default; an empty value exempts
-    # nobody. See services/scan_allowance.py.
+    # platform operator, so the founder can scan without paying the platform.
+    # A listed address is exempt only if that user ALSO has a linked Google
+    # identity — see services/scan_allowance.is_exempt for why a bare email
+    # is not enough. Per user, not per agency.
+    #
+    # EMPTY BY DEFAULT, deliberately. A personal address does not belong in
+    # source, and an empty default means a fresh environment — a new
+    # deployment, a restored database — exempts nobody until somebody decides
+    # it should. The live value is `SCAN_ALLOWANCE_EXEMPT_EMAILS`, a
+    # comma-separated list, set on the Render API service.
     scan_allowance_exempt_emails: Annotated[list[str], NoDecode] = Field(
-        default_factory=lambda: ["priyansh.ranpura9@gmail.com"]
+        default_factory=list
     )
 
     # --- seats -------------------------------------------------------------
