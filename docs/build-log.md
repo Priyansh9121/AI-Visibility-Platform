@@ -17875,3 +17875,53 @@ the ceiling of 50, the OpenAPI export and the generated contract confirmed
 current by a second regeneration — every count through
 `infra/ci/assert_count.py`, every exit code read from a file. CI: see the
 push.
+
+# The landing page's stale price line, and the two example scores that disagreed — section 1 of two, copy only
+
+**2026-09-28.** The live landing page was read on the morning of the 28th.
+Three defects, all copy, none behaviour.
+
+## What was found
+
+- **`HEAD` was `8782aba`, equal to `origin/main`, tree clean** apart from
+  the untracked skill-repository directories.
+- **The pricing heading said "One plan. Twenty-nine dollars a month."**
+  over a card that said $160 — six days after the repricing of 2026-09-22.
+  `PLAN_PRICE_USD` moved and this string, a second copy of the price in
+  words, did not. The existing consistency test matched `$\d+` and so could
+  not see a price spelled out.
+- **The seats bullet** read "3 seats — the same seat limit every agency
+  already gets, so this plan is not selling you the seats you have", a
+  sentence arguing with itself.
+- **Two example scores disagreed.** The worked ledger's five example
+  dimensions (34/28/11/62/90 at the §6 weights) sum to 37.7, drawn as 38;
+  the hero `ScoreMeter` at the foot of the page was hard-coded to 41, which
+  the real banding function labels "Emerging" — a different band from 38.
+
+## Changed
+
+- **Heading derived from the constant**: `One plan. $${PLAN_PRICE_USD} a
+  month.` The price is never typed a second time, in figures or words.
+- **Seats**: "3 seats per agency." from `PLAN_SEATS`.
+- **One example score.** `EXAMPLE_DIMENSIONS` is exported and the meter
+  reads `compositeScore(EXAMPLE_DIMENSIONS)` — the design system's own
+  arithmetic, 37.7 — which both the ledger and the meter round to 38 with
+  the same `Math.round`. The band label comes from `visibilityBand` inside
+  `ScoreMeter`, never from a string on the page: 38 is "Barely visible".
+- **The price-consistency test now sees words.** It asserts every `$`
+  figure on the rendered landing page is the constant, that `$29`,
+  "twenty-nine" and "twenty nine" are absent, and that no number-word from
+  a list of nineteen plausible ones sits beside "dollars". The same check
+  runs on the pricing card alone in both its signed-in and signed-out
+  renders. A second test pins the example: the composite rounds to 38, the
+  page carries `visibilityBandLabel(38)`, and neither "Emerging" nor a
+  bare 41 appears.
+
+Not changed here: every sentence about what the plan gates, which section
+2 rewrites when the gate exists.
+
+## Verified
+
+Web **890/890** (+2 tests; the seats and heading assertions moved with the
+copy), typecheck clean, count through `assert_count.py`, exit codes from
+files. Nothing outside `apps/web` was touched.

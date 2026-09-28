@@ -36,11 +36,8 @@ describe('the price itself', () => {
   it('names the seat count and ties it to the seat limit that already exists', () => {
     const out = render();
     expect(PLAN_SEATS).toBe(3);
-    expect(out).toContain('3 seats');
-    // The brief's point: say it on the card rather than leaving it implicit.
-    // And say the honest version — the plan is not granting seats the agency
-    // would otherwise lack, because every agency already starts with three.
-    expect(out).toContain('the same seat limit every agency already gets');
+    expect(out).toContain('3 seats per agency.');
+    expect(out).not.toContain('the same seat limit every agency already gets');
   });
 
   it('promises one plan and no tier above it', () => {
@@ -140,5 +137,17 @@ describe('no ad hoc styling', () => {
     const out = render({ signedIn: true, error: 'x' });
     expect(out).not.toMatch(/class="[^"]*\b(bg|text|border|max-w)-\[/);
     expect(out).not.toMatch(/class="[^"]*\b(slate|gray|zinc|blue|red|green)-\d{3}\b/);
+  });
+});
+
+describe('the price on the card is the constant and nothing else', () => {
+  it('carries no figure other than PLAN_PRICE_USD, and no price in words', () => {
+    for (const out of [render(), render({ signedIn: true })]) {
+      const prices = out.match(/\$\d[\d,]*/g) ?? [];
+      expect(new Set(prices)).toEqual(new Set([`$${PLAN_PRICE_USD}`]));
+      expect(out).not.toContain('$29');
+      expect(out.toLowerCase()).not.toContain('twenty-nine');
+      expect(out.toLowerCase()).not.toMatch(/\b(nineteen|twenty|thirty|forty|fifty|sixty|hundred)\b[^.]*\bdollars/);
+    }
   });
 });

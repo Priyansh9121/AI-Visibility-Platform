@@ -29,6 +29,16 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { compositeScore, visibilityBandLabel } from '@avp/design-system';
+import { EXAMPLE_DIMENSIONS } from './LandingView';
+import { PLAN_PRICE_USD } from './PricingCard';
+
+/** Every price a hand could plausibly type in words. Any of them beside "dollars" fails. */
+const PRICE_WORDS = [
+  'nineteen', 'twenty', 'twenty-nine', 'thirty', 'thirty-nine', 'forty', 'forty-nine', 'fifty',
+  'fifty-nine', 'sixty', 'seventy', 'seventy-nine', 'eighty', 'ninety', 'ninety-nine',
+  'one hundred', 'a hundred', 'one hundred and sixty', 'two hundred',
+];
 import { renderToStaticMarkup } from 'react-dom/server';
 import { LandingView } from './LandingView';
 
@@ -83,7 +93,7 @@ describe('the page explains the product', () => {
       'What it does not do yet',
       // Matched on the heading rather than the eyebrow: "Pricing" also appears
       // in the header nav, which is earlier in the markup by design.
-      'One plan. Twenty-nine dollars a month.',
+      `One plan. $${PLAN_PRICE_USD} a month.`,
       'Start',
     ];
     let cursor = -1;
@@ -153,18 +163,41 @@ describe('the price is published, deliberately', () => {
 
   it('says what the plan includes, seats named rather than implied', () => {
     const out = html();
-    expect(out).toContain('3 seats');
-    expect(out).toContain('the same seat limit every agency already gets');
+    expect(out).toContain('3 seats per agency.');
   });
 
   it('agrees with itself everywhere a number appears', () => {
     const out = html();
     // A page that says $160 in one place and something else in another is worse
-    // than a page with no price. Both mentions come from one constant; this
-    // asserts no third, hand-typed one crept in.
-    const prices = out.match(/\$\d+/g) ?? [];
+    // than a page with no price. Every mention comes from one constant; this
+    // asserts no hand-typed one crept in — as a figure OR in words. The pricing
+    // heading read "Twenty-nine dollars a month" above a $160 card for six
+    // days (read live 2026-09-28); the words escaped the `$\d+` match below.
+    const prices = out.match(/\$\d[\d,]*/g) ?? [];
     expect(prices.length).toBeGreaterThan(0);
-    expect(new Set(prices)).toEqual(new Set(['$160']));
+    expect(new Set(prices)).toEqual(new Set([`$${PLAN_PRICE_USD}`]));
+    expect(out).not.toContain('$29');
+    expect(out.toLowerCase()).not.toContain('twenty-nine');
+    expect(out.toLowerCase()).not.toContain('twenty nine');
+    for (const words of PRICE_WORDS) {
+      expect(out.toLowerCase(), `a price in words: "${words}"`).not.toMatch(
+        new RegExp(`\\b${words}\\b\\s+dollars`),
+      );
+    }
+  });
+
+  it('shows one example score, computed from the example ledger, banded by the real function', () => {
+    const out = html();
+    // 37.7 at one decimal; both the ledger and the meter round it to 38 for
+    // display, by the same `Math.round` the design system applies everywhere.
+    const composite = compositeScore(EXAMPLE_DIMENSIONS);
+    expect(Math.round(composite ?? NaN)).toBe(38);
+    // The meter and the ledger agree because the meter reads the ledger's
+    // arithmetic; until 2026-09-28 the meter said 41 Emerging beside a
+    // worked example that summed to 38.
+    expect(out).toContain(visibilityBandLabel(38));
+    expect(out).not.toContain('Emerging');
+    expect(out).not.toMatch(/>41</);
   });
 
   it('offers sign-up, not checkout, to a visitor with no account', () => {
