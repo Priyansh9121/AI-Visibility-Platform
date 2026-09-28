@@ -127,10 +127,15 @@ export function PricingCard({
             <Includes text="Named fixes, ordered by what they would move and what they would cost you." />
           </ul>
 
+          {/*
+            The one number on this card the API also holds: forty is
+            `PAID_SCANS_PER_MONTH` in `services/scan_allowance.py`, and the
+            app reads it from the billing response. A signed-out visitor
+            has no billing response to read, so it is stated here — the
+            only hand-typed copy of it on the web, by decision (2026-09-28).
+          */}
           <p className="max-w-measure text-ui-sm leading-prose text-text-tertiary">
-            Scan volume is not metered today. That is an absence rather than a
-            promise of unlimited use — usage limits are not built, and this card
-            will say what they are when they exist.
+            40 scans a month. Viewing, sharing and exporting reports is never limited.
           </p>
 
           {error != null && (
@@ -154,9 +159,8 @@ export function PricingCard({
               </Button>
             )}
             <p className="max-w-measure text-ui-sm text-text-tertiary">
-              Signing up is free and stays free. Nothing in the product is behind
-              this plan today — subscribing is how you pay for it once it is
-              worth paying for, not how you unlock it.
+              Signing up is free and includes one full scan and report. Subscribe to
+              keep scanning.
             </p>
           </div>
         </div>

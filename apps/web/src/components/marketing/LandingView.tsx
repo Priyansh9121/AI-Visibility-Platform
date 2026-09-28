@@ -176,8 +176,8 @@ export function LandingView({
                 the budget enforces is the one claim a slow scan cannot falsify.
               */}
               A scan usually takes under five minutes — twenty questions, put to four
-              AI answer engines, one at a time. ${PLAN_PRICE_USD}/month when you are ready to
-              pay for it.
+              AI answer engines, one at a time. Your first scan is free. ${PLAN_PRICE_USD}/month
+              after that.
             </p>
           </div>
         </PageSection>
@@ -361,7 +361,6 @@ export function LandingView({
           <ul className="flex flex-col gap-3">
             <Limit body="It measures four vendors' models today — Claude, ChatGPT, Gemini and Perplexity — and only Perplexity searches the web as it answers. Google's AI Overviews and Copilot are not measured." />
             <Limit body="White-labelling covers your agency name. Logo and colour control are not built yet." />
-            <Limit body="Scan volume is not metered or capped, in either direction. There is no usage limit to hit and no usage figure to look at." />
             <Limit body="Nothing tracks whether a fix was actually done, or re-measures what it changed. The report ends at the recommendation." />
           </ul>
         </PageSection>

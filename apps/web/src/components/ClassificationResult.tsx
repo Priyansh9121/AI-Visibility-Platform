@@ -4,6 +4,9 @@ import { useState } from 'react';
 import { Badge, Button, Card, CardBody, ErrorState, LoadingState } from '@avp/design-system';
 import type { ClientDetail } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
+import { ScanLimitNotice } from '@/components/billing/ScanLimitNotice';
+import { type ScanLimitProblem, scanLimitProblem } from '@/lib/billing/allowance';
+import { useScanAllowance } from '@/lib/billing/useScanAllowance';
 
 /**
  * The result of an intake classification.
@@ -53,6 +56,10 @@ export function ClassificationResult({
   const status = client.classificationStatus;
   const name = client.brandName ?? client.name;
   const [scan, setScan] = useState<ScanState>({ kind: 'idle' });
+  // "1 free scan" / "Free scan used" / "12 of 40 scans this month" beside the
+  // button, from the billing response; null for a member (403) or an
+  // ungated deployment, in which case nothing is shown.
+  const allowance = useScanAllowance(client.agencyId);
 
   /**
    * Start the scan — Epic 9.12, closing the second dead end Epic 9.11 named.
@@ -74,6 +81,11 @@ export function ClassificationResult({
       const started = await api.runScan(client.id);
       setScan({ kind: 'started', scanId: started.id });
     } catch (err) {
+      const limit = err instanceof ApiProblem ? scanLimitProblem(err.problem) : null;
+      if (limit) {
+        setScan({ kind: 'limited', problem: limit });
+        return;
+      }
       setScan({
         kind: 'failed',
         detail:
@@ -168,6 +180,10 @@ export function ClassificationResult({
             <ErrorState title="The scan could not be started" detail={scan.detail} />
           )}
 
+          {scan.kind === 'limited' && (
+            <ScanLimitNotice problem={scan.problem} agencyId={client.agencyId} />
+          )}
+
           {scan.kind === 'started' ? (
             /*
               Confirmation in place rather than an immediate redirect. A scan
@@ -200,7 +216,7 @@ export function ClassificationResult({
               </div>
             </div>
           ) : (
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               {status === 'classified' && (
                 <Button
                   variant="primary"
@@ -209,6 +225,11 @@ export function ClassificationResult({
                 >
                   {scan.kind === 'starting' ? 'Starting…' : 'Run a scan'}
                 </Button>
+              )}
+              {status === 'classified' && allowance != null && (
+                <span className="text-ui-sm text-text-tertiary" data-testid="scan-allowance">
+                  {allowance}
+                </span>
               )}
               <Button
                 variant={status === 'classified' ? 'secondary' : 'primary'}
@@ -231,7 +252,10 @@ type ScanState =
   | { kind: 'idle' }
   | { kind: 'starting' }
   | { kind: 'started'; scanId: string }
-  | { kind: 'failed'; detail: string };
+  | { kind: 'failed'; detail: string }
+  // The allowance said no — a 402, not a failure: a subscribe prompt, never
+  // an error state. 2026-09-28.
+  | { kind: 'limited'; problem: ScanLimitProblem };
 
 /** "a" or "an", so the sentence reads. Purely grammatical. */
 function article(industry: string | null | undefined): string {

@@ -503,10 +503,15 @@ async def test_a_new_agency_has_no_subscription_and_is_not_gated(
         "isActive": False,
         "currentPeriodEnd": None,
         "hasBillingAccount": False,
+        # The allowance — 2026-09-28. Billing is configured in this file's
+        # fixtures, so the gate is on: one free scan, none used, no reset.
+        "scansUsedThisPeriod": 0,
+        "scanLimit": 1,
+        "periodResetsAt": None,
     }
 
-    # And nothing is withheld because of it. The dashboard is the cheapest
-    # proof that no paywall was introduced by this epic.
+    # And READING is never withheld because of it — the gate is on starting a
+    # scan, not on any page. The dashboard is the cheapest proof.
     assert (await client.get(f"{BASE}/dashboard")).status_code == 200
 
 

@@ -17925,3 +17925,110 @@ Not changed here: every sentence about what the plan gates, which section
 Web **890/890** (+2 tests; the seats and heading assertions moved with the
 copy), typecheck clean, count through `assert_count.py`, exit codes from
 files. Nothing outside `apps/web` was touched.
+
+# The plan gates something: one free scan, then subscribe — section 2 of two
+
+**2026-09-28.** Until this pass the pricing card said "Nothing in the
+product is behind this plan today" and meant it. Stripe was wired to a $160
+Price that unlocked nothing. Each scan costs the platform about $1.70 in
+engine calls and 6 of the 250 SerpApi searches the Free tier allows a month
+— about 41 scans platform-wide before detection stops for everyone. The
+decision was made in the brief and is not reopened here: **free is one
+completed scan per organisation for life; the plan is forty a calendar
+month, UTC; reading is never gated.**
+
+## Built — API
+
+- **`services/scan_allowance.py`.** `FREE_SCAN_ALLOWANCE = 1`,
+  `PAID_SCANS_PER_MONTH = 40`, with the arithmetic beside the constant:
+  40 × $1.70 ≈ $68 of engine cost against $160, about 57% gross margin
+  before SerpApi; and 40 × 6 = 240 searches if every scan were a new client,
+  inside the 250. Paid means `services/billing.is_active` — `active` or
+  `trialing`; `canceled`, `past_due`, `unpaid`, `paused` are free.
+- **What holds a slot.** Every scan not `failed` or `cancelled` — queued and
+  running included. The brief's "completed scans only" was taken to mean
+  "failures never burn the allowance", which this honours; but a scan in
+  flight must count while it is in flight or two requests at the cap both
+  see room. The slot is taken when the scan starts and handed back if it
+  fails. Said in the module docstring and in api-contracts.md.
+- **Enforced in `POST /clients/{id}/scans`, server-side.** `SELECT … FOR
+  UPDATE` on the agency row, then the count, then `get_or_create_scan`, then
+  the commit that both persists the scan and releases the lock. A second
+  concurrent request blocks on the lock, counts the first's committed scan,
+  and gets its 402. A plain count-then-insert in one transaction would not
+  have closed this at READ COMMITTED; Epic 9.6 found the same shape for the
+  per-client case. A scan already RUNNING is returned as before and not
+  gated; the open QUEUED scan a run adopts is excluded from the count,
+  because adopting it IS starting it.
+- **`402 /problems/scan-limit-reached`** (`errors.ScanLimitReached`) with
+  `code` `SCAN_LIMIT_FREE_USED` or `SCAN_LIMIT_MONTHLY`, `scansUsed`,
+  `scanLimit`, and `periodResetsAt` (first instant of next month, UTC) for
+  the monthly case. The free detail says "Subscribe"; the monthly detail
+  names the reset date and offers no upgrade, because there is no tier
+  above this one.
+- **Failed-open when billing is not configured.** `gate_enabled` is both
+  `STRIPE_SECRET_KEY` and `STRIPE_PRICE_ID` set; otherwise the gate is off,
+  matching checkout's `503 billing-not-configured`. Stated in the docstring.
+  **This bit the suite first**: `conftest.py` supplied placeholder Stripe
+  keys "so point-of-use checks pass", which put every second scan in the
+  suite behind a 402 — 28 failures across nine files on the first full run.
+  The suite's default settings now leave both unset, which is the world CI
+  and local development actually live in; `test_billing.py` and the new
+  `test_scan_allowance.py` set the keys per test.
+- **`GET /agencies/{id}/billing`** gains `scansUsedThisPeriod`, `scanLimit`
+  (null when no gate applies) and `periodResetsAt` (null for free). One
+  COUNT, no Stripe call. OpenAPI and `api.gen.ts` regenerated and confirmed
+  stable on a second regeneration.
+- **Prompt re-runs are not scans**: they create no `Scan` row and stay
+  under the 30-an-hour throttle, which is unchanged. A test proves two
+  re-runs after a 402 succeed and move the count by nothing.
+- **Grandfathered: nobody.** Existing completed scans count, so every
+  agency that has scanned is at "free scan used", the founder's included.
+
+## Built — web
+
+- `lib/billing/allowance.ts`: the label — "1 free scan" / "Free scan used" /
+  "12 of 40 scans this month" / "40 of 40 scans this month · resets 1 Oct
+  2026" — built only from the billing response, and `scanLimitProblem`,
+  which narrows a 402. `useScanAllowance(agencyId)` reads billing once; a
+  member's 403 resolves to no label, the settings page's own degradation.
+- `components/billing/ScanLimitNotice.tsx`: the 402 on screen. Free: one
+  sentence and a **Subscribe** button into the existing Checkout. Monthly:
+  the reset date and nothing to click. Never an `ErrorState`.
+- The dashboard's Re-run and the intake result's "Run a scan" both show the
+  label and both render the notice on a 402 instead of the error state.
+- **Copy.** Pricing card: "40 scans a month. Viewing, sharing and exporting
+  reports is never limited." and "Signing up is free and includes one full
+  scan and report. Subscribe to keep scanning." Landing hero: "Your first
+  scan is free. $160/month after that." The "not metered or capped" bullet
+  is gone from the honest-limits list. Settings' billing lead and the
+  panel's no-subscription, cancelled and unknown-status sentences no longer
+  claim nothing is behind the plan. **The card's "40" is the one hand-typed
+  copy of the number on the web**, by decision: a signed-out visitor has no
+  billing response to read from. Everything signed-in reads the API.
+
+## What goes live on push
+
+Render deploys before CI finishes. The gate turns on there **only if
+Render's `STRIPE_SECRET_KEY` and `STRIPE_PRICE_ID` are both set** — the
+2026-09-23 entry records that Render's Price variable was still the $29
+one and had to be changed by hand. If both are set, the founder's own
+organisation reads "Free scan used" on the next visit and subscribes
+through Stripe test mode like anyone else. If either is unset, nothing is
+gated in production yet and the card's copy is ahead of the deployment.
+
+## Verified
+
+API **1457/1457** on a solo run (a wall-clock bound in `test_call_bounds`
+failed once while three suites shared the machine, and passed three times
+alone; +28 allowance tests: the constants argued, free 0→1→402, failed and
+cancelled scans not counted, an existing scan counted with no
+grandfathering, five lapsed statuses free, a running scan reported not
+refused, an adopted queued scan not double-counted, paid 39→202 for
+`active` and `trialing`, 40→402 with the reset date and no "upgrade", last
+month's scans not counted, the gate off without a key, the billing response
+in all three states, two concurrent requests at 39/40 producing exactly one
+scan, and re-runs moving nothing). ruff clean; mypy **47** under 50 via
+`assert_count.py`. Web **903/903** (+13), typecheck clean. shared-types
+**53**, typecheck clean, generated contract current. design-system
+**648/648**, typecheck clean. Exit codes from files.

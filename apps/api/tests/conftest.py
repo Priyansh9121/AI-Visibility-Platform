@@ -59,8 +59,16 @@ def settings() -> Settings:
         anthropic_api_key="test-anthropic-key-not-real",
         openai_api_key="test-openai-key-not-real",
         serpapi_key="test-serpapi-key-not-real",
-        stripe_secret_key="sk_test_not_real",
-        stripe_price_id="price_test_not_real",
+        # Billing is NOT configured by default — 2026-09-28. Since the scan
+        # allowance gate is on exactly when `STRIPE_SECRET_KEY` and
+        # `STRIPE_PRICE_ID` are both set, placeholder keys here would put every
+        # second scan in the suite behind a 402 (they did: 28 failures the
+        # first time). CI and local development are unconfigured deployments,
+        # and the suite now sees the same world. `test_billing.py` and
+        # `test_scan_allowance.py` set the keys themselves, per test, for the
+        # paths that need billing on.
+        stripe_secret_key=None,
+        stripe_price_id=None,
         # Argon2 at production cost makes a suite that logs in dozens of times
         # unbearably slow. These are the library minimums; every test that
         # cares about hashing correctness still exercises the real algorithm.

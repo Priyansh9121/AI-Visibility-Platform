@@ -42,6 +42,17 @@ class BillingStatusOut(ApiModel):
     is_active: bool
     current_period_end: datetime | None
     has_billing_account: bool
+    # --- the scan allowance — 2026-09-28, `services/scan_allowance.py` --------
+    # Scans started this period that hold a slot (not failed, not cancelled):
+    # this calendar month (UTC) for a paid agency, lifetime for a free one.
+    scans_used_this_period: int
+    # 1 free for life, 40 a month on the plan — or null when billing is not
+    # configured on this deployment and no gate applies. The web reads the
+    # numbers from here and never carries its own copy of them.
+    scan_limit: int | None
+    # First instant of next month (UTC) for a paid agency; null for free,
+    # whose allowance does not reset.
+    period_resets_at: datetime | None
 
 
 class CheckoutSessionOut(ApiModel):

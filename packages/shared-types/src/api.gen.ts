@@ -13,7 +13,12 @@ export interface paths {
         };
         /**
          * Read Billing
-         * @description This agency's subscription, as recorded. **Never asks Stripe.**
+         * @description This agency's subscription, as recorded, and its scan allowance. **Never asks Stripe.**
+         *
+         *     The allowance — `scansUsedThisPeriod`, `scanLimit`, `periodResetsAt` — is
+         *     one COUNT over the agency's scans (2026-09-28, `services/scan_allowance`).
+         *     `scanLimit` is null when billing is not configured on this deployment,
+         *     which is the honest way to say no gate applies.
          *
          *     Every field comes off the `agencies` row the webhook maintains. A settings
          *     screen that called a payment processor on page load would be slower, would
@@ -1028,6 +1033,14 @@ export interface paths {
          *     violation. The executor now refuses a scan it cannot claim (see
          *     `execute_scan`); this check simply declines to start a task that would be
          *     refused. The `202` reports the scan in flight, which is what was asked for.
+         *
+         *     **`402 scan-limit-reached` since 2026-09-28** — `services/scan_allowance`.
+         *     One free scan per agency for life, forty a month on the plan; the gate is
+         *     on when billing is configured and off when it is not. The agency row is
+         *     locked before the count and the scan is inserted and committed under that
+         *     lock, so two requests at the cap cannot both take the last slot. A scan
+         *     already RUNNING is returned as before, and the open QUEUED scan a run
+         *     adopts is not counted against starting it.
          */
         post: operations["run_scan_api_v1_clients__clientId__scans_post"];
         delete?: never;
@@ -1973,6 +1986,12 @@ export interface components {
             hasBillingAccount: boolean;
             /** Isactive */
             isActive: boolean;
+            /** Periodresetsat */
+            periodResetsAt: string | null;
+            /** Scanlimit */
+            scanLimit: number | null;
+            /** Scansusedthisperiod */
+            scansUsedThisPeriod: number;
             /** Subscriptionstatus */
             subscriptionStatus: string | null;
         };

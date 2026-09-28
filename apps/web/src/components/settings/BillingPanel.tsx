@@ -90,7 +90,8 @@ const STATUS_COPY: Record<string, { label: string; tone: BadgeTone; sentence: st
   canceled: {
     label: 'Canceled',
     tone: 'neutral',
-    sentence: 'This subscription has been cancelled. Nothing in the product has changed.',
+    sentence:
+      'This subscription has been cancelled. Starting a scan is back on the free allowance; every report you already have stays open.',
   },
   paused: {
     label: 'Paused',
@@ -182,8 +183,9 @@ export function BillingPanel({
             <div className="flex flex-wrap items-center gap-3">
               <Badge tone="neutral">No subscription</Badge>
               <p className="max-w-measure text-ui-base leading-prose text-text-secondary">
-                You are not subscribed. Everything in the product works anyway —
-                there is nothing behind this that you are missing.
+                You are not subscribed. Your agency has one free scan; subscribing
+                is how you keep scanning. Reports you already have stay open,
+                shareable and exportable either way.
               </p>
             </div>
           </CardBody>
@@ -217,7 +219,7 @@ export function BillingPanel({
 
           <p className="max-w-measure text-ui-base leading-prose text-text-secondary">
             {copy?.sentence ??
-              `Stripe reports this subscription as “${billing.subscriptionStatus}”, which this screen does not have wording for yet. Nothing in the product has changed.`}
+              `Stripe reports this subscription as “${billing.subscriptionStatus}”, which this screen does not have wording for yet. Starting a scan is on the free allowance until it is active again; every report you already have stays open.`}
           </p>
 
           {error != null && (
