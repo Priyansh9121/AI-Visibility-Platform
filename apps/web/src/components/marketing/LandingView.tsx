@@ -69,6 +69,7 @@ import {
   Card,
   CardBody,
   LuminanceLedger,
+  compositeScore,
   PageSection,
   Reveal,
   RevealGroup,
@@ -86,7 +87,7 @@ import { PLAN_PRICE_USD, PricingCard } from './PricingCard';
  * these are the actual five dimensions and their actual §6 weights — and the
  * sub-scores are invented and labelled as such on screen.
  */
-const EXAMPLE_DIMENSIONS: LedgerDimension[] = [
+export const EXAMPLE_DIMENSIONS: LedgerDimension[] = [
   { key: 'mention_rate', label: 'Mention Rate', weight: 30, subscore: 34 },
   { key: 'share_of_voice', label: 'Share of Voice', weight: 25, subscore: 28 },
   { key: 'citation_strength', label: 'Citation Strength', weight: 20, subscore: 11 },
@@ -370,7 +371,11 @@ export function LandingView({
           <Reveal animate={animate}>
           <PageSection
             eyebrow="Pricing"
-            heading="One plan. Twenty-nine dollars a month."
+            // Derived from the constant, never typed a second time: this string
+            // said "Twenty-nine dollars" for six days after the card under it
+            // said $160 (read live 2026-09-28), which is exactly the drift the
+            // constant exists to prevent and the price-consistency test now catches.
+            heading={`One plan. $${PLAN_PRICE_USD} a month.`}
             lead={
               <>
                 One price, published, with no &ldquo;contact us&rdquo; between you and it. It
@@ -400,7 +405,15 @@ export function LandingView({
               Scan a website
             </Button>
             <div className="flex items-center gap-3">
-              <ScoreMeter score={41} />
+              {/*
+                The SAME example the worked ledger above draws, so the two
+                figures on this page agree: the composite is computed from
+                EXAMPLE_DIMENSIONS by the design system's own arithmetic (38),
+                and ScoreMeter derives the band label from `visibilityBand`,
+                not from a string typed here. Until 2026-09-28 this read 41
+                Emerging beside a ledger that summed to 38.
+              */}
+              <ScoreMeter score={compositeScore(EXAMPLE_DIMENSIONS)} />
               <p className="max-w-measure text-ui-sm text-text-tertiary">
                 Example of a score a real prospect might return.
               </p>
