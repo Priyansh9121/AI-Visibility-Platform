@@ -88,27 +88,21 @@ describe('signed in', () => {
 });
 
 describe('what the card is not allowed to say', () => {
-  it('does not claim unlimited scans, because scans are not metered either way', () => {
+  it('states the cap and what is never limited — 2026-09-28', () => {
     const out = render();
-    // north-star.md §5.2 argues metering the scan is the right model and §5.4
-    // records that none of it is built. The absence of a cap is an absence,
-    // not a feature, and selling it as one would be a promise nobody has
-    // costed — §5.1's per-scan COGS has never been measured.
-    //
-    // Asserted by counting rather than by absence: the word appears exactly
-    // once on this card, inside the sentence that REFUSES the claim. A blunt
-    // `not.toContain('unlimited')` failed against honest copy, which is the
-    // same way LandingView's `\brated\b` assertion first went wrong.
-    expect(out.toLowerCase().match(/unlimited/g) ?? []).toHaveLength(1);
-    expect(out).toContain('rather than a promise of unlimited use');
-    expect(out).toContain('Scan volume is not metered today');
+    // The plan gates STARTING a scan: forty a month, one free for life. It
+    // never gates reading. The card says both, and claims nothing unlimited.
+    expect(out).toContain('40 scans a month');
+    expect(out).toContain('Viewing, sharing and exporting reports is never limited');
+    expect(out.toLowerCase()).not.toContain('unlimited');
+    expect(out).not.toContain('not metered');
   });
 
-  it('does not pretend the product is gated behind the plan', () => {
+  it('says what is free and what the plan is for', () => {
     const out = render();
-    // Sign-up and onboarding stay free. A card implying otherwise would gate
-    // the existing test accounts in the reader's mind if nowhere else.
-    expect(out).toContain('Signing up is free and stays free');
+    expect(out).toContain('Signing up is free and includes one full scan and report');
+    expect(out).toContain('Subscribe to keep scanning');
+    expect(out).not.toContain('Nothing in the product is behind');
     expect(out.toLowerCase()).not.toContain('free trial');
     expect(out.toLowerCase()).not.toContain('upgrade to unlock');
   });

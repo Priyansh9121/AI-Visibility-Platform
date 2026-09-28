@@ -33,7 +33,8 @@ describe('no subscription — the state every agency is in today', () => {
   it('says so without saying anything is wrong', () => {
     const html = render();
     expect(html).toContain('No subscription');
-    expect(html).toContain('Everything in the product works anyway');
+    expect(html).toContain('Your agency has one free scan');
+    expect(html).toContain('stay open, shareable and exportable');
   });
 
   it('offers the plan at the price the public page quoted', () => {
@@ -98,7 +99,7 @@ describe('canceled', () => {
   it('says the subscription ended and the product did not change', () => {
     const html = render({ billing: canceledSubscription });
     expect(html).toContain('Canceled');
-    expect(html).toContain('Nothing in the product has changed.');
+    expect(html).toContain('every report you already have stays open');
   });
 
   it('shows no renewal date, because there is no next renewal', () => {
@@ -148,7 +149,7 @@ describe('a status this screen has no wording for', () => {
 
   it('still refuses to imply anything was withdrawn', () => {
     const html = render({ billing: unknownStatusSubscription });
-    expect(html).toContain('Nothing in the product has changed.');
+    expect(html).toContain('every report you already have stays open');
   });
 });
 

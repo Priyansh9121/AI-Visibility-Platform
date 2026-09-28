@@ -58,6 +58,7 @@ listed in `CORS_ALLOW_ORIGINS` — browsers reject wildcard CORS with credential
 | `/problems/invalid-url` | 409 | Submitted URL has no public domain |
 | `/problems/invalid-webhook-signature` | 400 | Billing webhook signature missing, malformed or wrong |
 | `/problems/billing-not-configured` | 503 | A Stripe setting is unset. `detail` names the variable |
+| `/problems/scan-limit-reached` | 402 | The agency's scan allowance is spent. Carries `code` (`SCAN_LIMIT_FREE_USED` or `SCAN_LIMIT_MONTHLY`), `scansUsed`, `scanLimit`, `periodResetsAt` (monthly only) |
 
 Validation problems add an `errors` member:
 
@@ -595,9 +596,25 @@ one.
   "subscriptionStatus": "active",
   "isActive": true,
   "currentPeriodEnd": "2026-09-21T14:13:20Z",
-  "hasBillingAccount": true
+  "hasBillingAccount": true,
+  "scansUsedThisPeriod": 12,
+  "scanLimit": 40,
+  "periodResetsAt": "2026-10-01T00:00:00Z"
 }
 ```
+
+**The scan allowance — 2026-09-28** (`services/scan_allowance.py`). One free
+scan per agency for life (`FREE_SCAN_ALLOWANCE = 1`); forty per calendar
+month, UTC, on the plan (`PAID_SCANS_PER_MONTH = 40` — 40 × ~$1.70 of engine
+cost ≈ $68 against $160). `scansUsedThisPeriod` counts scans that hold a
+slot — everything not `failed` or `cancelled`, in-flight included — this
+month for a paid agency and lifetime for a free one. `scanLimit` is **null
+when billing is not configured** on the deployment (no `STRIPE_SECRET_KEY`
+or `STRIPE_PRICE_ID`): the gate is off there, matching checkout's
+`503 billing-not-configured`. `periodResetsAt` is the first instant of next
+month for a paid agency and null for free. The web reads all three from
+here and carries no copy of the numbers. `canceled`, `past_due`, `unpaid`
+and `paused` are free.
 
 **This endpoint never calls Stripe.** Every field is read from the `agencies`
 row that the webhook maintains. That is a deliberate property rather than an
@@ -1153,6 +1170,17 @@ from the registered routes.
 #### `POST /api/v1/clients/{clientId}/scans`
 **Auth required.** §5.4 steps 3–4: generate a prompt set, run it against every
 engine, extract and persist facts.
+
+**`402 /problems/scan-limit-reached` since 2026-09-28.** One free scan per
+agency for life, forty a month on the plan; the body carries `code`
+(`SCAN_LIMIT_FREE_USED` / `SCAN_LIMIT_MONTHLY`), `scansUsed`, `scanLimit`
+and, for the monthly case, `periodResetsAt`. Enforced here, server-side,
+under a `SELECT … FOR UPDATE` on the agency row that the scan's own commit
+releases, so two concurrent requests cannot both take the last slot. Off
+when billing is not configured. A scan already running is returned as
+before; the open queued scan a run adopts is not counted against starting
+it. Prompt re-runs are not scans and stay under their own throttle. Viewing,
+sharing and exporting reports is never gated.
 
 **Asynchronous since Epic 9.5.** Returns `202` immediately with a QUEUED scan;
 the pipeline runs out of band. It used to run inline and answer `201` with the

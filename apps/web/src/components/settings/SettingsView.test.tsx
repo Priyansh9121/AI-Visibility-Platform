@@ -151,10 +151,11 @@ describe('the "not built yet" list is maintained in both directions', () => {
 });
 
 describe('billing', () => {
-  it('says plainly that nothing is behind the plan', () => {
+  it('says the first scan is free and the plan is how you keep scanning', () => {
     const html = render(READY);
-    expect(html).toContain('subscribing is how you pay for this, not how you unlock it');
-    expect(html).toContain('there is nothing behind this that you are missing');
+    expect(html).toContain('Your first scan is free; subscribing is how you keep scanning');
+    expect(html).not.toContain('not how you unlock it');
+    expect(html).not.toContain('nothing behind this that you are missing');
   });
 
   it('offers the plan card when there is no subscription', () => {

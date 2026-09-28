@@ -23,6 +23,7 @@ from ..schemas.scan import (
     ScanOut,
 )
 from ..services import competitors as detection
+from ..services import scan_allowance
 from ..services.engines import ENGINE_REGISTRY, configured_engines, keyed_engines
 from ..services.intake import get_client
 from ..services.scan_executor import ScanJob, reap_stale_scans
@@ -123,6 +124,14 @@ async def run_scan(
     violation. The executor now refuses a scan it cannot claim (see
     `execute_scan`); this check simply declines to start a task that would be
     refused. The `202` reports the scan in flight, which is what was asked for.
+
+    **`402 scan-limit-reached` since 2026-09-28** — `services/scan_allowance`.
+    One free scan per agency for life, forty a month on the plan; the gate is
+    on when billing is configured and off when it is not. The agency row is
+    locked before the count and the scan is inserted and committed under that
+    lock, so two requests at the cap cannot both take the last slot. A scan
+    already RUNNING is returned as before, and the open QUEUED scan a run
+    adopts is not counted against starting it.
     """
     client = await get_client(db, agency_id=principal.agency_id, client_id=client_id)
 
@@ -176,10 +185,27 @@ async def run_scan(
     if await reap_stale_scans(db):
         await db.commit()
 
+    # A scan already in flight is reported, not re-started — and not gated:
+    # nothing is being started. Read before the lock so the common case pays
+    # for no lock at all.
+    existing = await detection.open_scan(db, client.id)
+    if existing is not None and existing.status is ScanStatus.RUNNING:
+        return existing
+
+    # The allowance, under a row lock on the agency that the COMMIT below
+    # releases. Gate off when billing is not configured — see the service.
+    if scan_allowance.gate_enabled(settings):
+        await scan_allowance.assert_can_start(
+            db,
+            principal.agency_id,
+            settings,
+            exclude_scan_id=existing.id if existing is not None else None,
+        )
+
     scan = await detection.get_or_create_scan(db, client, user_id=principal.user_id)
 
     # Commit BEFORE handing off. The executor loads the scan on its own session
-    # and would not find it otherwise.
+    # and would not find it otherwise. This commit also releases the lock.
     await db.commit()
     await db.refresh(scan)
 

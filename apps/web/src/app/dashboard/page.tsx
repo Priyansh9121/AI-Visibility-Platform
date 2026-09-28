@@ -17,6 +17,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Card, CardBody, ErrorState, LoadingState } from '@avp/design-system';
 import type { Dashboard } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
+import { type ScanLimitProblem, scanLimitProblem } from '@/lib/billing/allowance';
+import { useScanAllowance } from '@/lib/billing/useScanAllowance';
 import { DashboardView } from '@/components/dashboard/DashboardView';
 import { WorkspaceShell } from '@/components/shell/WorkspaceShell';
 import { type Poller, createPoller, settled, shouldPoll } from '@/lib/dashboard/polling';
@@ -36,6 +38,9 @@ export default function DashboardRoute() {
   const [view, setView] = useState<View>({ kind: 'loading' });
   const [rerunning, setRerunning] = useState<ReadonlySet<string>>(new Set());
   const [rerunError, setRerunError] = useState<string | null>(null);
+  const [scanLimit, setScanLimit] = useState<ScanLimitProblem | null>(null);
+  const agencyId = view.kind === 'ready' ? view.dashboard.agency.id : null;
+  const allowance = useScanAllowance(agencyId);
   const [pollProblem, setPollProblem] = useState<string | null>(null);
   const [live, setLive] = useState(false);
 
@@ -145,17 +150,25 @@ export default function DashboardRoute() {
   const rerun = useCallback(
     async (clientId: string) => {
       setRerunError(null);
+      setScanLimit(null);
       setRerunning((current) => new Set(current).add(clientId));
       try {
         const queued = await api.runScan(clientId);
         watching.current.add(queued.id);
         await load();
       } catch (err) {
-        setRerunError(
-          err instanceof ApiProblem
-            ? err.problem.detail
-            : 'The scan could not be started. It may still be running on the server.',
-        );
+        // A 402 is the allowance, not a failure: a subscribe prompt (or the
+        // reset date), never the error state — 2026-09-28.
+        const limit = err instanceof ApiProblem ? scanLimitProblem(err.problem) : null;
+        if (limit) {
+          setScanLimit(limit);
+        } else {
+          setRerunError(
+            err instanceof ApiProblem
+              ? err.problem.detail
+              : 'The scan could not be started. It may still be running on the server.',
+          );
+        }
       } finally {
         setRerunning((current) => {
           const next = new Set(current);
@@ -228,6 +241,9 @@ export default function DashboardRoute() {
         onRerun={rerun}
         rerunning={rerunning}
         rerunError={rerunError}
+        scanLimit={scanLimit}
+        agencyId={view.dashboard.agency.id}
+        allowance={allowance}
         live={live}
         pollProblem={pollProblem}
         onDismissGettingStarted={dismissGettingStarted}

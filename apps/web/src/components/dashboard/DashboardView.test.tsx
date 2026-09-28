@@ -549,3 +549,33 @@ describe('the getting-started checklist', () => {
     expect(html).not.toContain('avp-reveal');
   });
 });
+
+describe('the scan allowance — 2026-09-28', () => {
+  it('shows the remaining count beside the recent scans', () => {
+    const html = renderToStaticMarkup(
+      <DashboardView dashboard={scoredDashboard} allowance="12 of 40 scans this month" />,
+    );
+    expect(html).toContain('12 of 40 scans this month');
+  });
+
+  it('shows nothing when the caller may not read billing or no gate applies', () => {
+    const html = renderToStaticMarkup(<DashboardView dashboard={scoredDashboard} allowance={null} />);
+    expect(html).not.toContain('data-testid="scan-allowance"');
+  });
+
+  it('renders a 402 as a subscribe prompt, not as the error state', () => {
+    const html = renderToStaticMarkup(
+      <DashboardView
+        dashboard={scoredDashboard}
+        agencyId="agcy_01TEST"
+        scanLimit={{
+          code: 'SCAN_LIMIT_FREE_USED', detail: 'used', scansUsed: 1, scanLimit: 1,
+          periodResetsAt: null,
+        }}
+      />,
+    );
+    expect(html).toContain('Your free scan is used');
+    expect(html).toContain('>Subscribe<');
+    expect(html).not.toContain('The scan could not be started');
+  });
+});

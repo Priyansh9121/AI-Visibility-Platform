@@ -19,6 +19,15 @@ export const noSubscription: BillingStatus = {
   isActive: false,
   currentPeriodEnd: null,
   hasBillingAccount: false,
+  scansUsedThisPeriod: 0,
+  scanLimit: 1,
+  periodResetsAt: null,
+};
+
+/** Free, and the one free scan already started. */
+export const freeScanUsed: BillingStatus = {
+  ...noSubscription,
+  scansUsedThisPeriod: 1,
 };
 
 export const activeSubscription: BillingStatus = {
@@ -26,6 +35,22 @@ export const activeSubscription: BillingStatus = {
   isActive: true,
   currentPeriodEnd: '2026-09-21T14:13:20Z',
   hasBillingAccount: true,
+  scansUsedThisPeriod: 12,
+  scanLimit: 40,
+  periodResetsAt: '2026-10-01T00:00:00Z',
+};
+
+/** Paid and at the cap: the label says when it resets and offers no upgrade. */
+export const activeAtCap: BillingStatus = {
+  ...activeSubscription,
+  scansUsedThisPeriod: 40,
+};
+
+/** Billing not configured on this deployment: no gate, no label. */
+export const ungated: BillingStatus = {
+  ...noSubscription,
+  scansUsedThisPeriod: 7,
+  scanLimit: null,
 };
 
 /** Cancelled, and therefore with no next renewal date to show. */
@@ -34,6 +59,9 @@ export const canceledSubscription: BillingStatus = {
   isActive: false,
   currentPeriodEnd: null,
   hasBillingAccount: true,
+  scansUsedThisPeriod: 3,
+  scanLimit: 1,
+  periodResetsAt: null,
 };
 
 /**
@@ -45,6 +73,11 @@ export const pastDueSubscription: BillingStatus = {
   isActive: false,
   currentPeriodEnd: '2026-09-21T14:13:20Z',
   hasBillingAccount: true,
+  // A failed payment is free: the API's `is_active` says so, and the gate
+  // reads `is_active`. One lifetime scan, already used by any real agency.
+  scansUsedThisPeriod: 3,
+  scanLimit: 1,
+  periodResetsAt: null,
 };
 
 /** A status this screen has no wording for — Stripe's vocabulary can grow. */
@@ -53,4 +86,7 @@ export const unknownStatusSubscription: BillingStatus = {
   isActive: false,
   currentPeriodEnd: null,
   hasBillingAccount: true,
+  scansUsedThisPeriod: 1,
+  scanLimit: 1,
+  periodResetsAt: null,
 };

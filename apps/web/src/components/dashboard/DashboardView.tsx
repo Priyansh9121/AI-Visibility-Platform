@@ -26,6 +26,8 @@
  */
 
 import type { JSX } from 'react';
+import { ScanLimitNotice } from '@/components/billing/ScanLimitNotice';
+import type { ScanLimitProblem } from '@/lib/billing/allowance';
 import {
   Badge,
   Button,
@@ -133,6 +135,19 @@ export interface DashboardViewProps {
   rerunning?: ReadonlySet<string>;
   /** A failed re-run, surfaced above the table rather than swallowed. */
   rerunError?: string | null;
+  /**
+   * The allowance refusing to start a scan — a `402`, not a failure. Rendered
+   * as a subscribe prompt (free) or a reset date (monthly), never as an error.
+   */
+  scanLimit?: ScanLimitProblem | null;
+  /** Whose checkout the subscribe prompt opens. */
+  agencyId?: string | undefined;
+  /**
+   * The remaining-count label beside the scan controls — "1 free scan",
+   * "Free scan used", "12 of 40 scans this month". Null when the caller may
+   * not read billing, or when no gate applies on this deployment.
+   */
+  allowance?: string | null;
   /** The page is refreshing itself. Told to the user, not just done to them. */
   live?: boolean;
   /** Polling has been failing. Surfaced, because a silently stale page lies. */
@@ -150,6 +165,9 @@ export function DashboardView({
   onRerun,
   rerunning,
   rerunError,
+  scanLimit,
+  agencyId,
+  allowance,
   live,
   pollProblem,
   onDismissGettingStarted,
@@ -304,10 +322,19 @@ export function DashboardView({
         <ErrorState title="The scan could not be started" detail={rerunError} />
       )}
 
+      {scanLimit != null && agencyId != null && (
+        <ScanLimitNotice problem={scanLimit} agencyId={agencyId} />
+      )}
+
       {isEmpty ? <EmptyAgency withAction={!gettingStarted.visible} /> : (
         <Card elevation="seated">
           <CardHeader>
             <CardTitle>Recent scans</CardTitle>
+            {allowance != null && (
+              <p className="text-ui-sm text-text-tertiary" data-testid="scan-allowance">
+                {allowance}
+              </p>
+            )}
             {live === true && (
               <p className="flex items-center gap-3 text-ui-sm text-text-tertiary">
                 <Badge tone="beacon" live>

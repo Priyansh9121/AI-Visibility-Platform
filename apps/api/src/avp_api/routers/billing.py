@@ -53,6 +53,7 @@ from fastapi import APIRouter, Header, Path, Request, status
 from ..deps import DbDep, RequireAdmin, SettingsDep, assert_own_agency
 from ..schemas.billing import BillingStatusOut, CheckoutSessionOut, PortalSessionOut
 from ..services import billing as billing_service
+from ..services import scan_allowance
 
 router = APIRouter(tags=["billing"])
 
@@ -60,9 +61,16 @@ router = APIRouter(tags=["billing"])
 @router.get("/agencies/{agencyId}/billing", response_model=BillingStatusOut)
 async def read_billing(
     principal: RequireAdmin,
+    db: DbDep,
+    settings: SettingsDep,
     agency_id: str = Path(alias="agencyId"),
 ) -> Any:
-    """This agency's subscription, as recorded. **Never asks Stripe.**
+    """This agency's subscription, as recorded, and its scan allowance. **Never asks Stripe.**
+
+    The allowance — `scansUsedThisPeriod`, `scanLimit`, `periodResetsAt` — is
+    one COUNT over the agency's scans (2026-09-28, `services/scan_allowance`).
+    `scanLimit` is null when billing is not configured on this deployment,
+    which is the honest way to say no gate applies.
 
     Every field comes off the `agencies` row the webhook maintains. A settings
     screen that called a payment processor on page load would be slower, would
@@ -77,6 +85,7 @@ async def read_billing(
     """
     assert_own_agency(principal.agency_id, agency_id)
     agency = principal.agency
+    current = await scan_allowance.allowance(db, agency, settings)
 
     return BillingStatusOut(
         subscription_status=agency.subscription_status,
@@ -85,6 +94,9 @@ async def read_billing(
         # Whether the hosted portal has anything to open. Derived rather than
         # exposing the customer id, which the browser has no use for.
         has_billing_account=bool(agency.stripe_customer_id),
+        scans_used_this_period=current.scans_used,
+        scan_limit=current.scan_limit,
+        period_resets_at=current.period_resets_at,
     )
 
 
