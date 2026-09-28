@@ -85,7 +85,7 @@ async def read_billing(
     """
     assert_own_agency(principal.agency_id, agency_id)
     agency = principal.agency
-    current = await scan_allowance.allowance(db, agency, settings)
+    current = await scan_allowance.allowance(db, agency, settings, user_email=principal.user.email)
 
     return BillingStatusOut(
         subscription_status=agency.subscription_status,
