@@ -200,7 +200,7 @@ async def run_scan(
             principal.agency_id,
             settings,
             exclude_scan_id=existing.id if existing is not None else None,
-            user_email=principal.user.email,
+            user=principal.user,
         )
 
     scan = await detection.get_or_create_scan(db, client, user_id=principal.user_id)

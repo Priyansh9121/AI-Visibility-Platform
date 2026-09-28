@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from avp_api import ids
 from avp_api.deps import scan_executor
-from avp_api.models import Agency, Scan, ScanStatus, ScanTrigger
+from avp_api.models import Agency, Scan, ScanStatus, ScanTrigger, User
 from avp_api.services import scan_allowance as allowance
 
 BASE = "/api/v1"
@@ -78,6 +78,22 @@ async def _set_subscription(engine, agency_id: str, status: str | None) -> None:
     async with factory() as s:
         agency = (await s.execute(select(Agency).where(Agency.id == agency_id))).scalar_one()
         agency.subscription_status = status
+        await s.commit()
+
+
+async def _link_google(engine, agency_id: str, sub: str = "sub-operator") -> None:  # noqa: ANN001
+    """Give the agency's owner a linked Google identity.
+
+    What `services/google_oauth` writes when the person signs in with Google.
+    Set directly here because the exemption's question is only whether the
+    column is populated, and driving the whole OAuth dance to populate it is
+    `test_google_sign_in.py`'s job, not this file's.
+    """
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+    async with factory() as s:
+        user = (await s.execute(select(User).where(User.agency_id == agency_id))).scalars().first()
+        assert user is not None
+        user.google_sub = sub
         await s.commit()
 
 
@@ -137,6 +153,13 @@ class TestTheNumbersAreArgued:
 
     def test_the_free_allowance_is_one_full_scan(self) -> None:
         assert allowance.FREE_SCAN_ALLOWANCE == 1
+
+    def test_the_in_flight_window_clears_the_scan_budget_several_times_over(self) -> None:
+        # Three times the committed 300s budget, and ~2.5x the 361.3s best
+        # measured run — a live scan is never written off while it works.
+        window = allowance.IN_FLIGHT_WINDOW
+        assert window >= timedelta(seconds=300) * 3
+        assert window > timedelta(seconds=361.3) * 2
 
     def test_failed_and_cancelled_scans_hold_no_slot(self) -> None:
         assert ScanStatus.FAILED not in allowance.COUNTED_STATUSES
@@ -377,6 +400,100 @@ class TestTheBillingResponse:
 
 
 # ---------------------------------------------------------------------------
+# a stranded scan hands its slot back
+# ---------------------------------------------------------------------------
+
+
+class TestAStrandedScanDoesNotHoldASlotForever:
+    """QUEUED and RUNNING count, but only inside `IN_FLIGHT_WINDOW`.
+
+    A scan can sit in either state and never finish: the executor is a
+    per-request `BackgroundTasks` job and Render restarts the process on every
+    deploy, and detection deliberately leaves an open QUEUED row behind. Before
+    2026-09-28 such a row burned the one free scan permanently, with nothing
+    ever having run.
+
+    Every test here starts the new scan on a SECOND client, so what is measured
+    is the allowance and not `get_or_create_scan` adopting the open row (which
+    `exclude_scan_id` already excuses).
+    """
+
+    # Either side of the 15-minute window, by a minute.
+    OLD = 16
+    FRESH = 1
+
+    async def _agency_with_open_scan(
+        self, client: AsyncClient, engine, *, status: ScanStatus, age_minutes: int
+    ) -> tuple[str, str]:  # noqa: ANN001
+        """A free agency whose client A holds one open scan of `age_minutes`.
+
+        Returns the agency and the id of a SECOND client, which is where the
+        test starts its scan.
+        """
+        agency_id = await _sign_up(client)
+        _defer(client)
+        a = await _make_client(client, "helpscout.com")
+        b = await _make_client(client, "zendesk.com")
+        await _seed_scans(
+            engine, agency_id=agency_id, client_id=a, n=1, status=status,
+            created_at=datetime.now(UTC) - timedelta(minutes=age_minutes),
+        )
+        return agency_id, b
+
+    @pytest.mark.parametrize("status", [ScanStatus.QUEUED, ScanStatus.RUNNING])
+    async def test_an_in_flight_scan_past_the_window_hands_its_slot_back(
+        self, client: AsyncClient, billing_on, engine, status: ScanStatus
+    ) -> None:  # noqa: ANN001
+        _, b = await self._agency_with_open_scan(
+            client, engine, status=status, age_minutes=self.OLD
+        )
+        resp = await _start(client, b)
+        assert resp.status_code == 202, resp.text
+
+    @pytest.mark.parametrize("status", [ScanStatus.QUEUED, ScanStatus.RUNNING])
+    async def test_an_in_flight_scan_inside_the_window_still_holds_its_slot(
+        self, client: AsyncClient, billing_on, engine, status: ScanStatus
+    ) -> None:  # noqa: ANN001
+        """The half that must not regress: without this the gate is a fiction."""
+        _, b = await self._agency_with_open_scan(
+            client, engine, status=status, age_minutes=self.FRESH
+        )
+        resp = await _start(client, b)
+        assert resp.status_code == 402, resp.text
+        assert resp.json()["code"] == allowance.CODE_FREE_USED
+
+    async def test_a_stale_detection_only_scan_does_not_block_the_first_real_scan(
+        self, client: AsyncClient, billing_on, engine
+    ) -> None:  # noqa: ANN001
+        """Epic 3's detection leaves an open QUEUED row on client A.
+
+        Built through `get_or_create_scan` — the function detection actually
+        calls — rather than seeded, because the row's provenance is the point:
+        a free agency that only ever ran competitor detection has not used a
+        scan, and must still get its free one on client B.
+        """
+        from avp_api.models import Client as ClientModel
+        from avp_api.services import competitors as detection
+
+        agency_id = await _sign_up(client)
+        _defer(client)
+        a = await _make_client(client, "helpscout.com")
+        b = await _make_client(client, "zendesk.com")
+
+        factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+        async with factory() as s:
+            row = (await s.execute(select(ClientModel).where(ClientModel.id == a))).scalar_one()
+            detected = await detection.get_or_create_scan(s, row)
+            detected.created_at = datetime.now(UTC) - timedelta(minutes=self.OLD)
+            await s.commit()
+            assert detected.status is ScanStatus.QUEUED
+
+        assert (await _start(client, b)).status_code == 202
+        # And the agency's free scan is now genuinely spent.
+        assert (await _counted(engine, agency_id)) == 2
+
+
+# ---------------------------------------------------------------------------
 # the race
 # ---------------------------------------------------------------------------
 
@@ -460,13 +577,18 @@ class TestPromptReRunsAreNotScans:
 
 
 class TestTheOperatorIsExempt:
-    FOUNDER = "priyansh.ranpura9@gmail.com"
+    # Not the founder's real address: the default is empty now, and the live
+    # value lives in the Render environment. Any address does here.
+    OPERATOR = "operator@example.com"
 
-    def test_the_default_names_the_founder_and_nobody_else(self) -> None:
+    def test_the_default_exempts_nobody(self) -> None:
+        """A personal address does not belong in source, and a fresh
+        environment — a new deployment, a restored database — must exempt
+        nobody until somebody sets `SCAN_ALLOWANCE_EXEMPT_EMAILS`."""
         from avp_api.config import Settings
 
         cfg = Settings(_env_file=None)
-        assert cfg.scan_allowance_exempt_emails == [self.FOUNDER]
+        assert cfg.scan_allowance_exempt_emails == []
 
     def test_the_environment_replaces_the_default_lower_cased(self, monkeypatch) -> None:  # noqa: ANN001
         from avp_api.config import Settings
@@ -478,17 +600,31 @@ class TestTheOperatorIsExempt:
         assert Settings(_env_file=None).scan_allowance_exempt_emails == []
 
     def test_matching_is_case_insensitive(self, settings, monkeypatch) -> None:  # noqa: ANN001
-        monkeypatch.setattr(settings, "scan_allowance_exempt_emails", [self.FOUNDER])
-        assert allowance.is_exempt(settings, "Priyansh.Ranpura9@Gmail.com")
-        assert not allowance.is_exempt(settings, "someone@example.com")
+        monkeypatch.setattr(settings, "scan_allowance_exempt_emails", [self.OPERATOR])
+        assert allowance.is_exempt(settings, User(email="Operator@Example.com", google_sub="s"))
+        assert not allowance.is_exempt(settings, User(email="someone@example.com", google_sub="s"))
         assert not allowance.is_exempt(settings, None)
 
-    async def test_the_founder_scans_past_the_free_allowance(
+    def test_a_listed_address_is_not_enough_without_google(
+        self, settings, monkeypatch
+    ) -> None:  # noqa: ANN001
+        """`User.email` is a string somebody typed.
+
+        Password sign-up creates an ACTIVE account without ever proving the
+        address is theirs, so matching on the email alone would hand the
+        exemption to whoever registered it first on a fresh database.
+        """
+        monkeypatch.setattr(settings, "scan_allowance_exempt_emails", [self.OPERATOR])
+        assert not allowance.is_exempt(settings, User(email=self.OPERATOR, google_sub=None))
+        assert allowance.is_exempt(settings, User(email=self.OPERATOR, google_sub="sub-operator"))
+
+    async def test_the_operator_scans_past_the_free_allowance(
         self, client: AsyncClient, billing_on, engine, settings, monkeypatch
     ) -> None:  # noqa: ANN001
-        """Signed in as the exempt address, with the free scan long used."""
-        monkeypatch.setattr(settings, "scan_allowance_exempt_emails", [self.FOUNDER])
-        agency_id = await _sign_up(client, email=self.FOUNDER)
+        """Signed in as the exempt address, Google-linked, free scan long used."""
+        monkeypatch.setattr(settings, "scan_allowance_exempt_emails", [self.OPERATOR])
+        agency_id = await _sign_up(client, email=self.OPERATOR)
+        await _link_google(engine, agency_id)
         _defer(client)
         cid = await _make_client(client, "helpscout.com")
         await _seed_scans(engine, agency_id=agency_id, client_id=cid, n=45)
@@ -500,8 +636,43 @@ class TestTheOperatorIsExempt:
     async def test_anyone_else_is_still_gated(
         self, client: AsyncClient, billing_on, engine, settings, monkeypatch
     ) -> None:  # noqa: ANN001
-        monkeypatch.setattr(settings, "scan_allowance_exempt_emails", [self.FOUNDER])
+        monkeypatch.setattr(settings, "scan_allowance_exempt_emails", [self.OPERATOR])
         agency_id = await _sign_up(client, email="someone@example.com")
+        _defer(client)
+        cid = await _make_client(client, "helpscout.com")
+        await _seed_scans(engine, agency_id=agency_id, client_id=cid, n=1)
+        assert (await _start(client, cid)).status_code == 402
+
+    async def test_the_listed_address_without_google_is_gated_like_anyone_else(
+        self, client: AsyncClient, billing_on, engine, settings, monkeypatch
+    ) -> None:  # noqa: ANN001
+        """The whole point of the second condition.
+
+        Same address as the exempt operator, signed up by password, no Google
+        link — the 402 lands, and the billing response shows the real limit
+        rather than the exempt shape.
+        """
+        monkeypatch.setattr(settings, "scan_allowance_exempt_emails", [self.OPERATOR])
+        agency_id = await _sign_up(client, email=self.OPERATOR)
+        _defer(client)
+        cid = await _make_client(client, "helpscout.com")
+        await _seed_scans(engine, agency_id=agency_id, client_id=cid, n=1)
+
+        resp = await _start(client, cid)
+        assert resp.status_code == 402, resp.text
+        assert resp.json()["code"] == allowance.CODE_FREE_USED
+
+        body = (await client.get(f"{BASE}/agencies/{agency_id}/billing")).json()
+        assert body["scanLimit"] == allowance.FREE_SCAN_ALLOWANCE
+        assert body["scansUsedThisPeriod"] == 1
+
+    async def test_an_unlisted_google_user_is_not_exempt(
+        self, client: AsyncClient, billing_on, engine, settings, monkeypatch
+    ) -> None:  # noqa: ANN001
+        """Google vouching for an address is necessary, never sufficient."""
+        monkeypatch.setattr(settings, "scan_allowance_exempt_emails", [self.OPERATOR])
+        agency_id = await _sign_up(client, email="stranger@example.com")
+        await _link_google(engine, agency_id, sub="sub-stranger")
         _defer(client)
         cid = await _make_client(client, "helpscout.com")
         await _seed_scans(engine, agency_id=agency_id, client_id=cid, n=1)

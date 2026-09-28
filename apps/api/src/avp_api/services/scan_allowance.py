@@ -23,12 +23,32 @@ THE ALLOWANCE
 
 WHAT COUNTS AS A SCAN
 ---------------------
-Every scan the agency has started that has not FAILED or been CANCELLED —
-queued and running included. Two reasons. A scan that ends `failed` must
-never burn the free allowance, so terminal failures are out. And a scan in
-flight must count while it is in flight, or the gate is a fiction: with only
+A scan that finished with something to show — SUCCEEDED or PARTIAL — counts
+for good. A scan that ended FAILED or CANCELLED never counts: a failure must
+never burn the free allowance.
+
+A scan still QUEUED or RUNNING counts **only while it is plausibly still
+alive** — `created_at` within `IN_FLIGHT_WINDOW`. An in-flight scan has to
+count for the window it is in flight, or the gate is a fiction: with only
 finished scans counted, two requests at the cap would both see room and both
-start. The slot is taken when the scan starts and handed back if it fails.
+start. But counting it forever is the other failure, and it is the one that
+was here until 2026-09-28. A scan can stay QUEUED or RUNNING and never
+finish:
+
+* **Lost executor.** The executor is a per-request `BackgroundTasks` job and
+  Render restarts the process on every deploy. A scan queued seconds before a
+  restart is never picked up. `scan_executor.reap_stale_scans` rescues the
+  RUNNING half of that — but only rows holding an expired lease, and it never
+  touches QUEUED at all, deliberately (see its docstring).
+* **Detection-only scans.** Epic 3's competitor detection leaves an open
+  QUEUED scan for a later run to adopt. A free agency that ran detection on
+  client A and then starts a scan on client B was counted for A's row and
+  refused `SCAN_LIMIT_FREE_USED` without one scan ever having run.
+
+Either way the one free scan was burned by a scan that produced nothing,
+which breaks the rule the whole gate is built on. So the slot is taken when
+the scan starts, handed back if it fails, and handed back anyway once the
+window closes on a scan that never reported in.
 
 Prompt RE-RUNS (`services/prompt_runs`) are not scans, create no `Scan` row,
 and stay governed by their own 30-an-hour throttle only.
@@ -42,18 +62,41 @@ committed scan, then gets its 402. Counting without the lock — even inside one
 transaction — is a check-then-act at READ COMMITTED, which is exactly the
 shape Epic 9.6 found and closed for the per-client case.
 
+`IN_FLIGHT_WINDOW` does not weaken it. Two requests racing for the last slot
+are by definition milliseconds apart, so the loser counts the winner's row
+while it is minutes inside the window.
+
 THE PLATFORM OPERATOR IS EXEMPT
 -------------------------------
 `Settings.scan_allowance_exempt_emails` names the sign-ins the gate does not
-apply to — the founder's own, by default — so the person who runs the
-platform can scan without paying the platform. Matched on the requesting
-USER's email, lower-cased, whichever way they signed in (password or
-Google: both land on `User.email`). Per user, not per agency: a teammate
-seated in the same agency is gated like anyone else. An exempt user's
-billing response reads `scan_limit: null`, the same shape an ungated
-deployment has, so nothing on screen shows a count that does not apply.
-Configuration, not a hard-coded branch: the default is one address, and
-`SCAN_ALLOWANCE_EXEMPT_EMAILS` replaces it.
+apply to, so the person who runs the platform can scan without paying the
+platform. Two conditions, both required (2026-09-28):
+
+1. the requesting USER's email is in the list, lower-cased; **and**
+2. that user has a linked Google identity (`User.google_sub`).
+
+The second condition is the point. An email on `User` is a string somebody
+typed: password sign-up (`services/auth.sign_up_agency`) creates an ACTIVE
+account with no proof the address is theirs — there is no verification step
+and no `email_verified` column. Matching on the string alone meant that on
+any database where the founder's row does not already exist — a new
+environment, a restore, a deleted account — the first person to sign up by
+password with that address would be handed unlimited scans at about $1.70
+each. `google_sub` is set only by `services/google_oauth`, off a token
+Google signed, so it is the one credential here that says an outside party
+vouched for this address. A password-only account on a listed address is
+gated like anyone else.
+
+Per user, not per agency: a teammate seated in the same agency is gated like
+anyone else. An exempt user's billing response reads `scan_limit: null`, the
+same shape an ungated deployment has, so nothing on screen shows a count
+that does not apply.
+
+Configuration, not a hard-coded branch, and **the default is empty**. The
+address used to be a code default; a personal address does not belong in
+source, and an empty default means a new environment exempts nobody until
+somebody decides otherwise. The live value is
+`SCAN_ALLOWANCE_EXEMPT_EMAILS` in the Render API service environment.
 
 FAILED-OPEN, DELIBERATELY, WHEN BILLING IS NOT CONFIGURED
 ---------------------------------------------------------
@@ -67,15 +110,15 @@ gate there would be a cap nobody could lift. With both set, the gate is ON.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings
 from ..errors import ScanLimitReached
 from ..models.scan import Scan, ScanStatus
-from ..models.tenancy import Agency
+from ..models.tenancy import Agency, User
 from . import billing
 
 # One full scan and report, free, per agency, for the life of the agency. One
@@ -93,14 +136,36 @@ FREE_SCAN_ALLOWANCE = 1
 # month differ by at most a few days and a month is what the card can say.
 PAID_SCANS_PER_MONTH = 40
 
-# What holds a slot. Everything that has not ended in failure or cancellation:
-# a queued or running scan is counted while it runs (see the module docstring).
-COUNTED_STATUSES = (
-    ScanStatus.QUEUED,
-    ScanStatus.RUNNING,
-    ScanStatus.SUCCEEDED,
-    ScanStatus.PARTIAL,
-)
+# A scan that finished with something to show. Holds its slot for good.
+SETTLED_STATUSES = (ScanStatus.SUCCEEDED, ScanStatus.PARTIAL)
+
+# A scan that has not reported an outcome. Holds a slot only inside
+# `IN_FLIGHT_WINDOW` — see below and the module docstring.
+IN_FLIGHT_STATUSES = (ScanStatus.QUEUED, ScanStatus.RUNNING)
+
+# Every status that can hold a slot at all. FAILED and CANCELLED are absent
+# and that is the rule the gate is built on: a failure never burns the
+# allowance.
+COUNTED_STATUSES = IN_FLIGHT_STATUSES + SETTLED_STATUSES
+
+# How long a QUEUED or RUNNING scan keeps its slot before it is treated as
+# stranded and stops being counted.
+#
+# Fifteen minutes is three times the 300-second scan budget, the one duration
+# this product commits to. Three times, not one, so an unusually slow but
+# perfectly live scan is never written off while it is still working — and the
+# margin is real rather than nominal, because the budget is currently MISSED:
+# the best measured run is 361.3s (north-star.md), so the window is still
+# ~2.5x the slowest scan actually observed.
+#
+# Bounded at all because a scan CAN sit in these states forever. The executor
+# is a per-request `BackgroundTasks` job and Render restarts on every deploy,
+# and `reap_stale_scans` covers only RUNNING rows holding an expired lease —
+# never QUEUED, by design. Nothing else ever clears them.
+#
+# It does not weaken the race protection: two requests contending for the last
+# slot arrive milliseconds apart, deep inside the window.
+IN_FLIGHT_WINDOW = timedelta(minutes=15)
 
 CODE_FREE_USED = "SCAN_LIMIT_FREE_USED"
 CODE_MONTHLY = "SCAN_LIMIT_MONTHLY"
@@ -111,11 +176,20 @@ def gate_enabled(settings: Settings) -> bool:
     return bool(settings.stripe_secret_key and settings.stripe_price_id)
 
 
-def is_exempt(settings: Settings, email: str | None) -> bool:
-    """Whether this sign-in is a platform operator the gate does not apply to."""
-    if not email:
+def is_exempt(settings: Settings, user: User | None) -> bool:
+    """Whether this sign-in is a platform operator the gate does not apply to.
+
+    Listed address AND a linked Google identity, both. The email on a `User`
+    is an unverified string — password sign-up never proves it — so on its own
+    it would hand the exemption to whoever registered the address first on a
+    fresh database. `google_sub` is written only against a token Google
+    signed. See the module docstring.
+    """
+    if user is None or not user.email:
         return False
-    return email.strip().lower() in settings.scan_allowance_exempt_emails
+    if user.google_sub is None:
+        return False
+    return user.email.strip().lower() in settings.scan_allowance_exempt_emails
 
 
 def period_bounds(now: datetime) -> tuple[datetime, datetime]:
@@ -154,13 +228,29 @@ async def count_scans(
     db: AsyncSession,
     agency_id: str,
     *,
+    now: datetime,
     since: datetime | None = None,
     exclude_scan_id: str | None = None,
 ) -> int:
+    """How many scans hold a slot for this agency as of `now`.
+
+    `since` bounds the period for a paid agency (the UTC calendar month);
+    a free allowance is lifetime and passes None. `now` is not optional,
+    because the in-flight half of the predicate is a statement about time
+    and a default would let a caller silently measure it against the wrong
+    clock — the tests and `allowance` both drive it explicitly.
+    """
+    holds_a_slot = or_(
+        Scan.status.in_(SETTLED_STATUSES),
+        and_(
+            Scan.status.in_(IN_FLIGHT_STATUSES),
+            Scan.created_at >= now - IN_FLIGHT_WINDOW,
+        ),
+    )
     stmt = (
         select(func.count())
         .select_from(Scan)
-        .where(Scan.agency_id == agency_id, Scan.status.in_(COUNTED_STATUSES))
+        .where(Scan.agency_id == agency_id, holds_a_slot)
     )
     if since is not None:
         stmt = stmt.where(Scan.created_at >= since)
@@ -176,30 +266,34 @@ async def allowance(
     *,
     now: datetime | None = None,
     exclude_scan_id: str | None = None,
-    user_email: str | None = None,
+    user: User | None = None,
 ) -> Allowance:
-    """The agency's allowance as of `now`, for `user_email`. Pure read; no lock.
+    """The agency's allowance as of `now`, for `user`. Pure read; no lock.
 
     `exclude_scan_id` is the open QUEUED scan a run is about to adopt rather
     than create (`get_or_create_scan` reuses it): it is the scan being started,
     not a scan already started, so it must not count against starting it.
-    `user_email` is the requesting sign-in, for the operator exemption.
+    `user` is the requesting sign-in, for the operator exemption — the whole
+    row, not its email, because the exemption also asks whether Google
+    vouched for that address.
     """
     now = now or datetime.now(UTC)
     paid = billing.is_active(agency)
-    if not gate_enabled(settings) or is_exempt(settings, user_email):
-        used = await count_scans(db, agency.id, exclude_scan_id=exclude_scan_id)
+    if not gate_enabled(settings) or is_exempt(settings, user):
+        used = await count_scans(db, agency.id, now=now, exclude_scan_id=exclude_scan_id)
         return Allowance(scans_used=used, scan_limit=None, period_resets_at=None, is_paid=paid)
     if paid:
         start, next_start = period_bounds(now)
-        used = await count_scans(db, agency.id, since=start, exclude_scan_id=exclude_scan_id)
+        used = await count_scans(
+            db, agency.id, now=now, since=start, exclude_scan_id=exclude_scan_id
+        )
         return Allowance(
             scans_used=used,
             scan_limit=PAID_SCANS_PER_MONTH,
             period_resets_at=next_start,
             is_paid=True,
         )
-    used = await count_scans(db, agency.id, exclude_scan_id=exclude_scan_id)
+    used = await count_scans(db, agency.id, now=now, exclude_scan_id=exclude_scan_id)
     return Allowance(
         scans_used=used, scan_limit=FREE_SCAN_ALLOWANCE, period_resets_at=None, is_paid=False
     )
@@ -212,7 +306,7 @@ async def assert_can_start(
     *,
     exclude_scan_id: str | None = None,
     now: datetime | None = None,
-    user_email: str | None = None,
+    user: User | None = None,
 ) -> Allowance:
     """Lock the agency row, count, and refuse with 402 if the allowance is spent.
 
@@ -226,7 +320,7 @@ async def assert_can_start(
         await db.execute(select(Agency).where(Agency.id == agency_id).with_for_update())
     ).scalar_one()
     current = await allowance(
-        db, agency, settings, now=now, exclude_scan_id=exclude_scan_id, user_email=user_email
+        db, agency, settings, now=now, exclude_scan_id=exclude_scan_id, user=user
     )
     if not current.exhausted:
         return current
