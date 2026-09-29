@@ -1216,7 +1216,7 @@ on the same address, which links the account by its Google-verified email;
   "type": "/problems/scan-limit-reached",
   "title": "Scan limit reached",
   "status": 402,
-  "detail": "The free scan needs a Google sign-in, so that one person gets one. Continue with Google using this address, or subscribe.",
+  "detail": "The free scan needs a Google sign-in, so that one person gets one. Continue with Google using the same address you sign in with here, or subscribe.",
   "instance": "/api/v1/clients/clnt_01.../scans",
   "code": "SCAN_LIMIT_VERIFY_REQUIRED",
   "scansUsed": 0,

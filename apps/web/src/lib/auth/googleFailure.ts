@@ -1,10 +1,12 @@
 /**
- * The front door's Google failure notice — Epic 20, widened 2026-09-21.
+ * The front door's Google failure notice — Epic 20, widened 2026-09-21, and
+ * given a second voice on 2026-09-29 for a reader who is still signed in.
  *
  * The API puts one WORD in `/?google=error&reason=…` and nothing else (no
  * token, no email, no Google error text); this is where the word becomes a
  * sentence. Pure and exported so the mapping is tested directly — `Home`
- * reads the query in an effect, which a static render never runs.
+ * reads the query in an effect, which a static render never runs (its own
+ * test mounts it in jsdom for the part only a mount can show).
  *
  * Four of these words are new on 2026-09-21. Until then the API answered
  * `account-unavailable` for a suspended account, an address linked to a
@@ -35,19 +37,86 @@ export const GOOGLE_REASONS: Record<string, string> = {
   'not-configured': 'Google sign-in is not set up on this server yet. Sign in with your email and password.',
 };
 
+/**
+ * The same words, for somebody still SIGNED IN — 2026-09-29.
+ *
+ * Since the free scan began to need a Google sign-in, the scan-limit notice
+ * sends a signed-in user to Google to link this account (Continue with
+ * Google, on `SCAN_LIMIT_VERIFY_REQUIRED`), so a failure now lands on `/`
+ * with the session still live. The sentences above were written for the
+ * sign-in page — "sign in with your email and password", "start it again
+ * from this page" — which is not where this reader is, and not what they
+ * were doing: they were linking, not signing in. `denied` and
+ * `exchange-failed` already read true for them and have no entry here.
+ *
+ * The session proves this person's own account is active and not deleted,
+ * so a refusal about an account's state — `email-claimed`,
+ * `account-suspended`, `invitation-expired`, `account-unavailable` — is about
+ * the account at the address of the Google account they CHOSE: somebody
+ * else's row here, not theirs. The way out is the same for all four, so each
+ * ends with it, naming this sign-in's own address — the one Google has to be
+ * signed in as for the link to happen.
+ */
+export const GOOGLE_REASONS_SIGNED_IN: Record<string, (address: string) => string> = {
+  'invalid-state': (address) =>
+    `That Google sign-in had expired or was already used, so nothing was linked. Continue with Google again and choose ${address}.`,
+  'email-unverified': (address) =>
+    `Google has not verified the address on the Google account you chose, so nothing was linked. Continue with Google again and choose ${address}.`,
+  'account-suspended': (address) =>
+    `The Google account you chose belongs to a suspended account here, so nothing was linked. Continue with Google again and choose ${address}.`,
+  'email-claimed': (address) =>
+    `The address on the Google account you chose already belongs to another account here, so nothing was linked. Continue with Google again and choose ${address}.`,
+  'invitation-expired': (address) =>
+    `The Google account you chose has an expired invitation to another agency here, so nothing was linked. Continue with Google again and choose ${address}.`,
+  'account-unavailable': (address) =>
+    `The Google account you chose cannot be used here, so nothing was linked. Continue with Google again and choose ${address}.`,
+  unavailable: () =>
+    'Google sign-in is temporarily unavailable, so nothing was linked. Try again in a moment.',
+  'not-configured': () =>
+    'Google sign-in is not set up on this server yet, so this account cannot be linked to Google.',
+};
+
 export const GOOGLE_FALLBACK = 'Google sign-in did not complete. Try again.';
 
-/** The sentence for one reason word; the fallback for a word this build does not know. */
-export function googleReasonSentence(reason: string): string {
+/**
+ * The sentence for one reason word; the fallback for a word this build does
+ * not know. `signedInAs` is the signed-in user's own address, when there is
+ * one: it picks the signed-in wording where a reason has one.
+ */
+export function googleReasonSentence(reason: string, signedInAs?: string): string {
+  const signedIn = GOOGLE_REASONS_SIGNED_IN[reason];
+  if (signedInAs !== undefined && signedIn !== undefined) return signedIn(signedInAs);
   return GOOGLE_REASONS[reason] ?? GOOGLE_FALLBACK;
 }
 
 /**
- * Read a failure off a page's query string. Returns null unless the query
- * carries `google=error`; `reason` may be absent, in which case the fallback.
+ * The reason WORD off a page's query string. Null unless the query carries
+ * `google=error`; the empty string when `reason` is absent, which reads as
+ * the fallback. A word rather than a sentence, because which sentence it
+ * becomes waits on whether the session check that follows succeeds.
  */
-export function googleFailureFromSearch(search: string): string | null {
+export function googleFailureReason(search: string): string | null {
   const params = new URLSearchParams(search);
   if (params.get('google') !== 'error') return null;
-  return googleReasonSentence(params.get('reason') ?? '');
+  return params.get('reason') ?? '';
+}
+
+/** Read a failure off a page's query string, as a sentence. See `googleFailureReason`. */
+export function googleFailureFromSearch(search: string, signedInAs?: string): string | null {
+  const reason = googleFailureReason(search);
+  return reason === null ? null : googleReasonSentence(reason, signedInAs);
+}
+
+/**
+ * Take the reason off the address bar: read it, then clear the query, so a
+ * reload or a back-press does not show the notice twice. The window is a
+ * parameter so the clearing is tested, not assumed.
+ */
+export function takeGoogleFailure(
+  win: { location: Pick<Location, 'search' | 'pathname'>; history: Pick<History, 'replaceState'> },
+): string | null {
+  const reason = googleFailureReason(win.location.search);
+  if (reason === null) return null;
+  win.history.replaceState(null, '', win.location.pathname);
+  return reason;
 }

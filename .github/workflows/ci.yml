@@ -17,10 +17,12 @@
 #
 # Three jobs, one per runtime, so a failure names its half in seconds:
 #
-#   api       ruff, mypy (ceiling), alembic upgrade head against a real
-#             Postgres 17 service, then pytest against it and a real Redis;
-#             the OpenAPI export is diffed against the committed contract.
-#   workers   pytest, with the same services (it shares the API's models).
+#   api       uv.lock current, ruff, mypy (ceiling), alembic upgrade head
+#             against a real Postgres 17 service, then pytest against it and a
+#             real Redis; the OpenAPI export is diffed against the committed
+#             contract.
+#   workers   uv.lock current, then pytest, with the same services (it
+#             shares the API's models).
 #   web       shared-types, design-system and web: tests, typechecks, and the
 #             styleguide build; the generated TS contract is diffed too.
 #   image     the API container builds (Epic 18.2), migrates and serves
@@ -92,6 +94,13 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: apps/api/uv.lock
+
+      # `--frozen` below installs exactly what the lock says and never asks
+      # whether the lock still matches pyproject.toml. That is how the
+      # workers lock went without pyjwt[crypto] from Epic 20 to 2026-09-29,
+      # green the whole time. `--check` asks, and fails on a stale lock.
+      - name: uv.lock is current
+        run: uv lock --check
 
       - name: Install (locked)
         run: uv sync --frozen --extra dev
@@ -172,6 +181,12 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: apps/workers/uv.lock
+
+      # The API is a path dependency, so ITS pyproject.toml is part of this
+      # lock's input: a dependency added there stales this lock too. See the
+      # api job's step of the same name.
+      - name: uv.lock is current
+        run: uv lock --check
 
       - name: Install (locked)
         run: uv sync --frozen --extra dev

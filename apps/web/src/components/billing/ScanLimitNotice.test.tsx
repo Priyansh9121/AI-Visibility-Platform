@@ -49,11 +49,21 @@ describe('the free scan needs a Google sign-in — 2026-09-29', () => {
   it('says why in one sentence, and is not an error', () => {
     const html = render(VERIFY);
     expect(html).toContain(
-      'Your free scan needs a Google sign-in, so we know one person gets one. Continue with Google using this address, or subscribe.',
+      'Your free scan needs a Google sign-in, so we know one person gets one. Continue with Google using the same address you sign in with here, or subscribe. A different Google account would start a new agency instead.',
     );
     expect(html).not.toContain('could not be started');
     expect(html).not.toContain('role="alert"');
     expect(html).not.toContain('Your free scan is used');
+  });
+
+  it('says plainly that it must be the same address, and what another one does — 2026-09-29', () => {
+    // "Using this address" pointed at nothing: the card never shows one, and a
+    // different, unused Google account is not refused — it becomes a new
+    // agency's sign-up. The rule and its consequence are both on the card.
+    const html = render(VERIFY);
+    expect(html).toContain('the same address you sign in with here');
+    expect(html).toContain('A different Google account would start a new agency instead.');
+    expect(html).not.toContain('using this address');
   });
 
   it('offers Continue with Google, the sign-in page’s own entry point', () => {
