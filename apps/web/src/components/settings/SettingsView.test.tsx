@@ -139,7 +139,14 @@ describe('the "not built yet" list is maintained in both directions', () => {
     const html = render(READY);
     expect(html).toContain('white-labelling is still name-and-slug only');
     expect(html).toContain('Changing the seat limit');
-    expect(html).toContain('Usage limits and any view of how much you have used');
+  });
+
+  it('no longer says scans are unmetered — 2026-09-29', () => {
+    // True until the allowance shipped on 2026-09-28; the terms page now
+    // states the cap, so this line would contradict it.
+    const html = render(READY);
+    expect(html).not.toContain('Usage limits and any view of how much you have used');
+    expect(html).not.toContain('there is no cap to hit');
   });
 
   it('promises no dates and offers no controls for what is absent', () => {
@@ -278,20 +285,21 @@ describe('what is still missing is a numbered list, not small print', () => {
     const html = render(READY);
     expect(html).toContain('>01<');
     expect(html).toContain('>02<');
-    expect(html).toContain('>03<');
+    // Two since 2026-09-29, when "usage limits" stopped being missing.
+    expect(html).not.toContain('>03<');
   });
 
   it('is an ordered list, because the numbers are structure and not decoration', () => {
     expect(render(READY)).toContain('<ol');
   });
 
-  it('still says all three things, word for word', () => {
+  it('still says both things, word for word', () => {
     // The point of the section is that it is true, so a visual pass must not
-    // quietly drop an entry while restyling it.
+    // quietly drop an entry while restyling it. Three until 2026-09-29, when
+    // the usage-limits entry stopped being true.
     const html = render(READY);
     expect(html).toContain('white-labelling is still name-and-slug only');
     expect(html).toContain('there is no number here to change yet');
-    expect(html).toContain('there is no cap to hit and no figure to look at');
   });
 });
 

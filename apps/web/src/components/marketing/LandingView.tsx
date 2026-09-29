@@ -76,6 +76,8 @@ import {
   ScoreMeter,
 } from '@avp/design-system';
 import type { LedgerDimension } from '@avp/design-system';
+import { MarketingFooter } from './MarketingFooter';
+import { MarketingHeader } from './MarketingHeader';
 import { PLAN_PRICE_USD, PricingCard } from './PricingCard';
 
 /**
@@ -133,7 +135,11 @@ export function LandingView({
 }: LandingViewProps): JSX.Element {
   return (
     <div id="top" className="flex flex-col">
-      <LandingHeader onGetStarted={onGetStarted} onLogIn={onLogIn} />
+      <MarketingHeader
+        sections={{ productId: PRODUCT_ID, pricingId: PRICING_ID }}
+        onGetStarted={onGetStarted}
+        onLogIn={onLogIn}
+      />
 
       <main className="mx-auto flex w-full max-w-page flex-col gap-24 px-6 py-18">
         {/*
@@ -421,80 +427,9 @@ export function LandingView({
         </PageSection>
         </Reveal>
       </main>
+
+      <MarketingFooter />
     </div>
-  );
-}
-
-/**
- * The persistent header — Epic 9.15.
- *
- * 9.10 shipped this page with no header at all: the only way to reach the
- * product was the hero's own button, and the only way to reach a SIGN-IN form
- * was to click a sign-up button and then read your way out of it. A returning
- * customer had no door.
- *
- * Sticky rather than merely present, because the page is long by design — the
- * honest-limitations section and the pricing card are both below the fold, and
- * a header that scrolls away takes "Log in" with it exactly when a reader has
- * decided.
- *
- * The nav is two in-page anchors, plain `<a href="#…">`. No router, no scroll
- * library, no motion: the browser already does this correctly, and the
- * animation question is open from a previous epic and is not being answered
- * here by accident.
- */
-function LandingHeader({
-  onGetStarted,
-  onLogIn,
-}: {
-  onGetStarted?: (() => void) | undefined;
-  onLogIn?: (() => void) | undefined;
-}): JSX.Element {
-  return (
-    <header className="sticky top-0 z-10 border-b border-line-hairline bg-surface-ground">
-      <div className="mx-auto flex w-full max-w-page flex-wrap items-center gap-4 px-6 py-4">
-        {/* The wordmark, not a logo: the licensed-assets rule permits custom-drawn marks
-            and licensed fonts only, and no mark has been drawn. Type is the
-            honest option, and it is the name `layout.tsx` already ships as the
-            document title rather than a second name invented here. */}
-        <a
-          href="#top"
-          className="font-display text-ui-lg tracking-display text-text-primary"
-        >
-          AI Visibility Platform
-        </a>
-
-        <nav aria-label="Sections of this page" className="flex items-center gap-4">
-          <a
-            href={`#${PRODUCT_ID}`}
-            className="text-ui-sm text-text-secondary hover:underline"
-          >
-            Product
-          </a>
-          <a
-            href={`#${PRICING_ID}`}
-            className="text-ui-sm text-text-secondary hover:underline"
-          >
-            Pricing
-          </a>
-        </nav>
-
-        <div className="ml-auto flex items-center gap-3">
-          {/*
-            "Log in" is a button element rather than an anchor because sign-in
-            is a view state on this route, not a URL — see `app/page.tsx`. It is
-            styled ghost so that the page has exactly one primary action, which
-            is the one for people who do not have an account yet.
-          */}
-          <Button variant="ghost" size="sm" onClick={onLogIn}>
-            Log in
-          </Button>
-          <Button variant="primary" size="sm" onClick={onGetStarted}>
-            Get started free
-          </Button>
-        </div>
-      </div>
-    </header>
   );
 }
 

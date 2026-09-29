@@ -13,6 +13,13 @@ export interface PageSectionProps {
   /** Larger type and more space — for the first section on a page. */
   tone?: 'default' | 'lead';
   /**
+   * The heading's element — 2026-09-29. `h2` unless a page has no other
+   * title: the public privacy and terms pages open with a lead section whose
+   * heading IS the document's title, and a document needs one `h1`. The
+   * look is the same either way; only the outline changes.
+   */
+  headingAs?: 'h1' | 'h2';
+  /**
    * Reveal the eyebrow, heading, lead and body in sequence — Epic 9.16.
    *
    * **Defaults to false, and every existing caller keeps today's markup
@@ -57,6 +64,7 @@ export function PageSection({
   lead,
   children,
   tone = 'default',
+  headingAs: Heading = 'h2',
   stagger = false,
   animate = true,
   className,
@@ -64,7 +72,7 @@ export function PageSection({
   const parts = (
     <>
       {eyebrow != null && <p className="avp-section__eyebrow">{eyebrow}</p>}
-      {heading != null && <h2 className="avp-section__heading">{heading}</h2>}
+      {heading != null && <Heading className="avp-section__heading">{heading}</Heading>}
       {lead != null && <p className="avp-section__lead">{lead}</p>}
       {children != null && <div className="avp-section__body">{children}</div>}
     </>
@@ -99,11 +107,11 @@ export function PageSection({
         </Reveal>
       )}
       {heading != null && (
-        <h2 className="avp-section__heading">
+        <Heading className="avp-section__heading">
           <Reveal as="span" index={next()} animate={animate}>
             {heading}
           </Reveal>
-        </h2>
+        </Heading>
       )}
       {lead != null && (
         <Reveal as="p" index={next()} animate={animate} className="avp-section__lead">
