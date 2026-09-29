@@ -205,6 +205,35 @@ class _FakeGoogle:
         return replace(self.identity, nonce=self.nonce)
 
 
+def _google_answers_as(
+    client: AsyncClient, settings, monkeypatch, *, sub: str, email: str  # noqa: ANN001
+) -> None:
+    """Google configured on this deployment, and faked to vouch for one identity."""
+    monkeypatch.setattr(settings, "google_oauth_client_id", "test.apps.googleusercontent.com")
+    monkeypatch.setattr(settings, "google_oauth_client_secret", SecretStr("not-a-secret"))
+    monkeypatch.setattr(
+        settings, "google_oauth_redirect_url", "http://localhost:8000/api/v1/auth/google/callback"
+    )
+    fake = _FakeGoogle(GoogleIdentity(
+        sub=sub, email=email, email_verified=True, name="Op", nonce=None,
+    ))
+    client._transport.app.dependency_overrides[google_provider] = lambda: fake  # noqa: SLF001
+
+
+async def _continue_with_google(client: AsyncClient) -> Any:
+    """Press the notice's button and come back: `/start`, then the callback's 302."""
+    started = await client.get(f"{BASE}/auth/google/start", follow_redirects=False)
+    assert started.status_code == 302, started.text
+    state = parse_qs(urlparse(started.headers["location"]).query)["state"][0]
+    back = await client.get(
+        f"{BASE}/auth/google/callback",
+        params={"code": "code-1", "state": state},
+        follow_redirects=False,
+    )
+    assert back.status_code == 302, back.text
+    return back
+
+
 # ---------------------------------------------------------------------------
 # the constants, argued
 # ---------------------------------------------------------------------------
@@ -810,32 +839,16 @@ class TestTheFreeScanNeedsGoogle:
         replaces the cookie. `test_google_sign_in.py` proves the same link for
         somebody who signed out first.
         """
-        monkeypatch.setattr(settings, "google_oauth_client_id", "test.apps.googleusercontent.com")
-        monkeypatch.setattr(settings, "google_oauth_client_secret", SecretStr("not-a-secret"))
-        monkeypatch.setattr(
-            settings, "google_oauth_redirect_url", "http://localhost:8000/api/v1/auth/google/callback"
+        _google_answers_as(
+            client, settings, monkeypatch, sub="sub-way-through", email="allowance@test.example"
         )
-        fake = _FakeGoogle(GoogleIdentity(
-            sub="sub-way-through", email="allowance@test.example", email_verified=True,
-            name="Op", nonce=None,
-        ))
-        client._transport.app.dependency_overrides[google_provider] = lambda: fake  # noqa: SLF001
-
         agency_id = await _sign_up(client, google=False)
         _defer(client)
         cid = await _make_client(client, "helpscout.com")
         refused = await _start(client, cid)
         assert refused.json()["code"] == allowance.CODE_VERIFY_REQUIRED
 
-        started = await client.get(f"{BASE}/auth/google/start", follow_redirects=False)
-        assert started.status_code == 302, started.text
-        state = parse_qs(urlparse(started.headers["location"]).query)["state"][0]
-        back = await client.get(
-            f"{BASE}/auth/google/callback",
-            params={"code": "code-1", "state": state},
-            follow_redirects=False,
-        )
-        assert back.status_code == 302, back.text
+        back = await _continue_with_google(client)
         assert urlparse(back.headers["location"]).path == "/dashboard"
 
         resp = await _start(client, cid)
@@ -843,6 +856,35 @@ class TestTheFreeScanNeedsGoogle:
         me = (await client.get(f"{BASE}/auth/me")).json()
         assert me["agency"]["id"] == agency_id
         assert me["user"]["signInMethods"] == ["email", "google"]
+
+    async def test_a_different_unused_google_address_starts_a_new_sign_up_and_links_nothing(
+        self, client: AsyncClient, billing_on, engine, settings, monkeypatch
+    ) -> None:  # noqa: ANN001
+        """What the notice's wording warns about since 2026-09-29.
+
+        Signed in by password as one address, the person picks a Google
+        account with another address that nothing here holds. That is not
+        refused: `resolve_identity` finds no user by `sub` or by email, so the
+        callback takes it for a brand-new sign-up — a ticket, and
+        `/sign-up/google` to name an agency. Nothing is linked, the session is
+        untouched, and the free scan still asks for Google.
+        """
+        _google_answers_as(
+            client, settings, monkeypatch, sub="sub-elsewhere", email="someone.else@test.example"
+        )
+        agency_id = await _sign_up(client, google=False)
+        _defer(client)
+        cid = await _make_client(client, "helpscout.com")
+
+        back = await _continue_with_google(client)
+        landed = urlparse(back.headers["location"])
+        assert landed.path == "/sign-up/google"
+        assert parse_qs(landed.query)["ticket"][0]
+
+        me = (await client.get(f"{BASE}/auth/me")).json()
+        assert me["agency"]["id"] == agency_id
+        assert me["user"]["signInMethods"] == ["email"]
+        assert (await _start(client, cid)).json()["code"] == allowance.CODE_VERIFY_REQUIRED
 
     async def test_a_password_only_teammate_is_refused_where_the_google_owner_is_not(
         self, client: AsyncClient, billing_on, engine, settings

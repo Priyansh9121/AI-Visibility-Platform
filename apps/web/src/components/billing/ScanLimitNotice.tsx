@@ -16,7 +16,8 @@
  * the sign-in page carries (on the same address it links this account, and
  * works without signing out first), and **Subscribe**. Subscribe is the
  * secondary button here, so the free way through is not outshouted by the
- * paid one.
+ * paid one. If the Google step fails, the person lands back on `/` still
+ * signed in, and the front door says why (2026-09-29, `app/page.tsx`).
  */
 
 import { useState } from 'react';
@@ -63,9 +64,19 @@ export function ScanLimitNotice({ problem, agencyId, navigate }: ScanLimitNotice
         <div className="flex flex-col gap-4" data-testid="scan-limit-notice">
           {problem.code === 'SCAN_LIMIT_VERIFY_REQUIRED' ? (
             <>
+              {/*
+                "The same address", said plainly — 2026-09-29. It used to say
+                "using this address", and nothing on this card shows one.
+                Google's chooser lists every account in the browser, and a
+                different, unused address is not refused: the callback takes
+                it for a brand-new sign-up and asks for an agency name
+                (`/sign-up/google`). So the rule is stated, and so is what
+                breaking it does.
+              */}
               <p className="max-w-measure text-ui-base leading-prose text-text-primary">
                 Your free scan needs a Google sign-in, so we know one person gets one. Continue
-                with Google using this address, or subscribe.
+                with Google using the same address you sign in with here, or subscribe. A
+                different Google account would start a new agency instead.
               </p>
               {failure}
               <div className="flex flex-wrap items-center gap-3">

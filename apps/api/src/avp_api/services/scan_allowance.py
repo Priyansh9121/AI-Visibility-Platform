@@ -413,7 +413,8 @@ async def assert_can_start(
         raise ScanLimitReached(
             detail=(
                 "The free scan needs a Google sign-in, so that one person gets one. "
-                "Continue with Google using this address, or subscribe."
+                "Continue with Google using the same address you sign in with here, "
+                "or subscribe."
             ),
             code=CODE_VERIFY_REQUIRED,
             scansUsed=current.scans_used,

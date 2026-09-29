@@ -18337,3 +18337,154 @@ ruff clean; mypy **47** under its 50 ceiling. Workers **13/13**. Web
 clean. shared-types **53**, typecheck clean, generated contract current. All
 six count gates through `assert_count.py` against their logs. Exit codes
 read from files.
+
+# A failed Google step is explained to someone still signed in, and the workers lock is current
+
+**2026-09-29, later the same day.** Two things the free-scan pass left
+behind. The first was recorded there as a minor gap, and it no longer is:
+the `SCAN_LIMIT_VERIFY_REQUIRED` notice sends a **signed-in** user to
+`/auth/google/start`, which is exactly the path where a failure was dropped
+without a word. The second is the workers lockfile, which that pass left
+uncommitted as not its business.
+
+## 1. The front door speaks to someone still signed in
+
+**Before.** `app/page.tsx` read the failure reason before the session check
+but showed it only on the sign-in view. Someone who pressed Cancel on
+Google's screen, or picked a Google account whose address belongs to
+another account here, came back signed in and landed on intake with nothing
+said. Run a scan then met the same notice again, in a loop, with no
+explanation.
+
+**Now.** `lib/auth/googleFailure.takeGoogleFailure` reads the reason word
+and clears the query first, so a reload does not repeat it. After the
+session check:
+
+- **Signed in:** the same `ErrorState`, "Google sign-in did not complete",
+  above the intake form, in words written for someone signed in.
+- **Signed out:** unchanged — the sign-in view with the sign-in page's own
+  words.
+
+**The sentences, checked for a reader who is already signed in.** Eight of
+the ten were written for someone signing in: "sign in with your email and
+password", "start it again from this page", "contact the agency's owner",
+"cannot be used to sign in here", an invitation to accept. Those eight now
+have signed-in variants in `GOOGLE_REASONS_SIGNED_IN`. `denied` and `exchange-failed` read true for
+both and keep one sentence.
+
+A live session proves the reader's own account is active and not deleted
+(`current_principal` refuses anything else). So `email-claimed`,
+`account-suspended`, `invitation-expired` and `account-unavailable` are
+always about the account at the chosen Google account's address, which is
+somebody else's row. The way out is the same for all four, and each variant
+names this sign-in's own address:
+
+> The address on the Google account you chose already belongs to another
+> account here, so nothing was linked. Continue with Google again and choose
+> dana@northlight.example.
+
+## 2. A different Google address starts a new agency, and the notice now says so
+
+**Checked, not assumed.** `resolve_identity` looks for a user by `sub`, then
+by email. For a Google account whose address and `sub` are both unknown
+here, it finds nobody and returns no user. The callback then treats it as a
+brand-new sign-up: it mints a ticket and sends the browser to
+`/sign-up/google` to name an agency.
+
+- So a signed-in password user who picks the wrong Google account is not
+  linked and not refused. They are walked into creating a second agency.
+- Nothing is linked and their session is untouched until they finish that
+  form. If they do, a new agency exists with its own free scan, and the
+  cookie moves to it.
+- A new test pins this. `/sign-up/google` was not changed: it does not know
+  the person is still signed in elsewhere, but it does show the other
+  address, which is their second chance to notice.
+
+**"Using this address" was not enough.** The notice never shows an address,
+and Google's account chooser lists every account signed into the browser.
+The notice now reads:
+
+> Your free scan needs a Google sign-in, so we know one person gets one.
+> Continue with Google using the same address you sign in with here, or
+> subscribe. A different Google account would start a new agency instead.
+
+The API's `detail` for the same code says "the same address you sign in
+with here" too. The notice does not print the literal address, because the
+dashboard's payload carries no user; that would need an extra `/auth/me` or
+a new member on the 402. The failure sentences on `/` do name it, since that
+page already has `me`.
+
+## 3. The workers lock is current, and CI checks both
+
+**The drift, demonstrated.**
+- The committed `apps/workers/uv.lock` held no `pyjwt` at all, although
+  `avp-api` has required `pyjwt[crypto]` since Epic 20.
+- `uv lock --check` failed on it (rc 1).
+- A fresh environment built from it exactly as CI builds one
+  (`uv sync --frozen --extra dev`) could not
+  `import avp_api.services.google_oauth`, nor even `import avp_api.main`:
+  `ModuleNotFoundError: No module named 'jwt'`.
+- The workers suite stayed green only because nothing in it imports either.
+
+**Re-locked.** `uv lock` added `pyjwt` and `cryptography`, and nothing else
+moved. It picked `pyjwt` 2.15.1, released the day before. The two locks
+share 65 packages, and every one of the other 64 was pinned identically in
+both. So the new pin was held at the api's 2.13.0
+(`uv lock --upgrade-package pyjwt==2.13.0`), which is the version the API's
+own suite tests its Google code against.
+
+- The diff is 53 added lines and no removals.
+- `uv lock --check` passes.
+- A fresh frozen environment imports both modules on `jwt` 2.13.0.
+- The api lock passed `uv lock --check` as committed, so it was not
+  re-locked.
+
+**CI.** A `uv.lock is current` step (`uv lock --check`) now runs in both the
+api and workers jobs, after `setup-uv` and before the frozen install. A
+stale lock now fails CI instead of sitting as a local diff. The workers step
+says why it matters there in particular: the API is a path dependency, so
+the API's own `pyproject.toml` is an input to the workers lock.
+
+## Verified
+
+**API 1485 → 1486.** New test: a signed-in password user who continues with
+a different, unused Google address lands on `/sign-up/google` with a
+ticket, stays signed in as themselves with nothing linked, and is still
+asked for Google. It shares two new helpers with the way-through test,
+which now uses them too.
+
+**Web 910 → 925 (+15).**
+- Five mounted tests in jsdom (`app/home.test.tsx`, `WorkspaceShell.test`'s
+  pattern), each also checking the address bar afterwards:
+  - signed in with `denied`: intake renders, with the notice above the
+    form, and the query cleared;
+  - signed in with `email-claimed`: the signed-in words, naming the
+    address, and the query cleared;
+  - signed in with no failure: no notice, and the query left alone;
+  - signed out with `denied` and with `email-claimed`: the sign-in view,
+    unchanged, and the query cleared.
+- Nine on the mapping and on taking the query.
+- One on the notice's wording.
+
+**Negative controls, run rather than assumed.** With the signed-in notice
+removed from the page, exactly the two signed-in failure tests fail.
+
+**Caught by the typecheck, not by a test.** An existing test called
+`.map(googleReasonSentence)` point-free, so `map` passed the index as the
+new `signedInAs` argument. The test was quietly checking the signed-in
+variants with an address of "0". It now calls the function with the reason
+only.
+
+**Seen, not only asserted.** The page was mounted in jsdom and its HTML
+screenshotted with compiled CSS, in both themes at 1280 and 390 wide. The
+notice sits between the header and the form, aligned with the form, with no
+horizontal scroll. See `docs/screenshots/google-failure-signed-in-2026-09-29/`.
+
+**The rest of the bar.**
+- ruff clean; mypy **47** under its 50 ceiling.
+- Workers **13/13**; design-system **648/648**; shared-types **53**.
+- All three typechecks clean.
+- All six count gates through `assert_count.py` against their logs.
+- Both `uv lock --check` runs pass locally.
+- The OpenAPI export is unchanged, since no schema or route docstring moved.
+- Exit codes read from files.

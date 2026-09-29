@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { googleFailureFromSearch } from '@/lib/auth/googleFailure';
+import { googleReasonSentence, takeGoogleFailure } from '@/lib/auth/googleFailure';
 import { Button, Card, CardBody, ErrorState, LoadingState } from '@avp/design-system';
 import type { ClientDetail, Me } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
@@ -37,33 +37,37 @@ type View =
   | { kind: 'result'; client: ClientDetail };
 
 /**
- * The Google failure notice — Epic 20. The word-to-sentence mapping lives
- * in `lib/auth/googleFailure.ts`, where it is tested; this reads the query
- * and clears it so a reload or a back-press does not re-show the notice.
+ * The Google failure notice — Epic 20, and shown signed in since 2026-09-29.
+ *
+ * The word-to-sentence mapping lives in `lib/auth/googleFailure.ts`, where
+ * it is tested, and so does `takeGoogleFailure`, which reads the query and
+ * clears it so a reload or a back-press does not re-show the notice.
+ *
+ * A failure used to land here signed out, and the notice lived on the
+ * sign-in view alone. Since the free scan began to need a Google sign-in,
+ * the scan-limit notice sends a SIGNED-IN user to Google to link the
+ * account, so a failure can now land here with the session still live —
+ * and the intake screen said nothing, so Run a scan met the same notice
+ * again, in a loop, with no explanation. The notice is shown whichever view
+ * follows, in the words for that view.
  */
-function googleFailure(): string | null {
-  if (typeof window === 'undefined') return null;
-  const sentence = googleFailureFromSearch(window.location.search);
-  if (sentence === null) return null;
-  window.history.replaceState(null, '', window.location.pathname);
-  return sentence;
-}
-
 export default function Home() {
   const [me, setMe] = useState<Me | null>(null);
   const [view, setView] = useState<View>({ kind: 'loading' });
   const [googleNotice, setGoogleNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    // A Google failure lands here signed out; read the reason BEFORE the
-    // session check so the notice survives whichever view follows.
-    const failure = googleFailure();
-    if (failure != null) setGoogleNotice(failure);
+    // Take the reason BEFORE the session check, so it survives whichever view
+    // follows; which sentence it becomes waits on that check.
+    const failure = takeGoogleFailure(window);
     try {
-      setMe(await api.me());
+      const signedIn = await api.me();
+      setMe(signedIn);
+      if (failure != null) setGoogleNotice(googleReasonSentence(failure, signedIn.user.email));
       setView({ kind: 'intake' });
     } catch (err) {
       if (failure != null) {
+        setGoogleNotice(googleReasonSentence(failure));
         // Straight to the sign-in form, where the notice and the way forward are.
         setView({ kind: 'sign-in' });
       } else if (err instanceof ApiProblem && err.status === 401) {
@@ -164,6 +168,17 @@ export default function Home() {
           and use that to decide who it competes with.
         </p>
       </header>
+
+      {/*
+        A Google step that failed for someone still signed in — 2026-09-29.
+        The same ErrorState the sign-in view shows, above the intake form,
+        so the person who came back from Google hears what happened.
+      */}
+      {googleNotice != null && (
+        <div className="mb-8">
+          <ErrorState title="Google sign-in did not complete" detail={googleNotice} />
+        </div>
+      )}
 
       {view.kind === 'loading' && <LoadingState message="Loading your workspace…" />}
 
