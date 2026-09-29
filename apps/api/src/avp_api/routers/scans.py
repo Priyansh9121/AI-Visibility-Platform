@@ -132,6 +132,12 @@ async def run_scan(
     lock, so two requests at the cap cannot both take the last slot. A scan
     already RUNNING is returned as before, and the open QUEUED scan a run
     adopts is not counted against starting it.
+
+    **The free scan needs a Google sign-in since 2026-09-29.** A requesting
+    user with no linked Google identity, in a free agency, gets the 402 with
+    `SCAN_LIMIT_VERIFY_REQUIRED` — refused under the same lock, before the
+    count is consulted, and with no scan row created. Paid agencies and
+    exempt operators are unaffected.
     """
     client = await get_client(db, agency_id=principal.agency_id, client_id=client_id)
 

@@ -508,6 +508,9 @@ async def test_a_new_agency_has_no_subscription_and_is_not_gated(
         "scansUsedThisPeriod": 0,
         "scanLimit": 1,
         "periodResetsAt": None,
+        # 2026-09-29: this owner signed up by password and has no Google link,
+        # so the free scan would ask for one first.
+        "freeScanRequiresGoogle": True,
     }
 
     # And READING is never withheld because of it — the gate is on starting a

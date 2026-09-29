@@ -100,7 +100,9 @@ describe('what the card is not allowed to say', () => {
 
   it('says what is free and what the plan is for', () => {
     const out = render();
-    expect(out).toContain('Signing up is free and includes one full scan and report');
+    // The free scan needs a Google sign-in since 2026-09-29.
+    expect(out).toContain('Signing up is free. Your first scan is free with a Google sign-in.');
+    expect(out).not.toContain('includes one full scan and report');
     expect(out).toContain('Subscribe to keep scanning');
     expect(out).not.toContain('Nothing in the product is behind');
     expect(out.toLowerCase()).not.toContain('free trial');

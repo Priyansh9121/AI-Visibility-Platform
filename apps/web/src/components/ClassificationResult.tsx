@@ -56,9 +56,10 @@ export function ClassificationResult({
   const status = client.classificationStatus;
   const name = client.brandName ?? client.name;
   const [scan, setScan] = useState<ScanState>({ kind: 'idle' });
-  // "1 free scan" / "Free scan used" / "12 of 40 scans this month" beside the
-  // button, from the billing response; null for a member (403) or an
-  // ungated deployment, in which case nothing is shown.
+  // "1 free scan" / "Free scan needs Google sign-in" / "Free scan used" /
+  // "12 of 40 scans this month" beside the button, from the billing response;
+  // null for a member (403) or an ungated deployment, in which case nothing
+  // is shown.
   const allowance = useScanAllowance(client.agencyId);
 
   /**

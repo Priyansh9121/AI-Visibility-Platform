@@ -18,7 +18,11 @@ export interface paths {
          *     The allowance — `scansUsedThisPeriod`, `scanLimit`, `periodResetsAt` — is
          *     one COUNT over the agency's scans (2026-09-28, `services/scan_allowance`).
          *     `scanLimit` is null when billing is not configured on this deployment,
-         *     which is the honest way to say no gate applies.
+         *     which is the honest way to say no gate applies. `freeScanRequiresGoogle`
+         *     (2026-09-29) is true when the free scan is what this sign-in would start
+         *     and it has no linked Google identity — the case a scan start refuses with
+         *     `SCAN_LIMIT_VERIFY_REQUIRED`. It is about the requesting user, not the
+         *     agency: two seats of one agency can read it differently.
          *
          *     Every field comes off the `agencies` row the webhook maintains. A settings
          *     screen that called a payment processor on page load would be slower, would
@@ -1041,6 +1045,12 @@ export interface paths {
          *     lock, so two requests at the cap cannot both take the last slot. A scan
          *     already RUNNING is returned as before, and the open QUEUED scan a run
          *     adopts is not counted against starting it.
+         *
+         *     **The free scan needs a Google sign-in since 2026-09-29.** A requesting
+         *     user with no linked Google identity, in a free agency, gets the 402 with
+         *     `SCAN_LIMIT_VERIFY_REQUIRED` — refused under the same lock, before the
+         *     count is consulted, and with no scan row created. Paid agencies and
+         *     exempt operators are unaffected.
          */
         post: operations["run_scan_api_v1_clients__clientId__scans_post"];
         delete?: never;
@@ -1982,6 +1992,8 @@ export interface components {
         BillingStatusOut: {
             /** Currentperiodend */
             currentPeriodEnd: string | null;
+            /** Freescanrequiresgoogle */
+            freeScanRequiresGoogle: boolean;
             /** Hasbillingaccount */
             hasBillingAccount: boolean;
             /** Isactive */

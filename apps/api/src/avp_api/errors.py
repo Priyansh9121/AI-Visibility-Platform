@@ -202,10 +202,12 @@ class ScanLimitReached(ProblemError):
 
     **402**, because that is what it is: the thing asked for costs money the
     caller has not paid. Carries a stable `code` — `SCAN_LIMIT_FREE_USED` (one
-    free scan, lifetime) or `SCAN_LIMIT_MONTHLY` (forty a month on the plan) —
-    plus `scansUsed`, `scanLimit` and, for the monthly case, `periodResetsAt`,
-    so a client can say "resets on the 1st" rather than "try later". The gate
-    itself is `services/scan_allowance.py`; its docstring says when it is on.
+    free scan, lifetime), `SCAN_LIMIT_MONTHLY` (forty a month on the plan) or,
+    since 2026-09-29, `SCAN_LIMIT_VERIFY_REQUIRED` (the free scan, asked for by
+    a user with no linked Google identity) — plus `scansUsed`, `scanLimit` and,
+    for the monthly case, `periodResetsAt`, so a client can say "resets on the
+    1st" rather than "try later". The gate itself is
+    `services/scan_allowance.py`; its docstring says when it is on.
     """
 
     status_code = status.HTTP_402_PAYMENT_REQUIRED

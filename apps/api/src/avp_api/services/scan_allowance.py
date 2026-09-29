@@ -13,7 +13,9 @@ line with a shared fuse. So: the plan gates STARTING a scan, and only that.
 THE ALLOWANCE
 -------------
 * **Free** (no active subscription): `FREE_SCAN_ALLOWANCE` completed scans per
-  agency, lifetime. Viewing reports, share links and PDFs stays free forever.
+  agency, lifetime, started only by a user with a linked Google identity
+  (2026-09-29, below). Viewing reports, share links and PDFs stays free
+  forever.
 * **Paid** (`services/billing.is_active`: `active` or `trialing`):
   `PAID_SCANS_PER_MONTH` per agency per calendar month, UTC.
 * A `canceled`, `past_due`, `unpaid` or `paused` subscription is free.
@@ -65,6 +67,56 @@ shape Epic 9.6 found and closed for the per-client case.
 `IN_FLIGHT_WINDOW` does not weaken it. Two requests racing for the last slot
 are by definition milliseconds apart, so the loser counts the winner's row
 while it is minutes inside the window.
+
+THE FREE SCAN NEEDS A GOOGLE SIGN-IN (2026-09-29)
+-------------------------------------------------
+The free scan is per agency, and an agency costs nothing to make. Password
+sign-up (`services/auth.sign_up_agency`) accepts any address, real or not,
+and never verifies it. So the free tier was a farm: sign up, take one scan,
+sign up again. At about $1.70 and 6 SerpApi searches a scan, some 41 fake
+sign-ups spend SerpApi's month, and competitor detection then stops for
+every customer at once.
+
+So the free scan starts only for a requesting user with a linked Google
+identity, `User.google_sub`. Anyone else gets a 402 with
+`SCAN_LIMIT_VERIFY_REQUIRED`. It is the one verified identity fact this
+system already holds, and the operator exemption below rests on the same
+fact. It needs no new infrastructure: email verification would need Resend
+configured and a confirmation flow, which is a later decision.
+
+* **The requesting user, not the agency.** The person spending the free scan
+  is the one who must be verified. A password-only teammate in a free agency
+  whose owner is Google-linked is still refused.
+* **Before the count is consulted, and under the same row lock.** A
+  password-only user gets this code, not `SCAN_LIMIT_FREE_USED`, whatever the
+  count says. The count is not a record of scans actually run: a
+  detection-only QUEUED row holds a slot for its window, and a password-only
+  agency that never scanned would otherwise be told its free scan was used.
+  One consequence, accepted: where the free scan really is spent, a
+  password-only user is asked to sign in with Google first, and hears that
+  it is used only after doing so.
+* **Paid agencies and exempt operators are untouched.** A payment is
+  identity enough, so the forty a month applies to any seated user, password
+  or Google. An exempt operator has a `google_sub` by definition.
+* **Everything else stays open to a password-only user**: signing up,
+  adding clients, competitor detection, and viewing, sharing and exporting
+  reports. The way through already exists: Continue with Google on the same
+  address links the account by its Google-verified email
+  (`services/google_oauth.resolve_identity`).
+
+**One Google account, one free scan** — and that is why this closes the
+farm rather than raising its price. `google_sub` is UNIQUE and a user
+belongs to exactly one agency, so a Google account is the verified identity
+of one user in one agency. While it is linked it cannot start a second
+agency's free scan, and the only thing that unlinks it — re-issuing that
+seat's invitation (`services/invitations.invite_seat`) — leaves the row, and
+its unique address, in the same agency. The farm's input used to be a typed
+string, free and unlimited; it is now a Google account, which anyone can
+make, but not without real friction, and the friction is the point. The one
+route round the uniqueness runs through Google itself: unlink a seat, then
+change that Google account's own address to a new one Google verifies. That
+is an inbox per scan, which is the price email verification would have
+charged anyway.
 
 THE PLATFORM OPERATOR IS EXEMPT
 -------------------------------
@@ -169,11 +221,23 @@ IN_FLIGHT_WINDOW = timedelta(minutes=15)
 
 CODE_FREE_USED = "SCAN_LIMIT_FREE_USED"
 CODE_MONTHLY = "SCAN_LIMIT_MONTHLY"
+CODE_VERIFY_REQUIRED = "SCAN_LIMIT_VERIFY_REQUIRED"
 
 
 def gate_enabled(settings: Settings) -> bool:
     """On when billing is configured; off — deliberately — when it is not."""
     return bool(settings.stripe_secret_key and settings.stripe_price_id)
+
+
+def has_verified_identity(user: User | None) -> bool:
+    """Whether an outside party has vouched for this sign-in: a linked Google identity.
+
+    `User.google_sub` is written only by `services/google_oauth`, against a
+    token Google signed, and it is UNIQUE. Nothing else on `User` proves
+    anything — the email is a string somebody typed. The free scan and the
+    operator exemption both rest on this and on nothing weaker.
+    """
+    return user is not None and user.google_sub is not None
 
 
 def is_exempt(settings: Settings, user: User | None) -> bool:
@@ -187,7 +251,7 @@ def is_exempt(settings: Settings, user: User | None) -> bool:
     """
     if user is None or not user.email:
         return False
-    if user.google_sub is None:
+    if not has_verified_identity(user):
         return False
     return user.email.strip().lower() in settings.scan_allowance_exempt_emails
 
@@ -212,12 +276,19 @@ class Allowance:
     honest representation of "no limit applies here", never a large number.
     `period_resets_at` is set for a paid agency only; a free allowance is
     lifetime and does not reset.
+
+    `free_scan_requires_google` is true exactly when the gate is on, the
+    agency is free, and the requesting user has no linked Google identity —
+    the one case `assert_can_start` refuses with `SCAN_LIMIT_VERIFY_REQUIRED`.
+    One field, read by that refusal and by the billing response alike, so
+    the screen and the 402 cannot disagree about who needs to sign in.
     """
 
     scans_used: int
     scan_limit: int | None
     period_resets_at: datetime | None
     is_paid: bool
+    free_scan_requires_google: bool
 
     @property
     def exhausted(self) -> bool:
@@ -266,22 +337,28 @@ async def allowance(
     *,
     now: datetime | None = None,
     exclude_scan_id: str | None = None,
-    user: User | None = None,
+    user: User,
 ) -> Allowance:
     """The agency's allowance as of `now`, for `user`. Pure read; no lock.
 
     `exclude_scan_id` is the open QUEUED scan a run is about to adopt rather
     than create (`get_or_create_scan` reuses it): it is the scan being started,
     not a scan already started, so it must not count against starting it.
-    `user` is the requesting sign-in, for the operator exemption — the whole
-    row, not its email, because the exemption also asks whether Google
-    vouched for that address.
+    `user` is the requesting sign-in — the whole row, not its email, because
+    the exemption and the free scan both ask whether Google vouched for it.
+    Required since 2026-09-29: an allowance is always somebody's.
     """
     now = now or datetime.now(UTC)
     paid = billing.is_active(agency)
     if not gate_enabled(settings) or is_exempt(settings, user):
         used = await count_scans(db, agency.id, now=now, exclude_scan_id=exclude_scan_id)
-        return Allowance(scans_used=used, scan_limit=None, period_resets_at=None, is_paid=paid)
+        return Allowance(
+            scans_used=used,
+            scan_limit=None,
+            period_resets_at=None,
+            is_paid=paid,
+            free_scan_requires_google=False,
+        )
     if paid:
         start, next_start = period_bounds(now)
         used = await count_scans(
@@ -292,10 +369,15 @@ async def allowance(
             scan_limit=PAID_SCANS_PER_MONTH,
             period_resets_at=next_start,
             is_paid=True,
+            free_scan_requires_google=False,
         )
     used = await count_scans(db, agency.id, now=now, exclude_scan_id=exclude_scan_id)
     return Allowance(
-        scans_used=used, scan_limit=FREE_SCAN_ALLOWANCE, period_resets_at=None, is_paid=False
+        scans_used=used,
+        scan_limit=FREE_SCAN_ALLOWANCE,
+        period_resets_at=None,
+        is_paid=False,
+        free_scan_requires_google=not has_verified_identity(user),
     )
 
 
@@ -306,7 +388,7 @@ async def assert_can_start(
     *,
     exclude_scan_id: str | None = None,
     now: datetime | None = None,
-    user: User | None = None,
+    user: User,
 ) -> Allowance:
     """Lock the agency row, count, and refuse with 402 if the allowance is spent.
 
@@ -315,6 +397,9 @@ async def assert_can_start(
     whole mechanism. Re-reads the agency under the lock rather than trusting
     the principal's copy, so a subscription that changed between the request
     starting and this point is seen.
+
+    The free scan's Google requirement is refused first, before the count is
+    consulted, and under this same lock — one lock path for every refusal.
     """
     agency = (
         await db.execute(select(Agency).where(Agency.id == agency_id).with_for_update())
@@ -322,6 +407,19 @@ async def assert_can_start(
     current = await allowance(
         db, agency, settings, now=now, exclude_scan_id=exclude_scan_id, user=user
     )
+    if current.free_scan_requires_google:
+        # Whatever the count says — see the module docstring for why a count
+        # is not proof that this agency ever ran a scan.
+        raise ScanLimitReached(
+            detail=(
+                "The free scan needs a Google sign-in, so that one person gets one. "
+                "Continue with Google using this address, or subscribe."
+            ),
+            code=CODE_VERIFY_REQUIRED,
+            scansUsed=current.scans_used,
+            scanLimit=current.scan_limit,
+            periodResetsAt=None,
+        )
     if not current.exhausted:
         return current
     assert current.scan_limit is not None

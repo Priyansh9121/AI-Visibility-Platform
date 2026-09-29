@@ -181,7 +181,7 @@ export function SettingsView({
           <PageSection
             eyebrow="Billing"
             heading="What you pay"
-            lead={`One plan, $${PLAN_PRICE_USD} a month, 3 seats. Your first scan is free; subscribing is how you keep scanning. Reports you already have stay open either way.`}
+            lead={`One plan, $${PLAN_PRICE_USD} a month, 3 seats. Your first scan is free with a Google sign-in; subscribing is how you keep scanning. Reports you already have stay open either way.`}
           >
             <BillingPanel
               agencyId={state.me.agency.id}

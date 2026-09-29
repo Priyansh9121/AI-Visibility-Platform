@@ -58,7 +58,7 @@ listed in `CORS_ALLOW_ORIGINS` — browsers reject wildcard CORS with credential
 | `/problems/invalid-url` | 409 | Submitted URL has no public domain |
 | `/problems/invalid-webhook-signature` | 400 | Billing webhook signature missing, malformed or wrong |
 | `/problems/billing-not-configured` | 503 | A Stripe setting is unset. `detail` names the variable |
-| `/problems/scan-limit-reached` | 402 | The agency's scan allowance is spent. Carries `code` (`SCAN_LIMIT_FREE_USED` or `SCAN_LIMIT_MONTHLY`), `scansUsed`, `scanLimit`, `periodResetsAt` (monthly only) |
+| `/problems/scan-limit-reached` | 402 | A scan cannot start on the allowance. Carries `code` (`SCAN_LIMIT_FREE_USED`, `SCAN_LIMIT_MONTHLY`, or since 2026-09-29 `SCAN_LIMIT_VERIFY_REQUIRED` — the free scan, asked for by a user with no linked Google identity), `scansUsed`, `scanLimit`, `periodResetsAt` (monthly only) |
 
 Validation problems add an `errors` member:
 
@@ -599,7 +599,8 @@ one.
   "hasBillingAccount": true,
   "scansUsedThisPeriod": 12,
   "scanLimit": 40,
-  "periodResetsAt": "2026-10-01T00:00:00Z"
+  "periodResetsAt": "2026-10-01T00:00:00Z",
+  "freeScanRequiresGoogle": false
 }
 ```
 
@@ -614,9 +615,23 @@ or `STRIPE_PRICE_ID`): the gate is off there, matching checkout's
 `503 billing-not-configured`. `periodResetsAt` is the first instant of next
 month for a paid agency and null for free. The web reads all three from
 here and carries no copy of the numbers. `canceled`, `past_due`, `unpaid`
-and `paused` are free. **The platform operator is exempt**: sign-ins listed
-in `SCAN_ALLOWANCE_EXEMPT_EMAILS` (default: the founder's address) are not
-gated, per user, and read `scanLimit: null` here.
+and `paused` are free. **The platform operator is exempt**: a sign-in listed
+in `SCAN_ALLOWANCE_EXEMPT_EMAILS` (empty by default) **and** holding a
+linked Google identity is not gated, per user, and reads `scanLimit: null`
+here. A listed address with no Google link is gated like anyone else
+(2026-09-28).
+
+**`freeScanRequiresGoogle` — 2026-09-29.** The free scan starts only for a
+requesting user with a linked Google identity (`User.google_sub`): password
+sign-up never verifies an address, and an agency costs nothing to make.
+The field is true exactly when the gate is on, the agency is free, and the
+**requesting user** has no Google link — which is exactly when
+`POST /clients/{clientId}/scans` answers `402 SCAN_LIMIT_VERIFY_REQUIRED`.
+It describes the caller, not the agency: an owner who signed in with Google
+and a password-only teammate read it differently. False for a paid agency
+(a payment is identity enough), for an exempt operator, and wherever billing
+is not configured. The web shows "Free scan needs Google sign-in" from it
+and never works it out itself.
 
 **This endpoint never calls Stripe.** Every field is read from the `agencies`
 row that the webhook maintains. That is a deliberate property rather than an
@@ -1183,6 +1198,32 @@ when billing is not configured. A scan already running is returned as
 before; the open queued scan a run adopts is not counted against starting
 it. Prompt re-runs are not scans and stay under their own throttle. Viewing,
 sharing and exporting reports is never gated.
+
+**`SCAN_LIMIT_VERIFY_REQUIRED` since 2026-09-29.** The free scan needs a
+requesting user with a linked Google identity. A password-only user in a
+free agency is refused with this code — under the same row lock as the
+other two, **before the count is consulted** (so a password-only agency
+that never scanned is not told its free scan is used), and with no scan row
+created. Checked per user, not per agency: a password-only teammate is
+refused where a Google-linked owner of the same agency is not. Paid agencies
+and exempt operators are unaffected. The way through is Continue with Google
+on the same address, which links the account by its Google-verified email;
+`GET /agencies/{agencyId}/billing` says in advance, as
+`freeScanRequiresGoogle`.
+
+```json
+{
+  "type": "/problems/scan-limit-reached",
+  "title": "Scan limit reached",
+  "status": 402,
+  "detail": "The free scan needs a Google sign-in, so that one person gets one. Continue with Google using this address, or subscribe.",
+  "instance": "/api/v1/clients/clnt_01.../scans",
+  "code": "SCAN_LIMIT_VERIFY_REQUIRED",
+  "scansUsed": 0,
+  "scanLimit": 1,
+  "periodResetsAt": null
+}
+```
 
 **Asynchronous since Epic 9.5.** Returns `202` immediately with a QUEUED scan;
 the pipeline runs out of band. It used to run inline and answer `201` with the

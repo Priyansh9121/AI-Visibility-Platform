@@ -176,8 +176,8 @@ export function LandingView({
                 the budget enforces is the one claim a slow scan cannot falsify.
               */}
               A scan usually takes under five minutes — twenty questions, put to four
-              AI answer engines, one at a time. Your first scan is free. ${PLAN_PRICE_USD}/month
-              after that.
+              AI answer engines, one at a time. Your first scan is free with a Google
+              sign-in. ${PLAN_PRICE_USD}/month after that.
             </p>
           </div>
         </PageSection>

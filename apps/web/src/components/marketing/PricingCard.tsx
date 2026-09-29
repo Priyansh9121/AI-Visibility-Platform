@@ -158,9 +158,15 @@ export function PricingCard({
                 Get started
               </Button>
             )}
+            {/*
+              The free scan needs a Google sign-in since 2026-09-29 — the
+              one identity here somebody else has vouched for, and what
+              keeps "free" from meaning "free per typed address".
+              `services/scan_allowance.py` says why.
+            */}
             <p className="max-w-measure text-ui-sm text-text-tertiary">
-              Signing up is free and includes one full scan and report. Subscribe to
-              keep scanning.
+              Signing up is free. Your first scan is free with a Google sign-in.
+              Subscribe to keep scanning.
             </p>
           </div>
         </div>

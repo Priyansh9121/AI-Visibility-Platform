@@ -151,9 +151,12 @@ describe('the "not built yet" list is maintained in both directions', () => {
 });
 
 describe('billing', () => {
-  it('says the first scan is free and the plan is how you keep scanning', () => {
+  it('says the first scan is free with Google and the plan is how you keep scanning', () => {
     const html = render(READY);
-    expect(html).toContain('Your first scan is free; subscribing is how you keep scanning');
+    // 2026-09-29: the free scan needs a Google sign-in.
+    expect(html).toContain(
+      'Your first scan is free with a Google sign-in; subscribing is how you keep scanning',
+    );
     expect(html).not.toContain('not how you unlock it');
     expect(html).not.toContain('nothing behind this that you are missing');
   });

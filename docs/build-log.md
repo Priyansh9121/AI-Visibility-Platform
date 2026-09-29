@@ -18194,3 +18194,146 @@ count gates run locally against their logs before the push, floors and the
 mypy ceiling alike. No schema or route docstring changed;
 `export_openapi.py` re-run and the generated contract confirmed current
 (no diff). Exit codes read from files.
+
+# The free scan requires a verified identity
+
+**2026-09-29.** The finding of 2026-09-28, acted on: password sign-up never
+verifies an address, the free scan is per agency, and an agency costs
+nothing to make. Sign up with any string, take one scan (about $1.70 of
+engine calls and 6 of SerpApi's 250 searches a month), repeat — about 41
+fake sign-ups spend SerpApi's month, and competitor detection then stops for
+every customer at once. The landing page says "Your first scan is free" in
+public. The decision was made in the brief and is not reopened here: **the
+free scan runs only for a requesting user with a linked Google identity**
+(`User.google_sub` not null) — the one verified identity fact the system
+already holds, the same basis as the operator exemption, and no new
+infrastructure. Email verification (Resend plus a confirmation flow) stays
+a later decision.
+
+## The way through, confirmed before relying on it
+
+Read, then run. `/auth/google/start` takes no session. The callback's
+`resolve_identity` matches by `sub`, then by email; a password account with
+no `google_sub` is linked when Google says `email_verified` and the account
+is active and not deleted; the callback commits, replaces the cookie and
+sends the browser to `/dashboard`. The existing
+`test_a_password_account_links_by_verified_email_and_signs_in` covers the
+brief's order (sign out, then Continue with Google). A new test drives the
+notice's own order — still signed in: 402 `SCAN_LIMIT_VERIFY_REQUIRED` →
+`/auth/google/start` → callback → `/dashboard` → the same scan 202, same
+agency, `signInMethods` `["email", "google"]`. Google itself is faked at
+the provider seam, as in every Google test here; the real consent screen
+still needs the founder's account. Nothing else was needed, so no linking
+flow was built.
+
+**Gap found, not fixed.** When the Google attempt fails while the person is
+still signed in — Cancel on Google's screen, or an address already linked to
+another Google account — the callback sends them to `/?google=error&reason=…`
+with their session still live. `app/page.tsx` resolves the session first and
+shows the failure sentence only on the sign-in view, so it is dropped and
+they land on intake with no word said. Signed out first, the sentence shows.
+It is not something linking needs, so it is left for its own pass.
+
+## Built — API
+
+- **`services/scan_allowance.py`.** `has_verified_identity(user)` —
+  `google_sub` set — is now what both the free scan and the operator
+  exemption rest on. `Allowance.free_scan_requires_google` is true exactly
+  when the gate is on, the agency is free and the requesting user has no
+  link; `assert_can_start` raises `ScanLimitReached` with
+  `SCAN_LIMIT_VERIFY_REQUIRED` on it (`scansUsed`, `scanLimit: 1`,
+  `periodResetsAt: null`), **under the same row lock, before the count is
+  consulted**, and no scan row is created. `user` is now a required argument
+  of `allowance` and `assert_can_start`: an allowance is always somebody's.
+- **Before the count, as the brief directed, and for a reason worth keeping.**
+  The count is not a record of scans actually run: a detection-only QUEUED
+  row holds a slot for its 15-minute window, so a password-only agency that
+  never scanned would otherwise hear "your free scan is used". **Accepted
+  consequence, pinned by a test:** where the free scan really is spent, a
+  password-only user is asked for Google first and hears the scan is used
+  only once linked. For a listed operator address signed in by password,
+  asking for Google first is exactly right — the link is what makes it
+  exempt.
+- **Per requesting user, not per agency.** A password-only teammate in a
+  free agency whose owner is Google-linked is refused; the owner is not.
+  Paid agencies are untouched (a payment is identity enough; forty a month
+  for any seat), and so are exempt operators, who have a `google_sub` by
+  definition, and any deployment where billing is not configured.
+- **One Google account, one free scan** — written into the module docstring
+  as the reason this closes the farm rather than raising its price.
+  `google_sub` is UNIQUE and a user belongs to one agency; the only thing
+  that ever clears it, re-issuing a seat's invitation, leaves the row and
+  its unique address in the same agency. The one route around it, checked
+  and recorded rather than claimed away: unlink a seat, then change that
+  Google account's own address to a new one Google verifies — an inbox per
+  scan, the price email verification would have charged.
+- **`GET /agencies/{id}/billing` gains `freeScanRequiresGoogle`**, from the
+  same `Allowance` the refusal reads, so the screen and the 402 cannot
+  disagree. OpenAPI and `api.gen.ts` regenerated, and stable on a second
+  regeneration. api-contracts.md carries the code, the field and an example
+  body — and its stale "default: the founder's address" line for the
+  exemption now says empty-by-default plus Google, which 2026-09-28 changed
+  in code but not there.
+
+## Built — web
+
+- **Label** (`lib/billing/allowance.ts`): "Free scan needs Google sign-in"
+  when `freeScanRequiresGoogle` is true, read before the count as the API
+  checks it, so the label says what pressing the button will meet. The web
+  works nothing out itself. The 402 narrowing knows the third code.
+- **`ScanLimitNotice`**: "Your free scan needs a Google sign-in, so we know
+  one person gets one. Continue with Google using this address, or
+  subscribe." **Continue with Google** is the sign-in page's own
+  `GoogleSignInButton` → `/auth/google/start`; **Subscribe** is the same
+  Checkout, as the secondary button so the paid way on does not outshout
+  the free one. Not an `ErrorState`.
+- **Copy — four places made the unconditional claim**, not the two the brief
+  named, because the pricing card worded it differently from the hero:
+  the landing hero ("Your first scan is free with a Google sign-in.
+  $160/month after that."); the pricing card ("Signing up is free. Your
+  first scan is free with a Google sign-in. Subscribe to keep scanning.",
+  was "Signing up is free and includes one full scan and report"); Settings'
+  billing lead; and the billing panel's no-subscription sentence ("Your
+  agency's first scan is free with a Google sign-in", was "Your agency has
+  one free scan"). Every test that pinned an old string moved with it.
+- Seen, not only asserted: rendered to static HTML with compiled CSS, both
+  themes, 1280 and 390 wide. One row of buttons at 390 with no horizontal
+  scroll; the Google button is its guideline 40px beside a 32px secondary
+  Subscribe, centred. `docs/screenshots/free-scan-google-2026-09-29/`.
+
+## What goes live on push
+
+Render deploys before CI finishes. Where the gate is on (both Stripe
+variables set on Render), every password-only user of a free agency now
+reads "Free scan needs Google sign-in" and meets the notice. **This leans on
+Google sign-in being configured on Render** — the three `GOOGLE_OAUTH_*`
+variables, recorded as set on 2026-09-22. Without them Continue with Google
+is a 503 and a password-only free user's only way on is Subscribe.
+
+## Verified
+
+API **1485/1485** (+14). New: a password-only free agency with no scans gets
+402 `SCAN_LIMIT_VERIFY_REQUIRED` with no scan row; the same agency once
+linked gets 202; Continue with Google on the same address is the way
+through, end to end while signed in; a password-only teammate is refused
+where the Google owner of the same agency is not; a password-only user of a
+paid agency starts (`active`, `trialing`); billing unconfigured asks for
+nothing; the verification is asked before the count (a fresh detection-only
+row on another client); the spent case asks for Google first, then says
+used; and `freeScanRequiresGoogle` true for free and lapsed password-only
+users, false for Google, paid and ungated. Two existing tests moved: the
+password-only listed operator is still refused, and the code is now
+`SCAN_LIMIT_VERIFY_REQUIRED`; `test_billing.py`'s exact body gains the
+field. `_sign_up` in `test_scan_allowance.py` now links Google by default,
+because the free path needs it — so the stranded-scan tests and the 39/40
+concurrency test pass with their bodies byte-unchanged.
+
+Negative controls run rather than assumed: with the refusal switched off,
+exactly the seven refusal tests fail; with the count consulted first,
+exactly the three ordering tests fail.
+
+ruff clean; mypy **47** under its 50 ceiling. Workers **13/13**. Web
+**910/910** (+7), typecheck clean. design-system **648/648**, typecheck
+clean. shared-types **53**, typecheck clean, generated contract current. All
+six count gates through `assert_count.py` against their logs. Exit codes
+read from files.

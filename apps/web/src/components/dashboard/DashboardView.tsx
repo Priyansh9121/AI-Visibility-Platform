@@ -144,8 +144,9 @@ export interface DashboardViewProps {
   agencyId?: string | undefined;
   /**
    * The remaining-count label beside the scan controls — "1 free scan",
-   * "Free scan used", "12 of 40 scans this month". Null when the caller may
-   * not read billing, or when no gate applies on this deployment.
+   * "Free scan needs Google sign-in", "Free scan used", "12 of 40 scans this
+   * month". Null when the caller may not read billing, or when no gate
+   * applies on this deployment.
    */
   allowance?: string | null;
   /** The page is refreshing itself. Told to the user, not just done to them. */

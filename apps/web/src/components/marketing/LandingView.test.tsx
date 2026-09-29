@@ -209,12 +209,15 @@ describe('the price is published, deliberately', () => {
 
   it('says the first scan is free and the plan is for the rest — 2026-09-28', () => {
     const out = html();
-    expect(out).toContain('Your first scan is free.');
+    // With a Google sign-in since 2026-09-29, and said so in public.
+    expect(out).toContain('Your first scan is free with a Google sign-in.');
+    expect(out).not.toContain('Your first scan is free.');
     expect(out).toContain(`$${PLAN_PRICE_USD}/month after that`);
     expect(out).not.toContain('when you are ready to pay for it');
     // The honest-limits list no longer claims scans are unmetered: they are.
     expect(out).not.toContain('Scan volume is not metered');
-    expect(out).toContain('Signing up is free and includes one full scan and report');
+    expect(out).toContain('Signing up is free. Your first scan is free with a Google sign-in.');
+    expect(out).not.toContain('includes one full scan and report');
   });
 });
 
@@ -381,7 +384,7 @@ describe('the page arrives rather than being already there — Epic 9.16', () =>
     expect(out).toContain('For SEO and digital marketing agencies');
     expect(out).toContain('$160');
     expect(out).toContain('One URL in, and nothing else to fill in');
-    expect(out).toContain('Signing up is free and includes one full scan and report');
+    expect(out).toContain('Signing up is free. Your first scan is free with a Google sign-in.');
   });
 });
 
