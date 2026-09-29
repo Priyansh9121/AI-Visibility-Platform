@@ -19126,3 +19126,172 @@ question).
   route docstring changed.
 - `alembic check` clean on `avp_dev`.
 - Exit codes read from files.
+
+# A rarely named brand still sets Citation Strength's scale: shrinkage (v6) measured and rejected, and a 45-word note
+
+**2026-09-29, the sixth entry of the day.** The v5 entry flagged a property
+of a plain mean. A rival named in a handful of awareness answers can hold a
+scan's best mean, and every other brand is normalised against it. On one
+plausible.io scan, Seline, named in 3 of 36 answers, marked Plausible
+Analytics, named in all 36, down to 17.86. The brief fixed a candidate and a
+rule before anything was measured.
+
+## What was tried (v6)
+
+Each brand's per-answer mean is shrunk toward the scan's pooled mean P:
+`(sum of the brand's answer sums + K × P) / (n + K)`, with **K = 3**.
+
+- **n** is the number of awareness answers that name the brand.
+- **P** is the mean authority over every (answer, named brand) pair among
+  the brands compared.
+- A brand named in no answer stays at 0, not P.
+- Everything else was v5's.
+
+**The rule.** Ship only if ρ against Mention Rate (zeros excluded) stays
+below 0.70, **and** fewer scans have a scale set by a brand named in fewer
+than 5 answers than under v5. Keep v5 if n (zeros excluded) is under 15.
+
+**The measurement.**
+- `scripts/measure_citation_overlap.py` now also reports, per scan, which
+  brand sets the scale and how many awareness answers name it. Ties are
+  held jointly, so a scan counts as small-sample only if every brand at the
+  top is.
+- It ran on v5, then on v6 implemented in `scoring.py`, over the same 26
+  scored scans.
+- v6's arithmetic was checked by hand against the implementation on the two
+  scans where a rival sets the scale, and matched exactly.
+
+| | ρ, zeros excluded | n | ρ, all 132 pairs | scale set by a brand named < 5 times |
+|---|---|---|---|---|
+| v5 | 0.177 | 83 | 0.708 | 3 of 19 |
+| v6 | 0.301 | 95 | 0.715 | 3 of 19 |
+
+Every scan's scale-setter was the same brand under both:
+
+| client | scan | sets the scale (v5 and v6 alike) | named in | under 5? |
+|---|---|---|---|---|
+| helpscout.com | `0NC3SV8W` | Help Scout and Front | 2 and 2 | **yes** |
+| basecamp.com | `DD12YYE0` | Teamwork | 8 | no |
+| linear.app | `XVJ77KSS` | Shortcut | 23 | no |
+| plausible.io | `VRNNXXB1` | Seline | 3 | **yes** |
+| plausible.io | `1YDNFAAM` | PostHog | 18 | no |
+| plausible.io | `BZ9EY9QM` | PostHog | 13 | no |
+| notion.so | `AX2PBBB9` | Airtable | 12 | no |
+| notion.so | `P8A075RZ` | ClickUp | 15 | no |
+| front.com | `W0JRMC9E` | Missive | 6 | no |
+| missiveapp.com | `8ADTZ6ZT` | Gmelius | 6 | no |
+| zammad.com | `58RXESN4` | Zendesk | 8 | no |
+| helpwise.io | `QM1ATB7R` | Missive | 8 | no |
+| pirsch.io | `H84RKKH2` | Plausible Analytics | 36 | no |
+| helpwise.io | `Z82H0P59` | Missive | 6 | no |
+| intercom.com | `QT7WMVXZ` | Freshworks (Freshdesk) | 4 | **yes** |
+| helpwise.io | `34MJCNZ1` | Freshdesk | 28 | no |
+| hiverhq.com | `V7DEYSE5` | Hiver | 39 | no |
+| groovehq.com | `GEAFNQ8H` | Zendesk | 45 | no |
+| reamaze.com | `6H6C00ME` | Freshdesk | 24 | no |
+
+The three remaining scans with Citation Strength included (psmdigitalagency.com
+and psmdigitalagency.com.au twice) back no brand at all under either formula.
+
+## Verdict: v6 rejected, v5 stands
+
+The ρ guard held, and the count did not fall, so v6 does not ship.
+`FORMULA_VERSION` stays `v5`, and nothing is re-scored. K was not tuned.
+
+**Why shrinkage could not fix it.** A very high mean over three answers
+survives being blended with three answers' worth of the average:
+
+- **plausible.io** (P = 26.05 over 119 pairs): Seline goes from 116.67 to
+  71.36, still far above Matomo, the next brand, at 28.01 (named in 23).
+- **intercom.com** (P = 27.69 over 65 pairs): Freshworks goes from 50.00 to
+  40.44, still above Zendesk at 28.49 and the subject at 27.60.
+- **helpscout.com** has only two awareness answers, so no averaging rule can
+  give it a scale-setter named five times.
+
+Shrinkage also lifts a brand whose naming answers cite nothing trusted
+toward P. Botpress, named in 4 answers with nothing tiered, went from 0 to
+11.87, which is why n rose from 83 to 95.
+
+**The property stays open.** What would close it — a minimum number of
+answers before a brand can set the scale, or another treatment of small
+samples — is a formula decision of its own. scoring-spec.md records all of
+this under v5, as "Small-n measured, v6 rejected (2026-09-29)".
+
+**A reading of the brief, moot because v6 did not ship.** The brief said
+that when P is 0, `NO_AUTHORITY_DATA` "applies as today". Today that code
+fires only when no awareness answer cites anything tiered. The three
+psmdigitalagency scans are a third case: tiered sources are cited, but only
+in answers that name no brand. They score 0 and stay included. The v6
+implementation left that unchanged. Excluding them would have raised three
+unnamed brands' composites, and made the exclusion copy's "nothing cited …
+is on either tier" untrue.
+
+**Left in the code.**
+- `answer_authority`, split out of `authority_when_named`, returns each
+  brand's per-answer sums. It is behaviour-neutral: the final run
+  reproduces the v5 run pair for pair. Two tests pin it: the value is
+  exactly the plain mean of the lists, and a brand named in no answer gets
+  an empty list and a 0.
+- A rejection note on `authority_when_named`, and one line by
+  `FORMULA_VERSION`.
+- The script's scale-setter report.
+
+## The client-facing note: 45 words
+
+`DIMENSION_NOTE` for Citation Strength, on both sides of the language
+boundary, now reads:
+
+> When AI names the brand, how often does it back it with a trusted source?
+> It counts only answers to questions that did not name the brand. Some
+> sources qualify as trusted through uncalibrated industry labels — a coarse
+> proxy that a mis-classified client can skew.
+
+**45 words**, counting whitespace-separated tokens that contain a letter or
+digit (the dash is not a word). The v5 note had 239.
+
+**What stayed.** "uncalibrated", "coarse proxy" and "mis-classified" stay,
+because the copy contract requires them in this note.
+- When the dimension is measured, this note is the only place the proxy's
+  limit reaches a reader.
+- The report has no general caveat or method section they could move to.
+- The `NO_AUTHORITY_DATA` exclusion detail carries them, but only when the
+  dimension is left out.
+- "only answers to questions that did not name the brand" also stays, because
+  it changes how the number reads.
+
+**What left.** The tier list and the market-participant rule. They remain in
+the `NO_AUTHORITY_DATA` detail and in scoring-spec.md. The contract's
+"brands in a scanned market" check now applies to the exclusion detail
+only.
+
+**Contract checks.** New tests on both sides hold the note to 45 words and
+to your question. `report-copy.json` was regenerated with
+`AVP_WRITE_FIXTURES=1`, a one-line change, and `copyContract.test.ts` and
+`test_report_copy.py` pass. No wording about shrinkage was added, since v6
+did not ship.
+
+**Screenshots,** in `docs/screenshots/citation-note-2026-09-29/`:
+- `report-note-light-1280.png` and `report-note-dark-1280.png` show the real
+  `ReportView` in the route frame. The report is paper in both themes, so
+  only the page around it differs.
+- `report-note-pdf-page1.png` is page 1 of a real `render_report_pdf`
+  output, rasterised with Quick Look. The note prints under the score
+  table.
+- Both use the shared Help Scout case, marked v5 with its pre-v2.1
+  degradation flag removed, so the page shows no stale caveat. The numbers
+  are unchanged.
+
+## Verified
+
+- **API 1557 → 1560** (+3: the two `answer_authority` tests and the Python
+  word-limit test).
+- **Web 997 → 998** (+1: the TypeScript word-limit test).
+- `ReportView.test.tsx` and the PDF test pin the new wording.
+- Workers 13, shared-types 53, and the full design-system suite at 649.
+- ruff clean; mypy 47 under its 50 ceiling.
+- All three typechecks clean.
+- All six count gates through `assert_count.py`.
+- Both `uv lock --check` runs pass.
+- OpenAPI and `api.gen.ts` regenerate byte-identically.
+- `alembic check` clean.
+- Exit codes read from files.

@@ -82,13 +82,19 @@ describe('the Citation Strength copy says what the proxy cannot do', () => {
     );
   });
 
-  it('both texts say market participants are out of the second tier', () => {
-    for (const text of [
-      DIMENSION_NOTE['citation_strength']!,
-      EXCLUSION_REASON['NO_AUTHORITY_DATA']!.detail,
-    ]) {
-      expect(text).toContain('brands in a scanned market');
-    }
+  it('the exclusion detail says market participants are out of the second tier', () => {
+    // The note carried this too until 2026-09-29, when it was cut to what a
+    // client reads at a glance. The rule itself is in scoring-spec.md.
+    expect(EXCLUSION_REASON['NO_AUTHORITY_DATA']!.detail).toContain('brands in a scanned market');
+  });
+
+  it('the note reads at a glance: the question it answers, in at most 45 words', () => {
+    const note = DIMENSION_NOTE['citation_strength']!;
+    expect(note).toContain(
+      'When AI names the brand, how often does it back it with a trusted source?',
+    );
+    const words = note.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w));
+    expect(words.length).toBeLessThanOrEqual(45);
   });
 });
 

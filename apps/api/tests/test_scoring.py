@@ -23,6 +23,7 @@ from avp_api.services.scoring import (
     Dimension,
     ResultFacts,
     SubScoreOutOfRangeError,
+    answer_authority,
     authority_when_named,
     average_position,
     awareness_only,
@@ -577,6 +578,46 @@ class TestCitationStrengthWhenNamed:
         out = compute_score(no_rivals, [RIVAL], competitor_set_status=DetectionStatus.OK,
                             authority=CURATED_ONLY)
         assert out.value(Dimension.CITATION_STRENGTH) == Decimal("0.00")
+
+    def test_the_value_is_the_plain_mean_of_each_brands_answer_sums(self) -> None:
+        """`authority_when_named` is `answer_authority` averaged, and nothing else.
+
+        Pins the 2026-09-29 split: the per-answer sums moved into their own
+        function so the measurement script can read how many answers name a
+        brand, and the v5 value must still be exactly their mean.
+        """
+        results = [
+            res(1, mentioned=True, brands=(SUBJECT, self.ZENDESK),
+                citations=(("g2.com", False), ("helpscout.com", True))),
+            res(2, mentioned=True, brands=(SUBJECT,), citations=(("capterra.com", False),
+                                                                  ("nih.gov", False))),
+            res(3, mentioned=True, brands=(SUBJECT,)),
+            res(4, mentioned=False, brands=(self.ZENDESK,),
+                citations=(("zendesk.com", False), ("wide.example", False))),
+            res(5, mentioned=True, brands=(SUBJECT,), status=EngineResultStatus.TIMEOUT,
+                citations=(("g2.com", False),)),
+        ]
+        tiers = PLATFORM.tiers_for({d for r in results for d, _ in r.citations})
+        subject_sums, rival_sums = answer_authority(results, [RIVAL], tiers)
+        # Answered only; own domains out: 100, 200, 0 for the subject; 100 and
+        # 50 for Zendesk (zendesk.com is its own).
+        assert subject_sums == [Decimal("100"), Decimal("200"), Decimal("0")]
+        assert rival_sums == {"comp_0001": [Decimal("100"), Decimal("50")]}
+        subject, rivals = authority_when_named(results, [RIVAL], tiers)
+        assert subject == sum(subject_sums, Decimal("0")) / len(subject_sums) == Decimal("100")
+        assert rivals == {"comp_0001": Decimal("75")}
+
+    def test_a_brand_named_in_no_answer_has_no_answer_sums(self) -> None:
+        """An empty list, not a zero: how many answers name a brand is the list's length."""
+        silent = comp(2, "Freshdesk", "freshdesk.com")
+        results = [res(1, mentioned=False, brands=(self.ZENDESK,),
+                       citations=(("g2.com", False),))]
+        tiers = CURATED_ONLY.tiers_for({"g2.com"})
+        subject_sums, rival_sums = answer_authority(results, [RIVAL, silent], tiers)
+        assert subject_sums == []
+        assert rival_sums == {"comp_0001": [Decimal("100")], "comp_0002": []}
+        subject, rivals = authority_when_named(results, [RIVAL, silent], tiers)
+        assert (subject, rivals["comp_0002"]) == (Decimal("0"), Decimal("0"))
 
     def test_the_digest_moves_with_every_input_the_mean_reads(self) -> None:
         """Rule 1: a value that can move the composite must move the digest."""

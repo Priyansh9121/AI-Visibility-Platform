@@ -125,7 +125,7 @@ def test_the_cross_reference_table_points_at_real_objects(case: str) -> None:
 
 
 def test_the_citation_strength_note_is_the_shared_sentence() -> None:
-    """The PDF prints the same note as the screen, from the mirrored table — v5 wording.
+    """The PDF prints the same note as the screen, from the mirrored table.
 
     `test_report_copy.py` holds the table to `strings.ts`; this holds the
     document to the table, whole, so a note that stopped printing (or printed
@@ -134,7 +134,7 @@ def test_the_citation_strength_note_is_the_shared_sentence() -> None:
     note = re.sub(r"\s+", " ", narrative.DIMENSION_NOTE["citation_strength"])
     text = _visible_text(_render("scored-no-generated-fixes"))
     assert f"Citation Strength. {note}" in text
-    assert "how often does it back the brand with a trusted source?" in text
+    assert "how often does it back it with a trusted source?" in text
 
 
 def test_a_long_report_breaks_onto_more_than_one_page() -> None:

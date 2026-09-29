@@ -14,6 +14,12 @@ citations is expected and says nothing about overlap. Rivals only carry a
 Citation Strength when the subject's is included, so a scan whose dimension
 is excluded contributes no pairs.
 
+It also reports, per scan, which brand SETS THE SCALE: the one holding the
+best raw value that everyone is normalised against, and how many awareness
+answers name it. It counts the scans whose scale rests on fewer than
+`SMALL_SAMPLE` answers. Ties are held jointly, so a scan counts only when
+every brand at the top is named in fewer than `SMALL_SAMPLE` answers.
+
 On 2026-09-29, over 26 scored scans, v4 read Spearman ρ = 0.781 with zeros
 excluded (n = 83), above the 0.70 threshold fixed beforehand. That produced v5
 (scoring-spec.md), which reads 0.177 on the same pairs.
@@ -48,7 +54,18 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # no
 from avp_api.config import Settings  # noqa: E402
 from avp_api.models import Client, Scan, Score  # noqa: E402
 from avp_api.services import scoring_runner  # noqa: E402
-from avp_api.services.scoring import FORMULA_VERSION, Dimension  # noqa: E402
+from avp_api.services.domain_authority import load_domain_authority  # noqa: E402
+from avp_api.services.scoring import (  # noqa: E402
+    FORMULA_VERSION,
+    Dimension,
+    answer_authority,
+    authority_when_named,
+    awareness_only,
+)
+
+# "Named in fewer than 5 answers": the v6 brief's line for a scale that rests
+# on too little evidence.
+SMALL_SAMPLE = 5
 
 
 @dataclass(frozen=True)
@@ -59,6 +76,16 @@ class Pair:
     role: str  # "subject" or "rival"
     mention_rate: float
     citation_strength: float
+
+
+@dataclass(frozen=True)
+class ScaleSetter:
+    scan_id: str
+    client: str
+    brands: list[str]  # every brand holding the best raw value
+    named: list[int]  # awareness answers naming each of them
+    best: float  # the raw value everyone is normalised against
+    small_sample: bool  # every brand at the top is named in < SMALL_SAMPLE answers
 
 
 @dataclass(frozen=True)
@@ -228,7 +255,10 @@ async def main() -> int:
 
     pairs: list[Pair] = []
     scan_rows: list[ScanRow] = []
+    setters: list[ScaleSetter] = []
+    nobody_backed: list[str] = []
     async with session_factory() as session:
+        authority = await load_domain_authority(session)
         scans = (
             await session.execute(
                 select(Scan, Client)
@@ -269,6 +299,35 @@ async def main() -> int:
                     Pair(scan.id, client.domain, rival.name, "rival",
                          float(rival.mention_rate), float(rival.citation_strength))
                 )
+            if cs is None:
+                continue
+            # Who sets the scale: the raw values `citation_strength` normalises,
+            # recomputed from the same facts with the same functions.
+            results = await scoring_runner.load_result_facts(session, scan.id)
+            competitors, _ = await scoring_runner.load_competitor_facts(session, scan.id)
+            aware = awareness_only([r for r in results if r.answered])
+            tiers = authority.tiers_for({d for r in aware for d, _ in r.citations})
+            subject_raw, rival_raw = authority_when_named(aware, competitors, tiers)
+            subject_credits, rival_credits = answer_authority(aware, competitors, tiers)
+            names = {c.competitor_id: c.name for c in competitors}
+            brands = [(client.brand_name or client.name, subject_raw, len(subject_credits))] + [
+                (names[cid], rival_raw[cid], len(rival_credits[cid])) for cid in sorted(rival_raw)
+            ]
+            best = max(raw for _, raw, _ in brands)
+            if best == 0:
+                nobody_backed.append(client.domain)
+                continue
+            top = [(name, n) for name, raw, n in brands if raw == best]
+            setters.append(
+                ScaleSetter(
+                    scan_id=scan.id,
+                    client=client.domain,
+                    brands=[name for name, _ in top],
+                    named=[n for _, n in top],
+                    best=float(best),
+                    small_sample=all(n < SMALL_SAMPLE for _, n in top),
+                )
+            )
         await session.rollback()
     await engine.dispose()
 
@@ -285,6 +344,9 @@ async def main() -> int:
                 "all_pairs": every,
                 "zeros_excluded": zeros_out,
                 "widest_gaps": [asdict(p) for p in gaps],
+                "scale_setters": [asdict(s) for s in setters],
+                "small_sample_setters": sum(s.small_sample for s in setters),
+                "nobody_backed": nobody_backed,
             },
             indent=2,
         )
@@ -302,6 +364,12 @@ async def main() -> int:
     print(f"pairs: {len(pairs)} ({subjects} subject, {len(pairs) - subjects} rival)")
     for label, s in (("all pairs", every), ("zeros excluded", zeros_out)):
         print(f"{label}: n={s['n']} pearson={_fmt(s['pearson'])} spearman={_fmt(s['spearman'])}")
+    small = sum(s.small_sample for s in setters)
+    print(f"scale set by a brand named in fewer than {SMALL_SAMPLE} answers: {small} of "
+          f"{len(setters)} scans with a scale ({len(nobody_backed)} more back no brand at all)")
+    for st in setters:
+        held = ", ".join(f"{b} (n={n})" for b, n in zip(st.brands, st.named, strict=True))
+        print(f"  {st.client}: {held}{'  <- small sample' if st.small_sample else ''}")
     print("widest gaps (|MR - CS|, one per brand):")
     for p in gaps:
         print(f"  {p.brand} ({p.role}, scan of {p.client}): MR {p.mention_rate:.2f}, "
