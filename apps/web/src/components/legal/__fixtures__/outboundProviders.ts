@@ -11,8 +11,12 @@
  * classified here, and a provider here has to appear on the page.
  *
  * Hosts reached with no literal in our source are covered another way: the
- * Anthropic and Stripe SDKs by their dependency, jsDelivr by the setting that
- * serves the API's docs page, and the two hosts by the founder's word.
+ * Anthropic and Stripe SDKs by their dependency, and the two hosts by the
+ * founder's word.
+ *
+ * jsDelivr left on 2026-09-29. It served the viewer for the API's docs page,
+ * and staging and production no longer serve that page (`main.py`), so the
+ * running service loads nothing from it.
  */
 
 export interface OutboundProvider {
@@ -53,18 +57,11 @@ export const PROVIDERS: readonly OutboundProvider[] = [
   { pageName: 'SerpApi', hosts: ['serpapi.com'] },
   { pageName: 'Resend', hosts: ['api.resend.com'] },
   { pageName: 'Google Fonts', hosts: ['fonts.googleapis.com', 'fonts.gstatic.com'] },
-  {
-    // FastAPI's Swagger UI, served at /api/v1/docs in every environment,
-    // loads its viewer from jsDelivr (and an icon from fastapi.tiangolo.com).
-    pageName: 'jsDelivr',
-    evidence: { file: 'apps/api/src/avp_api/main.py', pattern: /docs_url=/ },
-  },
 ];
 
 /** Hosts that appear in the source but carry nobody's data anywhere. */
 export const NOT_PROVIDER_HOSTS: readonly string[] = [
   'localhost', // development defaults, and comments about them
-  'example.invalid', // the crawler's placeholder User-Agent info address
   'a.com', // a comment showing the CORS setting's format
   'b.com', // the same comment
   'www.oaic.gov.au', // a link on the privacy page itself

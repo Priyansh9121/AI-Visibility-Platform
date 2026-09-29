@@ -105,7 +105,8 @@ uv run uvicorn avp_api.main:app --reload --port 8000
 ```
 
 - API base: http://localhost:8000/api/v1
-- Interactive docs: http://localhost:8000/api/v1/docs
+- Interactive docs: http://localhost:8000/api/v1/docs (local and test only; staging
+  and production serve no docs and no `openapi.json`)
 - Health: http://localhost:8000/api/v1/health
 - Readiness (checks Postgres + Redis): http://localhost:8000/api/v1/ready
 

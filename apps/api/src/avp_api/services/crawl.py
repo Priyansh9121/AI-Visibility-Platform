@@ -35,6 +35,8 @@ import tldextract
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import async_playwright
 
+from ..config import Settings, get_settings
+
 logger = structlog.get_logger(__name__)
 
 # A classifier needs a page's gist, not its entire text. Capping the extract
@@ -46,11 +48,28 @@ MAX_TOTAL_CHARS = 18_000
 DEFAULT_TIMEOUT_MS = 12_000
 DEFAULT_MAX_PAGES = 4
 
-# Identify ourselves honestly rather than impersonating a browser.
-USER_AGENT = (
-    "Mozilla/5.0 (compatible; AVPScanBot/0.1; +https://example.invalid/bot) "
-    "Playwright/Chromium"
-)
+# Identify ourselves honestly rather than impersonating a browser, and say
+# where a site owner can read about us: the web app's /crawler page. Until
+# 2026-09-29 the address here was a placeholder. It is built from
+# `PUBLIC_WEB_BASE_URL` rather than typed, so a domain change moves it too.
+#
+# ONE LITERAL, READ BY THE WEB. The /crawler page prints this template filled
+# in with its own address (`apps/web/src/lib/legal/crawler.ts`), and a web test
+# reads these two lines back from this file, so the page cannot show a user
+# agent this crawler does not send. Keep each on one line.
+USER_AGENT_TEMPLATE = "Mozilla/5.0 (compatible; AVPScanBot/0.1; +{info_url}) Playwright/Chromium"
+CRAWLER_INFO_PATH = "/crawler"
+
+
+def crawler_user_agent(settings: Settings | None = None) -> str:
+    """The User-Agent header on every request to a client's site.
+
+    Pages, the files they load, robots.txt and sitemap.xml alike — the crawl
+    here and the technical audit (`technical_audit.py`) both send this.
+    """
+    base = (settings or get_settings()).public_web_base_url.rstrip("/")
+    return USER_AGENT_TEMPLATE.format(info_url=f"{base}{CRAWLER_INFO_PATH}")
+
 
 # Paths most likely to state what a business actually does. Ordered by value:
 # an About page names the business, Services names the offering.
@@ -188,7 +207,7 @@ async def crawl_site(
             )
             try:
                 context = await browser.new_context(
-                    user_agent=USER_AGENT,
+                    user_agent=crawler_user_agent(),
                     viewport={"width": 1280, "height": 900},
                     java_script_enabled=True,
                 )

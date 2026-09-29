@@ -34,6 +34,7 @@
 
 import type { JSX } from 'react';
 import { PageSection } from '@avp/design-system';
+import { CRAWLER_PATH } from '@/components/marketing/MarketingFooter';
 import { OPERATOR } from '@/lib/legal/operator';
 import { RETENTION, counted } from '@/lib/legal/retention';
 import { LegalPage, Para, Point, Points, TextLink } from './LegalPage';
@@ -158,14 +159,12 @@ export function PrivacyPolicy(): JSX.Element {
             serves the typefaces these pages use, so your browser fetches them from Google, which
             sees your IP address.
           </Point>
-          <Point term="jsDelivr">
-            serves the viewer for the API’s technical documentation page (/api/v1/docs), only if
-            you open it. That page also loads its icon from fastapi.tiangolo.com.
-          </Point>
         </Points>
         <Para>
           To audit a client’s website, the service visits its public pages the way a browser
-          does. No personal information about you is involved.
+          does. No personal information about you is involved. The{' '}
+          <TextLink href={CRAWLER_PATH}>crawler page</TextLink> says what it fetches and how it
+          identifies itself.
         </Para>
       </PageSection>
 
@@ -206,6 +205,12 @@ export function PrivacyPolicy(): JSX.Element {
           a password name the account by an internal identifier, not its email address, and no
           reset or invitation link is written to the log. Render keeps these logs; this service
           does not send them anywhere else.
+        </Para>
+        <Para>
+          Render also keeps its own record of the requests that reach the web app and the API,
+          with the addresses they asked for in full. This service cannot change what that record
+          holds, so the address of a shared report, or of a reset or invitation link someone has
+          opened, can appear in it. The web app keeps no request log of its own.
         </Para>
       </PageSection>
 

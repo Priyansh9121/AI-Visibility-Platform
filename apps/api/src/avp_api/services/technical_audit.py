@@ -57,7 +57,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
 
 from .ai_crawlers import AgentAccess, evaluate_robots, unknown_access
-from .crawl import USER_AGENT, normalise_url, registrable_domain
+from .crawl import crawler_user_agent, normalise_url, registrable_domain
 
 logger = structlog.get_logger(__name__)
 
@@ -200,7 +200,7 @@ class _SideFiles:
     ai_access: list[AgentAccess] = field(default_factory=list)
 
 
-async def _fetch_side_files(base: str) -> _SideFiles:
+async def _fetch_side_files(base: str, *, user_agent: str) -> _SideFiles:
     """Fetch robots.txt and sitemap.xml, and read both policies out of robots.
 
     **robots.txt is now read twice, on purpose.**
@@ -224,7 +224,7 @@ async def _fetch_side_files(base: str) -> _SideFiles:
 
     async with httpx.AsyncClient(
         timeout=SIDE_FETCH_TIMEOUT, follow_redirects=True,
-        headers={"User-Agent": USER_AGENT},
+        headers={"User-Agent": user_agent},
     ) as client:
         try:
             resp = await client.get(f"{base}/robots.txt")
@@ -276,9 +276,10 @@ async def audit_site(url: str, *, timeout_ms: int = PAGE_TIMEOUT_MS) -> AuditSig
 
     origin_match = re.match(r"^(https?://[^/]+)", start_url)
     origin = origin_match.group(1) if origin_match else start_url
+    user_agent = crawler_user_agent()
 
     try:
-        side = await _fetch_side_files(origin)
+        side = await _fetch_side_files(origin, user_agent=user_agent)
         signals.robots_txt_present = side.robots_present
         signals.robots_allows_crawl = side.robots_allows_crawl
         signals.has_sitemap = side.sitemap_present
@@ -297,7 +298,7 @@ async def audit_site(url: str, *, timeout_ms: int = PAGE_TIMEOUT_MS) -> AuditSig
                 # NO resource blocking — see the module note. Images must load
                 # or LCP is meaningless.
                 context = await browser.new_context(
-                    user_agent=USER_AGENT, viewport={"width": 1280, "height": 900}
+                    user_agent=user_agent, viewport={"width": 1280, "height": 900}
                 )
                 page = await context.new_page()
                 page.set_default_timeout(timeout_ms)
