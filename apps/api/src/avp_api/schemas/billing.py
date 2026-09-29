@@ -53,6 +53,12 @@ class BillingStatusOut(ApiModel):
     # First instant of next month (UTC) for a paid agency; null for free,
     # whose allowance does not reset.
     period_resets_at: datetime | None
+    # True when THIS sign-in would be refused the free scan for want of a
+    # linked Google identity — 2026-09-29. Only ever true with the gate on, the
+    # agency free and the requesting user holding no `google_sub`; exactly the
+    # case a scan start answers `402 SCAN_LIMIT_VERIFY_REQUIRED`. The web reads
+    # it and never works it out itself.
+    free_scan_requires_google: bool
 
 
 class CheckoutSessionOut(ApiModel):

@@ -70,7 +70,11 @@ async def read_billing(
     The allowance — `scansUsedThisPeriod`, `scanLimit`, `periodResetsAt` — is
     one COUNT over the agency's scans (2026-09-28, `services/scan_allowance`).
     `scanLimit` is null when billing is not configured on this deployment,
-    which is the honest way to say no gate applies.
+    which is the honest way to say no gate applies. `freeScanRequiresGoogle`
+    (2026-09-29) is true when the free scan is what this sign-in would start
+    and it has no linked Google identity — the case a scan start refuses with
+    `SCAN_LIMIT_VERIFY_REQUIRED`. It is about the requesting user, not the
+    agency: two seats of one agency can read it differently.
 
     Every field comes off the `agencies` row the webhook maintains. A settings
     screen that called a payment processor on page load would be slower, would
@@ -97,6 +101,7 @@ async def read_billing(
         scans_used_this_period=current.scans_used,
         scan_limit=current.scan_limit,
         period_resets_at=current.period_resets_at,
+        free_scan_requires_google=current.free_scan_requires_google,
     )
 
 

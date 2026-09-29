@@ -6,13 +6,20 @@ billing on with fake Stripe settings (the way `test_billing.py` does), seed
 scans directly so a "completed" or "failed" scan is a fact in the table rather
 than a run of stubbed engines, and drive the endpoint with an executor that
 records the job and never runs it — the `test_scan_race.py` pattern.
+
+Since 2026-09-29 the free scan needs a linked Google identity, so `_sign_up`
+links one by default and the tests that are about the count read exactly as
+they did. The password-only account is asked for by name, `google=False`,
+wherever the verification rule is what is under test.
 """
 
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from httpx import AsyncClient
@@ -21,11 +28,15 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from avp_api import ids
-from avp_api.deps import scan_executor
-from avp_api.models import Agency, Scan, ScanStatus, ScanTrigger, User
+from avp_api.db import get_sessionmaker
+from avp_api.deps import google_provider, scan_executor
+from avp_api.models import Agency, Scan, ScanStatus, ScanTrigger, User, UserRole
+from avp_api.services import auth as auth_service
 from avp_api.services import scan_allowance as allowance
+from avp_api.services.google_oauth import GoogleIdentity
 
 BASE = "/api/v1"
+PASSWORD = "correct-horse-battery-staple"
 
 
 # ---------------------------------------------------------------------------
@@ -57,13 +68,28 @@ def _defer(client: AsyncClient) -> list:
     return jobs
 
 
-async def _sign_up(client: AsyncClient, email: str = "allowance@test.example") -> str:
+async def _sign_up(
+    client: AsyncClient, email: str = "allowance@test.example", *, google: bool = True
+) -> str:
+    """An agency through the real sign-up route, its owner signed in. Returns its id.
+
+    Google-linked by default — see the module docstring. The link is written
+    straight to the row, as `_link_google` writes it and for its reason.
+    `google=False` leaves the password-only account `POST /auth/sign-up`
+    actually creates, which is the one the verification rule refuses.
+    """
     resp = await client.post(
         f"{BASE}/auth/sign-up",
         json={"agencyName": "Allowance Test Agency", "fullName": "Op",
-              "email": email, "password": "correct-horse-battery-staple"},
+              "email": email, "password": PASSWORD},
     )
     assert resp.status_code == 201, resp.text
+    if google:
+        async with get_sessionmaker()() as s:
+            user_id = resp.json()["user"]["id"]
+            user = (await s.execute(select(User).where(User.id == user_id))).scalar_one()
+            user.google_sub = f"sub-{email}"
+            await s.commit()
     return resp.json()["agency"]["id"]
 
 
@@ -132,6 +158,51 @@ async def _counted(engine, agency_id: str) -> int:  # noqa: ANN001
 
 async def _start(client: AsyncClient, cid: str) -> Any:
     return await client.post(f"{BASE}/clients/{cid}/scans", json={})
+
+
+async def _scan_rows(engine, agency_id: str) -> int:  # noqa: ANN001
+    """Every scan row the agency has, in any status — "none was created" means none."""
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+    async with factory() as s:
+        return int((await s.execute(
+            select(func.count()).select_from(Scan).where(Scan.agency_id == agency_id)
+        )).scalar_one())
+
+
+async def _seat_password_teammate(settings, agency_id: str, email: str) -> None:  # noqa: ANN001
+    """A MEMBER seat in the agency, with a password and no Google link."""
+    async with get_sessionmaker()() as s:
+        await auth_service.create_user_in_agency(
+            s, agency_id=agency_id, email=email, full_name="Teammate",
+            password=PASSWORD, role=UserRole.MEMBER, settings=settings,
+        )
+        await s.commit()
+
+
+async def _sign_in(client: AsyncClient, email: str) -> None:
+    resp = await client.post(f"{BASE}/auth/login", json={"email": email, "password": PASSWORD})
+    assert resp.status_code == 200, resp.text
+
+
+class _FakeGoogle:
+    """Google, faked at the seam `deps.google_provider` opens.
+
+    `test_google_sign_in.py`'s pattern, cut down to one identity: the
+    authorization URL carries the state, and the ID token echoes the nonce the
+    flow minted, as a real one would. Everything past the provider — the state
+    store, the callback, the linking policy, the cookie — runs for real.
+    """
+
+    def __init__(self, identity: GoogleIdentity) -> None:
+        self.identity = identity
+        self.nonce: str | None = None
+
+    def authorization_url(self, *, state: str, nonce: str, code_challenge: str) -> str:  # noqa: ARG002
+        self.nonce = nonce
+        return f"https://accounts.google.com/o/oauth2/v2/auth?state={state}"
+
+    async def exchange(self, *, code: str, code_verifier: str) -> GoogleIdentity:  # noqa: ARG002
+        return replace(self.identity, nonce=self.nonce)
 
 
 # ---------------------------------------------------------------------------
@@ -632,6 +703,7 @@ class TestTheOperatorIsExempt:
         body = (await client.get(f"{BASE}/agencies/{agency_id}/billing")).json()
         assert body["scanLimit"] is None and body["periodResetsAt"] is None
         assert body["scansUsedThisPeriod"] == 46
+        assert body["freeScanRequiresGoogle"] is False
 
     async def test_anyone_else_is_still_gated(
         self, client: AsyncClient, billing_on, engine, settings, monkeypatch
@@ -650,21 +722,25 @@ class TestTheOperatorIsExempt:
 
         Same address as the exempt operator, signed up by password, no Google
         link — the 402 lands, and the billing response shows the real limit
-        rather than the exempt shape.
+        rather than the exempt shape. Since 2026-09-29 the 402 is
+        `SCAN_LIMIT_VERIFY_REQUIRED`: gated like anyone else means gated like
+        any other password-only user, and for this address the Google sign-in
+        it asks for is also exactly what would make it exempt.
         """
         monkeypatch.setattr(settings, "scan_allowance_exempt_emails", [self.OPERATOR])
-        agency_id = await _sign_up(client, email=self.OPERATOR)
+        agency_id = await _sign_up(client, email=self.OPERATOR, google=False)
         _defer(client)
         cid = await _make_client(client, "helpscout.com")
         await _seed_scans(engine, agency_id=agency_id, client_id=cid, n=1)
 
         resp = await _start(client, cid)
         assert resp.status_code == 402, resp.text
-        assert resp.json()["code"] == allowance.CODE_FREE_USED
+        assert resp.json()["code"] == allowance.CODE_VERIFY_REQUIRED
 
         body = (await client.get(f"{BASE}/agencies/{agency_id}/billing")).json()
         assert body["scanLimit"] == allowance.FREE_SCAN_ALLOWANCE
         assert body["scansUsedThisPeriod"] == 1
+        assert body["freeScanRequiresGoogle"] is True
 
     async def test_an_unlisted_google_user_is_not_exempt(
         self, client: AsyncClient, billing_on, engine, settings, monkeypatch
@@ -677,3 +753,211 @@ class TestTheOperatorIsExempt:
         cid = await _make_client(client, "helpscout.com")
         await _seed_scans(engine, agency_id=agency_id, client_id=cid, n=1)
         assert (await _start(client, cid)).status_code == 402
+
+
+# ---------------------------------------------------------------------------
+# the free scan needs a Google sign-in — 2026-09-29
+# ---------------------------------------------------------------------------
+
+
+class TestTheFreeScanNeedsGoogle:
+    """Password sign-up never verifies the address, and an agency is free to make.
+
+    So the free scan starts only for a requesting user with a linked Google
+    identity, and anyone else gets `SCAN_LIMIT_VERIFY_REQUIRED`. Paid agencies
+    and exempt operators are untouched. The argument is in the module
+    docstring of `services/scan_allowance.py`.
+    """
+
+    async def test_a_password_only_free_agency_with_no_scans_is_asked_for_google(
+        self, client: AsyncClient, billing_on, engine
+    ) -> None:  # noqa: ANN001
+        agency_id = await _sign_up(client, google=False)
+        _defer(client)
+        cid = await _make_client(client, "helpscout.com")
+
+        resp = await _start(client, cid)
+        assert resp.status_code == 402, resp.text
+        body = resp.json()
+        assert body["type"].endswith("/scan-limit-reached")
+        assert body["code"] == "SCAN_LIMIT_VERIFY_REQUIRED"
+        assert (body["scansUsed"], body["scanLimit"], body["periodResetsAt"]) == (0, 1, None)
+        assert "Google" in body["detail"]
+        # Not merely nothing counted: nothing created.
+        assert await _scan_rows(engine, agency_id) == 0
+
+    async def test_the_same_agency_once_google_is_linked_starts_its_scan(
+        self, client: AsyncClient, billing_on, engine
+    ) -> None:  # noqa: ANN001
+        agency_id = await _sign_up(client, google=False)
+        jobs = _defer(client)
+        cid = await _make_client(client, "helpscout.com")
+        assert (await _start(client, cid)).status_code == 402
+
+        await _link_google(engine, agency_id)
+        resp = await _start(client, cid)
+        assert resp.status_code == 202, resp.text
+        assert len(jobs) == 1
+        assert await _scan_rows(engine, agency_id) == 1
+
+    async def test_continue_with_google_on_the_same_address_is_the_way_through(
+        self, client: AsyncClient, billing_on, engine, settings, monkeypatch
+    ) -> None:  # noqa: ANN001
+        """The notice's button, end to end, pressed while still signed in.
+
+        No sign-out first: `/auth/google/start` takes no session, and the
+        callback links the password account by its Google-verified email and
+        replaces the cookie. `test_google_sign_in.py` proves the same link for
+        somebody who signed out first.
+        """
+        monkeypatch.setattr(settings, "google_oauth_client_id", "test.apps.googleusercontent.com")
+        monkeypatch.setattr(settings, "google_oauth_client_secret", SecretStr("not-a-secret"))
+        monkeypatch.setattr(
+            settings, "google_oauth_redirect_url", "http://localhost:8000/api/v1/auth/google/callback"
+        )
+        fake = _FakeGoogle(GoogleIdentity(
+            sub="sub-way-through", email="allowance@test.example", email_verified=True,
+            name="Op", nonce=None,
+        ))
+        client._transport.app.dependency_overrides[google_provider] = lambda: fake  # noqa: SLF001
+
+        agency_id = await _sign_up(client, google=False)
+        _defer(client)
+        cid = await _make_client(client, "helpscout.com")
+        refused = await _start(client, cid)
+        assert refused.json()["code"] == allowance.CODE_VERIFY_REQUIRED
+
+        started = await client.get(f"{BASE}/auth/google/start", follow_redirects=False)
+        assert started.status_code == 302, started.text
+        state = parse_qs(urlparse(started.headers["location"]).query)["state"][0]
+        back = await client.get(
+            f"{BASE}/auth/google/callback",
+            params={"code": "code-1", "state": state},
+            follow_redirects=False,
+        )
+        assert back.status_code == 302, back.text
+        assert urlparse(back.headers["location"]).path == "/dashboard"
+
+        resp = await _start(client, cid)
+        assert resp.status_code == 202, resp.text
+        me = (await client.get(f"{BASE}/auth/me")).json()
+        assert me["agency"]["id"] == agency_id
+        assert me["user"]["signInMethods"] == ["email", "google"]
+
+    async def test_a_password_only_teammate_is_refused_where_the_google_owner_is_not(
+        self, client: AsyncClient, billing_on, engine, settings
+    ) -> None:  # noqa: ANN001
+        """The requirement is the requesting user's, not the agency's.
+
+        Same free agency, same client, same moment: its Google-linked owner may
+        start the free scan, and its password-only teammate may not.
+        """
+        agency_id = await _sign_up(client)  # the owner, Google-linked
+        _defer(client)
+        cid = await _make_client(client, "helpscout.com")
+        await _seat_password_teammate(settings, agency_id, "teammate@test.example")
+
+        await _sign_in(client, "teammate@test.example")
+        resp = await _start(client, cid)
+        assert resp.status_code == 402, resp.text
+        assert resp.json()["code"] == allowance.CODE_VERIFY_REQUIRED
+        assert await _scan_rows(engine, agency_id) == 0
+
+        await _sign_in(client, "allowance@test.example")
+        assert (await _start(client, cid)).status_code == 202
+
+    @pytest.mark.parametrize("status", ["active", "trialing"])
+    async def test_a_password_only_user_in_a_paid_agency_starts_a_scan(
+        self, client: AsyncClient, billing_on, engine, status: str
+    ) -> None:  # noqa: ANN001
+        """A payment is identity enough: the forty a month is for any seat."""
+        agency_id = await _sign_up(client, google=False)
+        await _set_subscription(engine, agency_id, status)
+        _defer(client)
+        cid = await _make_client(client, "helpscout.com")
+        assert (await _start(client, cid)).status_code == 202
+
+    async def test_with_billing_unconfigured_nothing_is_asked_for(
+        self, client: AsyncClient, billing_off
+    ) -> None:  # noqa: ANN001
+        """The rule is part of the gate, so it is off where the gate is off."""
+        await _sign_up(client, google=False)
+        _defer(client)
+        cid = await _make_client(client, "helpscout.com")
+        assert (await _start(client, cid)).status_code == 202
+
+    async def test_it_is_asked_before_the_count_is_consulted(
+        self, client: AsyncClient, billing_on, engine
+    ) -> None:  # noqa: ANN001
+        """A count is not proof that an agency ever scanned.
+
+        Client A holds a fresh detection-only QUEUED row — inside the window,
+        so it holds a slot — and this agency has never run a scan. Starting on
+        client B must ask for Google, not say the free scan is used.
+        """
+        from avp_api.models import Client as ClientModel
+        from avp_api.services import competitors as detection
+
+        agency_id = await _sign_up(client, google=False)
+        _defer(client)
+        a = await _make_client(client, "helpscout.com")
+        b = await _make_client(client, "zendesk.com")
+        factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+        async with factory() as s:
+            row = (await s.execute(select(ClientModel).where(ClientModel.id == a))).scalar_one()
+            await detection.get_or_create_scan(s, row)
+            await s.commit()
+
+        resp = await _start(client, b)
+        assert resp.status_code == 402, resp.text
+        assert resp.json()["code"] == allowance.CODE_VERIFY_REQUIRED
+        assert resp.json()["scansUsed"] == 1  # the count saw the row; it did not decide
+        assert await _scan_rows(engine, agency_id) == 1
+
+    async def test_where_the_free_scan_is_spent_google_is_still_asked_for_first(
+        self, client: AsyncClient, billing_on, engine
+    ) -> None:  # noqa: ANN001
+        """The accepted cost of asking first, pinned so it is never a surprise.
+
+        A password-only user whose agency has already used its free scan is
+        asked for Google, and hears the scan is used only once linked.
+        """
+        agency_id = await _sign_up(client, google=False)
+        _defer(client)
+        cid = await _make_client(client, "helpscout.com")
+        await _seed_scans(engine, agency_id=agency_id, client_id=cid, n=1)
+
+        assert (await _start(client, cid)).json()["code"] == allowance.CODE_VERIFY_REQUIRED
+        await _link_google(engine, agency_id)
+        assert (await _start(client, cid)).json()["code"] == allowance.CODE_FREE_USED
+
+    @pytest.mark.parametrize(
+        ("gate", "subscription", "google", "expected"),
+        [
+            pytest.param(True, None, False, True, id="free-password-only"),
+            pytest.param(True, "canceled", False, True, id="lapsed-password-only"),
+            pytest.param(True, None, True, False, id="free-google"),
+            pytest.param(True, "active", False, False, id="paid-password-only"),
+            pytest.param(False, None, False, False, id="ungated-password-only"),
+        ],
+    )
+    async def test_the_billing_response_says_who_needs_google(
+        self,
+        client: AsyncClient,
+        engine,  # noqa: ANN001
+        settings,  # noqa: ANN001
+        monkeypatch,  # noqa: ANN001
+        gate: bool,
+        subscription: str | None,
+        google: bool,
+        expected: bool,
+    ) -> None:
+        """True exactly when the gate is on, the agency free, the user unlinked."""
+        key = SecretStr("sk_test_fake") if gate else None
+        monkeypatch.setattr(settings, "stripe_secret_key", key)
+        monkeypatch.setattr(settings, "stripe_price_id", "price_test_fake" if gate else None)
+        agency_id = await _sign_up(client, google=google)
+        await _set_subscription(engine, agency_id, subscription)
+
+        body = (await client.get(f"{BASE}/agencies/{agency_id}/billing")).json()
+        assert body["freeScanRequiresGoogle"] is expected

@@ -183,9 +183,9 @@ export function BillingPanel({
             <div className="flex flex-wrap items-center gap-3">
               <Badge tone="neutral">No subscription</Badge>
               <p className="max-w-measure text-ui-base leading-prose text-text-secondary">
-                You are not subscribed. Your agency has one free scan; subscribing
-                is how you keep scanning. Reports you already have stay open,
-                shareable and exportable either way.
+                You are not subscribed. Your agency&rsquo;s first scan is free with a
+                Google sign-in; subscribing is how you keep scanning. Reports you
+                already have stay open, shareable and exportable either way.
               </p>
             </div>
           </CardBody>

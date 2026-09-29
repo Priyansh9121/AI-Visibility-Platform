@@ -9,12 +9,20 @@
  * allowance resets and offers nothing else, because there is no tier above
  * this one to upgrade to — a button that led nowhere would be worse than
  * none.
+ *
+ * The verify case (2026-09-29): the free scan needs a Google sign-in, and
+ * this user has none linked. Two ways on, in the order the sentence gives
+ * them — **Continue with Google**, the same anchor to `/auth/google/start`
+ * the sign-in page carries (on the same address it links this account, and
+ * works without signing out first), and **Subscribe**. Subscribe is the
+ * secondary button here, so the free way through is not outshouted by the
+ * paid one.
  */
 
 import { useState } from 'react';
 import type { JSX } from 'react';
-import { Button, Card, CardBody } from '@avp/design-system';
-import { api, ApiProblem } from '@/lib/api';
+import { Button, Card, CardBody, GoogleSignInButton } from '@avp/design-system';
+import { api, ApiProblem, GOOGLE_SIGN_IN_URL } from '@/lib/api';
 import type { ScanLimitProblem } from '@/lib/billing/allowance';
 import { formatDay } from '@/lib/dates';
 
@@ -42,21 +50,38 @@ export function ScanLimitNotice({ problem, agencyId, navigate }: ScanLimitNotice
     }
   }
 
+  const failure =
+    error != null ? (
+      <p role="alert" className="max-w-measure text-ui-sm leading-prose text-danger">
+        {error}
+      </p>
+    ) : null;
+
   return (
     <Card elevation="flat">
       <CardBody>
         <div className="flex flex-col gap-4" data-testid="scan-limit-notice">
-          {problem.code === 'SCAN_LIMIT_FREE_USED' ? (
+          {problem.code === 'SCAN_LIMIT_VERIFY_REQUIRED' ? (
+            <>
+              <p className="max-w-measure text-ui-base leading-prose text-text-primary">
+                Your free scan needs a Google sign-in, so we know one person gets one. Continue
+                with Google using this address, or subscribe.
+              </p>
+              {failure}
+              <div className="flex flex-wrap items-center gap-3">
+                <GoogleSignInButton href={GOOGLE_SIGN_IN_URL} label="Continue with Google" />
+                <Button variant="secondary" onClick={() => void subscribe()} disabled={busy}>
+                  {busy ? 'Opening checkout…' : 'Subscribe'}
+                </Button>
+              </div>
+            </>
+          ) : problem.code === 'SCAN_LIMIT_FREE_USED' ? (
             <>
               <p className="max-w-measure text-ui-base leading-prose text-text-primary">
                 Your free scan is used. Subscribe to keep scanning — the reports you already have
                 stay open, shareable and exportable.
               </p>
-              {error != null && (
-                <p role="alert" className="max-w-measure text-ui-sm leading-prose text-danger">
-                  {error}
-                </p>
-              )}
+              {failure}
               <div>
                 <Button variant="primary" onClick={() => void subscribe()} disabled={busy}>
                   {busy ? 'Opening checkout…' : 'Subscribe'}

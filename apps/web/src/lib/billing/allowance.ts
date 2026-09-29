@@ -8,6 +8,11 @@
  * else would be a second copy that drifts. `scanLimit` is null when billing
  * is not configured on the deployment, in which case there is no gate and
  * no label.
+ *
+ * Since 2026-09-29 the free scan needs a Google sign-in. Whether THIS user
+ * needs one is `freeScanRequiresGoogle`, and it is the API's answer: it is
+ * about the requesting user and not the agency, and working it out here
+ * would be a second copy of that rule.
  */
 
 import type { BillingStatus, ProblemDetail } from '@avp/shared-types';
@@ -17,6 +22,10 @@ import { formatDay } from '@/lib/dates';
 export function allowanceLabel(billing: BillingStatus): string | null {
   const { scanLimit, scansUsedThisPeriod: used, periodResetsAt } = billing;
   if (scanLimit === null || scanLimit === undefined) return null;
+  // Before the count, as the API checks it: a scan started by this user is
+  // refused `SCAN_LIMIT_VERIFY_REQUIRED` whatever the count says, and the
+  // label says what pressing the button will meet.
+  if (billing.freeScanRequiresGoogle) return 'Free scan needs Google sign-in';
   if (!billing.isActive) {
     return used >= scanLimit ? 'Free scan used' : `${scanLimit} free scan`;
   }
@@ -26,7 +35,10 @@ export function allowanceLabel(billing: BillingStatus): string | null {
   return base;
 }
 
-export type ScanLimitCode = 'SCAN_LIMIT_FREE_USED' | 'SCAN_LIMIT_MONTHLY';
+export type ScanLimitCode =
+  | 'SCAN_LIMIT_FREE_USED'
+  | 'SCAN_LIMIT_MONTHLY'
+  | 'SCAN_LIMIT_VERIFY_REQUIRED';
 
 /** A `402 /problems/scan-limit-reached`, narrowed. */
 export interface ScanLimitProblem {
@@ -41,7 +53,13 @@ export interface ScanLimitProblem {
 export function scanLimitProblem(problem: ProblemDetail): ScanLimitProblem | null {
   if (problem.status !== 402 || !problem.type.endsWith('/scan-limit-reached')) return null;
   const code = problem['code'];
-  if (code !== 'SCAN_LIMIT_FREE_USED' && code !== 'SCAN_LIMIT_MONTHLY') return null;
+  if (
+    code !== 'SCAN_LIMIT_FREE_USED' &&
+    code !== 'SCAN_LIMIT_MONTHLY' &&
+    code !== 'SCAN_LIMIT_VERIFY_REQUIRED'
+  ) {
+    return null;
+  }
   return {
     code,
     detail: problem.detail,

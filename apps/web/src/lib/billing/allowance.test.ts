@@ -10,6 +10,7 @@ import {
   activeAtCap,
   activeSubscription,
   canceledSubscription,
+  freeScanNeedsGoogle,
   freeScanUsed,
   noSubscription,
   pastDueSubscription,
@@ -43,6 +44,26 @@ describe('the remaining-count label', () => {
   it('no gate, no label', () => {
     expect(allowanceLabel(ungated)).toBeNull();
   });
+
+  it('free, for a user the API says needs Google — 2026-09-29', () => {
+    expect(allowanceLabel(freeScanNeedsGoogle)).toBe('Free scan needs Google sign-in');
+  });
+
+  it('reads the flag before the count, as the API refuses before counting', () => {
+    // Pressing the button meets SCAN_LIMIT_VERIFY_REQUIRED whatever the count
+    // says, so that is what the label says too.
+    expect(allowanceLabel({ ...freeScanNeedsGoogle, scansUsedThisPeriod: 1 })).toBe(
+      'Free scan needs Google sign-in',
+    );
+  });
+
+  it('takes the answer from the API and works nothing out itself', () => {
+    // Same agency, same count; only the flag differs — as it does between two
+    // seats of one agency, because it is about the requesting user.
+    expect(allowanceLabel({ ...freeScanNeedsGoogle, freeScanRequiresGoogle: false })).toBe(
+      '1 free scan',
+    );
+  });
 });
 
 describe('narrowing a 402', () => {
@@ -62,6 +83,17 @@ describe('narrowing a 402', () => {
     expect(monthly).toEqual({
       code: 'SCAN_LIMIT_MONTHLY', detail: 'cap', scansUsed: 40, scanLimit: 40,
       periodResetsAt: '2026-10-01T00:00:00Z',
+    });
+  });
+
+  it('recognises the verify code — 2026-09-29', () => {
+    const verify = scanLimitProblem({
+      ...base, type: '/problems/scan-limit-reached', detail: 'google',
+      code: 'SCAN_LIMIT_VERIFY_REQUIRED', scansUsed: 0, scanLimit: 1, periodResetsAt: null,
+    });
+    expect(verify).toEqual({
+      code: 'SCAN_LIMIT_VERIFY_REQUIRED', detail: 'google', scansUsed: 0, scanLimit: 1,
+      periodResetsAt: null,
     });
   });
 

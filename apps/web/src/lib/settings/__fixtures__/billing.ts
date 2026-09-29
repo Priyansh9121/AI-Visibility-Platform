@@ -22,12 +22,22 @@ export const noSubscription: BillingStatus = {
   scansUsedThisPeriod: 0,
   scanLimit: 1,
   periodResetsAt: null,
+  freeScanRequiresGoogle: false,
 };
 
 /** Free, and the one free scan already started. */
 export const freeScanUsed: BillingStatus = {
   ...noSubscription,
   scansUsedThisPeriod: 1,
+};
+
+/**
+ * Free, and this sign-in has no linked Google identity — 2026-09-29. The API
+ * says so in `freeScanRequiresGoogle`; the web never works it out.
+ */
+export const freeScanNeedsGoogle: BillingStatus = {
+  ...noSubscription,
+  freeScanRequiresGoogle: true,
 };
 
 export const activeSubscription: BillingStatus = {
@@ -38,6 +48,7 @@ export const activeSubscription: BillingStatus = {
   scansUsedThisPeriod: 12,
   scanLimit: 40,
   periodResetsAt: '2026-10-01T00:00:00Z',
+  freeScanRequiresGoogle: false,
 };
 
 /** Paid and at the cap: the label says when it resets and offers no upgrade. */
@@ -62,6 +73,7 @@ export const canceledSubscription: BillingStatus = {
   scansUsedThisPeriod: 3,
   scanLimit: 1,
   periodResetsAt: null,
+  freeScanRequiresGoogle: false,
 };
 
 /**
@@ -78,6 +90,7 @@ export const pastDueSubscription: BillingStatus = {
   scansUsedThisPeriod: 3,
   scanLimit: 1,
   periodResetsAt: null,
+  freeScanRequiresGoogle: false,
 };
 
 /** A status this screen has no wording for — Stripe's vocabulary can grow. */
@@ -89,4 +102,5 @@ export const unknownStatusSubscription: BillingStatus = {
   scansUsedThisPeriod: 1,
   scanLimit: 1,
   periodResetsAt: null,
+  freeScanRequiresGoogle: false,
 };

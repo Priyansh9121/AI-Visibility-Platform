@@ -33,7 +33,8 @@ describe('no subscription — the state every agency is in today', () => {
   it('says so without saying anything is wrong', () => {
     const html = render();
     expect(html).toContain('No subscription');
-    expect(html).toContain('Your agency has one free scan');
+    // With a Google sign-in since 2026-09-29.
+    expect(html).toContain('Your agency’s first scan is free with a Google sign-in');
     expect(html).toContain('stay open, shareable and exportable');
   });
 
