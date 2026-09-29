@@ -75,8 +75,17 @@ def test_citation_strength_copy_says_what_the_proxy_cannot_do() -> None:
     note = narrative.DIMENSION_NOTE["citation_strength"]
     assert "only answers to questions that did not name the brand" in note
     assert "including answers to questions that named the brand" not in note
-    for text in (note, narrative.EXCLUSION_DETAIL["NO_AUTHORITY_DATA"]):
-        assert "brands in a scanned market" in text
+    # The market-participant rule left the note on 2026-09-29, when the note
+    # was cut to a glance; the exclusion detail and scoring-spec.md keep it.
+    assert "brands in a scanned market" in narrative.EXCLUSION_DETAIL["NO_AUTHORITY_DATA"]
+
+
+def test_the_citation_strength_note_reads_at_a_glance() -> None:
+    """The question it answers, in at most 45 words — 2026-09-29."""
+    note = narrative.DIMENSION_NOTE["citation_strength"]
+    assert "When AI names the brand, how often does it back it with a trusted source?" in note
+    words = [w for w in note.split() if any(ch.isalnum() for ch in w)]
+    assert len(words) <= 45, len(words)
 
 
 def test_average_position_is_never_rendered_as_zero() -> None:

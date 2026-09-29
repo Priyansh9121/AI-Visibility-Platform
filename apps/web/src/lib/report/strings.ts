@@ -107,10 +107,15 @@ export const EXCLUSION_REASON: Record<string, { label: string; detail: string }>
  * counted through an industry classification whose confidence score is
  * uncalibrated (build-log Epic 2.6/2.8, Finding 2, still open), and the
  * sentence says so.
+ *
+ * At most 45 words since 2026-09-29, so a client can read it at a glance:
+ * the question the dimension answers, which answers it counts, and the
+ * proxy's limit. The tier list and the market-participant rule are in
+ * `EXCLUSION_REASON.NO_AUTHORITY_DATA` and in scoring-spec.md.
  */
 export const DIMENSION_NOTE: Record<string, string> = {
   citation_strength:
-    'Citation Strength asks: when AI names the brand, how often does it back the brand with a trusted source? Each answer that names the brand is weighed by the third-party sources it cites, and the figure is the average over those answers — so being named more often, which Mention Rate already counts, does not raise it. It is set against the best-backed brand in the same scan, so the leader reads 100, and a brand no answer names reads 0. Sources count on two tiers: a short structural list — government and university domains, Wikipedia, the AP and Reuters wire services, and the cross-industry review platforms (Better Business Bureau, Trustpilot, G2, Capterra) — at full weight, and domains that engines cite across at least three client industries and five clients on this platform at half weight; domains that are themselves brands in a scanned market — a client’s own site, or a rival detected in any scan — do not count on that tier. Everything else counts for nothing. The second tier is a coarse proxy: it counts industries through an automatic classification whose confidence score is uncalibrated, so a mis-classified client cannot be screened out of it, and its thresholds are first guesses to be revisited with more scans. It counts only answers to questions that did not name the brand: a question that supplies the name puts the brand beside whatever the answer cites, and that is not evidence of authority.',
+    'When AI names the brand, how often does it back it with a trusted source? It counts only answers to questions that did not name the brand. Some sources qualify as trusted through uncalibrated industry labels — a coarse proxy that a mis-classified client can skew.',
 };
 
 /**

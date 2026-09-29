@@ -169,6 +169,61 @@ records every result's own citations, brands, `mentioned`, intent and
 status, so moving a source from one answer to another moves the digest.
 **Stored `v4` rows are not re-scored** (rule 5).
 
+#### Small-n measured, v6 rejected (2026-09-29)
+
+**The formula tried.** Shrink each brand's per-answer mean toward the scan's
+pooled mean P before normalising. P is the mean authority over every
+(answer, named brand) pair among the brands compared:
+
+```
+authority(brand) = (sum of the brand's answer sums + K × P) / (n + K),   K = 3
+```
+
+Here n is the number of awareness answers that name the brand. A brand named
+in no answer still scored 0, not P. K was fixed in the brief before anything
+was measured, and was not tuned afterwards.
+
+**The rule, also fixed beforehand.** Ship only if both held: ρ against
+Mention Rate (zeros excluded) stays below 0.70, and fewer scans have a scale
+set by a brand named in fewer than 5 answers. The measurement is
+`scripts/measure_citation_overlap.py`, over the same 26 scored scans.
+
+| | ρ, zeros excluded | n | ρ, all 132 pairs | scale set by a brand named < 5 times |
+|---|---|---|---|---|
+| v5 | 0.177 | 83 | 0.708 | 3 of 19 scans with a scale |
+| v6 | 0.301 | 95 | 0.715 | 3 of 19, the same three |
+
+The guard held and the count did not move, so **v6 was rejected and v5
+stands.** The same three scans set their scale on a small sample under both:
+
+- **helpscout.com:** Help Scout and Front tied, each named in 2 answers.
+- **plausible.io** (`VRNNXXB1`): Seline, named in 3 of 36.
+- **intercom.com:** Freshworks (Freshdesk), named in 4 of 35.
+
+Three further scans back no brand at all under either formula.
+
+**Why shrinkage did not fix it.** A very high mean over three answers
+survives being blended with three answers' worth of the average.
+Hand-checked against the implementation on the two scans where a rival sets
+the scale:
+
+- **plausible.io:** P = 26.05 over 119 pairs. Seline goes from 116.67 to
+  71.36, still far above the next brand, Matomo, at 28.01 (named in 23).
+- **intercom.com:** P = 27.69 over 65 pairs. Freshworks goes from 50.00 to
+  40.44, still above Zendesk at 28.49 and the subject at 27.60.
+- **helpscout.com** has only two awareness answers, so no averaging rule
+  can give it a scale-setter named five times.
+
+Shrinkage also lifts a brand whose naming answers cite nothing trusted
+toward P. Botpress, named in 4 answers with nothing tiered, went from 0 to
+11.87, which is why n rose from 83 to 95.
+
+**The property stays open.** A brand named in a handful of answers can still
+set a scan's scale under v5. What would close it — a minimum number of
+answers before a brand can set the scale, or a different treatment of small
+samples — is a formula decision of its own, not a larger K fitted to these
+numbers.
+
 ### Citation Strength — measured from a two-tier authority input (v3)
 
 **Since v3 (2026-09-27) Citation Strength is scored.** The input v2.1 was

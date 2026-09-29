@@ -101,6 +101,9 @@ logger = structlog.get_logger(__name__)
 # brand named in no awareness answer still scores 0, never excluded. A major
 # bump: it redefines a weighted dimension, and moved two stored composites by
 # more than 10 points. Rows carrying v4 keep their numbers.
+# A v6 — shrinking each brand's mean toward the scan's pooled mean — was
+# measured the same day and rejected by the rule fixed before it ran; see the
+# note on `authority_when_named`. v5 stands.
 FORMULA_VERSION = "v5"
 
 TWO_PLACES = Decimal("0.01")
@@ -499,6 +502,36 @@ def _authority_credit(domains: set[str], tiers: dict[str, Tier]) -> Decimal:
     )
 
 
+def answer_authority(
+    results: list[ResultFacts],
+    competitors: list[CompetitorFacts],
+    tiers: dict[str, Tier],
+) -> tuple[list[Decimal], dict[str, list[Decimal]]]:
+    """Each answer's authority sum, per brand, over the answered results that name it.
+
+    An answer's authority sum for a brand is the AUTHORITY_VALUES of the
+    distinct third-party domains it cites, less the brand's own domain (a
+    brand is not a third party to itself). The same rule for the subject
+    (`mentioned`, `cites_subject`) and for each rival (named in `brands`,
+    `domain` from the competitor set). The length of a brand's list is how
+    many answers name it. `authority_when_named` aggregates these; the
+    measurement script reads them to find which brand sets a scan's scale.
+    """
+    answered = sorted((r for r in results if r.answered), key=lambda r: r.result_id)
+    subject = [
+        _authority_credit({d for d, cites_subject in r.citations if not cites_subject}, tiers)
+        for r in answered if r.mentioned
+    ]
+    by_competitor: dict[str, list[Decimal]] = {}
+    for competitor in sorted(competitors, key=lambda c: c.competitor_id):
+        by_competitor[competitor.competitor_id] = [
+            _authority_credit({d for d, _ in r.citations if d != competitor.domain}, tiers)
+            for r in answered
+            if any(name == competitor.name and not is_subject for name, is_subject in r.brands)
+        ]
+    return subject, by_competitor
+
+
 def authority_when_named(
     results: list[ResultFacts],
     competitors: list[CompetitorFacts],
@@ -506,14 +539,18 @@ def authority_when_named(
 ) -> tuple[Decimal, dict[str, Decimal]]:
     """How strongly each brand is backed WHEN it is named — v5.
 
-    For every answer that names a brand, that answer's authority sum: the
-    AUTHORITY_VALUES of the distinct third-party domains it cites, less the
-    brand's own domain (a brand is not a third party to itself). The brand's
-    value is the MEAN of those sums over the answers that name it. The same
-    rule for the subject (`mentioned`, `cites_subject`) and for each rival
-    (named in `brands`, `domain` from the competitor set). A brand named in no
-    answer is 0 — and still scored: an exclusion would hand its weight to the
-    other dimensions and could RAISE an invisible brand's composite.
+    For every answer that names a brand, that answer's authority sum
+    (`answer_authority`). The brand's value is the MEAN of those sums over
+    the answers that name it. A brand named in no answer is 0 — and still
+    scored: an exclusion would hand its weight to the other dimensions and
+    could RAISE an invisible brand's composite.
+
+    **A mean lets a rarely named brand set the scale, and shrinkage was
+    measured and rejected (v6, 2026-09-29).** Pulling each brand toward the
+    scan's pooled mean by three answers' worth kept ρ against Mention Rate at
+    0.301, but left the scans whose scale rests on fewer than five answers at
+    3 of 19, the same three. The rule required that count to fall.
+    scoring-spec.md, under v5, has both sets of numbers.
 
     **Why a mean, and not v3–v4's sum over every citing domain.** The sum
     grew with how often a brand was named: more answers naming it, more
@@ -535,26 +572,14 @@ def authority_when_named(
     names the brand manufactures the co-occurrence, which is why helpwise.io
     read 90.63 under v3 on a scan where no unprompted question named it.
     """
-    answered = sorted((r for r in results if r.answered), key=lambda r: r.result_id)
+    subject, rivals = answer_authority(results, competitors, tiers)
 
-    def mean_credit(per_answer: list[set[str]]) -> Decimal:
-        if not per_answer:
+    def mean_credit(credits: list[Decimal]) -> Decimal:
+        if not credits:
             return Decimal("0")
-        total = sum((_authority_credit(domains, tiers) for domains in per_answer), Decimal("0"))
-        return total / Decimal(len(per_answer))
+        return sum(credits, Decimal("0")) / Decimal(len(credits))
 
-    subject = mean_credit([
-        {d for d, cites_subject in r.citations if not cites_subject}
-        for r in answered if r.mentioned
-    ])
-    by_competitor: dict[str, Decimal] = {}
-    for competitor in sorted(competitors, key=lambda c: c.competitor_id):
-        by_competitor[competitor.competitor_id] = mean_credit([
-            {d for d, _ in r.citations if d != competitor.domain}
-            for r in answered
-            if any(name == competitor.name and not is_subject for name, is_subject in r.brands)
-        ])
-    return subject, by_competitor
+    return mean_credit(subject), {cid: mean_credit(c) for cid, c in rivals.items()}
 
 
 def citation_strength(
