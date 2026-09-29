@@ -395,6 +395,47 @@ class TestReScoringUnderANewFormulaVersion:
         report = (await client.get(f"{BASE}/scans/{sid}/report")).json()
         assert report["score"]["previousFormulaVersions"] == ["v1.1"]
 
+    async def test_a_v4_row_is_not_re_scored_under_v5(
+        self, client: AsyncClient, session, stub_engines
+    ) -> None:  # noqa: ANN001
+        """v5 redefined Citation Strength (2026-09-29); every v4 number stays as scored.
+
+        A v4 row with a full breakdown, written directly, then scored twice
+        under the current formula: a v5 row is added once and refreshed in
+        place, and every field of the v4 row reads exactly as written.
+        """
+        from avp_api import ids
+        from avp_api.models import Score, ScoreStatus
+
+        assert FORMULA_VERSION == "v5"
+        await _sign_up(client)
+        sid = await _scan(client, stub_engines)
+        v4 = {
+            "composite": "77.47", "mentionRate": "100.00", "shareOfVoice": "41.18",
+            "citationStrength": "100.00", "sentiment": "83.33", "technicalFoundation": None,
+            "inputsDigest": "4" * 64, "weights": {"citation_strength": "22.22"},
+        }
+        session.add(Score(
+            id=ids.new_id(ids.SCORE), scan_id=sid, status=ScoreStatus.SCORED,
+            formula_version="v4", composite=Decimal(v4["composite"]),
+            mention_rate=Decimal(v4["mentionRate"]), share_of_voice=Decimal(v4["shareOfVoice"]),
+            citation_strength=Decimal(v4["citationStrength"]),
+            sentiment=Decimal(v4["sentiment"]), inputs_digest=v4["inputsDigest"],
+            weights=v4["weights"], excluded_dimensions={}, degradation_flags=[],
+        ))
+        await session.commit()
+
+        first = (await client.post(f"{BASE}/scans/{sid}/score")).json()
+        second = (await client.post(f"{BASE}/scans/{sid}/score")).json()
+        assert first["formulaVersion"] == second["formulaVersion"] == "v5"
+        assert first["id"] == second["id"], "one v5 row, refreshed in place"
+        assert second["previousFormulaVersions"] == ["v4"]
+
+        history = (await client.get(f"{BASE}/scans/{sid}/scores")).json()
+        assert sorted(h["formulaVersion"] for h in history) == ["v4", "v5"]
+        kept = next(h for h in history if h["formulaVersion"] == "v4")
+        assert {key: kept[key] for key in v4} == v4, "the v4 row was re-scored"
+
     async def test_a_scan_scored_once_names_nothing(
         self, client: AsyncClient, stub_engines
     ) -> None:  # noqa: ANN001

@@ -1491,7 +1491,7 @@ reproducible.
   "mentionRate": "83.33", "shareOfVoice": "41.18",
   "citationStrength": "60.00", "sentiment": "75.00",
   "technicalFoundation": null,
-  "formulaVersion": "v4",
+  "formulaVersion": "v5",
   "weights": {
     "citation_strength": "22.22", "mention_rate": "33.33",
     "sentiment": "16.67", "share_of_voice": "27.78"
@@ -1558,9 +1558,13 @@ scan); from `v2.1` the dimension is excluded under that code instead, and
 **`competitors[].citationStrength` is `null`** whenever the subject's is
 excluded — a column means one thing. Since `v3` (scoring-spec.md) the
 dimension is measured from a two-tier citing-domain authority input, and
-each rival's `citationStrength` is its authority sum against the same
-best-in-scan denominator as the subject's, so the best-cited brand in the
-table reads `100.00`.
+each rival's `citationStrength` is measured exactly as the subject's, against
+the same best-in-scan denominator, so the best-placed brand in the table
+reads `100.00`. **Since `v5`** (2026-09-29) each brand's authority is the
+mean, over awareness answers that name it, of that answer's authority sum —
+not one sum over every citing domain, which grew with how often the brand
+was named and tracked Mention Rate (Spearman 0.781, zeros excluded). A brand
+named in no awareness answer reads `0.00`, not `null`.
 
 **`status: "insufficient_data"`** with `composite: null` and
 `reasonCode: "INSUFFICIENT_DATA"` when no engine call answered. An unrunnable

@@ -130,9 +130,13 @@ EXCLUSION_DETAIL: dict[str, str] = {
 # is never presented as more precise than it is.
 DIMENSION_NOTE: dict[str, str] = {
     "citation_strength": (
-        "Citation Strength weighs the third-party sources an answer cites when it names "
-        "the brand, against the best-cited brand in the same scan, so the leader reads "
-        "100. Sources count on two tiers: a short structural list — government and "
+        "Citation Strength asks: when AI names the brand, how often does it back the "
+        "brand with a trusted source? Each answer that names the brand is weighed by the "
+        "third-party sources it cites, and the figure is the average over those answers — "
+        "so being named more often, which Mention Rate already counts, does not raise it. "
+        "It is set against the best-backed brand in the same scan, so the leader reads "
+        "100, and a brand no answer names reads 0. Sources count on two tiers: a short "
+        "structural list — government and "
         "university domains, Wikipedia, the AP and Reuters wire services, and the "
         "cross-industry review platforms (Better Business Bureau, Trustpilot, G2, "
         "Capterra) — at full weight, and domains that engines cite across at least "
