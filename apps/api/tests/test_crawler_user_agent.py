@@ -7,14 +7,15 @@ browser and its robots.txt and sitemap.xml requests with each scan.
 
 No browser and no network. Playwright is replaced by a fake that records the
 context's user agent and then raises the error both fetchers already catch;
-httpx by a transport that records each request's headers.
+the robots gate's HTTP by `robots_web` (conftest), which records each
+request's user agent — robots.txt, sitemap.xml and the homepage's HEAD hop
+since the crawler began obeying robots.txt (2026-09-29).
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-import httpx
 import pytest
 from playwright.async_api import Error as PlaywrightError
 
@@ -82,7 +83,9 @@ class TestEveryFetcherSendsIt:
         # The service's own settings, as `get_settings()` hands them out.
         monkeypatch.setattr(crawl, "get_settings", lambda: _settings(WEB))
 
-    async def test_the_crawl_when_a_site_is_added(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_the_crawl_when_a_site_is_added(
+        self, monkeypatch: pytest.MonkeyPatch, robots_web: Any
+    ) -> None:
         seen: list[str] = []
         monkeypatch.setattr(crawl, "async_playwright", lambda: _Playwright(seen))
 
@@ -90,28 +93,24 @@ class TestEveryFetcherSendsIt:
 
         assert result.error_code == "BROWSER_ERROR"  # the fake stopped it, as designed
         assert seen == [EXPECTED]
+        # robots.txt (a 404 here, so everything is allowed) and the homepage's
+        # HEAD hop go out under the same name.
+        assert [m for m, _url, _ua in robots_web.requests] == ["GET", "HEAD"]
+        assert {ua for _m, _url, ua in robots_web.requests} == {EXPECTED}
 
     async def test_the_audit_browser_and_its_robots_and_sitemap_requests(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, robots_web: Any
     ) -> None:
         seen: list[str] = []
-        requested: list[tuple[str, str]] = []
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            requested.append((request.url.path, request.headers["user-agent"]))
-            return httpx.Response(404)
-
-        real = httpx.AsyncClient
-
-        def client(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
-            kwargs["transport"] = httpx.MockTransport(handler)
-            return real(*args, **kwargs)
-
-        monkeypatch.setattr(technical_audit.httpx, "AsyncClient", client)
         monkeypatch.setattr(technical_audit, "async_playwright", lambda: _Playwright(seen))
 
         signals = await technical_audit.audit_site("https://client.example")
 
         assert signals.error_code == "BROWSER_ERROR"
-        assert requested == [("/robots.txt", EXPECTED), ("/sitemap.xml", EXPECTED)]
+        assert [(m, url) for m, url, _ua in robots_web.requests] == [
+            ("GET", "https://client.example/robots.txt"),
+            ("GET", "https://client.example/sitemap.xml"),
+            ("HEAD", "https://client.example"),
+        ]
+        assert {ua for _m, _url, ua in robots_web.requests} == {EXPECTED}
         assert seen == [EXPECTED]

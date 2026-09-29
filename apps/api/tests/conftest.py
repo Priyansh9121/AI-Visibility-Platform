@@ -494,3 +494,67 @@ def stub_chain_externals(monkeypatch, request):  # noqa: ANN001, ANN201
         monkeypatch.setattr(
             anthropic.resources.messages.AsyncMessages, "parse", dispatching_parse
         )
+
+
+class FakeWeb:
+    """The sites the robots gate talks to, served from memory — 2026-09-29.
+
+    `serve(url, ...)` sets what a URL answers (any method); anything not served
+    answers 404. Every request the gate makes is recorded in `requests` as
+    `(method, url, user_agent)`, so a test can assert what was — and was not —
+    fetched. `fail(url, exc)` makes a URL raise a transport error instead.
+    """
+
+    def __init__(self) -> None:
+        self.routes: dict[str, tuple[int, str, dict[str, str]]] = {}
+        self.failures: dict[str, Exception] = {}
+        self.requests: list[tuple[str, str, str]] = []
+
+    def serve(
+        self, url: str, *, status: int = 200, body: str = "",
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        self.routes[url] = (status, body, headers or {"content-type": "text/plain"})
+
+    def fail(self, url: str, exc: Exception) -> None:
+        self.failures[url] = exc
+
+    def handler(self, request):  # noqa: ANN001, ANN201
+        import httpx
+
+        url = str(request.url)
+        self.requests.append((request.method, url, request.headers.get("user-agent", "")))
+        if url in self.failures:
+            raise self.failures[url]
+        status, body, headers = self.routes.get(url, (404, "", {}))
+        return httpx.Response(status, text=body, headers=headers)
+
+    def fetched(self, method: str | None = None) -> list[str]:
+        return [url for m, url, _ in self.requests if method is None or m == method]
+
+
+@pytest.fixture
+def robots_web(monkeypatch):  # noqa: ANN001, ANN201
+    """Route the robots gate's HTTP — robots.txt, HEAD hops, sitemap — to a `FakeWeb`.
+
+    Patched at `RobotsGate._client`, the one place the gate builds a client,
+    so nothing else's traffic is touched. The user agent and redirect limit
+    are the gate's own.
+    """
+    import httpx
+
+    from avp_api.services import crawl
+
+    web = FakeWeb()
+    real = httpx.AsyncClient
+
+    def client(self):  # noqa: ANN001, ANN202
+        return real(
+            timeout=self._timeout,
+            headers={"User-Agent": self._user_agent},
+            max_redirects=crawl.MAX_REDIRECTS,
+            transport=httpx.MockTransport(web.handler),
+        )
+
+    monkeypatch.setattr(crawl.RobotsGate, "_client", client)
+    return web

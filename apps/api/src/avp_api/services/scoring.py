@@ -106,6 +106,12 @@ logger = structlog.get_logger(__name__)
 # note on `authority_when_named`. v5 stands.
 FORMULA_VERSION = "v5"
 
+# Why Technical Foundation can be missing — the reason `compute_score` records.
+# NOT_YET_MEASURED: no audit, or one that could not read the site.
+# CRAWL_DISALLOWED (2026-09-29): the site's robots.txt forbids its pages to
+# this crawler. Neither moves the formula: both exclude and redistribute.
+TECHNICAL_FOUNDATION_EXCLUSIONS = ("NOT_YET_MEASURED", "CRAWL_DISALLOWED")
+
 TWO_PLACES = Decimal("0.01")
 HUNDRED = Decimal("100")
 
@@ -352,6 +358,7 @@ def compute_inputs_digest(
     competitors: list[CompetitorFacts],
     technical_foundation: Decimal | None = None,
     domain_tiers: dict[str, str] | None = None,
+    technical_foundation_exclusion: str | None = None,
 ) -> str:
     """Fingerprint the exact inputs a score was computed from.
 
@@ -387,6 +394,13 @@ def compute_inputs_digest(
     which answer cited which domain, and `results` already records every
     result's own citations, brands, `mentioned`, intent and status — so
     moving a source from one answer to another moves the digest.
+
+    `technical_foundation_exclusion` (2026-09-29) is WHY Technical Foundation
+    is missing, when the reason is not the default. It moves no number — the
+    dimension is excluded either way — but it changes what the stored score
+    says, so a score that reads CRAWL_DISALLOWED gets its own digest. It
+    enters the payload only when set, so every digest computed before it
+    existed is unchanged, byte for byte.
     """
     payload = {
         "formula_version": FORMULA_VERSION,
@@ -418,6 +432,8 @@ def compute_inputs_digest(
         ),
         "domain_tiers": dict(sorted((domain_tiers or {}).items())),
     }
+    if technical_foundation_exclusion is not None:
+        payload["technical_foundation_exclusion"] = technical_foundation_exclusion
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
@@ -835,6 +851,7 @@ def compute_score(
     *,
     competitor_set_status: DetectionStatus | None,
     technical_foundation: Decimal | None = None,
+    technical_foundation_exclusion: str | None = None,
     authority: DomainAuthority = CURATED_ONLY,
 ) -> ScoreResult:
     """Compute the composite and its breakdown.
@@ -848,10 +865,25 @@ def compute_score(
     production: `scoring_runner.score_scan` loads the platform tier from the
     database and passes it, and that is the only place this is called with
     real rows.
+
+    `technical_foundation_exclusion` says why `technical_foundation` is None,
+    when it is: one of `TECHNICAL_FOUNDATION_EXCLUSIONS`, NOT_YET_MEASURED by
+    default. It changes the reason recorded and nothing else — see the
+    exclusion below.
     """
+    if (
+        technical_foundation_exclusion is not None
+        and technical_foundation_exclusion not in TECHNICAL_FOUNDATION_EXCLUSIONS
+    ):
+        raise ValueError(
+            f"unknown Technical Foundation exclusion {technical_foundation_exclusion!r}"
+        )
     tiers = authority.tiers_for({d for r in results for d, _ in r.citations})
     digest = compute_inputs_digest(
-        results, competitors, technical_foundation, domain_tiers=describe(tiers)
+        results, competitors, technical_foundation, domain_tiers=describe(tiers),
+        technical_foundation_exclusion=(
+            technical_foundation_exclusion if technical_foundation is None else None
+        ),
     )
     weights_recorded = {
         d.value: str(w) for d, w in sorted(WEIGHTS.items(), key=lambda kv: kv[0].value)
@@ -1033,11 +1065,21 @@ def compute_score(
     # brand genuinely has no data for a dimension we can measure. Epic 7's report
     # must word those differently — "we haven't checked" is not "there's nothing
     # to find" — and collapsing them into one flag would lose that.
+    #
+    # CRAWL_DISALLOWED (2026-09-29) is a third fact: the site's robots.txt
+    # asks crawlers like ours not to load its pages, so the audit obeyed and
+    # did not measure. Excluded exactly as NOT_YET_MEASURED is — the same None,
+    # the same redistribution, so the composite is the one any unmeasured
+    # dimension produces and the formula is unchanged — under its own reason.
+    # Without the TECHNICAL_FOUNDATION_NOT_MEASURED flag, whose sentence ("had
+    # not been audited") would be false: the audit ran, and read robots.txt.
     tf_value: Decimal | None
     if technical_foundation is None:
         tf_value = None
-        excluded[Dimension.TECHNICAL_FOUNDATION.value] = "NOT_YET_MEASURED"
-        flags.append("TECHNICAL_FOUNDATION_NOT_MEASURED")
+        reason = technical_foundation_exclusion or "NOT_YET_MEASURED"
+        excluded[Dimension.TECHNICAL_FOUNDATION.value] = reason
+        if reason == "NOT_YET_MEASURED":
+            flags.append("TECHNICAL_FOUNDATION_NOT_MEASURED")
     else:
         tf_value = _round2(_guard(Dimension.TECHNICAL_FOUNDATION, technical_foundation))
 

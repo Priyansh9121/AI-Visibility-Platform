@@ -47,6 +47,7 @@ import {
   num,
   tally,
 } from '@/lib/client/technical';
+import { EXCLUSION_REASON, ROBOTS_DISALLOWED } from '@/lib/report/strings';
 
 export type TechnicalState =
   | { kind: 'loading' }
@@ -160,6 +161,19 @@ export function ClientTechnicalView({
 /* ============================== body =============================== */
 
 function Audited({ audit }: { audit: TechnicalAudit }): JSX.Element {
+  // robots.txt kept the crawler off the page — 2026-09-29. The site chose
+  // that; it is not a site we failed to reach, so it is not worded as one.
+  // What its robots.txt says to AI crawlers is on the Crawler screen.
+  if (audit.status === 'failed' && audit.errorCode === ROBOTS_DISALLOWED) {
+    return (
+      <EmptyState
+        eyebrow="Technical"
+        title="This site asks crawlers like ours to stay out"
+        body={`${EXCLUSION_REASON.CRAWL_DISALLOWED!.detail} This crawler obeys robots.txt, so nothing here is scored. What the file says to AI crawlers is on the Crawler screen.`}
+        note={`Reason: ${ROBOTS_DISALLOWED}`}
+      />
+    );
+  }
   if (audit.status !== 'ok') {
     return (
       <EmptyState

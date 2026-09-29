@@ -973,6 +973,47 @@ export const failedAuditReport: Report = {
 };
 
 /**
+ * robots.txt kept the crawler off the page — 2026-09-29. Technical Foundation
+ * is excluded under its own reason, and a blanket `Disallow: /` under `*` —
+ * read from the file itself — is still the finding it always was.
+ */
+export const crawlDisallowedReport: Report = {
+  ...helpscoutReport,
+  score: {
+    ...helpscoutReport.score!,
+    technicalFoundation: null,
+    excludedDimensions: { technical_foundation: 'CRAWL_DISALLOWED' },
+    degradationFlags: (helpscoutReport.score!.degradationFlags ?? []).filter(
+      (f) => f !== 'TECHNICAL_FOUNDATION_NOT_MEASURED',
+    ),
+  },
+  dimensions: helpscoutReport.dimensions.map((d) =>
+    d.key === 'technical_foundation'
+      ? { ...d, subscore: null, included: false, exclusionReason: 'CRAWL_DISALLOWED' }
+      : d,
+  ),
+  audit: {
+    ...helpscoutReport.audit!,
+    status: 'failed',
+    errorCode: 'ROBOTS_DISALLOWED',
+    technicalFoundation: null,
+    passed: 2,
+    warned: 0,
+    failed: 1,
+    notApplicable: 14,
+    findings: [
+      {
+        id: 'tchk_01M3ROBOTSBLOCKEDINDEXABLE0',
+        checkKey: 'indexable',
+        status: 'fail',
+        value: null,
+        detailCode: 'ROBOTS_TXT_DISALLOW',
+      },
+    ],
+  },
+};
+
+/**
  * A set that has been corrected AND re-detected — Finding 3's actual case.
  *
  * `apply_override` clears the confidence, so an overridden set alone never

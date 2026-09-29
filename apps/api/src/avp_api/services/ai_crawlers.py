@@ -75,7 +75,10 @@ __all__ = [
     "AgentAccess",
     "AiAgent",
     "AgentPurpose",
+    "CrawlPolicy",
+    "PolicyBasis",
     "RuleSource",
+    "crawl_policy",
     "evaluate_robots",
     "unknown_access",
 ]
@@ -299,7 +302,12 @@ def _rule_to_regex(path: str) -> re.Pattern[str]:
 
 
 def _allows(group: _Group, target: str) -> bool:
-    """Whether `group` permits `target`, by longest-match with Allow winning ties.
+    """Whether `group` permits `target`, by longest-match with Allow winning ties."""
+    return _allows_rules(group.rules, target)
+
+
+def _allows_rules(rules: list[tuple[str, bool]], target: str) -> bool:
+    """Whether `rules` permit `target`, by longest-match with Allow winning ties.
 
     RFC 9309 §2.2.2: the most specific (longest) matching rule decides, and
     where an Allow and a Disallow of equal length both match, the Allow wins.
@@ -309,7 +317,7 @@ def _allows(group: _Group, target: str) -> bool:
     best_length = -1
     best_allowed = True
 
-    for path, allowed in group.rules:
+    for path, allowed in rules:
         if not path:
             # `Disallow:` with an empty value permits everything; `Allow:` with
             # one is meaningless. Neither constrains a path.
@@ -400,3 +408,77 @@ def unknown_access() -> list[AgentAccess]:
         AgentAccess(agent=agent, verdict=AccessVerdict.UNKNOWN, source=RuleSource.UNREADABLE)
         for agent in AGENTS
     ]
+
+
+# ===========================================================================
+# What robots.txt lets THIS service's crawler fetch — 2026-09-29.
+#
+# Everything above reads a site's policy for OTHER crawlers, to report it.
+# This applies the same parser to our own, AVPScanBot, to obey it: the crawl
+# when a site is added and the technical audit both ask `CrawlPolicy.allows`
+# before every page they fetch (`crawl.RobotsGate`). One reader, two uses — a
+# third would be one more place for RFC 9309 to be got wrong.
+# ===========================================================================
+
+
+class PolicyBasis(str, enum.Enum):
+    """Why the policy says what it says, from how the robots.txt fetch went.
+
+    RFC 9309 §2.3.1 decides every row. The one choice made here is 429: the
+    RFC files it with the other 4xx ("unavailable", crawl freely), and it is
+    treated instead like a 5xx, because a site asking us to slow down is not
+    one to read that minute.
+    """
+
+    # 2xx: the file was read, and its rules for us apply.
+    RULES = "rules"
+    # 4xx (404, 410, 403 ...), except 429: there is no file to obey, so
+    # everything is allowed.
+    UNAVAILABLE = "unavailable"
+    # 5xx, 429, a timeout or no response at all: nothing may be fetched this
+    # run. The cautious reading, and the RFC's.
+    UNREACHABLE = "unreachable"
+
+
+@dataclass(frozen=True, slots=True)
+class CrawlPolicy:
+    """What one site's robots.txt lets one crawler fetch."""
+
+    basis: PolicyBasis
+    # The rules of every group that applies, combined, in file order. Empty
+    # when no group applies — which allows everything.
+    rules: tuple[tuple[str, bool], ...] = ()
+
+    def allows(self, target: str) -> bool:
+        """Whether a path (with its query, if any) may be fetched."""
+        if self.basis is PolicyBasis.UNREACHABLE:
+            return False
+        return _allows_rules(list(self.rules), target or "/")
+
+
+def crawl_policy(status: int | None, body: str, *, token: str) -> CrawlPolicy:
+    """The policy for the crawler whose product token is `token`.
+
+    `status` is the robots.txt response's status after redirects, or None when
+    there was no response. Which group applies is the RFC's §2.2.1 and the
+    rule `_select_group` follows: groups naming the token, else the `*`
+    groups, else none. Unlike `_select_group`, every matching group counts —
+    the RFC combines groups that name the same agent, and a file that
+    repeats `User-agent: *` means both.
+    """
+    if status is None or status == 429 or status >= 500:
+        return CrawlPolicy(PolicyBasis.UNREACHABLE)
+    if 400 <= status < 500:
+        return CrawlPolicy(PolicyBasis.UNAVAILABLE)
+    if not 200 <= status < 300:
+        # A 1xx, or a 3xx left over when redirects ran out: no file was read,
+        # and no answer is not permission.
+        return CrawlPolicy(PolicyBasis.UNREACHABLE)
+
+    groups = _parse_groups(body)
+    wanted = token.lower()
+    named = [g for g in groups if wanted in g.tokens]
+    applying = named or [g for g in groups if "*" in g.tokens]
+    return CrawlPolicy(
+        PolicyBasis.RULES, tuple(rule for group in applying for rule in group.rules)
+    )

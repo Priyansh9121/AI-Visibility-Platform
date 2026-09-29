@@ -41,6 +41,7 @@ from ..models import (
 from ..models.prompt import PromptIntent
 from ..models.score import ScoreStatus
 from ..models.technical_audit import AuditStatus
+from .crawl import ROBOTS_DISALLOWED
 from .domain_authority import load_domain_authority
 from .scoring import (
     CompetitorComparison,
@@ -172,12 +173,19 @@ async def load_competitor_facts(
     return facts, competitor_set
 
 
-async def load_technical_foundation(session: AsyncSession, scan_id: str) -> Decimal | None:
-    """The scan's Technical Foundation value, or None if it was never audited.
+async def load_technical_foundation(
+    session: AsyncSession, scan_id: str
+) -> tuple[Decimal | None, str | None]:
+    """The scan's Technical Foundation value, and why it is missing if it is.
 
     Returns None — not zero — for a failed audit as well as a missing one. A
     site we could not read is not a site with a bad technical foundation, and
     the two must not collapse into the same number.
+
+    The reason is None (NOT_YET_MEASURED, `compute_score`'s default) except
+    for an audit that robots.txt kept off the page: CRAWL_DISALLOWED
+    (2026-09-29). Stored as a failed audit with `ROBOTS_DISALLOWED`, it is
+    excluded like any failed one — its reason is the only difference.
     """
     audit = (
         await session.execute(
@@ -187,9 +195,13 @@ async def load_technical_foundation(session: AsyncSession, scan_id: str) -> Deci
             .limit(1)
         )
     ).scalar_one_or_none()
-    if audit is None or audit.status is AuditStatus.FAILED:
-        return None
-    return audit.technical_foundation
+    if audit is None:
+        return None, None
+    if audit.status is AuditStatus.FAILED:
+        if audit.error_code == ROBOTS_DISALLOWED:
+            return None, "CRAWL_DISALLOWED"
+        return None, None
+    return audit.technical_foundation, None
 
 
 async def score_scan(
@@ -212,7 +224,9 @@ async def score_scan(
     #
     # scoring.py's public contract is unchanged: it has always taken an optional
     # Decimal. Epic 6 produces one; scoring consumes it exactly as before.
-    technical_foundation = await load_technical_foundation(session, scan.id)
+    technical_foundation, technical_foundation_exclusion = await load_technical_foundation(
+        session, scan.id
+    )
 
     # v3 — the citing-domain authority lookup. Tier A needs no data; Tier B is
     # a platform-wide aggregate over stored citations (15 ms, measured — see
@@ -225,6 +239,7 @@ async def score_scan(
         competitors,
         competitor_set_status=competitor_set.status if competitor_set else None,
         technical_foundation=technical_foundation,
+        technical_foundation_exclusion=technical_foundation_exclusion,
         authority=authority,
     )
 

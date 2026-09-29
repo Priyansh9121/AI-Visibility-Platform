@@ -15,7 +15,9 @@ import { BEAT_SEQUENCE } from '@avp/design-system';
 import { ReportView } from './ReportView';
 import type { Report } from '@avp/shared-types';
 import { deriveNarrative } from '@/lib/report/derive';
+import { EXCLUSION_REASON, checkLabel } from '@/lib/report/strings';
 import {
+  crawlDisallowedReport,
   failedAuditReport,
   generatedFixesReport,
   helpscoutReport,
@@ -788,5 +790,36 @@ describe('the report acquires none of the Working screens visual pass', () => {
     for (const report of [unscoredReport, noCompetitorSetReport]) {
       expect(render(report)).not.toContain('avp-empty');
     }
+  });
+});
+
+
+describe('a site whose robots.txt keeps the crawler out — 2026-09-29', () => {
+  const html = render(crawlDisallowedReport);
+
+  it('says why Technical Foundation is left out, in the copy both sides share', () => {
+    expect(html).toContain(EXCLUSION_REASON.CRAWL_DISALLOWED!.label);
+    expect(html).toContain(
+      'This site’s robots.txt asks crawlers like ours not to load its pages, so its technical foundation wasn’t measured.',
+    );
+    // Not the other reasons' words: the audit ran, and nothing failed.
+    expect(html).not.toContain('Not yet checked');
+    expect(html).not.toContain('The site could not be read');
+    expect(html).not.toContain('Audit failed');
+  });
+
+  it('still shows what robots.txt itself says, and the blanket block as a fix', () => {
+    expect(html).toContain('What the site’s robots.txt says');
+    expect(html).toContain('Checks that did not pass');
+    expect(html).toContain(checkLabel('indexable'));
+    const narrative = deriveNarrative(crawlDisallowedReport);
+    expect(narrative.fixes.map((f) => f.id)).toContain('audit:indexable');
+    expect(narrative.exclusions.map((e) => [e.key, e.reason])).toEqual([
+      ['technical_foundation', 'CRAWL_DISALLOWED'],
+    ]);
+  });
+
+  it('a failed crawl is still worded as one', () => {
+    expect(render(failedAuditReport)).toContain('The site could not be read');
   });
 });

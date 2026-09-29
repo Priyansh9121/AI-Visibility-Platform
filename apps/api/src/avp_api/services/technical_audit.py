@@ -50,14 +50,19 @@ from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
-import httpx
 import structlog
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
 
 from .ai_crawlers import AgentAccess, evaluate_robots, unknown_access
-from .crawl import crawler_user_agent, normalise_url, registrable_domain
+from .crawl import (
+    ROBOTS_DISALLOWED,
+    RobotsGate,
+    crawler_user_agent,
+    normalise_url,
+    registrable_domain,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -109,6 +114,9 @@ class AuditSignals:
     robots_txt_present: bool = False
     robots_allows_crawl: bool = True
     has_sitemap: bool = False
+    # robots.txt forbids /sitemap.xml to this crawler (2026-09-29): unknown,
+    # not absent. Transient — the sitemap check carries it.
+    sitemap_disallowed: bool = False
     is_indexable: bool = True
 
     # --- AI crawler policy (Epic F) ---
@@ -196,20 +204,27 @@ class _SideFiles:
     robots_present: bool = False
     robots_allows_crawl: bool = True
     sitemap_present: bool = False
+    # 2026-09-29: robots.txt forbids /sitemap.xml to this crawler, so it was
+    # not fetched and whether one exists is unknown — not "no sitemap".
+    sitemap_disallowed: bool = False
     # Epic F. Per-agent AI crawler policy. Empty only if never evaluated.
     ai_access: list[AgentAccess] = field(default_factory=list)
 
 
-async def _fetch_side_files(base: str, *, user_agent: str) -> _SideFiles:
-    """Fetch robots.txt and sitemap.xml, and read both policies out of robots.
+async def _fetch_side_files(gate: RobotsGate, base: str) -> _SideFiles:
+    """Read robots.txt and sitemap.xml, and both policies out of robots.
 
-    **robots.txt is now read twice, on purpose.**
+    **robots.txt is read three ways, on purpose — and fetched once.** The
+    fetch is `gate`'s, the same one that decides what this crawler may load
+    (2026-09-29), so what is reported and what is obeyed come from one file.
 
     1. The blanket `Disallow: /` under `User-agent: *` check, unchanged since
        Epic 6, feeding `robots_allows_crawl` -> `is_indexable` -> the §6
        Technical Foundation sub-score.
     2. Epic F's full RFC 9309 parse in `services/ai_crawlers.py`, feeding the
        AI crawler access screen and NOTHING else.
+    3. The same parser applied to AVPScanBot (`gate.allows`), deciding what
+       the audit fetches — sitemap.xml here, the homepage in `audit_site`.
 
     The first is deliberately NOT reimplemented on top of the second, even
     though the second is strictly more correct. `robots_allows_crawl` is a
@@ -222,50 +237,61 @@ async def _fetch_side_files(base: str, *, user_agent: str) -> _SideFiles:
     """
     found = _SideFiles()
 
-    async with httpx.AsyncClient(
-        timeout=SIDE_FETCH_TIMEOUT, follow_redirects=True,
-        headers={"User-Agent": user_agent},
-    ) as client:
-        try:
-            resp = await client.get(f"{base}/robots.txt")
-            if resp.status_code == 200 and "text" in resp.headers.get("content-type", ""):
-                found.robots_present = True
-                body = resp.text[:20_000]
-                found.ai_access = evaluate_robots(body)
-                star_block = False
-                for raw in body.splitlines():
-                    line = raw.split("#", 1)[0].strip().lower()
-                    if line.startswith("user-agent:"):
-                        star_block = line.split(":", 1)[1].strip() == "*"
-                    elif (
-                        star_block
-                        and line.startswith("disallow:")
-                        and line.split(":", 1)[1].strip() == "/"
-                    ):
-                        found.robots_allows_crawl = False
-                    if "sitemap:" in line:
-                        found.sitemap_present = True
-        except httpx.HTTPError:
-            pass
+    robots = await gate.file(base)
+    if robots.status == 200 and "text" in robots.content_type:
+        found.robots_present = True
+        body = robots.body[:20_000]
+        found.ai_access = evaluate_robots(body)
+        star_block = False
+        for raw in body.splitlines():
+            line = raw.split("#", 1)[0].strip().lower()
+            if line.startswith("user-agent:"):
+                star_block = line.split(":", 1)[1].strip() == "*"
+            elif (
+                star_block
+                and line.startswith("disallow:")
+                and line.split(":", 1)[1].strip() == "/"
+            ):
+                found.robots_allows_crawl = False
+            if "sitemap:" in line:
+                found.sitemap_present = True
 
-        if not found.ai_access:
-            # Non-200, wrong content type, or a transport error. The file was
-            # not read, so the policy is UNKNOWN — never an allow. The
-            # distinction is the whole point of `unknown_access()`; see
-            # `ai_crawlers.py`.
-            found.ai_access = unknown_access()
+    if not found.ai_access:
+        # Non-200, wrong content type, or a transport error. The file was
+        # not read, so the policy is UNKNOWN — never an allow. The
+        # distinction is the whole point of `unknown_access()`; see
+        # `ai_crawlers.py`.
+        found.ai_access = unknown_access()
 
-        if not found.sitemap_present:
-            try:
-                resp = await client.get(f"{base}/sitemap.xml")
-                found.sitemap_present = resp.status_code == 200 and (
-                    "xml" in resp.headers.get("content-type", "")
-                    or resp.text.lstrip().startswith("<?xml")
-                )
-            except httpx.HTTPError:
-                pass
+    if not found.sitemap_present:
+        # Checked before it is requested, like every page (2026-09-29).
+        sitemap = await gate.follow("GET", f"{base}/sitemap.xml")
+        if sitemap.disallowed:
+            found.sitemap_disallowed = True
+        elif sitemap.response is not None:
+            response = sitemap.response
+            found.sitemap_present = response.status_code == 200 and (
+                "xml" in response.headers.get("content-type", "")
+                or response.text.lstrip().startswith("<?xml")
+            )
 
     return found
+
+
+def _robots_disallowed(signals: AuditSignals) -> AuditSignals:
+    """The audit of a site whose robots.txt forbids its homepage to this crawler.
+
+    Nothing is loaded. What robots.txt itself says — the AI crawler table,
+    whether the file exists, the sitemap it names — is already on `signals`,
+    read from the one file this crawler may always fetch. A blanket
+    `Disallow: /` under `*` also settles indexing without the page, so that
+    stays a finding (`build_checks`).
+    """
+    signals.ok = False
+    signals.error_code = ROBOTS_DISALLOWED
+    signals.is_indexable = signals.robots_allows_crawl
+    logger.info("audit.robots_disallowed", domain=signals.domain)
+    return signals
 
 
 async def audit_site(url: str, *, timeout_ms: int = PAGE_TIMEOUT_MS) -> AuditSignals:
@@ -277,12 +303,14 @@ async def audit_site(url: str, *, timeout_ms: int = PAGE_TIMEOUT_MS) -> AuditSig
     origin_match = re.match(r"^(https?://[^/]+)", start_url)
     origin = origin_match.group(1) if origin_match else start_url
     user_agent = crawler_user_agent()
+    gate = RobotsGate(user_agent=user_agent, timeout=SIDE_FETCH_TIMEOUT)
 
     try:
-        side = await _fetch_side_files(origin, user_agent=user_agent)
+        side = await _fetch_side_files(gate, origin)
         signals.robots_txt_present = side.robots_present
         signals.robots_allows_crawl = side.robots_allows_crawl
         signals.has_sitemap = side.sitemap_present
+        signals.sitemap_disallowed = side.sitemap_disallowed
         signals.ai_crawler_access = side.ai_access
     except Exception:  # noqa: BLE001 - side files must never fail the audit
         logger.warning("audit.side_fetch_failed", domain=domain)
@@ -290,6 +318,13 @@ async def audit_site(url: str, *, timeout_ms: int = PAGE_TIMEOUT_MS) -> AuditSig
         # policy is known. Say so explicitly rather than leaving the list
         # empty, which downstream would read as "no agents to report".
         signals.ai_crawler_access = unknown_access()
+
+    # robots.txt decides whether the page is loaded at all — 2026-09-29. The
+    # homepage's redirects are followed by the gate, each hop checked on its
+    # own host, so the browser is handed an address robots.txt allows.
+    home_url = await gate.resolve(start_url)
+    if home_url is None:
+        return _robots_disallowed(signals)
 
     try:
         async with async_playwright() as pw:
@@ -347,7 +382,7 @@ async def audit_site(url: str, *, timeout_ms: int = PAGE_TIMEOUT_MS) -> AuditSig
                 # existed, so nothing downstream had to change.
                 try:
                     response = await page.goto(
-                        start_url, wait_until="load", timeout=timeout_ms
+                        home_url, wait_until="load", timeout=timeout_ms
                     )
                 except PlaywrightTimeoutError:
                     logger.info(
@@ -356,12 +391,17 @@ async def audit_site(url: str, *, timeout_ms: int = PAGE_TIMEOUT_MS) -> AuditSig
                     )
                     signals.load_event_reached = False
                     response = await page.goto(
-                        start_url, wait_until="domcontentloaded", timeout=timeout_ms
+                        home_url, wait_until="domcontentloaded", timeout=timeout_ms
                     )
                 if response is None:
                     signals.ok = False
                     signals.error_code = "FETCH_FAILED"
                     return signals
+                # Where the browser landed, if the gate did not send it there
+                # (a redirect only a browser is given, or a script's): that
+                # host's robots.txt decides whether anything is read from it.
+                if not await gate.allows(page.url):
+                    return _robots_disallowed(signals)
 
                 signals.http_status = response.status
                 signals.last_modified = _parse_http_date(
@@ -601,7 +641,15 @@ def build_checks(signals: AuditSignals) -> list[CheckVerdict]:
     Technical Foundation is excluded either way (`score_audit` returns
     `scored=False` whenever the signals are not ok), so neither kind silently
     scores a client down.
+
+    **A THIRD KIND, 2026-09-29: the site's robots.txt forbids the page.** Not
+    a failure — this crawler obeys the file. What the file itself says is
+    still reported (`_robots_disallowed_checks`), and everything that needs
+    the page is `not_applicable` with `ROBOTS_DISALLOWED`, which is never a
+    finding.
     """
+    if not signals.ok and signals.error_code == ROBOTS_DISALLOWED:
+        return _robots_disallowed_checks(signals)
     if not signals.ok:
         code = signals.error_code or "FETCH_FAILED"
         site_answered = code.startswith(SITE_ANSWERED_CODES)
@@ -625,14 +673,7 @@ def build_checks(signals: AuditSignals) -> list[CheckVerdict]:
             "META_ROBOTS_NOINDEX" if signals.meta_robots_noindex else "ROBOTS_TXT_DISALLOW"
         ),
     ))
-    checks.append(CheckVerdict(
-        "robots_txt_present", _verdict(signals.robots_txt_present, warn=True), None,
-        None if signals.robots_txt_present else "NO_ROBOTS_TXT",
-    ))
-    checks.append(CheckVerdict(
-        "sitemap_present", _verdict(signals.has_sitemap, warn=True), None,
-        None if signals.has_sitemap else "NO_SITEMAP_XML",
-    ))
+    checks.extend(_robots_file_checks(signals))
     checks.append(CheckVerdict(
         "canonical_present", _verdict(signals.canonical_present, warn=True), None,
         None if signals.canonical_present else "NO_CANONICAL_LINK",
@@ -716,6 +757,67 @@ def build_checks(signals: AuditSignals) -> list[CheckVerdict]:
     ))
 
     return checks
+
+
+# The checks that need the page itself — every check but the two robots.txt
+# settles, and INP, which no crawler can measure. Ordered as `build_checks`.
+PAGE_CHECKS: tuple[str, ...] = (
+    "site_reachable",
+    "canonical_present",
+    "schema_present",
+    "schema_business_entity",
+    "schema_faq",
+    "schema_product_or_service",
+    "meta_title",
+    "meta_description",
+    "open_graph_tags",
+    "single_h1",
+    "content_freshness",
+    "cwv_lcp",
+    "cwv_cls",
+)
+
+
+def _robots_file_checks(signals: AuditSignals) -> list[CheckVerdict]:
+    """The two checks robots.txt answers on its own: the file, and the sitemap."""
+    if signals.has_sitemap:
+        sitemap = CheckVerdict("sitemap_present", "pass", None, None)
+    elif signals.sitemap_disallowed:
+        # Not fetched because robots.txt forbids it: unknown, so not a
+        # finding. Telling a client to publish a sitemap it may well have
+        # would be a claim this audit never checked.
+        sitemap = CheckVerdict("sitemap_present", "not_applicable", None, ROBOTS_DISALLOWED)
+    else:
+        sitemap = CheckVerdict("sitemap_present", "warn", None, "NO_SITEMAP_XML")
+    return [
+        CheckVerdict(
+            "robots_txt_present", _verdict(signals.robots_txt_present, warn=True), None,
+            None if signals.robots_txt_present else "NO_ROBOTS_TXT",
+        ),
+        sitemap,
+    ]
+
+
+def _robots_disallowed_checks(signals: AuditSignals) -> list[CheckVerdict]:
+    """What an audit barred from the page can still say, from robots.txt alone.
+
+    A blanket `Disallow: /` under `*` is a site telling every crawler, AI
+    ones included, to stay out. That is known from the file, and it stays the
+    `indexable` finding (`ROBOTS_TXT_DISALLOW`) it has always been: being
+    blocked from measuring is no reason to hide that the site blocks the
+    crawlers that build AI answers. Anything else about indexing needs the
+    page's own meta tags, so it is `not_applicable`.
+    """
+    if signals.robots_allows_crawl:
+        indexable = CheckVerdict("indexable", "not_applicable", None, ROBOTS_DISALLOWED)
+    else:
+        indexable = CheckVerdict("indexable", "fail", None, "ROBOTS_TXT_DISALLOW")
+    return [
+        indexable,
+        *_robots_file_checks(signals),
+        *(CheckVerdict(key, "not_applicable", None, ROBOTS_DISALLOWED) for key in PAGE_CHECKS),
+        CheckVerdict("cwv_inp", "not_applicable", None, "FIELD_METRIC_REQUIRES_REAL_USER_DATA"),
+    ]
 
 
 def compute_components(signals: AuditSignals) -> tuple[dict[str, Decimal], dict[str, str]]:
