@@ -12,7 +12,7 @@ stronger claim has no data source here. "Is AI touching our site" is a fact
 about the CLIENT'S server logs. Nothing in this system ingests those: there is
 no log drain, no CDN integration, no collector endpoint, and no model that
 could hold a bot hit. The only user agent this product has ever sent is its own
-(`crawl.py:USER_AGENT`) — that is us crawling the client, not a crawler
+(`crawl.crawler_user_agent`) — that is us crawling the client, not a crawler
 visiting them.
 
 robots.txt is the one first-party, publicly-fetchable statement of that policy,

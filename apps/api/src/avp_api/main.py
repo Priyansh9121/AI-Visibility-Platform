@@ -81,13 +81,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # that keeps share tokens and Google codes out of stdout (`logs.py`).
     configure_logging(settings)
 
+    # The API's own documentation — Swagger UI, and the schema it reads —
+    # lists every route to anyone who asks, so staging and production serve
+    # neither (2026-09-29); local and test keep both. Nothing deployed reads
+    # them: packages/shared-types generates from the COMMITTED export, which
+    # `scripts/export_openapi.py` writes from `app.openapi()` under local
+    # settings, with no server and no URL. ReDoc was never served anywhere.
+    docs_served = not settings.is_deployed
     app = FastAPI(
         title="AI Visibility & Competitive Intelligence Platform API",
         version=__version__,
-        # OpenAPI is the contract packages/shared-types generates from, so it
-        # is served in every environment, not just development.
-        openapi_url=f"{settings.api_base_path}/openapi.json",
-        docs_url=f"{settings.api_base_path}/docs",
+        openapi_url=f"{settings.api_base_path}/openapi.json" if docs_served else None,
+        docs_url=f"{settings.api_base_path}/docs" if docs_served else None,
         redoc_url=None,
         lifespan=lifespan,
     )

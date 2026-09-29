@@ -19295,3 +19295,223 @@ did not ship.
 - OpenAPI and `api.gen.ts` regenerate byte-identically.
 - `alembic check` clean.
 - Exit codes read from files.
+
+
+# Four loose ends before real customers: a manual reset, closed API docs, the crawler page, and the web's own logs
+
+**2026-09-29, the seventh entry of the day.** Four items, ordered by how
+likely each was to bite a paying customer. One commit.
+
+**Nothing to set on Render.** The crawler's address is built from
+`PUBLIC_WEB_BASE_URL`, which on the API service is already
+`https://ai-visibility-platform-1.onrender.com` (the Epic 20 live probe saw
+Google's callback redirect there). The docs close on the `ENVIRONMENT=production`
+the service already has.
+
+## 1. A manual password reset
+
+`apps/api/scripts/issue_password_reset.py --email <address>` is the "we'll
+reset it by hand" the forgot-password screen promises.
+
+- **One token path.** It mints through `password_reset.request_reset`, the
+  function the forgot-password route calls. So the storage is digest-only,
+  the expiry is `password_reset_ttl_seconds`, and earlier links are retired.
+  The link comes from the new `password_reset.reset_url`, which the route's
+  email now uses too, so the two cannot build different links.
+- **Output.** It prints the link once, to its own stdout. No log line carries
+  the link, the token or the address. The service's own
+  `password_reset.request.minted` line names the account by user id.
+- **Refusals.**
+  - Unknown or deleted address: "No such user.", exit 1. Only someone with a
+    shell on the API service can ask, so saying so is no enumeration oracle.
+  - Suspended, or invited and never joined: exit 2.
+  - No password: exit 2, "They should use Sign in with Google". The users
+    table's check constraint makes an active account with no password a
+    Google account. A link would ADD a password to an account that never had
+    one.
+- **Its own engine,** disposed at exit, and the API's logging configuration.
+- **`docs/runbook.md` (new)** has the Render-shell command, what each outcome
+  prints, and what to do with the link: send it to the account's own
+  address.
+- **Not run inside the image,** because this machine has no Docker. The
+  command's paths come from the Dockerfile: `WORKDIR /app`, the venv at
+  `/app/apps/api/.venv`, and `scripts/` inside the build context
+  (`.dockerignore` keeps all of `apps/api`). The same invocation,
+  `.venv/bin/python scripts/issue_password_reset.py`, ran locally against
+  `avp_dev` and printed "No such user." with exit 1.
+
+## 2. The API's docs are closed where it is deployed
+
+- **`create_app`:** in staging and production, `docs_url` and `openapi_url`
+  are `None`. `redoc_url` was already `None` everywhere. Local and test are
+  unchanged.
+- **Nothing deployed reads them.**
+  - The web app uses the committed `api.gen.ts`.
+  - The Dockerfile's HEALTHCHECK calls `/health`; CI's image job calls
+    `/health` and `/ready`.
+  - The workers never call the API over HTTP.
+- **The export still works.** `scripts/export_openapi.py` builds the app with
+  `Settings(environment="local")` and calls `app.openapi()`, which needs no
+  URL. It was run plainly, then with `ENVIRONMENT=production` plus a
+  real-shaped `APP_SECRET` and CORS origin. Both exited 0, and both outputs
+  are byte-identical to the committed `openapi.json`.
+  - With `ENVIRONMENT=production` and nothing else it fails at import: the
+    module-level `app = create_app()` refuses the placeholder secret. That
+    was true before this change, and CI never sets the variable.
+- **jsDelivr leaves the privacy page** and the provider fixture. It served
+  only the docs page's viewer.
+- The README says the docs are local and test only.
+
+## 3. The crawler page
+
+**Traced in the code before a word was written:**
+
+- **Which sites.** Only a site an agency has added as a client. Competitors
+  are found through SerpApi and engine answers, never crawled.
+- **Adding a site** (and "re-classify"): `crawl_site` loads the homepage,
+  then up to 2 more pages on the same host, chosen from links whose paths
+  start with `CANDIDATE_PATHS`. That is at most 3 pages (`intake.py`'s
+  `max_pages`). Images, fonts and video are blocked at the router.
+- **Each scan** (and a manual audit re-run): `GET /robots.txt`, then
+  `GET /sitemap.xml` unless robots.txt mentions a sitemap, then one full load
+  of the homepage. If `load` times out, it tries once more at
+  `domcontentloaded`.
+- **How often.** There is no schedule anywhere: no Celery beat, and no loop in
+  the API. Every run starts from a person's action.
+- **robots.txt is NOT honoured.**
+  - The audit fetches it only to report on it (Technical Foundation and the
+    AI crawler screen).
+  - Nothing consults it before a fetch, and `crawl.py` never reads it.
+  - The page says so plainly, and a tripwire test fails the day either
+    fetcher starts to consult it. Adding support was outside this pass.
+
+**The user agent.** `crawl.py` holds `USER_AGENT_TEMPLATE` and
+`CRAWLER_INFO_PATH`. `crawler_user_agent()` fills the template from
+`PUBLIC_WEB_BASE_URL`. The crawl, the audit's browser and both side fetches
+send it. In production it reads:
+`Mozilla/5.0 (compatible; AVPScanBot/0.1; +https://ai-visibility-platform-1.onrender.com/crawler) Playwright/Chromium`.
+
+**The page.**
+- `/crawler` uses the privacy and terms layout, and the footer on every
+  public page now links it. The privacy page links it too.
+- **Rendered per request.** The web app has no setting that holds its own
+  address, so the page prints the user agent with the address it was
+  requested at: `x-forwarded-host`/`-proto` if present, otherwise `Host`.
+  The API refuses exactly this for links. It is safe here because the
+  address is printed back only to the person whose request supplied it, and
+  the response is `private, no-store`.
+- **"The same string", across two languages.** The web test reads both
+  constants out of `crawl.py` and compares them with
+  `lib/legal/crawler.ts`. It also checks the rendered page's string against
+  the Python template filled with the same origin. The Python test replaces
+  Playwright and httpx with recorders and captures the user agent each
+  fetcher actually sends.
+- **Every other fact on the page** is read back from the API's source in
+  the same way. Page count, paths, side files, one page per scan, and no
+  schedule are each tested.
+
+**No placeholder left.** No `.invalid` host remains anywhere in `apps/`, and
+a tree-wide test holds that. Besides the user agent, two test-data values
+moved to `.example`: a web fixture's `urlAudited`, and
+`verify_google_live.py`'s probe redirect URL. No new host entered the
+scanned source, so the provider fixture only lost entries:
+`example.invalid` and jsDelivr.
+
+## 4. The web's own logs, and the Referer
+
+- **`next start` prints no request lines,** so there is nothing to redact.
+  - In Next 15.5.23, `logRequests` is required only by
+    `server/dev/next-dev-server.js`.
+  - A production build served by `next start` answered 8 requests without
+    writing a byte: four token routes with sentinel tokens, `/crawler`,
+    `/privacy`, a query-string variant and a 404. The log was 145 bytes
+    before and after, with 0 sentinel hits.
+  - The web package's `start` script is `next start`. The repo holds no
+    Render configuration, so that Render runs it is an assumption.
+- **The limit.** Render's own HTTP request log records every request's path,
+  for both services, and the app cannot change that. On the web:
+  `/share/{token}`, `/reset-password/{token}`, `/invite/{token}` and
+  `/sign-up/google?ticket=`. On the API: `/api/v1/reports/{token}`.
+  - The privacy page's logs paragraph said the log "cannot be used to open a
+    report", and read as the whole story. A second paragraph now says
+    Render keeps its own record, with full addresses, including an opened
+    reset or invitation link, and that the web app keeps none.
+- **Referrer-Policy.** `next.config.mjs` sends `no-referrer` on
+  `/share/:token`, `/reset-password/:token`, `/invite/:token` and
+  `/sign-up/google`. curl against the built server shows it on all four,
+  and not on other pages.
+  - The report's source links already carried `rel="noreferrer"`. The header
+    adds the agency's logo, the fonts, and any future link.
+  - It matters for older browsers, whose default policy sends the full
+    address to HTTPS hosts. Nothing reads a Referer: the API's CORS reads
+    Origin.
+
+## Found, not fixed
+
+- **Live tokens in Render's request log.**
+  - A reset link opened but not used stays redeemable for an hour, an
+    invitation for 7 days, and a share link for 30.
+  - Each sits in that log with its path. Moving the web routes' token into
+    the URL fragment (`#…`, never sent to a server) would close it for those
+    three routes.
+  - The share page's API call would still carry its token in a path.
+  - Worth doing before email goes on.
+- **The public reset route mints a token for a Google-only account.** A reset
+  can then add a password to it. With email off nothing is sent. The script
+  refuses the case; the route is unchanged.
+- **`export_openapi.py`'s last line** raises `relative_to` when given an
+  output path outside the repository. The file is written first, so it is
+  harmless, but the run exits 1.
+- **Still open:** there is no deletion endpoint.
+
+## Verified
+
+**API 1560 → 1575 (+15).**
+- The manual reset (6):
+  - the printed link, from the real command in a subprocess, is accepted by
+    `reset-password/confirm`, and the new password signs in;
+  - the token comes from `request_reset`, with the route's digest and expiry;
+  - log capture over structlog, stdout and stdlib logging finds no token,
+    link or address, and the link reaches stdout once;
+  - an unknown address exits 1 from the real command;
+  - Google-only and suspended accounts are refused, with no token row
+    written.
+- The user agent (5): built from the setting, a new domain follows it, and
+  the crawl, the audit's browser and both side fetches send it.
+- The docs (4): 404 for all three paths in staging and production, and
+  served in local and test.
+
+**Web 998 → 1017 (+19).**
+- `crawlerPage.test.tsx` (14);
+- `referrerPolicy.test.ts` (6), which finds the `[token]` routes on disk;
+- the mounted `/crawler` route, signed out (1);
+- minus 2 in `providers.test.ts`, whose per-provider tests for jsDelivr went
+  with it.
+
+**Negative controls, each file restored byte-for-byte:**
+- a structlog call carrying the link, added to the script: the log-capture
+  test fails, and so does the subprocess test (the token is printed twice);
+- docs served in every environment: both deployed-docs tests fail;
+- the web's template drifting from `crawl.py`, and `crawl.py`'s from the
+  web: 2 tests fail each way;
+- a `.invalid` URL added in `apps/api/scripts`: the tree-wide test fails;
+- `/share/:token` dropped from the header rule: 2 tests fail;
+- the audit returning early when robots.txt disallows: the tripwire fails;
+- the crawler's host hard-coded: "a new domain moves it" fails.
+
+**The rest of the bar.**
+- Workers 13, shared-types 53, and the full design-system suite at 649.
+- ruff clean (src and tests, and the new script); mypy 47, under its 50
+  ceiling.
+- All three typechecks clean.
+- All six count gates through `assert_count.py`.
+- Both `uv lock --check` runs pass.
+- `next build` passes from a copy, with `/crawler` dynamic.
+- Exit codes read from files.
+
+**Screenshots,** in `docs/screenshots/crawler-page-2026-09-29/`: `/crawler`
+in light and dark at 1280 and 390, from the production build.
+- Served with the forwarded headers Render's proxy sends, so the user agent
+  shows the production address.
+- No horizontal scroll at 390 (`scrollWidth` 390).
+- The user-agent block wraps to 4 lines at 1280 and 6 at 390.

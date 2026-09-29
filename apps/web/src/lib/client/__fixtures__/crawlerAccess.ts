@@ -163,7 +163,7 @@ export const blanketBlockAccess: CrawlerAccess = {
   clientId: 'clnt_01AAA',
   scanId: 'scan_01BLANKET',
   scannedAt: SCANNED,
-  urlAudited: 'https://example.invalid',
+  urlAudited: 'https://blanket-block.example',
   robotsReadable: true,
   agents: [
     agent('OAI-SearchBot', 'OpenAI', 'search', 'blocked', 'wildcard', '*', 1),

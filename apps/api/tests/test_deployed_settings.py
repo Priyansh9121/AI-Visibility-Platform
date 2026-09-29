@@ -62,3 +62,45 @@ def test_a_wildcard_or_empty_cors_list_refuses_to_boot(origins: list[str]) -> No
 def test_a_comma_separated_string_of_real_origins_is_accepted() -> None:
     s = _deployed(cors_allow_origins="https://app.example.com,https://www.example.com")
     assert s.cors_allow_origins == ["https://app.example.com", "https://www.example.com"]
+
+
+# ---------------------------------------------------------------------------
+# the API's documentation is closed where it is deployed — 2026-09-29
+# ---------------------------------------------------------------------------
+
+DOCS_PATHS = ("/api/v1/docs", "/api/v1/redoc", "/api/v1/openapi.json")
+
+
+async def _statuses(settings: Settings) -> dict[str, int]:
+    """What each documentation path answers. No datastore is touched by any of them."""
+    from httpx import ASGITransport, AsyncClient
+
+    from avp_api.logs import configure_logging
+    from avp_api.main import create_app
+
+    try:
+        app = create_app(settings)
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://testserver"
+        ) as client:
+            return {path: (await client.get(path)).status_code for path in DOCS_PATHS}
+    finally:
+        # `create_app` configures logging globally; give the suite its own back.
+        configure_logging(Settings(_env_file=None, environment="test"))
+
+
+@pytest.mark.parametrize("environment", ["staging", "production"])
+async def test_the_docs_and_the_schema_are_not_served_when_deployed(environment: str) -> None:
+    statuses = await _statuses(_deployed(environment=environment))
+    assert statuses == dict.fromkeys(DOCS_PATHS, 404)
+
+
+@pytest.mark.parametrize("environment", ["local", "test"])
+async def test_development_still_serves_the_docs_and_the_schema(environment: str) -> None:
+    settings = Settings(_env_file=None, environment=environment, database_url=DB,
+                        redis_url="redis://x/0")
+    statuses = await _statuses(settings)
+    assert statuses["/api/v1/docs"] == 200
+    assert statuses["/api/v1/openapi.json"] == 200
+    # ReDoc has never been served, in any environment.
+    assert statuses["/api/v1/redoc"] == 404

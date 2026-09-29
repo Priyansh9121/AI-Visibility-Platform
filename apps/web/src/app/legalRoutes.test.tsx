@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 /**
- * /privacy and /terms, mounted — 2026-09-29.
+ * /privacy, /terms and /crawler, mounted — 2026-09-29.
  *
  * Google's review, and any prospect, reaches these pages signed out, so what
  * matters is that they render with no session at all and never ask who is
@@ -16,6 +16,12 @@ import { createRoot, type Root } from 'react-dom/client';
 
 const me = vi.fn();
 
+// /crawler reads the address it was requested at; this is what Render's proxy sends.
+vi.mock('next/headers', () => ({
+  headers: async () =>
+    new Headers({ host: 'ai-visibility-platform-1.onrender.com', 'x-forwarded-proto': 'https' }),
+}));
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const real = await importOriginal<typeof import('@/lib/api')>();
   return { ...real, api: { ...real.api, me: (...args: unknown[]) => me(...args) } };
@@ -24,6 +30,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
 // Imported after the mock so every module under the routes sees it.
 const { default: PrivacyRoute } = await import('./privacy/page');
 const { default: TermsRoute } = await import('./terms/page');
+const { default: CrawlerRoute } = await import('./crawler/page');
+const { CRAWLER, crawlerUserAgent } = await import('@/lib/legal/crawler');
 const { MarketingHeader } = await import('@/components/marketing/MarketingHeader');
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -63,6 +71,18 @@ describe('both routes render signed out and never ask who is signed in', () => {
     const el = await mount(Route);
     expect(el.querySelector('h1')?.textContent).toBe(title);
     expect(el.querySelector('footer a[href="/privacy"]')).not.toBeNull();
+    expect(me).not.toHaveBeenCalled();
+  });
+
+  it('/crawler', async () => {
+    // An async server component: its element, awaited, is what Next renders.
+    const page = await CrawlerRoute();
+    const el = await mount(() => page);
+    expect(el.querySelector('h1')?.textContent).toBe(`What ${CRAWLER.name} does on a website.`);
+    expect(el.querySelector('code[data-user-agent]')?.textContent).toBe(
+      crawlerUserAgent('https://ai-visibility-platform-1.onrender.com'),
+    );
+    expect(el.querySelector('footer a[href="/crawler"]')).not.toBeNull();
     expect(me).not.toHaveBeenCalled();
   });
 });

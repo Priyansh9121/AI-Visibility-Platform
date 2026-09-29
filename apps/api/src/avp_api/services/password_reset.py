@@ -98,6 +98,17 @@ async def request_reset(
     return user, token
 
 
+def reset_url(settings: Settings, token: str) -> str:
+    """The web page that redeems `token` — the one place this link is built.
+
+    Shared by the forgot-password route and the operator's
+    `scripts/issue_password_reset.py` (2026-09-29), so the two cannot hand out
+    different links. It carries a live credential: send it or print it to the
+    operator, and never log it.
+    """
+    return f"{settings.public_web_base_url.rstrip('/')}/reset-password/{token}"
+
+
 async def confirm_reset(
     session: AsyncSession, *, token: str, new_password: str, settings: Settings
 ) -> User:

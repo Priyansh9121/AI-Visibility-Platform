@@ -92,7 +92,7 @@ def google_itself() -> list[str]:
         app_secret="probe-secret-not-used-anywhere",
         google_oauth_client_id="probe-client-id.apps.googleusercontent.com",
         google_oauth_client_secret="GOCSPX-probe-not-a-real-secret",
-        google_oauth_redirect_url="https://example.invalid/api/v1/auth/google/callback",
+        google_oauth_redirect_url="https://probe.example/api/v1/auth/google/callback",
     )
     provider = g.LiveGoogleProvider(settings)
 

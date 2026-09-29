@@ -281,9 +281,11 @@ async def request_password_reset(
 
     if minted is not None:
         user, token = minted
-        reset_url = f"{settings.public_web_base_url.rstrip('/')}/reset-password/{token}"
         await email_service.send_password_reset(
-            user.email, reset_url, user_id=user.id, settings=settings
+            user.email,
+            reset_service.reset_url(settings, token),
+            user_id=user.id,
+            settings=settings,
         )
 
     if not settings.email_configured:
