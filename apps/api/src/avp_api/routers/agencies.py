@@ -108,6 +108,11 @@ async def invite_seat(
     that is the resource this endpoint makes. Whether a SEAT was newly consumed
     is a different question and it is answered in the body, not in the status.
 
+    **`acceptUrl`, only when email is not configured** (2026-09-29). Without
+    email the invitee would never hear about the seat, so the link comes back
+    here, once, to the owner or admin who made it, to send themselves. With
+    email configured it is null and the link goes to the invitee's inbox only.
+
     **Errors:** `401`, `403`, `404` (another agency's id), `409
     seat-limit-reached`, `409 email-already-registered` (a live account, here or
     elsewhere), `422`.
@@ -137,6 +142,7 @@ async def invite_seat(
     await email_service.send_invitation(
         minted.user.email,
         invite_url,
+        user_id=minted.user.id,
         agency_name=principal.agency.name,
         inviter_name=principal.user.full_name,
         settings=settings,
@@ -147,6 +153,7 @@ async def invite_seat(
         user=UserOut.model_validate(minted.user),
         seat_consumed=minted.seat_consumed,
         seats=SeatUsageOut(used=used, limit=limit),
+        accept_url=None if settings.email_configured else invite_url,
     )
 
 

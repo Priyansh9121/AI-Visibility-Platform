@@ -59,6 +59,13 @@ class InviteSeatResponse(ApiModel):
     user: UserOut
     seat_consumed: bool
     seats: SeatUsageOut
+    # The invitee's link, returned ONCE to the inviter — and only when this
+    # service cannot email it (2026-09-29). Otherwise the invitee never hears
+    # about the seat. Null whenever email is configured: then the link goes to
+    # the invitee's inbox and nowhere else. The token behind it is still
+    # stored only as a digest; handing it back once to the authorised person
+    # who created it is how share links already work.
+    accept_url: str | None = None
 
 
 class SeatListOut(ApiModel):

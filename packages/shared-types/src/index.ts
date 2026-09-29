@@ -109,6 +109,8 @@ export type CompleteGoogleSignUpRequest = Schemas['CompleteGoogleSignUpRequest']
 export type SignInMethod = Schemas['UserOut']['signInMethods'][number];
 // --- password reset (Epic 9.13) ------------------------------------------
 export type ResetPasswordRequest = Schemas['ResetPasswordRequest'];
+/** The answer to a reset request — the same for every address (2026-09-29). */
+export type ResetRequestResult = Schemas['ResetRequestOut'];
 export type ResetPasswordConfirm = Schemas['ResetPasswordConfirm'];
 // --- seat invitations + password change (Epic 9.14) ----------------------
 export type AcceptInvitationRequest = Schemas['AcceptInvitationRequest'];

@@ -21,6 +21,12 @@ intent; the schema defines the shapes.
 - Errors: RFC 9457 `application/problem+json` — `{ type, title, status, detail, instance }`.
 - Pagination: cursor-based — `?limit=&cursor=`, response `{ data: [], nextCursor: string | null }`.
 - Timestamps: RFC 3339 UTC strings.
+- Logs (2026-09-29): structlog is configured once, in `create_app`
+  (`avp_api/logs.py`). `LOG_LEVEL` wins when set; otherwise INFO on staging and
+  production and DEBUG everywhere else. uvicorn's access log is kept, with the
+  share token in `/reports/{token}` replaced by `…` and the query string
+  dropped from `/auth/google/callback` and `/auth/google/pending`. No log line
+  carries a token, a link that carries one, or an email address.
 
 ### Authentication
 
@@ -234,29 +240,43 @@ than quietly backfilled.
 { "email": "dana@meridiansearch.example" }
 ```
 
-**Always `200`, always this body:**
+**Always `200`, and the same body for every address.** Which of two bodies
+depends on the deployment — whether it can send email at all (2026-09-29):
 
 ```json
 {
   "status": "accepted",
-  "detail": "If that address has an account, a reset link is on its way. The link works once and expires in an hour."
+  "detail": "If that address has an account, a reset link is on its way. The link works once and expires in an hour.",
+  "emailConfigured": true
 }
 ```
 
-**Byte-identical** whether the address has an account, has a suspended one, has
-never been seen, and whether or not an email provider is configured. Any
-observable difference is an oracle for enumerating who banks here — precisely
-what `login` already burns a dummy Argon2 hash to avoid. Tests assert the
-identity, because a different sentence is as good an oracle as a different
-status.
+```json
+{
+  "status": "accepted",
+  "detail": "Password reset by email is not available on this service yet, so no link was sent.",
+  "emailConfigured": false
+}
+```
+
+**Byte-identical** whether the address has an account, has a suspended one, or
+has never been seen. Any observable difference is an oracle for enumerating who
+banks here — precisely what `login` already burns a dummy Argon2 hash to avoid.
+Tests assert the identity in both modes, because a different sentence is as
+good an oracle as a different status. `emailConfigured` is not such a
+difference: it says whether `RESEND_API_KEY` is set, the same for every
+address, and the web reads it so that it never says "check your email" when
+nothing was sent.
 
 Only the token's SHA-256 digest is stored, following `SessionStore`'s rule
 rather than `Scan.share_token`'s: a reset token is minted, emailed once, and
 never shown back, so nobody needs it read back and a table dump must yield
 nothing. Requesting a second link retires the first.
 
-With no `RESEND_API_KEY` the link is logged instead of sent — a supported
-development mode, not a failure, and not a fake send.
+With no `RESEND_API_KEY` nothing is sent, and nothing is logged in its place.
+Until 2026-09-29 the link was logged instead — a live credential in logs the
+host keeps. The log line now carries the event, the user id and the fact that
+email was not sent; never the link, the token or the address.
 
 **Errors:** none. `422` only if the body is not an email address.
 
@@ -460,11 +480,13 @@ Merging the two would force one of those facts to be dropped.
 is still consumed — it is held by the `User` row, not this one — so it stays in
 `members`, and listing a dead link beside it would invite someone to wait for it.
 
-**No token and no invite URL appears in any response body**, here or below. The
-link goes in exactly one email; a response body is a place it would be logged by
-a proxy, kept in a browser's network panel, and read over an operator's
-shoulder. Same reasoning `PasswordResetToken` gives for storing only a digest,
-applied to the other end of the credential's life.
+**No token and no invite URL appears in any response body**, here or below,
+with one exception: an invitation made where email is not configured (see
+`acceptUrl` below). Otherwise the link goes in exactly one email; a response
+body is a place it would be logged by a proxy, kept in a browser's network
+panel, and read over an operator's shoulder. Same reasoning
+`PasswordResetToken` gives for storing only a digest, applied to the other end
+of the credential's life.
 
 **Errors:** `401`, `403`, `404`.
 
@@ -483,9 +505,18 @@ applied to the other end of the credential's life.
   "invitation": { "...": "PendingInvitationOut" },
   "user": { "...": "UserOut" },
   "seatConsumed": true,
-  "seats": { "used": 2, "limit": 3 }
+  "seats": { "used": 2, "limit": 3 },
+  "acceptUrl": null
 }
 ```
+
+**`acceptUrl` — 2026-09-29.** Null whenever email is configured: the link goes
+in one email and nowhere else. With no `RESEND_API_KEY` it carries the accept
+link, in this one response, to the owner or admin who made the invitation —
+otherwise the link would reach nobody. It is never shown again (the roster does
+not carry it), and re-inviting mints a fresh one and retires it. Only the
+token's digest is stored, as before; handing a link once to the authorised
+person who asked for it is what `POST /scans/{scanId}/share` already does.
 
 **The seat limit is enforced here, server-side, inside the same transaction as
 the insert.** `GET /auth/me`'s `seats` lets a screen grey out the form when the
@@ -600,9 +631,17 @@ one.
   "scansUsedThisPeriod": 12,
   "scanLimit": 40,
   "periodResetsAt": "2026-10-01T00:00:00Z",
-  "freeScanRequiresGoogle": false
+  "freeScanRequiresGoogle": false,
+  "cancelAtPeriodEnd": false
 }
 ```
+
+**`cancelAtPeriodEnd` — 2026-09-29.** True when the subscription was cancelled
+in Stripe's portal and runs to the end of the period already paid for. Stripe
+keeps the status `active` until then, so `isActive` stays true and the plan's
+allowance applies until `currentPeriodEnd`; Settings says "Ends" rather than
+"Renews". Stored from `customer.subscription.created` and `.updated`;
+`.deleted` sets it back to false.
 
 **The scan allowance — 2026-09-28** (`services/scan_allowance.py`). One free
 scan per agency for life (`FREE_SCAN_ALLOWANCE = 1`); forty per calendar
@@ -655,8 +694,8 @@ customer and subscription ids are withheld because the browser has no use for
 them and a response body is a place they would be logged by a proxy and kept in
 a network panel.
 
-All four fields are `null`/`false` for every agency that has not subscribed,
-which today is all of them.
+The four subscription fields and `cancelAtPeriodEnd` are `null`/`false` for
+every agency that has not subscribed, which today is all of them.
 
 **Errors:** `401`, `403` (member role), `404` (another agency's id).
 
@@ -761,8 +800,8 @@ wrongly, and it fails closed and confusingly.
 **With `STRIPE_WEBHOOK_SECRET` unset the endpoint REFUSES** — `503
 billing-not-configured`, naming the variable. It does not fall back to trusting
 an unverified payload. That is deliberately the opposite of the answer
-`services/email.py` gives for its own unset key, where logging instead of
-sending is a supported development mode: there, the consequence of the
+`services/email.py` gives for its own unset key, where not sending — and
+saying so — is the supported answer: there, the consequence of the
 unconfigured path is a message nobody receives; here it would be believing a
 stranger about money.
 
@@ -771,9 +810,9 @@ stranger about money.
 | Event | Effect |
 |---|---|
 | `checkout.session.completed` | Record customer + subscription id, mark `active` |
-| `customer.subscription.created` | Store status and renewal date |
-| `customer.subscription.updated` | Store status and renewal date |
-| `customer.subscription.deleted` | `canceled`, and clear the renewal date |
+| `customer.subscription.created` | Store status, renewal date and `cancel_at_period_end` |
+| `customer.subscription.updated` | Store status, renewal date and `cancel_at_period_end` |
+| `customer.subscription.deleted` | `canceled`, clear the renewal date, `cancel_at_period_end` false |
 
 `checkout.session.completed` writes `active` optimistically: the session object
 carries ids but no status and no period end, and those arrive in their own event

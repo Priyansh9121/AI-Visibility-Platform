@@ -34,6 +34,9 @@ SECRET_KEYS = {
     # Epic 20. The client ID is deliberately NOT here — it is sent to the
     # browser in every authorization URL and is not a credential.
     "GOOGLE_OAUTH_CLIENT_SECRET",
+    # 2026-09-29, with the rule that a blank provider key is unset: the one
+    # credential in the template this set had missed.
+    "RESEND_API_KEY",
 }
 
 # Shapes that are secrets regardless of which key they sit under.

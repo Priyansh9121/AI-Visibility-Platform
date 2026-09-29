@@ -17,6 +17,7 @@ import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { BillingPanel } from './BillingPanel';
 import {
+  activeEnding,
   activeSubscription,
   canceledSubscription,
   noSubscription,
@@ -214,5 +215,28 @@ describe('no ad hoc styling', () => {
     const html = render({ billing: pastDueSubscription, initialError: 'x' });
     expect(html).not.toMatch(/class="[^"]*\b(bg|text|border|max-w)-\[/);
     expect(html).not.toMatch(/class="[^"]*\b(slate|gray|zinc|blue|red|green)-\d{3}\b/);
+  });
+});
+
+describe('cancelled, but paid to the end of the period — 2026-09-29', () => {
+  // Stripe's portal cancels at the end of the billing period: the subscription
+  // stays active, with cancelAtPeriodEnd, until then.
+  it('says Ends, never Renews, and why', () => {
+    const html = render({ billing: activeEnding });
+    expect(html).toContain('Ends 21 Sep 2026');
+    expect(html).not.toContain('Renews');
+    expect(html).toContain('Cancelled — you keep full access until then, and it won’t renew.');
+    expect(html).not.toContain('Your subscription is live.');
+  });
+
+  it('keeps Manage billing, so it can be resumed', () => {
+    expect(render({ billing: activeEnding })).toContain('Manage billing');
+  });
+
+  it('an active plan that is not cancelling still renews, with no cancelled line', () => {
+    const html = render({ billing: activeSubscription });
+    expect(html).toContain('Renews 21 Sep 2026');
+    expect(html).not.toContain('Ends ');
+    expect(html).not.toContain('Cancelled —');
   });
 });

@@ -13,6 +13,7 @@ from . import __version__
 from .config import Settings, get_settings
 from .db import dispose_engine
 from .errors import register_error_handlers
+from .logs import configure_logging
 from .redis_client import close_redis
 from .routers import (
     action_items,
@@ -76,6 +77,9 @@ def _registered_methods(app: FastAPI) -> list[str]:
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
+    # First, before anything can log: the level, and the access-log redaction
+    # that keeps share tokens and Google codes out of stdout (`logs.py`).
+    configure_logging(settings)
 
     app = FastAPI(
         title="AI Visibility & Competitive Intelligence Platform API",

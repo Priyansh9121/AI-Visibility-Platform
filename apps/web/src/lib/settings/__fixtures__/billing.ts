@@ -23,6 +23,7 @@ export const noSubscription: BillingStatus = {
   scanLimit: 1,
   periodResetsAt: null,
   freeScanRequiresGoogle: false,
+  cancelAtPeriodEnd: false,
 };
 
 /** Free, and the one free scan already started. */
@@ -49,6 +50,17 @@ export const activeSubscription: BillingStatus = {
   scanLimit: 40,
   periodResetsAt: '2026-10-01T00:00:00Z',
   freeScanRequiresGoogle: false,
+  cancelAtPeriodEnd: false,
+};
+
+/**
+ * Cancelled in Stripe's portal, paid to the end of the period — 2026-09-29.
+ * Still `active` until then, so the plan still applies; the screen says
+ * "Ends", not "Renews".
+ */
+export const activeEnding: BillingStatus = {
+  ...activeSubscription,
+  cancelAtPeriodEnd: true,
 };
 
 /** Paid and at the cap: the label says when it resets and offers no upgrade. */
@@ -74,6 +86,7 @@ export const canceledSubscription: BillingStatus = {
   scanLimit: 1,
   periodResetsAt: null,
   freeScanRequiresGoogle: false,
+  cancelAtPeriodEnd: false,
 };
 
 /**
@@ -91,6 +104,7 @@ export const pastDueSubscription: BillingStatus = {
   scanLimit: 1,
   periodResetsAt: null,
   freeScanRequiresGoogle: false,
+  cancelAtPeriodEnd: false,
 };
 
 /** A status this screen has no wording for — Stripe's vocabulary can grow. */
@@ -103,4 +117,5 @@ export const unknownStatusSubscription: BillingStatus = {
   scanLimit: 1,
   periodResetsAt: null,
   freeScanRequiresGoogle: false,
+  cancelAtPeriodEnd: false,
 };

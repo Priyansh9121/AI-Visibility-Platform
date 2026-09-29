@@ -241,6 +241,7 @@ def _subscription(
     agency_id: str | None = None,
     period_end: int | None = PERIOD_END_TS,
     legacy_period_end: bool = False,
+    cancel_at_period_end: bool | None = None,
 ) -> dict[str, Any]:
     """A Subscription payload shaped like the pinned API version sends one.
 
@@ -261,6 +262,8 @@ def _subscription(
         obj["items"] = {"data": [{"id": "si_test_001"}]}
     else:
         obj["items"] = {"data": [{"id": "si_test_001", "current_period_end": period_end}]}
+    if cancel_at_period_end is not None:
+        obj["cancel_at_period_end"] = cancel_at_period_end
     return obj
 
 
@@ -511,6 +514,8 @@ async def test_a_new_agency_has_no_subscription_and_is_not_gated(
         # 2026-09-29: this owner signed up by password and has no Google link,
         # so the free scan would ask for one first.
         "freeScanRequiresGoogle": True,
+        # 2026-09-29: nothing is cancelling — there is no subscription at all.
+        "cancelAtPeriodEnd": False,
     }
 
     # And READING is never withheld because of it — the gate is on starting a
@@ -954,3 +959,89 @@ async def test_portal_before_subscribing_refuses_with_a_sentence(
     resp = await client.post(f"{BASE}/agencies/{me['agency']['id']}/billing/portal")
     assert resp.status_code == 503, resp.text
     assert "Subscribe first" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# cancelled in the portal, paid to the end of the period — 2026-09-29
+# ---------------------------------------------------------------------------
+
+
+class TestCancelAtPeriodEnd:
+    """Stripe's portal cancels at the END of the billing period.
+
+    Until then the subscription stays `active` with `cancel_at_period_end:
+    true`, and Settings must say "Ends", not "Renews". Both the cancel and a
+    resume arrive as `customer.subscription.updated`; the end arrives as
+    `customer.subscription.deleted`.
+    """
+
+    async def _update(self, client: AsyncClient, agency_id: str, cancelling: bool) -> None:
+        payload = _event(
+            "customer.subscription.updated",
+            _subscription(agency_id=agency_id, cancel_at_period_end=cancelling),
+        )
+        assert (await _deliver(client, payload)).json()["handled"] is True
+
+    async def test_cancelled_then_resumed(self, client: AsyncClient, engine) -> None:  # noqa: ANN001
+        me = await _sign_up(client)
+        agency_id = me["agency"]["id"]
+
+        await self._update(client, agency_id, cancelling=True)
+        agency = await _agency(engine, agency_id)
+        assert agency.subscription_cancel_at_period_end is True
+        assert agency.subscription_status == "active"
+        body = (await client.get(f"{BASE}/agencies/{agency_id}/billing")).json()
+        assert body["cancelAtPeriodEnd"] is True
+        assert body["isActive"] is True
+        assert body["currentPeriodEnd"] is not None
+
+        await self._update(client, agency_id, cancelling=False)
+        assert (await _agency(engine, agency_id)).subscription_cancel_at_period_end is False
+        body = (await client.get(f"{BASE}/agencies/{agency_id}/billing")).json()
+        assert body["cancelAtPeriodEnd"] is False
+
+    async def test_an_event_without_the_field_is_not_cancelling(
+        self, client: AsyncClient, engine
+    ) -> None:  # noqa: ANN001
+        me = await _sign_up(client)
+        agency_id = me["agency"]["id"]
+        payload = _event("customer.subscription.updated", _subscription(agency_id=agency_id))
+        assert (await _deliver(client, payload)).json()["handled"] is True
+        assert (await _agency(engine, agency_id)).subscription_cancel_at_period_end is False
+
+    async def test_the_plan_still_applies_until_the_period_ends(
+        self, client: AsyncClient, engine
+    ) -> None:  # noqa: ANN001
+        """`is_active` reads the status, which stays `active`: the month is paid for."""
+        from avp_api.services import scan_allowance
+
+        me = await _sign_up(client)
+        agency_id = me["agency"]["id"]
+        await self._update(client, agency_id, cancelling=True)
+
+        agency = await _agency(engine, agency_id)
+        assert billing_service.is_active(agency) is True
+        body = (await client.get(f"{BASE}/agencies/{agency_id}/billing")).json()
+        assert body["scanLimit"] == scan_allowance.PAID_SCANS_PER_MONTH
+        assert body["periodResetsAt"] is not None
+
+    async def test_deleted_still_makes_the_agency_free(self, client: AsyncClient, engine) -> None:  # noqa: ANN001
+        me = await _sign_up(client)
+        agency_id = me["agency"]["id"]
+        await self._update(client, agency_id, cancelling=True)
+
+        payload = _event(
+            "customer.subscription.deleted",
+            _subscription(status="canceled", agency_id=agency_id, cancel_at_period_end=True),
+        )
+        assert (await _deliver(client, payload)).json()["handled"] is True
+
+        agency = await _agency(engine, agency_id)
+        assert agency.subscription_status == "canceled"
+        assert agency.subscription_cancel_at_period_end is False
+        assert billing_service.is_active(agency) is False
+        body = (await client.get(f"{BASE}/agencies/{agency_id}/billing")).json()
+        assert body["cancelAtPeriodEnd"] is False
+        assert body["isActive"] is False
+        assert body["currentPeriodEnd"] is None
+        assert body["scanLimit"] == 1

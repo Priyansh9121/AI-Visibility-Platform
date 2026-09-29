@@ -66,6 +66,20 @@ class ResetPasswordRequest(ApiModel):
     email: EmailStr
 
 
+class ResetRequestOut(ApiModel):
+    """The answer to a reset request — the same for every address.
+
+    `email_configured` is a fact about the DEPLOYMENT, never about the address:
+    whether this service can send email at all. It exists so the screen can
+    stop saying "check your inbox" when nothing was sent (2026-09-29), and it
+    cannot become an enumeration oracle, because no address changes it.
+    """
+
+    status: str
+    detail: str
+    email_configured: bool
+
+
 class ResetPasswordConfirm(ApiModel):
     """Redeem a link and set a new password.
 

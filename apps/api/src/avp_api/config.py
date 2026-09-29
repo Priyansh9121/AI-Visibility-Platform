@@ -18,6 +18,7 @@ Rules this module enforces:
 
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from typing import Annotated, Literal
 
@@ -25,6 +26,28 @@ from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 Environment = Literal["local", "test", "staging", "production"]
+LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+
+# Every setting that names or unlocks an outside provider. ONE rule for all of
+# them, in `_blank_provider_setting_is_unset` below: a present-but-empty value
+# is unset. Until 2026-09-29 only the three Google settings had it, and a blank
+# `RESEND_API_KEY=` — exactly what `.env.example` ships — counted as a key: the
+# recipient, the subject and the reset link went to Resend with an empty bearer
+# token, to be refused only after they had been sent.
+PROVIDER_SETTINGS: tuple[str, ...] = (
+    "serpapi_key",
+    "resend_api_key",
+    "anthropic_api_key",
+    "openai_api_key",
+    "perplexity_api_key",
+    "google_ai_api_key",
+    "stripe_secret_key",
+    "stripe_price_id",
+    "stripe_webhook_secret",
+    "google_oauth_client_id",
+    "google_oauth_client_secret",
+    "google_oauth_redirect_url",
+)
 
 
 class Settings(BaseSettings):
@@ -37,7 +60,13 @@ class Settings(BaseSettings):
 
     # --- runtime -----------------------------------------------------------
     environment: Environment = "local"
-    log_level: str = "INFO"
+    # Unset by default, and then decided by `environment` — INFO in staging and
+    # production, DEBUG in local and test (`effective_log_level`). Until
+    # 2026-09-29 this read "INFO" and nothing read it at all: structlog was never
+    # configured, so DEBUG lines — two of them carrying model-written reasoning
+    # about client sites — printed in production. `logs.configure_logging`
+    # applies it once, at startup.
+    log_level: LogLevel | None = None
     api_base_path: str = "/api/v1"
 
     # --- datastores --------------------------------------------------------
@@ -135,9 +164,10 @@ class Settings(BaseSettings):
     # from Epic 2 onward.
     serpapi_key: SecretStr | None = None
     # Outbound email (Epic 9.13). OPTIONAL, exactly like every key above it:
-    # unset is a supported mode, not a misconfiguration. With no key the reset
-    # email is logged instead of sent, and the endpoint's response is unchanged
-    # either way — see services/email.py.
+    # unset is a supported mode, not a misconfiguration — and today's
+    # production state (2026-09-29: no verified sending domain yet). With no
+    # key nothing is sent and NOTHING that carries a token is logged; the
+    # reset and invitation flows say so instead (`email_configured`).
     resend_api_key: SecretStr | None = None
     anthropic_api_key: SecretStr | None = None
     openai_api_key: SecretStr | None = None
@@ -192,21 +222,43 @@ class Settings(BaseSettings):
     # a person to pick an account and type an agency name, not a standing key.
     google_sign_in_ttl_seconds: int = 600
 
-    @field_validator(
-        "google_oauth_client_id", "google_oauth_client_secret", "google_oauth_redirect_url",
-        mode="before",
-    )
+    @field_validator(*PROVIDER_SETTINGS, mode="before")
     @classmethod
-    def _blank_google_setting_is_unset(cls, value: object) -> object:
-        # `cp .env.example .env` leaves `GOOGLE_OAUTH_CLIENT_ID=` — present and
-        # empty — and until 2026-09-21 that counted as configured: the button
-        # then sent a browser to Google with an empty client id instead of
-        # answering the 503 `.env.example` promises. A blank is unset. Found
-        # by the Google Sign-In audit; the other provider keys keep their
-        # `is None` reading and are noted in that build-log entry.
+    def _blank_provider_setting_is_unset(cls, value: object) -> object:
+        # A blank is unset, for every provider setting alike. `cp .env.example
+        # .env` leaves `GOOGLE_OAUTH_CLIENT_ID=` present and empty, and until
+        # 2026-09-21 that counted as configured (the button sent a browser to
+        # Google with an empty client id); until 2026-09-29 the same held for
+        # every other key here, so a blank one still sent content to its
+        # provider with an empty credential. One rule, applied once.
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _log_level_is_a_level_name(cls, value: object) -> object:
+        # `LOG_LEVEL=` is unset; `info` is `INFO`. Anything else fails at boot
+        # through the Literal, rather than as a crash on the first log line.
+        if isinstance(value, str):
+            return value.strip().upper() or None
+        return value
+
+    @property
+    def effective_log_level(self) -> int:
+        """`LOG_LEVEL` if set; otherwise INFO when deployed, DEBUG when not."""
+        if self.log_level is not None:
+            return logging.getLevelNamesMapping()[self.log_level]
+        return logging.INFO if self.environment in ("staging", "production") else logging.DEBUG
+
+    @property
+    def email_configured(self) -> bool:
+        """Whether outbound email can be sent at all — a fact about the deployment.
+
+        Global by construction: it never depends on an address, so reporting it
+        cannot tell anybody whether an account exists.
+        """
+        return self.resend_api_key is not None
 
     @property
     def google_sign_in_configured(self) -> bool:

@@ -721,6 +721,10 @@
       "BillingStatusOut": {
         "description": "An agency's subscription, as recorded \u2014 never as freshly asked of Stripe.\n\nEvery field here is read from the `agencies` row. **This endpoint makes no\ncall to Stripe**, which is a deliberate property rather than an optimisation:\na settings screen that reached a payment API on every page load would be\nslower, would fail when Stripe was slow, and would put a third party in the\npath of a page that has four other things to render. The webhook is what\nkeeps these columns true.\n\n`subscriptionStatus` is Stripe's own string, passed through unmapped \u2014 see\n`models/tenancy.py` for why the column is not an enum. A client that wants\nto know \"is this agency paid up\" should read `isActive` rather than\ncomparing strings, because the set of statuses that mean yes is a decision\nthat lives in `services/billing.py` and may grow.",
         "properties": {
+          "cancelAtPeriodEnd": {
+            "title": "Cancelatperiodend",
+            "type": "boolean"
+          },
           "currentPeriodEnd": {
             "anyOf": [
               {
@@ -792,6 +796,7 @@
           "scansUsedThisPeriod",
           "scanLimit",
           "periodResetsAt",
+          "cancelAtPeriodEnd",
           "freeScanRequiresGoogle"
         ],
         "title": "BillingStatusOut",
@@ -2611,6 +2616,17 @@
       "InviteSeatResponse": {
         "description": "What the invite produced, and what the agency's seat position now is.\n\n`seat_consumed` is false when the address already held an `INVITED` seat and\nthis call only re-issued its link. The distinction is the difference between\n\"Invited\" and \"A new link is on its way\", and a screen that cannot tell them\napart will report a seat as newly taken when the count did not move.\n\n`seats` is returned so a caller does not have to re-read `GET /auth/me` to\nfind out how much room is left after acting.",
         "properties": {
+          "acceptUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepturl"
+          },
           "invitation": {
             "$ref": "#/components/schemas/PendingInvitationOut"
           },
@@ -4027,6 +4043,30 @@
         "title": "ResetPasswordRequest",
         "type": "object"
       },
+      "ResetRequestOut": {
+        "description": "The answer to a reset request \u2014 the same for every address.\n\n`email_configured` is a fact about the DEPLOYMENT, never about the address:\nwhether this service can send email at all. It exists so the screen can\nstop saying \"check your inbox\" when nothing was sent (2026-09-29), and it\ncannot become an enumeration oracle, because no address changes it.",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "emailConfigured": {
+            "title": "Emailconfigured",
+            "type": "boolean"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "detail",
+          "emailConfigured"
+        ],
+        "title": "ResetRequestOut",
+        "type": "object"
+      },
       "RunScanRequest": {
         "description": "Start a scan.\n\n`promptLimit` caps the generated set. It exists for cost control during\nverification \u2014 a full run is 20-30 prompts across every engine, and the\ngrounded engine can take 100s per prompt. Omit it for a real scan.\n\n`engines` is de-duplicated BEFORE validation and bounded by the enum's own\nsize \u2014 API key discipline audit, 2026-09-07. Neither alone bounds spend: a\nbare `max_length` still lets `[\"claude\", \"claude\", \"claude\"]` through as\nthree billed calls per prompt that then die on\n`uq_engine_results_prompt_engine` after the money is spent, and\nde-duplication is a ceiling only because the enum is finite. Together they\nmake \"one call per engine per prompt\" true by construction. Whether each\nengine has an ADAPTER is the router's check, against `ENGINE_REGISTRY`:\nthe enum names what this product might ever measure, the registry what it\ncan measure today.",
         "properties": {
@@ -5264,7 +5304,7 @@
   "paths": {
     "/api/v1/agencies/{agencyId}/billing": {
       "get": {
-        "description": "This agency's subscription, as recorded, and its scan allowance. **Never asks Stripe.**\n\nThe allowance \u2014 `scansUsedThisPeriod`, `scanLimit`, `periodResetsAt` \u2014 is\none COUNT over the agency's scans (2026-09-28, `services/scan_allowance`).\n`scanLimit` is null when billing is not configured on this deployment,\nwhich is the honest way to say no gate applies. `freeScanRequiresGoogle`\n(2026-09-29) is true when the free scan is what this sign-in would start\nand it has no linked Google identity \u2014 the case a scan start refuses with\n`SCAN_LIMIT_VERIFY_REQUIRED`. It is about the requesting user, not the\nagency: two seats of one agency can read it differently.\n\nEvery field comes off the `agencies` row the webhook maintains. A settings\nscreen that called a payment processor on page load would be slower, would\nfail whenever Stripe was slow, and would put a third party in the render\npath of a page with four other sections on it \u2014 for a value that would be\nno more current than the webhook already makes it.\n\nThe agency is already loaded on the principal, so there is no query here at\nall beyond the one `current_principal` performs on every request.\n\n**Errors:** `401`, `403` (member role), `404` (another agency's id).",
+        "description": "This agency's subscription, as recorded, and its scan allowance. **Never asks Stripe.**\n\nThe allowance \u2014 `scansUsedThisPeriod`, `scanLimit`, `periodResetsAt` \u2014 is\none COUNT over the agency's scans (2026-09-28, `services/scan_allowance`).\n`scanLimit` is null when billing is not configured on this deployment,\nwhich is the honest way to say no gate applies. `freeScanRequiresGoogle`\n(2026-09-29) is true when the free scan is what this sign-in would start\nand it has no linked Google identity \u2014 the case a scan start refuses with\n`SCAN_LIMIT_VERIFY_REQUIRED`. It is about the requesting user, not the\nagency: two seats of one agency can read it differently.\n\n`cancelAtPeriodEnd` (2026-09-29) is true when the subscription was\ncancelled in Stripe's portal and runs to `currentPeriodEnd` without\nrenewing. It is still `active` until then, so `isActive` stays true and\nthe scan allowance stays the plan's.\n\nEvery field comes off the `agencies` row the webhook maintains. A settings\nscreen that called a payment processor on page load would be slower, would\nfail whenever Stripe was slow, and would put a third party in the render\npath of a page with four other sections on it \u2014 for a value that would be\nno more current than the webhook already makes it.\n\nThe agency is already loaded on the principal, so there is no query here at\nall beyond the one `current_principal` performs on every request.\n\n**Errors:** `401`, `403` (member role), `404` (another agency's id).",
         "operationId": "read_billing_api_v1_agencies__agencyId__billing_get",
         "parameters": [
           {
@@ -5446,7 +5486,7 @@
     },
     "/api/v1/agencies/{agencyId}/invitations": {
       "post": {
-        "description": "Invite an address to a seat.\n\n**The seat limit is enforced here, server-side, in the same transaction as\nthe insert.** `GET /auth/me`'s `seats` object lets a screen grey out the\nform when the agency is full, but that is a courtesy \u2014 the limit is\ncommercial policy and a client-side check is a suggestion. Refused with\n`409 /problems/seat-limit-reached`, carrying `seatsUsed` and `seatLimit` so\nthe screen can say what to do about it rather than just that it failed.\n\n**Re-inviting an address that already holds an INVITED seat is allowed** and\nconsumes no second seat: it revokes the outstanding link and mints a new\none. `seatConsumed: false` in the response says that is what happened. See\n`services/invitations.py` for why refusing it would be a trap.\n\n**`201` in both cases.** An invitation row is genuinely created either way \u2014\nthat is the resource this endpoint makes. Whether a SEAT was newly consumed\nis a different question and it is answered in the body, not in the status.\n\n**Errors:** `401`, `403`, `404` (another agency's id), `409\nseat-limit-reached`, `409 email-already-registered` (a live account, here or\nelsewhere), `422`.",
+        "description": "Invite an address to a seat.\n\n**The seat limit is enforced here, server-side, in the same transaction as\nthe insert.** `GET /auth/me`'s `seats` object lets a screen grey out the\nform when the agency is full, but that is a courtesy \u2014 the limit is\ncommercial policy and a client-side check is a suggestion. Refused with\n`409 /problems/seat-limit-reached`, carrying `seatsUsed` and `seatLimit` so\nthe screen can say what to do about it rather than just that it failed.\n\n**Re-inviting an address that already holds an INVITED seat is allowed** and\nconsumes no second seat: it revokes the outstanding link and mints a new\none. `seatConsumed: false` in the response says that is what happened. See\n`services/invitations.py` for why refusing it would be a trap.\n\n**`201` in both cases.** An invitation row is genuinely created either way \u2014\nthat is the resource this endpoint makes. Whether a SEAT was newly consumed\nis a different question and it is answered in the body, not in the status.\n\n**`acceptUrl`, only when email is not configured** (2026-09-29). Without\nemail the invitee would never hear about the seat, so the link comes back\nhere, once, to the owner or admin who made it, to send themselves. With\nemail configured it is null and the link goes to the invitee's inbox only.\n\n**Errors:** `401`, `403`, `404` (another agency's id), `409\nseat-limit-reached`, `409 email-already-registered` (a live account, here or\nelsewhere), `422`.",
         "operationId": "invite_seat_api_v1_agencies__agencyId__invitations_post",
         "parameters": [
           {
@@ -5983,7 +6023,7 @@
     },
     "/api/v1/auth/reset-password/request": {
       "post": {
-        "description": "Ask for a reset link. **Always `200`, always this body.**\n\nThe response is byte-identical whether the address has an account, has a\nsuspended one, or has never been seen \u2014 and identical again whether or not\nan email provider is configured. Any observable difference is an oracle for\nenumerating who banks here, which is precisely what `authenticate` already\nburns a dummy Argon2 hash to avoid on the login path.\n\nThe email is best-effort by construction: `send_password_reset` never raises\nand never reports its outcome, so a provider outage cannot become a\ndifferent status code. With no `RESEND_API_KEY` the link is logged instead\nof sent \u2014 a supported development mode, not a failure.\n\n**Errors:** none. `422` only if the body is not an email address.",
+        "description": "Ask for a reset link. **Always `200`, and the same body for every address.**\n\nThe response is byte-identical whether the address has an account, has a\nsuspended one, or has never been seen. Any observable difference is an\noracle for enumerating who banks here, which is precisely what\n`authenticate` already burns a dummy Argon2 hash to avoid on the login path.\n\n**It does differ by deployment, honestly** (2026-09-29): `emailConfigured`\nsays whether this service can send email at all, and the `detail` says\nwhat that means. With no `RESEND_API_KEY` nothing is sent \u2014 and nothing is\nlogged in its place any more, because the link it used to log is a live\ncredential. Neither field depends on the address.\n\nThe email is best-effort by construction: `send_password_reset` never raises\nand never reports its outcome, so a provider outage cannot become a\ndifferent status code.\n\n**Errors:** none. `422` only if the body is not an email address.",
         "operationId": "request_password_reset_api_v1_auth_reset_password_request_post",
         "requestBody": {
           "content": {
@@ -6000,11 +6040,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "title": "Response Request Password Reset Api V1 Auth Reset Password Request Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/ResetRequestOut"
                 }
               }
             },

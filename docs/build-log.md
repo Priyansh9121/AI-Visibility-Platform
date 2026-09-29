@@ -18685,3 +18685,232 @@ failed exactly the tests meant to catch it:
 - All six count gates through `assert_count.py`.
 - Both `uv lock --check` runs pass.
 - Exit codes read from files.
+
+# Live tokens out of the logs, "no email" said out loud, quieter logs, and a cancelled plan that says "Ends"
+
+**2026-09-29, the fourth entry of the day.** Four of the findings the third
+entry listed as "Found, not fixed", fixed in order of severity. The founder
+confirmed the production facts today:
+
+- `RESEND_API_KEY` is **not set** on Render.
+- Google sign-in is published, and the exemption variable is set.
+- `ENVIRONMENT` is `production` on the API service.
+- The live Stripe webhook sends every event, `customer.subscription.updated`
+  included.
+
+**Nothing the founder does on Render changes.** The new column arrives through
+the migration the container runs on start (`docker-entrypoint.sh`), and
+`ENVIRONMENT=production` already makes INFO the log level. `LOG_LEVEL` stays
+optional.
+
+## 1. Live tokens never reach the logs
+
+With Resend unset, the reset and invitation paths printed the whole link, live
+token included, to stdout, and Render keeps stdout. Anyone who could read
+those logs could take over any account that asked for a reset.
+
+- **`services/email.py` logs the event, the user id and the outcome**, in
+  every configuration:
+  - `*.not_sent` with its reason;
+  - `*.sent`;
+  - `*.failed` with the error's type.
+
+  It never logs the address, the link or the token.
+- **`password_reset.request.no_account`** no longer logs the address that was
+  typed.
+- **A blank key is unset, for every provider key.** One normaliser in
+  `config.py` (`PROVIDER_SETTINGS`) replaces the Google-only one.
+  - `RESEND_API_KEY=`, as `.env.example` ships it, now sends nothing.
+  - Before, it posted the recipient, the subject and the reset link to Resend
+    with an empty key.
+- **Nothing else logs one either.** An AST sweep of every log call in
+  `apps/api/src` and `apps/workers/src` found no other event carrying an
+  email address, a link or a token.
+
+## 2. When email is off, the product says so
+
+Resend needs a verified sending domain, and the product still runs on
+`onrender.com`, so email is off in production for now.
+
+- **Password reset.**
+  - `POST /auth/reset-password/request` gains `emailConfigured`, and with it
+    false the detail says no link was sent.
+  - The field reports whether `RESEND_API_KEY` is set, which is the same for
+    every address, so it is no enumeration oracle. Tests assert byte-identical
+    bodies for an account and a stranger in both modes.
+  - The screen said "Check your email… a reset link is on its way" whatever
+    happened. With email off it now says "No email was sent", then the
+    founder's sentence: "Password reset by email isn't available yet. Sign in
+    with Google if your account uses this address, or email
+    priyansh.ranpura9@gmail.com and we'll reset it by hand." It offers **Sign
+    in with Google** and **Back to sign in**.
+  - Signing in with Google on the same address links the password account and
+    signs the person in, so that path is a complete reset.
+  - The form no longer promises an email before it knows whether one can be
+    sent: "Enter the address you sign in with." and **Continue**.
+- **Invitations.**
+  - With email off, `POST /agencies/{id}/invitations` returns the accept link
+    once, in `acceptUrl`, to the owner or admin who made the invitation. With
+    email on, `acceptUrl` is always null.
+  - The token is still stored only as a digest. The roster never shows the
+    link, and re-inviting mints a fresh one.
+  - The seat screen shows the link in a read-only field with **Copy link**,
+    under the line "Email isn't set up yet — send this link yourself. It works
+    once and expires in 7 days."
+  - As `ShareLinkBar` does, a refused clipboard leaves the link on screen to
+    select.
+  - Wording that implied sending is now neutral:
+    - the button says **Invite**;
+    - the intro reads "An invitation is a link…";
+    - a re-invite with email off says "send them the new one";
+    - the outstanding list says re-inviting "makes" a fresh link.
+- **Privacy page:** Resend "sends password-reset and invitation emails when
+  this service's email is set up".
+
+## 3. Logs: INFO in production, and no secrets in access-log paths
+
+- **`avp_api/logs.py`, called first in `create_app`, sets structlog's level
+  once.**
+  - `LOG_LEVEL` wins when set. Otherwise the level is INFO on staging and
+    production, and DEBUG on local and test.
+  - The two DEBUG lines that carry model-written reasoning about client sites
+    (`classify.result`, `fixes.reasoning`) no longer print in production.
+  - A misspelt level fails at boot.
+- **The same module installs a filter on `uvicorn.access`.**
+  - `/reports/{token}` and its `.pdf` log as `/reports/…`.
+  - `/auth/google/callback` and `/auth/google/pending` lose their query
+    strings (`code`, `state`, `ticket`).
+  - Every other path is untouched.
+- **The filter is installed for the process Render runs.**
+  - `apps/api/docker-entrypoint.sh` execs `uvicorn avp_api.main:app`.
+  - `main.py` builds `app = create_app()` on import, and `create_app` calls
+    `configure_logging`.
+  - uvicorn configures its own loggers in `Config.__init__`, before it
+    imports the app, so nothing overwrites the filter.
+  - Checked live: that command, run locally with `ENVIRONMENT=production`
+    (only the host and port differ), logged `GET /api/v1/reports/…`,
+    `/reports/….pdf`, `/auth/google/callback` and `/auth/google/pending`.
+    None of the sentinel token, code, state, ticket or email address appeared
+    anywhere in its output.
+- **The privacy page's logs paragraph now matches.**
+  - The secret parts of addresses are left out.
+  - Events name an account by id, not email.
+  - No reset or invitation link is written.
+- **`.env.example`:**
+  - `LOG_LEVEL` is blank, so the environment decides.
+  - The Resend note no longer says the email "is logged instead".
+  - `test_env_template.py` now requires the Resend key to be blank there.
+
+## 4. A cancelled plan says "Ends", not "Renews"
+
+Stripe's portal cancels at the end of the period, and until then the
+subscription stays `active` with `cancel_at_period_end: true`.
+
+- **The column.** `agencies.subscription_cancel_at_period_end` is a boolean,
+  not null, default false (migration `55c6b4395e7d`).
+  - Existing rows are backfilled to false. A subscription cancelled in the
+    portal before this deploy reads false until Stripe's next update for it.
+    Resending that event from the Stripe dashboard corrects it.
+  - **The server default is kept**, unlike `competitors.corroborated`'s. The
+    container migrates before it serves, so the old instance keeps serving
+    during a deploy, and its sign-ups insert agencies without this column.
+    The model declares the same default, so `alembic check` stays clean.
+  - The first draft dropped the default, and a review before the commit
+    caught that. An insert that omits the column, run against `avp_dev` in a
+    rolled-back transaction, now gets false.
+- **The webhook** stores it from `customer.subscription.created` and
+  `.updated`, and `.deleted` sets it false.
+- **The API.** `GET /agencies/{id}/billing` gains `cancelAtPeriodEnd`.
+- **The screen.** BillingPanel shows "Ends {date}" and "Cancelled — you keep
+  full access until then, and it won't renew." **Manage billing** stays, so
+  the plan can be resumed.
+- **The allowance is unchanged.** The status stays `active`, so the plan's 40
+  scans a month apply until the period ends, and a test pins this.
+
+## Found, not fixed
+
+- **"We'll reset it by hand" has no tool behind it.** No script or endpoint
+  sets a password or mints a reset link. Today the founder would need
+  database access: a hash written through Supabase's SQL editor, or a Python
+  shell against production. Worth building before the first request comes in.
+- **Only the API's access log is filtered.**
+  - The web app's own paths carry tokens too: `/share/{token}`,
+    `/invite/{token}`, `/reset-password/{token}` and
+    `/sign-up/google?ticket=`.
+  - `next start` does not log requests, so no code here writes them.
+  - Any request log Render itself keeps for the web service is beyond the
+    code's reach.
+- **Email stays off in production** until a sending domain is verified at
+  Resend and `RESEND_API_KEY` and `EMAIL_FROM` are set. Both screens then
+  switch back by themselves.
+- **Still open from the third entry:**
+  - no deletion endpoint;
+  - `/api/v1/docs` is public;
+  - the crawler's info URL is still a placeholder.
+
+## Verified
+
+**API 1486 → 1549 (+63).**
+- **Secrets stay out of the logs (28).**
+  - Each provider key: blank or whitespace is unset, and a real value is
+    kept.
+  - Every key-like setting is covered by the normaliser.
+  - A blank Resend key sends nothing.
+  - Log capture over reset and invite, with Resend unset and set, through
+    structlog, stdout and stdlib logging. No token, no link and no address
+    appears.
+- **Logging (23).**
+  - The level per environment, and the override.
+  - A misspelt level fails at boot.
+  - Production drops the two DEBUG lines.
+  - The redaction samples, the untouched paths, and `create_app` installing
+    the filter exactly once.
+- **Email off (7).**
+  - The reset reply is honest, and identical for every address, in both
+    modes.
+  - The invite link is returned, is absent from the roster, and redeems.
+  - A re-invite returns a fresh link.
+  - With email on, the link is never returned and goes by email.
+- **Billing (4).** Cancelled then resumed; no field means not cancelling; the
+  allowance stays paid; `deleted` makes the agency free.
+- **Env template (1).**
+
+**Web 984 → 997 (+13).**
+- **The reset panel, mounted and submitted against a mocked API in both
+  modes.**
+  - Two addresses render identically.
+  - The form promises no email.
+- **The seat panel, mounted and inviting in both modes.**
+  - Copying the link works, and a refused clipboard leaves it on screen.
+  - A re-invite with email off says to send the new link.
+- **BillingPanel's copy** in both states.
+
+**Negative controls, each file restored byte-for-byte.** Each failed exactly
+the tests meant to catch it:
+- the link put back into the `not_sent` log line: the log-capture test fails;
+- the normaliser disabled, so a blank key counts as set: 13 tests fail (12
+  per key, plus "a blank Resend key sends nothing");
+- the reset panel ignoring `emailConfigured`: 2 tests fail;
+- the seat panel dropping the handed-back link: 4 tests fail.
+
+**Migration.** Downgraded to its parent, then `alembic upgrade head` and
+`alembic check` on `avp_dev` (55433): "No new upgrade operations detected."
+The column reads `boolean`, NOT NULL, default `false`, and all nine dev
+agencies are false.
+
+**Build and screenshots.**
+- `next build` passes. It ran from a copy of `apps/web`, because the
+  founder's running `next dev` shares `apps/web/.next`.
+- `docs/screenshots/email-off-and-plan-end-2026-09-29/` holds the invite
+  link, the reset notice, the new neutral reset form and "Ends", each in
+  light and dark at 1280 and 390 wide.
+- No capture scrolls sideways at 390.
+
+**The rest of the bar.**
+- Workers 13, shared-types 53, and the full design-system suite at 649.
+- ruff clean; mypy 47 under its 50 ceiling.
+- All three typechecks clean.
+- All six count gates through `assert_count.py`.
+- Both `uv lock --check` runs pass.
+- The OpenAPI export and `api.gen.ts` regenerate byte-identically.
+- Exit codes read from files.

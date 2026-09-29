@@ -7,6 +7,7 @@
  */
 
 import type {
+  ResetRequestResult,
   AcknowledgeAlert,
   AlertFeed,
   AnswerGaps,
@@ -219,12 +220,14 @@ export const api = {
    * Ask for a password-reset link — Epic 9.13.
    *
    * **Always resolves.** The endpoint answers 200 with the same body whether or
-   * not that address has an account, so there is nothing here to branch on and
-   * the caller must not invent a difference. The response is deliberately not
-   * typed as anything the UI reads beyond "it came back".
+   * not that address has an account, so the caller must not invent a
+   * difference. The one thing it may read is `emailConfigured` (2026-09-29):
+   * whether this service can send email at all — a fact about the deployment,
+   * the same for every address — so the screen never says "check your email"
+   * when nothing was sent.
    */
   requestPasswordReset: (email: string) =>
-    request<{ status: string; detail: string }>('/auth/reset-password/request', {
+    request<ResetRequestResult>('/auth/reset-password/request', {
       method: 'POST',
       body: JSON.stringify({ email }),
     }),
@@ -473,8 +476,10 @@ export const api = {
    * `seatConsumed`, and the screen must not report a seat as newly taken when
    * the count did not move.
    *
-   * The response deliberately carries NO token and no invite URL. The link goes
-   * in one email; a response body is not that email.
+   * The link goes in one email, so with email set up the response carries no
+   * token and no invite URL. Without it (2026-09-29) `acceptUrl` carries the
+   * link, this once, to the owner or admin who made it — otherwise nobody
+   * could ever deliver it. It is never shown again; re-inviting mints a new one.
    */
   inviteSeat: (agencyId: string, email: string, role: UserRole = 'member') =>
     request<InviteSeatResponse>(`/agencies/${agencyId}/invitations`, {

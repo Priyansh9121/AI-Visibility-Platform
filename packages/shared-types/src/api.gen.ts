@@ -24,6 +24,11 @@ export interface paths {
          *     `SCAN_LIMIT_VERIFY_REQUIRED`. It is about the requesting user, not the
          *     agency: two seats of one agency can read it differently.
          *
+         *     `cancelAtPeriodEnd` (2026-09-29) is true when the subscription was
+         *     cancelled in Stripe's portal and runs to `currentPeriodEnd` without
+         *     renewing. It is still `active` until then, so `isActive` stays true and
+         *     the scan allowance stays the plan's.
+         *
          *     Every field comes off the `agencies` row the webhook maintains. A settings
          *     screen that called a payment processor on page load would be slower, would
          *     fail whenever Stripe was slow, and would put a third party in the render
@@ -182,6 +187,11 @@ export interface paths {
          *     **`201` in both cases.** An invitation row is genuinely created either way —
          *     that is the resource this endpoint makes. Whether a SEAT was newly consumed
          *     is a different question and it is answered in the body, not in the status.
+         *
+         *     **`acceptUrl`, only when email is not configured** (2026-09-29). Without
+         *     email the invitee would never hear about the seat, so the link comes back
+         *     here, once, to the owner or admin who made it, to send themselves. With
+         *     email configured it is null and the link goes to the invitee's inbox only.
          *
          *     **Errors:** `401`, `403`, `404` (another agency's id), `409
          *     seat-limit-reached`, `409 email-already-registered` (a live account, here or
@@ -587,18 +597,22 @@ export interface paths {
         put?: never;
         /**
          * Request Password Reset
-         * @description Ask for a reset link. **Always `200`, always this body.**
+         * @description Ask for a reset link. **Always `200`, and the same body for every address.**
          *
          *     The response is byte-identical whether the address has an account, has a
-         *     suspended one, or has never been seen — and identical again whether or not
-         *     an email provider is configured. Any observable difference is an oracle for
-         *     enumerating who banks here, which is precisely what `authenticate` already
-         *     burns a dummy Argon2 hash to avoid on the login path.
+         *     suspended one, or has never been seen. Any observable difference is an
+         *     oracle for enumerating who banks here, which is precisely what
+         *     `authenticate` already burns a dummy Argon2 hash to avoid on the login path.
+         *
+         *     **It does differ by deployment, honestly** (2026-09-29): `emailConfigured`
+         *     says whether this service can send email at all, and the `detail` says
+         *     what that means. With no `RESEND_API_KEY` nothing is sent — and nothing is
+         *     logged in its place any more, because the link it used to log is a live
+         *     credential. Neither field depends on the address.
          *
          *     The email is best-effort by construction: `send_password_reset` never raises
          *     and never reports its outcome, so a provider outage cannot become a
-         *     different status code. With no `RESEND_API_KEY` the link is logged instead
-         *     of sent — a supported development mode, not a failure.
+         *     different status code.
          *
          *     **Errors:** none. `422` only if the body is not an email address.
          */
@@ -1990,6 +2004,8 @@ export interface components {
          *     that lives in `services/billing.py` and may grow.
          */
         BillingStatusOut: {
+            /** Cancelatperiodend */
+            cancelAtPeriodEnd: boolean;
             /** Currentperiodend */
             currentPeriodEnd: string | null;
             /** Freescanrequiresgoogle */
@@ -2774,6 +2790,8 @@ export interface components {
          *     find out how much room is left after acting.
          */
         InviteSeatResponse: {
+            /** Accepturl */
+            acceptUrl?: string | null;
             invitation: components["schemas"]["PendingInvitationOut"];
             /** Seatconsumed */
             seatConsumed: boolean;
@@ -3383,6 +3401,23 @@ export interface components {
              * Format: email
              */
             email: string;
+        };
+        /**
+         * ResetRequestOut
+         * @description The answer to a reset request — the same for every address.
+         *
+         *     `email_configured` is a fact about the DEPLOYMENT, never about the address:
+         *     whether this service can send email at all. It exists so the screen can
+         *     stop saying "check your inbox" when nothing was sent (2026-09-29), and it
+         *     cannot become an enumeration oracle, because no address changes it.
+         */
+        ResetRequestOut: {
+            /** Detail */
+            detail: string;
+            /** Emailconfigured */
+            emailConfigured: boolean;
+            /** Status */
+            status: string;
         };
         /**
          * RunScanRequest
@@ -4428,9 +4463,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
+                    "application/json": components["schemas"]["ResetRequestOut"];
                 };
             };
             /** @description Validation Error */

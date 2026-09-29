@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 /**
  * Ask for a reset link — Epic 9.13.
  *
@@ -5,11 +7,33 @@
  * backend was built so that an address with an account and one without get
  * byte-identical responses; a screen that rendered "we couldn't find that
  * email" would hand the oracle straight back.
+ *
+ * Since 2026-09-29 it must also not say "a link is on its way" when this
+ * service cannot send email. Which of the two it says is decided by the API's
+ * `emailConfigured`, so those tests MOUNT the panel, submit it, and answer
+ * with a mocked API — the pattern `app/home.test.tsx` set.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { ForgotPasswordPanel } from './ForgotPasswordPanel';
+import type { ResetRequestResult } from '@avp/shared-types';
+import { OPERATOR } from '@/lib/legal/operator';
+
+const requestPasswordReset = vi.fn<(email: string) => Promise<ResetRequestResult>>();
+
+vi.mock('@/lib/api', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/lib/api')>();
+  return {
+    ...real,
+    api: { ...real.api, requestPasswordReset: (email: string) => requestPasswordReset(email) },
+  };
+});
+
+// Imported after the mock so the panel sees the mocked module.
+const { ForgotPasswordPanel } = await import('./ForgotPasswordPanel');
+const { GOOGLE_SIGN_IN_URL } = await import('@/lib/api');
 
 const render = () =>
   renderToStaticMarkup(<ForgotPasswordPanel onBackToSignIn={() => {}} />);
@@ -18,15 +42,18 @@ describe('the form asks for one thing', () => {
   it('collects an email and nothing else', () => {
     const out = render();
     expect(out).toContain('>Email<');
-    expect(out).toContain('Email me a link');
+    expect(out).toContain('>Continue<');
     // No password field on a page reached by someone who has lost theirs.
     expect(out).not.toContain('type="password"');
   });
 
-  it('states the link rules up front', () => {
-    const out = render();
-    expect(out).toContain('works once');
-    expect(out).toContain('expires in an hour');
+  it('promises no email before it knows one can be sent', () => {
+    // The API says whether email is on only in its answer. Until then the
+    // form must not say "we will email", which production cannot yet do.
+    const out = render().toLowerCase();
+    for (const promise of ['we will email', 'email me a link', 'on its way', 'check your email']) {
+      expect(out, `found "${promise}"`).not.toContain(promise);
+    }
   });
 
   it('offers a way back', () => {
@@ -94,5 +121,106 @@ describe('the card arrives — Epic 9.16', () => {
     // it from the document.
     const out = live();
     expect(out).toContain('Email');
+  });
+});
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+/** Let every pending microtask settle — the mocked request resolves on the next tick. */
+const settle = () =>
+  act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+let root: Root | null = null;
+
+/** Mount the panel, type `address`, submit, and wait for the answer. */
+async function submitted(address: string): Promise<HTMLDivElement> {
+  const el = document.createElement('div');
+  document.body.appendChild(el);
+  root = createRoot(el);
+  act(() => root!.render(<ForgotPasswordPanel onBackToSignIn={() => {}} animate={false} />));
+  const input = el.querySelector<HTMLInputElement>('input[type="email"]')!;
+  act(() => {
+    // React tracks the value itself; set it the way a browser would, then
+    // announce it, so the controlled field's onChange sees the typing.
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, address);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  act(() => {
+    el.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  });
+  await settle();
+  return el;
+}
+
+const answer = (emailConfigured: boolean): ResetRequestResult => ({
+  status: 'accepted',
+  detail: 'Whatever the API said; the panel words it itself.',
+  emailConfigured,
+});
+
+afterEach(() => {
+  act(() => root?.unmount());
+  root = null;
+  document.body.innerHTML = '';
+});
+
+describe('with email not set up — 2026-09-29', () => {
+  beforeEach(() => {
+    requestPasswordReset.mockReset();
+    requestPasswordReset.mockResolvedValue(answer(false));
+  });
+
+  it("says no email was sent, in the founder's words, and does not say check your inbox", async () => {
+    const el = await submitted('someone@example.com');
+    expect(requestPasswordReset).toHaveBeenCalledWith('someone@example.com');
+    const text = el.textContent ?? '';
+    expect(text).toContain(
+      `Password reset by email isn’t available yet. Sign in with Google if your account uses this address, or email ${OPERATOR.email} and we’ll reset it by hand.`,
+    );
+    for (const untrue of ['Check your email', 'on its way', 'in spam']) {
+      expect(text).not.toContain(untrue);
+    }
+  });
+
+  it('offers Google, the operator by email, and the way back', async () => {
+    const el = await submitted('someone@example.com');
+    expect(el.querySelector(`a[href="${GOOGLE_SIGN_IN_URL}"]`)?.textContent).toContain(
+      'Sign in with Google',
+    );
+    expect(el.querySelector(`a[href="mailto:${OPERATOR.email}"]`)?.textContent).toBe(OPERATOR.email);
+    expect(el.textContent).toContain('Back to sign in');
+    // A different address would get the same answer, so it is not offered.
+    expect(el.textContent).not.toContain('Use a different address');
+  });
+
+  it('says the same for an address with no account — the answer is about the service', async () => {
+    // The API returns one body for every address; the panel has nothing else
+    // to go on, so two addresses must render identically.
+    const first = (await submitted('has.account@example.com')).innerHTML;
+    act(() => root?.unmount());
+    document.body.innerHTML = '';
+    const second = (await submitted('nobody@example.com')).innerHTML;
+    expect(second).toBe(first);
+  });
+});
+
+describe('with email set up', () => {
+  beforeEach(() => {
+    requestPasswordReset.mockReset();
+    requestPasswordReset.mockResolvedValue(answer(true));
+  });
+
+  it('says to check the inbox, as before, and nothing about email being unavailable', async () => {
+    const el = await submitted('someone@example.com');
+    const text = el.textContent ?? '';
+    expect(text).toContain('Check your email');
+    expect(text).toContain('If that address has an account, a reset link is on its way.');
+    expect(text).toContain('works once and expires in an hour');
+    expect(text).not.toContain('isn’t available yet');
+    expect(text).not.toContain(OPERATOR.email);
+    expect(text).toContain('Use a different address');
   });
 });

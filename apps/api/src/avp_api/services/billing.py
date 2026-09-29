@@ -546,3 +546,12 @@ def _apply_subscription_event(agency: Agency, subscription: Any, *, deleted: boo
     agency.subscription_current_period_end = (
         None if deleted else period_end_of(subscription)
     )
+
+    # Cancelled in the portal but paid to the end of the period — 2026-09-29.
+    # Stripe keeps such a subscription `active` with `cancel_at_period_end: true`
+    # until the period ends, and resuming it sets the flag back to false; both
+    # arrive as `customer.subscription.updated`. The status is untouched, so the
+    # agency stays paid until then. A deleted subscription is simply over.
+    agency.subscription_cancel_at_period_end = (
+        False if deleted else bool(_get(subscription, "cancel_at_period_end"))
+    )
