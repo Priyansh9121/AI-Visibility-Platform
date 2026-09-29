@@ -150,9 +150,9 @@ export function PrivacyPolicy(): JSX.Element {
             the client’s brand or domain and its industry.
           </Point>
           <Point term="Resend">
-            sends password-reset and invitation emails. It receives the recipient’s email address
-            and the message, which carries the agency’s name and, for an invitation, the name of
-            the person who sent it.
+            sends password-reset and invitation emails when this service’s email is set up. It then
+            receives the recipient’s email address and the message, which carries the agency’s name
+            and, for an invitation, the name of the person who sent it.
           </Point>
           <Point term="Google Fonts">
             serves the typefaces these pages use, so your browser fetches them from Google, which
@@ -200,9 +200,12 @@ export function PrivacyPolicy(): JSX.Element {
       <PageSection heading="Logs">
         <Para>
           The API’s server log records each request: the IP address it came from and the address
-          it asked for — which, for a shared report, includes its link. Some events also record an
-          email address, such as a request to reset a password. Render keeps these logs; this
-          service does not send them anywhere else.
+          it asked for. The secret parts of those addresses are left out — the token in a shared
+          report’s link, and the one-time codes a Google sign-in passes back — so the log cannot
+          be used to open a report or finish someone’s sign-in. Events such as a request to reset
+          a password name the account by an internal identifier, not its email address, and no
+          reset or invitation link is written to the log. Render keeps these logs; this service
+          does not send them anywhere else.
         </Para>
       </PageSection>
 

@@ -10,25 +10,34 @@ CONFIGURED OR NOT, THE CALLER CANNOT TELL
 `send_password_reset` **never raises and never reports a different outcome
 based on configuration.** That is not defensive tidiness; it is the security
 property the endpoint above it depends on. `POST /auth/reset-password/request`
-must answer identically whether the address exists, whether the provider is
-reachable, and whether a key is set at all — any difference is an oracle for
-enumerating accounts.
+must answer identically for every address, whether it has an account and
+whether the provider is reachable — any difference is an oracle for
+enumerating accounts. Whether a key is set at all is the one thing it does
+report (2026-09-29), from `Settings.email_configured`: a fact about the
+deployment, the same for every address, and never the outcome of a send.
 
-With no `RESEND_API_KEY` the would-be email is logged at info and the function
-returns. That is a real, useful mode: it is how this runs in development today,
-and the reset link is recoverable from the log. It is NOT a fake send — nothing
-pretends a message went out, and the log line says plainly that it did not.
+With no `RESEND_API_KEY` nothing is sent, and the log line says so and nothing
+more. That is production's state today (2026-09-29: no verified sending domain
+yet), and the flows above this module now say so to the person, too:
+`Settings.email_configured` is what the reset response and the invite response
+report, never the outcome of a send.
 
 No `resend` SDK. Its default client is `requests` (synchronous), which is the
 exact objection Epic 3.1 raised against the SerpApi SDK inside an async service,
 and the send is one authenticated JSON POST. `httpx` is already vetted
 (BSD-3-Clause). Zero dependencies added.
 
-The facts-only rule is not at stake here — the only content is our own copy and our
-own URL — but the token itself is a credential and is never logged. The log line
-carries the recipient and the URL because in the unconfigured mode the URL is
-the point; that mode is for development, and the docstring on the endpoint says
-so.
+NOTHING THAT CARRIES A TOKEN IS EVER LOGGED, IN ANY CONFIGURATION
+-----------------------------------------------------------------
+Until 2026-09-29 the unconfigured path logged the recipient and the full
+reset or invitation URL — "the link is recoverable from the log", for
+development. With Resend unset in production, that put live credentials in
+stdout, which Render keeps: anyone who could read the logs could take over any
+account that asked for a reset. Every line here now carries the event, the
+user id and whether a message went out. Never the address, never the link.
+`tests/test_secrets_stay_out_of_logs.py` captures the log output of both
+paths, configured and not, and fails if a token, a link or an address appears
+in it.
 """
 
 from __future__ import annotations
@@ -85,10 +94,10 @@ async def _send(
     *,
     settings: Settings,
     to: str,
+    user_id: str,
     subject: str,
     text: str,
     log_event: str,
-    unconfigured_extra: dict[str, str] | None = None,
 ) -> None:
     """One send. **Never raises, in any path.**
 
@@ -98,22 +107,14 @@ async def _send(
     reporting an outcome. A second hand-written copy of this would be one
     stray `raise` away from becoming an account-enumeration oracle.
 
-    `unconfigured_extra` is what gets logged INSTEAD of sending when no
-    provider is configured. It exists because the two messages want different
-    things there: each URL is the recoverable credential in development, and
-    that log line is how it is recovered.
+    Every log line names the account by `user_id` and nothing else about it:
+    not `to`, and never `text`, which holds the link.
     """
     key = settings.resend_api_key
 
     if key is None:
-        # The development path, and an honest one: nothing is claimed to have
-        # been sent, and the log line says so in as many words.
-        logger.info(
-            f"{log_event}.not_configured",
-            to=to,
-            reason="RESEND_API_KEY is unset; no message was sent",
-            **(unconfigured_extra or {}),
-        )
+        # Nothing is claimed to have been sent, and the log line says so.
+        logger.info(f"{log_event}.not_sent", user_id=user_id, reason="email is not configured")
         return
 
     try:
@@ -135,15 +136,15 @@ async def _send(
     except Exception as exc:  # noqa: BLE001 - swallowed on purpose, see docstring
         # Logged, never surfaced. A provider outage must not turn into a
         # different HTTP response, because the difference is the oracle.
-        logger.warning(f"{log_event}.failed", to=to, error=type(exc).__name__)
+        logger.warning(f"{log_event}.failed", user_id=user_id, error=type(exc).__name__)
         return
 
-    # Deliberately no URL here: once a real message carries the token, the
-    # token is a live credential and a log line holding it is a copy of it.
-    logger.info(f"{log_event}.sent", to=to)
+    logger.info(f"{log_event}.sent", user_id=user_id)
 
 
-async def send_password_reset(to: str, reset_url: str, *, settings: Settings) -> None:
+async def send_password_reset(
+    to: str, reset_url: str, *, user_id: str, settings: Settings
+) -> None:
     """Send a reset link. **Never raises, whatever happens.**
 
     Returns `None` in every path on purpose. A caller that could distinguish
@@ -153,10 +154,10 @@ async def send_password_reset(to: str, reset_url: str, *, settings: Settings) ->
     await _send(
         settings=settings,
         to=to,
+        user_id=user_id,
         subject=_SUBJECT,
         text=_body(reset_url),
         log_event="email.password_reset",
-        unconfigured_extra={"reset_url": reset_url},
     )
 
 
@@ -164,6 +165,7 @@ async def send_invitation(
     to: str,
     invite_url: str,
     *,
+    user_id: str,
     agency_name: str,
     inviter_name: str,
     settings: Settings,
@@ -181,10 +183,10 @@ async def send_invitation(
     await _send(
         settings=settings,
         to=to,
+        user_id=user_id,
         subject=_invitation_subject(agency_name),
         text=_invitation_body(
             invite_url, agency_name=agency_name, inviter_name=inviter_name
         ),
         log_event="email.invitation",
-        unconfigured_extra={"invite_url": invite_url, "agency": agency_name},
     )

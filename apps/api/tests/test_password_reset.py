@@ -344,7 +344,7 @@ class TestTheEmailInterface:
         assert (
             await email_service.send_password_reset(
                 "someone@test.example", "http://localhost:3000/reset-password/x",
-                settings=settings,
+                user_id="user_test", settings=settings,
             )
             is None
         )
@@ -379,15 +379,21 @@ class TestTheEmailInterface:
         monkeypatch.setattr(email_service.httpx, "AsyncClient", factory)
         assert (
             await email_service.send_password_reset(
-                "someone@test.example", "http://x/y", settings=settings
+                "someone@test.example", "http://x/y", user_id="user_test", settings=settings
             )
             is None
         )
 
-    async def test_the_request_endpoint_answers_the_same_with_a_key_set(
+    async def test_the_reply_never_depends_on_how_the_send_went(
         self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Configured or not, the caller cannot tell."""
+        """The send reports nothing, so the reply cannot vary with it.
+
+        Until 2026-09-29 this read "configured or not, the caller cannot tell".
+        The reply now says whether email is configured at all — a fact about the
+        deployment, the same for every address (`test_email_not_configured.py`)
+        — while the outcome of any one send stays invisible, as here.
+        """
         from avp_api.services import email as email_service
 
         await _sign_up(client, "cfg@test.example")
@@ -395,7 +401,7 @@ class TestTheEmailInterface:
 
         sent: list[str] = []
 
-        async def fake_send(to: str, reset_url: str, *, settings) -> None:  # noqa: ANN001
+        async def fake_send(to: str, reset_url: str, *, user_id: str, settings) -> None:  # noqa: ANN001
             sent.append(to)
 
         monkeypatch.setattr(email_service, "send_password_reset", fake_send)

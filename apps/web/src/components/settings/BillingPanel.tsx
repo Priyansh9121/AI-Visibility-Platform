@@ -201,6 +201,9 @@ export function BillingPanel({
   }
 
   const copy = STATUS_COPY[billing.subscriptionStatus];
+  // Cancelled in the portal but still paid up. Manage billing stays below, so
+  // the plan can be resumed before it ends.
+  const ending = billing.isActive && billing.cancelAtPeriodEnd;
 
   return (
     <Card elevation="seated">
@@ -211,15 +214,20 @@ export function BillingPanel({
               {copy?.label ?? billing.subscriptionStatus}
             </Badge>
             {billing.isActive && billing.currentPeriodEnd != null && (
+              // "Ends", not "Renews", once it has been cancelled — 2026-09-29.
+              // Stripe's portal cancels at the end of the period, so the
+              // subscription stays active (and the plan applies) until then.
               <p className="text-ui-base text-text-primary">
-                Renews {formatDay(billing.currentPeriodEnd)}
+                {ending ? 'Ends' : 'Renews'} {formatDay(billing.currentPeriodEnd)}
               </p>
             )}
           </div>
 
           <p className="max-w-measure text-ui-base leading-prose text-text-secondary">
-            {copy?.sentence ??
-              `Stripe reports this subscription as “${billing.subscriptionStatus}”, which this screen does not have wording for yet. Starting a scan is on the free allowance until it is active again; every report you already have stays open.`}
+            {ending
+              ? 'Cancelled — you keep full access until then, and it won’t renew.'
+              : (copy?.sentence ??
+                `Stripe reports this subscription as “${billing.subscriptionStatus}”, which this screen does not have wording for yet. Starting a scan is on the free allowance until it is active again; every report you already have stays open.`)}
           </p>
 
           {error != null && (

@@ -36,6 +36,7 @@ from ..schemas.auth import (
     MeOut,
     ResetPasswordConfirm,
     ResetPasswordRequest,
+    ResetRequestOut,
     SeatUsageOut,
     SignUpRequest,
     UserOut,
@@ -244,24 +245,30 @@ async def change_password(
     )
 
 
-@router.post("/reset-password/request", status_code=status.HTTP_200_OK)
+@router.post(
+    "/reset-password/request", response_model=ResetRequestOut, status_code=status.HTTP_200_OK
+)
 async def request_password_reset(
     payload: ResetPasswordRequest,
     db: DbDep,
     settings: SettingsDep,
-) -> dict[str, str]:
-    """Ask for a reset link. **Always `200`, always this body.**
+) -> Any:
+    """Ask for a reset link. **Always `200`, and the same body for every address.**
 
     The response is byte-identical whether the address has an account, has a
-    suspended one, or has never been seen — and identical again whether or not
-    an email provider is configured. Any observable difference is an oracle for
-    enumerating who banks here, which is precisely what `authenticate` already
-    burns a dummy Argon2 hash to avoid on the login path.
+    suspended one, or has never been seen. Any observable difference is an
+    oracle for enumerating who banks here, which is precisely what
+    `authenticate` already burns a dummy Argon2 hash to avoid on the login path.
+
+    **It does differ by deployment, honestly** (2026-09-29): `emailConfigured`
+    says whether this service can send email at all, and the `detail` says
+    what that means. With no `RESEND_API_KEY` nothing is sent — and nothing is
+    logged in its place any more, because the link it used to log is a live
+    credential. Neither field depends on the address.
 
     The email is best-effort by construction: `send_password_reset` never raises
     and never reports its outcome, so a provider outage cannot become a
-    different status code. With no `RESEND_API_KEY` the link is logged instead
-    of sent — a supported development mode, not a failure.
+    different status code.
 
     **Errors:** none. `422` only if the body is not an email address.
     """
@@ -276,16 +283,26 @@ async def request_password_reset(
         user, token = minted
         reset_url = f"{settings.public_web_base_url.rstrip('/')}/reset-password/{token}"
         await email_service.send_password_reset(
-            user.email, reset_url, settings=settings
+            user.email, reset_url, user_id=user.id, settings=settings
         )
 
-    return {
-        "status": "accepted",
-        "detail": (
+    if not settings.email_configured:
+        return ResetRequestOut(
+            status="accepted",
+            detail=(
+                "Password reset by email is not available on this service yet, "
+                "so no link was sent."
+            ),
+            email_configured=False,
+        )
+    return ResetRequestOut(
+        status="accepted",
+        detail=(
             "If that address has an account, a reset link is on its way. "
             "The link works once and expires in an hour."
         ),
-    }
+        email_configured=True,
+    )
 
 
 @router.post("/reset-password/confirm", status_code=status.HTTP_200_OK)

@@ -8,15 +8,39 @@
  * must not undo that: a "we couldn't find that email" here would hand back
  * exactly the account-enumeration oracle the backend was built to withhold.
  *
- * So there is one success state, its copy says "if that address has an
- * account", and the submit path has no branch that could say otherwise. The
- * only error this screen can show is the request never completing at all —
- * which is about the network, not about the address.
+ * So the success copy says "if that address has an account", and the submit
+ * path has no branch that could say otherwise. The only error this screen can
+ * show is the request never completing at all — which is about the network,
+ * not about the address.
+ *
+ * WHEN THIS SERVICE CANNOT SEND EMAIL (2026-09-29)
+ * ------------------------------------------------
+ * Production has no email provider yet — Resend needs a verified sending
+ * domain — and this screen used to say "a reset link is on its way" anyway.
+ * The response now carries `emailConfigured`, and with it false the second
+ * state says what is true: no email was sent, sign in with Google, or ask the
+ * operator. That is the one branch on the response, and it is on a fact about
+ * the DEPLOYMENT: the API returns the same body for every address in both
+ * modes, so it still tells nobody whether an account exists. The form itself
+ * promises no email, because until the response arrives this screen does not
+ * know whether one can be sent — and the web must not guess.
  */
 
 import { useState, type FormEvent } from 'react';
-import { Button, Card, CardBody, ErrorState, Reveal, TextField } from '@avp/design-system';
-import { api } from '@/lib/api';
+import {
+  Button,
+  Card,
+  CardBody,
+  ErrorState,
+  GoogleSignInButton,
+  Reveal,
+  TextField,
+} from '@avp/design-system';
+import { api, GOOGLE_SIGN_IN_URL } from '@/lib/api';
+import { OPERATOR } from '@/lib/legal/operator';
+
+/** What the API said it did: emailed a link, or could not email at all. */
+type Sent = 'emailed' | 'email-off';
 
 /**
  * Epic 9.16: the card arrives rather than being already there.
@@ -38,7 +62,7 @@ export function ForgotPasswordPanel({
   animate?: boolean;
 }) {
   const [email, setEmail] = useState('');
-  const [sent, setSent] = useState(false);
+  const [sent, setSent] = useState<Sent | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -47,9 +71,10 @@ export function ForgotPasswordPanel({
     setBusy(true);
     setError(null);
     try {
-      await api.requestPasswordReset(email);
-      // No branch on the response. There is nothing in it to branch on.
-      setSent(true);
+      const result = await api.requestPasswordReset(email);
+      // The one branch, and it is on the deployment, never on the address:
+      // every address gets the same body, which says whether email is on.
+      setSent(result.emailConfigured ? 'emailed' : 'email-off');
     } catch {
       setError('The request did not complete. Check your connection and try again.');
     } finally {
@@ -57,7 +82,45 @@ export function ForgotPasswordPanel({
     }
   }
 
-  if (sent) {
+  if (sent === 'email-off') {
+    return (
+      <Reveal animate={animate} className="mx-auto flex max-w-form flex-col gap-4">
+        <Card elevation="raised">
+          <CardBody>
+            <div className="flex flex-col gap-3">
+              <h1 className="font-display text-ed-xs leading-display text-text-primary">
+                No email was sent
+              </h1>
+              <p className="text-ui-base leading-prose text-text-secondary">
+                Password reset by email isn&rsquo;t available yet. Sign in with Google if your
+                account uses this address, or email{' '}
+                <a
+                  href={`mailto:${OPERATOR.email}`}
+                  className="text-text-primary underline decoration-line-strong underline-offset-2 transition-colors duration-hover ease-out hover:text-beacon-600 hover:decoration-beacon-400"
+                >
+                  {OPERATOR.email}
+                </a>{' '}
+                and we&rsquo;ll reset it by hand.
+              </p>
+            </div>
+            {/*
+              Google first: on the same address its callback links the
+              password account and signs the person in, which is the whole
+              reset, done by Google instead of by a link.
+            */}
+            <div className="mt-5 flex flex-col gap-2">
+              <GoogleSignInButton href={GOOGLE_SIGN_IN_URL} label="Sign in with Google" fullWidth />
+              <Button variant="secondary" fullWidth onClick={onBackToSignIn}>
+                Back to sign in
+              </Button>
+            </div>
+          </CardBody>
+        </Card>
+      </Reveal>
+    );
+  }
+
+  if (sent === 'emailed') {
     return (
       <Reveal animate={animate} className="mx-auto flex max-w-form flex-col gap-4">
         <Card elevation="raised">
@@ -79,7 +142,7 @@ export function ForgotPasswordPanel({
               <Button variant="secondary" onClick={onBackToSignIn}>
                 Back to sign in
               </Button>
-              <Button variant="ghost" onClick={() => setSent(false)}>
+              <Button variant="ghost" onClick={() => setSent(null)}>
                 Use a different address
               </Button>
             </div>
@@ -101,7 +164,7 @@ export function ForgotPasswordPanel({
                 Reset your password
               </h1>
               <p className="text-ui-sm leading-prose text-text-secondary">
-                We will email a link that works once and expires in an hour.
+                Enter the address you sign in with.
               </p>
             </div>
 
@@ -116,7 +179,7 @@ export function ForgotPasswordPanel({
             />
 
             <Button type="submit" variant="primary" fullWidth disabled={busy}>
-              {busy ? 'Sending…' : 'Email me a link'}
+              {busy ? 'Requesting a reset…' : 'Continue'}
             </Button>
           </form>
         </CardBody>

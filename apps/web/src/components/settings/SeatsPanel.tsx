@@ -30,6 +30,14 @@
  * Removing a seat ends that person's sessions everywhere, not just their
  * subscription. That is a real consequence of pressing a small button, so the
  * confirmation says it rather than leaving it to be discovered.
+ *
+ * And, since 2026-09-29, that this service cannot send email yet. Production
+ * has no email provider (Resend needs a verified sending domain), so an
+ * invitation used to reach nobody while this screen implied it had been sent.
+ * Now the API hands the link back in `acceptUrl` when — and only when — it
+ * could not email it, and this screen shows it once, with a Copy link button,
+ * for the owner to send themselves. Its presence is the API saying email is
+ * off; the screen never works that out for itself.
  */
 
 import { useState, type FormEvent, type JSX } from 'react';
@@ -46,6 +54,7 @@ import type { BadgeTone, Column } from '@avp/design-system';
 import type { PendingInvitation, SeatList, User, UserRole } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
 import { formatDay } from '@/lib/dates';
+import { RETENTION, counted } from '@/lib/legal/retention';
 
 const ROLE_LABEL: Record<UserRole, string> = {
   owner: 'Owner',
@@ -71,6 +80,13 @@ const STATUS_TONE: Record<string, BadgeTone> = {
   invited: 'neutral',
   suspended: 'warn',
 };
+
+/** An invitation link the API handed back because it could not email it. */
+interface HandedLink {
+  email: string;
+  url: string;
+  copied: boolean;
+}
 
 export interface SeatsPanelProps {
   agencyId: string;
@@ -99,6 +115,9 @@ export function SeatsPanel({
   const [error, setError] = useState<string | null>(initialError);
   const [notice, setNotice] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
+  // Only the invite response ever carries it, so this is the one time it can
+  // be shown. The next invite or removal clears it; re-inviting mints a fresh one.
+  const [link, setLink] = useState<HandedLink | null>(null);
 
   const full = seats.seats.used >= seats.seats.limit;
 
@@ -107,16 +126,22 @@ export function SeatsPanel({
     setBusy(true);
     setError(null);
     setNotice(null);
+    setLink(null);
     try {
       const result = await api.inviteSeat(agencyId, email.trim(), role);
+      const handed = result.acceptUrl ?? null;
       // The API distinguishes a new seat from a re-issued link, so this does
       // too. Reporting "seat taken" when the count did not move would be a
-      // small lie the seat counter immediately contradicts.
+      // small lie the seat counter immediately contradicts. And a link the
+      // API handed back was not sent anywhere, so this does not say it was.
       setNotice(
         result.seatConsumed
           ? `${result.user.email} has been invited. They hold a seat from now, before they accept.`
-          : `${result.user.email} already had a pending invitation. A new link has been sent and the old one no longer works.`,
+          : handed != null
+            ? `${result.user.email} already had a pending invitation. The old link no longer works — send them the new one.`
+            : `${result.user.email} already had a pending invitation. A new link has been sent and the old one no longer works.`,
       );
+      setLink(handed != null ? { email: result.user.email, url: handed, copied: false } : null);
       setEmail('');
       await onChanged();
     } catch (err) {
@@ -126,10 +151,22 @@ export function SeatsPanel({
     }
   }
 
+  async function copy(handed: HandedLink) {
+    try {
+      await navigator.clipboard.writeText(handed.url);
+      setLink({ ...handed, copied: true });
+    } catch {
+      // As in `ShareLinkBar`: clipboard access is refused in some browsers and
+      // over plain HTTP. The link is on screen and selectable, so it gets
+      // copied by hand instead — nothing worth interrupting anyone over.
+    }
+  }
+
   async function remove(userId: string) {
     setBusy(true);
     setError(null);
     setNotice(null);
+    setLink(null);
     try {
       await api.removeSeat(userId);
       setConfirming(null);
@@ -266,8 +303,8 @@ export function SeatsPanel({
               <div>
                 <h3 className="text-ui-md font-medium text-text-primary">Invite someone</h3>
                 <p className="mt-1 max-w-measure text-ui-sm leading-prose text-text-tertiary">
-                  They get a link that works once and expires in seven days. Opening it
-                  lets them choose a password and sign in.
+                  An invitation is a link that works once and expires in seven days.
+                  Opening it lets the person choose a password and sign in.
                 </p>
               </div>
 
@@ -308,7 +345,7 @@ export function SeatsPanel({
                   variant="primary"
                   disabled={busy || full || email.trim() === ''}
                 >
-                  {busy ? 'Sending…' : 'Send invitation'}
+                  {busy ? 'Inviting…' : 'Invite'}
                 </Button>
               </div>
 
@@ -324,6 +361,33 @@ export function SeatsPanel({
                 </p>
               )}
             </form>
+
+            {link != null && (
+              // Outside the form, so nothing here can submit it.
+              <div className="mt-5 flex flex-col gap-3 border-t border-line-hairline pt-5">
+                <p className="max-w-measure text-ui-sm leading-prose text-text-secondary">
+                  Email isn&rsquo;t set up yet — send this link yourself. It works once and
+                  expires in {counted(RETENTION.invitationDays, 'day')}.
+                </p>
+                {/*
+                  A read-only field, as `ShareLinkBar` does it: selectable
+                  where the clipboard is refused, with its label bound.
+                */}
+                <div className="flex flex-wrap items-end gap-3">
+                  <div className="min-w-0 flex-1 basis-full sm:basis-auto">
+                    <TextField
+                      label={`Invitation link for ${link.email}`}
+                      readOnly
+                      value={link.url}
+                      onFocus={(e) => e.currentTarget.select()}
+                    />
+                  </div>
+                  <Button variant="secondary" onClick={() => void copy(link)}>
+                    {link.copied ? 'Copied' : 'Copy link'}
+                  </Button>
+                </div>
+              </div>
+            )}
           </CardBody>
         </Card>
       )}
@@ -346,7 +410,7 @@ export function SeatsPanel({
               ))}
             </ul>
             <p className="mt-3 max-w-measure text-ui-sm leading-prose text-text-tertiary">
-              Inviting the same address again sends a fresh link and retires this one. It
+              Inviting the same address again makes a fresh link and retires this one. It
               does not take a second seat.
             </p>
           </CardBody>

@@ -53,6 +53,11 @@ class BillingStatusOut(ApiModel):
     # First instant of next month (UTC) for a paid agency; null for free,
     # whose allowance does not reset.
     period_resets_at: datetime | None
+    # Cancelled, but paid until `current_period_end` — 2026-09-29. Stripe's
+    # portal cancels at the end of the period, so the subscription stays
+    # active (and `is_active` true) until then; the screen says "Ends", not
+    # "Renews". Always false for a subscription that is over or never began.
+    cancel_at_period_end: bool
     # True when THIS sign-in would be refused the free scan for want of a
     # linked Google identity — 2026-09-29. Only ever true with the gate on, the
     # agency free and the requesting user holding no `google_sub`; exactly the

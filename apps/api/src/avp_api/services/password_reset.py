@@ -61,10 +61,11 @@ async def request_reset(
     ).scalar_one_or_none()
 
     if user is None or user.status is not UserStatus.ACTIVE:
-        # Logged without the address at warning level would be useless for
-        # support, and logged AT the address is fine: this is our own log, and
-        # the response the caller gets is unchanged.
-        logger.info("password_reset.request.no_account", email=normalised)
+        # The event alone. Until 2026-09-29 this logged the address, which
+        # meant every address anybody typed into the reset form — customer or
+        # not — ended up in logs the host keeps. No log line carries an email
+        # address now (`services/email.py` says why for the rest).
+        logger.info("password_reset.request.no_account")
         return None
 
     # Invalidate every outstanding token for this user first. Requesting a

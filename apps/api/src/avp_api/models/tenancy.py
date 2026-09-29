@@ -9,7 +9,16 @@ import enum
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import CheckConstraint, DateTime, Index, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import (
@@ -123,6 +132,22 @@ class Agency(Base, TimestampMixin, SoftDeleteMixin):
     # alongside the status, so it is.
     subscription_current_period_end: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+    # Whether that period END is the end — 2026-09-29. Stripe's customer portal
+    # is set to cancel at the end of the billing period, so a cancelled
+    # subscription stays `active`, with `cancel_at_period_end: true`, until the
+    # date above. `billing.is_active` reads the status, so the agency is still
+    # paid (the scan allowance included) until then — correct, it paid for the
+    # month. What changes is the sentence: "Ends <date>", never "Renews". Written
+    # by the webhook only, like every column in this block.
+    #
+    # The SERVER default is on purpose: during a deploy the old instance keeps
+    # serving while the new one migrates, and its sign-ups insert agencies
+    # without this column. Without a default, those inserts would break the
+    # NOT NULL.
+    subscription_cancel_at_period_end: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
     )
 
     # --- white-label branding (Epic 9.22) -----------------------------------

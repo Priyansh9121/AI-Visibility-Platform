@@ -76,6 +76,11 @@ async def read_billing(
     `SCAN_LIMIT_VERIFY_REQUIRED`. It is about the requesting user, not the
     agency: two seats of one agency can read it differently.
 
+    `cancelAtPeriodEnd` (2026-09-29) is true when the subscription was
+    cancelled in Stripe's portal and runs to `currentPeriodEnd` without
+    renewing. It is still `active` until then, so `isActive` stays true and
+    the scan allowance stays the plan's.
+
     Every field comes off the `agencies` row the webhook maintains. A settings
     screen that called a payment processor on page load would be slower, would
     fail whenever Stripe was slow, and would put a third party in the render
@@ -102,6 +107,7 @@ async def read_billing(
         scan_limit=current.scan_limit,
         period_resets_at=current.period_resets_at,
         free_scan_requires_google=current.free_scan_requires_google,
+        cancel_at_period_end=agency.subscription_cancel_at_period_end,
     )
 
 

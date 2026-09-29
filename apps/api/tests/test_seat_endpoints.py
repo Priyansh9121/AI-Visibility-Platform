@@ -179,10 +179,28 @@ async def test_an_invited_seat_is_occupied_before_it_is_accepted(
 # ---------------------------------------------------------------------------
 
 
-async def test_the_invite_response_never_carries_the_token(client: AsyncClient) -> None:
-    """The link goes in one email. A response body is not that email."""
+async def test_with_email_configured_the_invite_response_never_carries_the_token(
+    client: AsyncClient, settings, monkeypatch: pytest.MonkeyPatch
+) -> None:  # noqa: ANN001
+    """The link goes in one email. A response body is not that email.
+
+    With email configured, that is. Since 2026-09-29, when this service cannot
+    email at all, the link comes back ONCE, to the inviter, to send themselves
+    — see `test_email_not_configured.py`. With a key set it never does.
+    """
+    from pydantic import SecretStr
+
+    from avp_api.services import email as email_service
+
+    monkeypatch.setattr(settings, "resend_api_key", SecretStr("re_test_key_never_sent"))
+
+    async def quiet_send(*args: object, **kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(email_service, "send_invitation", quiet_send)
     me = await _sign_up(client)
     resp = await _invite(client, me["agency"]["id"], "quiet@seats.example")
+    assert resp.json()["acceptUrl"] is None
     body = resp.text
     assert "token" not in body.lower()
     assert "/invite/" not in body
