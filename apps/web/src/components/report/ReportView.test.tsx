@@ -208,8 +208,14 @@ describe('degraded data renders as degraded, never as bad', () => {
 
   it('says what Citation Strength is measured from, limitation included', () => {
     // v3. The Help Scout fixture carries the dimension as included, so the
-    // note prints; it must name the second tier's proxy for what it is.
+    // note prints; it must name the second tier's proxy for what it is. And
+    // since v5, what it asks: how a brand is backed when it is named, which
+    // how often it is named does not raise.
     const html = render(helpscoutReport);
+    expect(html).toContain(
+      'when AI names the brand, how often does it back the brand with a trusted source?',
+    );
+    expect(html).toContain('the average over those answers');
     expect(html).toContain('Sources count on two tiers');
     expect(html).toContain('confidence score is uncalibrated');
     expect(html).toContain('only answers to questions that did not name the brand');

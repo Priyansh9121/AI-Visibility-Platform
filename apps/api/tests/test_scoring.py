@@ -6,6 +6,7 @@ against real persisted scan data is scripts/verify_scoring.py.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import ROUND_HALF_UP, Decimal
 
 import pytest
@@ -22,7 +23,7 @@ from avp_api.services.scoring import (
     Dimension,
     ResultFacts,
     SubScoreOutOfRangeError,
-    authority_sums,
+    authority_when_named,
     average_position,
     awareness_only,
     citation_strength,
@@ -97,8 +98,10 @@ class TestFormulaConstants:
         # classifiable citation, which is a major bump by v2's precedent.
         # v4 when Citation Strength moved to the awareness population — a
         # population change, v2's precedent again — shipping with the
-        # market-participant exclusion from Tier B.
-        assert FORMULA_VERSION == "v4"
+        # market-participant exclusion from Tier B. v5 when Citation Strength
+        # became the mean authority per answer naming the brand: under v4 it
+        # tracked Mention Rate (Spearman 0.781, zeros excluded, n = 83).
+        assert FORMULA_VERSION == "v5"
 
     def test_authority_values_say_the_ordering_and_nothing_more_precise(self) -> None:
         # The ratios are what the normalisation reads. Curated is the ceiling
@@ -239,7 +242,7 @@ class TestCitationStrength:
         ]
         value, _ = citation_strength(results, [RIVAL], authority=PLATFORM)
         assert value == Decimal("0")
-        subject, rivals = authority_sums(results, [RIVAL], PLATFORM.tiers_for(
+        subject, rivals = authority_when_named(results, [RIVAL], PLATFORM.tiers_for(
             {"blog.example", "forum.example", "nih.gov"}))
         assert subject == Decimal("0") and rivals["comp_0001"] == Decimal("100")
 
@@ -299,14 +302,14 @@ class TestCitationStrength:
                 citations=(("zendesk.com", False),)),
         ]
         tiers = platform.tiers_for({"helpscout.com", "zendesk.com"})
-        subject, rivals = authority_sums(results, [RIVAL], tiers)
+        subject, rivals = authority_when_named(results, [RIVAL], tiers)
         assert subject == Decimal("0") and rivals["comp_0001"] == Decimal("0")
 
     def test_attribution_is_by_co_occurrence_in_the_answer(self) -> None:
         """An answer naming two brands credits its sources to both — a known limit."""
         results = [res(1, mentioned=True, brands=(SUBJECT, ("Zendesk", False)),
                        citations=(("g2.com", False),))]
-        subject, rivals = authority_sums(results, [RIVAL], CURATED_ONLY.tiers_for({"g2.com"}))
+        subject, rivals = authority_when_named(results, [RIVAL], CURATED_ONLY.tiers_for({"g2.com"}))
         assert subject == rivals["comp_0001"] == Decimal("100")
 
     def test_only_answered_results_and_only_answers_naming_the_brand_count(self) -> None:
@@ -315,7 +318,9 @@ class TestCitationStrength:
             res(2, mentioned=True, brands=(SUBJECT,), citations=(("nih.gov", False),),
                 status=EngineResultStatus.TIMEOUT),
         ]
-        subject, _ = authority_sums(results, [RIVAL], CURATED_ONLY.tiers_for({"g2.com", "nih.gov"}))
+        subject, _ = authority_when_named(
+            results, [RIVAL], CURATED_ONLY.tiers_for({"g2.com", "nih.gov"})
+        )
         assert subject == Decimal("0")
 
     def test_tiered_sources_cited_in_answers_naming_nobody_score_zero(self) -> None:
@@ -430,6 +435,204 @@ class TestCitationStrengthPopulation:
         assert out.excluded_dimensions["citation_strength"] == "NO_AWARENESS_POPULATION"
 
 
+class TestCitationStrengthWhenNamed:
+    """v5 — when an engine names a brand, does it back it with authoritative sources?
+
+    A brand's value is the MEAN, over awareness answers that name it, of that
+    answer's authority sum. v3-v4 summed one set of citing domains over all
+    of them, so the figure grew with how often the brand was named — and
+    tracked Mention Rate at Spearman 0.781 over the stored scans (zeros
+    excluded, n = 83). How often is Mention Rate's question.
+    """
+
+    ZENDESK = ("Zendesk", False)
+
+    def _two_of_ten_and_eight_of_ten(self, *, subject_is_the_frequent_one: bool):  # noqa: ANN202
+        """Ten awareness answers: one brand named in 2, each citing a Tier A
+        source; the other named in 8, with one Tier A citation between them."""
+        rare, frequent = (self.ZENDESK, SUBJECT) if subject_is_the_frequent_one else (
+            SUBJECT, self.ZENDESK)
+
+        def named(i: int, brand: tuple[str, bool], cites: tuple[tuple[str, bool], ...]):  # noqa: ANN202
+            return res(i, mentioned=brand[1], brands=(brand,), citations=cites)
+
+        return [
+            named(1, rare, (("g2.com", False),)),
+            named(2, rare, (("capterra.com", False),)),
+            named(3, frequent, (("nih.gov", False),)),
+            *[named(i, frequent, (("blog.example", False),)) for i in range(4, 11)],
+        ]
+
+    @pytest.mark.parametrize("subject_is_the_frequent_one", [False, True])
+    def test_backed_every_time_it_is_named_outscores_named_often_and_backed_once(
+        self, subject_is_the_frequent_one: bool
+    ) -> None:
+        """The point of the change. v4 read both brands 100: one tiered domain each."""
+        results = self._two_of_ten_and_eight_of_ten(
+            subject_is_the_frequent_one=subject_is_the_frequent_one
+        )
+        out = compute_score(results, [RIVAL], competitor_set_status=DetectionStatus.OK,
+                            authority=CURATED_ONLY)
+        subject_cs = out.value(Dimension.CITATION_STRENGTH)
+        [rival] = out.competitors
+        # 100 per answer for the rare brand; 100 / 8 = 12.5 for the frequent one.
+        rare_cs, frequent_cs = (
+            (rival.citation_strength, subject_cs)
+            if subject_is_the_frequent_one
+            else (subject_cs, rival.citation_strength)
+        )
+        assert rare_cs == Decimal("100.00")
+        assert frequent_cs == Decimal("12.50")
+        # ...while Mention Rate says the opposite, which is the independence.
+        subject_mr = out.value(Dimension.MENTION_RATE)
+        frequent_mr, rare_mr = (
+            (subject_mr, rival.mention_rate)
+            if subject_is_the_frequent_one
+            else (rival.mention_rate, subject_mr)
+        )
+        assert (frequent_mr, rare_mr) == (Decimal("80.00"), Decimal("20.00"))
+
+    def test_a_brand_named_in_no_awareness_answer_scores_zero_and_is_not_excluded(
+        self,
+    ) -> None:
+        """Excluding it would hand its 20% to the other dimensions and could RAISE
+        an invisible brand's composite."""
+        results = [
+            res(1, mentioned=False, sentiment=None, brands=(self.ZENDESK,),
+                citations=(("g2.com", False),)),
+            res(2, mentioned=False, brands=(self.ZENDESK,)),
+            res(3, mentioned=True, sentiment=Sentiment.POSITIVE, brands=(SUBJECT,),
+                intent=PromptIntent.COMPARISON, citations=(("nih.gov", False),)),
+        ]
+        out = compute_score(results, [RIVAL], competitor_set_status=DetectionStatus.OK,
+                            technical_foundation=Decimal("90"), authority=CURATED_ONLY)
+        assert out.value(Dimension.CITATION_STRENGTH) == Decimal("0.00")
+        assert "citation_strength" not in out.excluded_dimensions
+        assert out.sub_scores[Dimension.CITATION_STRENGTH].included
+        assert out.sub_scores[Dimension.CITATION_STRENGTH].weight == Decimal("20.00")
+        # With it left out, the same scan would read higher — the reason it is not.
+        others = {d: s.value for d, s in out.sub_scores.items()
+                  if s.included and d is not Dimension.CITATION_STRENGTH}
+        weight = sum((WEIGHTS[d] for d in others), Decimal("0"))
+        redistributed = weighted_composite(
+            {d: WEIGHTS[d] / weight * Decimal("100") for d in others}, others
+        )
+        assert out.composite < redistributed
+        # And a rival never named on an unprompted question reads 0, not None.
+        silent = comp(2, "Freshdesk", "freshdesk.com")
+        out = compute_score(results, [RIVAL, silent], competitor_set_status=DetectionStatus.OK,
+                            authority=CURATED_ONLY)
+        assert {c.name: c.citation_strength for c in out.competitors}["Freshdesk"] == Decimal(
+            "0.00"
+        )
+
+    def test_normalisation_to_the_best_brand_in_the_scan_is_unchanged(self) -> None:
+        """One denominator for the column: the best mean, whoever holds it, reads 100."""
+        results = [
+            res(1, mentioned=True, brands=(SUBJECT,), citations=(("g2.com", False),)),
+            res(2, mentioned=True, brands=(SUBJECT,)),  # subject: (100 + 0) / 2 = 50
+            res(3, mentioned=False, brands=(self.ZENDESK,),
+                citations=(("g2.com", False), ("capterra.com", False))),  # rival: 200
+        ]
+        out = compute_score(results, [RIVAL], competitor_set_status=DetectionStatus.OK,
+                            authority=CURATED_ONLY)
+        assert out.value(Dimension.CITATION_STRENGTH) == Decimal("25.00")
+        assert [c.citation_strength for c in out.competitors] == [Decimal("100.00")]
+        # The subject holding the best mean reads 100 and the rival its ratio.
+        swapped = [
+            res(1, mentioned=True, brands=(SUBJECT,),
+                citations=(("g2.com", False), ("capterra.com", False))),
+            res(2, mentioned=False, brands=(self.ZENDESK,), citations=(("g2.com", False),)),
+            res(3, mentioned=False, brands=(self.ZENDESK,)),
+        ]
+        out = compute_score(swapped, [RIVAL], competitor_set_status=DetectionStatus.OK,
+                            authority=CURATED_ONLY)
+        assert out.value(Dimension.CITATION_STRENGTH) == Decimal("100.00")
+        assert [c.citation_strength for c in out.competitors] == [Decimal("25.00")]
+        subject, rivals = authority_when_named(
+            swapped, [RIVAL], CURATED_ONLY.tiers_for({"g2.com", "capterra.com"})
+        )
+        assert (subject, rivals["comp_0001"]) == (Decimal("200"), Decimal("50"))
+
+    def test_the_scan_level_flags_keep_their_precedence_over_a_brand_level_zero(
+        self,
+    ) -> None:
+        """A subject named nowhere scores 0 — unless the scan cannot be scored at all."""
+        never_named_brand_named_backed = [
+            res(1, mentioned=True, brands=(SUBJECT,), citations=(("g2.com", False),),
+                intent=PromptIntent.COMPARISON),
+        ]
+        out = compute_score(never_named_brand_named_backed, [RIVAL],
+                            competitor_set_status=DetectionStatus.OK, authority=CURATED_ONLY)
+        assert out.excluded_dimensions["citation_strength"] == "NO_AWARENESS_POPULATION"
+        nothing_tiered = [res(1, mentioned=False, brands=(self.ZENDESK,),
+                              citations=(("blog.example", False),))]
+        out = compute_score(nothing_tiered, [RIVAL], competitor_set_status=DetectionStatus.OK,
+                            authority=CURATED_ONLY)
+        assert out.excluded_dimensions["citation_strength"] == "NO_AUTHORITY_DATA"
+        no_rivals = [res(1, mentioned=False, brands=(), citations=(("g2.com", False),))]
+        out = compute_score(no_rivals, [], competitor_set_status=None, authority=CURATED_ONLY)
+        assert out.excluded_dimensions["citation_strength"] == "NO_COMPETITOR_SET"
+        # With all three answered, the brand-level zero is a score.
+        out = compute_score(no_rivals, [RIVAL], competitor_set_status=DetectionStatus.OK,
+                            authority=CURATED_ONLY)
+        assert out.value(Dimension.CITATION_STRENGTH) == Decimal("0.00")
+
+    def test_the_digest_moves_with_every_input_the_mean_reads(self) -> None:
+        """Rule 1: a value that can move the composite must move the digest."""
+        rival_best = res(3, mentioned=False, brands=(self.ZENDESK,),
+                         citations=(("g2.com", False), ("capterra.com", False)))
+        both_backed = [
+            res(1, mentioned=True, brands=(SUBJECT,), citations=(("g2.com", False),)),
+            res(2, mentioned=True, brands=(SUBJECT,), citations=(("g2.com", False),)),
+            rival_best,
+        ]
+        # The same set of citing domains, grouped differently across the two
+        # answers: v4's figure could not tell these apart, v5's can.
+        once_backed = [
+            both_backed[0],
+            res(2, mentioned=True, brands=(SUBJECT,)),
+            rival_best,
+        ]
+
+        def scored(results, competitors=(RIVAL,), authority=CURATED_ONLY):  # noqa: ANN001, ANN202
+            return compute_score(list(results), list(competitors),
+                                 competitor_set_status=DetectionStatus.OK, authority=authority)
+
+        base = scored(both_backed)
+        moved = scored(once_backed)
+        assert (base.value(Dimension.CITATION_STRENGTH),
+                moved.value(Dimension.CITATION_STRENGTH)) == (Decimal("50.00"), Decimal("25.00"))
+        assert base.inputs_digest != moved.inputs_digest
+
+        naming = both_backed[1]
+        perturbed = {
+            "mentioned": [both_backed[0], replace(naming, mentioned=False), rival_best],
+            "brands": [both_backed[0], replace(naming, brands=(SUBJECT, self.ZENDESK)),
+                       rival_best],
+            "citations": [both_backed[0],
+                          replace(naming, citations=(("capterra.com", False),)), rival_best],
+            "intent": [both_backed[0], replace(naming, intent=PromptIntent.COMPARISON),
+                       rival_best],
+            "status": [both_backed[0], replace(naming, status=EngineResultStatus.TIMEOUT),
+                       rival_best],
+        }
+        for field_name, results in perturbed.items():
+            assert scored(results).inputs_digest != base.inputs_digest, field_name
+        assert scored(both_backed, [comp(1, "Zendesk", "zendesk.io")]).inputs_digest != (
+            base.inputs_digest
+        ), "competitor domain"
+        assert scored(both_backed, [comp(1, "Zendesk Suite", "zendesk.com")]).inputs_digest != (
+            base.inputs_digest
+        ), "competitor name"
+        blog_on_platform = DomainAuthority(platform_domains=frozenset({"blog.example"}))
+        with_blog = [replace(both_backed[0], citations=(("blog.example", False),)),
+                     *both_backed[1:]]
+        assert scored(with_blog).inputs_digest != scored(
+            with_blog, authority=blog_on_platform
+        ).inputs_digest, "a cited domain's tier"
+
+
 class TestCitationStrengthInTheComposite:
     """How `compute_score` treats the dimension since v3."""
 
@@ -464,9 +667,12 @@ class TestCitationStrengthInTheComposite:
     def test_rivals_carry_a_figure_against_the_same_best(self) -> None:
         """A column means one thing — and now that thing is a number."""
         out = self._scored()
-        # Subject: g2 + capterra = 200. Zendesk: g2 + capterra (answer 1) + g2
-        # (answer 2), zendesk.com excluded = 200. Both read 100 of the best.
-        assert [c.citation_strength for c in out.competitors] == [Decimal("100.00")]
+        # v5, per answer naming the brand. Subject: one answer, g2 + capterra
+        # = 200. Zendesk: answer 1 g2 + capterra = 200, answer 2 g2 = 100
+        # (zendesk.com excluded), a mean of 150 — 75 of the subject's 200.
+        # Under v4's one set of domains both read 200, and so both read 100.
+        assert out.value(Dimension.CITATION_STRENGTH) == Decimal("100.00")
+        assert [c.citation_strength for c in out.competitors] == [Decimal("75.00")]
 
     def test_nothing_classifiable_is_excluded_exactly_as_v2_1_did(self) -> None:
         results = [

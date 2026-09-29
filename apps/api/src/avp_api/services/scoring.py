@@ -88,7 +88,20 @@ logger = structlog.get_logger(__name__)
 # changes tiers and is carried by the digest. A major bump, by v2's precedent:
 # a population change moves every composite that has the dimension. Rows
 # carrying v3 keep their numbers.
-FORMULA_VERSION = "v4"
+# v5 — Citation Strength asks "when an engine names the brand, does it back it
+# with authoritative sources?", not "how often is it backed" (2026-09-29). A
+# brand's value is the MEAN, over awareness answers that name it, of that
+# answer's authority sum — v3-v4 summed one set of citing domains over every
+# such answer, so it grew with how often the brand was named, which is Mention
+# Rate's question on Mention Rate's population. Measured over the 26 scored
+# scans before changing anything: Spearman rho 0.781 with zeros excluded (n =
+# 83), against a threshold of 0.70 fixed before the numbers were seen. Under
+# v5 the same measurement reads 0.177. Weights, tiers, AUTHORITY_VALUES, the
+# normalisation to the scan's best and the three exclusions are unchanged; a
+# brand named in no awareness answer still scores 0, never excluded. A major
+# bump: it redefines a weighted dimension, and moved two stored composites by
+# more than 10 points. Rows carrying v4 keep their numbers.
+FORMULA_VERSION = "v5"
 
 TWO_PLACES = Decimal("0.01")
 HUNDRED = Decimal("100")
@@ -257,7 +270,8 @@ class CompetitorComparison:
     share_of_voice: Decimal
     # None when the subject's own Citation Strength is excluded: a column
     # means one thing (v2.1). Since v3 it is a number whenever the subject's
-    # is — the rival's authority sum against the same best-in-scan.
+    # is — the rival's own figure (since v5 its mean authority per answer that
+    # names it) against the same best-in-scan.
     citation_strength: Decimal | None
     # Mean ordinal among the brands named, over awareness answers that named
     # this rival, and how many answers that is. None / 0 when never named on
@@ -365,6 +379,11 @@ def compute_inputs_digest(
     formula. That is an input change, and rule 1 says an input that can move
     the composite must be in the digest or the change is unattributable —
     the third time this function has been widened for that reason.
+
+    v5 needed no widening, and a test holds that: its per-answer mean reads
+    which answer cited which domain, and `results` already records every
+    result's own citations, brands, `mentioned`, intent and status — so
+    moving a source from one answer to another moves the digest.
     """
     payload = {
         "formula_version": FORMULA_VERSION,
@@ -480,51 +499,62 @@ def _authority_credit(domains: set[str], tiers: dict[str, Tier]) -> Decimal:
     )
 
 
-def authority_sums(
+def authority_when_named(
     results: list[ResultFacts],
     competitors: list[CompetitorFacts],
     tiers: dict[str, Tier],
 ) -> tuple[Decimal, dict[str, Decimal]]:
-    """Authority credited to the subject and to each competitor — v3.
+    """How strongly each brand is backed WHEN it is named — v5.
 
-    **What "domains citing the brand" means in this data.** A `Citation` is a
-    source the answer cited, and `cites_subject` says only whether it points
-    at the subject's own site — so read literally, the subject's citations
-    were its own domain, 0 or 1, which is why the v1-v2 stand-in could never
-    exceed 1/N. The reading that carries information is the other one: a
-    brand's citing domains are the third-party sources an engine cited IN
-    ANSWERS THAT NAMED THE BRAND — what the engine drew on when it talked
-    about the brand — less the brand's own domain, which is not a third party
-    to itself. The same rule for the subject (`mentioned`, `cites_subject`)
-    and for each rival (named in `brands`, `domain` from the competitor set).
+    For every answer that names a brand, that answer's authority sum: the
+    AUTHORITY_VALUES of the distinct third-party domains it cites, less the
+    brand's own domain (a brand is not a third party to itself). The brand's
+    value is the MEAN of those sums over the answers that name it. The same
+    rule for the subject (`mentioned`, `cites_subject`) and for each rival
+    (named in `brands`, `domain` from the competitor set). A brand named in no
+    answer is 0 — and still scored: an exclusion would hand its weight to the
+    other dimensions and could RAISE an invisible brand's composite.
 
-    The attribution is by co-occurrence: an answer that names two brands and
-    cites three sources credits all three to both. That is the limit of what
-    facts-only storage can support — nothing here knows what a cited page is
-    ABOUT — and it is a limit worth knowing when reading the comparison.
+    **Why a mean, and not v3–v4's sum over every citing domain.** The sum
+    grew with how often a brand was named: more answers naming it, more
+    sources to credit, and from v4 both it and Mention Rate read the same
+    awareness answers. Measured over the 26 scored scans in `avp_dev`
+    (2026-09-29), the two sub-scores had Spearman ρ = 0.781 with zeros
+    excluded (n = 83; 0.880 over all 132 pairs), so the composite was counting
+    one fact twice, at 30 + 20 = 50% of its weight. Frequency is Mention
+    Rate's question. This one is "when an engine names you, does it back you
+    with authoritative sources?", and it is answered per answer.
 
-    **Which results — v4.** This function sums over whatever it is handed;
-    `citation_strength` and `compare_competitors` hand it the AWARENESS
-    results, for the reason `awareness_only` gives and one more of this
-    dimension's own: co-occurrence is manufactured by a question that names
-    the brand. 55% of a prompt set does, so under v3 the subject accumulated
-    nearly the whole scan's tiered sources whatever its standing — 14 of 23
-    stored scans read 100, and helpwise.io read 90.63 on a scan where no
-    unprompted question named it at all.
+    **Attribution is still by co-occurrence**: an answer that names two brands
+    and cites three sources credits all three to both. That is the limit of
+    what facts-only storage can support — nothing here knows what a cited page
+    is ABOUT.
+
+    **Which results.** Whatever it is handed; `citation_strength` and
+    `compare_competitors` hand it the AWARENESS results (v4): a question that
+    names the brand manufactures the co-occurrence, which is why helpwise.io
+    read 90.63 under v3 on a scan where no unprompted question named it.
     """
-    answered = [r for r in results if r.answered]
-    subject_domains = {
-        d for r in answered if r.mentioned for d, cites_subject in r.citations if not cites_subject
-    }
+    answered = sorted((r for r in results if r.answered), key=lambda r: r.result_id)
+
+    def mean_credit(per_answer: list[set[str]]) -> Decimal:
+        if not per_answer:
+            return Decimal("0")
+        total = sum((_authority_credit(domains, tiers) for domains in per_answer), Decimal("0"))
+        return total / Decimal(len(per_answer))
+
+    subject = mean_credit([
+        {d for d, cites_subject in r.citations if not cites_subject}
+        for r in answered if r.mentioned
+    ])
     by_competitor: dict[str, Decimal] = {}
     for competitor in sorted(competitors, key=lambda c: c.competitor_id):
-        named = [
-            r for r in answered
+        by_competitor[competitor.competitor_id] = mean_credit([
+            {d for d, _ in r.citations if d != competitor.domain}
+            for r in answered
             if any(name == competitor.name and not is_subject for name, is_subject in r.brands)
-        ]
-        domains = {d for r in named for d, _ in r.citations if d != competitor.domain}
-        by_competitor[competitor.competitor_id] = _authority_credit(domains, tiers)
-    return _authority_credit(subject_domains, tiers), by_competitor
+        ])
+    return subject, by_competitor
 
 
 def citation_strength(
@@ -549,18 +579,22 @@ def citation_strength(
 
     **What replaced it.** `authority` (`services/domain_authority.py`) gives
     each cited domain a tier: curated-structural, platform-frequency, or none.
-    `authority_sums` credits each brand the AUTHORITY_VALUES of its citing
-    domains, and the subject's total is normalised against the best total in
-    the scan — its own or a rival's — exactly as scoring-spec.md specifies.
-    Normalising against the scan's best rather than an absolute target is the
-    reason the old docstring gave and it still holds: "is 7 citing domains
-    good" is not answerable from what we have; "how close is the subject to
-    the best-cited player here" is.
+    Since v5 `authority_when_named` gives each brand the MEAN authority of the
+    answers that name it — each answer's AUTHORITY_VALUES summed over its
+    citing domains — and the subject's mean is normalised against the best
+    mean in the scan, its own or a rival's, exactly as scoring-spec.md
+    specifies. (v3-v4 summed one set of citing domains over all those
+    answers, which grew with how often the brand was named — Mention Rate's
+    question; `authority_when_named` has the measurement.) Normalising
+    against the scan's best rather than an absolute target is the reason the
+    old docstring gave and it still holds: "is 7 citing domains good" is not
+    answerable from what we have; "how close is the subject to the
+    best-backed player here" is.
 
     **Population — v4: awareness prompts only**, the same as Mention Rate and
     Share of Voice. scoring-spec.md closed this question for Citation
     Strength in v2 and said reopening it needed a reason of its own; v3's
-    measurement is that reason, and `authority_sums` states it. Sentiment
+    measurement is that reason, and `authority_when_named` states it. Sentiment
     keeps every answered result — portrayal is a signal whoever raised the
     brand — and the two dimensions now differ on purpose.
 
@@ -592,7 +626,7 @@ def citation_strength(
         flags.append("NO_AUTHORITY_DATA")
         return Decimal("0"), flags
 
-    subject, rivals = authority_sums(aware, competitors, tiers)
+    subject, rivals = authority_when_named(aware, competitors, tiers)
     best = max([subject, *rivals.values()])
     if best == 0:
         # Tiered sources were cited, but in answers that named nobody. There
@@ -710,11 +744,13 @@ def compare_competitors(
     itself leaves out is the same accounting mismatch this docstring already
     refuses, from the other side.
 
-    **When it is included — v3 — each rival's figure is its authority sum
+    **When it is included — v3 — each rival's figure is its own authority
     against the SAME best-in-scan the subject was normalised against**, so
-    the best-cited brand in the table reads 100 and everyone else reads their
+    the best-backed brand in the table reads 100 and everyone else reads their
     distance from it. One denominator for one column — and since v4 one
-    population for it too: awareness results, exactly as the subject's.
+    population for it too: awareness results, exactly as the subject's. Since
+    v5 that authority is the rival's mean per answer that names it, the same
+    measure as the subject's.
     """
     answered = [r for r in results if r.answered]
     if not answered or not competitors:
@@ -726,7 +762,7 @@ def compare_competitors(
     aware = awareness_only(answered)
     total_mentions = sum(len(r.brands) for r in aware)
     tiers = authority.tiers_for(_cited_domains(aware))
-    subject_authority, rival_authority = authority_sums(aware, competitors, tiers)
+    subject_authority, rival_authority = authority_when_named(aware, competitors, tiers)
     best_authority = max([subject_authority, *rival_authority.values()])
 
     out: list[CompetitorComparison] = []
@@ -856,10 +892,12 @@ def compute_score(
     # 24-prompt scan N was 152, the subject and all five rivals scored 0.66,
     # and across every stored score the maximum was 3.70. `citation_strength`
     # now reads tiers from `authority` and normalises the subject's authority
-    # sum against the best in the scan; its docstring has the whole account.
+    # against the best in the scan; its docstring has the whole account.
     #
     # Since v4 it is measured on AWARENESS results, like the two discovery
-    # dimensions — `authority_sums` has the measurement that forced it.
+    # dimensions, and since v5 a brand's authority is its mean per answer that
+    # names it, so it no longer grows with how often it is named —
+    # `authority_when_named` has both measurements.
     #
     # Three exclusions, different facts, in a fixed order of precedence:
     #

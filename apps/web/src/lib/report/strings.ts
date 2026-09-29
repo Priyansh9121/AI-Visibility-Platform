@@ -41,9 +41,10 @@ export const DIMENSION_MEANING: Record<string, string> = {
   share_of_voice:
     'How much of the conversation the brand holds against its rivals, in those same unprompted answers.',
   // v3: authority of the sources cited alongside the brand — not "the brand's
-  // own pages", which described the retired 1/N stand-in.
+  // own pages", which described the retired 1/N stand-in. v5: per answer that
+  // names the brand, so how often it is named no longer raises it.
   citation_strength:
-    'How authoritative the sources are that answers cite when they name the brand, against the best-cited brand in the scan.',
+    'When answers name the brand, how often they back it with a trusted source, against the best-backed brand in the scan.',
   sentiment: 'How favourably the brand is described when it is named.',
   technical_foundation: 'How readable the site is to the systems that build those answers.',
 };
@@ -109,7 +110,7 @@ export const EXCLUSION_REASON: Record<string, { label: string; detail: string }>
  */
 export const DIMENSION_NOTE: Record<string, string> = {
   citation_strength:
-    'Citation Strength weighs the third-party sources an answer cites when it names the brand, against the best-cited brand in the same scan, so the leader reads 100. Sources count on two tiers: a short structural list — government and university domains, Wikipedia, the AP and Reuters wire services, and the cross-industry review platforms (Better Business Bureau, Trustpilot, G2, Capterra) — at full weight, and domains that engines cite across at least three client industries and five clients on this platform at half weight; domains that are themselves brands in a scanned market — a client’s own site, or a rival detected in any scan — do not count on that tier. Everything else counts for nothing. The second tier is a coarse proxy: it counts industries through an automatic classification whose confidence score is uncalibrated, so a mis-classified client cannot be screened out of it, and its thresholds are first guesses to be revisited with more scans. It counts only answers to questions that did not name the brand: a question that supplies the name puts the brand beside whatever the answer cites, and that is not evidence of authority.',
+    'Citation Strength asks: when AI names the brand, how often does it back the brand with a trusted source? Each answer that names the brand is weighed by the third-party sources it cites, and the figure is the average over those answers — so being named more often, which Mention Rate already counts, does not raise it. It is set against the best-backed brand in the same scan, so the leader reads 100, and a brand no answer names reads 0. Sources count on two tiers: a short structural list — government and university domains, Wikipedia, the AP and Reuters wire services, and the cross-industry review platforms (Better Business Bureau, Trustpilot, G2, Capterra) — at full weight, and domains that engines cite across at least three client industries and five clients on this platform at half weight; domains that are themselves brands in a scanned market — a client’s own site, or a rival detected in any scan — do not count on that tier. Everything else counts for nothing. The second tier is a coarse proxy: it counts industries through an automatic classification whose confidence score is uncalibrated, so a mis-classified client cannot be screened out of it, and its thresholds are first guesses to be revisited with more scans. It counts only answers to questions that did not name the brand: a question that supplies the name puts the brand beside whatever the answer cites, and that is not evidence of authority.',
 };
 
 /**

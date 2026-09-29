@@ -21,7 +21,7 @@ score = Σ (weight_i × subscore_i) / 100
 |---|---|---|---|
 | 1 | **Mention Rate** | 30% | % of **awareness** prompts where the brand appears (v2) |
 | 2 | **Share of Voice** | 25% | Brand mentions ÷ total mentions, over **awareness** prompts (v2) |
-| 3 | **Citation Strength** | 20% | Authority of the domains cited in **awareness** answers that name the brand (v4), against the best-cited brand in the same scan — measured since v3 from a two-tier authority input; excluded (`NO_AWARENESS_POPULATION`) when the set has no awareness prompts, (`NO_AUTHORITY_DATA`) when the awareness answers cite nothing tiered, and (`NO_COMPETITOR_SET`) when there is no rival to normalise against |
+| 3 | **Citation Strength** | 20% | When an **awareness** answer names the brand, the authority of the sources it cites — the mean over those answers (v5), against the best-backed brand in the same scan; a brand named in none scores 0. Measured since v3 from a two-tier authority input; excluded (`NO_AWARENESS_POPULATION`) when the set has no awareness prompts, (`NO_AUTHORITY_DATA`) when the awareness answers cite nothing tiered, and (`NO_COMPETITOR_SET`) when there is no rival to normalise against |
 | 4 | **Sentiment** | 15% | Weighted positive/neutral/negative across all mentions |
 | 5 | **Technical Foundation** | 10% | Schema presence, structured data, content freshness |
 
@@ -105,6 +105,70 @@ set. Unreachable through the generator (45% awareness quota) and through
 Full numbers and method: `build-log.md`, *"Mention Rate may be measuring the
 prompt, not the engine — sized, not fixed"*.
 
+### Citation Strength — how well a brand is backed when it is named (v5)
+
+**Since v5 (2026-09-29) Citation Strength asks "when an engine names the
+brand, does it back it with authoritative sources?"**, not "how often is it
+backed". How often is Mention Rate's question.
+
+Under v3–v4 a brand's value was one authority SUM: every distinct tiered
+domain cited in any awareness answer that named it. A brand named in more
+answers collected more citations almost mechanically, and since v4 the two
+dimensions read the same population. **Measured before anything changed**,
+over the 26 scored scans in `avp_dev`, each scored with
+`score_scan(persist=False)`, subject and every rival:
+
+- **all pairs:** n = 132, Pearson r = 0.872, Spearman ρ = 0.880;
+- **zeros excluded** (any pair where either value is 0, since zero mentions
+  forcing zero citations says nothing about overlap): **n = 83, r = 0.747,
+  ρ = 0.781.**
+
+The threshold was fixed before the numbers were seen: ρ ≥ 0.70 with zeros
+excluded meant the overlap was real. So the composite was counting one fact
+twice, at 30 + 20 = 50% of its weight.
+
+**The formula.** For each awareness answer that names a brand, take that
+answer's authority sum: the `AUTHORITY_VALUES` of the distinct third-party
+domains it cites, less the brand's own. The brand's raw value is the mean of
+those sums over the answers that name it. The subject's is normalised
+against the best mean in the scan, its own or a rival's:
+
+```
+authority(brand)  = mean, over awareness answers naming the brand, of
+                    Σ tier(domains that answer cites, less the brand's own)
+citation_strength = 100 × authority(subject)
+                          / max over brands in the scan of authority(brand)
+```
+
+**Unchanged:** the tiers, `AUTHORITY_VALUES`, attribution by co-occurrence,
+the normalisation, the three exclusions and their order, and the weights.
+This redefines one dimension; it does not re-weight the composite. **A brand
+named in no awareness answer scores 0, not an exclusion.** Excluding it
+would redistribute its 20% to the other dimensions, and could raise an
+invisible brand's composite.
+
+**Measured again under v5:** zeros excluded, n = 83, r = 0.215, **ρ = 0.177**.
+Over all pairs r = 0.695 and ρ = 0.708, because the zero pairs still line up
+by construction. The change was to count only if ρ fell below 0.70. It did,
+and the formula was not tuned to get there.
+
+**What it does to the stored scans.** Two composites move by more than 10
+points, both plausible.io: 77.47 → 61.04 and 76.03 → 64.41 (`build-log.md`,
+2026-09-29, has every scan).
+
+**A property of a mean, stated rather than tuned away.** A scan's best can be
+held by a rival named in only a handful of answers. Seline, named in 3 of 36
+awareness answers, sets the scale on one plausible.io scan, where Plausible
+Analytics, named in all 36, reads 17.86. No scan's best is held by a brand
+named only once. A floor on how many answers a brand needs before its mean
+can set the scale would be a formula change of its own, and was not made
+here.
+
+**The inputs digest needed no widening, and a test holds that.** It already
+records every result's own citations, brands, `mentioned`, intent and
+status, so moving a source from one answer to another moves the digest.
+**Stored `v4` rows are not re-scored** (rule 5).
+
 ### Citation Strength — measured from a two-tier authority input (v3)
 
 **Since v3 (2026-09-27) Citation Strength is scored.** The input v2.1 was
@@ -142,7 +206,8 @@ coarse proxy that cannot currently filter out a bad classification. On the
 day v3 shipped the rule admitted 70 domains, a good part of them help-desk
 vendors that the fine-grained labels count as seven industries.
 
-**The formula.** A brand's *citing domains* are the distinct third-party
+**The formula (v3–v4; v5, above, replaced the sum with a mean per answer).**
+A brand's *citing domains* are the distinct third-party
 sources cited in **awareness** results (v4; every answered result under v3)
 that name it, less its own domain (a brand is not a third party to itself). Each carries its tier's value —
 `AUTHORITY_VALUES`: **curated 100, platform 50, unclassified 0**, ratios
@@ -297,12 +362,14 @@ These are the unit-test targets named by the Epic 5 acceptance criterion.
 | Zero prompts in set | Score is **not** 0 — it is `null` with reason `INSUFFICIENT_DATA`. An unrunnable scan must never render as a bad score. |
 | Citations present but no cited domain has an authority tier | **v3:** excluded under `NO_AUTHORITY_DATA` and the weight redistributed — there is no input to measure with. (v1–v2 fell back to a raw domain count that in practice was the subject's own domain over every domain cited, and could not exceed 1/N; v2.1 excluded it.) |
 | Tiered domains cited, no competitor set | **v3:** excluded under `NO_COMPETITOR_SET` — normalised against nobody, the subject would score 100 for any classifiable citation, which is the v1 Share of Voice defect. |
+| Brand named in no awareness answer | **v5:** Citation Strength 0 for that brand, subject or rival — scored, not excluded. Excluding it would hand its weight to the other dimensions and could raise an invisible brand's composite. The three scan-level exclusions still come first. |
 | Sub-score > 100 from an input bug | Clamp to 100 **and** raise — a silent clamp hides pipeline defects. |
 
 ## Tuning changelog
 
 | Date | Version | Change |
 |---|---|---|
+| 2026-09-29 | `v5` | **Citation Strength is conditional on being named: the mean authority per awareness answer that names the brand, not one sum over every citing domain.** Measured first, against a threshold fixed before the numbers were seen. Over the 26 scored scans (`score_scan(persist=False)`, subject and every rival), Citation Strength tracked Mention Rate at Spearman ρ = 0.781 with zeros excluded (n = 83; 0.880 over all 132 pairs). That is above the 0.70 at which the overlap counts as real, so the composite was counting one fact twice at 50% of its weight. Each answer naming a brand now contributes its own authority sum, with the same `AUTHORITY_VALUES` and tiers, and the brand's value is the mean of those, normalised to the scan's best as before. A brand named in no awareness answer scores 0, not an exclusion. Weights, tiers, and the three exclusions and their order are unchanged. Re-measured under v5: ρ = 0.177 (zeros excluded, n = 83). **Major:** it redefines a weighted dimension, and two stored composites move by more than 10 points (plausible.io −16.43 and −11.62). The digest needed no widening, which a test confirms. **Stored `v4` rows are not re-scored.** See the v5 section above and `build-log.md`, 2026-09-29. |
 | 2026-09-27 | `v4` | **Citation Strength is scored on awareness prompts only, and market participants are excluded from Tier B.** Two changes, one bump. (1) The population moves to `awareness_only`, the one Mention Rate and Share of Voice have used since v2, for a reason of this dimension's own: attribution is by co-occurrence, and a brand-named question manufactures it — under v3, 14 of 23 stored scans read 100 and helpwise.io read 90.63 with an awareness Mention Rate of 0. Rivals are scored on the same population. Sentiment stays on every answered result, and the population section says why the two now differ. `NO_AWARENESS_POPULATION` joins the exclusions, ahead of `NO_AUTHORITY_DATA` and `NO_COMPETITOR_SET`. (2) `load_platform_domains` refuses any domain that is a non-deleted `Client.domain` or a `Competitor.domain` anywhere on the platform: an engine cites a market participant because it is an option, not a reference. Structural, like Tier A; Tier A is unaffected. The admitted list went 70 → 57 on the day. **Major, not minor**, by the precedent: v2's population change was major and v2.1's exclusion minor, and this is a population change first — it moves every composite that carries the dimension, by up to 20 points on the stored scans. The tier change rides on the digest through `domain_tiers`, which a test confirms. **Stored `v3` rows are not re-scored.** See `build-log.md`, 2026-09-27, sections 1 and 2. |
 | 2026-09-27 | `v3` | **Citation Strength is measured again, from a two-tier citing-domain authority input.** `services/domain_authority.py`: Tier A is a curated structural list (gov/edu/mil suffixes and country forms, Wikipedia, Wikidata, AP, Reuters, BBB, Trustpilot, G2, Capterra); Tier B is a live aggregate over stored citations — cited across ≥ 3 `Client.industry` values and ≥ 5 clients, both thresholds first guesses. Values 100 / 50 / 0. A brand's citing domains are the third-party sources cited in answers that name it, less its own; the subject's sum is normalised against the best in the scan, as this spec always said and the v1–v2 stand-in never did. `NO_AUTHORITY_DATA` now fires only when no cited domain has a tier; `NO_COMPETITOR_SET` when there is no rival to normalise against. The tiers are in the digest. **Honest limit, in the report copy:** Tier B counts through an industry label whose confidence is uncalibrated (Finding 2, open), so it cannot screen out a mis-classified client. Major bump by v2's precedent: a dimension re-entering the weighting moves every composite with a classifiable citation. **Stored `v2.1` rows are not re-scored.** See the section above and `build-log.md`, 2026-09-27. |
 | 2026-08-20 | `v1` | Initial weights from product-spec.md §6. Not yet data-tuned. |

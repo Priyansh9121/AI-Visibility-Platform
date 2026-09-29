@@ -18914,3 +18914,215 @@ agencies are false.
 - Both `uv lock --check` runs pass.
 - The OpenAPI export and `api.gen.ts` regenerate byte-identically.
 - Exit codes read from files.
+
+# Citation Strength repeated Mention Rate — measured at ρ 0.781, so v5 asks how a brand is backed when it is named
+
+**2026-09-29, the fifth entry of the day.** Since v4 both dimensions read the
+same population, awareness answers. Citation Strength summed the authority of
+every tiered domain cited in the awareness answers that named a brand, so a
+brand named in more of them collected more citations almost mechanically. If
+the two moved together, the composite counted one fact twice, at 30 + 20 =
+50% of its weight. The brief fixed a decision rule before any number was
+seen: Spearman ρ with zeros excluded ≥ 0.70 means the overlap is real, and
+v5 follows. Under 0.70, keep v4. Under 15 pairs, too little data.
+
+## 1. Measured, before anything changed
+
+**Method.** `scripts/measure_citation_overlap.py`, committed so the figure
+can be re-run as scans accumulate:
+
+- It scores every scan with a Score row with `score_scan(persist=False)`, the
+  same 26 scans the v4 entry measured. `avp_dev` has nothing newer than
+  2026-09-12.
+- It collects (Mention Rate, Citation Strength) for the subject and for every
+  rival in the comparison.
+- Rivals carry a figure only when the subject's is included, so 22 scans
+  contribute pairs: 22 subject pairs and 110 rival pairs.
+- The per-scan values reproduce the v4 entry's table exactly, so the lookup
+  and the data are the ones v4 was measured on.
+- ρ was checked against an independent average-rank implementation, and the
+  two agree to four places.
+
+**Under v4:**
+
+| | n | Pearson r | Spearman ρ |
+|---|---|---|---|
+| all pairs | 132 | 0.872 | 0.880 |
+| zeros excluded | **83** | 0.747 | **0.781** |
+
+The scatter is `docs/screenshots/citation-overlap-2026-09-29/overlap-v4.png`
+(hand-written SVG rendered by Playwright; there is no matplotlib in the API
+venv). Hollow marks are the pairs with a zero.
+
+**Where the two sub-scores differed most under v4,** one row per brand. These
+are the cases where Citation Strength carried its own information:
+
+| brand | scan of | Mention Rate | Citation Strength |
+|---|---|---|---|
+| Freshdesk (rival) | helpwise.io | 75.00 | 0.00 |
+| Seline (rival) | plausible.io | 8.33 | 70.00 |
+| PostHog (rival) | plausible.io | 39.39 | 100.00 |
+| Missive (rival) | front.com | 50.00 | 100.00 |
+| Zendesk (rival) | helpscout.com | 50.00 | 0.00 |
+
+**Verdict: ρ = 0.781 with zeros excluded, n = 83. That is at least 0.70 and
+above the 15-pair minimum, so the overlap is real and section 2 ran.**
+
+## 2. v5: Citation Strength conditional on being named
+
+**The measure now asks "when an engine names you, does it back you with
+authoritative sources?"**
+
+- For each awareness answer that names a brand, the answer's authority sum is
+  the `AUTHORITY_VALUES` of the distinct third-party domains it cites, less
+  the brand's own domain.
+- The brand's raw value is the **mean** of those sums over the answers that
+  name it.
+- The subject is normalised against the best mean in the scan, as v4 did.
+
+`authority_sums` became `authority_when_named`, because what it returns
+changed from a sum to a mean.
+
+**Unchanged:**
+- the tiers, `AUTHORITY_VALUES` and co-occurrence attribution;
+- the normalisation;
+- the weights;
+- the three scan-level exclusions and their order.
+
+A brand named in no awareness answer scores 0 and is not excluded, subject
+or rival. Excluding it would move its 20% to the other dimensions and could
+raise an invisible brand's composite, and a test shows exactly that.
+
+`FORMULA_VERSION = "v5"`, a major bump because it redefines a weighted
+dimension. scoring-spec.md has a new v5 section, the edge-case row and a
+changelog row with the reason and the measured ρ. **Stored v4 rows are not
+re-scored.**
+
+**Re-measured under v5:** zeros excluded, n = 83, r = 0.215, **ρ = 0.177**.
+Over all pairs r = 0.695 and ρ = 0.708, because the zero pairs still line up
+by construction. The change counts only if ρ falls below 0.70, and it did.
+The formula was not tuned. The scatter is `overlap-v5.png`.
+
+**Every scored scan, v4 against v5**, both recomputed, nothing persisted.
+The subject's Citation Strength (CS) and composite:
+
+| client | scan | v4 CS | v5 CS | v4 composite | v5 composite | change |
+|---|---|---|---|---|---|---|
+| helpscout.com | `0NC3SV8W` | 100.00 | 100.00 | 78.33 | 78.33 | 0.00 |
+| epic7-degraded.example | `BSFZW7QY` | no answered results | no answered results | — | — | — |
+| basecamp.com | `DD12YYE0` | 100.00 | 62.22 | 67.68 | 60.12 | -7.56 |
+| linear.app | `XVJ77KSS` | 100.00 | 95.83 | 74.12 | 73.28 | -0.84 |
+| psmdigitalagency.com | `2QWZ69T3` | 0.00 | 0.00 | 16.67 | 16.67 | 0.00 |
+| ghost.org | `MY7BQWAX` | excluded (no rivals) | excluded (no rivals) | 96.67 | 96.67 | 0.00 |
+| plausible.io | `VRNNXXB1` | 100.00 | 17.86 | 77.47 | **61.04** | **-16.43** |
+| plausible.io | `1YDNFAAM` | 100.00 | 62.50 | 76.29 | 68.79 | -7.50 |
+| plausible.io | `BZ9EY9QM` | 100.00 | 41.94 | 76.03 | **64.41** | **-11.62** |
+| notion.so | `AX2PBBB9` | 100.00 | 66.67 | 73.56 | 66.89 | -6.67 |
+| notion.so | `P8A075RZ` | 100.00 | 88.24 | 70.99 | 68.64 | -2.35 |
+| psmdigitalagency.com.au | `PEV85Y7K` | excluded (nothing tiered) | excluded (nothing tiered) | 18.91 | 18.91 | 0.00 |
+| front.com | `W0JRMC9E` | 100.00 | 83.33 | 73.33 | 70.00 | -3.33 |
+| missiveapp.com | `8ADTZ6ZT` | 100.00 | 81.82 | 74.37 | 70.73 | -3.64 |
+| zammad.com | `58RXESN4` | 40.00 | 38.10 | 48.86 | 48.48 | -0.38 |
+| helpwise.io | `QM1ATB7R` | 0.00 | 0.00 | 7.81 | 7.81 | 0.00 |
+| pirsch.io | `H84RKKH2` | 40.00 | 72.73 | 35.15 | 41.69 | +6.54 |
+| helpwise.io | `Z82H0P59` | 0.00 | 0.00 | 16.88 | 16.88 | 0.00 |
+| helpwise.io | `C5HBX40P` | excluded (nothing tiered) | excluded (nothing tiered) | 14.42 | 14.42 | 0.00 |
+| psmdigitalagency.com.au | `YPKQZ35E` | 0.00 | 0.00 | 14.26 | 14.26 | 0.00 |
+| psmdigitalagency.com.au | `KQ5AEE5G` | 0.00 | 0.00 | 13.12 | 13.12 | 0.00 |
+| intercom.com | `QT7WMVXZ` | 100.00 | 55.17 | 77.00 | 68.04 | -8.96 |
+| helpwise.io | `34MJCNZ1` | 0.00 | 0.00 | 16.56 | 16.56 | 0.00 |
+| hiverhq.com | `V7DEYSE5` | 95.00 | 100.00 | 59.69 | 60.80 | +1.11 |
+| groovehq.com | `GEAFNQ8H` | 0.00 | 0.00 | 13.47 | 13.47 | 0.00 |
+| reamaze.com | `6H6C00ME` | 0.00 | 0.00 | 22.02 | 22.02 | 0.00 |
+
+**Moved by more than 10 points: plausible.io `VRNNXXB1`, 77.47 → 61.04
+(−16.43), and plausible.io `BZ9EY9QM`, 76.03 → 64.41 (−11.62).** Both are
+brands named in nearly every awareness answer whose answers cite little that
+is tiered.
+
+- Eleven composites fall and two rise: pirsch.io +6.54, where CS went
+  40 → 72.73, and hiverhq.com +1.11.
+- Every brand that no unprompted question names reads exactly as before.
+
+## Found, not fixed: a mean lets a rarely named rival set the scale
+
+The best mean in a scan can belong to a brand named in only a handful of
+answers. Where each scan's best comes from:
+
+- **Seline, named in 3 of 36 awareness answers,** holds a mean of 116.67 on
+  plausible.io `VRNNXXB1`. Plausible Analytics is named in all 36 with a mean
+  of 20.83, which is why it reads 17.86.
+- **Freshworks (Freshdesk), named in 4 of 35,** sets intercom.com's scale.
+- No scan's best is set by a brand named only once. Elsewhere the best is
+  named in 6 to 45 answers, or is the subject itself.
+
+This is the property the brief asked for: a brand named twice and backed
+both times outscores one named eight times and backed once. It also means the
+scale can rest on few answers. A floor on how many answers a brand needs
+before its mean can set the scale would be a formula change of its own. The
+brief said not to tune toward the threshold, so it is not made here.
+
+## Copy, and section 3
+
+- **`DIMENSION_NOTE` for Citation Strength, both sides, word for word.** It
+  opens: "Citation Strength asks: when AI names the brand, how often does it
+  back the brand with a trusted source?" It then says the figure is the
+  average over the answers that name the brand, so being named more often
+  does not raise it, and that the leader reads 100 and an unnamed brand 0.
+  - The rest is unchanged. "uncalibrated", "coarse proxy", "mis-classified",
+    "brands in a scanned market" and "only answers to questions that did not
+    name the brand" are all still true, and all are kept.
+  - `report-copy.json` was regenerated from the TypeScript side with
+    `AVP_WRITE_FIXTURES=1`. `copyContract.test.ts` and `test_report_copy.py`
+    pass.
+- **`DIMENSION_MEANING`** (web only, and rendered nowhere) no longer says
+  "best-cited".
+- **No hard-coded description of the dimension exists elsewhere.**
+  - In `apps/web`, the dashboard and landing ledgers carry the label only.
+  - `report_pdf.py` has only the table header, and prints the note from
+    `narrative.DIMENSION_NOTE`.
+  - A new PDF test holds the drawn text to the whole shared note.
+  - `ReportView.test.tsx` pins the new question on screen.
+- **Screenshots:** `report-note-light-1280.png` and
+  `report-note-dark-1280.png`, the real `ReportView` inside the route frame.
+  The report is paper in both themes by design (Epic 15). The note's ink and
+  the report's paper computed identically in both themes, and the dark
+  capture differs only in the dark page around the paper.
+
+## Verified
+
+**API 1549 → 1557 (+8).**
+- `TestCitationStrengthWhenNamed` (6):
+  - named in 2 of 10 and backed both times reads 100, and named in 8 of 10
+    with one Tier A citation reads 12.50, whichever of the two is the subject;
+  - a brand named in no awareness answer scores 0, stays included, and would
+    have read higher excluded;
+  - the best mean reads 100 whoever holds it;
+  - the three scan-level flags keep their precedence over a brand-level 0;
+  - the digest moves with every input the mean reads, including the same
+    domains regrouped across answers.
+- A v4 row survives two v5 scorings field for field (1).
+- The PDF prints the whole shared note (1).
+- One v4 expectation moved legitimately: in the composite fixture the
+  rival's two answers average 150 against the subject's 200, so it reads
+  75.00 where v4's single union read 100.
+
+**Web 997** (unchanged count; `ReportView.test.tsx` asserts the new
+question).
+
+**Negative controls, each file restored byte-for-byte.**
+- v4's union sum put back inside the function fails exactly the five v5
+  tests that encode the new meaning. The precedence and "not excluded"
+  tests, which pin unchanged behaviour, still pass.
+- `score_scan` made to overwrite whatever row it finds fails the v4-row test.
+
+**The rest of the bar.**
+- Workers 13, shared-types 53, and the full design-system suite at 649.
+- ruff clean; mypy 47 under its 50 ceiling.
+- All three typechecks clean.
+- All six count gates through `assert_count.py`.
+- Both `uv lock --check` runs pass.
+- OpenAPI and `api.gen.ts` regenerate byte-identically, since no schema or
+  route docstring changed.
+- `alembic check` clean on `avp_dev`.
+- Exit codes read from files.
