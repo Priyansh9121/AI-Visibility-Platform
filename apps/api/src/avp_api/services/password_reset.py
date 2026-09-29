@@ -68,6 +68,17 @@ async def request_reset(
         logger.info("password_reset.request.no_account")
         return None
 
+    if user.password_hash is None:
+        # NO PASSWORD, NOTHING TO RESET — 2026-09-29. An account with no
+        # password signs in with Google (the users table's check constraint
+        # allows nothing else for an active one), and a reset link would ADD a
+        # password to it: a second way in, opened by whoever reads the inbox.
+        # So it goes the "no account" way, minting nothing, and the caller
+        # answers byte for byte as it does for a stranger. The event is its
+        # own, named by id and never by address.
+        logger.info("password_reset.request.no_password", user_id=user.id)
+        return None
+
     # Invalidate every outstanding token for this user first. Requesting a
     # second link should retire the first — otherwise a forwarded or leaked
     # earlier email stays live for the rest of its hour.

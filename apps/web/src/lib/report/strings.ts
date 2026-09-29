@@ -57,6 +57,14 @@ export const DIMENSION_MEANING: Record<string, string> = {
  * "excluded" flag: a capability we have not built yet is our gap, not the
  * client's, and must not read as a finding about them.
  */
+/**
+ * The audit's error code when robots.txt kept the crawler off the page —
+ * 2026-09-29. `ROBOTS_DISALLOWED` in the API's `services/crawl.py`, which a
+ * test reads back. Not a failure: the crawler obeys the file. The report and
+ * the technical screen say so instead of "could not be read".
+ */
+export const ROBOTS_DISALLOWED = 'ROBOTS_DISALLOWED';
+
 export const EXCLUSION_REASON: Record<string, { label: string; detail: string }> = {
   NOT_YET_MEASURED: {
     label: 'Not yet checked',
@@ -94,6 +102,16 @@ export const EXCLUSION_REASON: Record<string, { label: string; detail: string }>
     label: 'No authority source',
     detail:
       'Citation Strength weighs the sources an answer cites when it names the brand, on two tiers: a short structural list — government and university domains, Wikipedia, the AP and Reuters wire services, and the cross-industry review platforms (Better Business Bureau, Trustpilot, G2, Capterra) — and the domains engines cite across at least three client industries and five clients on this platform, leaving out domains that are themselves brands in a scanned market. Nothing cited in this scan’s unprompted answers is on either tier, so there is no authority to measure and the dimension is left out with its weight spread across the others, rather than scored as zero. The second tier counts industries through an automatic classification whose confidence score is uncalibrated, so it is a coarse proxy that cannot screen out a mis-classified client; that is said here so the tier is not read as more precise than it is. The citations themselves are still shown in the evidence below.',
+  },
+  // 2026-09-29. The crawler obeys robots.txt now, and a site that forbids its
+  // pages to crawlers like ours leaves Technical Foundation unmeasured. Its own
+  // code, not NOT_YET_MEASURED: the audit ran and read robots.txt, and the
+  // reason is the site's choice rather than our gap. Mirrored word for word in
+  // `report_narrative.EXCLUSION_DETAIL`.
+  CRAWL_DISALLOWED: {
+    label: 'Blocked by robots.txt',
+    detail:
+      'This site’s robots.txt asks crawlers like ours not to load its pages, so its technical foundation wasn’t measured.',
   },
 };
 

@@ -409,3 +409,82 @@ class TestTheEmailInterface:
 
         assert unconfigured.json() == configured.json()
         assert sent == ["cfg@test.example"]
+
+
+class TestAnAccountWithNoPassword:
+    """A reset never adds a password to a Google-only account — 2026-09-29.
+
+    Until this date `request_reset` minted a token for any active account, so a
+    reset link could give a password to an account that had only ever signed
+    in with Google: a second way in, opened by whoever reads the inbox. It now
+    goes the "no account" way, and the reply cannot tell them apart.
+    """
+
+    GOOGLE = "google-only@test.example"
+
+    async def _google_only(self, client: AsyncClient, engine) -> None:  # noqa: ANN001
+        from sqlalchemy import update
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+
+        # What a Google sign-up leaves: a Google subject and no password.
+        await _sign_up(client, self.GOOGLE)
+        factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+        async with factory() as s:
+            await s.execute(
+                update(User)
+                .where(User.email == self.GOOGLE)
+                .values(password_hash=None, google_sub="google-subject-no-password")
+            )
+            await s.commit()
+
+    async def _tokens(self, engine) -> list[PasswordResetToken]:  # noqa: ANN001
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+
+        factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+        async with factory() as s:
+            return list((await s.execute(select(PasswordResetToken))).scalars().all())
+
+    async def test_it_gets_the_same_reply_as_an_unknown_address(
+        self, client: AsyncClient, engine
+    ) -> None:  # noqa: ANN001
+        await self._google_only(client, engine)
+
+        google = await _request(client, self.GOOGLE)
+        unknown = await _request(client, "nobody-at-all@test.example")
+
+        assert google.status_code == unknown.status_code == 200
+        assert google.content == unknown.content
+
+    async def test_no_token_is_minted_and_no_address_is_logged(
+        self, client: AsyncClient, engine
+    ) -> None:  # noqa: ANN001
+        import json
+
+        import structlog
+
+        await self._google_only(client, engine)
+        with structlog.testing.capture_logs() as events:
+            await _request(client, self.GOOGLE)
+
+        assert await self._tokens(engine) == []
+        no_password = [e for e in events if e["event"] == "password_reset.request.no_password"]
+        assert len(no_password) == 1 and no_password[0]["user_id"].startswith("user_")
+        assert self.GOOGLE not in json.dumps(events, default=str)
+
+    async def test_a_password_account_still_gets_one(
+        self, client: AsyncClient, engine
+    ) -> None:  # noqa: ANN001
+        await self._google_only(client, engine)
+        await _sign_up(client, "has-a-password@test.example")
+
+        await _request(client, "has-a-password@test.example")
+        await _request(client, self.GOOGLE)
+
+        tokens = await self._tokens(engine)
+        assert len(tokens) == 1
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+
+        factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+        async with factory() as s:
+            owner = (await s.execute(select(User).where(User.id == tokens[0].user_id))).scalar_one()
+        assert owner.email == "has-a-password@test.example"

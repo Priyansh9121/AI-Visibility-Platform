@@ -15,10 +15,11 @@
  * the values are constants that `crawlerPage.test.tsx` reads back from the
  * API's source (`lib/legal/crawler.ts`, `lib/legal/retention.ts`).
  *
- * It says the crawler does NOT obey robots.txt because it does not: the audit
- * reads the file to report on it, and nothing consults it before a fetch. The
- * test holds that too, so the day robots support is added this page fails
- * until it says so.
+ * It says the crawler OBEYS robots.txt because, since 2026-09-29, it does:
+ * `crawl.RobotsGate` reads the file first and checks every page before it is
+ * requested. Until then this page said, truthfully, that it did not. The test
+ * requires the check before each fetch in the API's source, so the day one is
+ * dropped this page fails until it says so.
  */
 
 import type { JSX } from 'react';
@@ -58,7 +59,8 @@ export function CrawlerInfo({ origin }: { origin: string }): JSX.Element {
       <PageSection heading="What it fetches">
         <Points>
           <Point term="When a site is added.">
-            It opens the homepage, then up to {counted(RETENTION.crawlPages - 1, 'more page')} on
+            It reads the site’s robots.txt, then opens the homepage and up to{' '}
+            {counted(RETENTION.crawlPages - 1, 'more page')} on
             the same site that the homepage links to, chosen from addresses that start{' '}
             {either(CRAWLER.candidatePaths)}: at most {counted(RETENTION.crawlPages, 'page')} in
             all. It does not download their images, fonts or video. The same happens again if the
@@ -69,6 +71,10 @@ export function CrawlerInfo({ origin }: { origin: string }): JSX.Element {
             the homepage once in full, images included, to check how it is built and how quickly
             it loads. That is one page per scan. If the load times out, it loads the homepage once
             more.
+          </Point>
+          <Point term="Only what robots.txt allows.">
+            Each of those is checked against robots.txt before it is requested, as the next section
+            describes.
           </Point>
         </Points>
         <Para>
@@ -87,12 +93,41 @@ export function CrawlerInfo({ origin }: { origin: string }): JSX.Element {
 
       <PageSection heading="robots.txt">
         <Para>
-          It does not obey robots.txt. With each scan it reads the file to report what it tells AI
-          crawlers, but it fetches the pages above whether or not the file allows them.
+          It obeys robots.txt. It reads the file before anything else on a site, and follows the
+          group that names {CRAWLER.name} or, if there is none, the group for every crawler
+          (User-agent: *). Each page is checked before it is requested — the homepage, the linked
+          pages and /sitemap.xml — and a page the file disallows is not fetched. Where an Allow and
+          a Disallow rule both match, the longer one wins.
         </Para>
+        <Points>
+          <Point term="No robots.txt.">
+            If the file is missing (a 404, a 410 or another 4xx answer), everything is allowed.
+          </Point>
+          <Point term="An unreachable robots.txt.">
+            If the server answers with an error (5xx), asks it to slow down (429), or does not
+            answer in time, it fetches nothing from the site that run.
+          </Point>
+          <Point term="Redirects.">
+            It follows the homepage’s redirects itself, so the robots.txt of every host a redirect
+            leads to is checked before the redirect is followed.
+          </Point>
+          <Point term="A page’s own files.">
+            The scripts, stylesheets and images a loaded page asks for are not checked one by one:
+            the crawler is a browser, and like every browser-based crawler it lets the page load
+            them.
+          </Point>
+          <Point term="Crawl-delay.">
+            It ignores Crawl-delay: it fetches at most{' '}
+            {counted(RETENTION.crawlPages, 'page')} in a run, one after another.
+          </Point>
+        </Points>
+        <Para>To keep it off a whole site, add this to robots.txt:</Para>
+        <pre className="max-w-measure rounded-md border border-line-hairline bg-surface-sunken p-4 font-mono text-ui-sm leading-mono text-text-primary">
+          <code data-robots-example="">{`User-agent: ${CRAWLER.name}\nDisallow: /`}</code>
+        </pre>
         <Para>
-          To keep it off a site, refuse requests whose user agent contains {CRAWLER.name}. Every
-          request it makes carries that name.
+          A site that keeps it out is not read at all, and the rest of a scan never visits the
+          site: it asks AI answer engines about the business.
         </Para>
       </PageSection>
 

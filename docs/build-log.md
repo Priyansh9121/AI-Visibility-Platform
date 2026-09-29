@@ -19515,3 +19515,243 @@ in light and dark at 1280 and 390, from the production build.
   shows the production address.
 - No horizontal scroll at 390 (`scrollWidth` 390).
 - The user-agent block wraps to 4 lines at 1280 and 6 at 390.
+
+
+# The crawler obeys robots.txt, and a public reset never adds a password to a Google-only account
+
+**2026-09-29, the eighth entry of the day.** Two items, one commit.
+
+**Nothing to set on Render.** No migration, no new setting, and the API
+contract regenerates byte-identically.
+
+**What an agency sees when a prospect's site blocks the crawler:**
+- **On adding the site:** the client is created unclassified ("Could not
+  read", reason `ROBOTS_DISALLOWED`). No page is fetched.
+- **On scanning it:** the scan runs, because the engines never visit the site.
+  The report leaves Technical Foundation out with "This site’s robots.txt asks
+  crawlers like ours not to load its pages, so its technical foundation wasn’t
+  measured." A blanket `Disallow: /` under `*` is still listed as a fix.
+
+## 1. robots.txt, obeyed
+
+**The rule, as the brief decided it.**
+- robots.txt is always fetched first, now by the intake crawl too.
+- The group naming `AVPScanBot` applies, case-insensitively; otherwise `*`.
+- Longest match decides between Allow and Disallow, and Allow wins a tie.
+- Every page is checked before it is requested: the homepage, the linked
+  pages and `/sitemap.xml`.
+- A page's own subresources are not checked, and Crawl-delay is ignored. The
+  `/crawler` page says both.
+
+**One reader.** `ai_crawlers.crawl_policy` reuses the RFC 9309 parser that
+already fed the AI crawler screen: `_parse_groups`, and the longest-match
+rule, moved into `_allows_rules` with no change in behaviour. Groups that name
+the same agent are combined, as the RFC says.
+
+**How a fetch's status is read** (`PolicyBasis`):
+- **2xx:** the body is parsed, whatever its content type. The RFC says so,
+  and a single-page app that answers `/robots.txt` with its HTML page has no
+  groups, so everything is allowed.
+- **Any 4xx:** there is no file, so everything is allowed. The brief named
+  404 and 410. The RFC puts every 4xx here, 403 included, and so does this.
+- **429:** treated like a 5xx. This is the one choice made here, since the
+  RFC files 429 with the other 4xx. A site asking us to slow down is not one
+  to read that minute.
+- **5xx, a timeout, no answer, or too many redirects:** nothing is fetched
+  from the site that run.
+
+**The gate, `crawl.RobotsGate`.**
+- It fetches each host's robots.txt once, and every page is checked before
+  it is requested.
+- **Redirects are followed by the gate, by hand.** A probe on 2026-09-29
+  showed that Playwright's request routing never sees a redirect's second
+  request. So a browser handed `https://domain` would load the www host
+  before anyone read www's robots.txt.
+  - The gate follows the homepage's redirects with HEAD requests, checking
+    each hop's own host first.
+  - The browser is then handed the resolved address.
+  - Where the browser actually lands is checked too. A script's redirect, or
+    one only a browser is given, is caught there, and nothing from a
+    disallowed page is kept.
+- The gate opens an HTTP client per call, so it can be asked from inside a
+  browser session without holding a connection open around it.
+
+**Intake.**
+- **A disallowed homepage** means no browser and not even a HEAD request.
+  `crawl_site` returns `ROBOTS_DISALLOWED`, and the classifier's existing
+  "could not classify" path records it as the reason. The client is still
+  created.
+- **A disallowed candidate page** is skipped without taking a slot, so the
+  next allowed candidate is read instead. A page that fails to load still
+  takes its slot, as it always has.
+- **The intake screen is unchanged, and the brief's sentence was not added.**
+  No operator can set an industry by hand: there is no PUT or PATCH on
+  clients, and no UI for it.
+  - The screen still reads "We could not read this site … This usually means
+    the site did not load", with "Reason: ROBOTS_DISALLOWED" under it.
+  - The scan API does not require a classification, so the dashboard can
+    still scan such a client, with no industry seed.
+
+**The audit.**
+- **Stored as `status=failed`, `error_code=ROBOTS_DISALLOWED`.** That needs
+  no migration and no enum change. Every consumer already treats a failed
+  audit as unmeasured, which is exactly what excluding Technical Foundation
+  needs.
+- **The checks.**
+  - A blanket `Disallow: /` under `*` is known from the file alone, so it
+    stays `indexable: fail` with `ROBOTS_TXT_DISALLOW`, a finding and a fix.
+  - A block on AVPScanBot alone makes `indexable` `not_applicable`.
+  - `robots_txt_present`, the sitemap named in robots.txt, and the AI crawler
+    table are all recorded.
+  - Every check that needs the page is `not_applicable` with
+    `ROBOTS_DISALLOWED`. INP keeps its own code, because it can never be
+    measured.
+- **A disallowed `/sitemap.xml`** is not fetched, and its check is
+  `not_applicable` rather than the `NO_SITEMAP_XML` finding.
+  - The indexation component still counts that sitemap as absent, as it
+    always has counted one it could not fetch.
+  - This affects only a site that allows its homepage but forbids its
+    sitemap.
+
+**Scoring, rule 5 held.**
+- The scorer already excluded Technical Foundation whenever it received
+  None, and spread its weight across the others.
+  - `compute_score` now also takes `technical_foundation_exclusion`, and
+    `load_technical_foundation` returns `CRAWL_DISALLOWED` for a
+    `ROBOTS_DISALLOWED` audit.
+  - The composite is the same one an unmeasured dimension gives. That is
+    tested on synthetic results, and again by re-scoring the end-to-end
+    scan's own rows.
+  - `FORMULA_VERSION` stays v5.
+- **The `TECHNICAL_FOUNDATION_NOT_MEASURED` flag is not raised.** Its
+  sentence, "had not been audited", would be false.
+- **The digest.** The reason enters it only when set, so every existing
+  digest is byte-identical, and a test checks that.
+- **"A new flag, `CRAWL_DISALLOWED`"** was read as the exclusion reason, and
+  no degradation flag was added. The report prints an exclusion's sentence
+  and then the flags, so a flag would print the same sentence twice.
+
+**Copy, on both sides.**
+- `EXCLUSION_REASON.CRAWL_DISALLOWED`: the label is "Blocked by robots.txt",
+  and the detail is the brief's sentence.
+- `report-copy.json` was regenerated with `AVP_WRITE_FIXTURES=1`, adding one
+  entry, and `copyCoverage.test.ts` lists the new code.
+- **The report's audit section** reads "What the site’s robots.txt says",
+  with the badge, and still shows the checks that did not pass.
+- **The Technical screen** has its own wording, "This site asks crawlers
+  like ours to stay out". It no longer says "could not be read".
+- `fix_generator` treats `CRAWL_DISALLOWED` like `NOT_YET_MEASURED`: no gap
+  fix is written for it.
+
+**`/crawler`.**
+- It now says the crawler obeys robots.txt, with the 4xx, 5xx and 429 rules,
+  redirects, a page's own files, and Crawl-delay.
+- It has an example to paste: `User-agent: AVPScanBot` / `Disallow: /`.
+- **The tripwire is flipped.** It now requires, in the API's own source, a
+  robots check before each fetch: in the gate's `follow`, before `_crawl`,
+  before each candidate, after the homepage lands, and before the audit's
+  browser. The browser may never be handed `start_url`.
+- `CRAWLER_TOKEN`, `ROBOTS_DISALLOWED` and the status rules are read back
+  from the Python source.
+
+## 2. The public reset form never mints for an account without a password
+
+- **`request_reset`** treats `password_hash IS NULL` like "no account". It
+  logs `password_reset.request.no_password` by user id, mints nothing, and
+  returns None.
+- **The reply is byte-identical** to an unknown address's, and a test
+  compares the bytes. The existing identical-body tests pass untouched.
+- **The operator script is unchanged.** It still checks before calling
+  `request_reset`, so its message stays the clearer one.
+
+## Live check
+
+**No `avp_dev` client blocks `/` outright.**
+- groovehq.com is the only one the Epic 6 reader flags. Its file reads
+  `User-agent: *`, `Disallow: /`, `Allow: /$`, so by longest match its
+  homepage is allowed.
+- **Run live through the real `audit_site`, with real Chromium:**
+  - robots.txt came first.
+  - `/sitemap.xml` was not requested.
+  - The homepage redirects twice, from groovehq.com to www.groovehq.com to
+    helply.com. Each host's robots.txt was read before its HEAD request.
+  - The browser was handed `https://helply.com/`, and the audit scored
+    68.00.
+  - The intake crawl, run live too, read helply.com's homepage and `/about`.
+- **So the blocked path ran against a local server** serving
+  `User-agent: *` / `Disallow: /`, through the real `audit_site` and
+  `crawl_site` with Chromium installed.
+  - The server's own log shows only `GET /robots.txt`, once per crawler.
+  - No browser launched, and both returned `ROBOTS_DISALLOWED`.
+  - The audit recorded the robots facts and the blanket finding, and was not
+    scored.
+
+## Found, not fixed
+
+- **The Technical screen shows every `partial` audit as "The site could not
+  be read".** 8 of the 25 audits in `avp_dev` are `partial` (a component had
+  no signal, usually the date), and all 8 are scored.
+  `routers/audits.py` also computes components only for `ok`.
+- **The Epic 6 blanket reader and the RFC parser disagree on groovehq.com.**
+  The old reader sees `Disallow: /` and ignores `Allow: /$`. So `indexable`
+  fails with `ROBOTS_TXT_DISALLOW`, while the crawler, obeying the same file,
+  loads the homepage. It is a scored input, left alone as Epic F decided,
+  but the contradiction is now visible.
+- **The robots facts come from the host a scan starts at**, while the page
+  audited can be on another host after redirects (groovehq.com → helply.com).
+  That was already so before this change.
+- **The AI crawler table's `_select_group` still takes the first matching
+  group** where the RFC combines them. The crawler's own policy combines.
+- **No operator can set an industry by hand**, so a blocked prospect stays
+  unclassified.
+
+## Verified
+
+**API 1575 → 1620 (+45).**
+- `test_robots_obeyed.py` (41):
+  - the parser rules;
+  - the gate: once per host, a disallowed redirect never requested, an
+    allowed one resolved with HEAD, a timeout;
+  - intake: a disallowed homepage fetches nothing, the client is created
+    with the reason, a candidate is skipped without taking a slot, and a
+    landing elsewhere is checked; 404 and 410 crawl, 503 does not;
+  - the audit: no browser, the robots facts, the blanket finding, a block on
+    AVPScanBot alone, a disallowed sitemap not fetched and an allowed one
+    fetched;
+  - the composite equals the excluded composite and not a zero, the digests
+    are unchanged, and an unknown reason is refused.
+- One end-to-end chain test: a real scan through the real `audit_site`
+  against a site blocking `*`. It checks the audit row, `CRAWL_DISALLOWED`
+  on the score, a re-score with the dimension excluded that gives the same
+  composite, and the report.
+- The reset (3): a byte-identical reply, no token and no address logged, and
+  a password account still gets one.
+- The UA tests were rewritten on the fake web, and now cover the HEAD hop.
+
+**Web 1017 → 1023 (+6).**
+- `/crawler`: the policy, the required checks, and the reason code (3
+  replacing 1);
+- the report's blocked audit (3);
+- copy coverage (1).
+
+**Negative control.** With the audit's check before the homepage removed,
+both homepage-disallowed audit tests fail. The file was restored
+byte-for-byte.
+
+**The rest of the bar.**
+- Workers 13, shared-types 53, and the full design-system suite at 649.
+- ruff clean; mypy 47, under its 50 ceiling.
+- All three typechecks clean.
+- All six count gates through `assert_count.py`.
+- Both `uv lock --check` runs pass.
+- OpenAPI and `api.gen.ts` regenerate byte-identically.
+- `next build` passes from a copy.
+- Exit codes read from files.
+
+**Screenshots,** in `docs/screenshots/robots-obeyed-2026-09-29/`.
+- `/crawler` in light and dark at 1280 and 390, from the production build,
+  served with Render's forwarded headers. There is no horizontal scroll at
+  390.
+- The report's exclusion note and its robots.txt audit section, from the
+  production build's `/share` page with the API answered from the new
+  fixture. The report is paper in both themes, so they were shot light.

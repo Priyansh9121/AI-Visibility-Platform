@@ -52,6 +52,7 @@ import {
   DIMENSION_NOTE,
   EXCLUSION_REASON,
   POSITION_COPY,
+  ROBOTS_DISALLOWED,
   VISIBILITY_FLAG,
   checkLabel,
   dimensionLabel,
@@ -1060,7 +1061,13 @@ function AuditEvidence({ report }: { report: Report }) {
     );
   }
 
-  if (audit.status === 'failed') {
+  // robots.txt kept the crawler off the page — 2026-09-29. Stored as a failed
+  // audit, but not one: the crawler obeys the file. What the file itself says
+  // is still a finding — a blanket `Disallow: /` above all — so the checks that
+  // did not pass are shown, as they are for an audit that read the page.
+  const disallowed = audit.status === 'failed' && audit.errorCode === ROBOTS_DISALLOWED;
+
+  if (audit.status === 'failed' && !disallowed) {
     return (
       <Card elevation="flat">
         <CardBody>
@@ -1082,15 +1089,26 @@ function AuditEvidence({ report }: { report: Report }) {
   return (
     <div>
       <h3 className="flex items-center gap-3 text-ui-sm font-medium text-text-primary">
-        What the site itself says
+        {disallowed ? 'What the site’s robots.txt says' : 'What the site itself says'}
         {audit.status === 'partial' && <Badge tone="warn">Partial audit</Badge>}
+        {disallowed && <Badge tone="neutral">{EXCLUSION_REASON.CRAWL_DISALLOWED!.label}</Badge>}
       </h3>
-      <p className="mt-2 text-ui-sm leading-prose text-text-secondary">
-        {audit.passed} checks passed, {audit.warned} raised a warning and {audit.failed} failed
-        {audit.notApplicable > 0 ? `; ${audit.notApplicable} could not apply` : ''}.
-        {audit.status === 'partial' &&
-          ' Some signals were unavailable, so the sub-score was computed from what could be measured.'}
-      </p>
+      {disallowed ? (
+        <p className="mt-2 text-ui-sm leading-prose text-text-secondary">
+          {EXCLUSION_REASON.CRAWL_DISALLOWED!.detail} This crawler obeys robots.txt, so its only
+          checks were on the file itself
+          {audit.findings.length > 0
+            ? '. The ones that did not pass are below.'
+            : ', and they found nothing to fix.'}
+        </p>
+      ) : (
+        <p className="mt-2 text-ui-sm leading-prose text-text-secondary">
+          {audit.passed} checks passed, {audit.warned} raised a warning and {audit.failed} failed
+          {audit.notApplicable > 0 ? `; ${audit.notApplicable} could not apply` : ''}.
+          {audit.status === 'partial' &&
+            ' Some signals were unavailable, so the sub-score was computed from what could be measured.'}
+        </p>
+      )}
       {audit.findings.length > 0 && (
         <DataTable
           className="mt-3"

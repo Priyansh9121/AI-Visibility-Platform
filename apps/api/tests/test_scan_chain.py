@@ -408,3 +408,74 @@ class TestCompetitorSetsCarryForward:
         # The struck rivals came too — a strike that lasted one scan would not
         # be a strike.
         assert any(r.is_suppressed for r in rows)
+
+
+class TestASiteWhoseRobotsTxtKeepsUsOut:
+    """The whole chain against a site whose robots.txt blocks `*` — 2026-09-29.
+
+    The REAL `audit_site`, over conftest's autouse stub, with only its network
+    faked (`robots_web`) and a browser that fails the test if it is launched.
+    """
+
+    async def test_technical_foundation_is_excluded_and_the_block_stays_a_finding(
+        self, client: AsyncClient, engine, stub_engines, robots_web, monkeypatch  # noqa: ANN001
+    ) -> None:
+        from decimal import Decimal
+
+        from avp_api.models.technical_audit import AuditStatus
+        from avp_api.services import audit_runner, scoring_runner, technical_audit
+
+        def no_browser():  # noqa: ANN202
+            raise AssertionError("the browser was launched for a disallowed homepage")
+
+        monkeypatch.setattr(audit_runner, "audit_site", technical_audit.audit_site)
+        monkeypatch.setattr(technical_audit, "async_playwright", no_browser)
+        robots_web.serve("https://helpscout.com/robots.txt", body="User-agent: *\nDisallow: /\n")
+
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_engines(n_prompts=3)
+        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+
+        # The audit: robots.txt only, stored as a failed audit with the reason.
+        assert robots_web.fetched() == ["https://helpscout.com/robots.txt"]
+        (audit,) = await _rows(engine, TechnicalAudit, sid, load=TechnicalAudit.checks)
+        assert audit.status is AuditStatus.FAILED
+        assert (audit.error_code, audit.pages_crawled) == ("ROBOTS_DISALLOWED", 0)
+        assert audit.technical_foundation is None
+        checks = {c.check_key: (c.status.value, c.detail_code) for c in audit.checks}
+        assert checks["indexable"] == ("fail", "ROBOTS_TXT_DISALLOW")
+        assert checks["meta_title"] == ("not_applicable", "ROBOTS_DISALLOWED")
+
+        # The score: Technical Foundation excluded under its own reason.
+        (score,) = await _rows(engine, Score, sid)
+        assert score.excluded_dimensions["technical_foundation"] == "CRAWL_DISALLOWED"
+        assert "TECHNICAL_FOUNDATION_NOT_MEASURED" not in score.degradation_flags
+        assert "technical_foundation" not in score.weights
+        assert score.composite is not None
+
+        # ...and its composite is the one with the dimension excluded, not a
+        # zero carried at 10%. Re-scored from the same rows, unpersisted.
+        factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+
+        async def rescored(value: Decimal | None) -> Decimal | None:
+            async def load(session, scan_id):  # noqa: ANN001, ANN202, ARG001
+                return value, None
+
+            monkeypatch.setattr(scoring_runner, "load_technical_foundation", load)
+            async with factory() as s:
+                scan = (await s.execute(select(Scan).where(Scan.id == sid))).scalar_one()
+                _row, computed, _ = await scoring_runner.score_scan(s, scan, persist=False)
+            return computed.composite
+
+        assert await rescored(None) == score.composite
+        assert await rescored(Decimal("0")) != score.composite
+
+        # The report says why, and still carries the finding.
+        report = (await client.get(f"{BASE}/scans/{sid}/report")).json()
+        tf = next(d for d in report["dimensions"] if d["key"] == "technical_foundation")
+        assert (tf["included"], tf["exclusionReason"]) == (False, "CRAWL_DISALLOWED")
+        assert report["audit"]["errorCode"] == "ROBOTS_DISALLOWED"
+        assert {"checkKey": "indexable", "detailCode": "ROBOTS_TXT_DISALLOW"}.items() <= next(
+            f for f in report["audit"]["findings"] if f["checkKey"] == "indexable"
+        ).items()

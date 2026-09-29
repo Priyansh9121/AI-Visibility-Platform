@@ -69,6 +69,7 @@ EXCLUSION_REASON: dict[str, str] = {
     "NO_ANSWERED_RESULTS": "No answers came back",
     "NO_AWARENESS_POPULATION": "Nothing unprompted to measure",
     "NO_AUTHORITY_DATA": "No authority source",
+    "CRAWL_DISALLOWED": "Blocked by robots.txt",
 }
 
 # The sentence under each label — `strings.ts`'s `EXCLUSION_REASON[code].detail`,
@@ -120,6 +121,12 @@ EXCLUSION_DETAIL: dict[str, str] = {
         "uncalibrated, so it is a coarse proxy that cannot screen out a mis-classified "
         "client; that is said here so the tier is not read as more precise than it is. "
         "The citations themselves are still shown in the evidence below."
+    ),
+    # 2026-09-29. The crawler obeys robots.txt, and a site that forbids its
+    # pages to crawlers like ours leaves Technical Foundation unmeasured.
+    "CRAWL_DISALLOWED": (
+        "This site’s robots.txt asks crawlers like ours not to load its pages, so its "
+        "technical foundation wasn’t measured."
     ),
 }
 

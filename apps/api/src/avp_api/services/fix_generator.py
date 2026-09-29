@@ -363,8 +363,10 @@ def build_candidates(
     for dim in ranked:
         # A dimension excluded because we have not measured it yet is OUR gap,
         # not the client's. It must never generate a fix telling them to
-        # change something.
-        if excluded.get(dim.key) == "NOT_YET_MEASURED":
+        # change something. Nor one robots.txt kept us from measuring
+        # (2026-09-29): what the file itself shows reaches the list as an
+        # audit finding, below, and nothing else about it is known.
+        if excluded.get(dim.key) in ("NOT_YET_MEASURED", "CRAWL_DISALLOWED"):
             continue
         candidates.append(
             FixCandidate(

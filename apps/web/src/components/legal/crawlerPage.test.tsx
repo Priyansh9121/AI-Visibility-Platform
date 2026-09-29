@@ -8,8 +8,9 @@
  *     and path are read out of the API's `crawl.py`, not copied, and the page
  *     is rendered and its printed string compared with them;
  *   - every other fact it states is read back from the API's source the same
- *     way (`legalPages.test.tsx`'s pattern), including the two negatives: it
- *     does not obey robots.txt, and nothing runs it on a schedule;
+ *     way (`legalPages.test.tsx`'s pattern): that it obeys robots.txt — a
+ *     check before every fetch, required in the source since 2026-09-29 —
+ *     and that nothing runs it on a schedule;
  *   - no placeholder address is left anywhere in apps/.
  *
  * Signed-out rendering, mounted with effects, is in `app/legalRoutes.test.tsx`.
@@ -23,6 +24,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { LandingView } from '@/components/marketing/LandingView';
 import { CRAWLER, crawlerUserAgent, requestOrigin } from '@/lib/legal/crawler';
+import { ROBOTS_DISALLOWED } from '@/lib/report/strings';
 import { OPERATOR } from '@/lib/legal/operator';
 import { RETENTION } from '@/lib/legal/retention';
 import { CrawlerInfo } from './CrawlerInfo';
@@ -54,6 +56,15 @@ function pythonString(name: string): string {
   const value = new RegExp(`^${name} = "([^"\\n]*)"$`, 'm').exec(read(CRAWL))?.[1];
   expect(value, `${name} is not a one-line string in ${CRAWL}`).toBeDefined();
   return value!;
+}
+
+/** One top-level Python function's source: from its `def` to the next top-level statement. */
+function topLevel(source: string, name: string): string {
+  const start = source.search(new RegExp(`^(?:async )?def ${name}\\(`, 'm'));
+  expect(start, `def ${name} not found`).toBeGreaterThan(-1);
+  const rest = source.slice(start);
+  const end = rest.search(/\n(?:async def |def |class |[A-Za-z_][A-Za-z0-9_]* = |@|# =)/);
+  return end === -1 ? rest : rest.slice(0, end);
 }
 
 /** The printed user agent, as the page renders it. */
@@ -117,9 +128,9 @@ describe('what it fetches is what the code fetches', () => {
 
   it('with each scan: robots.txt, the sitemap unless robots names one, and the homepage once', () => {
     const audit = read(AUDIT);
-    expect(audit).toContain('await client.get(f"{base}/robots.txt")');
+    expect(audit).toContain('robots = await gate.file(base)');
     expect(audit).toContain('if not found.sitemap_present:');
-    expect(audit).toContain('await client.get(f"{base}/sitemap.xml")');
+    expect(audit).toContain('await gate.follow("GET", f"{base}/sitemap.xml")');
     const runner = read(AUDIT_RUNNER);
     expect(runner).toContain('signals = await audit_site(f"https://{client.domain}")');
     expect(runner).toContain('row.pages_crawled = 1 if signals.ok else 0');
@@ -129,16 +140,63 @@ describe('what it fetches is what the code fetches', () => {
     expect(CRAWLER_PAGE.text).toContain('That is one page per scan.');
   });
 
-  it('says it does not obey robots.txt — and fails the day it starts to', () => {
-    expect(CRAWLER_PAGE.text).toContain('It does not obey robots.txt.');
-    expect(CRAWLER_PAGE.text).not.toMatch(/(respects|honou?rs|obeys|follows) robots\.txt/i);
-    // Tripwires: the crawl never fetches or parses robots.txt, and in the
-    // audit nothing about robots.txt decides whether a page is loaded.
-    expect(read(CRAWL)).not.toMatch(/\/robots\.txt["'`]|robotparser|can_fetch|evaluate_robots/);
-    const auditSite = /^async def audit_site\([\s\S]*?(?=^\S)/m.exec(read(AUDIT))?.[0];
-    expect(auditSite).toBeDefined();
-    expect(auditSite).toContain('page.goto(');
-    expect(auditSite).not.toMatch(/^\s*(if|elif|while)\b[^\n]*robots/m);
+  it('says it obeys robots.txt, with the token the parser matches and an example to paste', () => {
+    expect(CRAWLER_PAGE.text).toContain('It obeys robots.txt.');
+    expect(CRAWLER_PAGE.text).not.toMatch(/does not obey/i);
+    // The group it follows is named by the token crawl.py hands the parser.
+    expect(CRAWLER.name).toBe(pythonString('CRAWLER_TOKEN'));
+    expect(CRAWLER_PAGE.text).toContain(`follows the group that names ${CRAWLER.name}`);
+    expect(CRAWLER_PAGE.html).toContain(
+      `<code data-robots-example="">User-agent: ${CRAWLER.name}\nDisallow: /</code>`,
+    );
+    // The two sentences the brief asked for, and the rest of the rules.
+    expect(CRAWLER_PAGE.text).toContain('are not checked one by one');
+    expect(CRAWLER_PAGE.text).toContain(
+      `It ignores Crawl-delay: it fetches at most ${RETENTION.crawlPages} pages in a run`,
+    );
+    expect(CRAWLER_PAGE.text).toContain('a 404, a 410 or another 4xx answer), everything is allowed');
+    expect(CRAWLER_PAGE.text).toContain(
+      'answers with an error (5xx), asks it to slow down (429), or does not answer in time, it fetches nothing',
+    );
+    // ...which is what the parser does with a status (ai_crawlers.crawl_policy).
+    const policy = read('apps/api/src/avp_api/services/ai_crawlers.py');
+    expect(policy).toMatch(
+      /if status is None or status == 429 or status >= 500:\n\s+return CrawlPolicy\(PolicyBasis\.UNREACHABLE\)/,
+    );
+    expect(policy).toMatch(
+      /if 400 <= status < 500:\n\s+return CrawlPolicy\(PolicyBasis\.UNAVAILABLE\)/,
+    );
+  });
+
+  it('requires the robots.txt check before every fetch — and fails the day one loses it', () => {
+    // Where each check sits relative to the fetch it guards, in the API's own
+    // source. The behaviour is tested in the API's suite
+    // (`test_robots_obeyed.py`); this holds the page's claim to the code.
+    const before = (source: string, check: string, fetch: string) => {
+      const at = source.indexOf(check);
+      expect(at, `missing: ${check}`).toBeGreaterThan(-1);
+      expect(source.indexOf(fetch, at), `${fetch} is not after ${check}`).toBeGreaterThan(at);
+    };
+    const crawl = read(CRAWL);
+    const gateFollow = /async def follow\([\s\S]*?(?=\n    async def |\n\S)/.exec(crawl)?.[0] ?? '';
+    before(gateFollow, 'if not await self.allows(url):', 'await client.request(');
+    const crawlSite = topLevel(crawl, 'crawl_site');
+    before(crawlSite, 'home_url = await gate.resolve(start_url)', 'await _crawl(');
+    const browser = topLevel(crawl, '_crawl');
+    before(browser, 'if not await gate.allows(target):', '_fetch_page(page, target, timeout_ms)');
+    before(browser, '_fetch_page(page, home_url, timeout_ms)', 'if not await gate.allows(page.url):');
+
+    const audit = read(AUDIT);
+    const auditSite = topLevel(audit, 'audit_site');
+    before(auditSite, 'home_url = await gate.resolve(start_url)', 'async_playwright()');
+    before(auditSite, 'page.goto(\n                        home_url', 'if not await gate.allows(page.url):');
+    // The browser is only ever handed the address the gate resolved.
+    expect(auditSite).not.toMatch(/page\.goto\(\s*start_url/);
+    expect(crawlSite + browser).not.toMatch(/_fetch_page\(page, start_url/);
+  });
+
+  it('the reason code on the report and the technical screen is the API’s', () => {
+    expect(ROBOTS_DISALLOWED).toBe(pythonString('ROBOTS_DISALLOWED'));
   });
 
   it('says nothing runs it on a schedule, because nothing does', () => {

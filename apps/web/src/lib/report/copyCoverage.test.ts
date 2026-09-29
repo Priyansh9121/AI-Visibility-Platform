@@ -31,6 +31,8 @@ const EXCLUSION_CODES = [
   'NO_ANSWERED_RESULTS',
   'NO_AWARENESS_POPULATION',
   'NO_AUTHORITY_DATA',
+  // TECHNICAL_FOUNDATION_EXCLUSIONS in scoring.py — 2026-09-29.
+  'CRAWL_DISALLOWED',
 ] as const;
 
 /** `flags.append("...")` in scoring.py and citation_strength. */

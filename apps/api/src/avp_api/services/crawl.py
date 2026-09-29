@@ -28,14 +28,16 @@ from __future__ import annotations
 import asyncio
 import re
 from dataclasses import dataclass, field
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, urlsplit
 
+import httpx
 import structlog
 import tldextract
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import async_playwright
 
 from ..config import Settings, get_settings
+from .ai_crawlers import CrawlPolicy, crawl_policy
 
 logger = structlog.get_logger(__name__)
 
@@ -59,6 +61,9 @@ DEFAULT_MAX_PAGES = 4
 # agent this crawler does not send. Keep each on one line.
 USER_AGENT_TEMPLATE = "Mozilla/5.0 (compatible; AVPScanBot/0.1; +{info_url}) Playwright/Chromium"
 CRAWLER_INFO_PATH = "/crawler"
+# The product token in the user agent: the name a robots.txt group uses to
+# address this crawler (`User-agent: AVPScanBot`), matched case-insensitively.
+CRAWLER_TOKEN = "AVPScanBot"
 
 
 def crawler_user_agent(settings: Settings | None = None) -> str:
@@ -69,6 +74,153 @@ def crawler_user_agent(settings: Settings | None = None) -> str:
     """
     base = (settings or get_settings()).public_web_base_url.rstrip("/")
     return USER_AGENT_TEMPLATE.format(info_url=f"{base}{CRAWLER_INFO_PATH}")
+
+
+# ===========================================================================
+# robots.txt, obeyed — 2026-09-29
+#
+# Until this date the crawler read robots.txt only to report on it, and
+# fetched pages whether or not the file allowed them. Agencies point this tool
+# at prospects' sites, whose owners never agreed to anything, so it now obeys
+# the file the way every reputable crawler does: robots.txt first, then only
+# what the group for AVPScanBot (or else `*`) allows. The crawl here and the
+# technical audit (`technical_audit.py`) share this gate, and
+# `ai_crawlers.crawl_policy` is the one reader of the rules.
+# ===========================================================================
+
+# Reason code for a site whose robots.txt forbids the page. The intake crawl
+# returns it as its error code, so the classifier's "could not classify" path
+# records it as the reason; the audit stores it as its error code, and the
+# score excludes Technical Foundation as CRAWL_DISALLOWED.
+ROBOTS_DISALLOWED = "ROBOTS_DISALLOWED"
+
+ROBOTS_TIMEOUT = 10.0
+# Redirects followed, for robots.txt (RFC 9309 §2.3.1.2 asks for at least
+# five) and for a page, whose redirects the gate follows by hand.
+MAX_REDIRECTS = 5
+# RFC 9309 §2.5: a crawler must read at least the first 500 KiB.
+ROBOTS_MAX_CHARS = 512_000
+
+
+def origin_of(url: str) -> str:
+    parts = urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc}"
+
+
+def path_of(url: str) -> str:
+    """What a robots.txt rule is matched against: the path, and the query if any."""
+    parts = urlsplit(url)
+    return (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
+
+
+@dataclass(frozen=True, slots=True)
+class RobotsFile:
+    """One fetch of an origin's robots.txt, as it came back.
+
+    `status` is None when nothing came back: a timeout, a refused connection,
+    too many redirects. `body` is empty unless something did.
+    """
+
+    status: int | None
+    content_type: str = ""
+    body: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class Followed:
+    """Where a request ended after the gate followed its redirects.
+
+    `response` is None when the last hop was not sent (it was disallowed) or
+    got no answer.
+    """
+
+    url: str
+    response: httpx.Response | None
+    disallowed: bool = False
+
+
+class RobotsGate:
+    """robots.txt for this crawler, one fetch per host, asked before every page.
+
+    Every page the crawler fetches is checked first: the homepage, the linked
+    pages, and /sitemap.xml. A redirect is followed HERE, by hand, so each hop
+    is checked on its own host before it is requested. The browser cannot do
+    that: Playwright's request routing never sees a redirect's second request
+    (tried on 2026-09-29), so a browser handed a bare domain that redirects to
+    its www host would load www before anyone read www's robots.txt. The crawls
+    hand the browser the address this gate resolved instead, and still check
+    where the browser actually landed.
+
+    The files a loaded page asks for itself — scripts, stylesheets, images —
+    are not checked one by one. No browser-based crawler does that, and the
+    /crawler page says so.
+    """
+
+    def __init__(self, *, user_agent: str, timeout: float = ROBOTS_TIMEOUT) -> None:
+        self._user_agent = user_agent
+        self._timeout = timeout
+        self._files: dict[str, RobotsFile] = {}
+
+    def _client(self) -> httpx.AsyncClient:
+        # A client per call rather than one held open: a crawl makes a handful
+        # of these requests, and a gate that owns nothing open can be asked
+        # from inside a browser session without either outliving the other.
+        return httpx.AsyncClient(
+            timeout=self._timeout,
+            headers={"User-Agent": self._user_agent},
+            max_redirects=MAX_REDIRECTS,
+        )
+
+    async def file(self, origin: str) -> RobotsFile:
+        """This origin's robots.txt, fetched once and remembered."""
+        if origin not in self._files:
+            self._files[origin] = await self._fetch(origin)
+        return self._files[origin]
+
+    async def _fetch(self, origin: str) -> RobotsFile:
+        try:
+            async with self._client() as client:
+                response = await client.get(f"{origin}/robots.txt", follow_redirects=True)
+        except httpx.HTTPError:
+            return RobotsFile(status=None)
+        return RobotsFile(
+            status=response.status_code,
+            content_type=response.headers.get("content-type", ""),
+            body=response.text[:ROBOTS_MAX_CHARS],
+        )
+
+    async def policy(self, origin: str) -> CrawlPolicy:
+        robots = await self.file(origin)
+        return crawl_policy(robots.status, robots.body, token=CRAWLER_TOKEN)
+
+    async def allows(self, url: str) -> bool:
+        return (await self.policy(origin_of(url))).allows(path_of(url))
+
+    async def follow(self, method: str, url: str) -> Followed:
+        """Request `url`, following redirects by hand and checking each hop first."""
+        async with self._client() as client:
+            for _ in range(MAX_REDIRECTS + 1):
+                if not await self.allows(url):
+                    return Followed(url, None, disallowed=True)
+                try:
+                    response = await client.request(method, url, follow_redirects=False)
+                except httpx.HTTPError:
+                    return Followed(url, None)
+                location = response.headers.get("location")
+                if not response.is_redirect or not location:
+                    return Followed(url, response)
+                url = urljoin(url, location)
+        return Followed(url, None)
+
+    async def resolve(self, url: str) -> str | None:
+        """Where the homepage's redirects lead, or None if robots.txt forbids a hop.
+
+        Asked with HEAD, so a hop costs a response's headers and no page. A
+        server that answers HEAD with no redirect (or not at all) leaves the
+        address as it is, and the browser's own landing is checked after.
+        """
+        followed = await self.follow("HEAD", url)
+        return None if followed.disallowed else followed.url
 
 
 # Paths most likely to state what a business actually does. Ordered by value:
@@ -195,79 +347,27 @@ async def crawl_site(
     Never raises for an unreachable site: a site that will not load is a normal
     outcome for a prospecting tool pointed at an arbitrary URL, and it must
     surface as `ok=False` with a reason code rather than a 500.
+
+    **robots.txt first** (2026-09-29). Nothing the file forbids this crawler is
+    fetched, and a forbidden homepage means no crawl at all: `ok=False` with
+    `ROBOTS_DISALLOWED`, which the classifier records as its reason.
     """
     start_url = normalise_url(url)
     domain = registrable_domain(start_url)
     signals = CrawlSignals(final_url=start_url, registrable_domain=domain)
+    user_agent = crawler_user_agent()
+    gate = RobotsGate(user_agent=user_agent)
+
+    home_url = await gate.resolve(start_url)
+    if home_url is None:
+        logger.info("crawl.robots_disallowed", url=start_url)
+        return _disallowed(signals)
 
     try:
-        async with async_playwright() as pw:
-            browser = await pw.chromium.launch(
-                args=["--disable-dev-shm-usage", "--no-sandbox"]
-            )
-            try:
-                context = await browser.new_context(
-                    user_agent=crawler_user_agent(),
-                    viewport={"width": 1280, "height": 900},
-                    java_script_enabled=True,
-                )
-                # Images and fonts contribute nothing to classification and are
-                # most of the bytes; blocking them roughly halves crawl time.
-                await context.route(
-                    re.compile(r"\.(png|jpe?g|gif|webp|svg|ico|woff2?|ttf|mp4|webm)$"),
-                    lambda route: asyncio.ensure_future(route.abort()),
-                )
-                page = await context.new_page()
-                page.set_default_timeout(timeout_ms)
-
-                home = await _fetch_page(page, start_url, timeout_ms)
-                if home is None:
-                    return CrawlResult(
-                        signals=signals,
-                        text_extract="",
-                        ok=False,
-                        error_code="FETCH_FAILED",
-                    )
-                if home.get("blocked"):
-                    signals.http_status = home["status"]
-                    signals.final_url = page.url
-                    return CrawlResult(
-                        signals=signals,
-                        text_extract="",
-                        ok=False,
-                        error_code=f"HTTP_{home['status']}",
-                    )
-
-                signals.final_url = page.url
-                signals.registrable_domain = registrable_domain(page.url) or domain
-                signals.http_status = home["status"]
-                _apply_page_signals(signals, home, is_home=True)
-
-                extracts = [home["text"][:MAX_CHARS_PER_PAGE]]
-                titles = [home["title"]] if home["title"] else []
-                signals.pages_fetched = 1
-                signals.urls_fetched.append(page.url)
-
-                for target in _pick_secondary_urls(page.url, home["links"], max_pages - 1):
-                    if sum(len(e) for e in extracts) >= MAX_TOTAL_CHARS:
-                        break
-                    sub = await _fetch_page(page, target, timeout_ms)
-                    if sub is None or sub.get("blocked"):
-                        continue
-                    _apply_page_signals(signals, sub, is_home=False)
-                    extracts.append(sub["text"][:MAX_CHARS_PER_PAGE])
-                    if sub["title"]:
-                        titles.append(sub["title"])
-                    signals.pages_fetched += 1
-                    signals.urls_fetched.append(target)
-
-                text = _WHITESPACE.sub(" ", "\n\n".join(extracts)).strip()[:MAX_TOTAL_CHARS]
-                signals.word_count = len(text.split())
-
-                return CrawlResult(signals=signals, text_extract=text, titles=titles)
-            finally:
-                await browser.close()
-
+        return await _crawl(
+            gate, home_url, signals,
+            user_agent=user_agent, max_pages=max_pages, timeout_ms=timeout_ms,
+        )
     except PlaywrightError as exc:
         logger.warning("crawl.playwright_error", url=start_url, error=type(exc).__name__)
         return CrawlResult(
@@ -275,6 +375,111 @@ async def crawl_site(
         )
     except TimeoutError:
         return CrawlResult(signals=signals, text_extract="", ok=False, error_code="TIMEOUT")
+
+
+def _disallowed(signals: CrawlSignals) -> CrawlResult:
+    """The result for a site whose robots.txt forbids its homepage: nothing read."""
+    return CrawlResult(signals=signals, text_extract="", ok=False, error_code=ROBOTS_DISALLOWED)
+
+
+async def _crawl(
+    gate: RobotsGate,
+    home_url: str,
+    signals: CrawlSignals,
+    *,
+    user_agent: str,
+    max_pages: int,
+    timeout_ms: int,
+) -> CrawlResult:
+    """The browser half of `crawl_site`, from a homepage robots.txt allows."""
+    domain = signals.registrable_domain
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(
+            args=["--disable-dev-shm-usage", "--no-sandbox"]
+        )
+        try:
+            context = await browser.new_context(
+                user_agent=user_agent,
+                viewport={"width": 1280, "height": 900},
+                java_script_enabled=True,
+            )
+            # Images and fonts contribute nothing to classification and are
+            # most of the bytes; blocking them roughly halves crawl time.
+            await context.route(
+                re.compile(r"\.(png|jpe?g|gif|webp|svg|ico|woff2?|ttf|mp4|webm)$"),
+                lambda route: asyncio.ensure_future(route.abort()),
+            )
+            page = await context.new_page()
+            page.set_default_timeout(timeout_ms)
+
+            home = await _fetch_page(page, home_url, timeout_ms)
+            if home is None:
+                return CrawlResult(
+                    signals=signals,
+                    text_extract="",
+                    ok=False,
+                    error_code="FETCH_FAILED",
+                )
+            # The browser can still land somewhere the gate did not send it —
+            # a redirect only a browser is given, or a script's. That host's
+            # robots.txt decides whether anything from it is kept.
+            if not await gate.allows(page.url):
+                logger.info("crawl.robots_disallowed", url=page.url)
+                return _disallowed(signals)
+            if home.get("blocked"):
+                signals.http_status = home["status"]
+                signals.final_url = page.url
+                return CrawlResult(
+                    signals=signals,
+                    text_extract="",
+                    ok=False,
+                    error_code=f"HTTP_{home['status']}",
+                )
+
+            signals.final_url = page.url
+            signals.registrable_domain = registrable_domain(page.url) or domain
+            signals.http_status = home["status"]
+            _apply_page_signals(signals, home, is_home=True)
+
+            extracts = [home["text"][:MAX_CHARS_PER_PAGE]]
+            titles = [home["title"]] if home["title"] else []
+            signals.pages_fetched = 1
+            signals.urls_fetched.append(page.url)
+
+            # Every candidate, best first; a page robots.txt forbids is skipped
+            # without taking a slot, so the next one allowed is read instead.
+            # A page that fails to load still takes its slot, as it always has.
+            wanted = max_pages - 1
+            attempted = skipped = 0
+            for target in _pick_secondary_urls(page.url, home["links"], len(home["links"])):
+                if attempted >= wanted or sum(len(e) for e in extracts) >= MAX_TOTAL_CHARS:
+                    break
+                # Checked before it is requested.
+                if not await gate.allows(target):
+                    skipped += 1
+                    continue
+                attempted += 1
+                sub = await _fetch_page(page, target, timeout_ms)
+                if sub is None or sub.get("blocked"):
+                    continue
+                if not await gate.allows(page.url):
+                    skipped += 1
+                    continue
+                _apply_page_signals(signals, sub, is_home=False)
+                extracts.append(sub["text"][:MAX_CHARS_PER_PAGE])
+                if sub["title"]:
+                    titles.append(sub["title"])
+                signals.pages_fetched += 1
+                signals.urls_fetched.append(target)
+            if skipped:
+                logger.info("crawl.robots_skipped_pages", url=signals.final_url, skipped=skipped)
+
+            text = _WHITESPACE.sub(" ", "\n\n".join(extracts)).strip()[:MAX_TOTAL_CHARS]
+            signals.word_count = len(text.split())
+
+            return CrawlResult(signals=signals, text_extract=text, titles=titles)
+        finally:
+            await browser.close()
 
 
 async def _fetch_page(page, url: str, timeout_ms: int) -> dict | None:  # noqa: ANN001
