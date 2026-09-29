@@ -138,3 +138,49 @@ describe('signed out: unchanged', () => {
     expect(window.location.search).toBe('');
   });
 });
+
+describe('the forms by URL, for the header on other public pages — 2026-09-29', () => {
+  const signedOut = () =>
+    me.mockRejectedValue(
+      new ApiProblem({
+        type: '/problems/unauthenticated',
+        title: 'Not signed in',
+        status: 401,
+        detail: 'Sign in to continue.',
+        instance: '/api/v1/auth/me',
+      }),
+    );
+
+  beforeEach(() => {
+    me.mockReset();
+  });
+
+  it('signed out, ?view=sign-in opens the sign-in form, and the query is cleared', async () => {
+    signedOut();
+    const el = await arrive('?view=sign-in');
+    expect(el.textContent).toContain('Sign in with Google');
+    expect(el.textContent).not.toContain(TITLE);
+    expect(window.location.search).toBe('');
+  });
+
+  it('signed out, ?view=sign-up opens the sign-up form', async () => {
+    signedOut();
+    const el = await arrive('?view=sign-up');
+    expect(el.textContent).toContain('Sign up with Google');
+    expect(window.location.search).toBe('');
+  });
+
+  it('signed out with no view asked for, the landing page as before', async () => {
+    signedOut();
+    const el = await arrive('');
+    expect(el.textContent).toContain('For SEO and digital marketing agencies');
+    expect(el.textContent).not.toContain('Sign in with Google');
+  });
+
+  it('signed in, a view in the query changes nothing but is cleared', async () => {
+    me.mockResolvedValue(ownerMe);
+    const el = await arrive('?view=sign-in');
+    expect(el.textContent).toContain(INTAKE);
+    expect(window.location.search).toBe('');
+  });
+});

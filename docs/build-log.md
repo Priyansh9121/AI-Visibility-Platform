@@ -18488,3 +18488,200 @@ horizontal scroll. See `docs/screenshots/google-failure-signed-in-2026-09-29/`.
 - Both `uv lock --check` runs pass locally.
 - The OpenAPI export is unchanged, since no schema or route docstring moved.
 - Exit codes read from files.
+
+# Public /privacy and /terms pages, so Google sign-in can leave Testing
+
+**2026-09-29, the third entry of the day.** Google keeps the OAuth consent
+screen in **Testing**, where only listed test users can sign in. The free
+scan now needs a Google sign-in, so no real prospect could get one. Google
+will not publish the screen without a public privacy policy on an authorised
+domain. The founder will enter these two URLs in Google Cloud → Branding:
+`https://ai-visibility-platform-1.onrender.com/privacy` and
+`https://ai-visibility-platform-1.onrender.com/terms`.
+
+**Both pages are DRAFTS for the founder's review.** An agent that is not a
+lawyer wrote them from what the code does. They should be reviewed by one
+before real customers pay. The draft status is recorded here and in code
+comments (`lib/legal/operator.ts`, both page components), and deliberately
+not on the rendered pages.
+
+## What the founder supplied, asked rather than guessed
+
+- **Operator:** Priyansh Ranpura, sole trader, Melbourne, Australia, ABN
+  89 415 092 182. The ABN passes the ATO's mod-89 checksum, and a test pins
+  that.
+- **Contact** for privacy questions and deletion requests:
+  priyansh.ranpura9@gmail.com, published with the founder's say-so.
+- **Redis** runs on Render Key Value. It holds sign-in sessions and, for 10
+  minutes, the Google email and name of an unfinished sign-up. If it ran
+  anywhere else, that host would have been a missing processor.
+- **Supabase** as the database host comes from the brief. The repository
+  cannot show it: `DATABASE_URL` is configuration, and the build log only ever
+  lists Supabase as one candidate among four. The 2026-09-28 entry's phrase
+  "the Render Postgres URL" was an assumption, and this corrects it.
+
+No `TODO(founder)` value remains, and both pages publish on this commit.
+
+## How the facts were established
+
+Three read-only sweeps, each claim then spot-checked by hand:
+1. every outbound host and dependency;
+2. every stored column, Redis key, file and log line;
+3. exactly what each provider receives.
+
+What the pages state, in brief:
+
+- **Stored.**
+  - Account: name, email, role, last sign-in, and an Argon2id hash or
+    Google's `sub`.
+  - Agency: name, invitations, and a logo URL if set.
+  - Clients: domain, name, brand, industry and niche, and competitors.
+  - Scan facts: mentions, positions, cited URLs and domains, sentiment
+    labels, and audit results.
+  - Text: the questions, text an operator types into a re-run, and the
+    written recommendations.
+  - Billing: Stripe ids, status and period end.
+  - Tokens: session, reset and invite tokens as SHA-256 digests only.
+- **Not stored:** answer text or page copy. Cited as the facts-only rule
+  (`test_facts_only.py` and the API-boundary tests), with its real scope: the
+  facts tables cannot hold that text, and no response returns it. Also not
+  stored: IP addresses and card details.
+- **Processors:**
+  - Render: web app, API, sessions and logs.
+  - Supabase: the database.
+  - Stripe: receives the agency name and id; the payer's card and email go
+    to Stripe directly.
+  - Google sign-in: returns `sub`, email and name.
+  - Anthropic, OpenAI, Google Gemini and Perplexity: questions only, and never
+    a user's name, email or id. Checked in the prompt builder and every SDK
+    call: no `user` or `metadata` field is ever sent.
+  - Anthropic also receives up to three public pages of a client's site, the
+    answers that name the client, and a finished scan's facts.
+  - SerpApi: brand or domain and industry search terms.
+  - Resend: recipient, subject and message.
+  - Google Fonts: in the visitor's browser, on every page.
+  - jsDelivr: only on the API's `/api/v1/docs` page.
+- **Cookies:** one, `avp_session` (httpOnly, 14 days or until sign-out), plus
+  two preferences in browser storage, `avp.theme` and `avp.sidebar.clients`.
+  No analytics.
+- **Logs:** the API's access log records IP addresses and paths, and some
+  events record an email address. Render keeps them.
+- **Retention:** kept while the agency uses the service, with no self-serve
+  deletion. Seat removal ends sign-in but keeps the person's details. The
+  expiry times are listed, and deletion is by email, done by hand.
+- **Law:** the Australian Privacy Principles and the OAIC; the terms add the
+  Australian Consumer Law.
+
+## Built
+
+- **Routes `/privacy` and `/terms`,** both prerendered as static pages in
+  `next build`.
+  - The route files are server components that export page titles. The
+    content components are client boundaries, like every other page here.
+  - Reason: the plan constants live in a `'use client'` module
+    (`PricingCard`), and a server component importing a value from one gets a
+    client reference, not the number.
+  - Neither route calls the session API.
+- **The landing page's header, shared** (`MarketingHeader`).
+  - Away from the landing page it drops the section nav and links the
+    wordmark home.
+  - Its buttons open `/?view=sign-in` and `/?view=sign-up`. The front door
+    now reads those (`lib/auth/frontDoor.ts`, cleared on arrival like the
+    Google failure reason), so **Log in** on `/privacy` lands on the sign-in
+    form rather than on a second landing page.
+- **A footer** (`MarketingFooter`) on the landing page and both legal pages,
+  linking both.
+- **`PageSection` gains `headingAs`,** so each page's title is its one `h1`
+  with no change of look.
+- **Numbers from constants, held to the API.**
+  - `PLAN_SCANS_PER_MONTH` and `PLAN_FREE_SCANS` join `PLAN_PRICE_USD` and
+    `PLAN_SEATS`. The pricing card's "40" is no longer typed by hand.
+  - `lib/legal/retention.ts` holds every duration the privacy page states.
+  - Tests read the API's own source (`scan_allowance.py`, `config.py`,
+    `share.py`, `intake.py`) and fail if a copy drifts.
+- **Settings' "Not built yet" list** loses "Usage limits… there is no cap to
+  hit". That has been false since the scan allowance shipped (2026-09-28),
+  and the terms now state the cap.
+
+## Found, not fixed
+
+- **Blank keys count as set.** A blank provider key, including `RESEND_API_KEY=`
+  as `.env.example` ships it, still sends the request with an empty key. The
+  recipient, subject and reset link reach Resend before it is refused.
+  SerpApi's call is the exception: a blank key sends nothing.
+- **Reset and invite links in the logs.** With Resend unset, those links,
+  with live tokens, are printed to stdout, which Render keeps.
+- **DEBUG logging is always on.** structlog is never configured, so DEBUG
+  lines always print, including model-written reasoning about client sites.
+- **The access log records paths.** uvicorn's access log records share-link
+  tokens and Google callback codes in the paths.
+- **No deletion anywhere.** There is no endpoint for an account, agency,
+  client or scan. A removed person's email stays reserved.
+- **Public API docs.** `/api/v1/docs` is served in every environment and
+  loads its viewer from jsDelivr.
+- **Cancellation depends on Stripe.** Whether cancelling is enabled is a
+  Stripe-dashboard portal setting the code cannot see, and the terms promise
+  it.
+- **Placeholder crawler info URL.** The crawler's User-Agent still points at
+  `https://example.invalid/bot`.
+
+## Two mistakes, caught before the commit
+
+- **An off-scale spacing class.** The first screenshots showed the sections
+  run together. `gap-16` is not on the design system's spacing scale, which
+  replaces Tailwind's, so it compiled to nothing.
+  - The design-system suite's existing guard (`tokens/reportIsolation.test.ts`)
+    catches exactly this. I had run only its render tests at that point.
+  - I first wrote a duplicate guard, then removed it when the full suite
+    showed the existing one.
+- **A `beforeEach` that returned the spy.** `beforeEach(() => me.mockReset())`
+  hands vitest the spy as a teardown, which it then calls. That surfaced as
+  the mocked 401 failing three new tests, and every such hook now uses a
+  block body.
+
+## Verified
+
+**Web 925 → 984 (+59).**
+- **Provider list:** a grep-derived fixture test re-runs the grep of every
+  host and runtime dependency and holds it against the fixture and the
+  rendered page.
+- **Page content:**
+  - both pages render one `h1` with the shared header and footer;
+  - numbers come from the constants, and the constants match the API's
+    source;
+  - no "TODO" renders, and the ABN passes its checksum;
+  - Australian law only, with no GDPR or CCPA sections;
+  - the landing page links both pages, and no legal module imports the API
+    client.
+- **Mounted in jsdom:** both routes render with `api.me` watched and never
+  called, and the header's buttons go to `/?view=sign-in` and `/?view=sign-up`.
+- **Front door:** it opens both forms by URL, and a view in the query changes
+  nothing for someone signed in.
+
+**Design-system 648 → 649** (`headingAs`).
+
+**Negative controls, each restoring its file byte-for-byte.** Each change
+failed exactly the tests meant to catch it:
+- an unknown host in a scanned file;
+- an unknown dependency in a manifest;
+- a processor renamed off the page;
+- a session call in the shared frame;
+- a price typed by hand in the terms;
+- a duration drifted from the API;
+- the spacing bug put back.
+
+**Build and screenshots.**
+- `next build` passes, with both routes prerendered.
+- Served by `next start`, both pages were screenshotted in light and dark at
+  1280 and 390 wide, plus the landing footer
+  (`docs/screenshots/legal-pages-2026-09-29/`).
+- In every capture: one `h1`, the requested theme, no horizontal scroll, and
+  no "TODO".
+
+**The rest of the bar.**
+- API 1486, workers 13, shared-types 53.
+- ruff clean; mypy 47 under its 50 ceiling.
+- All three typechecks clean.
+- All six count gates through `assert_count.py`.
+- Both `uv lock --check` runs pass.
+- Exit codes read from files.

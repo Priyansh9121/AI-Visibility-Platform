@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { takeFrontDoorForm } from '@/lib/auth/frontDoor';
 import { googleReasonSentence, takeGoogleFailure } from '@/lib/auth/googleFailure';
 import { Button, Card, CardBody, ErrorState, LoadingState } from '@avp/design-system';
 import type { ClientDetail, Me } from '@avp/shared-types';
@@ -60,6 +61,9 @@ export default function Home() {
     // Take the reason BEFORE the session check, so it survives whichever view
     // follows; which sentence it becomes waits on that check.
     const failure = takeGoogleFailure(window);
+    // `/?view=sign-in` or `/?view=sign-up` — the header on the privacy and
+    // terms pages opens these forms by URL (`lib/auth/frontDoor.ts`).
+    const asked = takeFrontDoorForm(window);
     try {
       const signedIn = await api.me();
       setMe(signedIn);
@@ -70,6 +74,8 @@ export default function Home() {
         setGoogleNotice(googleReasonSentence(failure));
         // Straight to the sign-in form, where the notice and the way forward are.
         setView({ kind: 'sign-in' });
+      } else if (asked != null) {
+        setView({ kind: asked });
       } else if (err instanceof ApiProblem && err.status === 401) {
         setView({ kind: 'signed-out' });
       } else {

@@ -229,13 +229,14 @@ function Row({ label, value }: { label: string; value: string }) {
  * What Settings still cannot do, listed rather than hidden.
  *
  * Lifted out of the JSX so the list is one thing to keep true rather than
- * three call sites — two entries have already been removed as the features
- * behind them shipped (Epic 9.14's seats, Epic 9.15's billing).
+ * three call sites — three entries have been removed as the features behind
+ * them shipped (Epic 9.14's seats, Epic 9.15's billing, and on 2026-09-29
+ * "usage limits": scans have been metered since 2026-09-28, the count shows
+ * beside the scan controls, and the terms page states the cap).
  */
 const MISSING: readonly string[] = [
   'Changing your agency name, and the logo and colours a report carries — white-labelling is still name-and-slug only, and needs a written policy on which design tokens an agency may override before it is safe to open up.',
   'Changing the seat limit. Seats can be invited and removed, but three is what every plan includes and there is only one plan, so there is no number here to change yet.',
-  'Usage limits and any view of how much you have used. Scans are not metered in either direction — there is no cap to hit and no figure to look at.',
 ];
 
 function Missing({ index, text }: { index: number; text: string }) {

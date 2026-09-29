@@ -78,6 +78,21 @@ export const PLAN_PRICE_USD = 160;
  */
 export const PLAN_SEATS = 3;
 
+/**
+ * Scans a month on the plan, and free scans for an agency's lifetime — the
+ * API's `PAID_SCANS_PER_MONTH` and `FREE_SCAN_ALLOWANCE`
+ * (`services/scan_allowance.py`), which are the authority and are what the
+ * gate enforces.
+ *
+ * Copies, because a signed-out visitor has no billing response to read them
+ * from. They used to be typed into this card's copy by hand; since the terms
+ * page (2026-09-29) states them too, they are constants, and
+ * `lib/legal/legalPages.test.tsx` reads the API's source and fails if either
+ * copy drifts from it.
+ */
+export const PLAN_SCANS_PER_MONTH = 40;
+export const PLAN_FREE_SCANS = 1;
+
 export interface PricingCardProps {
   /** Signed-in visitors subscribe; signed-out visitors sign up first. */
   signedIn?: boolean | undefined;
@@ -130,12 +145,13 @@ export function PricingCard({
           {/*
             The one number on this card the API also holds: forty is
             `PAID_SCANS_PER_MONTH` in `services/scan_allowance.py`, and the
-            app reads it from the billing response. A signed-out visitor
-            has no billing response to read, so it is stated here — the
-            only hand-typed copy of it on the web, by decision (2026-09-28).
+            signed-in app reads it from the billing response. A signed-out
+            visitor has no billing response, so it comes from
+            `PLAN_SCANS_PER_MONTH` above, which a test holds to the API's.
           */}
           <p className="max-w-measure text-ui-sm leading-prose text-text-tertiary">
-            40 scans a month. Viewing, sharing and exporting reports is never limited.
+            {PLAN_SCANS_PER_MONTH} scans a month. Viewing, sharing and exporting reports is never
+            limited.
           </p>
 
           {error != null && (

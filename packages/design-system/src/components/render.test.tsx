@@ -407,6 +407,19 @@ describe('PageSection is the report voice without the report contract', () => {
     expect(out).not.toContain('avp-beat');
     expect(out).not.toContain('avp-beat__step');
   });
+
+  it('is an h2 unless a page has no other title — 2026-09-29', () => {
+    // The public privacy and terms pages open with a lead section whose
+    // heading is the document's title, so it may be the page's one h1. Same
+    // class either way: only the outline changes, never the look.
+    expect(html(<PageSection heading="A claim." />)).toContain('<h2 class="avp-section__heading">A claim.</h2>');
+    const title = html(<PageSection tone="lead" headingAs="h1" heading="The title." />);
+    expect(title).toContain('<h1 class="avp-section__heading">The title.</h1>');
+    expect(title).not.toContain('<h2');
+    // Staggered sections keep the element too.
+    const staggered = html(<PageSection headingAs="h1" heading="Moving." stagger animate={false} />);
+    expect(staggered).toMatch(/<h1 class="avp-section__heading">/);
+  });
 });
 
 describe('LoadingState is the one way this product says wait', () => {
