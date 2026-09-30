@@ -74,7 +74,12 @@ export interface paths {
          *     **This endpoint does not subscribe anybody.** It returns a URL. The
          *     subscription begins when Stripe says it did, over the webhook below.
          *
-         *     **Errors:** `401`, `403` (member role), `404` (another agency's id), `503
+         *     **Errors:** `401`, `403` (member role), `404` (another agency's id), `409
+         *     subscription-already-active` when the agency's status is `active` or
+         *     `trialing` (checked after auth and tenancy, before any Stripe call), `503
+         *     checkout-in-progress` when another checkout holds the agency row for over
+         *     3 s, `503
+         *     service-unavailable` when Stripe fails expiring the previous open session, `503
          *     billing-not-configured` when `STRIPE_SECRET_KEY` or `STRIPE_PRICE_ID` is
          *     unset — carrying a detail that names the variable.
          */
@@ -4007,6 +4012,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CheckoutSessionOut"];
+                };
+            };
+            /** @description `/problems/subscription-already-active`: the agency already has an active or trialing subscription. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
                 };
             };
             /** @description Validation Error */

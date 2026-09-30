@@ -127,6 +127,18 @@ class EmailAlreadyRegistered(Conflict):
     title = "That email address is already registered"
 
 
+class CheckoutInProgress(Conflict):
+    """Another checkout for this agency holds its row lock (409).
+
+    A specific type rather than the generic `conflict`, so a client can say
+    "try again in a moment" without parsing prose. Retrying is safe: nothing was
+    created at Stripe.
+    """
+
+    problem_type = "checkout-in-progress"
+    title = "Checkout already in progress"
+
+
 class InvalidWebhookSignature(ProblemError):
     """A billing webhook whose Stripe signature is missing, malformed or wrong.
 
@@ -202,6 +214,21 @@ class SeatLimitReached(ProblemError):
     status_code = status.HTTP_409_CONFLICT
     problem_type = "seat-limit-reached"
     title = "Seat limit reached"
+
+
+class SubscriptionAlreadyActive(ProblemError):
+    """Checkout refused: the agency already has a live subscription.
+
+    **409.** A second Checkout Session would create a second subscription and
+    bill the agency twice; Stripe does not stop that. "Live" is exactly
+    `services.billing.ACTIVE_STATUSES` (`active`, `trialing`). The detail points
+    at the billing portal, where the existing subscription is managed, and
+    carries no Stripe id and not the status itself.
+    """
+
+    status_code = status.HTTP_409_CONFLICT
+    problem_type = "subscription-already-active"
+    title = "Subscription already active"
 
 
 class ScanLimitReached(ProblemError):

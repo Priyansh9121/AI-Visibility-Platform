@@ -20531,3 +20531,49 @@ contract regenerates byte-identically.
 - Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
 - OpenAPI and `api.gen.ts` regenerate byte-identically.
 - Exit codes were read from files.
+
+# Checkout is refused while a subscription is live, and one agency can no longer end up with two
+
+**2026-09-30, the thirteenth entry of the day.** One item, one commit.
+
+**Render: nothing to set.** The Stripe timeout and retry values are constants in code.
+
+## 1. What changed
+
+- **`POST /api/v1/agencies/{agencyId}/billing/checkout` returns 409 `/problems/subscription-already-active`** when the agency's `subscription_status` is `active` or `trialing`, before any Stripe call. Every other status (none, `past_due`, `canceled`, `unpaid`, `incomplete`, `incomplete_expired`, `paused`) behaves as before. The owner/admin and tenancy checks still run first, so a non-member gets the existing 403 or 404, never a 409 that reveals subscription state. The detail says "This agency already has a current subscription. Manage it from Manage billing in Settings." and carries no Stripe id or status.
+- **The security review found two pre-existing ways one agency could end up billed twice, and both are closed here** (no product decision involved):
+  - **Two concurrent first checkouts created two Stripe customers.** `uq_agencies_stripe_customer_id` covers one column, so the second request simply overwrote the first customer id (the old docstring said otherwise). Checkout now re-reads the agency with a row lock in the request's transaction and runs the guard and `ensure_customer` on the locked row, so the second request waits and reuses the first customer. A repeat checkout takes `FOR NO KEY UPDATE`, so inserts into child tables (scans, prompt runs, alerts, clients) are not blocked; the first checkout takes the full lock because writing `stripe_customer_id` changes a key column.
+  - **An older open Checkout link stayed payable after a newer one was paid.** Before creating a session for an agency that already has a customer, checkout now asks Stripe whether that customer has an `active` or `trialing` subscription (409 if so, which also covers a paid checkout whose webhook has not landed), then lists the customer's open Checkout Sessions and expires each, so at most one link is ever payable. If the list reports `has_more`, or a Stripe error occurs while expiring, checkout returns 503 `/problems/service-unavailable` with a fixed message and creates nothing.
+- **The lock is bounded.** `SET LOCAL lock_timeout = '3s'` runs before the locked read; a held lock returns 409 `/problems/checkout-in-progress` ("A checkout for this agency is already in progress. Try again in a moment."). The Stripe client is built with a 15 s HTTP timeout and one network retry (the SDK default was 80 s and two retries), so a hung Stripe call can no longer hold the row for minutes.
+- **Webhook backstop:** when `checkout.session.completed` or `customer.subscription.created` carries a subscription id different from a live stored one, the API logs `stripe.webhook.second_subscription` (event id, agency id, both subscription ids; no email, no secret) and keeps today's behaviour. `docs/runbook.md` gains "If the logs show a second Stripe subscription".
+- **Contracts:** `docs/api-contracts.md` documents both 409 problem types, the 503, the Stripe-side check, the link expiry and the bounded wait; `openapi.json` and `api.gen.ts` are regenerated (the checkout operation declares its 409).
+
+## 2. Tests
+
+- `tests/test_billing.py` gains 23 tests: active and trialing refused with no customer or session created; all seven other statuses still create a session; 403 and 404 precede the 409 and make no Stripe call; a second checkout expires the first open link; a failed expire returns 503 and creates nothing; `has_more` returns 503; a live Stripe subscription with a null database status is refused; two concurrent first checkouts create one customer (a real `asyncio.gather` against the ASGI app); a held agency lock returns `checkout-in-progress` in under 5 s with no Stripe call; a first checkout blocked by a child insert fails before Stripe; a repeat checkout is not blocked by a child insert; the client carries the 15 s timeout and one retry; the second-subscription warning fires, contains no `@`, and a repeated id does not warn. The held-lock tests release their own lock after 6 s, so if `lock_timeout` regresses they fail in about 20 s instead of hanging the suite.
+- Red first: the active and trialing cases returned 201; later, the concurrency test caught a real double customer (`assert 2 == 1`).
+
+## 3. The review
+
+- **Security review (opus), twice: PASS WITH NITS both times.** Round one: the guard is correctly ordered and leaks nothing; it raised the two pre-existing double-billing paths above (one High, one Medium) and the nits (raw API route in the detail, a missing no-Stripe-call assertion), all fixed. Round two: the lock is correct and cannot deadlock with the webhook (both take the one agency lock first); it raised the unbounded lock (Medium) and the paid-but-unapplied window (Low), both fixed.
+
+## Found, not fixed
+
+- **Which statuses should also refuse checkout is a founder decision.** `past_due`, `unpaid`, `paused` and `incomplete` are still live Stripe subscriptions; checkout for them creates a second subscription (the Stripe-side check only looks for `active` and `trialing`). The web UI shows Subscribe only when the status is empty, so a `canceled` agency cannot resubscribe from the UI either.
+- **The webhook applies events for any subscription id.** If a duplicate is cancelled in Stripe, the agency can be marked `canceled` while the kept subscription keeps billing (the runbook step covers recovery).
+- **The Checkout link lifetime is Stripe's default (24 h);** shortening it is a founder decision.
+- **A first checkout that fails after the Stripe customer is created still leaves an orphan customer,** as before.
+- **The web does not yet show the 409 or 503 detail specially;** the only call site is `apps/web/src/lib/api.ts`.
+- **The lock is still held across the Stripe calls,** now bounded by the 15 s timeout and one retry per call.
+
+## Verified
+
+**API pytest 1768 → 1791 (+23); `api-pytest` floor 1768 → 1791.**
+- **Negative controls:** replacing the guard with `if False:` fails the active and trialing tests; removing `with_for_update()` fails the concurrency test; replacing the expire call with `pass` fails three tests; forcing the full lock on a repeat checkout fails the child-insert test; removing `SET LOCAL lock_timeout` fails both held-lock tests in about 20 s; emptying the Stripe subscription check fails the null-status test. Each file was restored with `cp` and checked with `cmp`.
+
+**The rest of the bar.**
+- Workers 13, shared-types 53 (0 fail), design-system 846, web 1093, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- `openapi.json` and `api.gen.ts` were regenerated for this change, and regenerating again produces the same files (+22/−2 against the last commit).
+- Exit codes were read from files.

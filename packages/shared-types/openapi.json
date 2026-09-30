@@ -5404,7 +5404,7 @@
     },
     "/api/v1/agencies/{agencyId}/billing/checkout": {
       "post": {
-        "description": "Create a Stripe Checkout Session. Returns the URL to navigate to.\n\n**`201`, because a session really is created** \u2014 at Stripe, with an id and a\nlifetime, and this call is what makes it. That it lives in someone else's\ndatabase does not make it less of a created resource.\n\nThe agency's Stripe customer is created here too, if it does not have one\nyet, and REUSED if it does. A second visit to this endpoint does not mint a\nsecond customer \u2014 see `services/billing.py`, where the reuse and the unique\nconstraint under it are explained.\n\n**This endpoint does not subscribe anybody.** It returns a URL. The\nsubscription begins when Stripe says it did, over the webhook below.\n\n**Errors:** `401`, `403` (member role), `404` (another agency's id), `503\nbilling-not-configured` when `STRIPE_SECRET_KEY` or `STRIPE_PRICE_ID` is\nunset \u2014 carrying a detail that names the variable.",
+        "description": "Create a Stripe Checkout Session. Returns the URL to navigate to.\n\n**`201`, because a session really is created** \u2014 at Stripe, with an id and a\nlifetime, and this call is what makes it. That it lives in someone else's\ndatabase does not make it less of a created resource.\n\nThe agency's Stripe customer is created here too, if it does not have one\nyet, and REUSED if it does. A second visit to this endpoint does not mint a\nsecond customer \u2014 see `services/billing.py`, where the reuse and the unique\nconstraint under it are explained.\n\n**This endpoint does not subscribe anybody.** It returns a URL. The\nsubscription begins when Stripe says it did, over the webhook below.\n\n**Errors:** `401`, `403` (member role), `404` (another agency's id), `409\nsubscription-already-active` when the agency's status is `active` or\n`trialing` (checked after auth and tenancy, before any Stripe call), `503\ncheckout-in-progress` when another checkout holds the agency row for over\n3 s, `503\nservice-unavailable` when Stripe fails expiring the previous open session, `503\nbilling-not-configured` when `STRIPE_SECRET_KEY` or `STRIPE_PRICE_ID` is\nunset \u2014 carrying a detail that names the variable.",
         "operationId": "start_checkout_api_v1_agencies__agencyId__billing_checkout_post",
         "parameters": [
           {
@@ -5427,6 +5427,12 @@
               }
             },
             "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "`/problems/subscription-already-active`: the agency already has an active or trialing subscription."
           },
           "422": {
             "content": {
