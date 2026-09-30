@@ -131,6 +131,8 @@ async def _seed_scans(
     n: int,
     status: ScanStatus = ScanStatus.SUCCEEDED,
     created_at: datetime | None = None,
+    submitted_at: datetime | None = None,
+    lease_expires_at: datetime | None = None,
 ) -> None:
     factory = async_sessionmaker(bind=engine, expire_on_commit=False)
     async with factory() as s:
@@ -142,6 +144,8 @@ async def _seed_scans(
             )
             if created_at is not None:
                 scan.created_at = created_at
+            scan.submitted_at = submitted_at
+            scan.lease_expires_at = lease_expires_at
             s.add(scan)
         await s.commit()
 
@@ -591,6 +595,158 @@ class TestAStrandedScanDoesNotHoldASlotForever:
         assert (await _start(client, b)).status_code == 202
         # And the agency's free scan is now genuinely spent.
         assert (await _counted(engine, agency_id)) == 2
+
+
+class TestTheAllowanceCountsFromSubmission:
+    """`submitted_at`, not `created_at`, dates an in-flight scan — 2026-09-30."""
+
+    OLD = 16
+    FRESH = 1
+
+    async def _detected(self, client, engine, *names):  # noqa: ANN001, ANN202
+        """Free agency; detection rows (old `created_at`, never submitted) per domain."""
+        from avp_api.models import Client as ClientModel
+        from avp_api.services import competitors as detection
+
+        agency_id = await _sign_up(client)
+        _defer(client)
+        cids = [await _make_client(client, d) for d in names]
+        factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+        async with factory() as s:
+            for cid in cids:
+                row = (
+                    await s.execute(select(ClientModel).where(ClientModel.id == cid))
+                ).scalar_one()
+                d = await detection.get_or_create_scan(s, row)
+                d.created_at = datetime.now(UTC) - timedelta(minutes=self.OLD)
+            await s.commit()
+        return agency_id, cids
+
+    async def test_an_adopted_detection_row_older_than_the_window_counts_while_in_flight(
+        self, client: AsyncClient, billing_on, engine
+    ) -> None:  # noqa: ANN001
+        """The hole: two quick starts on two detected clients both began."""
+        _, (a, b) = await self._detected(client, engine, "helpscout.com", "zendesk.com")
+
+        assert (await _start(client, a)).status_code == 202
+        second = await _start(client, b)
+
+        assert second.status_code == 402, second.text
+        assert second.json()["code"] == allowance.CODE_FREE_USED
+
+    async def test_a_stranded_submission_past_the_window_no_longer_holds_a_slot(
+        self, client: AsyncClient, billing_on, engine
+    ) -> None:  # noqa: ANN001
+        agency_id = await _sign_up(client)
+        _defer(client)
+        a = await _make_client(client, "helpscout.com")
+        b = await _make_client(client, "zendesk.com")
+        old = datetime.now(UTC) - timedelta(minutes=self.OLD)
+        await _seed_scans(
+            engine, agency_id=agency_id, client_id=a, n=1, status=ScanStatus.QUEUED,
+            created_at=old, submitted_at=old,
+        )
+
+        assert (await _start(client, b)).status_code == 202
+        factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+        async with factory() as s:
+            rows = (await s.execute(
+                select(Scan).where(Scan.client_id == a)
+            )).scalars().all()
+        assert [r.status for r in rows] == [ScanStatus.FAILED]
+        assert rows[0].error_code == "EXECUTOR_NEVER_STARTED"
+
+    async def test_a_submission_inside_the_window_still_holds_its_slot(
+        self, client: AsyncClient, billing_on, engine
+    ) -> None:  # noqa: ANN001
+        agency_id = await _sign_up(client)
+        _defer(client)
+        a = await _make_client(client, "helpscout.com")
+        b = await _make_client(client, "zendesk.com")
+        recent = datetime.now(UTC) - timedelta(minutes=self.FRESH)
+        await _seed_scans(
+            engine, agency_id=agency_id, client_id=a, n=1, status=ScanStatus.QUEUED,
+            created_at=recent, submitted_at=recent,
+        )
+
+        resp = await _start(client, b)
+
+        assert resp.status_code == 402, resp.text
+        assert await _counted(engine, agency_id) == 1
+
+
+class TestTheMonthAndLivenessFollowSubmission:
+    """Review fixes, 2026-09-30: the month is dated by submission; RUNNING by lease."""
+
+    async def test_a_detection_row_from_last_month_scanned_this_month_counts_now(
+        self, client: AsyncClient, billing_on, engine
+    ) -> None:  # noqa: ANN001
+        agency_id = await _sign_up(client)
+        _defer(client)
+        a = await _make_client(client, "helpscout.com")
+        now = datetime.now(UTC)
+        start, _ = allowance.period_bounds(now)
+        await _seed_scans(
+            engine, agency_id=agency_id, client_id=a, n=1, status=ScanStatus.SUCCEEDED,
+            created_at=start - timedelta(days=1), submitted_at=now,
+        )
+        factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+        async with factory() as s:
+            used = await allowance.count_scans(s, agency_id, now=now, since=start)
+        assert used == 1
+
+    async def test_a_leased_running_scan_past_the_window_still_holds_the_slot(
+        self, client: AsyncClient, billing_on, engine
+    ) -> None:  # noqa: ANN001
+        agency_id = await _sign_up(client)
+        _defer(client)
+        a = await _make_client(client, "helpscout.com")
+        b = await _make_client(client, "zendesk.com")
+        old = datetime.now(UTC) - timedelta(minutes=20)
+        await _seed_scans(
+            engine, agency_id=agency_id, client_id=a, n=1, status=ScanStatus.RUNNING,
+            created_at=old, submitted_at=old,
+            lease_expires_at=datetime.now(UTC) + timedelta(minutes=2),
+        )
+
+        resp = await _start(client, b)
+
+        assert resp.status_code == 402, resp.text
+        assert resp.json()["code"] == allowance.CODE_FREE_USED
+
+    async def test_a_running_scan_with_an_expired_lease_holds_no_slot(
+        self, client: AsyncClient, billing_on, engine
+    ) -> None:  # noqa: ANN001
+        agency_id = await _sign_up(client)
+        _defer(client)
+        a = await _make_client(client, "helpscout.com")
+        b = await _make_client(client, "zendesk.com")
+        recent = datetime.now(UTC) - timedelta(minutes=1)
+        await _seed_scans(
+            engine, agency_id=agency_id, client_id=a, n=1, status=ScanStatus.RUNNING,
+            created_at=recent, submitted_at=recent,
+            lease_expires_at=datetime.now(UTC) - timedelta(seconds=5),
+        )
+
+        assert (await _start(client, b)).status_code == 202
+
+    async def test_an_unleased_running_row_counts_inside_the_window_and_not_after(
+        self, client: AsyncClient, billing_on, engine
+    ) -> None:  # noqa: ANN001
+        agency_id = await _sign_up(client)
+        _defer(client)
+        a = await _make_client(client, "helpscout.com")
+        b = await _make_client(client, "zendesk.com")
+        now = datetime.now(UTC)
+        for cid, age in ((a, 1), (b, 16)):
+            when = now - timedelta(minutes=age)
+            await _seed_scans(
+                engine, agency_id=agency_id, client_id=cid, n=1,
+                status=ScanStatus.RUNNING, created_at=when, submitted_at=when,
+            )
+        factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+        async with factory() as s:
+            assert await allowance.count_scans(s, agency_id, now=now) == 1
 
 
 # ---------------------------------------------------------------------------

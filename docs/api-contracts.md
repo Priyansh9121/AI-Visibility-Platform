@@ -1395,6 +1395,14 @@ deploy or a crash — is failed by a reaper after 15 minutes with
 away" from `ALL_ENGINE_CALLS_FAILED`, where the pipeline ran and every engine
 failed.
 
+**A scan handed to an executor but never started** (typically after a deploy
+restart) is failed with `errorCode: "EXECUTOR_NEVER_STARTED"` if it remains
+`queued` for 15 minutes after submission. The reaper fails it on the
+`POST /clients/{clientId}/scans` start route, on the dashboard read that
+already reaps, and on `GET /scans/{scanId}`. A failed scan never counts against
+the allowance, and starting the client again creates a fresh scan. A scan left
+open by competitor detection alone is never failed this way.
+
 **`GET /api/v1/scans/{scanId}` response** — `ScanDetailOut` with `promptSet` and
 one `results` entry per **prompt × engine pair**.
 
@@ -1463,7 +1471,9 @@ position 1 of 1 for every mention, because there is nothing else to detect.
 
 #### `GET /api/v1/scans/{scanId}`
 **Auth required.** The scan with its prompt set and every engine result.
-`404` for an unknown scan or another agency's — never `403`.
+`404` for an unknown scan or another agency's — never `403`. For a `queued`
+scan submitted more than 15 minutes ago, it fails that one scan with
+`EXECUTOR_NEVER_STARTED` and returns it as `failed`.
 
 #### `GET /api/v1/scans/{scanId}/results`
 **Auth required.** Cursor-paginated engine results, ascending by id.

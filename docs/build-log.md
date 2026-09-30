@@ -19996,3 +19996,101 @@ billing state (for example, bring a cancelled agency back to active). Now:
     on avp_dev.
   - The OpenAPI contract and `api.gen.ts` are regenerated for `WebhookAck`.
   - Exit codes were read from files.
+# A scan stranded by a restart fails after 15 minutes, and a scan holds its slot exactly while it is alive
+
+**2026-09-30, the third entry of the day.** One item, one commit.
+
+**One migration, and no new setting.** Revision `3e8a5b7c9d14` adds the nullable column `scans.submitted_at`, under `lock_timeout = '5s'`, with no backfill.
+
+## 1. What a person sees
+
+- A scan started seconds before Render restarted the API (every deploy does) used
+  to read "queued" for ever.
+- It still holds its slot and reads queued for 15 minutes after it was started.
+  After that, the next poll of the scan, the next start, or the dashboard shows
+  it `failed` with `EXECUTOR_NEVER_STARTED`.
+- It never counts against the allowance, and starting that client again makes a
+  fresh scan.
+- A scan left open by competitor detection alone is never touched, so detect now
+  and scan tomorrow still works.
+
+## 2. The mechanism
+
+- `scans.submitted_at` is stamped when a scan is handed to the executor, inside
+  the transaction that holds the allowance's `FOR UPDATE` lock, so a concurrent
+  start sees it.
+- `scan_executor.fail_never_started_scans` fails only QUEUED rows with
+  `submitted_at` older than `IN_FLIGHT_WINDOW`. It runs inside
+  `reap_stale_scans` and, scoped to one scan, in `GET /scans/{scanId}` when a
+  Python check says it is due.
+- The executor's claim now refuses a row that is already reapable.
+
+## 3. The allowance, which was wrong in three ways that this closes
+
+- An adopted detection row kept its old `created_at`, so it was not counted
+  while it ran. At the free cap, two quick starts on two detected clients both
+  began; now the second gets `402` `SCAN_LIMIT_FREE_USED`.
+- The paid monthly period dated scans by `created_at`, so a detection row opened
+  on the 30th and scanned on the 1st never counted in the new month.
+- A RUNNING scan stopped holding its slot 15 minutes in, although a legitimate
+  run can last up to 40 (`MAX_SCAN_DURATION`, with a live lease).
+- Now a scan is dated by `coalesce(submitted_at, created_at)`. QUEUED holds a
+  slot for 15 minutes from then; RUNNING holds one while its lease is live
+  (unleased script runs keep the 15-minute rule).
+
+## 4. Review
+
+The security review found no Critical or High. Its two Mediums (the monthly date
+and RUNNING by age) and one Low (a late claim of a reapable row) were fixed,
+along with a no-op UPDATE on every poll.
+
+## Found, not fixed
+
+- **A scan that hits the 40-minute deadline ends FAILED after its engine answers
+  are paid for and stored, and FAILED never counts.** `page.evaluate` in the
+  technical audit has no timeout, so a site that stalls its own page could make
+  this happen on purpose and read the engine results without using the free scan.
+  It needs an audit timeout, and a decision on whether such a scan counts.
+- **No web screen shows a failed scan's `errorCode` or `errorDetail`,** so the
+  reason for a failure is not visible to a person.
+- **The scan id excluded from the count comes from a read taken before the
+  lock.** It is not reachable in practice (it needs a lock wait of minutes);
+  re-reading after the lock would close it.
+- **The CI floors in `infra/ci/floors.json` were not raised.**
+
+## Verified
+
+**API 1674 → 1690 (+16).**
+- New tests in `test_scan_executor.py` and `test_scan_allowance.py`:
+  - a submitted QUEUED scan past the window is failed by the start POST and by
+    `GET /scans/{id}`, and a fresh scan then runs to `succeeded`;
+  - one inside the window is neither failed nor uncounted;
+  - a three-day-old detection-only row is never failed and is adopted with the
+    same id;
+  - a failed scan cannot be claimed late, and a reapable QUEUED row cannot be
+    claimed even before the reaper runs;
+  - another agency's stranded scan is a 404 and stays QUEUED;
+  - `GET` on a fresh QUEUED scan does not call the reaper;
+  - the adoption race: 202 then 402 at the free cap;
+  - a stranded submission frees its slot;
+  - a last-month detection row scanned this month counts this month;
+  - a RUNNING scan with a live lease 20 minutes in holds the slot and one with
+    an expired lease does not;
+  - an unleased RUNNING row counts at 1 minute and not at 16.
+
+**Negative controls,** each file restored byte-for-byte and checked with `cmp`:
+  - an age-only reap rule fails the detection-only test;
+  - counting by `created_at` fails the adoption test;
+  - dating the month by `created_at` fails the month test;
+  - an age-only RUNNING rule fails the live-lease test;
+  - dropping the claim guard fails the late-claim test.
+
+**The rest of the bar.**
+  - Workers 13, shared-types 53, design-system 649, web 1052.
+  - ruff clean; mypy 47, under its 50 ceiling.
+  - Typechecks clean, and all six count gates through `assert_count.py`.
+  - Both `uv lock --check` runs pass.
+  - `alembic upgrade head` and `check` pass, with a downgrade/upgrade round trip
+    on avp_dev.
+  - The OpenAPI contract regenerates byte-identically.
+  - Exit codes were read from files.
