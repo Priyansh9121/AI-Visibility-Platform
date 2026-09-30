@@ -19888,3 +19888,111 @@ still calling the old GET gets a 404, and a reload fixes it.
 - `next build` passes from a copy: `/share`, `/invite` and `/reset-password`
   are static, and the three `[token]` routes are thin redirects.
 - Exit codes were read from files.
+
+# Stripe webhook events are applied once and in order
+
+**2026-09-30, the second entry of the day.** One item, one commit.
+
+**One migration, and no new setting.** Revision `7c1d4e9a2b53` adds the table
+`stripe_webhook_events` and the nullable column `agencies.stripe_event_at`. The
+container runs it before serving. It sets `lock_timeout = '5s'`, so a long
+transaction on `agencies` fails the deploy instead of queueing every request.
+Deploy while Stripe shows no pending webhook retries, because the watermark
+starts empty. The runbook has a new "Live Stripe test (test mode on Render)"
+section.
+
+## 1. What it fixes
+
+Before this change, a retried or out-of-order delivery could overwrite newer
+billing state (for example, bring a cancelled agency back to active). Now:
+
+- Each handled event is applied at most once, keyed on its Stripe id, in the
+  same transaction as its change. Concurrent duplicates block on the primary key
+  and then conflict.
+- The agency row is locked `FOR UPDATE` on every lookup route (metadata
+  `agency_id`, subscription id, customer id) before the ledger insert. That both
+  serialises events for one agency and avoids a deadlock between the ledger's
+  foreign-key lock and the unique `stripe_subscription_id` update.
+- Subscription events older than the newest applied one are `stale`. Checkout
+  does not move the watermark, so the subscription event carrying the period
+  end still applies after it.
+- A same-subscription state-machine guard: a `canceled` or `incomplete_expired`
+  status is never overwritten, and `incomplete` never overwrites another status.
+  This covers same-second ties and retries.
+- Non-subscription checkouts are ignored.
+- Unmatched events are not recorded, so a Resend after linking applies.
+- An event without a numeric `created` is ignored and never sets the watermark
+  from our clock.
+- Log lines are `stripe.webhook.{applied,duplicate,stale,ignored,unmatched,rejected}`.
+  `billing.webhook_*` is renamed and found nowhere else. The logs carry the
+  event id, type and agency id, and never the payload or an email.
+
+## 2. Reviews
+
+- **The first security review found one High:** the metadata route was not
+  locked, so concurrent updated@T2 and deleted@T3 could leave a cancelled
+  agency active and move the watermark back. It also found two Mediums (the
+  deadlock, and same-second ties and retries) and five Lows. All were fixed.
+- **A re-review confirmed all fixed.** Its new Lows were also fixed: checkout
+  moving the watermark, non-subscription checkouts, and the migration's lock
+  order (it now adds the column first, taking ACCESS EXCLUSIVE once).
+
+## Found, not fixed
+
+- **Checkout does not refuse an agency that already has an active subscription.**
+  Two tabs opened before the first payment, or a new checkout while the old plan
+  runs to its end, can create a second subscription. The stored pointer then
+  follows whichever subscription's event is newest, so a `deleted` for the old
+  one can show the agency `canceled` while the new one is paid. Refusing checkout
+  while active changes what a person sees, so it is left for a decision.
+- **An operator editing a subscription's metadata in the Stripe dashboard** to
+  name a different agency than the stored customer would hit
+  `uq_agencies_stripe_customer_id` and answer 500 on every retry. None of our
+  own flows produce that.
+- **The ledger's `stale` covers both timestamp-stale and guarded events.**
+- **The ledger has no retention rule.** It gains about one row per subscription
+  change.
+- **The CI floors in `infra/ci/floors.json` were not raised.**
+
+## Verified
+
+**API 1645 → 1674 (+29).**
+- New tests in `tests/test_billing.py`:
+  - a duplicate delivery applies once;
+  - four concurrent deliveries of one id apply once;
+  - a two-session proof that the conflicting insert blocks;
+  - a two-session proof that the metadata route locks the agency row;
+  - concurrent deleted@T3 and updated@T2 on the metadata route always end
+    `canceled` with the watermark at T3 (both orderings, 6 iterations each);
+  - three first-checkout events delivered together do not deadlock, end active
+    and set the period end;
+  - an older event arriving late is stale;
+  - same-second events apply in order;
+  - a retried `created` does not regress to `incomplete`;
+  - `updated` or checkout after `deleted` does not resurrect;
+  - a new subscription id after a cancellation applies;
+  - a subscription update delivered after a newer checkout still applies and
+    sets the period end;
+  - non-subscription checkouts (payment mode, setup mode, a null subscription)
+    are ignored and cannot undo a cancellation;
+  - an unmatched event writes no row and applies when resent;
+  - an event without a numeric `created` is ignored;
+  - a handler failure rolls back the ledger row and the retry applies;
+  - the watermark only moves forward.
+  - `test_facts_only.py` now covers the ledger model.
+- **Negative controls.** Each file was restored byte-for-byte afterwards and
+  checked with `cmp`.
+  - Removing the metadata lock fails 3 of 3 metadata-route tests on all three
+    runs.
+  - Forcing the guard off fails 3 tests.
+  - Disabling the stale check fails the out-of-order test.
+  - Letting checkout advance the watermark fails 2 tests.
+- **The rest of the bar.**
+  - Workers 13, shared-types 53, design-system 649, web 1052.
+  - ruff clean; mypy 47, under its 50 ceiling.
+  - Typechecks clean, and all six count gates through `assert_count.py`.
+  - Both `uv lock --check` runs pass.
+  - `alembic upgrade head`, `check`, and a downgrade/upgrade round trip pass
+    on avp_dev.
+  - The OpenAPI contract and `api.gen.ts` are regenerated for `WebhookAck`.
+  - Exit codes were read from files.

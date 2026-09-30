@@ -812,43 +812,44 @@ saying so — is the supported answer: there, the consequence of the
 unconfigured path is a message nobody receives; here it would be believing a
 stranger about money.
 
-**Events handled:**
+**Handled types:** `checkout.session.completed` (only with `mode == "subscription"`
+and a `subscription` id; any other checkout is ignored) and
+`customer.subscription.created|updated|deleted`. Any other type is ignored.
 
-| Event | Effect |
-|---|---|
-| `checkout.session.completed` | Record customer + subscription id, mark `active` |
-| `customer.subscription.created` | Store status, renewal date and `cancel_at_period_end` |
-| `customer.subscription.updated` | Store status, renewal date and `cancel_at_period_end` |
-| `customer.subscription.deleted` | `canceled`, clear the renewal date, `cancel_at_period_end` false |
+**The response is now the typed `WebhookAck`,** always 200 after a valid signature:
+- applied → `{"received": true, "handled": true}`;
+- duplicate → `{"received": true, "handled": false, "duplicate": true}`;
+- stale → `{"received": true, "handled": false, "stale": true}`;
+- ignored or unmatched → `{"received": true, "handled": false}`.
 
-`checkout.session.completed` writes `active` optimistically: the session object
-carries ids but no status and no period end, and those arrive in their own event
-moments later. A completed session in `subscription` mode means payment
-succeeded, and if it somehow did not, the subscription event that follows
-overwrites this within seconds — so the worst case is a screen that was briefly
-too generous, not one that denied somebody something they paid for.
+**Once:** each handled event id is recorded in `stripe_webhook_events` in the
+same transaction as the change it makes. A redelivery is answered `duplicate`
+and changes nothing. An event that matches no agency is not recorded, so Stripe's
+"Resend" applies it once the agency is linked.
 
-Deletion is treated as authoritative that the subscription is over, even if the
-payload's own `status` disagreed.
+**In order:** the agency row is locked `FOR UPDATE`.
+- A `customer.subscription.*` event created strictly before `agencies.stripe_event_at`
+  (the newest subscription event applied) is `stale`.
+- Only `customer.subscription.*` events advance that watermark; checkout does not,
+  because it carries no subscription state of its own.
+- Events in the same second apply in arrival order, except for a state-machine
+  guard on the same subscription id: a `canceled` or `incomplete_expired` status
+  is never overwritten, and `incomplete` is never written over another status.
+  A guarded event is also `stale`.
+- An event without a numeric `created` is ignored.
 
-**The renewal date is read from the subscription's ITEMS**, not from
-`subscription.current_period_end`. That field is no longer top-level on the API
-version this SDK pins (`2026-08-26.dahlia`) — it moved onto each item, because a
-subscription's items can bill on different schedules. Reading the old location
-returns nothing, and the failure is silent: status saves, Settings says
-"Active", and the date is simply never there. The legacy field is kept as a
-fallback because replayed events carry the API version of the endpoint that
-received them.
-
-**The agency is resolved by**, in order: `metadata.agency_id` (written by us at
-checkout onto the session, the customer and the subscription), then the
-subscription id, then the customer id. Metadata is trusted only because
-verification has already happened — on an unverified body it would be an
-attacker naming the agency they would like to upgrade.
-
-**Response `200`**
+**Response `200` with the typed `WebhookAck`:**
 ```json
 { "received": true, "handled": true }
+```
+```json
+{ "received": true, "handled": false, "duplicate": true }
+```
+```json
+{ "received": true, "handled": false, "stale": true }
+```
+```json
+{ "received": true, "handled": false }
 ```
 
 **An unrecognised event type is a `200` with `handled: false`,** not an error. A

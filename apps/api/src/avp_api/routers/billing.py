@@ -51,7 +51,12 @@ from typing import Any
 from fastapi import APIRouter, Header, Path, Request, status
 
 from ..deps import DbDep, RequireAdmin, SettingsDep, assert_own_agency
-from ..schemas.billing import BillingStatusOut, CheckoutSessionOut, PortalSessionOut
+from ..schemas.billing import (
+    BillingStatusOut,
+    CheckoutSessionOut,
+    PortalSessionOut,
+    WebhookAck,
+)
 from ..services import billing as billing_service
 from ..services import scan_allowance
 
@@ -185,13 +190,18 @@ async def open_portal(
     return PortalSessionOut(url=url)
 
 
-@router.post("/billing/webhook", include_in_schema=True)
+@router.post(
+    "/billing/webhook",
+    include_in_schema=True,
+    response_model=WebhookAck,
+    response_model_exclude_none=True,
+)
 async def stripe_webhook(
     request: Request,
     db: DbDep,
     settings: SettingsDep,
     stripe_signature: str | None = Header(default=None, alias="Stripe-Signature"),
-) -> dict[str, Any]:
+) -> WebhookAck:
     """Stripe telling us what happened. **The only writer of subscription state.**
 
     **No session auth, and that is not a hole.** The caller is a machine with no
@@ -220,6 +230,12 @@ async def stripe_webhook(
     it was acted on, so a human reading `stripe listen` output can tell the
     difference between "handled" and "politely ignored".
 
+    **Idempotent and ordered.** Each handled event id is recorded once; a
+    redelivery answers `{"received": true, "handled": false, "duplicate": true}`
+    and applies nothing. An event older than the agency's newest applied one
+    answers `{"received": true, "handled": false, "stale": true}` and applies
+    nothing. Unmatched and unhandled events answer `handled: false` alone.
+
     **Errors:** `400 invalid-webhook-signature` for a missing, malformed or
     wrong signature, and for a body that is not JSON. `503
     billing-not-configured` when `STRIPE_WEBHOOK_SECRET` is unset.
@@ -227,8 +243,16 @@ async def stripe_webhook(
     payload = await request.body()
     event = billing_service.verify_webhook(payload, stripe_signature, settings=settings)
 
-    handled = await billing_service.apply_event(db, event)
-    if handled:
+    result = await billing_service.apply_event(db, event)
+    if result.writes:
         await db.commit()
+    else:
+        # Nothing to keep (ignored or duplicate); release the agency lock now.
+        await db.rollback()
 
-    return {"received": True, "handled": handled}
+    return WebhookAck(
+        received=True,
+        handled=result is billing_service.WebhookResult.APPLIED,
+        duplicate=True if result is billing_service.WebhookResult.DUPLICATE else None,
+        stale=True if result is billing_service.WebhookResult.STALE else None,
+    )

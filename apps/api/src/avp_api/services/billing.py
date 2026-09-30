@@ -63,17 +63,19 @@ our own customers.
 
 from __future__ import annotations
 
+import enum
 from datetime import UTC, datetime
 from typing import Any
 
 import stripe
 import structlog
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings
 from ..errors import BillingNotConfigured, InvalidWebhookSignature
-from ..models import Agency
+from ..models import Agency, StripeWebhookEvent, StripeWebhookOutcome
 
 logger = structlog.get_logger(__name__)
 
@@ -382,7 +384,7 @@ def verify_webhook(payload: bytes, signature: str | None, *, settings: Settings)
     try:
         return stripe.Webhook.construct_event(payload, signature, secret)
     except stripe.SignatureVerificationError as exc:
-        logger.warning("billing.webhook_rejected", reason=type(exc).__name__)
+        logger.warning("stripe.webhook.rejected", reason=type(exc).__name__)
         raise InvalidWebhookSignature(
             detail="The Stripe-Signature header did not match this payload."
         ) from exc
@@ -406,6 +408,14 @@ async def _resolve_agency(db: AsyncSession, obj: Any) -> Agency | None:
        flow — a subscription started by hand in the Stripe dashboard, which is
        a real thing a founder does while testing.
 
+    The row is returned `FOR UPDATE` on ALL THREE routes, with `populate_existing`
+    so a session-cached copy is refreshed to the locked row. Two different events
+    for one agency therefore serialise: the second waits for the first's commit
+    and then reads the `stripe_event_at` and status the first wrote. The lock is
+    taken BEFORE the ledger insert (see `apply_event`), so a waiting transaction
+    never holds the ledger row's foreign-key `KEY SHARE` on the agency while it
+    waits, which is what would otherwise deadlock against the holder's UPDATE.
+
     Metadata is trusted because this is only ever called on a payload that
     `verify_webhook` has already authenticated. On an unverified body it would
     be an attacker naming the agency they would like to upgrade, which is
@@ -414,8 +424,17 @@ async def _resolve_agency(db: AsyncSession, obj: Any) -> Agency | None:
     metadata = _get(obj, "metadata")
     agency_id = _get(metadata, "agency_id") if metadata is not None else None
     if agency_id:
+        # Locked like the two routes below. This is the route our own checkout
+        # metadata takes, so it is the common one; an unlocked read here would
+        # make the stale check and the watermark run on a snapshot another
+        # transaction is about to change.
         found = (
-            await db.execute(select(Agency).where(Agency.id == str(agency_id)))
+            await db.execute(
+                select(Agency)
+                .where(Agency.id == str(agency_id))
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
         ).scalar_one_or_none()
         if found is not None:
             return found
@@ -426,7 +445,10 @@ async def _resolve_agency(db: AsyncSession, obj: Any) -> Agency | None:
     if subscription_id:
         found = (
             await db.execute(
-                select(Agency).where(Agency.stripe_subscription_id == str(subscription_id))
+                select(Agency)
+                .where(Agency.stripe_subscription_id == str(subscription_id))
+                .with_for_update()
+                .execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
         if found is not None:
@@ -436,58 +458,232 @@ async def _resolve_agency(db: AsyncSession, obj: Any) -> Agency | None:
     if customer_id:
         return (
             await db.execute(
-                select(Agency).where(Agency.stripe_customer_id == str(customer_id))
+                select(Agency)
+                .where(Agency.stripe_customer_id == str(customer_id))
+                .with_for_update()
+                .execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
 
     return None
 
 
-async def apply_event(db: AsyncSession, event: Any) -> bool:
-    """Apply one verified Stripe event. Returns whether it was acted on.
+class WebhookResult(str, enum.Enum):
+    """What `apply_event` did. The router maps this to the response body."""
+
+    IGNORED = "ignored"  # a type we do not handle: nothing recorded
+    APPLIED = "applied"
+    STALE = "stale"  # older than the agency's stored state
+    UNMATCHED = "unmatched"  # no agency: NOT recorded, nothing changed
+    DUPLICATE = "duplicate"  # this event id was already recorded
+
+    @property
+    def writes(self) -> bool:
+        """Whether the transaction holds anything worth committing."""
+        return self in (WebhookResult.APPLIED, WebhookResult.STALE)
+
+
+# Statuses a Stripe subscription never leaves.
+TERMINAL_STATUSES = frozenset({"canceled", "incomplete_expired"})
+
+
+def _blocked_by_state_machine(
+    agency: Agency, subscription_id: str | None, new_status: str | None
+) -> bool:
+    """Whether this event would move ONE subscription backwards. True = ignore it.
+
+    Timestamps cannot settle this: Stripe's `created` has one-second resolution,
+    so a retry or a sibling event can share a second with the event that
+    already superseded it, and an equal timestamp applies in arrival order. So
+    the subscription's own life cycle is checked as well, and only for the SAME
+    subscription id (a new subscription after a cancellation is a new life):
+
+    * a terminal status (`canceled`, `incomplete_expired`) is never overwritten
+      by a different status, including checkout's optimistic `active`;
+    * `incomplete` is never written over any status but `incomplete`, because
+      Stripe only enters it when the subscription is created, so a later
+      `incomplete` is a retried or reordered `created`.
+    """
+    if not subscription_id or subscription_id != agency.stripe_subscription_id:
+        return False
+    current = agency.subscription_status
+    if new_status is None or current is None or new_status == current:
+        return False
+    if current in TERMINAL_STATUSES:
+        return True
+    return new_status == "incomplete"
+
+
+def _incoming_state(event_type: str, obj: Any) -> tuple[str | None, str | None]:
+    """The (subscription id, resulting status) this event would write."""
+    if event_type == "checkout.session.completed":
+        sub = _get(obj, "subscription")
+        return (str(sub) if sub else None, "active")
+    sub = _get(obj, "id")
+    if event_type.endswith(".deleted"):
+        return (str(sub) if sub else None, "canceled")
+    status = _get(obj, "status")
+    return (str(sub) if sub else None, str(status) if status else None)
+
+
+async def _record_event(
+    db: AsyncSession,
+    *,
+    event_id: str,
+    event_type: str,
+    created_at: datetime,
+    agency_id: str | None,
+    outcome: StripeWebhookOutcome,
+) -> bool:
+    """Insert the dedupe row. True if this call inserted it, False on a duplicate.
+
+    `ON CONFLICT (id) DO NOTHING RETURNING id` in the caller's transaction: a
+    concurrent insert of the same id blocks on the other's uncommitted row and
+    then conflicts, and a rollback removes the row so Stripe's retry runs.
+    """
+    inserted = await db.execute(
+        pg_insert(StripeWebhookEvent)
+        .values(
+            id=event_id,
+            event_type=event_type,
+            stripe_created_at=created_at,
+            agency_id=agency_id,
+            outcome=outcome,
+        )
+        .on_conflict_do_nothing(index_elements=[StripeWebhookEvent.id])
+        .returning(StripeWebhookEvent.id)
+    )
+    return inserted.scalar_one_or_none() is not None
+
+
+async def apply_event(db: AsyncSession, event: Any) -> WebhookResult:
+    """Apply one verified Stripe event, once, and never over newer state.
 
     **This is the only thing in the system that may change a subscription
-    status.** No endpoint the browser can reach writes one. That is the whole
-    architecture of this feature in one sentence: the browser's redirect after
-    checkout is a UX nicety, and Stripe telling us is the fact. An operator who
-    pays and then closes the tab before the redirect still ends up subscribed,
-    because nothing was ever waiting on that tab.
+    status.** No endpoint the browser can reach writes one. The browser's
+    redirect after checkout is a UX nicety, and Stripe telling us is the fact.
 
-    **An unhandled event type is a success, not an error.** Stripe endpoints
-    receive whatever the account is configured to send, and answering non-2xx to
-    an event we simply do not care about makes Stripe retry it, back off, and
-    eventually mark the endpoint unhealthy — degrading delivery of the events we
-    DO care about. So this returns False and the router answers 200.
+    **Idempotent.** The event id is recorded in `stripe_webhook_events` in this
+    same transaction; an id already there is a `DUPLICATE` and nothing is
+    applied. A raise anywhere rolls the row back with the change.
+
+    **Ordered.** The agency is locked `FOR UPDATE`. An event whose `created` is
+    strictly older than `agencies.stripe_event_at` is `STALE`: recorded, applied
+    to nothing. Equal timestamps apply in arrival order (Stripe's clock has
+    one-second resolution), except that `_blocked_by_state_machine` also makes
+    an event `STALE` when it would move the same subscription backwards. Every
+    applied `customer.subscription.*` event moves `stripe_event_at` forward
+    only; `checkout.session.completed` is judged against it but never moves it,
+    and one that is not a subscription-mode session is `IGNORED`. An event with no numeric
+    `created` is ignored. An event matching no agency is `UNMATCHED` and is not
+    recorded, so Stripe's "Resend" applies it once an operator links the agency.
+
+    **An unhandled event type is a success, not an error, and leaves no row.**
+    Answering non-2xx to an event we do not care about makes Stripe retry it,
+    back off, and eventually mark the endpoint unhealthy.
+
+    The caller commits when `result.writes`.
     """
     event_type = str(_get(event, "type") or "")
+    event_id = str(_get(event, "id") or "")
     data = _get(event, "data")
     obj = _get(data, "object") if data is not None else None
 
-    if event_type not in HANDLED_EVENT_TYPES or obj is None:
-        logger.info("billing.webhook_ignored", event_type=event_type)
-        return False
+    if event_type not in HANDLED_EVENT_TYPES or obj is None or not event_id:
+        logger.info("stripe.webhook.ignored", event_id=event_id, event_type=event_type)
+        return WebhookResult.IGNORED
 
+    if event_type == "checkout.session.completed" and not (
+        _get(obj, "mode") == "subscription" and _get(obj, "subscription")
+    ):
+        # A payment- or setup-mode session for a linked customer says nothing
+        # about a subscription, and the guard skips a null subscription id, so
+        # applying it could write `active` over `canceled`.
+        logger.info(
+            "stripe.webhook.ignored",
+            event_id=event_id,
+            event_type=event_type,
+            reason="not_a_subscription_checkout",
+        )
+        return WebhookResult.IGNORED
+
+    created = _get(event, "created")
+    if not isinstance(created, int | float) or isinstance(created, bool):
+        # Never substitute our own clock: a watermark set from it could sit in
+        # the future and make every real event stale.
+        logger.info(
+            "stripe.webhook.ignored",
+            event_id=event_id,
+            event_type=event_type,
+            reason="missing_or_invalid_created",
+        )
+        return WebhookResult.IGNORED
+    created_at = datetime.fromtimestamp(created, tz=UTC)
+
+    # ORDER MATTERS: lock the agency, THEN insert the ledger row, THEN update.
+    # A second transaction waits here, before it holds anything, so it never
+    # owns the ledger insert's FK `KEY SHARE` on the agency row that the holder
+    # is about to UPDATE.
     agency = await _resolve_agency(db, obj)
+
     if agency is None:
-        # Not an error either. A Stripe account can carry customers this
-        # database has never heard of — a founder clicking around the dashboard
-        # makes one — and asking Stripe to retry forever would not conjure a
-        # row. Logged loudly enough to notice if it ever becomes common.
-        logger.warning("billing.webhook_unmatched", event_type=event_type)
-        return False
+        # Not an error, and deliberately NOT recorded: a Stripe account can
+        # carry customers this database has never heard of, and a ledger row
+        # would make Stripe's "Resend" a duplicate after an operator links the
+        # agency. Nothing is held, so there is nothing to dedupe.
+        logger.warning("stripe.webhook.unmatched", event_id=event_id, event_type=event_type)
+        return WebhookResult.UNMATCHED
+
+    sub_id, new_status = _incoming_state(event_type, obj)
+    older = agency.stripe_event_at is not None and created_at < agency.stripe_event_at
+    if older or _blocked_by_state_machine(agency, sub_id, new_status):
+        outcome = StripeWebhookOutcome.STALE
+    else:
+        outcome = StripeWebhookOutcome.APPLIED
+
+    if not await _record_event(
+        db,
+        event_id=event_id,
+        event_type=event_type,
+        created_at=created_at,
+        agency_id=agency.id,
+        outcome=outcome,
+    ):
+        logger.info("stripe.webhook.duplicate", event_id=event_id, event_type=event_type)
+        return WebhookResult.DUPLICATE
+
+    if outcome is StripeWebhookOutcome.STALE:
+        logger.info(
+            "stripe.webhook.stale",
+            event_id=event_id,
+            event_type=event_type,
+            agency_id=agency.id,
+        )
+        return WebhookResult.STALE
 
     if event_type == "checkout.session.completed":
+        # Ids and an assumed `active` only: it is judged against the watermark
+        # but never moves it, or a subscription event created a second earlier
+        # and delivered after it would be stale and the period end never set.
         _apply_checkout_completed(agency, obj)
     else:
         _apply_subscription_event(agency, obj, deleted=event_type.endswith(".deleted"))
+        # Monotonic: the agency row is locked and freshly loaded, so this max()
+        # cannot race; the watermark never goes backwards.
+        agency.stripe_event_at = (
+            created_at
+            if agency.stripe_event_at is None
+            else max(agency.stripe_event_at, created_at)
+        )
 
     logger.info(
-        "billing.webhook_applied",
+        "stripe.webhook.applied",
+        event_id=event_id,
         event_type=event_type,
         agency_id=agency.id,
         status=agency.subscription_status,
     )
-    return True
+    return WebhookResult.APPLIED
 
 
 def _apply_checkout_completed(agency: Agency, session: Any) -> None:

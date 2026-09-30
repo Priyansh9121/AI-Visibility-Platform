@@ -59,3 +59,58 @@ PUBLIC_WEB_BASE_URL='https://ai-visibility-platform-1.onrender.com' \
 
 Both variables are required. Without `PUBLIC_WEB_BASE_URL`, the link points at
 `localhost`.
+
+## Live Stripe test (test mode on Render)
+
+Set up a subscription payment and verify that events apply once and in order.
+All of this happens in Stripe's **Test mode**. Never use a live key.
+
+1. **Before you start.** Everything happens in Stripe's **Test mode**. Never
+   paste a live key (`sk_live_…`) anywhere. `charges_enabled: false` is expected
+   in test mode. Deploy this change while the webhook endpoint shows no pending
+   retries in Stripe: the ordering watermark starts empty, so the first retry
+   after deploy applies whatever its age.
+
+2. **Price.** In the Stripe dashboard (Test mode), open Product catalogue and
+   find or create the product with a recurring monthly Price of US$160. Copy
+   its Price ID (`price_…`).
+
+3. **Render.** On the API service (`ai-visibility-platform-5gk4`), open
+   Environment. Set `STRIPE_PRICE_ID` to that id. Confirm `STRIPE_SECRET_KEY`
+   is the test secret key (it starts `sk_test_`) and `PUBLIC_WEB_BASE_URL` is
+   the web URL. Save; Render redeploys.
+
+4. **Webhook endpoint.** In Stripe, go to Developers → Webhooks → Add endpoint.
+   The URL is
+   `https://ai-visibility-platform-5gk4.onrender.com/api/v1/billing/webhook`. Select exactly these
+   events: `checkout.session.completed`, `customer.subscription.created`,
+   `customer.subscription.updated`, `customer.subscription.deleted`. Save,
+   reveal the endpoint's Signing secret (`whsec_…`), set it as
+   `STRIPE_WEBHOOK_SECRET` on the Render API service, and save.
+
+5. **Customer portal.** Go to Settings → Billing → Customer portal. Allow
+   customers to cancel subscriptions at the end of the billing period and to
+   update payment methods. Save. The code cannot see this setting; cancellation
+   depends on it.
+
+6. **Subscribe.** Sign in to the web app as the owner of a test agency and
+   open **Settings**, and press **Subscribe** on the plan card (it reads
+   "Opening checkout…" while Stripe loads). Pay with Stripe's
+   test card `4242 4242 4242 4242`, any future expiry and any CVC.
+
+7. **Check afterwards:**
+   - (a) Settings shows the plan as active, with "Renews" and a date.
+   - (b) In Stripe → Webhooks → your endpoint → Event deliveries, each of the
+     four event types answered 200. The subscription events answer
+     `{"received":true,"handled":true}`.
+   - (c) Press **Resend** on one delivered `customer.subscription.updated`. It
+     answers `{"received":true,"handled":false,"duplicate":true}` and changes
+     nothing.
+   - (d) On the Render API service's Logs, there are `stripe.webhook.applied`
+     lines and no `stripe.webhook.rejected`.
+   - (e) Press **Manage billing** in Settings and cancel in Stripe's portal.
+     Settings then shows "Ends" and the date, and the `customer.subscription.updated`
+     delivery answered handled.
+
+8. **Stop.** Nothing is ever switched to live mode from this runbook. Going
+   live is the founder's key swap after Stripe's business verification.
