@@ -20501,3 +20501,33 @@ contract regenerates byte-identically.
 - Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
 - OpenAPI and `api.gen.ts` regenerate byte-identically.
 - Exit codes were read from files.
+
+# The web app serves a robots.txt that welcomes AI crawlers and keeps token pages out
+
+**2026-09-30, the twelfth entry of the day.** One item, one commit.
+
+**Render: nothing to set.**
+
+## 1. What changed
+
+- **Before this, nothing served `/robots.txt`** on either host: `apps/web` had no `public/` directory, no `app/robots.*`, no middleware and no rewrite, and the FastAPI app has no such route (its "robots" code is the crawler's handling of client sites).
+- **New `apps/web/src/app/robots.ts`** (Next 15 `MetadataRoute.Robots`): one rule, `userAgent: '*'`, `allow: '/'`, `disallow: ['/share', '/invite', '/reset-password']`. Founder decision 2026-09-30: AI crawlers are allowed, search and training alike, so there is no per-bot group and no public page is blocked. The disallows are prefix matches, so the legacy `/share/:token`, `/invite/:token` and `/reset-password/:token` forms are covered too. No sitemap is named, because none is served.
+- **New `apps/web/src/app/robots.test.ts` (6 tests):** the `*` rule allows `/` and disallows exactly the three pages; `/share/abc123`, `/invite/abc123` and `/reset-password/abc123` are covered by prefix; no rule blocks `/`, `/crawler`, `/privacy` or `/terms`; any explicit AI-crawler group (GPTBot, OAI-SearchBot, ChatGPT-User, ClaudeBot, Claude-SearchBot, Claude-User, PerplexityBot, Perplexity-User, Google-Extended, CCBot, Applebot-Extended) would have to allow `/` and repeat the three disallows, because robots.txt groups do not inherit from `*`; `sitemap` is absent; and the object rendered with Next's own `resolveRobots` contains `User-Agent: *`, `Allow: /` and the three `Disallow:` lines, with no bare `Disallow: /` and no `Sitemap:`. Red first: the test failed to load with `robots.ts` missing.
+
+## Found, not fixed
+
+- **The disallow hides the noindex on those paths.** Crawlers that obey robots.txt never fetch `/share`, `/invite` or `/reset-password`, so they never see the `X-Robots-Tag: noindex` those pages send (previous entry); a legacy `/share/<token>` URL posted publicly could still be listed URL-only. Kept as the founder decided; it is on the decisions list.
+- **The three paths now live in two lists:** `next.config.mjs` (headers) and `robots.ts`. Nothing ties them together; a shared list would be a separate change.
+- **The rendered-text test imports `resolveRobots` from `next/dist/…`,** an internal path (as `referrerPolicy.test.ts` already does for the path matcher); a Next upgrade could move it.
+
+## Verified
+
+**Web vitest 1087 → 1093 (+6); `web-vitest` floor 1087 → 1093.**
+- **Negative control:** adding `{ userAgent: 'GPTBot', disallow: '/' }` fails 3 tests ("blocks no public page for any agent", "never blocks an AI crawler", "renders as the text Next serves"); the file was restored with `cp` and `cmp` identical.
+
+**The rest of the bar.**
+- API pytest 1768, workers 13, shared-types 53 (0 fail), design-system 846, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- OpenAPI and `api.gen.ts` regenerate byte-identically.
+- Exit codes were read from files.
