@@ -76,6 +76,9 @@ export function SignInPanel({
       // never wrong.
       if (err instanceof ApiProblem && (err.status === 401 || err.status === 422)) {
         setCredentialError(err.problem.detail);
+      } else if (err instanceof ApiProblem && err.status === 429) {
+        // Too many attempts: the server's own words, with the wait in them.
+        setError(err.problem.detail);
       } else if (err instanceof ApiProblem) {
         setError(err.problem.detail);
       } else {

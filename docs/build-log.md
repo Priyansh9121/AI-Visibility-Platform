@@ -20094,3 +20094,104 @@ along with a no-op UPDATE on every poll.
     on avp_dev.
   - The OpenAPI contract regenerates byte-identically.
   - Exit codes were read from files.
+# Login, sign-up and reset requests are rate-limited per email and per IP
+
+**2026-09-30, the fourth entry of the day.** One item, one commit.
+
+**No migration. New optional settings, all with defaults:** `LOGIN_LIMIT_PER_EMAIL`, `LOGIN_LIMIT_PER_IP`, `LOGIN_WINDOW_SECONDS`, `SIGNUP_LIMIT_PER_EMAIL`, `SIGNUP_LIMIT_PER_IP`, `SIGNUP_WINDOW_SECONDS`, `RESET_LIMIT_PER_EMAIL`, `RESET_LIMIT_PER_IP`, `RESET_WINDOW_SECONDS`, and `CLIENT_IP_HEADER` (empty). **Run the runbook's new client-IP probe after deploy.**
+
+## 1. What a person sees
+
+After too many attempts, the sign-in, sign-up and forgot-password forms show
+"Too many attempts. Try again in N minutes." Successful sign-ins do not count.
+A reset, once completed, clears the count for that address. With Redis down,
+sign-in and sign-up say the service is unavailable (they could not create a
+session anyway), and forgot-password still gives its usual reply.
+
+## 2. The mechanism
+
+- `services/rate_limit.py`: fixed-window counters in Redis, one Lua script per
+  request. The IP bucket is checked first, and a request refused by IP writes
+  no email key.
+- Keys are `rl:{action}:{kind}:` plus a 16-byte HMAC of the normalised email or
+  IP, keyed from `APP_SECRET`, so neither is stored in the clear. Every check
+  runs before argon2 or any database work.
+- Client IP is uvicorn's address by default, or the header named by
+  `CLIENT_IP_HEADER`. It is parsed with `ipaddress`: IPv4 is keyed exactly,
+  IPv6 per /64, and v4-mapped addresses as IPv4. An unparseable value, or a
+  configured header that is missing, shares one bucket and is logged without
+  its value.
+- The 429 is the existing `RateLimited` problem, now with `Retry-After`. The
+  new 503 `service-unavailable` covers login and sign-up when Redis errors.
+- Log lines are `auth.rate_limited` (action and kind only),
+  `auth.rate_limit.unavailable`, `auth.rate_limit.ip_unparsed` and
+  `auth.rate_limit.ip_header_missing`.
+- Web: the three forms show the server's detail for a 429; forgot-password no
+  longer calls it a connection error.
+
+## 3. Review
+
+- **The first security review raised one High, not confirmed:** on Render the
+  per-IP bucket may key on a client-chosen `X-Forwarded-For`. It is hardened
+  in code, and the runbook probe settles which header to trust.
+- **It also raised three Mediums** (IPv6 /128 buckets; refused requests writing
+  new email keys that could fill Key Value; a victim locked out by counted
+  attempts, with successes counted too) and two Lows (fail-open gaining nothing
+  on login and sign-up; unvalidated settings). All were fixed.
+- **This change also briefly took mypy from 47 to 48;** that was fixed without
+  an ignore.
+
+## Found, not fixed
+
+- **A person can still be kept out of password sign-in** by someone who sends
+  11 wrong passwords for their address every 15 minutes. A completed reset
+  clears the count until the next round. Existing sessions and Google sign-in
+  (which links a verified Google address) are unaffected. The full fix is a
+  per-device budget (a signed "known device" cookie), a design decision left
+  open.
+- **The per-email count shows recent activity on an address:** a limit tripping
+  early, and its `Retry-After`, show that someone else tried that address
+  recently. This comes with any per-subject counter.
+- **`CLIENT_IP_HEADER` is empty until the runbook probe is run on Render.**
+- **A re-review after the fixes** found no new defect in the code. Left open:
+  a limit keyed per (email, IP) with a looser per-email ceiling would stop
+  the lock-out above, and is a design decision; IPv6 is keyed per /64, so a
+  tunnelled /48 still yields many buckets; `POST /auth/change-password` has no
+  limit (older than this change); and the Redis pool has no
+  `socket_timeout`, so a Redis that hangs rather than refusing makes sign-in
+  hang instead of answering 503.
+- **The CI floors in `infra/ci/floors.json` were not raised.**
+
+## Verified
+
+**API 1690 → 1749 (+59).** `tests/test_auth_rate_limit.py`, 59 tests, covering:
+- the defaults;
+- for each route, the (N+1)th attempt answering 429 with `Retry-After`, per
+  email and per IP;
+- the window resetting;
+- reset 200s and 429s byte-identical for known and unknown addresses;
+- sign-up tripping before the 409;
+- IP parsing (garbage, ports, scopes, a missing configured header never
+  falling back to `X-Forwarded-For`), IPv6 /64 grouping and v4-mapped
+  addresses;
+- no new email keys once the IP bucket trips;
+- successful logins giving their attempt back, with the counter floored at 0;
+- a reset-confirm clearing the login count;
+- Redis down: 503 for login and sign-up, the usual 200 for reset;
+- settings of 0 or −1 rejected;
+- no email or IP in any key or log line.
+
+**Web 1052 → 1056 (+4):** the 429 branch of each of the three forms.
+
+**Negative controls,** each file restored byte-for-byte and checked with `cmp`:
+- bypassing the login check fails its tests;
+- removing the give-back on success fails 3 tests;
+- putting the email count before the IP check fails 3 tests.
+
+**The rest of the bar.**
+- Workers 13, shared-types 53, design-system 649.
+- ruff clean; mypy 47, under its 50 ceiling.
+- Typechecks clean, and all six count gates through `assert_count.py`.
+- Both `uv lock --check` runs pass.
+- The OpenAPI contract is regenerated (the reset route's description).
+- Exit codes were read from files.

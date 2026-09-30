@@ -615,7 +615,9 @@ export interface paths {
          *     and never reports its outcome, so a provider outage cannot become a
          *     different status code.
          *
-         *     **Errors:** none. `422` only if the body is not an email address.
+         *     **Errors:** `429` when the per-email or per-IP limit is spent. The per-email
+         *     limit trips identically for every address, so it reveals nothing about
+         *     accounts. `422` if the body is not an email address.
          */
         post: operations["request_password_reset_api_v1_auth_reset_password_request_post"];
         delete?: never;

@@ -6,7 +6,7 @@ import contextlib
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Query, Response, status
+from fastapi import APIRouter, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 
@@ -16,6 +16,7 @@ from ..deps import (
     GoogleFlowStoreDep,
     GoogleProviderDep,
     PrincipalDep,
+    RedisDep,
     SessionStoreDep,
     SettingsDep,
 )
@@ -43,7 +44,7 @@ from ..schemas.auth import (
 )
 from ..services import auth as auth_service
 from ..services import email as email_service
-from ..services import google_oauth
+from ..services import google_oauth, rate_limit
 from ..services import invitations as invitation_service
 from ..services import password_reset as reset_service
 from ..services import seats as seat_service
@@ -82,6 +83,8 @@ def _clear_session_cookie(response: Response, settings: Settings) -> None:
 @router.post("/sign-up", response_model=MeOut, status_code=status.HTTP_201_CREATED)
 async def sign_up(
     payload: SignUpRequest,
+    request: Request,
+    redis: RedisDep,
     response: Response,
     db: DbDep,
     store: SessionStoreDep,
@@ -92,6 +95,9 @@ async def sign_up(
     Signing in as part of signup is deliberate: requiring a fresh login
     immediately after choosing a password is friction with no security value.
     """
+    # Before the "already registered" 409, so that answer cannot be probed
+    # faster than the limit.
+    await rate_limit.enforce(redis, settings, request, action="signup", email=payload.email)
     agency, user = await auth_service.sign_up_agency(
         db,
         agency_name=payload.agency_name,
@@ -118,14 +124,20 @@ async def sign_up(
 @router.post("/login", response_model=MeOut)
 async def login(
     payload: LoginRequest,
+    request: Request,
+    redis: RedisDep,
     response: Response,
     db: DbDep,
     store: SessionStoreDep,
     settings: SettingsDep,
 ) -> Any:
+    # Before Argon2: a limited attempt costs nothing.
+    await rate_limit.enforce(redis, settings, request, action="login", email=payload.email)
     user = await auth_service.authenticate(
         db, email=payload.email, password=payload.password, settings=settings
     )
+    # A failed login raised above and stays counted; a success is given back.
+    await rate_limit.release_login(redis, settings, request, email=payload.email)
     await db.commit()
     await db.refresh(user)
 
@@ -250,6 +262,8 @@ async def change_password(
 )
 async def request_password_reset(
     payload: ResetPasswordRequest,
+    request: Request,
+    redis: RedisDep,
     db: DbDep,
     settings: SettingsDep,
 ) -> Any:
@@ -270,8 +284,11 @@ async def request_password_reset(
     and never reports its outcome, so a provider outage cannot become a
     different status code.
 
-    **Errors:** none. `422` only if the body is not an email address.
+    **Errors:** `429` when the per-email or per-IP limit is spent. The per-email
+    limit trips identically for every address, so it reveals nothing about
+    accounts. `422` if the body is not an email address.
     """
+    await rate_limit.enforce(redis, settings, request, action="reset", email=payload.email)
     minted = await reset_service.request_reset(
         db, email=payload.email, settings=settings
     )
@@ -311,6 +328,7 @@ async def request_password_reset(
 async def confirm_password_reset(
     payload: ResetPasswordConfirm,
     response: Response,
+    redis: RedisDep,
     db: DbDep,
     store: SessionStoreDep,
     settings: SettingsDep,
@@ -343,6 +361,9 @@ async def confirm_password_reset(
 
     await db.commit()
     await store.revoke_all_for_user(user.id)
+    # Best effort: the person proved control of the inbox, so forget the failed
+    # logins that may have locked them out. Never changes the reply.
+    await rate_limit.clear_login(redis, settings, email=user.email)
     _clear_session_cookie(response, settings)
     return {
         "status": "reset",

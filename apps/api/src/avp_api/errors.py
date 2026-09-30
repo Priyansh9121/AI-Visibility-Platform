@@ -32,8 +32,15 @@ class ProblemError(Exception):
     problem_type: str = "internal-error"
     title: str = "Internal server error"
 
-    def __init__(self, detail: str | None = None, **extra: Any) -> None:
+    def __init__(
+        self,
+        detail: str | None = None,
+        *,
+        headers: dict[str, str] | None = None,
+        **extra: Any,
+    ) -> None:
         self.detail = detail or self.title
+        self.headers = headers or {}
         self.extra = extra
         super().__init__(self.detail)
 
@@ -215,6 +222,14 @@ class ScanLimitReached(ProblemError):
     title = "Scan limit reached"
 
 
+class ServiceUnavailable(ProblemError):
+    """A dependency this route cannot safely do without is down (503)."""
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    problem_type = "service-unavailable"
+    title = "Service unavailable"
+
+
 class RateLimited(ProblemError):
     status_code = status.HTTP_429_TOO_MANY_REQUESTS
     problem_type = "rate-limited"
@@ -226,6 +241,7 @@ def _problem_response(request: Request, exc: ProblemError) -> JSONResponse:
         status_code=exc.status_code,
         content=exc.to_dict(instance=request.url.path),
         media_type=PROBLEM_CONTENT_TYPE,
+        headers=exc.headers or None,
     )
 
 

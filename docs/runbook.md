@@ -114,3 +114,53 @@ All of this happens in Stripe's **Test mode**. Never use a live key.
 
 8. **Stop.** Nothing is ever switched to live mode from this runbook. Going
    live is the founder's key swap after Stripe's business verification.
+
+## Confirm how Render passes the client IP (rate limits)
+
+The per-IP rate-limit bucket uses uvicorn's client address, which is the
+leftmost `X-Forwarded-For` entry. If Render appends to a client-sent
+`X-Forwarded-For` instead of replacing it, anyone can pick their own bucket.
+The per-email limits hold either way.
+
+1. **Why.** Spoof-safe per-IP rate limiting requires that the server trusts
+   a proxy header Render adds, not one a client controls.
+
+2. **Probe the default.** From one machine, send 11 `POST
+   https://ai-visibility-platform-5gk4.onrender.com/api/v1/auth/reset-password/request`
+   requests, each with a different made-up email address (for example
+   `probe1@example.com` … `probe11@example.com`) and a different header
+   `X-Forwarded-For: 198.51.100.N`. Use:
+
+   ```bash
+   curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+     -H 'Content-Type: application/json' \
+     -H 'X-Forwarded-For: 198.51.100.N' \
+     --data '{"email":"probeN@example.com"}' \
+     https://ai-visibility-platform-5gk4.onrender.com/api/v1/auth/reset-password/request
+   ```
+
+   Replace N each time (1 through 11). Email is off in production, so nothing
+   is sent.
+
+3. **Read the result.**
+   - If the 11th answers **429**, Render replaces the header, and the default
+     is safe: stop here.
+   - If it answers **200**, the header can be spoofed; go on.
+
+4. **Switch to Cloudflare's header.** On the Render API service, open
+   Environment and set `CLIENT_IP_HEADER=CF-Connecting-IP`. Save; Render
+   redeploys. Never set it to `X-Forwarded-For`, because its first entry is
+   the one a client controls.
+
+5. **Probe again.** After the deploy, repeat step 2, varying a
+   `CF-Connecting-IP` header instead and sending no `X-Forwarded-For`. The
+   11th must answer 429. If it does not, undo step 4 and report it.
+   Then, while that bucket is still full, send one more request from a
+   **different network** (a phone hotspot, say) without the header override.
+   It must answer 200. A 429 here means every request is sharing one bucket
+   (the header is not arriving): undo step 4. Finally, open the API service's
+   Logs and check there is no `auth.rate_limit.ip_header_missing` line.
+
+6. **Note.** Each probe run uses up the prober's own IP bucket for an hour. If
+   the service logs `auth.rate_limit.ip_header_missing`, requests are
+   arriving without the header and are sharing one bucket; undo step 4.
