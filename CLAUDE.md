@@ -23,8 +23,13 @@ brief disagree, stop and ask.
   off-scale spacing do not compile (`packages/design-system/src/tailwind-preset.ts:1-17`).
   The report stays paper in both themes (`packages/design-system/src/tokens/reportIsolation.test.ts`).
 - **Dependency licences.** No copyleft, source-available or undeclared
-  licence (`apps/api/scripts/license_audit.py`). psycopg, vendor LLM SDKs other
-  than anthropic, and PDF libraries are deliberately absent.
+  licence. Python deps (API and workers environments) are checked by
+  `apps/api/scripts/license_audit.py`, JS deps by
+  `apps/api/scripts/js_license_audit.py` over `pnpm licenses list`; both run in
+  CI on one policy (`ALLOWED`/`BLOCKING` in `license_audit.py`). Open licence
+  questions live in `infra/ci/licence-pending-decisions.json` until the founder
+  decides; it is not an allow-list. psycopg, vendor LLM SDKs other than
+  anthropic, and PDF libraries are deliberately absent.
 - **Every new outbound host or runtime dependency** is classified in
   `apps/web/src/components/legal/providers.test.ts` and named on `/privacy`.
 - **No secret, token or email in a log.** `apps/api/src/avp_api/logs.py`
