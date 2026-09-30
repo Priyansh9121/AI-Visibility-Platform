@@ -20738,3 +20738,36 @@ contract regenerates byte-identically.
 - Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
 - OpenAPI and `api.gen.ts` regenerate byte-identically.
 - Exit codes were read from files.
+
+# MPL-2.0 is allowed for unmodified use, as its own licence category
+
+**2026-10-01, the fifth entry of the day.** One item, one commit.
+
+**Render: nothing to set.**
+
+## 1. What changed
+
+- **Founder decision 2.** MPL-2.0 is file-level copyleft. It is allowed when the package is used unmodified, as its own category `ALLOWED_UNMODIFIED` in `apps/api/scripts/license_audit.py`, not as a member of `ALLOWED`. Its verdict, `ok-unmodified`, passes the run but is printed apart from `ok`, so it stays visible. The comment gives the reason (the packages are used unmodified and AVP is hosted, so no modified source is distributed) and says that vendoring or patching an MPL package needs the founder.
+- **Spellings covered:** `MPL-2.0`, `MPL 2.0`, and the classifier `Mozilla Public License 2.0 (MPL 2.0)`, which is what certifi and pathspec declare (classifier only, no SPDX expression). The whole string is matched before parentheses are stripped. MPL-1.1 and any other MPL version are not covered and stay REVIEW (listed, does not fail).
+- **One verdict function.** `license_audit.py` gains `verdict_of()` (ok / ok-unmodified / REVIEW / BLOCK). `js_license_audit.py` keeps its own "undeclared" check and delegates the rest to that function, so the two audits share one implementation instead of two copies of the rule. Output columns widen to fit the new label.
+- **Behaviour change in the Python audit.** It used to BLOCK when any part of a licence string matched `BLOCKING`. It now uses the SPDX logic the JS audit already used: `A OR B` passes if either alternative passes, `A AND B` needs every part, and the ` | ` that joins several Python classifiers counts as OR. So `MIT OR GPL-3.0` is now `ok` in the Python audit (it already was in the JS audit), `MPL-2.0 OR GPL-3.0` is `ok-unmodified`, and `MPL-2.0 AND GPL-3.0`, GPL, LGPL and AGPL still BLOCK. On the real environments no verdict changed apart from certifi and pathspec.
+- **`CLAUDE.md`:** the "Dependency licences" rule names the new category.
+- **Tests:** new `apps/api/tests/test_license_audit.py` (20 tests) and 8 more in `test_js_license_audit.py`: each spelling, the OR/AND combinations above, MPL-1.1 → REVIEW, GPL/LGPL/AGPL → BLOCK, and the JS audit reading the same category. Red first: 21 failed, 21 passed before the implementation.
+
+## Found, not fixed
+
+- **`BLOCKING` misses classifier-only GPL spellings.** The regex is `\b(GPL|AGPL|LGPL|…)\b`, so `GNU General Public License v3 (GPLv3)` and `GNU Lesser General Public License v3 (LGPLv3)` do not match (there is no word boundary between `GPL` and `v3`) and would land in REVIEW, which does not fail CI, instead of BLOCK. SPDX spellings (`GPL-3.0-only`, `LGPL-3.0-or-later`) do block, and pnpm reports SPDX ids, so the gap is the Python classifier path only. No installed package declares such a classifier today. It predates this change.
+- **REVIEW rows that remain, unchanged:** `avp-api` and `avp-workers` (our own packages, UNLICENSED), `email-validator` (`The Unlicense (Unlicense)`, a classifier spelling that is not in `ALLOWED`), and on the JS side `argparse`, `caniuse-lite` and `lru-cache`.
+
+## Verified
+
+**API pytest 1835 → 1859 (+24); `api-pytest` floor raised to match.**
+- **The real audits:** API: 65 distributions, ok 61, ok-unmodified 2 (certifi, pathspec), REVIEW 2; before: ok 61, REVIEW 4. Workers: 80 distributions, ok 75, ok-unmodified 2, REVIEW 3. JS: 236 packages, ok 233, REVIEW 3, 0 held, 0 blocked. All three exit 0.
+- **Negative control:** with the old `license_audit.py` restored from a copy, the two audit test files fail 40 of 42 and the API audit puts certifi and pathspec back in REVIEW; the new file was copied back and checked with `cmp`.
+
+**The rest of the bar.**
+- Workers 26, shared-types 53 (0 fail), design-system 846, web 1104, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- OpenAPI and `api.gen.ts` regenerate byte-identically.
+- Exit codes were read from files.
