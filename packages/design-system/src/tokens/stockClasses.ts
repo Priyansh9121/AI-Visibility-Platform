@@ -241,6 +241,48 @@ function scanTokens(text: string, startLine: number, found: StockFinding[]): voi
     const reason = classifyClass(tok);
     if (reason) found.push({ line: l, className: tok, reason });
   }
+  if (classList) {
+    for (const { tok, line: l } of tokens) {
+      const reason = trapReason(tok, tokens.map((t) => t.tok));
+      if (reason) found.push({ line: l, className: tok, reason });
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Traps that COMPILE (so the palette check cannot see them) but paint a stock
+// default. See docs/design-system.md, "Tailwind traps the preset cannot catch
+// at build time".
+// ---------------------------------------------------------------------------
+
+/** The utility of a token, without variants, `!` or a leading `-`. */
+const utilityOf = (tok: string) =>
+  (splitTop(tok, ':').pop() ?? '').replace(/^!/, '').replace(/!$/, '');
+
+const RING_WIDTH_RE = /^ring(?:-(?:1|2|4|8))?$/;
+const RING_COLOUR_RE = /^ring-(?!inset$|offset-|\d+$)[a-z\[]/;
+const BORDER_WIDTH_RE = /^border(?:-[trblxyse])?(?:-(?:[1-9]\d*))?$/;
+const BORDER_NON_COLOUR_RE =
+  /^border(?:-[trblxyse])?-(?:solid|dashed|dotted|double|hidden|none|collapse|separate|spacing-.*|opacity-.*|\d+)$/;
+const BORDER_COLOUR_RE = /^border(?:-[trblxyse](?=-))?-(?![trblxyse]$)[a-z\[]/;
+
+function trapReason(tok: string, all: string[]): string | null {
+  const parts = splitTop(tok, ':');
+  const u = utilityOf(tok);
+  if (u === '') return null;
+  if (parts.length > 1 && parts.slice(0, -1).includes('dark')) {
+    return 'dark: variant follows the OS setting, not data-theme; use a token that resolves per theme';
+  }
+  const utils = all.map(utilityOf);
+  if (RING_WIDTH_RE.test(u)) {
+    if (utils.some((x) => RING_COLOUR_RE.test(x))) return null;
+    return 'ring width without a ring colour paints stock blue (#3b82f6 at 50%); use shadow-focus';
+  }
+  if (BORDER_WIDTH_RE.test(u)) {
+    if (utils.some((x) => BORDER_COLOUR_RE.test(x) && !BORDER_NON_COLOUR_RE.test(x))) return null;
+    return 'border width without a border colour draws currentColor; add a border-line-* colour';
+  }
+  return null;
 }
 
 export function findStockClasses(source: string, kind: 'ts' | 'tsx' | 'css'): StockFinding[] {
