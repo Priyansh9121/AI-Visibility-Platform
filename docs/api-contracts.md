@@ -63,6 +63,8 @@ listed in `CORS_ALLOW_ORIGINS` — browsers reject wildcard CORS with credential
 | `/problems/conflict` | 409 | Generic conflict |
 | `/problems/email-already-registered` | 409 | Signup email in use |
 | `/problems/seat-limit-reached` | 409 | Carries `seatsUsed`, `seatLimit` |
+| `/problems/subscription-already-active` | 409 | Checkout refused: the agency's subscription is `active` or `trialing`. `detail` points at the billing portal |
+| `/problems/checkout-in-progress` | 409 | Another checkout for the same agency holds its row lock for more than 3 s. Nothing was created; retry |
 | `/problems/invalid-reset-token` | 400 | Reset link unknown, expired, used, or orphaned |
 | `/problems/invalid-invitation` | 400 | Invitation unknown, expired, accepted, revoked, or orphaned |
 | `/problems/rate-limited` | 429 | Too many requests |
@@ -749,7 +751,46 @@ lands on reads the database.
 **This endpoint does not subscribe anybody.** It returns a URL. The subscription
 begins when Stripe says so, over the webhook.
 
-**Errors:** `401`, `403`, `404`, `503 billing-not-configured` when
+**A live subscription refuses a new checkout.** When the agency's
+`subscriptionStatus` is `active` or `trialing` (`services.billing.ACTIVE_STATUSES`,
+the same set as `isActive`), the answer is `409 subscription-already-active`
+and no Stripe call is made: a second Checkout Session would create a second
+subscription and bill the agency twice. `detail` reads "This agency already has
+a current subscription. Manage it from Manage billing in Settings."; it carries
+no Stripe id and not the status. Every
+other state (`null`, `past_due`, `canceled`, `unpaid`, `incomplete`,
+`incomplete_expired`, `paused`) checks out as before. The check runs after auth
+and tenancy, so a member still gets `403` and another agency's id `404`; the
+`409` is only ever seen by that agency's own owner or admin.
+
+**Starting a new checkout expires the previous one.** Before creating a session
+for an agency that already has a Stripe customer, every `open` Checkout Session
+of that customer is expired, so at most one payable session exists and two
+cannot both be paid into two subscriptions. If Stripe fails while listing or
+expiring, the checkout fails with `503 service-unavailable` and creates
+nothing; retrying is safe. Concurrent checkouts for one agency serialise on the
+agency row, so two first checkouts create one Stripe customer, not two. The
+session's own lifetime (`expires_at`) is unchanged.
+
+**The subscription check also asks Stripe.** For an agency that already has a
+customer, Stripe is asked for that customer's `active` and `trialing`
+subscriptions before anything is created; any hit is the same `409
+subscription-already-active`, even when our row does not say so yet (paid, the
+webhook has not landed). If more open sessions exist than one page (100) holds,
+the answer is `503 service-unavailable` rather than creating another.
+
+**Bounded waiting.** The agency row is locked for the request, but a checkout
+waits at most 3 s for it (`lock_timeout`) and then answers `409
+checkout-in-progress`. A repeat checkout locks `FOR NO KEY UPDATE`, so scans,
+clients and alerts being inserted for the agency are not held up; the first
+checkout writes the customer id (a unique-indexed column) and takes the full
+lock. The Stripe client used here has a 15 s timeout and one retry per call
+rather than the SDK defaults.
+
+**Errors:** `401`, `403`, `404`, `409 subscription-already-active`, `409
+checkout-in-progress`, `503
+service-unavailable` (Stripe failed while clearing the previous session), `503
+billing-not-configured` when
 `STRIPE_SECRET_KEY` or `STRIPE_PRICE_ID` is unset — `detail` names the exact
 variable, the same courtesy `provider_key()` gives every other integration.
 

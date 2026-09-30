@@ -164,3 +164,27 @@ The per-email limits hold either way.
 6. **Note.** Each probe run uses up the prober's own IP bucket for an hour. If
    the service logs `auth.rate_limit.ip_header_missing`, requests are
    arriving without the header and are sharing one bucket; undo step 4.
+
+## If the logs show a second Stripe subscription
+
+Checkout refuses a new subscription while one is live, expires older open
+checkout links, and checks Stripe for a live subscription before creating a
+new session. If two subscriptions still end up on one customer, the API logs
+`stripe.webhook.second_subscription` at warning level with `agency_id`,
+`stored_subscription_id` (the earlier one) and `incoming_subscription_id`
+(the one AVP now tracks). The agency is billed twice until you act.
+
+1. **Find it.** Render → the **API** service → Logs → search
+   `stripe.webhook.second_subscription`. Note the three ids.
+2. **Confirm in Stripe.** Stripe Dashboard → Customers → the agency's
+   customer → Subscriptions. Two should be active or trialing.
+3. **Cancel and refund the earlier one** (its id is `stored_subscription_id`),
+   and refund its payment if one was taken. Keep the one AVP tracks.
+4. **Check AVP.** In the agency's Settings → Billing, the plan should still
+   show as current. Known gap: the webhook applies events for any
+   subscription id, so the cancellation of the earlier one can mark the agency
+   canceled while the kept one is still billing. If Billing shows canceled,
+   make any small change to the kept subscription in Stripe (for example add
+   a metadata key); Stripe sends a new `customer.subscription.updated`, which
+   AVP applies as the newest event. Re-check Billing. Rehearse this in test
+   mode before relying on it.

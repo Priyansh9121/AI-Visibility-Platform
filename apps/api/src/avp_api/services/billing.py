@@ -69,15 +69,31 @@ from typing import Any
 
 import stripe
 import structlog
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings
-from ..errors import BillingNotConfigured, InvalidWebhookSignature
+from ..errors import (
+    BillingNotConfigured,
+    CheckoutInProgress,
+    InvalidWebhookSignature,
+    ServiceUnavailable,
+    SubscriptionAlreadyActive,
+)
 from ..models import Agency, StripeWebhookEvent, StripeWebhookOutcome
 
 logger = structlog.get_logger(__name__)
+
+STRIPE_TIMEOUT_SECONDS = 15
+STRIPE_MAX_RETRIES = 1
+# How long a checkout waits for another checkout of the same agency.
+CHECKOUT_LOCK_TIMEOUT = "3s"
+_ALREADY_ACTIVE_DETAIL = (
+    "This agency already has a current subscription. "
+    "Manage it from Manage billing in Settings."
+)
 
 # Which of Stripe's statuses mean "this agency is paid up".
 #
@@ -135,7 +151,14 @@ def _client(settings: Settings) -> stripe.StripeClient:
     is deprecated in 15.6 and emits a DeprecationWarning, which this project's
     pytest configuration is configured to take seriously.
     """
-    return stripe.StripeClient(api_key=_require(settings, "stripe_secret_key"))
+    return stripe.StripeClient(
+        api_key=_require(settings, "stripe_secret_key"),
+        # Explicit, not the SDK defaults (80s, two retries per call): checkout
+        # makes several calls while holding the agency row lock, and a slow
+        # Stripe must not hold it for minutes.
+        http_client=stripe.HTTPXClient(timeout=STRIPE_TIMEOUT_SECONDS),
+        max_network_retries=STRIPE_MAX_RETRIES,
+    )
 
 
 def is_active(agency: Agency) -> bool:
@@ -221,11 +244,13 @@ async def ensure_customer(db: AsyncSession, agency: Agency, *, settings: Setting
     edge one.
 
     The id is committed by the caller as part of the same request that creates
-    the Checkout Session. `uq_agencies_stripe_customer_id` is the backstop
-    underneath this check rather than the mechanism: two simultaneous checkout
-    requests from the same agency would both find NULL here, and the constraint
-    is what stops the second one silently pointing the agency at a second
-    customer.
+    the Checkout Session. **The mechanism is the row lock**, taken by
+    `create_checkout_session` before this is called: two simultaneous first
+    checkouts serialise on it, and the second finds the first's committed
+    customer here. `uq_agencies_stripe_customer_id` is single-column and only
+    forbids two AGENCIES sharing a customer; it does NOT stop one agency's
+    second UPDATE overwriting the first customer id, which is why the lock is
+    needed. Call this only on a row locked `FOR UPDATE` in the same transaction.
     """
     if agency.stripe_customer_id:
         return agency.stripe_customer_id
@@ -284,10 +309,91 @@ async def create_checkout_session(
     _require(settings, "stripe_secret_key")
     price_id = _require(settings, "stripe_price_id")
 
+    # A live subscription means a second checkout would bill the agency twice.
+    # Refused before `ensure_customer`, so nothing is created at Stripe. Caller
+    # authority is settled by the router before this is reached.
+    #
+    # The agency is re-read `FOR UPDATE` in this request's transaction and the
+    # guard and `ensure_customer` run against THAT row, so concurrent checkouts
+    # serialise: the second waits for the first's commit and then sees its
+    # customer id (and any status the webhook has since written). The lock is
+    # held across the Stripe calls below, deliberately: it is per agency, and it
+    # is what makes "one customer, at most one open session" true.
+    #
+    # Bounded and gentle: `lock_timeout` so a stuck holder gives a clear 409
+    # instead of a queue of pooled connections, and FOR NO KEY UPDATE
+    # when the agency already has a customer, so child inserts (scans, clients,
+    # alerts take FOR KEY SHARE) are not blocked.
+    # Recording the FIRST customer id writes a unique-indexed column, which
+    # Postgres treats as a key change, so that case takes the full FOR UPDATE
+    # (up front, before any Stripe call). A repeat checkout writes no key.
+    key_share = bool(agency.stripe_customer_id)
+    await db.execute(text(f"SET LOCAL lock_timeout = '{CHECKOUT_LOCK_TIMEOUT}'"))
+    try:
+        agency = (
+            await db.execute(
+                select(Agency)
+                .where(Agency.id == agency.id)
+                .with_for_update(key_share=key_share)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one()
+    except DBAPIError as exc:
+        if getattr(exc.orig, "sqlstate", None) == "55P03":  # lock_not_available
+            raise CheckoutInProgress(
+                "A checkout for this agency is already in progress. "
+                "Try again in a moment."
+            ) from exc
+        raise
+
+    if is_active(agency):
+        raise SubscriptionAlreadyActive(_ALREADY_ACTIVE_DETAIL)
+
+    had_customer = bool(agency.stripe_customer_id)
     customer_id = await ensure_customer(db, agency, settings=settings)
     base = settings.public_web_base_url.rstrip("/")
 
     client = _client(settings)
+
+    # An older open Checkout Session stays payable at Stripe until it expires,
+    # so paying two of them would create two subscriptions. Expire every open
+    # one for this customer first: at most one is ever open. A brand-new
+    # customer cannot have any, so it is not asked. If Stripe fails here the
+    # checkout FAILS (503) rather than carrying on, because carrying on is
+    # exactly the double-subscription case; the caller can simply retry.
+    if had_customer:
+        try:
+            # A subscription that is live at Stripe refuses the checkout even
+            # when our row does not say so yet (paid, webhook not landed).
+            for live in sorted(ACTIVE_STATUSES):
+                subs = await client.v1.subscriptions.list_async(
+                    params={"customer": customer_id, "status": live, "limit": 1}
+                )
+                if subs.data:
+                    raise SubscriptionAlreadyActive(_ALREADY_ACTIVE_DETAIL)
+
+            open_sessions = await client.v1.checkout.sessions.list_async(
+                params={"customer": customer_id, "status": "open", "limit": 100}
+            )
+            if open_sessions.has_more:
+                # Cannot prove they are all expired, so do not create another.
+                raise ServiceUnavailable(
+                    "Could not clear the previous checkout sessions at Stripe. "
+                    "Try again in a moment."
+                )
+            for old_session in open_sessions.data:
+                await client.v1.checkout.sessions.expire_async(old_session.id)
+        except stripe.StripeError as exc:
+            logger.warning(
+                "billing.checkout_expire_failed",
+                agency_id=agency.id,
+                error_type=type(exc).__name__,
+            )
+            raise ServiceUnavailable(
+                "Could not clear the previous checkout session at Stripe. "
+                "Try again in a moment."
+            ) from exc
+
     session = await client.v1.checkout.sessions.create_async(
         params={
             "mode": "subscription",
@@ -660,6 +766,23 @@ async def apply_event(db: AsyncSession, event: Any) -> WebhookResult:
             agency_id=agency.id,
         )
         return WebhookResult.STALE
+
+    if (
+        event_type in ("checkout.session.completed", "customer.subscription.created")
+        and sub_id
+        and agency.stripe_subscription_id
+        and sub_id != agency.stripe_subscription_id
+        and is_active(agency)
+    ):
+        # Backstop signal, behaviour unchanged: a second subscription was
+        # created for an agency that already has a live one. Ids only.
+        logger.warning(
+            "stripe.webhook.second_subscription",
+            event_id=event_id,
+            agency_id=agency.id,
+            stored_subscription_id=agency.stripe_subscription_id,
+            incoming_subscription_id=sub_id,
+        )
 
     if event_type == "checkout.session.completed":
         # Ids and an assumed `active` only: it is judged against the watermark
