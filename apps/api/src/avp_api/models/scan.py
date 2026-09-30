@@ -162,7 +162,7 @@ class Scan(Base, TimestampMixin):
             unique=True,
             postgresql_where=text("status IN ('queued', 'running')"),
         ),
-        # Unique, and the lookup index for GET /reports/{token} — Epic 9.8.
+        # Unique, and the lookup index for POST /reports/shared (token in the body) — Epic 9.8.
         #
         # Partial on NOT NULL for both halves of that. Postgres treats NULLs as
         # distinct so a plain unique index would already permit many unshared

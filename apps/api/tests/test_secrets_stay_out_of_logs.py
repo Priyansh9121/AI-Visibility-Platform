@@ -83,7 +83,7 @@ class TestABlankKeyIsNoKey:
 
         monkeypatch.setattr(email_service.httpx, "AsyncClient", no_client)
         await email_service.send_password_reset(
-            OWNER, "http://localhost:3000/reset-password/x", user_id="user_x", settings=settings
+            OWNER, "http://localhost:3000/reset-password#x", user_id="user_x", settings=settings
         )
 
 
@@ -141,7 +141,7 @@ def _assert_nothing_secret(everything: str, web: str) -> None:
     # The links as the code builds them — the web app's address, then the
     # token. (The API's own `/auth/reset-password/request` path is not one:
     # the test client logs every request it makes, and that path is public.)
-    links = (f"{web.rstrip('/')}/reset-password/", f"{web.rstrip('/')}/invite/")
+    links = (f"{web.rstrip('/')}/reset-password#", f"{web.rstrip('/')}/invite#")
     for secret in (RESET_TOKEN, INVITE_TOKEN, *links, OWNER, INVITEE, STRANGER):
         assert secret not in everything, f"{secret!r} reached the logs"
 
@@ -180,6 +180,6 @@ class TestNothingSecretIsLogged:
         assert {"email.password_reset.sent", "email.invitation.sent"} <= kinds
         # The links DID go out — to the inboxes, and only there.
         bodies = " ".join(message["text"] for message in resend_configured)
-        assert f"/reset-password/{RESET_TOKEN}" in bodies
-        assert f"/invite/{INVITE_TOKEN}" in bodies
+        assert f"/reset-password#{RESET_TOKEN}" in bodies
+        assert f"/invite#{INVITE_TOKEN}" in bodies
         assert [m["to"] for m in resend_configured] == [[OWNER], [INVITEE]]

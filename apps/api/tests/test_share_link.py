@@ -2,7 +2,7 @@
 
 **This is the first unauthenticated read surface in the product.** Everything
 else behind /api/v1 resolves a session cookie and scopes every query to one
-agency; `GET /reports/{token}` is reached by a stranger holding a URL. These
+agency; `POST /reports/shared` is reached by a stranger holding a URL. These
 tests are therefore weighted toward what must NOT be reachable, not toward the
 happy path — the happy path is one request and it is the least interesting
 thing here.
@@ -27,6 +27,14 @@ from avp_api.services.engines import CitedSource, EngineAnswer
 from avp_api.services.prompts import GeneratedPrompt
 
 BASE = "/api/v1"
+
+
+async def _shared(client: AsyncClient, token: str):  # noqa: ANN202
+    return await client.post(f"{BASE}/reports/shared", json={"token": token})
+
+
+async def _shared_pdf(client: AsyncClient, token: str):  # noqa: ANN202
+    return await client.post(f"{BASE}/reports/shared/pdf", json={"token": token})
 
 
 async def _sign_up(client: AsyncClient, agency: str, email: str) -> None:
@@ -161,7 +169,7 @@ class TestPublicRead:
         token = (await client.post(f"{BASE}/scans/{sid}/share")).json()["token"]
 
         client.cookies.clear()
-        resp = await client.get(f"{BASE}/reports/{token}")
+        resp = await client.post(f"{BASE}/reports/shared", json={"token": token})
 
         assert resp.status_code == 200, resp.text
         body = resp.json()
@@ -188,7 +196,7 @@ class TestPublicRead:
 
         private = (await client.get(f"{BASE}/scans/{sid}/report")).json()
         client.cookies.clear()
-        public = (await client.get(f"{BASE}/reports/{token}")).json()
+        public = (await _shared(client, token)).json()
 
         private.pop("generatedAt")
         public.pop("generatedAt")
@@ -207,7 +215,7 @@ class TestPublicRead:
         sid = await _scored_scan(client, stub_engines)
         token = (await client.post(f"{BASE}/scans/{sid}/share")).json()["token"]
         client.cookies.clear()
-        body = (await client.get(f"{BASE}/reports/{token}")).json()
+        body = (await _shared(client, token)).json()
 
         forbidden = {
             # who is behind the account
@@ -247,7 +255,7 @@ class TestPublicRead:
         token = (await client.post(f"{BASE}/scans/{sid}/share")).json()["token"]
         client.cookies.clear()
 
-        raw = (await client.get(f"{BASE}/reports/{token}")).text
+        raw = (await _shared(client, token)).text
         assert token not in raw
 
 
@@ -259,17 +267,16 @@ class TestRejectionIsIndistinguishable:
         [
             "nope",                                    # too short
             "!!!not-base64url!!!",                     # wrong charset
-            "",                                        # empty (falls to another route)
             "x" * 43,                                  # right shape, does not exist
-            "x" * 4000,                                # absurdly long
+            "x" * 512,                                 # longest the body allows
             "../../../etc/passwd",                     # traversal
             "' OR 1=1 --",                             # injection shape
         ],
     )
     async def test_every_bad_token_is_a_404(self, client: AsyncClient, token: str) -> None:
-        resp = await client.get(f"{BASE}/reports/{token}")
-        # 404 for a miss; an empty token cannot match the route at all, which
-        # is also a 404. Never 401, never 403, never 500.
+        resp = await client.post(f"{BASE}/reports/shared", json={"token": token})
+        # 404 for a miss. Never 401, never 403, never 500. (Empty and over-512
+        # tokens are the body's 422, tested in TestTheTokenIsNotInThePath.)
         assert resp.status_code == 404, f"{token!r} returned {resp.status_code}"
 
     async def test_malformed_and_well_formed_misses_are_byte_identical(
@@ -280,8 +287,10 @@ class TestRejectionIsIndistinguishable:
         A different body for a malformed token would confirm the charset and
         length of a real one, which is the expensive half of enumerating.
         """
-        malformed = await client.get(f"{BASE}/reports/not-a-real-token")
-        well_formed = await client.get(f"{BASE}/reports/{'A' * 43}")
+        malformed = await client.post(
+            f"{BASE}/reports/shared", json={"token": "not-a-real-token"}
+        )
+        well_formed = await client.post(f"{BASE}/reports/shared", json={"token": "A" * 43})
 
         assert malformed.status_code == well_formed.status_code == 404
         assert malformed.json()["detail"] == well_formed.json()["detail"]
@@ -301,7 +310,7 @@ class TestRejectionIsIndistinguishable:
         sid = await _scored_scan(client, stub_engines)
         client.cookies.clear()
 
-        assert (await client.get(f"{BASE}/reports/{sid}")).status_code == 404
+        assert (await _shared(client, sid)).status_code == 404
 
     async def test_a_scan_that_was_never_shared_has_no_live_link(
         self, client: AsyncClient, stub_engines
@@ -367,8 +376,8 @@ class TestRevocation:
         token = (await client.post(f"{BASE}/scans/{sid}/share")).json()["token"]
 
         client.cookies.clear()
-        assert (await client.get(f"{BASE}/reports/{token}")).status_code == 200
-        assert (await client.get(f"{BASE}/reports/{token}.pdf")).status_code == 200
+        assert (await _shared(client, token)).status_code == 200
+        assert (await _shared_pdf(client, token)).status_code == 200
 
         await _sign_up(client, "Revoke Agency", "revoke1b@test.example")
         # A fresh agency cannot revoke it; the owner must sign back in.
@@ -382,8 +391,8 @@ class TestRevocation:
         assert (await client.delete(f"{BASE}/scans/{sid}/share")).status_code == 204
 
         client.cookies.clear()
-        assert (await client.get(f"{BASE}/reports/{token}")).status_code == 404
-        assert (await client.get(f"{BASE}/reports/{token}.pdf")).status_code == 404
+        assert (await _shared(client, token)).status_code == 404
+        assert (await _shared_pdf(client, token)).status_code == 404
 
     async def test_a_revoked_token_is_indistinguishable_from_one_that_never_existed(
         self, client: AsyncClient, stub_engines
@@ -400,8 +409,8 @@ class TestRevocation:
         assert (await client.delete(f"{BASE}/scans/{sid}/share")).status_code == 204
 
         client.cookies.clear()
-        revoked = await client.get(f"{BASE}/reports/{token}")
-        never = await client.get(f"{BASE}/reports/{'A' * 43}")
+        revoked = await client.post(f"{BASE}/reports/shared", json={"token": token})
+        never = await client.post(f"{BASE}/reports/shared", json={"token": "A" * 43})
 
         assert revoked.status_code == never.status_code == 404
         # Every field except `instance`, which is the request path echoed back
@@ -449,7 +458,7 @@ class TestRevocation:
         assert (await client.delete(f"{BASE}/scans/{sid}/share")).status_code == 404
 
         client.cookies.clear()
-        assert (await client.get(f"{BASE}/reports/{token}")).status_code == 200
+        assert (await _shared(client, token)).status_code == 200
 
     async def test_revoking_requires_a_session(
         self, client: AsyncClient, stub_engines
@@ -477,8 +486,8 @@ class TestRevocation:
 
         assert first != second
         client.cookies.clear()
-        assert (await client.get(f"{BASE}/reports/{first}")).status_code == 404
-        assert (await client.get(f"{BASE}/reports/{second}")).status_code == 200
+        assert (await _shared(client, first)).status_code == 404
+        assert (await _shared(client, second)).status_code == 200
 
 
 class TestExpiry:
@@ -514,12 +523,12 @@ class TestExpiry:
         token = (await client.post(f"{BASE}/scans/{sid}/share")).json()["token"]
 
         client.cookies.clear()
-        assert (await client.get(f"{BASE}/reports/{token}")).status_code == 200
+        assert (await _shared(client, token)).status_code == 200
 
         await _expire(sid)
 
-        assert (await client.get(f"{BASE}/reports/{token}")).status_code == 404
-        assert (await client.get(f"{BASE}/reports/{token}.pdf")).status_code == 404
+        assert (await _shared(client, token)).status_code == 404
+        assert (await _shared_pdf(client, token)).status_code == 404
 
     async def test_an_expired_token_is_indistinguishable_from_an_unknown_one(
         self, client: AsyncClient, stub_engines
@@ -535,8 +544,8 @@ class TestExpiry:
         await _expire(sid)
 
         client.cookies.clear()
-        expired = await client.get(f"{BASE}/reports/{token}")
-        never = await client.get(f"{BASE}/reports/{'A' * 43}")
+        expired = await client.post(f"{BASE}/reports/shared", json={"token": token})
+        never = await client.post(f"{BASE}/reports/shared", json={"token": "A" * 43})
 
         assert expired.status_code == never.status_code == 404
         # Every field except `instance`, which is the request path echoed back
@@ -559,7 +568,7 @@ class TestExpiry:
         await _expire(sid)
 
         client.cookies.clear()
-        assert (await client.get(f"{BASE}/reports/{first['token']}")).status_code == 404
+        assert (await _shared(client, first['token'])).status_code == 404
 
         await client.post(
             f"{BASE}/auth/login",
@@ -573,7 +582,7 @@ class TestExpiry:
             first["expiresAt"]
         )
         client.cookies.clear()
-        assert (await client.get(f"{BASE}/reports/{first['token']}")).status_code == 200
+        assert (await _shared(client, first['token'])).status_code == 200
 
     async def test_a_token_without_an_expiry_serves_nothing(
         self, client: AsyncClient, stub_engines
@@ -614,7 +623,7 @@ class TestExpiry:
 
         client.cookies.clear()
         try:
-            assert (await client.get(f"{BASE}/reports/{token}")).status_code == 404
+            assert (await _shared(client, token)).status_code == 404
         finally:
             async with get_sessionmaker()() as s:
                 await s.execute(
@@ -776,3 +785,93 @@ class TestSharingAndTheLeaseShareOneRow:
             # And the link still works: reaping is a statement about the
             # executor, not about whether the report may be read.
             assert scan.share_token == token
+
+
+class TestTheTokenIsNotInThePath:
+    """The share token travels in a POST body, so it never reaches a request log."""
+
+    async def test_the_minted_url_carries_the_token_in_the_fragment(
+        self, client: AsyncClient, stub_engines
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client, "Frag Agency", "frag@test.example")
+        sid = await _scored_scan(client, stub_engines)
+        body = (await client.post(f"{BASE}/scans/{sid}/share")).json()
+
+        before, hash_, after = body["url"].partition("#")
+        assert hash_ == "#"
+        assert after == body["token"]
+        assert before.endswith("/share")
+        assert body["token"] not in before
+
+    async def test_the_old_get_routes_are_gone(
+        self, client: AsyncClient, stub_engines
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client, "Old Agency", "oldget@test.example")
+        sid = await _scored_scan(client, stub_engines)
+        token = (await client.post(f"{BASE}/scans/{sid}/share")).json()["token"]
+        client.cookies.clear()
+
+        assert (await client.get(f"{BASE}/reports/{token}")).status_code == 404
+        assert (await client.get(f"{BASE}/reports/{token}.pdf")).status_code == 404
+        # The new paths answer only POST.
+        assert (await client.get(f"{BASE}/reports/shared")).status_code == 405
+        assert (await client.get(f"{BASE}/reports/shared/pdf")).status_code == 405
+
+    @pytest.mark.parametrize("route", ["/reports/shared", "/reports/shared/pdf"])
+    @pytest.mark.parametrize(
+        "body",
+        [{}, {"token": ""}, {"token": "A" * 513}, {"token": None}, {"token": 5}, {"tok": "x"}],
+    )
+    async def test_a_missing_empty_or_over_long_token_is_422(
+        self, client: AsyncClient, route: str, body: dict
+    ) -> None:
+        resp = await client.post(f"{BASE}{route}", json=body)
+        assert resp.status_code == 422, resp.text
+
+    async def test_the_longest_allowed_token_is_an_ordinary_404(
+        self, client: AsyncClient
+    ) -> None:
+        for route in ("/reports/shared", "/reports/shared/pdf"):
+            resp = await client.post(f"{BASE}{route}", json={"token": "A" * 512})
+            assert resp.status_code == 404
+
+    async def test_both_routes_are_uncacheable_and_the_pdf_keeps_its_headers(
+        self, client: AsyncClient, stub_engines
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client, "Hdr Agency", "hdr@test.example")
+        sid = await _scored_scan(client, stub_engines)
+        token = (await client.post(f"{BASE}/scans/{sid}/share")).json()["token"]
+        client.cookies.clear()
+
+        web = await client.post(f"{BASE}/reports/shared", json={"token": token})
+        pdf = await client.post(f"{BASE}/reports/shared/pdf", json={"token": token})
+        assert web.status_code == pdf.status_code == 200
+        assert web.headers["cache-control"] == "private, no-store"
+        assert pdf.headers["cache-control"] == "private, no-store"
+        assert pdf.headers["content-type"] == "application/pdf"
+        assert pdf.headers["content-disposition"].startswith('attachment; filename="')
+        assert pdf.content.startswith(b"%PDF")
+
+    async def test_the_token_never_appears_in_a_log_line(
+        self, client: AsyncClient, stub_engines, capsys, caplog  # noqa: ANN001
+    ) -> None:
+        import json
+
+        import structlog
+
+        await _sign_up(client, "Log Agency", "logshare@test.example")
+        sid = await _scored_scan(client, stub_engines)
+        token = (await client.post(f"{BASE}/scans/{sid}/share")).json()["token"]
+        client.cookies.clear()
+        capsys.readouterr()
+        caplog.clear()
+        caplog.set_level("DEBUG")
+
+        with structlog.testing.capture_logs() as events:
+            for route in ("/reports/shared", "/reports/shared/pdf"):
+                assert (
+                    await client.post(f"{BASE}{route}", json={"token": token})
+                ).status_code == 200
+        everything = json.dumps(events, default=str) + capsys.readouterr().out + caplog.text
+        assert token not in everything
+

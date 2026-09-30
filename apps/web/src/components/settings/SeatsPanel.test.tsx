@@ -216,7 +216,7 @@ describe('no ad hoc styling', () => {
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const LINK = 'https://app.example/invite/INVITESENTINELtoken0123456789';
+const LINK = 'https://app.example/invite#INVITESENTINELtoken0123456789';
 const NEW_SEAT = 'new.seat@northlight.example';
 const EMAIL_OFF_LINE =
   'Email isn\u2019t set up yet \u2014 send this link yourself. It works once and expires in 7 days.';
@@ -358,7 +358,7 @@ describe('an invite with email set up shows no link', () => {
     const el = await invited();
     expect(el.textContent).toContain(`${NEW_SEAT} has been invited.`);
     expect(el.textContent).not.toContain('Email isn\u2019t set up');
-    expect(el.textContent).not.toContain('/invite/');
+    expect(el.textContent).not.toContain('/invite#');
     expect(el.querySelector('input[readonly]')).toBeNull();
     expect(button(el, 'Copy link')).toBeUndefined();
   });

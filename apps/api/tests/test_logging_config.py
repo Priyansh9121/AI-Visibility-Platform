@@ -92,7 +92,15 @@ class TestTheAccessLog:
         [
             ("/api/v1/reports/Tk-abc_123XYZ", "/api/v1/reports/…"),
             ("/api/v1/reports/Tk-abc_123XYZ.pdf", "/api/v1/reports/….pdf"),
-            ("/api/v1/reports/Tk-abc_123XYZ?download=1", "/api/v1/reports/…?download=1"),
+            ("/api/v1/reports/Tk-abc_123XYZ?download=1", "/api/v1/reports/…"),
+            # The two body-token routes' names are not a licence to carry a token elsewhere.
+            ("/api/v1/reports/shared?token=Tk-abc_123XYZ", "/api/v1/reports/…"),
+            ("/api/v1/reports/shared/Tk-abc_123XYZ", "/api/v1/reports/…"),
+            # uvicorn logs the unquoted path, so an encoded slash prints as a slash.
+            ("/api/v1/reports/shared%2FTk-abc_123XYZ", "/api/v1/reports/…"),
+            # A token that merely starts with "shared" is still a token.
+            ("/api/v1/reports/sharedTk-abc_123XYZ", "/api/v1/reports/…"),
+            ("/api/v1/reports/shared.pdf", "/api/v1/reports/….pdf"),
             (
                 "/api/v1/auth/google/callback?state=S3cr3t&code=4/0Ab-code",
                 "/api/v1/auth/google/callback",
@@ -113,6 +121,15 @@ class TestTheAccessLog:
             assert secret not in message
         # Who asked, and how it went, stay: that is what the access log is for.
         assert message.startswith("203.0.113.9:51234 - ")
+
+    @pytest.mark.parametrize(
+        "path", ["/api/v1/reports/shared", "/api/v1/reports/shared/pdf"]
+    )
+    def test_the_body_token_routes_are_not_rewritten(self, path: str) -> None:
+        """They carry no token in the path, so there is nothing to hide."""
+        record = _access_record(path)
+        assert RedactSecretPaths().filter(record) is True
+        assert f'"GET {path} HTTP/1.1" 200' in record.getMessage()
 
     @pytest.mark.parametrize(
         "path",

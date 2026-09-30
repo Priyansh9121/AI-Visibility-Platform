@@ -9,8 +9,8 @@
  * back to create the agency. On success the session cookie is already set,
  * so it goes where sign-up goes: /welcome.
  *
- * The ticket travels in the query string, the trade `/reset-password/{token}`
- * and `/invite/{token}` make for the same reason: there is no session yet to
+ * The ticket travels in the query string, the trade `/reset-password#{token}`
+ * and `/invite#{token}` make for the same reason: there is no session yet to
  * carry it any other way, and it lives ten minutes and once.
  */
 

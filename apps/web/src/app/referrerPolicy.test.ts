@@ -1,7 +1,7 @@
 /**
  * No Referer from a page whose address is a credential — 2026-09-29.
  *
- * The public report at /share/{token} links out to every source it cites and
+ * The public report at /share#{token} links out to every source it cites and
  * shows an agency's logo from wherever that agency keeps it. `next.config.mjs`
  * sends `Referrer-Policy: no-referrer` with it, so none of those hosts is
  * handed the report's address — and with the other pages whose address is a
@@ -45,6 +45,13 @@ describe('pages whose address is a credential send no Referer', () => {
 
   it('finds the token routes on disk, so passing means something', () => {
     expect(tokenRoutes().sort()).toEqual(['/invite/:token', '/reset-password/:token', '/share/:token']);
+  });
+
+  // The fragment routes are the live form. A fragment never reaches a server,
+  // but the page still links out and loads fonts and logos.
+  it.each(['/share', '/invite', '/reset-password'])('the fragment route %s does, and exists on disk', async (source) => {
+    expect(existsSync(join(APP, source.slice(1), 'page.tsx'))).toBe(true);
+    expect(await rulesFor(source)).toContainEqual(NO_REFERRER);
   });
 
   it.each([...tokenRoutes(), '/sign-up/google'])('%s does', async (source) => {

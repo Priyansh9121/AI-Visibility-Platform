@@ -18,7 +18,15 @@ const nextConfig = {
   // rel="noreferrer"; this covers every other request and any future link.
   // Nothing here needs a Referer: the API's CORS reads Origin.
   async headers() {
-    return ['/share/:token', '/reset-password/:token', '/invite/:token', '/sign-up/google'].map(
+    return [
+      '/share',
+      '/invite',
+      '/reset-password',
+      '/share/:token',
+      '/reset-password/:token',
+      '/invite/:token',
+      '/sign-up/google',
+    ].map(
       (source) => ({ source, headers: [{ key: 'Referrer-Policy', value: 'no-referrer' }] }),
     );
   },

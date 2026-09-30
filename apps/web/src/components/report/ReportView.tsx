@@ -76,7 +76,7 @@ export interface ReportViewProps {
    */
   competitorEditor?: ReactNode;
   /**
-   * Render as a PUBLIC document — Epic 9.8, `/share/{token}`.
+   * Render as a PUBLIC document — Epic 9.8, `/share#{token}`.
    *
    * Omitting `competitorEditor` already removes the only *editing* affordance,
    * which is why this component was almost public-ready by construction. What

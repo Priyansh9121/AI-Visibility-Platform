@@ -16,15 +16,17 @@ SECRETS IN ACCESS-LOG PATHS
 uvicorn's access log prints each request's full path and query string, and
 three kinds of request carry a secret there:
 
-- a share link's token: `/reports/{token}` and `/reports/{token}.pdf`;
+- a legacy share token: `/reports/{token}` and `/reports/{token}.pdf` (the
+  current `POST /reports/shared[/pdf]` routes carry it in the body);
 - the Google callback's `code` and `state`: `/auth/google/callback?…`;
 - an unfinished Google sign-up's `ticket`: `/auth/google/pending?…`.
 
 `RedactSecretPaths` rewrites those before the line is formatted — the token
 segment becomes `…`, and those two query strings are dropped. The access log
 itself stays: the client, the method, the status and the rest of the path are
-how a request is traced. Invitation and reset tokens travel in POST bodies,
-which the access log never prints.
+how a request is traced. Invitation, reset and (now) share tokens travel in POST bodies,
+which the access log never prints; the links carry them in the URL fragment,
+which a browser never sends.
 
 INSTALLED BY `create_app` (`main.py`), so it applies to whatever command
 imports `avp_api.main:app` — the uvicorn in `docker-entrypoint.sh`, which is
@@ -45,16 +47,30 @@ from .config import Settings
 ACCESS_LOGGER = "uvicorn.access"
 REDACTED = "…"
 
-# A share token is the path segment after /reports/, up to a slash, a query or
-# the ".pdf" suffix. Tokens are URL-safe base64 — never a dot.
-_SHARE_TOKEN = re.compile(r"(/reports/)[^/?#.]+")
+# Under /reports/ only the two body-token routes, `/reports/shared` and
+# `/reports/shared/pdf`, are logged as they are: they carry no secret. Any other
+# remainder (a legacy `/reports/<token>` or `<token>.pdf`, `/reports/shared?token=`,
+# `/reports/shared/<token>`, `/reports/shared%2F<token>`) is replaced by one
+# ellipsis, keeping only a trailing ".pdf", and a query string on a /reports/ path
+# is dropped whole. Tokens are URL-safe base64, so never contain a dot.
+_REPORTS_PATH = re.compile(r"(/reports/)([^?#\s]*)(?:[?#]\S*)?")
+_OPEN_REPORT_ROUTES = frozenset({"shared", "shared/pdf"})
+
+
+def _redact_reports(match: re.Match[str]) -> str:
+    rest = match.group(2)
+    if rest in _OPEN_REPORT_ROUTES and match.group(0) == match.group(1) + rest:
+        return match.group(0)
+    return match.group(1) + REDACTED + (".pdf" if rest.endswith(".pdf") else "")
+
+
 # Everything after the "?" on the two Google routes that carry a secret there.
 _SECRET_QUERY = re.compile(r"(/auth/google/(?:callback|pending))\?\S*")
 
 
 def redact_path(path: str) -> str:
     """The path with every secret it can carry replaced. Anything else untouched."""
-    return _SECRET_QUERY.sub(r"\1", _SHARE_TOKEN.sub(rf"\g<1>{REDACTED}", path))
+    return _SECRET_QUERY.sub(r"\1", _REPORTS_PATH.sub(_redact_reports, path))
 
 
 class RedactSecretPaths(logging.Filter):

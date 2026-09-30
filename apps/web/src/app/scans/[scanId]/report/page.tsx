@@ -113,7 +113,7 @@ export default function ReportPageRoute({
       kept the page at design-direction.md's 52rem Presenting measure, and
       the founder then looked at it live twice and found a well-fitted desk
       around a narrow page is still a narrow page. Epic 17 reversed the
-      width table's row for this route and `/share/{token}`, explicitly,
+      width table's row for this route and `/share`, explicitly,
       in the table.
 
       `wide` is deliberate now: the shell runs at the Working measure and
