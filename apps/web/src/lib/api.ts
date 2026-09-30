@@ -270,12 +270,16 @@ export const api = {
   /**
    * Who a Google sign-in is for, before the agency is named — Epic 20.
    *
-   * Read-only: the ticket is not spent by reading it, so the completion
-   * page survives a reload. `400 invalid-google-ticket` for unknown, used
+   * A POST so the ticket rides in the body, never a URL. Read-only: the
+   * ticket is not spent by reading it, so the completion page survives a
+   * reload. `400 invalid-google-ticket` for unknown, used
    * and expired alike.
    */
   googlePending: (ticket: string) =>
-    request<GooglePending>(`/auth/google/pending?ticket=${encodeURIComponent(ticket)}`),
+    request<GooglePending>('/auth/google/pending', {
+      method: 'POST',
+      body: JSON.stringify({ ticket }),
+    }),
 
   /**
    * Finish creating an agency from a verified Google identity — Epic 20.

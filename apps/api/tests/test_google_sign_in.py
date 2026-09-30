@@ -110,6 +110,22 @@ def landed(resp, path: str) -> dict[str, list[str]]:  # noqa: ANN001
     return parse_qs(url.query)
 
 
+def landed_ticket(resp) -> str:  # noqa: ANN001
+    """The ticket from the completion redirect: in the fragment, never the query."""
+    assert resp.status_code == 302, resp.text
+    url = urlparse(resp.headers["location"])
+    assert f"{url.scheme}://{url.netloc}{url.path}" == f"{WEB}/sign-up/google"
+    assert url.query == "", "the ticket must not ride in the query string"
+    fragment = parse_qs(url.fragment)
+    assert list(fragment) == ["ticket"]
+    (ticket,) = fragment["ticket"]
+    return ticket
+
+
+async def peek(client: AsyncClient, ticket: str):  # noqa: ANN201
+    return await client.post(f"{BASE}/auth/google/pending", json={"ticket": ticket})
+
+
 async def sign_up_with_password(client: AsyncClient, email: str) -> str:
     resp = await client.post(
         f"{BASE}/auth/sign-up",
@@ -225,8 +241,7 @@ async def test_a_new_address_creates_nothing_until_the_agency_is_named(
 ) -> None:  # noqa: ANN001
     google.identities["code-1"] = identity("new@example.com", name="Dana Whitfield")
     state = await start(client)
-    query = landed(await callback(client, code="code-1", state=state), "/sign-up/google")
-    (ticket,) = query["ticket"]
+    ticket = landed_ticket(await callback(client, code="code-1", state=state))
     assert len(ticket) >= 43
 
     # Nothing exists yet, and nobody is signed in.
@@ -239,7 +254,7 @@ async def test_a_new_address_creates_nothing_until_the_agency_is_named(
 
     # The completion page can read who this is, more than once.
     for _ in range(2):
-        pending = await client.get(f"{BASE}/auth/google/pending", params={"ticket": ticket})
+        pending = await peek(client, ticket)
         assert pending.status_code == 200, pending.text
         assert pending.json() == {"email": "new@example.com", "suggestedName": "Dana Whitfield"}
 
@@ -268,9 +283,7 @@ async def test_a_new_address_creates_nothing_until_the_agency_is_named(
     )
     assert again.status_code == 400
     assert again.json()["type"].endswith("/invalid-google-ticket")
-    assert (
-        await client.get(f"{BASE}/auth/google/pending", params={"ticket": ticket})
-    ).status_code == 400
+    assert (await peek(client, ticket)).status_code == 400
 
 
 async def test_completion_validates_the_agency_name_like_sign_up_does(
@@ -278,17 +291,13 @@ async def test_completion_validates_the_agency_name_like_sign_up_does(
 ) -> None:
     google.identities["code-1"] = identity("new@example.com")
     state = await start(client)
-    (ticket,) = landed(await callback(client, code="code-1", state=state), "/sign-up/google")[
-        "ticket"
-    ]
+    ticket = landed_ticket(await callback(client, code="code-1", state=state))
     resp = await client.post(
         f"{BASE}/auth/google/complete", json={"ticket": ticket, "agencyName": "N", "fullName": "D"}
     )
     assert resp.status_code == 422
     # A rejected form does not spend the ticket.
-    assert (
-        await client.get(f"{BASE}/auth/google/pending", params={"ticket": ticket})
-    ).status_code == 200
+    assert (await peek(client, ticket)).status_code == 200
 
 
 async def test_an_unknown_ticket_is_one_refusal(
@@ -307,9 +316,7 @@ async def test_a_google_only_account_cannot_sign_in_with_a_password(
 ) -> None:
     google.identities["code-1"] = identity("new@example.com")
     state = await start(client)
-    (ticket,) = landed(await callback(client, code="code-1", state=state), "/sign-up/google")[
-        "ticket"
-    ]
+    ticket = landed_ticket(await callback(client, code="code-1", state=state))
     await client.post(
         f"{BASE}/auth/google/complete",
         json={"ticket": ticket, "agencyName": "Northlight", "fullName": "Dana"},
@@ -599,14 +606,13 @@ async def test_a_ticket_expires_with_the_configured_ttl(
     app.dependency_overrides[get_settings] = lambda: short
     google.identities["code-1"] = identity("new-person@example.com", sub="sub-new")
     state = await start(client)
-    query = landed(await callback(client, code="code-1", state=state), "/sign-up/google")
-    ticket = query["ticket"][0]
+    ticket = landed_ticket(await callback(client, code="code-1", state=state))
 
-    peek = await client.get(f"{BASE}/auth/google/pending", params={"ticket": ticket})
-    assert peek.status_code == 200, peek.text
+    first = await peek(client, ticket)
+    assert first.status_code == 200, first.text
     await asyncio.sleep(1.2)
-    peek = await client.get(f"{BASE}/auth/google/pending", params={"ticket": ticket})
-    assert peek.status_code == 400, peek.text
+    second = await peek(client, ticket)
+    assert second.status_code == 400, second.text
     done = await client.post(
         f"{BASE}/auth/google/complete",
         json={"ticket": ticket, "agencyName": "Late Agency", "fullName": "New Person"},
@@ -624,3 +630,53 @@ async def test_the_failure_redirect_carries_no_email_and_no_token(
     assert "secret-person" not in location
     assert "code-1" not in location
     assert state not in location
+
+
+async def test_the_pending_peek_is_a_post_and_a_query_ticket_is_refused(
+    client: AsyncClient, google: FakeGoogleProvider
+) -> None:
+    """The ticket is a bearer credential: it travels in a body, never a query.
+
+    GET is 405 (the path exists, the method does not), so an old client that
+    still sends `?ticket=` learns nothing and its ticket reaches no handler.
+    """
+    google.identities["code-1"] = identity("new@example.com")
+    state = await start(client)
+    ticket = landed_ticket(await callback(client, code="code-1", state=state))
+    old = await client.get(f"{BASE}/auth/google/pending", params={"ticket": ticket})
+    assert old.status_code == 405, old.text
+    assert "new@example.com" not in old.text
+    # A POST with the ticket in a query and no body is a validation error, not a peek.
+    assert (
+        await client.post(f"{BASE}/auth/google/pending", params={"ticket": ticket})
+    ).status_code == 422
+    # Unknown ticket in the body: the existing problem.
+    unknown = await peek(client, "not-a-ticket")
+    assert unknown.status_code == 400
+    assert unknown.json()["type"].endswith("/invalid-google-ticket")
+
+
+# Covers app/structlog logs over ASGITransport, not uvicorn's access log; that
+# path is covered by the empty-query assertions, the 405 test and
+# test_logging_config.py.
+async def test_the_ticket_reaches_no_app_log_line(
+    client: AsyncClient, google: FakeGoogleProvider, capsys, caplog  # noqa: ANN001
+) -> None:
+    import json
+
+    import structlog
+
+    caplog.set_level("DEBUG")
+    google.identities["code-1"] = identity("logcheck@example.com")
+    with structlog.testing.capture_logs() as events:
+        state = await start(client)
+        ticket = landed_ticket(await callback(client, code="code-1", state=state))
+        assert (await peek(client, ticket)).status_code == 200
+        done = await client.post(
+            f"{BASE}/auth/google/complete",
+            json={"ticket": ticket, "agencyName": "Log Agency", "fullName": "Dana"},
+        )
+        assert done.status_code == 201, done.text
+    everything = json.dumps(events, default=str) + capsys.readouterr().out + caplog.text
+    assert ticket not in everything
+    assert "logcheck@example.com" not in everything

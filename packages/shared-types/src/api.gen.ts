@@ -344,7 +344,8 @@ export interface paths {
          *     - an existing account → the session cookie is set and the browser goes
          *       to `/dashboard`;
          *     - a new address → a ten-minute ticket is minted and the browser goes to
-         *       `/sign-up/google?ticket=…` to name the agency;
+         *       `/sign-up/google#ticket=…` (the fragment, never the query, so it is in
+         *       no request log and no Referer) to name the agency;
          *     - anything else → `/?google=error&reason=…` with one of `not-configured`,
          *       `denied`, `invalid-state`, `exchange-failed`, `email-unverified`,
          *       `account-suspended`, `email-claimed`, `invitation-expired`,
@@ -400,22 +401,22 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        get?: never;
+        put?: never;
         /**
          * Google Pending
          * @description What the completion page shows before asking for an agency name. **No auth.**
          *
-         *     Reads the ticket without consuming it, so a reload of the page is not a
-         *     second sign-in. The ticket is a bearer credential with a session token's
-         *     entropy and a reset link's lifetime; carrying it in a query string is a
-         *     trade the reset link (`/reset-password#<token>`, a fragment, which is never
-         *     sent to a server) does not have to make; here the Google redirect is the constraint — there
-         *     is no session yet to carry it any other way.
+         *     A POST so the ticket rides in the body: it is a bearer credential with a
+         *     session token's entropy, and a URL is logged. It is not a mutation: the
+         *     ticket is read without being consumed, so asking twice is not a second
+         *     sign-in. The web page removes the ticket from the address bar once read
+         *     (like invite and reset), so reloading that page does not bring it back and
+         *     the person starts again. `GET` with a `?ticket=` is `405`.
          *
          *     **Errors:** `400 invalid-google-ticket` for unknown, used and expired alike.
          */
-        get: operations["google_pending_api_v1_auth_google_pending_get"];
-        put?: never;
-        post?: never;
+        post: operations["google_pending_api_v1_auth_google_pending_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2662,13 +2663,21 @@ export interface components {
          *
          *     Read by the sign-up completion page so it can show the address the
          *     account will be under and pre-fill the name. Nothing here is a credential;
-         *     the ticket in the query string is.
+         *     the ticket is.
          */
         GooglePendingOut: {
             /** Email */
             email: string;
             /** Suggestedname */
             suggestedName: string;
+        };
+        /**
+         * GooglePendingRequest
+         * @description The ticket to peek at, in a body so it never lands in a URL.
+         */
+        GooglePendingRequest: {
+            /** Ticket */
+            ticket: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -4297,16 +4306,18 @@ export interface operations {
             };
         };
     };
-    google_pending_api_v1_auth_google_pending_get: {
+    google_pending_api_v1_auth_google_pending_post: {
         parameters: {
-            query: {
-                ticket: string;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GooglePendingRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

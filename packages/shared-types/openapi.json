@@ -2331,7 +2331,7 @@
         "type": "string"
       },
       "GooglePendingOut": {
-        "description": "What Google told us about a person who has no account yet \u2014 Epic 20.\n\nRead by the sign-up completion page so it can show the address the\naccount will be under and pre-fill the name. Nothing here is a credential;\nthe ticket in the query string is.",
+        "description": "What Google told us about a person who has no account yet \u2014 Epic 20.\n\nRead by the sign-up completion page so it can show the address the\naccount will be under and pre-fill the name. Nothing here is a credential;\nthe ticket is.",
         "properties": {
           "email": {
             "title": "Email",
@@ -2347,6 +2347,22 @@
           "suggestedName"
         ],
         "title": "GooglePendingOut",
+        "type": "object"
+      },
+      "GooglePendingRequest": {
+        "description": "The ticket to peek at, in a body so it never lands in a URL.",
+        "properties": {
+          "ticket": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Ticket",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticket"
+        ],
+        "title": "GooglePendingRequest",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -5730,7 +5746,7 @@
     },
     "/api/v1/auth/google/callback": {
       "get": {
-        "description": "Where Google sends the browser back. **No auth.** Always a 302.\n\nIn order: the state must be one this process minted and not yet used;\nthe code is exchanged and the ID token verified (signature, audience,\nissuer, expiry); the token's nonce must be the state's; then the\nlinking policy decides. Three destinations:\n\n- an existing account \u2192 the session cookie is set and the browser goes\n  to `/dashboard`;\n- a new address \u2192 a ten-minute ticket is minted and the browser goes to\n  `/sign-up/google?ticket=\u2026` to name the agency;\n- anything else \u2192 `/?google=error&reason=\u2026` with one of `not-configured`,\n  `denied`, `invalid-state`, `exchange-failed`, `email-unverified`,\n  `account-suspended`, `email-claimed`, `invitation-expired`,\n  `account-unavailable`, or `unavailable` when something this route\n  depends on \u2014 Redis, Postgres, the session store \u2014 failed underneath it\n  (2026-09-21; until then that was the one way this route showed a raw\n  500 page).\n\n**Errors:** none as status codes. A person arriving here is not a script\nand gets a page, not a problem document.",
+        "description": "Where Google sends the browser back. **No auth.** Always a 302.\n\nIn order: the state must be one this process minted and not yet used;\nthe code is exchanged and the ID token verified (signature, audience,\nissuer, expiry); the token's nonce must be the state's; then the\nlinking policy decides. Three destinations:\n\n- an existing account \u2192 the session cookie is set and the browser goes\n  to `/dashboard`;\n- a new address \u2192 a ten-minute ticket is minted and the browser goes to\n  `/sign-up/google#ticket=\u2026` (the fragment, never the query, so it is in\n  no request log and no Referer) to name the agency;\n- anything else \u2192 `/?google=error&reason=\u2026` with one of `not-configured`,\n  `denied`, `invalid-state`, `exchange-failed`, `email-unverified`,\n  `account-suspended`, `email-claimed`, `invitation-expired`,\n  `account-unavailable`, or `unavailable` when something this route\n  depends on \u2014 Redis, Postgres, the session store \u2014 failed underneath it\n  (2026-09-21; until then that was the one way this route showed a raw\n  500 page).\n\n**Errors:** none as status codes. A person arriving here is not a script\nand gets a page, not a problem document.",
         "operationId": "google_callback_api_v1_auth_google_callback_get",
         "parameters": [
           {
@@ -5846,22 +5862,19 @@
       }
     },
     "/api/v1/auth/google/pending": {
-      "get": {
-        "description": "What the completion page shows before asking for an agency name. **No auth.**\n\nReads the ticket without consuming it, so a reload of the page is not a\nsecond sign-in. The ticket is a bearer credential with a session token's\nentropy and a reset link's lifetime; carrying it in a query string is a\ntrade the reset link (`/reset-password#<token>`, a fragment, which is never\nsent to a server) does not have to make; here the Google redirect is the constraint \u2014 there\nis no session yet to carry it any other way.\n\n**Errors:** `400 invalid-google-ticket` for unknown, used and expired alike.",
-        "operationId": "google_pending_api_v1_auth_google_pending_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "ticket",
-            "required": true,
-            "schema": {
-              "maxLength": 512,
-              "minLength": 1,
-              "title": "Ticket",
-              "type": "string"
+      "post": {
+        "description": "What the completion page shows before asking for an agency name. **No auth.**\n\nA POST so the ticket rides in the body: it is a bearer credential with a\nsession token's entropy, and a URL is logged. It is not a mutation: the\nticket is read without being consumed, so asking twice is not a second\nsign-in. The web page removes the ticket from the address bar once read\n(like invite and reset), so reloading that page does not bring it back and\nthe person starts again. `GET` with a `?ticket=` is `405`.\n\n**Errors:** `400 invalid-google-ticket` for unknown, used and expired alike.",
+        "operationId": "google_pending_api_v1_auth_google_pending_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GooglePendingRequest"
+              }
             }
-          }
-        ],
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {

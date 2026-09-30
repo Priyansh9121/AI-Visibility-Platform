@@ -1035,7 +1035,8 @@ class TestTheFreeScanNeedsGoogle:
         back = await _continue_with_google(client)
         landed = urlparse(back.headers["location"])
         assert landed.path == "/sign-up/google"
-        assert parse_qs(landed.query)["ticket"][0]
+        assert landed.query == ""
+        assert parse_qs(landed.fragment)["ticket"][0]
 
         me = (await client.get(f"{BASE}/auth/me")).json()
         assert me["agency"]["id"] == agency_id
