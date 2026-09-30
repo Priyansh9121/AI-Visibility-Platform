@@ -65,6 +65,14 @@ export const DIMENSION_MEANING: Record<string, string> = {
  */
 export const ROBOTS_DISALLOWED = 'ROBOTS_DISALLOWED';
 
+/**
+ * How a `partial` technical audit is worded, on the report and on the client's
+ * Technical screen alike: one place, so the two cannot drift.
+ */
+export const PARTIAL_AUDIT_LABEL = 'Partial audit';
+export const PARTIAL_AUDIT_NOTE =
+  'Some signals were unavailable, so the sub-score was computed from what could be measured.';
+
 export const EXCLUSION_REASON: Record<string, { label: string; detail: string }> = {
   NOT_YET_MEASURED: {
     label: 'Not yet checked',

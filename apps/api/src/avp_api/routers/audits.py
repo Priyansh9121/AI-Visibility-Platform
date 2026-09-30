@@ -47,9 +47,12 @@ def _ordered(audit) -> TechnicalAuditOut:  # noqa: ANN001
 
     # The four weighted parts of the sub-score, recomputed from the stored row —
     # Epic 9.22. Same function the score itself was built from, so the two
-    # cannot disagree; nothing is re-crawled and nothing is written. Skipped for
-    # an audit that failed, which has no components to show.
-    if audit.status is AuditStatus.OK:
+    # cannot disagree; nothing is re-crawled and nothing is written. Computed for
+    # OK and PARTIAL alike: a partial audit was read and scored with a component
+    # excluded (its reason is in `excluded_components`), so it has measured
+    # components and redistributed weights to show. Skipped only for FAILED,
+    # which was not read, not scored and has nothing to show.
+    if audit.status is not AuditStatus.FAILED:
         components, _excluded = technical_audit.compute_components(
             technical_audit.signals_from_row(audit)
         )

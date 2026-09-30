@@ -1635,6 +1635,14 @@ records a verdict for each check.
   "id": "taud_01J...", "scanId": "scan_01J...",
   "urlAudited": "https://helpscout.com", "status": "ok",
   "technicalFoundation": "87.50", "excludedComponents": {},
+  "components": {
+    "indexation": "100.00", "structuredData": "87.50",
+    "contentFreshness": "75.00", "schemaPresence": "90.00"
+  },
+  "componentWeights": {
+    "indexation": "30.00", "structuredData": "25.00",
+    "contentFreshness": "25.00", "schemaPresence": "20.00"
+  },
   "lcpMs": 812, "cls": "0.053", "inpMs": null,
   "schemaTypes": ["VideoObject", "WebSite", "Corporation"],
   "hasOrganizationSchema": true, "hasLocalbusinessSchema": false,
@@ -1663,9 +1671,9 @@ number, which is why `status: "failed"` exists.
 
 | `status` | Meaning |
 |---|---|
-| `ok` | Every component measurable |
-| `partial` | Read the page, but a component had no signal (e.g. no date anywhere). Scored on what was measurable; `excludedComponents` says which was dropped. |
-| `failed` | Could not read the site. `technicalFoundation` is `null`. |
+| `ok` | Every component measurable; `components` and `componentWeights` filled. |
+| `partial` | Read the page, but a component had no signal (e.g. no date anywhere). Scored on what was measurable; `components` and `componentWeights` show the measured ones, and `excludedComponents` lists those left out with their reason (e.g., `content_freshness: NO_DATE_SIGNAL_AVAILABLE`). |
+| `failed` | Could not read the site. `technicalFoundation`, `components` and `componentWeights` are all empty. |
 
 **Core Web Vitals are measured and reported, but carry NO weight in the
 sub-score.** `lcpMs` and `cls` are single-cold-load **lab** measurements, not
@@ -1674,12 +1682,21 @@ noisy measurement move a client-facing score would make the score noisy.
 **`inpMs` is always `null`**: INP measures real user interaction latency, and a
 crawler that never interacts cannot produce one. Real INP needs CrUX or RUM.
 
-**Scored components and their weights inside Technical Foundation:**
+**`components` and `componentWeights` — 2026-09-30.** Both are populated for `ok`
+and `partial` audits; `failed` audits omit both. `components` holds each
+component's score (0–100 decimal), calculated only from the measured signals; a
+partial audit drops the one with no signal. `componentWeights` holds the weight
+applied to each component after redistribution — when one is excluded, its weight
+is split proportionally among the rest, exactly as `Score.excludedDimensions`
+works. The weighted sum of `components` times `componentWeights` (÷100) equals
+`technicalFoundation`, and a client can draw the latter as a Luminance Ledger
+whose total lit height is the score. `excludedComponents` lists the keys not in
+`components` and the reason each was dropped (e.g., `content_freshness: NO_DATE_SIGNAL_AVAILABLE`).
+
+**Scored components and their nominal weights inside Technical Foundation:**
 indexation 30, structured data 25, content freshness 25, schema presence 20.
 Indexation is heaviest because it is a precondition — a site telling crawlers to
-stay out has no foundation whatever its markup looks like. A component with no
-signal is excluded and its weight redistributed, exactly as
-`Score.excludedDimensions` works.
+stay out has no foundation whatever its markup looks like.
 
 **Facts only** (the facts-only rule). Schema **type names**, presence booleans,
 counts, durations and a day count. No page copy, no meta description text, no
