@@ -20436,3 +20436,40 @@ contract regenerates byte-identically.
 - Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
 - OpenAPI and `api.gen.ts` regenerate byte-identically.
 - Exit codes were read from files.
+
+# JS and Python dependency licences are checked in CI on one policy
+
+**2026-09-30, the tenth entry of the day.** One item, one commit.
+
+**Render: nothing to set.**
+
+## 1. What changed
+
+- **Before this, no licence check ran in CI.** `CLAUDE.md` pointed at `apps/api/scripts/license_audit.py`, but that script walks only the Python environment it runs in, CI never ran it, and nothing checked JS licences. Found by the skills-pilot security review of `avp-ui-styling`.
+- **New `apps/api/scripts/js_license_audit.py`** (standard library only; plain `python3`) reads `pnpm licenses list --json` output and applies `license_audit.py`'s own `ALLOWED`, `BLOCKING`, `NOT_COPYLEFT` and `normalise`, imported by file path, so there is one policy. SPDX `OR` passes if any alternative is allowed; `AND` needs every part to pass; a missing, `UNKNOWN` or `Unlicensed` licence is undeclared and blocks, as in the Python script. Verdicts: ok, `REVIEW` (listed, exit 0), `BLOCK` (exit 1).
+- **New `infra/ci/licence-pending-decisions.json` holds open licence questions until the founder decides. It is not an allow-list.** An entry holds a finding only while that package's current verdict is `BLOCK` and both its name pattern and its exact licence string match; the held finding prints `PENDING FOUNDER DECISION: …` on every run and the run exits 0. An entry that matches nothing, or matches a package that is not blocking, fails the check, so it cannot silence anything else or go stale. One entry: `@img/sharp-libvips-*`, `LGPL-3.0-or-later`, raised 2026-09-30: "Accept the LGPL libvips binaries that sharp (an optional dependency of next) loads, or remove sharp?" Per the founder, no exception was added and `ALLOWED`/`BLOCKING` are unchanged.
+- **`.github/workflows/ci.yml`: three steps, each writing to a file and checking its own exit code.** "Python dependency licences (API environment)" in the api job after `uv sync`; "Python dependency licences (workers environment)" in the workers job (it runs `../api/scripts/license_audit.py`); "JS dependency licences" in the web job after `pnpm install --frozen-lockfile`, which writes `pnpm licenses list --json` to `$RUNNER_TEMP/js-licences.json` and then runs the script on that file.
+- **`CLAUDE.md`'s "Dependency licences" bullet** now says Python deps (API and workers environments) are checked by `license_audit.py`, JS deps by `js_license_audit.py` over `pnpm licenses list`, both in CI on one policy, and that open questions live in `infra/ci/licence-pending-decisions.json`, which is not an allow-list.
+- **New `apps/api/tests/test_js_license_audit.py` (17 tests):** MIT ok; GPL-3.0 and LGPL block; `(MIT OR GPL-3.0)` ok; `MIT AND GPL-2.0` blocks; a missing licence blocks; CC-BY-4.0 is `REVIEW` with exit 0; a pending entry holds a matching blocked package; a pending entry with a different licence string does not; a pending entry matching a non-blocking package fails; one matching nothing fails; the real pending file parses with one entry. Red first: 17 failed with the script and the file missing.
+
+## Found, not fixed
+
+- **On Linux CI the held package is `@img/sharp-libvips-linux-x64` (or `-linuxmusl-x64`).** The `@img/sharp-libvips-*` pattern covers both, but that is untested until the first CI run.
+- **The Linux `uv sync --frozen --extra dev` set may differ slightly from the local one,** so the new Python steps could flag something on the first CI run.
+- **`certifi` and `pathspec` are MPL-2.0 (weak copyleft) and only `REVIEW` under today's `BLOCKING` regex.** Whether that fits "no copyleft" is a founder question; changing `ALLOWED`/`BLOCKING` was out of scope.
+
+## Verified
+
+**API pytest 1751 → 1768 (+17); `api-pytest` floor 1205 → 1768.**
+- **Negative control:** a fake GPL-3.0 package added to a copy of the real licence list makes the check exit 1, naming it.
+- **The three licence steps, run locally as CI will run them (exit codes read from files):**
+  - API environment: 65 distributions, 61 ok, 4 `REVIEW` (`avp-api` itself UNLICENSED, `certifi` MPL 2.0, `email-validator` "The Unlicense (Unlicense)", `pathspec` MPL 2.0), 0 blocks; exit 0.
+  - Workers environment: 80 distributions, 75 ok, 5 `REVIEW` (the same four plus `avp-workers`), 0 blocks; exit 0.
+  - JS: 242 rows (one per package version), 238 ok, 3 `REVIEW` (`argparse` 2.0.1 Python-2.0, dev; `caniuse-lite` CC-BY-4.0, runtime; `lru-cache` 11.5.2 BlueOak-1.0.0, dev), 1 held (`@img/sharp-libvips-darwin-arm64@1.2.4`, LGPL-3.0-or-later), 0 unheld blocks; exit 0.
+
+**The rest of the bar.**
+- Workers 13, shared-types 53 (0 fail), design-system 839, web 1087, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- OpenAPI and `api.gen.ts` regenerate byte-identically.
+- Exit codes were read from files.

@@ -105,6 +105,12 @@ jobs:
       - name: Install (locked)
         run: uv sync --frozen --extra dev
 
+      - name: Python dependency licences (API environment)
+        run: |
+          rc=0; uv run python scripts/license_audit.py > "$RUNNER_TEMP/licences-api.log" 2>&1 || rc=$?
+          tail -12 "$RUNNER_TEMP/licences-api.log"
+          [ "$rc" = 0 ] || { echo "::error::a copyleft, source-available or undeclared licence is installed"; exit "$rc"; }
+
       - name: ruff (src and tests — scripts/ carries an accepted baseline)
         run: uv run ruff check src tests
 
@@ -191,6 +197,12 @@ jobs:
       - name: Install (locked)
         run: uv sync --frozen --extra dev
 
+      - name: Python dependency licences (workers environment)
+        run: |
+          rc=0; uv run python ../api/scripts/license_audit.py > "$RUNNER_TEMP/licences-workers.log" 2>&1 || rc=$?
+          tail -12 "$RUNNER_TEMP/licences-workers.log"
+          [ "$rc" = 0 ] || { echo "::error::a copyleft, source-available or undeclared licence is installed"; exit "$rc"; }
+
       - name: pytest
         run: |
           rc=0; uv run pytest -q -p no:cacheprovider > "$RUNNER_TEMP/pytest.log" 2>&1 || rc=$?
@@ -221,6 +233,18 @@ jobs:
 
       - name: Install (locked)
         run: pnpm install --frozen-lockfile
+
+      # One policy for both languages: js_license_audit.py imports ALLOWED and
+      # BLOCKING from apps/api/scripts/license_audit.py. Open questions live in
+      # infra/ci/licence-pending-decisions.json (printed every run, never an
+      # allow-list).
+      - name: JS dependency licences
+        run: |
+          rc=0; pnpm licenses list --json > "$RUNNER_TEMP/js-licences.json" || rc=$?
+          [ "$rc" = 0 ] || { echo "::error::pnpm licenses list failed"; exit "$rc"; }
+          rc=0; python3 apps/api/scripts/js_license_audit.py "$RUNNER_TEMP/js-licences.json" > "$RUNNER_TEMP/js-audit.log" 2>&1 || rc=$?
+          tail -20 "$RUNNER_TEMP/js-audit.log"
+          [ "$rc" = 0 ] || { echo "::error::an unheld copyleft, source-available or undeclared JS licence"; exit "$rc"; }
 
       - name: shared-types — tests
         working-directory: packages/shared-types
