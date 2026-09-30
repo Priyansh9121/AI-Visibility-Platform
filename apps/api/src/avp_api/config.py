@@ -78,6 +78,14 @@ class Settings(BaseSettings):
     database_pool_size: int = 10
     database_max_overflow: int = 5
     redis_url: str = Field(default="redis://127.0.0.1:6379/0")
+    # Bounds on every Redis call, so a slow or unreachable Redis fails the
+    # request fast (a 503) instead of hanging it. Redis is same-region and
+    # answers in about a millisecond; 2 s is generous for a Lua rate-limit
+    # script or a session read, yet well inside a browser's patience. Nothing
+    # on the API pool blocks on purpose (no BLPOP, XREAD BLOCK or pub/sub), so
+    # a read timeout cannot break a legitimate wait.
+    redis_connect_timeout_seconds: float = Field(default=2.0, gt=0, allow_inf_nan=False)
+    redis_socket_timeout_seconds: float = Field(default=2.0, gt=0, allow_inf_nan=False)
 
     # --- auth --------------------------------------------------------------
     app_secret: SecretStr = Field(

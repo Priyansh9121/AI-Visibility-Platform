@@ -12,10 +12,16 @@ from __future__ import annotations
 
 from typing import Any
 
+import structlog
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from redis.exceptions import AuthenticationError, AuthorizationError
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
+logger = structlog.get_logger(__name__)
 
 PROBLEM_CONTENT_TYPE = "application/problem+json"
 
@@ -278,6 +284,25 @@ def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(ProblemError)
     async def _handle_problem(request: Request, exc: ProblemError) -> JSONResponse:
         return _problem_response(request, exc)
+
+    @app.exception_handler(RedisConnectionError)
+    @app.exception_handler(RedisTimeoutError)
+    async def _handle_redis(request: Request, exc: Exception) -> JSONResponse:
+        # Redis unreachable or too slow (connect/read timeout). Other RedisError
+        # classes (a Lua bug) are NOT mapped, and neither are AuthenticationError
+        # and AuthorizationError, which subclass ConnectionError in redis-py: a
+        # rotated password is a config fault and stays a 500, not an outage.
+        if isinstance(exc, AuthenticationError | AuthorizationError):
+            raise exc
+        # Fail closed with the same 503 problem the rate limiter gives. Only
+        # the exception's class is logged; its text can carry the host.
+        logger.warning("redis.unavailable", error=type(exc).__name__)
+        return _problem_response(
+            request,
+            ServiceUnavailable(
+                detail="This is temporarily unavailable. Please try again shortly."
+            ),
+        )
 
     @app.exception_handler(RequestValidationError)
     async def _handle_validation(

@@ -67,7 +67,11 @@ def check_datastores() -> dict[str, str]:
         checks["postgres"] = f"error: {type(exc).__name__}"
 
     try:
-        client = redis_lib.Redis.from_url(settings.redis_url)
+        client = redis_lib.Redis.from_url(
+            settings.redis_url,
+            socket_connect_timeout=settings.redis_connect_timeout,
+            socket_timeout=settings.redis_socket_timeout,
+        )
         client.ping()
         client.close()
         checks["redis"] = "ok"

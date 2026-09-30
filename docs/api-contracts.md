@@ -48,6 +48,13 @@ Redis dump does not yield working cookies. Every authenticated request re-reads
 the user and agency from Postgres, so a suspended user or deleted agency loses
 access on their *next* request.
 
+Redis calls are bounded: connect and read each time out after 2 seconds
+(`REDIS_CONNECT_TIMEOUT_SECONDS`, `REDIS_SOCKET_TIMEOUT_SECONDS`, both optional;
+the workers read the same names). When Redis is down or too slow, any route that
+touches it — sign-in, every authenticated request — answers `503
+service-unavailable` (fail closed) within about that time, with no host, URL or
+address in the body or the log.
+
 Cross-origin callers must send `credentials: 'include'`, and the origin must be
 listed in `CORS_ALLOW_ORIGINS` — browsers reject wildcard CORS with credentials.
 

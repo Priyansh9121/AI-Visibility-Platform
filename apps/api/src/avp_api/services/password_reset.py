@@ -135,6 +135,9 @@ async def confirm_reset(
             select(PasswordResetToken).where(
                 PasswordResetToken.token_digest == token_digest(token)
             )
+            # Row lock: a second concurrent confirm waits for the first to
+            # commit, then sees `used_at` set and is refused.
+            .with_for_update()
         )
     ).scalar_one_or_none()
 
@@ -154,5 +157,4 @@ async def confirm_reset(
     user.password_hash = hash_password(new_password, settings)
     row.used_at = now
     await session.flush()
-    logger.info("password_reset.confirm.succeeded", user_id=user.id)
     return user
