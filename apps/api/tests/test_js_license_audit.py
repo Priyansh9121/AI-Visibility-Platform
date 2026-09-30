@@ -148,14 +148,18 @@ def test_pending_entry_matching_nothing_fails(tmp_path, capsys):
     assert "@img/sharp-libvips-*" in out
 
 
-def test_real_pending_file_has_exactly_the_one_entry():
+def test_real_pending_file_parses_and_may_be_empty():
+    """The file stays as the place for future open questions; empty is the good state."""
     data = json.loads((REPO / "infra" / "ci" / "licence-pending-decisions.json").read_text())
-    assert len(data) == 1
-    e = data[0]
-    assert e["package"] == "@img/sharp-libvips-*"
-    assert e["licence"] == "LGPL-3.0-or-later"
-    assert e["raised"] == "2026-09-30"
-    assert e["question"].strip()
+    assert isinstance(data, list)
+    for e in data:
+        assert {"package", "licence", "raised", "question"} <= set(e)
+        assert e["question"].strip()
+
+
+def test_empty_pending_list_passes_a_clean_tree(tmp_path, capsys):
+    rc, _ = _run(tmp_path, [("a", "1.0.0", "MIT")], pending=[], capsys=capsys)
+    assert rc == 0
 
 
 def test_policy_is_imported_not_copied():

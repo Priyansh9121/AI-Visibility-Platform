@@ -1,8 +1,1 @@
-[
-  {
-    "package": "@img/sharp-libvips-*",
-    "licence": "LGPL-3.0-or-later",
-    "raised": "2026-09-30",
-    "question": "Accept the LGPL libvips binaries that sharp (an optional dependency of next) loads, or remove sharp?"
-  }
-]
+[]
