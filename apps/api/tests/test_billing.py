@@ -25,8 +25,10 @@ that passes forever while the thing it names is broken.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
+import itertools
 import json
 import time
 from datetime import UTC, datetime
@@ -38,7 +40,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from avp_api.models import Agency, Invitation
+from avp_api.models import Agency, Invitation, StripeWebhookEvent
 from avp_api.security import token_digest
 from avp_api.services import billing as billing_service
 
@@ -227,9 +229,31 @@ def _sign(
     return f"t={ts},v1={digest}"
 
 
-def _event(event_type: str, obj: dict[str, Any]) -> bytes:
+_event_seq = itertools.count(1)
+EVENT_BASE_TS = 1780000000
+
+
+def _event(
+    event_type: str,
+    obj: dict[str, Any],
+    *,
+    event_id: str | None = None,
+    created: int | None = None,
+) -> bytes:
+    """A Stripe event body. Each call gets a fresh id and a later `created`.
+
+    Unique ids because the webhook now dedupes by id: two deliveries that share
+    one are, correctly, one event. Later `created` because an event older than
+    the agency's stored state is ignored. Pass either explicitly to test those.
+    """
+    n = next(_event_seq)
     return json.dumps(
-        {"id": "evt_test_001", "type": event_type, "data": {"object": obj}}
+        {
+            "id": event_id or f"evt_test_{n:04d}",
+            "type": event_type,
+            "created": created if created is not None else EVENT_BASE_TS + n * 10,
+            "data": {"object": obj},
+        }
     ).encode()
 
 
@@ -674,6 +698,7 @@ async def test_checkout_completed_marks_the_agency_active(
         {
             "id": "cs_test_001",
             "object": "checkout_session",
+            "mode": "subscription",
             "customer": "cus_test_001",
             "subscription": "sub_test_001",
             "client_reference_id": agency_id,
@@ -919,6 +944,594 @@ async def test_the_webhook_needs_no_session(client: AsyncClient, engine) -> None
     )
     assert (await _deliver(client, payload)).status_code == 200
     assert (await _agency(engine, agency_id)).subscription_status == "active"
+
+
+# ---------------------------------------------------------------------------
+# idempotency and ordering
+# ---------------------------------------------------------------------------
+
+
+async def _ledger(engine) -> dict[str, StripeWebhookEvent]:  # noqa: ANN001
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+    async with factory() as s:
+        rows = (await s.execute(select(StripeWebhookEvent))).scalars().all()
+    return {r.id: r for r in rows}
+
+
+def _at(ts: int) -> datetime:
+    return datetime.fromtimestamp(ts, tz=UTC)
+
+
+async def test_the_same_event_delivered_twice_applies_once(
+    client: AsyncClient, engine
+) -> None:  # noqa: ANN001
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    payload = _event(
+        "customer.subscription.updated",
+        _subscription(agency_id=agency_id),
+        event_id="evt_dup",
+        created=1780000100,
+    )
+
+    first = await _deliver(client, payload)
+    assert first.status_code == 200
+    assert first.json() == {"received": True, "handled": True}
+
+    # Change the state behind the webhook's back; a re-application would undo it.
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+    async with factory() as s:
+        row = (await s.execute(select(Agency).where(Agency.id == agency_id))).scalar_one()
+        row.subscription_status = "past_due"
+        await s.commit()
+
+    second = await _deliver(client, payload)
+    assert second.status_code == 200
+    assert second.json() == {"received": True, "handled": False, "duplicate": True}
+    assert (await _agency(engine, agency_id)).subscription_status == "past_due"
+    ledger = await _ledger(engine)
+    assert list(ledger) == ["evt_dup"]
+    assert ledger["evt_dup"].outcome.value == "applied"
+
+
+async def test_two_concurrent_deliveries_of_one_event_apply_once(
+    client: AsyncClient, engine
+) -> None:  # noqa: ANN001
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    payload = _event(
+        "customer.subscription.updated",
+        _subscription(agency_id=agency_id),
+        event_id="evt_race",
+        created=1780000100,
+    )
+
+    results = await asyncio.gather(
+        *[_deliver(client, payload, _sign(payload)) for _ in range(4)]
+    )
+
+    bodies = [r.json() for r in results]
+    assert all(r.status_code == 200 for r in results), bodies
+    assert sum(1 for b in bodies if b["handled"] is True) == 1, bodies
+    assert sum(1 for b in bodies if b.get("duplicate") is True) == 3, bodies
+    assert list(await _ledger(engine)) == ["evt_race"]
+    assert (await _agency(engine, agency_id)).subscription_status == "active"
+
+
+async def test_the_insert_itself_conflicts_across_two_sessions(engine) -> None:  # noqa: ANN001
+    """The mechanism under the race test, with no HTTP in the way: the second
+    insert blocks on the first's uncommitted row and then does nothing."""
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+    args = {
+        "event_id": "evt_two_sessions",
+        "event_type": "customer.subscription.updated",
+        "created_at": _at(1780000100),
+        "agency_id": None,
+        "outcome": billing_service.StripeWebhookOutcome.APPLIED,
+    }
+    async with factory() as one, factory() as two:
+        assert await billing_service._record_event(one, **args) is True  # noqa: SLF001
+        second = asyncio.ensure_future(
+            billing_service._record_event(two, **args)  # noqa: SLF001
+        )
+        await asyncio.sleep(0.3)
+        assert not second.done(), "the second insert should be waiting on the first"
+        await one.commit()
+        assert await asyncio.wait_for(second, 5) is False
+        await two.rollback()
+
+
+async def test_an_older_event_arriving_late_is_stale_and_changes_nothing(
+    client: AsyncClient, engine
+) -> None:  # noqa: ANN001
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+
+    deleted = _event(
+        "customer.subscription.deleted",
+        _subscription(status="canceled", agency_id=agency_id),
+        event_id="evt_t2",
+        created=1780000200,
+    )
+    older = _event(
+        "customer.subscription.updated",
+        _subscription(status="active", agency_id=agency_id),
+        event_id="evt_t1",
+        created=1780000100,
+    )
+    assert (await _deliver(client, deleted)).json() == {"received": True, "handled": True}
+    resp = await _deliver(client, older)
+
+    assert resp.status_code == 200
+    assert resp.json() == {"received": True, "handled": False, "stale": True}
+    agency = await _agency(engine, agency_id)
+    assert agency.subscription_status == "canceled"
+    assert agency.stripe_event_at == _at(1780000200)
+    ledger = await _ledger(engine)
+    assert ledger["evt_t1"].outcome.value == "stale"
+    assert ledger["evt_t2"].outcome.value == "applied"
+    assert ledger["evt_t1"].agency_id == agency_id
+
+
+async def test_two_events_in_the_same_second_both_apply_in_arrival_order(
+    client: AsyncClient, engine
+) -> None:  # noqa: ANN001
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    ts = 1780000300
+
+    for status in ("past_due", "active"):
+        payload = _event(
+            "customer.subscription.updated",
+            _subscription(status=status, agency_id=agency_id),
+            created=ts,
+        )
+        assert (await _deliver(client, payload)).json() == {"received": True, "handled": True}
+
+    agency = await _agency(engine, agency_id)
+    assert agency.subscription_status == "active"  # the later arrival won
+    assert {r.outcome.value for r in (await _ledger(engine)).values()} == {"applied"}
+
+
+async def test_checkout_then_a_newer_subscription_update_both_apply(
+    client: AsyncClient, engine
+) -> None:  # noqa: ANN001
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+
+    checkout = _event(
+        "checkout.session.completed",
+        {
+            "id": "cs_test_1",
+            "object": "checkout.session",
+            "mode": "subscription",
+            "customer": "cus_test_001",
+            "subscription": "sub_test_001",
+            "metadata": {"agency_id": agency_id},
+        },
+        created=1780000400,
+    )
+    update = _event(
+        "customer.subscription.updated",
+        _subscription(status="trialing", agency_id=agency_id),
+        created=1780000401,
+    )
+    assert (await _deliver(client, checkout)).json()["handled"] is True
+    assert (await _deliver(client, update)).json() == {"received": True, "handled": True}
+
+    agency = await _agency(engine, agency_id)
+    assert agency.subscription_status == "trialing"
+    assert agency.stripe_event_at == _at(1780000401)
+    assert {r.outcome.value for r in (await _ledger(engine)).values()} == {"applied"}
+
+
+async def test_stripe_event_at_only_moves_forward(
+    client: AsyncClient, engine
+) -> None:  # noqa: ANN001
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    seen: list[datetime | None] = []
+
+    for created in (1780000500, 1780000400, 1780000500, 1780000600):
+        payload = _event(
+            "customer.subscription.updated",
+            _subscription(agency_id=agency_id),
+            created=created,
+        )
+        await _deliver(client, payload)
+        seen.append((await _agency(engine, agency_id)).stripe_event_at)
+
+    assert seen == [_at(1780000500), _at(1780000500), _at(1780000500), _at(1780000600)]
+
+
+async def test_an_unmatched_event_writes_no_ledger_row_and_applies_when_resent(
+    client: AsyncClient, engine
+) -> None:  # noqa: ANN001
+    """Nothing is held for an unknown customer, so nothing is deduped.
+
+    An operator links the agency, then uses Stripe's "Resend": the same event id
+    must apply, not be answered as a duplicate.
+    """
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    payload = _event(
+        "customer.subscription.updated",
+        _subscription(customer="cus_nobody"),
+        event_id="evt_nobody",
+    )
+    resp = await _deliver(client, payload)
+
+    assert resp.json() == {"received": True, "handled": False}
+    assert await _ledger(engine) == {}
+
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+    async with factory() as s:
+        row = (await s.execute(select(Agency).where(Agency.id == agency_id))).scalar_one()
+        row.stripe_customer_id = "cus_nobody"
+        await s.commit()
+
+    again = await _deliver(client, payload)
+    assert again.json() == {"received": True, "handled": True}
+    assert (await _agency(engine, agency_id)).subscription_status == "active"
+    assert (await _ledger(engine))["evt_nobody"].outcome.value == "applied"
+
+
+@pytest.mark.parametrize("created", [None, "1780000100", True, "abc"])
+async def test_an_event_without_a_numeric_created_is_ignored(
+    client: AsyncClient, engine, created: Any  # noqa: ANN001
+) -> None:
+    """Never the server clock: it would set a watermark that could sit in the future."""
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    first = _event(
+        "customer.subscription.updated",
+        _subscription(status="past_due", agency_id=agency_id),
+        created=1780000100,
+    )
+    assert (await _deliver(client, first)).json()["handled"] is True
+
+    body = json.loads(
+        _event(
+            "customer.subscription.updated",
+            _subscription(status="active", agency_id=agency_id),
+            event_id="evt_nocreated",
+        )
+    )
+    if created is None:
+        del body["created"]
+    else:
+        body["created"] = created
+    payload = json.dumps(body).encode()
+    resp = await _deliver(client, payload)
+
+    assert resp.status_code == 200
+    assert resp.json() == {"received": True, "handled": False}
+    agency = await _agency(engine, agency_id)
+    assert agency.subscription_status == "past_due"
+    assert agency.stripe_event_at == _at(1780000100)
+    assert "evt_nocreated" not in await _ledger(engine)
+
+
+async def test_a_retried_created_in_the_same_second_does_not_regress_to_incomplete(
+    client: AsyncClient, engine
+) -> None:  # noqa: ANN001
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    ts = 1780001000
+    updated = _event(
+        "customer.subscription.updated",
+        _subscription(status="active", agency_id=agency_id),
+        created=ts,
+    )
+    created = _event(
+        "customer.subscription.created",
+        _subscription(status="incomplete", agency_id=agency_id),
+        event_id="evt_created_retry",
+        created=ts,
+    )
+    assert (await _deliver(client, updated)).json()["handled"] is True
+    resp = await _deliver(client, created)
+
+    assert resp.json() == {"received": True, "handled": False, "stale": True}
+    assert (await _agency(engine, agency_id)).subscription_status == "active"
+    assert (await _ledger(engine))["evt_created_retry"].outcome.value == "stale"
+
+
+async def test_active_after_deleted_in_the_same_second_does_not_resurrect(
+    client: AsyncClient, engine
+) -> None:  # noqa: ANN001
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    ts = 1780001100
+    deleted = _event(
+        "customer.subscription.deleted",
+        _subscription(status="canceled", agency_id=agency_id),
+        created=ts,
+    )
+    updated = _event(
+        "customer.subscription.updated",
+        _subscription(status="active", agency_id=agency_id),
+        created=ts,
+    )
+    checkout = _event(
+        "checkout.session.completed",
+        {
+            "id": "cs_tie",
+            "object": "checkout.session",
+            "mode": "subscription",
+            "customer": "cus_test_001",
+            "subscription": "sub_test_001",
+            "metadata": {"agency_id": agency_id},
+        },
+        created=ts,
+    )
+    assert (await _deliver(client, deleted)).json()["handled"] is True
+    for late in (updated, checkout):
+        assert (await _deliver(client, late)).json() == {
+            "received": True,
+            "handled": False,
+            "stale": True,
+        }
+    agency = await _agency(engine, agency_id)
+    assert agency.subscription_status == "canceled"
+
+
+async def test_a_new_subscription_after_a_cancellation_applies(
+    client: AsyncClient, engine
+) -> None:  # noqa: ANN001
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    ts = 1780001200
+    deleted = _event(
+        "customer.subscription.deleted",
+        _subscription(status="canceled", sub_id="sub_old", agency_id=agency_id),
+        created=ts,
+    )
+    fresh = _event(
+        "customer.subscription.created",
+        _subscription(status="incomplete", sub_id="sub_new", agency_id=agency_id),
+        created=ts,  # same second: only the id tells them apart
+    )
+    activated = _event(
+        "customer.subscription.updated",
+        _subscription(status="active", sub_id="sub_new", agency_id=agency_id),
+        created=ts + 1,
+    )
+    for payload in (deleted, fresh, activated):
+        assert (await _deliver(client, payload)).json() == {"received": True, "handled": True}
+    agency = await _agency(engine, agency_id)
+    assert agency.subscription_status == "active"
+    assert agency.stripe_subscription_id == "sub_new"
+
+
+async def test_the_state_machine_guard_is_one_named_function() -> None:
+    """The rule itself, table-driven, with no database."""
+    guard = billing_service._blocked_by_state_machine  # noqa: SLF001
+    agency = Agency(stripe_subscription_id="sub_1", subscription_status="canceled")
+    assert guard(agency, "sub_1", "active") is True
+    assert guard(agency, "sub_1", "canceled") is False
+    assert guard(agency, "sub_2", "active") is False
+    agency.subscription_status = "incomplete_expired"
+    assert guard(agency, "sub_1", "incomplete") is True
+    agency.subscription_status = "past_due"
+    assert guard(agency, "sub_1", "incomplete") is True
+    assert guard(agency, "sub_1", "active") is False
+    agency.subscription_status = "incomplete"
+    assert guard(agency, "sub_1", "incomplete") is False
+    assert guard(agency, "sub_1", "active") is False
+
+
+async def test_the_metadata_route_locks_the_agency_row(
+    client: AsyncClient, engine  # noqa: ANN001
+) -> None:
+    """Deterministic proof of the lock: no HTTP, no timing luck.
+
+    Session one resolves the agency by `metadata.agency_id` and holds its
+    transaction open; session two doing the same must WAIT, and proceed only
+    after session one commits.
+    """
+    agency_id = (await _sign_up(client))["agency"]["id"]
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+    obj = {"metadata": {"agency_id": agency_id}}
+    async with factory() as one, factory() as two:
+        assert await billing_service._resolve_agency(one, obj) is not None  # noqa: SLF001
+        second = asyncio.ensure_future(
+            billing_service._resolve_agency(two, obj)  # noqa: SLF001
+        )
+        await asyncio.sleep(0.5)
+        assert not second.done(), "the metadata route must lock the agency row"
+        await one.commit()
+        assert await asyncio.wait_for(second, 5) is not None
+        await two.rollback()
+
+
+@pytest.mark.parametrize("deleted_first", [True, False])
+async def test_concurrent_different_events_on_the_metadata_route_end_canceled(
+    client: AsyncClient, engine, deleted_first: bool  # noqa: ANN001
+) -> None:
+    """deleted@T3 racing updated-active@T2 must end canceled, watermark T3.
+
+    Different subscription ids on purpose, so the state-machine guard cannot
+    mask a missing lock: only the row lock and the timestamp order protect this.
+    """
+    t2, t3 = 1780002000, 1780002001
+    for i in range(6):
+        me = await _sign_up(
+            client, email=f"race{i}{int(deleted_first)}@billing.example", agency=f"Race {i}"
+        )
+        agency_id = me["agency"]["id"]
+        deleted = _event(
+            "customer.subscription.deleted",
+            _subscription(status="canceled", sub_id=f"sub_del_{i}",
+                          customer=f"cus_del_{i}{int(deleted_first)}", agency_id=agency_id),
+            created=t3,
+        )
+        updated = _event(
+            "customer.subscription.updated",
+            _subscription(status="active", sub_id=f"sub_upd_{i}",
+                          customer=f"cus_upd_{i}{int(deleted_first)}", agency_id=agency_id),
+            created=t2,
+        )
+        order = [deleted, updated] if deleted_first else [updated, deleted]
+        results = await asyncio.gather(*[_deliver(client, p) for p in order])
+        assert all(r.status_code == 200 for r in results), [r.text for r in results]
+        agency = await _agency(engine, agency_id)
+        assert agency.subscription_status == "canceled", i
+        assert agency.stripe_event_at == _at(t3), i
+
+
+async def test_three_first_checkout_events_delivered_together_do_not_deadlock(
+    client: AsyncClient, engine
+) -> None:  # noqa: ANN001
+    base = 1780003000
+    for i in range(5):
+        me = await _sign_up(client, email=f"first{i}@billing.example", agency=f"First {i}")
+        agency_id = me["agency"]["id"]
+        sub = f"sub_first_{i}"
+        created = _event(
+            "customer.subscription.created",
+            _subscription(
+                status="incomplete", sub_id=sub, customer=f"cus_first_{i}", agency_id=agency_id
+            ),
+            created=base,
+        )
+        updated = _event(
+            "customer.subscription.updated",
+            _subscription(
+                status="active", sub_id=sub, customer=f"cus_first_{i}", agency_id=agency_id
+            ),
+            created=base + 1,
+        )
+        checkout = _event(
+            "checkout.session.completed",
+            {
+                "id": f"cs_first_{i}",
+                "object": "checkout.session",
+                "mode": "subscription",
+                "customer": f"cus_first_{i}",
+                "subscription": sub,
+                "metadata": {"agency_id": agency_id},
+            },
+            created=base + 2,
+        )
+        results = await asyncio.wait_for(
+            asyncio.gather(*[_deliver(client, p) for p in (created, updated, checkout)]),
+            30,
+        )
+        assert [r.status_code for r in results] == [200, 200, 200], [r.text for r in results]
+        agency = await _agency(engine, agency_id)
+        assert agency.subscription_status == "active", i
+        # Checkout never moves the watermark; the newest subscription event does.
+        assert agency.stripe_event_at == _at(base + 1), i
+        assert agency.subscription_current_period_end == _at(PERIOD_END_TS), i
+
+
+def _checkout(agency_id: str, *, created: int, **extra: Any) -> bytes:
+    session: dict[str, Any] = {
+        "id": f"cs_{created}",
+        "object": "checkout.session",
+        "mode": "subscription",
+        "customer": "cus_test_001",
+        "subscription": "sub_test_001",
+        "metadata": {"agency_id": agency_id},
+    }
+    session.update(extra)
+    return _event("checkout.session.completed", session, created=created)
+
+
+async def test_a_subscription_update_delivered_after_a_newer_checkout_still_applies(
+    client: AsyncClient, engine
+) -> None:  # noqa: ANN001
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    t = 1780004000
+    update = _event(
+        "customer.subscription.updated",
+        _subscription(status="active", agency_id=agency_id),
+        created=t,
+    )
+    assert (await _deliver(client, _checkout(agency_id, created=t + 1))).json()["handled"] is True
+    assert (await _deliver(client, update)).json() == {"received": True, "handled": True}
+
+    agency = await _agency(engine, agency_id)
+    assert agency.subscription_status == "active"
+    assert agency.subscription_current_period_end == _at(PERIOD_END_TS)
+    assert agency.stripe_event_at == _at(t)
+    assert {r.outcome.value for r in (await _ledger(engine)).values()} == {"applied"}
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [{"mode": "payment"}, {"mode": "setup", "subscription": None}, {"subscription": None}],
+)
+async def test_a_non_subscription_checkout_is_ignored_and_cannot_undo_a_cancellation(
+    client: AsyncClient, engine, extra: dict[str, Any]  # noqa: ANN001
+) -> None:
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    deleted = _event(
+        "customer.subscription.deleted",
+        _subscription(status="canceled", agency_id=agency_id),
+        created=1780004100,
+    )
+    assert (await _deliver(client, deleted)).json()["handled"] is True
+    before = await _agency(engine, agency_id)
+
+    resp = await _deliver(client, _checkout(agency_id, created=1780004200, **extra))
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"received": True, "handled": False}
+
+    agency = await _agency(engine, agency_id)
+    assert agency.subscription_status == "canceled"
+    assert agency.stripe_subscription_id == before.stripe_subscription_id
+    assert agency.stripe_event_at == before.stripe_event_at
+    assert len(await _ledger(engine)) == 1
+
+
+async def test_unhandled_types_and_bad_signatures_write_no_ledger_row(
+    client: AsyncClient, engine
+) -> None:  # noqa: ANN001
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+
+    await _deliver(client, _event("invoice.paid", {"id": "in_1", "customer": "cus_x"}))
+    signed_wrong = _event(
+        "customer.subscription.updated", _subscription(agency_id=agency_id)
+    )
+    assert (await _deliver(client, signed_wrong, "t=1,v1=deadbeef")).status_code == 400
+    assert (await _deliver(client, signed_wrong, None)).status_code == 400
+
+    assert await _ledger(engine) == {}
+
+
+async def test_a_handler_failure_rolls_the_ledger_row_back_so_the_retry_applies(
+    client: AsyncClient, engine, monkeypatch  # noqa: ANN001
+) -> None:
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    payload = _event(
+        "customer.subscription.updated",
+        _subscription(agency_id=agency_id),
+        event_id="evt_boom",
+        created=1780000700,
+    )
+
+    real = billing_service._apply_subscription_event  # noqa: SLF001
+
+    def boom(*_a: Any, **_k: Any) -> None:
+        raise RuntimeError("handler failed")
+
+    monkeypatch.setattr(billing_service, "_apply_subscription_event", boom)
+    with pytest.raises(RuntimeError):
+        await _deliver(client, payload)
+    assert await _ledger(engine) == {}
+    assert (await _agency(engine, agency_id)).stripe_event_at is None
+
+    monkeypatch.setattr(billing_service, "_apply_subscription_event", real)
+    retry = await _deliver(client, payload)
+    assert retry.json() == {"received": True, "handled": True}
+    assert (await _agency(engine, agency_id)).subscription_status == "active"
+    assert list(await _ledger(engine)) == ["evt_boom"]
 
 
 # ---------------------------------------------------------------------------

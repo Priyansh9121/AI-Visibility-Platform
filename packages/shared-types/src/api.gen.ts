@@ -686,6 +686,12 @@ export interface paths {
          *     it was acted on, so a human reading `stripe listen` output can tell the
          *     difference between "handled" and "politely ignored".
          *
+         *     **Idempotent and ordered.** Each handled event id is recorded once; a
+         *     redelivery answers `{"received": true, "handled": false, "duplicate": true}`
+         *     and applies nothing. An event older than the agency's newest applied one
+         *     answers `{"received": true, "handled": false, "stale": true}` and applies
+         *     nothing. Unmatched and unhandled events answer `handled: false` alone.
+         *
          *     **Errors:** `400 invalid-webhook-signature` for a missing, malformed or
          *     wrong signature, and for a body that is not JSON. `503
          *     billing-not-configured` when `STRIPE_WEBHOOK_SECRET` is unset.
@@ -3923,6 +3929,24 @@ export interface components {
             /** Error Type */
             type: string;
         };
+        /**
+         * WebhookAck
+         * @description The webhook's answer to Stripe. Read by a human running `stripe listen`.
+         *
+         *     `duplicate` and `stale` are present only when true (the route drops `None`),
+         *     so an applied, ignored or unmatched event keeps the two-key body it always
+         *     had. Stripe only looks at the status code.
+         */
+        WebhookAck: {
+            /** Duplicate */
+            duplicate?: boolean | null;
+            /** Handled */
+            handled: boolean;
+            /** Received */
+            received: boolean;
+            /** Stale */
+            stale?: boolean | null;
+        };
     };
     responses: never;
     parameters: never;
@@ -4543,9 +4567,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["WebhookAck"];
                 };
             };
             /** @description Validation Error */

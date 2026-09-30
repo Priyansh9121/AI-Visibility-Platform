@@ -42,6 +42,7 @@ from .prompt_run import (
 )
 from .scan import Scan, ScanStatus, ScanTrigger
 from .score import DEFAULT_WEIGHTS, DIMENSION_KEYS, Score, ScoreStatus
+from .stripe_webhook_event import StripeWebhookEvent, StripeWebhookOutcome
 from .technical_audit import AuditStatus, CheckStatus, TechnicalAudit, TechnicalAuditCheck
 from .tenancy import Agency, Invitation, User, UserRole, UserStatus
 
@@ -89,6 +90,8 @@ __all__ = [
     "Score",
     "ScoreStatus",
     "Sentiment",
+    "StripeWebhookEvent",
+    "StripeWebhookOutcome",
     "TechnicalAudit",
     "TechnicalAuditCheck",
     "User",
