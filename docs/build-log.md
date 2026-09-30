@@ -20665,3 +20665,47 @@ contract regenerates byte-identically.
 - Both `uv lock --check` runs pass (no dependency change); no schema change, so Alembic was not run.
 - OpenAPI and `api.gen.ts` regenerate byte-identically (no route signature changed).
 - Exit codes were read from files.
+
+# The Google sign-up ticket leaves the query string
+
+**2026-10-01, the third entry of the day.** One item, one commit.
+
+**Render: nothing to set.** The API and the web app deploy separately; see "Found, not fixed" for the deploy window.
+
+## 1. What changed
+
+- **The ticket rides in the URL fragment, like the share, invite and reset tokens (`d2fe29a`).** The Google callback now redirects to `/sign-up/google#ticket=…` instead of `?ticket=…`, so the ten-minute bearer ticket no longer reaches the web server's request log, browser history as a query, or a `Referer`. Google's own `code` and `state` on the callback are still stripped from the access log (`logs.py`).
+- **The peek is a POST.** `/auth/google/pending` is now `POST` with `{ "ticket": … }` in the JSON body (new `GooglePendingRequest`); `GET` answers 405, so a stale `?ticket=` reaches no handler. A query-only POST answers 422; an unknown ticket keeps the existing 400 `invalid-google-ticket`. The peek still does not consume the ticket; `POST /auth/google/complete` still consumes it once.
+- **Web:** new `apps/web/src/lib/googleTicket.ts` (`takeGoogleTicket`) reads `#ticket=`, then clears the fragment and any query with `history.replaceState`; the page holds the read in a ref so React's development double effect does not read an already-cleared address bar. `lib/api.ts` `googlePending` posts the body. For one release only, the page also accepts a legacy `?ticket=` link when there is no fragment, moves it out of the address bar at once and uses the POST; it is never sent to the API in a query. The fallback is dead ten minutes after deploy and is marked for removal in the code and in `docs/api-contracts.md`.
+- **A reload of `/sign-up/google` no longer keeps the ticket** (it is removed from the address bar once read, as on the invite and reset pages); the docstrings now say so. The page shows its existing "expired" message.
+- **Contracts:** `docs/api-contracts.md` (Google routes) documents the fragment redirect, the POST peek, the 405 and the legacy fallback; `openapi.json` and `api.gen.ts` are regenerated.
+
+## 2. Tests
+
+- API (`tests/test_google_sign_in.py`, `tests/test_logging_config.py`, `tests/test_scan_allowance.py`): the redirect has an empty query and the ticket after `#`; `GET /pending` is 405, a query-only POST 422, an unknown ticket 400; callback, peek and complete leave the ticket and the email out of every app log line (over `ASGITransport`, so uvicorn's access log is covered by the empty-query and 405 assertions and `test_logging_config.py`, not by that test); peek does not consume, complete consumes once, expiry holds.
+- Web (new `googleTicket.test.ts`, `api.googlePending.test.ts`): the helper reads the fragment first, clears the address bar, and falls back to a legacy query only without a fragment; the pending call is a POST with no `?` in its URL. The page itself is checked by source (no `location.search`), because this vitest setup has no DOM.
+- Red first: 6 API failures and 2 web failures before the code change.
+
+## 3. The review
+
+- **Security review (opus): PASS WITH NITS, nothing Medium or above.** Confirmed: uvicorn logs method, path and status only; no third-party script or prefetch runs on the page before the address bar is cleared, and the fragment never enters a `Referer`; a cross-origin JSON POST needs a CORS preflight against the allowlist; the peek returns what the old GET returned; the ticket is 256-bit and single-use. Fixed from it: the docstrings and a `next.config.mjs` comment that described the old query, and a test name that claimed more than it checked.
+
+## Found, not fixed
+
+- **Deploy window.** Render deploys the API and the web app separately. New web with the old API gets 405 on the peek; old web with the new API finds no query ticket; either way a user mid-sign-up sees "expired" and starts again. Deploying both together shortens it.
+- **The ticket is still in the callback's 302 `Location` header,** which Render's proxy sees because it terminates TLS. Whether Render's request log keeps response headers is not visible from the repo; the same was true before.
+- **The "expired" message on reload** is the page's existing copy; clearer wording ("removed from the address bar once read; start again", as on invite and reset) is a copy decision.
+- **Next's router may keep the fragment in its own state** if the page's effect runs before the router patches `history.replaceState` (unconfirmed; nothing on this page triggers a router action, and `useFragmentToken` has the same pattern). A one-time check in a real browser would settle it.
+- `/pending` and `/complete` have no rate limit; the ticket is unguessable, as for reset and invite redemption.
+
+## Verified
+
+**API pytest 1831 → 1834 (+3); web vitest 1093 → 1102 (+9); floors raised to match.**
+- **Negative controls:** putting `?ticket=` back in the redirect fails 7 API tests; making the helper read `location.search` first fails the web helper test. Each file was restored with `cp` and checked with `cmp`.
+
+**The rest of the bar.**
+- Workers 26, shared-types 53 (0 fail), design-system 846, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- `openapi.json` and `api.gen.ts` were regenerated for this change, and regenerating again produces the same files.
+- Exit codes were read from files.

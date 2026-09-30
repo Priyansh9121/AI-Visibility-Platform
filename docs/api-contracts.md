@@ -27,7 +27,7 @@ intent; the schema defines the shapes.
 - Logs (2026-09-29): structlog is configured once, in `create_app`
   (`avp_api/logs.py`). `LOG_LEVEL` wins when set; otherwise INFO on staging and
   production and DEBUG everywhere else. uvicorn's access log is kept with the
-  query string dropped from `/auth/google/callback` and `/auth/google/pending`,
+  query string dropped from `/auth/google/callback` (Google's `code` and `state`) and any stale `/auth/google/pending`,
   and all query strings under `/reports/` redacted. No log line carries a token,
   a link that carries one, or an email address. Since 2026-09-30, share tokens
   travel in request bodies (`POST /reports/shared` and `/reports/shared/pdf`),
@@ -442,7 +442,7 @@ document — a person, not a script, is standing here:
 | Outcome | Redirects to |
 |---|---|
 | existing account | `{PUBLIC_WEB_BASE_URL}/dashboard`, with the session cookie set |
-| new address | `{PUBLIC_WEB_BASE_URL}/sign-up/google?ticket=…` (ten minutes, single use) |
+| new address | `{PUBLIC_WEB_BASE_URL}/sign-up/google#ticket=…` (ten minutes, single use; in the fragment, never the query) |
 | anything else | `{PUBLIC_WEB_BASE_URL}/?google=error&reason=…` |
 
 `reason` is one of `denied`, `invalid-state`, `exchange-failed`,
@@ -457,7 +457,13 @@ the person reading the sentence has just proven, through Google, that they
 hold the very address in question. A soft-deleted account is the one that
 stays `account-unavailable`.
 
-##### `GET /api/v1/auth/google/pending?ticket=…`
+##### `POST /api/v1/auth/google/pending`
+_Note 2026-10-01:_ the legacy `?ticket=` fallback in
+`apps/web/src/lib/googleTicket.ts` is dead ten minutes after this deploys
+(tickets live ten minutes); remove it in the next release.
+
+**Request:** `{ "ticket": "…" }` (was `GET ?ticket=…` until 2026-10-01; a `GET`
+is now `405`, so the ticket is never in a URL).
 **Response `200`** — `GooglePendingOut`: `{ "email": "…", "suggestedName": "…" }`.
 Read-only; the ticket is not spent. **Errors:** `400 invalid-google-ticket`
 for unknown, used and expired alike.

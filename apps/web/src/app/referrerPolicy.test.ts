@@ -56,7 +56,7 @@ describe('pages whose address is a credential send no Referer', () => {
   });
 
   it.each([...tokenRoutes(), '/sign-up/google'])('%s does', async (source) => {
-    // /sign-up/google carries an unfinished Google sign-up's ticket in its query.
+    // /sign-up/google carries an unfinished Google sign-up (its ticket is in the fragment).
     expect(await rulesFor(source)).toContainEqual(NO_REFERRER);
   });
 });

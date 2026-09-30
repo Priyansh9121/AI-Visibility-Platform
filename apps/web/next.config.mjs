@@ -10,7 +10,9 @@ const nextConfig = {
   // NO REFERER FROM A PAGE WHOSE ADDRESS IS A CREDENTIAL — 2026-09-29.
   //
   // A shared report's address is its token, and so is a reset or invitation
-  // link's; a Google sign-up in progress carries its ticket in the query. From
+  // link's; a Google sign-up in progress carries its ticket in the fragment (a
+  // legacy link may still carry it in the query, and the header covers that
+  // and the page itself). From
   // these pages the browser also asks other hosts for things: the fonts, an
   // agency's logo, a cited source someone clicks. Under a lax policy — some
   // older browsers' default — each of those requests is sent the full address.

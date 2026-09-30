@@ -64,7 +64,9 @@ def _redact_reports(match: re.Match[str]) -> str:
     return match.group(1) + REDACTED + (".pdf" if rest.endswith(".pdf") else "")
 
 
-# Everything after the "?" on the two Google routes that carry a secret there.
+# Everything after the "?" on the Google routes. The callback carries Google's
+# `code` and `state` there. `/pending` no longer carries anything (its ticket is
+# in a POST body); it stays listed so a stale client's `?ticket=` is still cut.
 _SECRET_QUERY = re.compile(r"(/auth/google/(?:callback|pending))\?\S*")
 
 
