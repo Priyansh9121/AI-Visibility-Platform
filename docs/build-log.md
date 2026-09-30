@@ -20365,3 +20365,40 @@ contract regenerates byte-identically.
 **Negative control:** `git commit --dry-run --no-verify` denied (the `--no-verify` rule matches); `git commit --dry-run` ran.
 
 **The rest of the bar:** all count gates through `assert_count.py` pass; `uv lock --check` clean in both `apps/api` and `apps/workers`; exit codes read from files. No schema change, so Alembic was not run.
+
+# A stock Tailwind class anywhere in apps/web or packages fails the design-system suite
+
+**2026-09-30, the eighth entry of the day.** One item, one commit.
+
+**Render: nothing to set.**
+
+## 1. What changed
+
+- **`packages/design-system/src/tailwind-preset.ts` replaces colours, spacing, fontFamily, fontSize, borderRadius and boxShadow,** so a stock class such as `bg-white text-gray-500 text-sm shadow-md` compiles to nothing. The existing guards in `packages/design-system/src/tokens/reportIsolation.test.ts` (~218-340) only caught numeric spacing suffixes, `-semantic-` colours and bad line/surface/text/on or rounded-* suffixes.
+- **The test file found 0 stock classes in the tree.** Before this change, the bar would have missed them during build and all suites.
+
+## 2. The mechanism
+
+- New `packages/design-system/src/tokens/stockClasses.ts`: a scanner that imports the preset object and reads spacing, fontSize, boxShadow, borderRadius, fontFamily and colours (nested keys and shades) from it, so a future token is allowed automatically. The only hard-coded vocabulary is Tailwind's own stock names (the palette names, white/black/transparent/current/inherit, stock text sizes, shadows, families); each is a finding unless the preset defines the same key. It flags stock colours on bg, text, border-*, ring, ring-offset, outline, fill, stroke, from/via/to, divide, placeholder, decoration, accent, caret and shadow; stock text sizes and shadows; any rounded[-side][-key] whose key is not in the preset; font-sans/font-serif; numeric spacing outside the preset scale on p/m/gap/space, w/h/min/max, inset/top/right/bottom/left, translate and basis. Arbitrary `[...]` values are skipped.
+- A small character-level tokenizer: strips //, /* */ and JSX {/* */} comments; scans ', " and template literals (with ${} bodies scanned as code); keeps line numbers; CSS is scanned only in @apply bodies. A bare word (`shadow`, `rounded`) counts as a class only when at least half the tokens in that string look like utilities, which keeps prose out.
+- New `packages/design-system/src/tokens/stockClasses.test.ts`: fixture tests (each category flagged; real preset classes and prefix-sharing utilities not flagged) plus a tree test over `apps/web/src` and every `packages/*/src` (ts, tsx, css; skips node_modules, dist, .next, dist-styleguide, tests) asserting zero findings and printing file:line:class for any.
+- One scanner false positive was found and fixed (the word `shadow` in a prose `note=` string in `packages/design-system/src/styleguide/Styleguide.tsx:381`). The two comments that mention `bg-slate-500` (tailwind-preset.ts header, ReportView.tsx:14) are not flagged.
+
+## Found, not fixed
+
+- **Known limits:** a class glued to an interpolation (`p-${x}`) is not checked; prose with many hyphenated words could in theory false-positive.
+
+## Verified
+
+**Design-system vitest 649 → 839 (+190).**
+- Red first: the 190 new tests ran against a stub scanner and 60 failed (the fixture tests: each category flagged; real preset classes and prefix-sharing utilities not flagged). With the scanner implemented, all 190 pass.
+- `infra/ci/floors.json`: `design-system-vitest` 606 → 839 (it was already 43 behind at 649).
+- Tree test asserting zero findings across all source files.
+- Negative control: `bg-white text-sm shadow-md` added to `apps/web/src/components/report/ReportView.tsx:186` → the design-system suite exited 1 (1 failed, 838 passed) naming all three at ReportView.tsx:186; the file was restored byte-for-byte with `cp` and verified with `cmp`.
+
+**The rest of the bar.**
+- API pytest 1751, workers 13, shared-types 53, web 1068, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- OpenAPI and `api.gen.ts` regenerate byte-identically.
+- Exit codes were read from files.
