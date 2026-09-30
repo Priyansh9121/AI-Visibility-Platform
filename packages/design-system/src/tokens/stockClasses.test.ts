@@ -184,6 +184,53 @@ describe('findStockClasses: scanning source', () => {
   });
 });
 
+describe('findStockClasses: traps that compile fine but paint a stock default', () => {
+  const names = (src: string, kind: 'ts' | 'tsx' | 'css' = 'tsx') =>
+    findStockClasses(src, kind).map((f) => f.className);
+
+  it('flags any dark: variant (Tailwind follows the OS, not data-theme)', () => {
+    expect(names('<div className="flex dark:bg-surface-raised p-4" />')).toEqual(['dark:bg-surface-raised']);
+    expect(names('<div className="flex md:dark:p-4 p-2" />')).toEqual(['md:dark:p-4']);
+    expect(names('.a { @apply flex dark:p-4; }', 'css')).toEqual(['dark:p-4']);
+  });
+
+  it('does not flag words that merely start with dark', () => {
+    expect(names('<div className="flex data-[theme=dark]:p-4 p-2" />')).toEqual([]);
+    expect(names('const s = "dark: a heading in prose";', 'ts')).toEqual([]);
+  });
+
+  it('flags a bare ring width with no ring colour in the same class list', () => {
+    expect(names('<div className="flex ring p-4" />')).toEqual(['ring']);
+    expect(names('<div className="flex ring-2 p-4" />')).toEqual(['ring-2']);
+    expect(names('<div className="flex focus:ring-4 p-4" />')).toEqual(['focus:ring-4']);
+  });
+
+  it('accepts a ring width paired with a preset ring colour, and ring-0', () => {
+    expect(names('<div className="flex ring-2 ring-beacon-600 p-4" />')).toEqual([]);
+    expect(names('<div className="flex ring-2 ring-inset ring-offset-2 ring-beacon-600" />')).toEqual([]);
+    expect(names('<div className="flex ring-0 p-4" />')).toEqual([]);
+    expect(names('<div className="flex ring-inset p-4" />')).toEqual([]);
+  });
+
+  it('flags a bare border width with no border colour in the same class list', () => {
+    expect(names('<div className="flex border p-4" />')).toEqual(['border']);
+    expect(names('<div className="flex border-b-2 p-4" />')).toEqual(['border-b-2']);
+    expect(names('<div className="flex border-t p-4" />')).toEqual(['border-t']);
+    expect(names('<div className="flex border-2 border-dashed p-4" />')).toEqual(['border-2']);
+  });
+
+  it('accepts a border width paired with a preset border colour', () => {
+    expect(names('<div className="flex border border-line-hairline p-4" />')).toEqual([]);
+    expect(names('<div className="flex border-b-2 border-b-line-ink p-4" />')).toEqual([]);
+    expect(names('<div className="flex border border-transparent p-4" />')).toEqual([]);
+    expect(names('<div className="flex border-0 border-solid p-4" />')).toEqual([]);
+  });
+
+  it('does not treat prose containing "border" or "ring" as classes', () => {
+    expect(names('const s = "a thin border around the ring";', 'ts')).toEqual([]);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // The tree.
 // ---------------------------------------------------------------------------

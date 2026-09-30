@@ -20473,3 +20473,31 @@ contract regenerates byte-identically.
 - Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
 - OpenAPI and `api.gen.ts` regenerate byte-identically.
 - Exit codes were read from files.
+
+# Three Tailwind traps are documented and caught by the design-system suite
+
+**2026-09-30, the eleventh entry of the day.** One item, one commit.
+
+**Render: nothing to set.**
+
+## 1. What changed
+
+- **`docs/design-system.md` has a new section, "Tailwind traps the preset cannot catch at build time"** (end of §8, before §9). Replacing the palette makes a wrong colour fail loudly; these three go the other way, because the class exists, compiles, and paints a Tailwind default the preset never touched. Found by the skills-pilot rebuild of `ui-styling` on AVP's tokens.
+  1. **`dark:` follows the OS, not the theme switch.** Neither `apps/web/tailwind.config.ts` nor the preset sets `darkMode`, so Tailwind 3.4's default `'media'` applies (`tailwindcss/stubs/config.full.js:4`), while AVP's theme is `[data-theme='dark']` (`tokens.css:288`). Rule: never write `dark:`.
+  2. **A bare `ring` paints stock blue.** Stock `ringColor.DEFAULT` is `theme('colors.blue.500', '#3b82f6')` at 0.5 opacity (`config.full.js:761-764`); the preset replaces `colors` and defines no ring colour, so the `#3b82f6` fallback wins. Rule: no ring widths; focus is `focus-visible:shadow-focus` or the global `:focus-visible` rule in `base.css`, both on `--avp-focus-ring`.
+  3. **A bare `border` draws `currentColor`.** Preflight sets `border-color: theme('borderColor.DEFAULT', currentColor)` (`preflight.css:12`), stock `borderColor.DEFAULT` falls back to `currentColor` when `colors.gray` is absent (`config.full.js:82-85`), and the preset has no `gray`. Rule: pair every border width with `border-line-hairline`, `border-line-strong` or `border-line-ink` in the same class list.
+- **`packages/design-system/src/tokens/stockClasses.ts` flags all three:** any `dark` variant on a class; a ring width (`ring`, `ring-1/2/4/8`) with no ring colour in the same class string (`ring-0`, `ring-inset`, `ring-offset-*` are not widths); a border width (`border`, `border-[trblxyse]`, `border-N`, side widths) with no border colour in the same class string (style keywords and `border-0` do not count; `border-transparent` counts as a colour). It reads "same class string" only, so a colour applied by a wrapper or a global rule is a finding to fix, not an exception.
+- **`stockClasses.test.ts`: 7 new fixture tests.** Red first: 3 failed of 197. A first green attempt failed once because `border-t` was read as a colour; the colour pattern was tightened.
+- **Current tree: 0 real hits** for all three in `apps/web/src` and `packages/*/src` (the two `dark:` matches in `ThemeControl.tsx:26,32` are object keys, not classes; every `border*` is paired with `border-line-hairline`). No source file changed.
+
+## Verified
+
+**Design-system vitest 839 → 846 (+7); `design-system-vitest` floor 839 → 846.**
+- **Negative control:** `dark:bg-surface-raised ring-2` added to `apps/web/src/components/marketing/MarketingFooter.tsx:23` → the suite exited 1 (1 failed, 845 passed), naming both classes at that line; the file was restored with `cp` and `cmp` identical.
+
+**The rest of the bar.**
+- API pytest 1768, workers 13, shared-types 53 (0 fail), web 1087, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- OpenAPI and `api.gen.ts` regenerate byte-identically.
+- Exit codes were read from files.
