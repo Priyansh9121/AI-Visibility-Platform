@@ -25,7 +25,7 @@ export const metadata: Metadata = {
  *   - **Not a React effect**, which is the whole point. An effect runs after
  *     hydration, and hydration is exactly the window this exists to cover.
  *
- * Why it is needed at all: `/invite/{token}` and `/reset-password/{token}` are
+ * Why it is needed at all: `/invite` and `/reset-password` (and their older path forms) are
  * server-rendered, so their cards are in the HTML before any bundle runs. With
  * the hidden state as the CSS default those two screens were blank until
  * hydration — verified with `curl`, which returned the card markup carrying

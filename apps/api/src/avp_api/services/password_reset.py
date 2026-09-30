@@ -28,6 +28,7 @@ from ..config import Settings
 from ..models import PasswordResetToken, User, UserStatus
 from ..security import hash_password, new_session_token, token_digest
 from .auth import normalise_email
+from .links import reset_link
 
 logger = structlog.get_logger(__name__)
 
@@ -117,7 +118,7 @@ def reset_url(settings: Settings, token: str) -> str:
     different links. It carries a live credential: send it or print it to the
     operator, and never log it.
     """
-    return f"{settings.public_web_base_url.rstrip('/')}/reset-password/{token}"
+    return reset_link(settings.public_web_base_url, token)
 
 
 async def confirm_reset(

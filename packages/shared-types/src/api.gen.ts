@@ -398,8 +398,9 @@ export interface paths {
          *
          *     Reads the ticket without consuming it, so a reload of the page is not a
          *     second sign-in. The ticket is a bearer credential with a session token's
-         *     entropy and a reset link's lifetime; carrying it in a query string is the
-         *     same trade `/reset-password/{token}` makes, for the same reason — there
+         *     entropy and a reset link's lifetime; carrying it in a query string is a
+         *     trade the reset link (`/reset-password#<token>`, a fragment, which is never
+         *     sent to a server) does not have to make; here the Google redirect is the constraint — there
          *     is no session yet to carry it any other way.
          *
          *     **Errors:** `400 invalid-google-ticket` for unknown, used and expired alike.
@@ -1172,13 +1173,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/reports/{token}": {
+    "/api/v1/reports/shared": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
+        get?: never;
+        put?: never;
         /**
          * Get Public Report
          * @description A report, by share token. **No session required** — Epic 9.8.
@@ -1192,11 +1195,13 @@ export interface paths {
          *     * **Read-only.** There is no sibling route that mutates anything by token.
          *       A holder cannot edit the competitor set, re-run the scan, or reach any
          *       other scan — the token resolves to exactly one row.
-         *     * **`404` for every rejection, with one code path.** A malformed token, an
-         *       unknown token and a well-formed miss are indistinguishable in both status
-         *       and body. There is no shape or length pre-check, deliberately: rejecting
-         *       an implausible token faster than a plausible one is a timing oracle that
-         *       makes enumeration cheaper. Every guess pays for the same index lookup.
+         *     * **`404` for every rejection, with one code path.** An unknown, revoked or
+         *       expired token is indistinguishable in both status and body. The only
+         *       pre-check is the body's length bound (`422` for an empty or over-512
+         *       token); it says nothing about whether any token is real. Every plausible
+         *       guess pays for the same index lookup.
+         *     * **The token is in the POST body, not the path**, so it stays out of
+         *       request logs.
          *     * **No `401`, ever.** A `401` would say "this token is real, authenticate to
          *       use it", which is precisely the bit an enumerator wants.
          *     * **Same projection as the authenticated route.** `build_report` is reused
@@ -1206,22 +1211,22 @@ export interface paths {
          *
          *     **Errors:** `404` only.
          */
-        get: operations["get_public_report_api_v1_reports__token__get"];
-        put?: never;
-        post?: never;
+        post: operations["get_public_report_api_v1_reports_shared_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/reports/{token}.pdf": {
+    "/api/v1/reports/shared/pdf": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
+        get?: never;
+        put?: never;
         /**
          * Get Public Report Pdf
          * @description A report PDF, by share token. **No session required** — Epic 9.14.
@@ -1232,7 +1237,7 @@ export interface paths {
          *     offers it. Three reasons, in order of weight:
          *
          *     1. **It exposes nothing new.** The PDF carries strictly the facts
-         *        `GET /reports/{token}` already serves to the same holder, rendered
+         *        `POST /reports/shared` already serves to the same holder, rendered
          *        differently. Withholding it would not protect a single datum.
          *     2. **The send path is the point.** Epic 9.8 built this token because "the
          *        prospect a report is about has no account, and must not need one to read
@@ -1261,15 +1266,14 @@ export interface paths {
          *     a file already downloaded.
          *
          *     Every rule the JSON share route states holds here unchanged, because it is
-         *     the same lookup: read-only, one code path, `404` for every rejection with no
-         *     shape pre-check, and never a `401` — which would say "this token is real,
+         *     the same lookup: read-only, one code path, `404` for every rejection (the body's
+         *     token is bounded 1..512 by the schema, a `422` alike for real and fake
+         *     tokens, and no other shape check runs), and never a `401` — which would say "this token is real,
          *     authenticate to use it".
          *
          *     **Errors:** `404` only.
          */
-        get: operations["get_public_report_pdf_api_v1_reports__token__pdf_get"];
-        put?: never;
-        post?: never;
+        post: operations["get_public_report_pdf_api_v1_reports_shared_pdf_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3733,6 +3737,18 @@ export interface components {
             url: string;
         };
         /**
+         * SharedReportRequest
+         * @description The body of `POST /reports/shared` and `POST /reports/shared/pdf`.
+         *
+         *     The share token travels here, not in the URL path, so it never reaches a
+         *     request log. The bounds are the same ones every other token body uses
+         *     (`ConfirmResetIn`); a real token is far shorter than 512.
+         */
+        SharedReportRequest: {
+            /** Token */
+            token: string;
+        };
+        /**
          * ShelfSlotOut
          * @description One brand standing in one ordinal slot of one answer.
          *
@@ -5119,16 +5135,18 @@ export interface operations {
             };
         };
     };
-    get_public_report_api_v1_reports__token__get: {
+    get_public_report_api_v1_reports_shared_post: {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                token: string;
-            };
+            path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SharedReportRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -5150,16 +5168,18 @@ export interface operations {
             };
         };
     };
-    get_public_report_pdf_api_v1_reports__token__pdf_get: {
+    get_public_report_pdf_api_v1_reports_shared_pdf_post: {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                token: string;
-            };
+            path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SharedReportRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

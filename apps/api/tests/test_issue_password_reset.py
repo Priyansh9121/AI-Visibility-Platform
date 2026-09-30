@@ -107,7 +107,7 @@ class TestTheLinkIsTheRoutesOwn:
         assert result.returncode == 0, result.stderr
 
         prefix = reset_service.reset_url(settings, "")
-        assert prefix == f"{settings.public_web_base_url.rstrip('/')}/reset-password/"
+        assert prefix == f"{settings.public_web_base_url.rstrip('/')}/reset-password#"
         links = [line for line in result.stdout.splitlines() if line.startswith(prefix)]
         assert len(links) == 1, result.stdout
         token = links[0].removeprefix(prefix)
@@ -202,7 +202,7 @@ class TestRefusals:
         assert result.returncode != 0
         assert result.returncode == script.NO_SUCH_USER
         assert "No such user." in result.stderr
-        assert "/reset-password/" not in result.stdout + result.stderr
+        assert "/reset-password#" not in result.stdout + result.stderr
         assert STRANGER not in result.stdout + result.stderr
 
     async def test_a_google_only_account_is_refused(

@@ -19755,3 +19755,136 @@ byte-for-byte.
 - The report's exclusion note and its robots.txt audit section, from the
   production build's `/share` page with the API answered from the new
   fixture. The report is paper in both themes, so they were shot light.
+
+# Share, invite and reset tokens leave the URL path
+
+**2026-09-30, the first entry of the day.** One item, one commit.
+
+**Nothing to set on Render.** No migration and no new setting. The API and web
+deploy from the same push. For the minute between the two deploys, a web page
+still calling the old GET gets a 404, and a reload fixes it.
+
+## 1. What changes for a person
+
+- **Links sent from now on** read `/share#…`, `/invite#…` and `/reset-password#…`.
+  The part after `#` is never sent to any server, so it cannot reach Render's
+  request log, the API's log, or a Referer.
+- **Links already sent** (`/share/<token>` and so on) still work: the old page
+  loads, sends the browser to the `#` form with `location.replace`, and offers
+  an "Open the link" anchor, plus a `<noscript>` note for a visitor without
+  JavaScript.
+- **The share page keeps its `#…` in the address bar**, so a report can be
+  reloaded, bookmarked and forwarded. It also reacts to a pasted `#` change in
+  the same tab.
+- **Invite and reset remove it once read** (`history.replaceState(null, …)`),
+  because they are single-use secrets. A reload afterwards says: "This page no
+  longer has the link's code (it is removed from the address bar once read).
+  Open the link from your email again."
+
+## 2. The mechanism
+
+- **`apps/api/src/avp_api/services/links.py`** is now the one place link shapes
+  are built (`share_link`, `invite_link`, `reset_link`). It is used by
+  `_share_url`, the seat invitation, `reset_url` and `scripts/issue_password_reset.py`.
+- **`GET /reports/{token}` and `GET /reports/{token}.pdf` are replaced** by
+  `POST /reports/shared` and `POST /reports/shared/pdf` with the token in the
+  body.
+- **`logs.py` still redacts** any legacy `/reports/<token>` path. It now logs
+  exactly `/reports/shared` and `/reports/shared/pdf` as they are, and redacts
+  every other remainder and any query string under `/reports/`.
+- **The web reads the token** through `src/lib/fragmentToken.ts`. The first
+  render is a neutral loading state, so there is no hydration mismatch and no
+  error flash, and an empty fragment goes straight to the invalid state.
+- **The public PDF is a POST** that returns a Blob, saved through
+  `DownloadPdfButton`. It now keeps focus while busy (`aria-disabled`), has a
+  visually hidden status ("Preparing the PDF…", then "PDF downloaded"), and its
+  error is tied to the button with `aria-describedby`.
+- **`Referrer-Policy: no-referrer`** is on the three old routes and the three new ones.
+
+## 3. Reviews
+
+- **The security review found no Critical, High or Medium issue.**
+- **Its Lows were fixed:**
+  - Next's router could write the token back after a `replaceState` carrying
+    Next's own state;
+  - the log exemption was broader than the two real paths (`/reports/shared?token=…`
+    and `/reports/shared/<t>` were logged);
+  - the reload copy blamed a valid link;
+  - stale docstrings.
+- **The UI review's Mediums were fixed:** the no-JS dead end on old links, a
+  one-frame flash of the form on an empty fragment, the reload copy, and PDF
+  button focus and announcements.
+
+## Found, not fixed
+
+- **The Google sign-up ticket still rides in a query string.** `routers/auth.py`
+  redirects to `/sign-up/google?ticket=…`, and the web calls
+  `GET /auth/google/pending?ticket=…`. Both land in Render's request log. Within
+  the ticket's 10 minutes, someone reading that log could complete the sign-up
+  bound to the victim's Google account. The same fragment-plus-POST treatment
+  would close it.
+- **Path-form share links sent before this change stay alive, and are logged when
+  opened.** Re-sharing refreshes the same token's expiry, so each re-share gives
+  those old copies another 30 days. Only revoke-then-share retires them.
+- **CORS does not expose `Content-Disposition`,** so the web names the PDF with
+  its own fallback (`<slug>-ai-visibility.pdf`, the same rule the server uses).
+  The security review judged adding `expose_headers=["Content-Disposition"]`
+  negligible risk.
+- **`.avp-btn` has no `[aria-disabled]` styling,** so a busy PDF button only
+  changes its label.
+- **`apps/web` has no DOM test environment,** so the hash-change and focus
+  behaviour is pinned by source and static-markup tests, not exercised.
+- **The CI floors in `infra/ci/floors.json` were not raised.**
+
+## Verified
+
+**API 1620 → 1645 (+25).**
+- `tests/test_token_links.py`: every builder puts the token after `#` and never
+  before it, with or without a trailing slash on the base.
+- `TestTheTokenIsNotInThePath` in `test_share_link.py`:
+  - the minted URL carries the token only in the fragment;
+  - the old GETs answer 404 and GETs on the new paths 405;
+  - bad bodies answer 422 on both routes;
+  - a 512-character token is an ordinary 404;
+  - both routes send `private, no-store`, and the PDF keeps its attachment
+    header and `%PDF` bytes;
+  - the token is absent from structlog, caplog and stdout.
+- `test_logging_config.py` adds the three bypass shapes, redacted, and the two
+  exact paths, kept.
+- The other suites that used the old paths or link shapes moved to the new ones.
+
+**Web 1023 → 1052 (+29).**
+- `lib/api.publicReport.test.ts` (4): POST with the token only in the body, a
+  404 becomes `ApiProblem`, the filename comes from `Content-Disposition`, and
+  the signed-in PDF stays a GET by scan id.
+- `app/fragmentRoutes.test.tsx`:
+  - the fragment parser;
+  - a neutral server render;
+  - invite and reset clear the fragment, share does not;
+  - `replaceState(null, …)`;
+  - the hashchange listener only on share;
+  - the invalid state derived in render;
+  - `FragmentRedirect`'s `location.replace`, anchor and `<noscript>`;
+  - no web source builds `/share/${`, `/invite/${`, `/reset-password/${` or
+    `/reports/${`.
+- `DownloadPdfButton.test.tsx` (+4) covers `aria-disabled`, the status region
+  and `aria-describedby`.
+- `referrerPolicy.test.ts` covers the three fragment routes.
+
+**Negative controls.**
+- With the old lookahead put back in `logs.py`, the `?token=` and `/shared/<t>`
+  cases fail (2 failed).
+- With `publicReportPdf` put back to a token path, the web test fails.
+- Both files were restored byte-for-byte, checked with `cmp`.
+
+**The rest of the bar.**
+- Workers 13, shared-types 53, and the full design-system suite 649.
+- ruff clean; mypy 47, under its 50 ceiling.
+- All typechecks clean, and all six count gates through `assert_count.py`.
+- Both `uv lock --check` runs pass, and `alembic upgrade head` and
+  `alembic check` pass.
+- The OpenAPI contract and `api.gen.ts` were regenerated: two operations
+  swapped and descriptions updated.
+- `next build` passes from a copy: `/share`, `/invite` and `/reset-password`
+  are static, and the three `[token]` routes are thin redirects.
+- Exit codes were read from files.

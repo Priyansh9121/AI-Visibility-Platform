@@ -122,7 +122,7 @@ class TestTheRequestRevealsNothing:
         await _sign_up(client, "leak@test.example")
         resp = await _request(client, "leak@test.example")
         body = resp.text.lower()
-        for tell in ("token", "reset-password/", "http://"):
+        for tell in ("token", "reset-password", "http://"):
             assert tell not in body, f"the response leaked {tell!r}"
 
     async def test_only_a_digest_is_ever_stored(
@@ -343,7 +343,7 @@ class TestTheEmailInterface:
         # Returns None, does not raise, does not attempt a network call.
         assert (
             await email_service.send_password_reset(
-                "someone@test.example", "http://localhost:3000/reset-password/x",
+                "someone@test.example", "http://localhost:3000/reset-password#x",
                 user_id="user_test", settings=settings,
             )
             is None

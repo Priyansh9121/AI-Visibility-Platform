@@ -572,8 +572,9 @@ async def google_pending(
 
     Reads the ticket without consuming it, so a reload of the page is not a
     second sign-in. The ticket is a bearer credential with a session token's
-    entropy and a reset link's lifetime; carrying it in a query string is the
-    same trade `/reset-password/{token}` makes, for the same reason — there
+    entropy and a reset link's lifetime; carrying it in a query string is a
+    trade the reset link (`/reset-password#<token>`, a fragment, which is never
+    sent to a server) does not have to make; here the Google redirect is the constraint — there
     is no session yet to carry it any other way.
 
     **Errors:** `400 invalid-google-ticket` for unknown, used and expired alike.

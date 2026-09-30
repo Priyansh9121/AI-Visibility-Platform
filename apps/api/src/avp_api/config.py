@@ -113,7 +113,8 @@ class Settings(BaseSettings):
     # Where the WEB app is reachable from outside. The API returns a complete,
     # copyable URL from POST /scans/{id}/share rather than a bare token,
     # because the operator's next action is to paste it into an email — and a
-    # token alone forces every caller to reinvent the same string, which is
+    # token alone forces every caller to reinvent the same string (`/share#<token>`,
+    # a fragment, never a path), which is
     # how a frontend and a backend end up disagreeing about the path.
     #
     # Deliberately NOT derived from the request's Host or Origin header: those

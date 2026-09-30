@@ -203,7 +203,7 @@ async def test_with_email_configured_the_invite_response_never_carries_the_token
     assert resp.json()["acceptUrl"] is None
     body = resp.text
     assert "token" not in body.lower()
-    assert "/invite/" not in body
+    assert "/invite#" not in body
     assert resp.json()["invitation"].keys() == {
         "id",
         "email",

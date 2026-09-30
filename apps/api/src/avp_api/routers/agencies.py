@@ -15,7 +15,7 @@ They also are not the same KIND of endpoint. `auth.py` is the unauthenticated
 edge plus the caller's own session — sign-up, login, logout, "who am I".
 Everything here acts on somebody ELSE's seat and is gated on role. `report.py`
 is the precedent for a router spanning two path families (`/scans/{id}/report`
-and `/reports/{token}`) with no prefix at all, so that is the shape used.
+and `/reports/shared`) with no prefix at all, so that is the shape used.
 
 **Acceptance lives in `auth.py`, not here**, because it is unauthenticated: a
 person redeeming an invitation has no session yet, which is the whole point.
@@ -47,6 +47,7 @@ from ..schemas.auth import SeatUsageOut, UserOut
 from ..services import email as email_service
 from ..services import invitations as invitation_service
 from ..services import seats as seat_service
+from ..services.links import invite_link
 
 router = APIRouter(tags=["agencies"])
 
@@ -136,9 +137,7 @@ async def invite_seat(
     await db.refresh(minted.user)
     await db.refresh(minted.invitation)
 
-    invite_url = (
-        f"{settings.public_web_base_url.rstrip('/')}/invite/{minted.token}"
-    )
+    invite_url = invite_link(settings.public_web_base_url, minted.token)
     await email_service.send_invitation(
         minted.user.email,
         invite_url,

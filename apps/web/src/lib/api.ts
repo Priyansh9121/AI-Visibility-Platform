@@ -81,10 +81,10 @@ export class ApiProblem extends Error {
 }
 
 /**
- * A binary GET — Epic 9.14's PDF export.
+ * A binary GET or POST — Epic 9.14's PDF export. The share-token PDF is a POST with the token in the JSON body, so no token is ever in a URL.
  *
  * Separate from `request` rather than a flag on it, because almost nothing it
- * does applies here: there is no JSON body to send, no `Content-Type` to set,
+ * does applies here: there is no JSON response to parse, no `Content-Type` to set,
  * and no `response.json()` to parse. What IS shared is the part that matters —
  * `credentials: 'include'`, without which the session cookie is silently
  * omitted and every call is a 401.
@@ -94,8 +94,18 @@ export class ApiProblem extends Error {
  * caller should not have to handle two error vocabularies depending on what
  * the success case returns.
  */
-async function requestBlob(path: string): Promise<Blob> {
-  const response = await fetch(`${API_BASE}${path}`, { credentials: 'include' });
+async function requestBlob(
+  path: string,
+  init: { method?: 'GET' | 'POST'; body?: unknown } = {},
+): Promise<Blob> {
+  const hasBody = init.body !== undefined;
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: init.method ?? 'GET',
+    credentials: 'include',
+    ...(hasBody
+      ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(init.body) }
+      : {}),
+  });
 
   if (!response.ok) {
     const body: unknown = await response.json().catch(() => null);
@@ -109,7 +119,12 @@ async function requestBlob(path: string): Promise<Blob> {
     });
   }
 
-  return response.blob();
+  const blob = await response.blob();
+  // The server names the file. When the browser lets us read the header, return
+  // a File carrying that name (a File is a Blob); otherwise the plain Blob, and
+  // the caller supplies its own fallback name.
+  const name = /filename="?([^";]+)"?/i.exec(response.headers?.get?.('Content-Disposition') ?? '')?.[1];
+  return name ? new File([blob], name, { type: blob.type }) : blob;
 }
 
 /**
@@ -446,12 +461,13 @@ export const api = {
   /**
    * A report by share token — the UNAUTHENTICATED read, Epic 9.8.
    *
-   * Called from /share/{token} by someone with no account and no cookie. Goes
+   * Called from /share#{token} by someone with no account and no cookie. Goes
    * through the same `request` helper as everything else: it sends credentials
    * that will not exist, which the endpoint ignores. Any bad token is a 404,
    * deliberately indistinguishable from any other bad token.
    */
-  publicReport: (token: string) => request<Report>(`/reports/${token}`),
+  publicReport: (token: string) =>
+    request<Report>('/reports/shared', { method: 'POST', body: JSON.stringify({ token }) }),
 
   /**
    * Who holds a seat, and which invitations are still live — Epic 9.14.
@@ -530,7 +546,8 @@ export const api = {
    * page. It carries strictly the facts `publicReport` already serves them, so
    * withholding it would protect nothing while making the send path worse.
    */
-  publicReportPdf: (token: string) => requestBlob(`/reports/${token}.pdf`),
+  publicReportPdf: (token: string) =>
+    requestBlob('/reports/shared/pdf', { method: 'POST', body: { token } }),
 
   /**
    * This agency's subscription, as recorded — Epic 9.15.

@@ -166,7 +166,7 @@ describe('working', () => {
 });
 
 describe('no workspace chrome for someone with no session', () => {
-  it('renders no sidebar in any state — the rule /share/{token} follows', () => {
+  it('renders no sidebar in any state — the rule /share follows', () => {
     for (const state of [
       { kind: 'form' } as const,
       { kind: 'done' } as const,
