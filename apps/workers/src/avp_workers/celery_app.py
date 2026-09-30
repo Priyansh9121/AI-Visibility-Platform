@@ -57,6 +57,13 @@ celery_app.conf.update(
         "avp.*": {"queue": "scans"},
     },
     task_track_started=True,
+    # --- redis reachability -------------------------------------------------
+    # Bound only the CONNECT. No socket_timeout on the broker: kombu's blocking
+    # BRPOP is already capped at 1 s, but its pub/sub listener sits on an idle
+    # socket by design, and a read timeout would tear it down. The result
+    # backend keeps Celery's own read timeout (120 s).
+    broker_transport_options={"socket_connect_timeout": settings.redis_connect_timeout},
+    redis_socket_connect_timeout=settings.redis_connect_timeout,
 )
 
 # Import task modules so they register on the app.

@@ -22,11 +22,12 @@ from ..deps import (
 )
 from ..errors import (
     GoogleSignInNotConfigured,
+    InvalidCredentials,
     InvalidGoogleTicket,
     InvalidInvitation,
     InvalidResetToken,
 )
-from ..models import Agency
+from ..models import Agency, User
 from ..schemas.auth import (
     AcceptInvitationRequest,
     AgencyOut,
@@ -136,8 +137,7 @@ async def login(
     user = await auth_service.authenticate(
         db, email=payload.email, password=payload.password, settings=settings
     )
-    # A failed login raised above and stays counted; a success is given back.
-    await rate_limit.release_login(redis, settings, request, email=payload.email)
+    verified_hash = user.password_hash
     await db.commit()
     await db.refresh(user)
 
@@ -146,6 +146,17 @@ async def login(
     ).scalar_one()
 
     token, _ = await store.create(user_id=user.id, agency_id=user.agency_id)
+    # A password change that committed after the hash was verified has already
+    # run its revoke, so this session would outlive it. Re-read the hash; if it
+    # moved, kill the session just minted and refuse (counted, not refunded).
+    current_hash = (
+        await db.execute(select(User.password_hash).where(User.id == user.id))
+    ).scalar_one_or_none()
+    if current_hash != verified_hash:
+        await store.revoke(token)
+        raise InvalidCredentials()
+    # A failed login raised above and stays counted; a success is given back.
+    await rate_limit.release_login(redis, settings, request, email=payload.email)
     _set_session_cookie(response, token, settings)
 
     used, limit = await seat_service.seat_usage(db, user.agency_id)
@@ -248,6 +259,10 @@ async def change_password(
         new_password=payload.new_password,
         settings=settings,
     )
+    # Revoke BEFORE the commit as well as after it (see below). The current
+    # password is already verified here, so a wrong guess never reaches this
+    # line. If Redis fails now the request is a 503 and nothing has changed.
+    await store.revoke_all_for_user(principal.user_id)
     await db.commit()
     # After the commit, so a failed commit does not refund an attempt.
     await rate_limit.release_change_password(
@@ -259,8 +274,12 @@ async def change_password(
         await db.execute(select(Agency).where(Agency.id == user.agency_id))
     ).scalar_one()
 
-    # Revoke AFTER the commit. Revoking first and then failing to commit would
-    # sign every device out over a password that never changed.
+    # Revoked twice on purpose. The pre-commit revoke means a Redis failure
+    # leaves the password unchanged (503, retry works); if the commit then
+    # fails, devices are signed out over an unchanged password, the safe
+    # direction. This post-commit revoke catches a session minted in between.
+    # The durable fix would be a `users.sessions_valid_after` column checked by
+    # `current_principal`, which needs no Redis at write time; not implemented.
     await store.revoke_all_for_user(user.id)
     token, _ = await store.create(user_id=user.id, agency_id=user.agency_id)
     _set_session_cookie(response, token, settings)
@@ -375,8 +394,16 @@ async def confirm_password_reset(
             detail="That reset link is not valid. Links work once and expire after an hour."
         ) from None
 
+    # Revoke before the commit as well as after it: if Redis fails here the
+    # request is a 503 with the password unchanged and the reset link not yet
+    # consumed (the session_scope rollback discards it), so the retry works.
+    # The post-commit revoke catches a session minted in between. Durable fix,
+    # not implemented: a `users.sessions_valid_after` column checked by
+    # `current_principal`.
+    await store.revoke_all_for_user(user.id)
     await db.commit()
     await store.revoke_all_for_user(user.id)
+    logger.info("password_reset.confirm.succeeded", user_id=user.id)
     # Best effort: the person proved control of the inbox, so forget the failed
     # logins that may have locked them out. Never changes the reply.
     await rate_limit.clear_login(redis, settings, email=user.email)

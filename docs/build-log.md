@@ -20616,3 +20616,52 @@ contract regenerates byte-identically.
 - Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
 - `openapi.json` and `api.gen.ts` were regenerated for this change, and regenerating again produces the same files.
 - Exit codes were read from files.
+
+# Redis failures answer fast with a 503, and a password change or reset really ends every other session
+
+**2026-10-01, the second entry of the day.** One item, one commit.
+
+**Render: nothing to set.** New optional settings with defaults, read by the API and the workers: `REDIS_CONNECT_TIMEOUT_SECONDS` (2) and `REDIS_SOCKET_TIMEOUT_SECONDS` (2); both must be finite and greater than 0.
+
+## 1. What changed
+
+- **Redis timeouts.** The API's Redis pool now has a 2 s connect timeout, a 2 s read timeout and `health_check_interval=30` (no retries: a retried rate-limit script whose reply was lost would count twice). The API pool uses no blocking commands (no `BLPOP`, `XREAD`, pub/sub), so a read timeout cannot cut a legitimate wait. Workers: the health-check client gets both timeouts; the Celery broker gets a connect timeout only, because kombu's pub/sub listener idles on its socket by design; the result backend gets a connect timeout and keeps Celery's 120 s read default. The API never publishes Celery tasks, so it has no broker path that could stall.
+- **A Redis outage is a 503, not a 500 or a hang.** Before this, the rate limiter already failed closed with 503, but the session store had no mapping, so `/auth/me` and every authenticated route returned 500 when Redis failed. A new app-wide handler maps redis-py `ConnectionError` and `TimeoutError` to the existing 503 `/problems/service-unavailable` and logs only the class name (`redis.unavailable`). `AuthenticationError` and `AuthorizationError` (which subclass `ConnectionError` in redis-py 6.4) and any other `RedisError`, such as a Lua `ResponseError`, propagate as 500, so a real bug or a rotated Redis password does not look like an outage.
+- **Found by the security review, fixed here (all pre-existing):**
+  - **A password change or reset could leave other sessions alive.** Both committed the new password and then revoked sessions in Redis; a Redis failure there (now a fast 503) left the password changed and an attacker's session alive for up to 14 days, and the retry failed. Both now also revoke **before** the commit: if that fails, nothing changes (password unchanged, reset token not consumed, so the retry works); if the commit then fails, the user is merely signed out elsewhere. The post-commit revoke stays. The durable fix, a `users.sessions_valid_after` column checked on every request, is described in the docstrings and not built.
+  - **`revoke_all_for_user` could orphan a session.** It read the user's session set and then deleted the whole set; a session created in between kept its key but left the index, so logout-all, a password change or a reset could never reach it. It now removes only the members it read (`SREM`).
+  - **A login racing a password change could keep a session.** A login that verified the old hash just before the change committed could create its session after the final revoke. Login now re-reads the password hash after creating the session and, if it changed, revokes that session and answers 401, without refunding the rate-limit attempt.
+  - **Two concurrent confirms of one reset link both succeeded.** The token row is now locked (`FOR UPDATE`), so the second gets 400 `invalid-reset-token`.
+  - `confirm.succeeded` is now logged after the commit (user id only), so a rolled-back confirm no longer logs success.
+- **Docs:** `docs/api-contracts.md` (Sessions) describes the timeouts, the settings and the 503.
+
+## 2. Tests
+
+- New `tests/test_redis_timeouts.py`, `tests/test_password_change_revocation_order.py` and `tests/test_session_races.py`, plus new cases in `apps/workers/tests/test_celery_config.py`: the pool carries the timeouts; a local TCP server that accepts and never answers makes Redis calls fail within the bound, and login and `/auth/me` answer 503 in under 5 s with no host or email in the body or log; a refused connection answers 503; a `ResponseError` propagates; settings reject 0, negatives, NaN and infinity in both apps; a Redis failure on the revoke leaves reset and change-password unchanged and retryable; a session indexed during revoke-all stays reachable; a login across a password change keeps no session; concurrent confirms give one success. The hang tests run under a 15 s watchdog, so a missing timeout fails instead of stalling the suite. All loopback; no external host.
+- Red first for every group.
+
+## 3. The review
+
+- **Security review (opus), three rounds, each PASS WITH NITS.** Round one raised the revoke-after-commit gap (Medium, pre-existing) and four Lows (a wrong pool comment, too-broad 503 mapping, unvalidated worker timeouts, unclosed test pools); round two confirmed the new ordering and raised the orphaned-session and login races (two Mediums, pre-existing) and three Lows (reset-token lock, the `AuthenticationError` mapping, the early success log); round three checked those fixes and found them sound; its remaining notes (below) are pre-existing or latent and are recorded, not fixed.
+
+## Found, not fixed
+
+- **The durable session fix** (`users.sessions_valid_after`, checked by `current_principal`) needs a migration; the stopgaps above close the known paths.
+- **Other routes that commit and then touch Redis** (seat release, accept-invitation, Google callback and complete) were reviewed: a Redis failure there leaves the database change in place and returns 503, with no security impact (a removed seat is rejected on the next request; the others only fail to create a session).
+- **Reset-request still fails open** when Redis is down, as before; once email is on, a Redis outage lifts the per-email cap on reset emails.
+- **A rare spurious 401** is possible if a legitimate password rehash on another login lands in the re-check window; the user retries.
+- **The login re-check relies on Postgres's default READ COMMITTED.** Nothing sets an isolation level; under REPEATABLE READ the re-read would use an older snapshot. Pinning `isolation_level="READ COMMITTED"` on the engine would make that explicit.
+- **The automatic password rehash on login overwrites the hash unconditionally** (`services/auth.py`, pre-existing). If a password change commits between login's read and its flush, login writes back a hash of the old password and the change is silently undone. It only happens after an Argon2 parameter raise; the fix is a compare-and-set update (`WHERE password_hash = <old>`).
+- **`SessionStore.touch` reads then sets unconditionally,** which would resurrect a revoked session that is no longer indexed. Nothing calls it today; it should use `xx=True` if it is ever used.
+
+## Verified
+
+**API pytest 1807 → 1831 (+24); workers pytest 13 → 26 (+13); floors raised to match.**
+- **Negative controls:** removing the pool timeouts fails three timeout tests through the watchdog (no hang); moving the revokes back to after the commit fails both Redis-failure tests; reverting `SREM` to `DEL` fails the orphaned-session test; removing the login re-check fails the race test. Each file was restored with `cp` and checked with `cmp`.
+
+**The rest of the bar.**
+- Shared-types 53 (0 fail), design-system 846, web 1093, mypy 47 (ceiling 50).
+- ruff clean in both Python apps; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass (no dependency change); no schema change, so Alembic was not run.
+- OpenAPI and `api.gen.ts` regenerate byte-identically (no route signature changed).
+- Exit codes were read from files.

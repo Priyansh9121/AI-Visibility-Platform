@@ -127,7 +127,9 @@ class SessionStore:
         pipe = self._redis.pipeline()
         for digest in digests:
             pipe.delete(f"{SESSION_PREFIX}{digest}")
-        pipe.delete(key)
+        # Remove only the digests read above, never the whole index: a session
+        # indexed after the SMEMBERS must stay reachable for the next revoke.
+        pipe.srem(key, *digests)
         await pipe.execute()
         return len(digests)
 
