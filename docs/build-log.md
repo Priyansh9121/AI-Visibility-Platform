@@ -20771,3 +20771,20 @@ contract regenerates byte-identically.
 - Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
 - OpenAPI and `api.gen.ts` regenerate byte-identically.
 - Exit codes were read from files.
+
+# The constraint-driven-development skill's description is valid YAML, so the skill loads
+
+**2026-10-01, the sixth entry of the day.** One item, one commit.
+
+**Render: nothing to set.**
+
+## 1. What changed
+
+- **`.claude/skills/constraint-driven-development/SKILL.md`** (tracked since the skills commit `610e4ea`): its `description:` value contained an unquoted `: ` ("…lower the test or lint floor: no new suppressions…"), which YAML rejects ("mapping values are not allowed here"). The value is now a double-quoted string with the same text; nothing else changed.
+- **Effect:** before the fix the skill was missing from the session's list of available skills; it appeared as soon as the header was quoted. The other 17 tracked skills and the 8 user-level skills parse.
+- **How it was found:** a PyYAML parse of every `SKILL.md` frontmatter (run with the API's own virtualenv; nothing installed), done while adapting the next library batch. The library copy in `~/Skills-library` had the same defect and was fixed the same way.
+
+## Verified
+
+- Every tracked `.claude/skills/*/SKILL.md` frontmatter parses as a mapping whose `name` equals its folder (18 of 18).
+- No test, script or workflow in `apps`, `packages`, `infra` or `.github/workflows` reads `.claude/skills`, so the bar run for the previous entry (API pytest 1859, workers 26, shared-types 53, design-system 846, web 1104, mypy 47; ruff, typechecks, lock checks and regeneration clean) covers this tree unchanged.
