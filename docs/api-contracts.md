@@ -69,6 +69,7 @@ listed in `CORS_ALLOW_ORIGINS` — browsers reject wildcard CORS with credential
 | `/problems/invalid-url` | 409 | Submitted URL has no public domain |
 | `/problems/invalid-webhook-signature` | 400 | Billing webhook signature missing, malformed or wrong |
 | `/problems/billing-not-configured` | 503 | A Stripe setting is unset. `detail` names the variable |
+| `/problems/service-unavailable` | 503 | A dependency the request needs is down |
 | `/problems/scan-limit-reached` | 402 | A scan cannot start on the allowance. Carries `code` (`SCAN_LIMIT_FREE_USED`, `SCAN_LIMIT_MONTHLY`, or since 2026-09-29 `SCAN_LIMIT_VERIFY_REQUIRED` — the free scan, asked for by a user with no linked Google identity), `scansUsed`, `scanLimit`, `periodResetsAt` (monthly only) |
 
 Validation problems add an `errors` member:
@@ -137,7 +138,7 @@ A password using fewer than 5 distinct characters is rejected.
 
 **Response `201`** — body is `MeOut` (below). Sets the `avp_session` cookie.
 
-**Errors:** `409 email-already-registered`, `422 validation-failed`.
+**Errors:** `429 rate-limited` (with `Retry-After` header in seconds; detail "Too many attempts. Try again in N minutes."; 5 per email and 10 per IP per hour, checked before the 409), `503 service-unavailable` (Redis down), `409 email-already-registered`, `422 validation-failed`.
 
 #### `POST /api/v1/auth/login`
 **No auth.**
@@ -148,7 +149,7 @@ A password using fewer than 5 distinct characters is rejected.
 
 **Response `200`** — `MeOut`. Sets the `avp_session` cookie.
 
-**Errors:** `401 invalid-credentials`.
+**Errors:** `429 rate-limited` (with `Retry-After` header in seconds; detail "Too many attempts. Try again in N minutes."; 10 failed attempts per email and 30 per IP per 15 minutes; successful logins are given back), `503 service-unavailable` (Redis down), `401 invalid-credentials`.
 
 Unknown email, wrong password, and suspended account all return an *identical*
 response, and the unknown-email path performs a dummy Argon2 verification so
@@ -283,7 +284,7 @@ Until 2026-09-29 the link was logged instead — a live credential in logs the
 host keeps. The log line now carries the event, the user id and the fact that
 email was not sent; never the link, the token or the address.
 
-**Errors:** none. `422` only if the body is not an email address.
+**Errors:** `429 rate-limited` (with `Retry-After` header in seconds; detail "Too many attempts. Try again in N minutes."; 3 per email and 10 per IP per hour; byte-identical for an address with and without an account; with Redis down this endpoint still answers 200), `422 validation-failed` (if the body is not an email address).
 
 #### `POST /api/v1/auth/reset-password/confirm`
 Redeem a reset link and set the new password. **No auth.** Epic 9.13.
@@ -300,6 +301,9 @@ A reset is what someone does when they believe the account is compromised, so
 leaving the attacker's session alive would defeat the exercise; and the person
 holding the link proved control of an inbox rather than knowledge of the old
 password, so signing in once with the new one confirms they hold it.
+
+**A successful reset clears that email's login rate-limit counter**, so the
+next login (or 10 failed logins) starts fresh.
 
 **Errors:** `400 invalid-reset-token` for unknown, expired, already-used and
 belonging-to-an-inactive-user alike — one response, no branch that says which.

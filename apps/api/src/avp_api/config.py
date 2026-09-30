@@ -22,7 +22,7 @@ import logging
 from functools import lru_cache
 from typing import Annotated, Literal
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, PositiveInt, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 Environment = Literal["local", "test", "staging", "production"]
@@ -95,6 +95,39 @@ class Settings(BaseSettings):
     argon2_time_cost: int = 2
     argon2_memory_cost_kib: int = 19456
     argon2_parallelism: int = 1
+
+    # Rate limits on the three unauthenticated credential routes, per address
+    # AND per source IP, as fixed windows in Redis (services/rate_limit.py).
+    # Sign-up and reset-request count every attempt; login counts failures only
+    # (a success gives its attempt back). The check runs before any Argon2,
+    # database write or email. Per email stops one account being ground down
+    # from many IPs; per IP stops one source walking many accounts. Limits and
+    # windows must be at least 1.
+    # Login: guessing passwords is the attack, so the per-email budget is small.
+    login_limit_per_email: PositiveInt = 10
+    login_limit_per_ip: PositiveInt = 30
+    login_window_seconds: PositiveInt = 15 * 60
+    # Sign-up creates an agency, a user and (later) a scan allowance: the abuse
+    # is minting free accounts, and probing which addresses are registered (409).
+    signup_limit_per_email: PositiveInt = 5
+    signup_limit_per_ip: PositiveInt = 10
+    signup_window_seconds: PositiveInt = 60 * 60
+    # Reset-request sends email (a cost, and a mailbox someone else owns) and
+    # must trip identically for every address, so it stays enumeration-safe.
+    reset_limit_per_email: PositiveInt = 3
+    reset_limit_per_ip: PositiveInt = 10
+    reset_window_seconds: PositiveInt = 60 * 60
+    # Which request header carries the real client IP, for the per-IP bucket.
+    # Empty (the default): use the connection's client host, which uvicorn's
+    # --proxy-headers already sets from the leftmost X-Forwarded-For entry.
+    # Render sits behind Cloudflare, which sets CF-Connecting-IP; that header is
+    # trustworthy only if every request really arrives through Cloudflare. The
+    # operator must confirm that before setting CLIENT_IP_HEADER=CF-Connecting-IP.
+    # NEVER set this to X-Forwarded-For: its first entry is client-controlled.
+    # When set, the header's whole value must be one IP (IPv6 is keyed on its
+    # /64, IPv4-mapped on the IPv4); if the header is absent or unparseable the
+    # request lands in one shared bucket, never in the connection's host.
+    client_ip_header: str = ""
 
     # --- CORS --------------------------------------------------------------
     # The web app runs on a different origin in development, and session
