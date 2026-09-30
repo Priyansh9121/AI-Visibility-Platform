@@ -20709,3 +20709,32 @@ contract regenerates byte-identically.
 - Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
 - `openapi.json` and `api.gen.ts` were regenerated for this change, and regenerating again produces the same files.
 - Exit codes were read from files.
+
+# sharp and its LGPL libvips binary leave the install; images are served unoptimised
+
+**2026-10-01, the fourth entry of the day.** One item, one commit.
+
+**Render: nothing to set.** The web build's `pnpm install` follows the new lockfile.
+
+## 1. What changed
+
+- **Founder decision 1.** `next/image` is not used anywhere in `apps/web` or `packages` (no `next/image`, `next/legacy/image`, `<Image`, `ImageResponse`, `next/og`, and no opengraph-image, icon, twitter-image or apple-icon files; the only hit is the `next/image-types/global` reference in `next-env.d.ts`). So there is no image optimiser to keep, and the founder chose to remove `sharp` rather than accept its LGPL binary.
+- **`apps/web/next.config.mjs`** sets `images: { unoptimized: true }`, with a comment giving the reason and the date.
+- **The root `package.json`** adds `"pnpm": { "ignoredOptionalDependencies": ["sharp"] }`. `sharp` is an optional dependency of `next` 15.5.23; pnpm 9.12.0 (the repo's `packageManager`, not upgraded) reads this setting and records it in the lockfile (checked read-only in its own bundle). `corepack pnpm install` reused 236 packages from the store and downloaded none.
+- **`pnpm-lock.yaml`:** 3 insertions, 294 deletions. The only addition is the `ignoredOptionalDependencies` entry; the deletions are `sharp@0.34.5` and its own tree (every `@img/sharp-*` and `@img/sharp-libvips-*`, `@img/colour`, `@emnapi/runtime`, `detect-libc@2.1.2`, `semver@7.8.5`) and `next`'s optional `sharp` edge. Nothing was upgraded or added. `node_modules/.pnpm` holds no sharp, `@img` or emnapi entry, and `corepack pnpm install --frozen-lockfile` exits 0.
+- **`infra/ci/licence-pending-decisions.json`** is now `[]` (kept as the place for future open questions). `test_js_license_audit.py` replaces the one-entry assertion with "the real file parses and may be empty" and adds "an empty pending list passes a clean tree".
+- **New `apps/web/src/nextConfig.test.ts`:** `images.unoptimized` is true, and the root `package.json` ignores the optional `sharp`. Red first: the `unoptimized` assertion failed before the config change.
+- `providers.test.ts` and `/privacy` never named sharp or libvips, so they are unchanged.
+
+## Verified
+
+**Web vitest 1102 → 1104 (+2); API pytest 1834 → 1835 (+1, one test replaced by two); floors raised to match.**
+- **The licence proof:** `corepack pnpm licenses list --json` lists no `sharp` and no `libvips`; `js_license_audit.py` on it: 233 ok, 3 REVIEW (argparse, caniuse-lite, lru-cache), 0 held, 0 blocked, exit 0.
+- **Negative control:** restoring the old pending entry makes the check exit 1 ("pending entry @img/sharp-libvips-* (LGPL-3.0-or-later) matches no package; remove it"), because a stale entry fails by design; the file was restored with `cp` and checked with `cmp`.
+
+**The rest of the bar.**
+- Workers 26, shared-types 53 (0 fail), design-system 846, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- OpenAPI and `api.gen.ts` regenerate byte-identically.
+- Exit codes were read from files.
