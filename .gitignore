@@ -8,6 +8,8 @@ build/
 .next/
 out/
 *.tsbuildinfo
+# Vite build output that CI rebuilds and nothing serves
+packages/design-system/dist-styleguide/
 
 # env / secrets
 .env

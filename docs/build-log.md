@@ -20272,3 +20272,65 @@ contract regenerates byte-identically.
 - The OpenAPI contract regenerates byte-identically.
 - Copy-contract tests pass; no Python copy changed.
 - Exit codes were read from files.
+
+# Housekeeping: the styleguide build leaves git, and the READMEs describe today
+
+**2026-09-30, the sixth entry of the day.** One item, one commit.
+
+**Nothing to set on Render.** No code, no migration, no setting.
+
+## 1. The styleguide build
+
+- `packages/design-system/dist-styleguide/` is Vite's output
+  (`vite.config.ts:17`).
+- Three hashed files were tracked, and each rebuild left new untracked
+  ones beside them. Nothing serves or deploys the folder; CI rebuilds it
+  to prove it builds.
+- It is now untracked (`git rm --cached`; the files stay on disk) and
+  ignored in `.gitignore`.
+
+## 2. Docs that had gone stale
+
+- **`README.md`:** the layout table's status column ("Epic 7 complete",
+  "Epic 1 complete") now says what each path is and how it runs today:
+  Render for the API (from `apps/api/Dockerfile`, which migrates then
+  starts uvicorn) and for the web app; `apps/workers` a scaffold not used
+  for scans; the Alembic head; `infra/ci`'s floors. The test line ("1496
+  tests as of Epic 9.18") now gives the 2026-09-30 counts and points at
+  the build log's last `## Verified` block and at
+  `infra/ci/floors.json`.
+- **`infra/deploy/README.md`:** no longer says there is no Dockerfile and
+  no deployment target. It says where deployment lives: Render, configured
+  in its dashboard, with no `render.yaml`, and deploys through Render's
+  git hook on push to `main`, before CI finishes.
+- **`packages/shared-types/README.md`:** "Populated in Epic 1" is replaced
+  by the two regenerate commands, and CI's diff check.
+- **`apps/web/README.md`:** said charts use Recharts, which is not a
+  dependency. Charts are the design system's own SVG components
+  (`ChartFrame`, `TrendChart`, `ShareBar` and others).
+- **`.github/workflows/deploy.yml`:** gains a comment saying Render
+  auto-deploys both services through its own git hook, so this workflow
+  deploys nothing and its `render` branch is a placeholder. No job logic
+  changed.
+
+## Found, not fixed
+
+- The README's setup text still frames the environment as "Epic 1". It is
+  stale in tone but not false, so it was left.
+- The CI floors in `infra/ci/floors.json` were not raised. They stay far
+  below the real counts (for example api 1205 against 1751), so CI would
+  not notice a suite that silently ran a quarter fewer tests.
+
+## Verified
+
+**API 1751, workers 13, shared-types 53, design-system 649, web 1068.**
+- mypy 47, under its 50 ceiling.
+- The design-system styleguide build passes and writes only into the
+  now-ignored folder; `git status` shows nothing new there.
+- `crawlerPage.test.tsx`, which lists `dist-styleguide` among ignored
+  folders, passes.
+- `deploy.yml` parses as YAML.
+- ruff clean; typechecks clean; all six count gates through
+  `assert_count.py`; both `uv lock --check` runs pass; `alembic upgrade
+  head` and `check` pass; the OpenAPI contract regenerates
+  byte-identically. Exit codes were read from files.
