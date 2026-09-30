@@ -1,4 +1,5 @@
-"""Fixed-window rate limits for the unauthenticated credential routes.
+"""Fixed-window rate limits for the credential routes: login, sign-up and
+reset-request (unauthenticated) and change-password (authenticated).
 
 One counter per (action, kind, subject) in Redis. Keys are
 `rl:{action}:{kind}:{digest}` where the digest is a truncated HMAC-SHA256 over
@@ -13,7 +14,12 @@ attacker cannot fill Redis with a key per made-up address.
 Argon2; a successful login gives both counts back (`release_login`), and a
 successful password reset clears that email's login key.
 
-**Fails closed for login and sign-up** (503, `auth.rate_limit.unavailable`):
+**Change-password is the one authenticated route here.** It verifies the
+current password, so a stolen session cookie would otherwise be an unmetered
+guessing oracle. It counts failures only, like login, and is keyed on the
+signed-in account's email (never in the clear).
+
+**Fails closed for login, sign-up and change-password** (503, `auth.rate_limit.unavailable`):
 failing open there would switch off the guard exactly when it is needed.
 Reset-request fails open: it does not use Redis and replies identically either
 way.
@@ -40,7 +46,7 @@ from .auth import normalise_email
 
 logger = structlog.get_logger(__name__)
 
-Action = Literal["login", "signup", "reset"]
+Action = Literal["login", "signup", "reset", "change_password"]
 
 UNPARSED_BUCKET = "unparsed"
 MISSING_HEADER_BUCKET = "missing-header"
@@ -147,6 +153,12 @@ def _limits(settings: Settings, action: Action) -> tuple[int, int, int]:
             settings.login_limit_per_ip,
             settings.login_window_seconds,
         )
+    if action == "change_password":
+        return (
+            settings.change_password_limit_per_email,
+            settings.change_password_limit_per_ip,
+            settings.change_password_window_seconds,
+        )
     if action == "signup":
         return (
             settings.signup_limit_per_email,
@@ -214,21 +226,39 @@ async def enforce(
     raise _too_many(max(1, math.ceil(ttl_ms / 1000)))
 
 
-async def release_login(
-    redis: Redis, settings: Settings, request: Request, *, email: str
+async def _release(
+    redis: Redis, settings: Settings, request: Request, action: Action, email: str
 ) -> None:
-    """A login succeeded: give its attempt back to both buckets (floor 0)."""
-    keys = _keys(settings, request, "login", email)
+    keys = _keys(settings, request, action, email)
     try:
         await _eval(redis, _RELEASE, list(keys), [])
     except (RedisError, OSError):
         logger.warning("auth.rate_limit.unavailable")
 
 
+async def release_login(
+    redis: Redis, settings: Settings, request: Request, *, email: str
+) -> None:
+    """A login succeeded: give its attempt back to both buckets (floor 0)."""
+    await _release(redis, settings, request, "login", email)
+
+
+async def release_change_password(
+    redis: Redis, settings: Settings, request: Request, *, email: str
+) -> None:
+    """A password change succeeded: give its attempt back, as login does."""
+    await _release(redis, settings, request, "change_password", email)
+
+
 async def clear_login(redis: Redis, settings: Settings, *, email: str) -> None:
-    """A password reset succeeded: forget that email's failed logins."""
-    key = _key(settings, "login", "email", normalise_email(email))
+    """A password reset succeeded: forget that email's failed logins and failed
+    change-password attempts (the same inbox proof unlocks both)."""
+    subject = normalise_email(email)
+    keys = [
+        _key(settings, "login", "email", subject),
+        _key(settings, "change_password", "email", subject),
+    ]
     try:
-        await redis.delete(key)
+        await redis.delete(*keys)
     except (RedisError, OSError):
         logger.warning("auth.rate_limit.unavailable")

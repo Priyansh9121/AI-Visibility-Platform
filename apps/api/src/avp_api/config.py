@@ -107,6 +107,12 @@ class Settings(BaseSettings):
     login_limit_per_email: PositiveInt = 10
     login_limit_per_ip: PositiveInt = 30
     login_window_seconds: PositiveInt = 15 * 60
+    # Change-password re-verifies the current password for a signed-in caller,
+    # so it is the same guessing attack with a stolen session cookie. Same
+    # budget as login, counted on its own keys; failures only.
+    change_password_limit_per_email: PositiveInt = 10
+    change_password_limit_per_ip: PositiveInt = 30
+    change_password_window_seconds: PositiveInt = 15 * 60
     # Sign-up creates an agency, a user and (later) a scan allowance: the abuse
     # is minting free accounts, and probing which addresses are registered (409).
     signup_limit_per_email: PositiveInt = 5

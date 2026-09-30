@@ -313,7 +313,10 @@ export interface paths {
          *     **Errors:** `401 authentication-required` (no session), `401
          *     invalid-credentials` (wrong current password — no "no such user" branch
          *     exists, because the caller is authenticated), `422 validation-failed` for a
-         *     new password that fails the SIGN-UP rules or that is the current one.
+         *     new password that fails the SIGN-UP rules or that is the current one, `429
+         *     rate-limited` (10 failed attempts per account and 30 per IP per 15 minutes,
+         *     counted before the password is verified; a success gives its attempt back),
+         *     `503` (Redis down).
          */
         post: operations["change_password_api_v1_auth_change_password_post"];
         delete?: never;
