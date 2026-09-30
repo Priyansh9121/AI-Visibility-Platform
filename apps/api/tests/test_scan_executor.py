@@ -32,6 +32,7 @@ from avp_api.services.engines import DEFAULT_ENGINES
 from avp_api.services.scan_executor import (
     EXECUTION_FAILED,
     EXECUTOR_LOST,
+    EXECUTOR_NEVER_STARTED,
     LEASE,
     MAX_SCAN_DURATION,
     SCAN_DEADLINE_EXCEEDED,
@@ -77,7 +78,8 @@ def _defer(client: AsyncClient) -> list:
 
 
 async def _add_scan(  # noqa: ANN001
-    session, cid: str, *, status: ScanStatus, started_at, lease_expires_at=None
+    session, cid: str, *, status: ScanStatus, started_at, lease_expires_at=None,
+    submitted_at=None, created_at=None,
 ) -> Scan:
     row = await session.get(Client, cid)
     scan = Scan(
@@ -87,7 +89,10 @@ async def _add_scan(  # noqa: ANN001
         status=status,
         started_at=started_at,
         lease_expires_at=lease_expires_at,
+        submitted_at=submitted_at,
     )
+    if created_at is not None:
+        scan.created_at = created_at
     session.add(scan)
     await session.commit()
     return scan
@@ -629,7 +634,8 @@ class TestStaleScanReaper:
 
         `POST /clients/{clientId}/competitors` opens a scan for a CompetitorSet
         to hang off, and an operator may run it days later. Reaping QUEUED would
-        break detect-now-scan-tomorrow, so the reaper only ever touches RUNNING.
+        break detect-now-scan-tomorrow, so a QUEUED row nobody has submitted
+        (`submitted_at` NULL) is never reaped. See `TestAStrandedSubmissionIsReaped`.
         """
         await _sign_up(client)
         cid = await _make_client(client)
@@ -715,3 +721,178 @@ class TestTheReaperRunsWhereItMatters:
         await session.refresh(stranded)
         assert stranded.status is ScanStatus.FAILED
         assert stranded.error_code == EXECUTOR_LOST
+
+
+class TestAStrandedSubmissionIsReaped:
+    """A scan handed to an executor that never started it — 2026-09-30.
+
+    The executor is a per-request `BackgroundTasks` job and Render restarts the
+    process on every deploy, so a scan submitted seconds before a restart sat
+    QUEUED forever. `submitted_at` separates that from detection's open row.
+    """
+
+    PAST = timedelta(minutes=16)
+    INSIDE = timedelta(minutes=1)
+
+    async def _stranded(self, client, session, *, age: timedelta, submitted: bool = True):  # noqa: ANN001, ANN202
+        await _sign_up(client)
+        cid = await _make_client(client)
+        when = datetime.now(UTC) - age
+        scan = await _add_scan(
+            session, cid, status=ScanStatus.QUEUED, started_at=None,
+            submitted_at=when if submitted else None, created_at=when,
+        )
+        return cid, scan
+
+    async def test_the_start_path_reaps_it_and_starts_a_fresh_scan(
+        self, client: AsyncClient, session
+    ) -> None:  # noqa: ANN001
+        cid, stranded = await self._stranded(client, session, age=self.PAST)
+        jobs = _defer(client)
+
+        resp = await client.post(f"{BASE}/clients/{cid}/scans", json={})
+
+        assert resp.status_code == 202, resp.text
+        assert resp.json()["id"] != stranded.id
+        assert len(jobs) == 1 and jobs[0].scan_id == resp.json()["id"]
+        await session.refresh(stranded)
+        assert stranded.status is ScanStatus.FAILED
+        assert stranded.error_code == EXECUTOR_NEVER_STARTED
+        assert stranded.finished_at is not None
+        assert "15 minutes" in (stranded.error_detail or "")
+
+    async def test_get_scan_reaps_it_and_returns_the_failed_row(
+        self, client: AsyncClient, session
+    ) -> None:  # noqa: ANN001
+        _, stranded = await self._stranded(client, session, age=self.PAST)
+
+        body = (await client.get(f"{BASE}/scans/{stranded.id}")).json()
+
+        assert body["status"] == "failed"
+        assert body["errorCode"] == EXECUTOR_NEVER_STARTED
+        await session.refresh(stranded)
+        assert stranded.status is ScanStatus.FAILED
+
+    async def test_a_submission_inside_the_window_is_left_alone(
+        self, client: AsyncClient, session
+    ) -> None:  # noqa: ANN001
+        _, scan = await self._stranded(client, session, age=self.INSIDE)
+
+        assert await reap_stale_scans(session) == 0
+        await session.commit()
+        body = (await client.get(f"{BASE}/scans/{scan.id}")).json()
+
+        assert body["status"] == "queued"
+        assert body["errorCode"] is None
+
+    async def test_a_detection_only_row_is_never_reaped_and_can_still_be_adopted(
+        self, client: AsyncClient, session
+    ) -> None:  # noqa: ANN001
+        cid, detected = await self._stranded(
+            client, session, age=timedelta(days=3), submitted=False
+        )
+
+        assert await reap_stale_scans(session) == 0
+        await session.commit()
+        assert (await client.get(f"{BASE}/scans/{detected.id}")).json()["status"] == "queued"
+
+        jobs = _defer(client)
+        resp = await client.post(f"{BASE}/clients/{cid}/scans", json={})
+
+        assert resp.status_code == 202, resp.text
+        assert resp.json()["id"] == detected.id, "the detection row was not adopted"
+        assert jobs[0].scan_id == detected.id
+        await session.refresh(detected)
+        assert detected.status is ScanStatus.QUEUED
+        assert detected.submitted_at is not None  # submission stamps it
+
+    async def test_a_reapable_queued_row_cannot_be_claimed_even_before_the_reaper_runs(
+        self, client: AsyncClient, session, settings, monkeypatch
+    ) -> None:  # noqa: ANN001
+        cid, stranded = await self._stranded(client, session, age=timedelta(minutes=20))
+        runs: list[str] = []
+
+        async def counting_run_scan(session_, scan, client_, **kwargs):  # noqa: ANN001, ANN003, ANN202, ARG001
+            runs.append(scan.id)
+            return scan
+
+        monkeypatch.setattr(scan_runner, "run_scan", counting_run_scan)
+        await execute_scan(
+            ScanJob(scan_id=stranded.id, client_id=cid, engines=DEFAULT_ENGINES, prompt_limit=None),
+            settings=settings,
+        )
+
+        assert runs == []
+        await session.refresh(stranded)
+        assert stranded.status is ScanStatus.QUEUED
+
+    async def test_get_scan_on_a_fresh_queued_scan_issues_no_reap(
+        self, client: AsyncClient, session, monkeypatch
+    ) -> None:  # noqa: ANN001
+        from avp_api.routers import scans as scans_router
+
+        _, scan = await self._stranded(client, session, age=self.INSIDE)
+
+        async def must_not_run(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+            raise AssertionError("the reap UPDATE ran for a fresh scan")
+
+        monkeypatch.setattr(scans_router, "fail_never_started_scans", must_not_run)
+
+        resp = await client.get(f"{BASE}/scans/{scan.id}")
+
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "queued"
+
+    async def test_a_reaped_scan_cannot_be_claimed_late(
+        self, client: AsyncClient, session, settings, monkeypatch
+    ) -> None:  # noqa: ANN001
+        cid, stranded = await self._stranded(client, session, age=self.PAST)
+        assert await reap_stale_scans(session) == 1
+        await session.commit()
+
+        runs: list[str] = []
+
+        async def counting_run_scan(session_, scan, client_, **kwargs):  # noqa: ANN001, ANN003, ANN202, ARG001
+            runs.append(scan.id)
+            return scan
+
+        monkeypatch.setattr(scan_runner, "run_scan", counting_run_scan)
+        await execute_scan(
+            ScanJob(scan_id=stranded.id, client_id=cid, engines=DEFAULT_ENGINES, prompt_limit=None),
+            settings=settings,
+        )
+
+        assert runs == []
+        await session.refresh(stranded)
+        assert stranded.status is ScanStatus.FAILED
+        assert stranded.error_code == EXECUTOR_NEVER_STARTED
+
+    async def test_after_a_reap_starting_again_runs_a_fresh_scan(
+        self, client: AsyncClient, session, settings, monkeypatch
+    ) -> None:  # noqa: ANN001
+        cid, stranded = await self._stranded(client, session, age=self.PAST)
+        jobs = _defer(client)
+        resp = await client.post(f"{BASE}/clients/{cid}/scans", json={})
+        fresh = resp.json()["id"]
+
+        async def run_scan_ok(session_, scan, client_, **kwargs):  # noqa: ANN001, ANN003, ANN202, ARG001
+            return scan
+
+        monkeypatch.setattr(scan_runner, "run_scan", run_scan_ok)
+        await execute_scan(jobs[0], settings=settings)
+
+        assert fresh != stranded.id
+        assert (await client.get(f"{BASE}/scans/{fresh}")).json()["status"] == "succeeded"
+
+    async def test_another_agencys_stranded_scan_is_404_and_untouched(
+        self, client: AsyncClient, session
+    ) -> None:  # noqa: ANN001
+        _, stranded = await self._stranded(client, session, age=self.PAST)
+        await _sign_up(client, email="other@test.example")
+
+        resp = await client.get(f"{BASE}/scans/{stranded.id}")
+
+        assert resp.status_code == 404
+        await session.refresh(stranded)
+        assert stranded.status is ScanStatus.QUEUED
+        assert stranded.error_code is None

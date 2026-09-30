@@ -30,7 +30,16 @@ for good. A scan that ended FAILED or CANCELLED never counts: a failure must
 never burn the free allowance.
 
 A scan still QUEUED or RUNNING counts **only while it is plausibly still
-alive** — `created_at` within `IN_FLIGHT_WINDOW`. An in-flight scan has to
+alive**. QUEUED: `coalesce(submitted_at, created_at)` within `IN_FLIGHT_WINDOW`
+(2026-09-30; it was `created_at` alone). RUNNING: while its `lease_expires_at`
+is in the future — a legitimate run can last `MAX_SCAN_DURATION` (40 minutes),
+longer than the window, and the lease is what says it is alive — or, for an
+unleased row, the same window as QUEUED. A RUNNING row whose lease has expired
+holds nothing; the lease reaper fails it. The monthly period dates a scan by
+the same `coalesce(submitted_at, created_at)`. `submitted_at` is set by
+`routers/scans.py` when the scan is handed to an executor, in the transaction
+that releases the allowance lock; detection never sets it, so a row nothing
+has submitted is counted from its creation exactly as before. An in-flight scan has to
 count for the window it is in flight, or the gate is a fiction: with only
 finished scans counted, two requests at the cap would both see room and both
 start. But counting it forever is the other failure, and it is the one that
@@ -40,12 +49,20 @@ finish:
 * **Lost executor.** The executor is a per-request `BackgroundTasks` job and
   Render restarts the process on every deploy. A scan queued seconds before a
   restart is never picked up. `scan_executor.reap_stale_scans` rescues the
-  RUNNING half of that — but only rows holding an expired lease, and it never
-  touches QUEUED at all, deliberately (see its docstring).
+  RUNNING half of that (an expired lease) and, since 2026-09-30, a QUEUED
+  scan that was SUBMITTED more than `IN_FLIGHT_WINDOW` ago and never claimed
+  (`EXECUTOR_NEVER_STARTED`). It still never touches a QUEUED row that was
+  never submitted (see its docstring).
 * **Detection-only scans.** Epic 3's competitor detection leaves an open
   QUEUED scan for a later run to adopt. A free agency that ran detection on
   client A and then starts a scan on client B was counted for A's row and
   refused `SCAN_LIMIT_FREE_USED` without one scan ever having run.
+
+THE ADOPTION HOLE, CLOSED (2026-09-30). Adopting a detection row keeps its old
+`created_at`, so counting by creation left an adopted scan uncounted while it
+ran: at the cap, two quick starts on two detected clients both saw room and
+both began. Counting from `submitted_at` closes it — the adopted scan holds its
+slot from the moment it was submitted.
 
 Either way the one free scan was burned by a scan that produced nothing,
 which breaks the rule the whole gate is built on. So the slot is taken when
@@ -211,9 +228,13 @@ COUNTED_STATUSES = IN_FLIGHT_STATUSES + SETTLED_STATUSES
 # ~2.5x the slowest scan actually observed.
 #
 # Bounded at all because a scan CAN sit in these states forever. The executor
-# is a per-request `BackgroundTasks` job and Render restarts on every deploy,
-# and `reap_stale_scans` covers only RUNNING rows holding an expired lease —
-# never QUEUED, by design. Nothing else ever clears them.
+# is a per-request `BackgroundTasks` job and Render restarts on every deploy.
+# The window applies to QUEUED rows, and to RUNNING rows with no lease; a
+# leased RUNNING row holds its slot for as long as the lease is live (a run may
+# outlast the window), and one with an expired lease holds nothing. Failing
+# those rows is `reap_stale_scans`' job (expired lease; submitted-then-never-
+# claimed QUEUED). A QUEUED row nothing ever submitted (detection's) is never
+# reaped; it just stops counting once the window closes.
 #
 # It does not weaken the race protection: two requests contending for the last
 # slot arrive milliseconds apart, deep inside the window.
@@ -311,11 +332,23 @@ async def count_scans(
     and a default would let a caller silently measure it against the wrong
     clock — the tests and `allowance` both drive it explicitly.
     """
+    # From SUBMISSION, falling back to creation for a row nothing has
+    # submitted. An adopted detection row keeps its old `created_at`.
+    dated = func.coalesce(Scan.submitted_at, Scan.created_at)
     holds_a_slot = or_(
         Scan.status.in_(SETTLED_STATUSES),
+        # QUEUED: nothing has claimed it, so only its age says it is alive.
+        and_(Scan.status == ScanStatus.QUEUED, dated >= now - IN_FLIGHT_WINDOW),
+        # RUNNING: alive while its lease is live, however long it has run (a
+        # run may last MAX_SCAN_DURATION, longer than the window). An unleased
+        # row (a script run) falls back to age. An expired lease is the
+        # reaper's to fail and holds nothing.
         and_(
-            Scan.status.in_(IN_FLIGHT_STATUSES),
-            Scan.created_at >= now - IN_FLIGHT_WINDOW,
+            Scan.status == ScanStatus.RUNNING,
+            or_(
+                Scan.lease_expires_at >= now,
+                and_(Scan.lease_expires_at.is_(None), dated >= now - IN_FLIGHT_WINDOW),
+            ),
         ),
     )
     stmt = (
@@ -324,7 +357,9 @@ async def count_scans(
         .where(Scan.agency_id == agency_id, holds_a_slot)
     )
     if since is not None:
-        stmt = stmt.where(Scan.created_at >= since)
+        # Dated by submission too: a detection row opened on the 30th and
+        # scanned on the 1st belongs to the month it was scanned in.
+        stmt = stmt.where(dated >= since)
     if exclude_scan_id is not None:
         stmt = stmt.where(Scan.id != exclude_scan_id)
     return int((await db.execute(stmt)).scalar_one())

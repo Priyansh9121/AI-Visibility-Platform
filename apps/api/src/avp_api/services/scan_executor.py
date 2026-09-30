@@ -47,7 +47,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
 import structlog
-from sqlalchemy import update
+from sqlalchemy import or_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings
@@ -57,6 +57,7 @@ from ..models.engine_result import Engine
 from . import alerts as alerts_service
 from . import audit_runner, fix_runner, scan_runner, scoring_runner
 from . import competitors as detection
+from .scan_allowance import IN_FLIGHT_WINDOW
 
 logger = structlog.get_logger(__name__)
 
@@ -136,6 +137,10 @@ class ScanDeadlineError(Exception):
 # failed) and from EXECUTION_FAILED (the pipeline raised). This one means the
 # process that was running the scan disappeared without saying anything.
 EXECUTOR_LOST = "EXECUTOR_LOST"
+# A scan was submitted, sat QUEUED for the whole in-flight window, and no
+# executor ever claimed it (typically the process restarted between the
+# response and the background task). Nothing ran, so nothing was spent.
+EXECUTOR_NEVER_STARTED = "EXECUTOR_NEVER_STARTED"
 EXECUTION_FAILED = "EXECUTION_FAILED"
 # The chain was alive and renewing, and still did not finish in time. Distinct
 # from EXECUTOR_LOST (it went silent) and EXECUTION_FAILED (it raised).
@@ -445,7 +450,16 @@ async def execute_scan(job: ScanJob, *, settings: Settings) -> None:
             claimed = (
                 await session.execute(
                     update(Scan)
-                    .where(Scan.id == scan.id, Scan.status == ScanStatus.QUEUED)
+                    .where(
+                        Scan.id == scan.id,
+                        Scan.status == ScanStatus.QUEUED,
+                        # Not a row already reapable (submitted, then past the
+                        # window): it must not be both claimable and reapable.
+                        or_(
+                            Scan.submitted_at.is_(None),
+                            Scan.submitted_at >= datetime.now(UTC) - IN_FLIGHT_WINDOW,
+                        ),
+                    )
                     .values(
                         status=ScanStatus.RUNNING,
                         started_at=datetime.now(UTC),
@@ -633,15 +647,53 @@ class InlineScanExecutor:
         await execute_scan(job, settings=settings)
 
 
+async def fail_never_started_scans(
+    session: AsyncSession, *, now: datetime, scan_id: str | None = None
+) -> list[str]:
+    """Fail QUEUED scans that were submitted, then never claimed, past the window.
+
+    The one rule, used by the global reaper and by the single-row lazy reap in
+    `GET /scans/{scanId}` (`scan_id` scopes it to that row). A QUEUED row with
+    `submitted_at IS NULL` is never touched: that is detection's open scan.
+    Returns the ids failed. The caller commits.
+    """
+    stmt = update(Scan).where(
+        Scan.status == ScanStatus.QUEUED,
+        Scan.submitted_at.is_not(None),
+        Scan.submitted_at < now - IN_FLIGHT_WINDOW,
+    )
+    if scan_id is not None:
+        stmt = stmt.where(Scan.id == scan_id)
+    result = await session.execute(
+        stmt.values(
+            status=ScanStatus.FAILED,
+            error_code=EXECUTOR_NEVER_STARTED,
+            error_detail=(
+                "No executor started this scan within 15 minutes of it being submitted."
+            ),
+            finished_at=datetime.now(UTC),
+        )
+        .returning(Scan.id)
+        .execution_options(synchronize_session=False)
+    )
+    return list(result.scalars().all())
+
+
 async def reap_stale_scans(session: AsyncSession, *, now: datetime | None = None) -> int:
     """Fail scans whose executor went away. Returns how many were reaped.
 
-    **RUNNING only — never QUEUED**, and the distinction is load-bearing.
-    QUEUED means "open, nobody has claimed it": that is the state a detect-only
-    run leaves behind for a later scan to pick up (`competitors.py`'s
-    `get_or_create_scan`), and reaping it would break detect-now-scan-tomorrow.
-    A QUEUED row stranded by a crash is harmless anyway — `get_or_create_scan`
-    reuses it on the next request.
+    **RUNNING by lease; QUEUED only once submitted and past the window**, and
+    the distinction is load-bearing. QUEUED alone means "open, nobody has
+    claimed it": that is the state a detect-only run leaves behind for a later
+    scan to pick up (`competitors.py`'s `get_or_create_scan`), and reaping it
+    would break detect-now-scan-tomorrow. So a QUEUED row with
+    `submitted_at IS NULL` is never reaped, however old. But a QUEUED row with
+    a `submitted_at` older than `IN_FLIGHT_WINDOW` was handed to an executor
+    that never claimed it (the process restarted first); left alone it holds
+    the client's open scan and, before the window closed, an allowance slot
+    with nothing running. That half is failed as `EXECUTOR_NEVER_STARTED`; the
+    executor's claim is a conditional QUEUED -> RUNNING UPDATE, so a reaped
+    scan can never be picked up late.
 
     RUNNING means an executor claimed it and started work. Without this the row
     stays RUNNING forever when that executor goes away: the dashboard shows
@@ -664,7 +716,8 @@ async def reap_stale_scans(session: AsyncSession, *, now: datetime | None = None
     it strands only the scratch clients those scripts create, and the fix for
     it is for them to hold a lease rather than for the reaper to guess.
 
-    A single UPDATE, covered by `ix_scans_status`. The caller commits.
+    Two UPDATEs, covered by `ix_scans_status`. The caller commits. Returns the
+    combined count.
     """
     moment = now or datetime.now(UTC)
     result = await session.execute(
@@ -692,4 +745,12 @@ async def reap_stale_scans(session: AsyncSession, *, now: datetime | None = None
             scan_ids=reaped,
             lease_s=LEASE.total_seconds(),
         )
-    return len(reaped)
+    never_started = await fail_never_started_scans(session, now=moment)
+    if never_started:
+        logger.warning(
+            "scan.reaped_never_started",
+            count=len(never_started),
+            scan_ids=never_started,
+            window_s=IN_FLIGHT_WINDOW.total_seconds(),
+        )
+    return len(reaped) + len(never_started)
