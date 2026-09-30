@@ -20577,3 +20577,42 @@ contract regenerates byte-identically.
 - Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
 - `openapi.json` and `api.gen.ts` were regenerated for this change, and regenerating again produces the same files (+22/−2 against the last commit).
 - Exit codes were read from files.
+
+# Change-password is rate-limited like login
+
+**2026-10-01, the first entry of the day.** One item, one commit.
+
+**Render: nothing to set.** Three new optional settings have defaults: `CHANGE_PASSWORD_LIMIT_PER_EMAIL` (10), `CHANGE_PASSWORD_LIMIT_PER_IP` (30), `CHANGE_PASSWORD_WINDOW_SECONDS` (900).
+
+## 1. What changed
+
+- **`POST /auth/change-password` is rate-limited per account and per IP, like login,** so a stolen session cookie cannot be used to brute-force the current password. It uses the existing `rate_limit.enforce()` with a new action, `change_password`, keyed on the signed-in account's normalised email through the same HMAC as login under its own prefix (`rl:change_password:{email|ip}:*`), so no raw email is in a key or a log line. Defaults match login: 10 per account and 30 per IP per 15 minutes; values below 1 are rejected.
+- **Order:** authentication first (an unauthenticated request gets 401 and creates no rate-limit key), then `enforce()`, then Argon2 verification. A limited request (429 `/problems/rate-limited` with `Retry-After`) never verifies the password, sets no cookie and revokes no session. If Redis errors, the route fails closed with 503, as login does.
+- **A successful change gives one attempt back,** like login, after the commit (so a failed commit refunds nothing). **A completed password reset now also clears the change-password lock** (`clear_login` deletes both keys).
+- **The per-account budget is separate from login's.** A cookie holder can make at most 10 guesses here per 15 minutes in addition to login's 10; a shared budget would have let a stolen cookie lock the victim out of login. `logout-all` needs no password and revokes a stolen session. Keying by email is safe today because no route changes `users.email`; a code comment says `user.id` would be needed if one is ever added.
+- **Contracts:** `docs/api-contracts.md` documents the 429 and 503, the limits and settings, and the budget choice; `openapi.json` and `api.gen.ts` are regenerated (description text only; the route declares no `responses=`).
+
+## 2. Tests
+
+- New `tests/test_change_password_rate_limit.py` (16 tests): the per-account and per-IP limits trip with 429, `Retry-After` and the problem type, and even the right password is refused once limited; a different IP is unaffected; a success gives one attempt back; eight successes in a row never trip it; keys and logs contain no email and login's keys are untouched; an unauthenticated request creates no key; a limited request does not call `verify_password`, sets no cookie and leaves sessions working; a completed reset unlocks change-password; a Redis error gives 503 with no email in the body. Red first: every test errored at setup because the settings did not exist.
+
+## 3. The review
+
+- **Security review (opus): PASS WITH NITS, nothing Medium or above.** Fixed from it: a reset now clears the change-password lock; the give-back runs after the commit; the module docstring; the Redis-down test; the budget sentence in the contract. Its other findings are accepted and recorded below.
+
+## Found, not fixed
+
+- **A cookie holder can keep the real user from changing their password** by spending the 10 attempts every 15 minutes. The user can escape with `logout-all` (no password needed) and the lock clears within 15 minutes; locking someone's login already needs only their email, so this is no worse.
+- **The known per-IP caveat stands:** if `CLIENT_IP_HEADER` is set but the header never arrives, every request shares one IP bucket (runbook, "Confirm how Render passes the client IP").
+
+## Verified
+
+**API pytest 1791 → 1807 (+16); `api-pytest` floor 1791 → 1807.**
+- **Negative controls:** removing the `enforce()` call fails five tests (per-account trip, per-IP trip, give-one-back, keyed-on-account, no-verify/no-revoke); removing the change-password key from the reset clearing fails the reset test. Each file was restored with `cp` and checked with `cmp`.
+
+**The rest of the bar.**
+- Workers 13, shared-types 53 (0 fail), design-system 846, web 1093, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- `openapi.json` and `api.gen.ts` were regenerated for this change, and regenerating again produces the same files.
+- Exit codes were read from files.

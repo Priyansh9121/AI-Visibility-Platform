@@ -238,6 +238,24 @@ rules **or** that is the current one. Reusing the current password is a
 field-level `422` rather than a silent success: accepting it would revoke every
 other session for a change that did not happen, and nobody could tell.
 
+`429 rate-limited` (with `Retry-After` header in seconds; detail "Too many
+attempts. Try again in N minutes."; 10 failed attempts per account and 30 per IP
+per 15 minutes; successful changes are given back), `503 service-unavailable`
+(Redis down). It is the login limit for the same reason: a stolen session cookie
+must not become an unmetered oracle for the current password. The check runs
+**before** the password is verified, so a limited request costs no Argon2, is
+not a timing oracle and revokes no session. The account bucket is keyed on the
+signed-in account's email (normalised, HMAC-hashed, never stored or logged in the
+clear) on its own `rl:change_password:*` keys, separate from login's. An
+unauthenticated request still gets `401` first. Optional settings, defaults
+shown, nothing to set on Render: `CHANGE_PASSWORD_LIMIT_PER_EMAIL` (10),
+`CHANGE_PASSWORD_LIMIT_PER_IP` (30), `CHANGE_PASSWORD_WINDOW_SECONDS` (900).
+The per-account budget is separate from login's: a cookie holder gets at most 10
+guesses per 15 minutes here, in addition to login's own, and this is chosen so a
+stolen cookie cannot lock the victim out of login. `logout-all` (no password
+needed) revokes a stolen session. A completed password reset also clears this
+budget.
+
 #### `POST /api/v1/auth/reset-password/request`
 Ask for a reset link. **No auth.** Built in Epic 9.13; **recorded here in 9.14,
 which is late** — the convention at the top of this file is that an endpoint is

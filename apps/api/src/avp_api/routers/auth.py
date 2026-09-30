@@ -184,6 +184,8 @@ async def logout_everywhere(
 @router.post("/change-password", response_model=MeOut)
 async def change_password(
     payload: ChangePasswordRequest,
+    request: Request,
+    redis: RedisDep,
     response: Response,
     principal: PrincipalDep,
     db: DbDep,
@@ -227,8 +229,18 @@ async def change_password(
     **Errors:** `401 authentication-required` (no session), `401
     invalid-credentials` (wrong current password — no "no such user" branch
     exists, because the caller is authenticated), `422 validation-failed` for a
-    new password that fails the SIGN-UP rules or that is the current one.
+    new password that fails the SIGN-UP rules or that is the current one, `429
+    rate-limited` (10 failed attempts per account and 30 per IP per 15 minutes,
+    counted before the password is verified; a success gives its attempt back),
+    `503` (Redis down).
     """
+    # Before Argon2: a limited attempt costs nothing, is not a timing oracle and
+    # revokes nothing. Keyed on the signed-in account's email, HMAC-hashed. Safe
+    # today because no route changes users.email; if an email-change route is
+    # ever added, key on user.id instead or the budget resets with the address.
+    await rate_limit.enforce(
+        redis, settings, request, action="change_password", email=principal.user.email
+    )
     user = await auth_service.change_password(
         db,
         user=principal.user,
@@ -237,6 +249,10 @@ async def change_password(
         settings=settings,
     )
     await db.commit()
+    # After the commit, so a failed commit does not refund an attempt.
+    await rate_limit.release_change_password(
+        redis, settings, request, email=principal.user.email
+    )
     await db.refresh(user)
 
     agency = (
