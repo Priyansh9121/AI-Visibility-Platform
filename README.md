@@ -9,16 +9,17 @@ client.
 
 ## Repo layout
 
-| Path | What lives here | Status |
+| Path | What lives here | Today |
 |---|---|---|
-| `apps/web` | Next.js + React frontend — intake screen, narrative report | ✅ **Epic 7 complete** |
-| `apps/api` | **FastAPI (Python)** — HTTP API, auth, models | ✅ **Epic 1 complete** |
-| `apps/workers` | **Celery (Python)** — background scan workers | ✅ **Epic 1 complete** |
-| `packages/design-system` | Proprietary design system: tokens + components | ✅ **Epic 0 complete** |
-| `packages/shared-types` | Domain types shared across all apps | Epic 1 |
-| `infra/db` | Schema, migrations, local docker-compose | Epic 1 |
-| `infra/deploy` | Deploy manifests, CI/CD | Epic 1 |
-| `docs` | Spec, build log, API contracts, scoring spec | live |
+| `apps/web` | Next.js + React frontend: intake, report, dashboard, legal pages | Deployed on Render as a web service |
+| `apps/api` | FastAPI (Python): HTTP API, auth, models; scans run as BackgroundTasks in this process | Deployed on Render from `apps/api/Dockerfile`; the entrypoint runs `alembic upgrade head`, then uvicorn |
+| `apps/workers` | Celery (Python) scaffold: three health tasks, no scan tasks | Not used for scans |
+| `packages/design-system` | Proprietary design system: tokens, components, SVG chart components | Its styleguide is built by CI and served nowhere |
+| `packages/shared-types` | TypeScript types generated from the API's OpenAPI schema | Regenerated; CI fails on a diff |
+| `infra/db` | Alembic migrations (head `3e8a5b7c9d14`) | Postgres is Supabase in production |
+| `infra/deploy` | Local Postgres and Redis compose file, deployment notes | No `render.yaml`; Render is configured in its dashboard |
+| `infra/ci` | CI helper scripts and the test-count floors (`floors.json`) | Enforced by `.github/workflows/ci.yml` |
+| `docs` | Spec, build log, API contracts, scoring spec, runbook | live |
 
 ## Docs you should read first
 
@@ -167,8 +168,11 @@ cd apps/api     && uv run pytest -q            # API
 cd apps/workers && uv run pytest -q            # workers
 ```
 
-1496 tests as of Epic 9.18 — api 822, workers 13, shared-types 53,
-design-system 149, web 459.
+3534 tests as of 2026-09-30 — api 1751, workers 13, shared-types 53,
+design-system 649, web 1068 (mypy 47, ceiling 50).
+
+The latest counts are in the last `## Verified` block of `docs/build-log.md`,
+and CI enforces the floors in `infra/ci/floors.json`.
 
 Live verification of the Epic 2 acceptance criterion — real crawl, real model
 call, no mocks:

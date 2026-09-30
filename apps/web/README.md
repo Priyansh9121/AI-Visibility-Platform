@@ -5,8 +5,9 @@ Report, and pitch export.
 
 **Stack** (product-spec.md §5.1): Next.js + React + Tailwind, with Tailwind
 **customized to the proprietary design tokens** via the preset exported from
-`@avp/design-system/tailwind-preset`. Recharts for conventional charts, styled
-through `@avp/design-system` chart theme — never Recharts' default theme.
+`@avp/design-system/tailwind-preset`. Charts are hand-drawn SVG components from
+`@avp/design-system` (`ChartFrame`, `TrendChart`, `ShareBar` and others); there
+is no charting library.
 
 Every customer-facing surface **must** import from `@avp/design-system`.
 Ad hoc Tailwind defaults on customer-facing screens are not permitted —

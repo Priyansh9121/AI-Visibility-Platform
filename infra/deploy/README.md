@@ -14,27 +14,26 @@ docker compose -f infra/deploy/docker-compose.yml down -v     # stop and wipe da
 
 It provides **datastores only**. The API, workers, and web app run on the host
 via `uv run` and `pnpm dev` — a code-reload loop through a container mount is
-slower and flakier than running natively, and there is no deployment target yet
-that would justify maintaining service images.
+slower and flakier than running natively.
 
 **Docker is optional.** If you already run Postgres and Redis locally, ignore
 this file and point `DATABASE_URL` / `REDIS_URL` at your own instances. Epic 1
 was developed and verified against host-installed instances.
 
-## What is deliberately not here yet
+## Where deployment lives
 
-Nothing in this directory should be written before there is a real deployment
-target, because infrastructure-as-code written against a hypothetical
-environment is guaranteed to be wrong:
+The API has a `Dockerfile` (`apps/api/Dockerfile`; `apps/api/docker-entrypoint.sh`
+runs `alembic upgrade head`, then uvicorn) and is deployed on Render, as is the
+web app. Deploys happen through Render's own git hook on push to `main`, before
+CI finishes. Configuration lives in the Render dashboard; there is no
+`render.yaml`. Postgres is Supabase and Redis is Render Key Value.
 
-- Service container images (`Dockerfile` for api / workers / web)
-- IaC for the hosting platform
-- Managed Postgres and Redis provisioning
-- Secret storage wiring — Epic 1 uses `.env` locally; a deployed environment
-  must inject the variables in `apps/api/.env.example` from a real secret store
+`.github/workflows/deploy.yml` deploys nothing today; see the comment at its top.
+The CI gate is `.github/workflows/ci.yml` with `infra/ci/`.
 
-**Built since:** the CI gate — `.github/workflows/ci.yml` with
-`infra/ci/` (Epic 18). It is a gate, not a deploy: nothing here deploys yet.
+What is deliberately not here: infrastructure-as-code for Render, and a
+`Dockerfile` for `apps/workers` or `apps/web`. Secrets are injected as the
+variables in `apps/api/.env.example` from the Render dashboard, never committed.
 
 ## Deployment-time requirements already fixed
 
