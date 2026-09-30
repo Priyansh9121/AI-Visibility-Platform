@@ -20195,3 +20195,80 @@ session anyway), and forgot-password still gives its usual reply.
 - Both `uv lock --check` runs pass.
 - The OpenAPI contract is regenerated (the reset route's description).
 - Exit codes were read from files.
+# A partial technical audit shows its score on the Technical screen
+
+**2026-09-30, the fifth entry of the day.** One item, one commit.
+
+**Nothing to set on Render.** No migration and no new setting; the API
+contract regenerates byte-identically.
+
+## 1. What changes
+
+- **The Technical screen showed every `partial` audit as "The site could not
+  be read",** although a partial audit read the page and is scored with one
+  component left out, usually freshness when the site gives no date. 8 of the
+  25 audits in avp_dev were partial, and all 8 were scored
+  (`docs/build-log.md:19689`).
+- **Now a partial audit shows its score, its figures and each check,** with
+  the report's own "Partial audit" badge and sentence ("Some signals were
+  unavailable, so the sub-score was computed from what could be measured.")
+  beside the heading. The two screens share the words through
+  `lib/report/strings.ts`, so they cannot drift.
+- **The excluded component sits in a card headed "Not in this score",** one
+  list item per component, with the existing "Not measured" badge and reason.
+  The explainer counts the parts it shows ("three parts" for a partial audit,
+  where it always said "four").
+- **Only a `failed` audit reads "The site could not be read".** A
+  robots-blocked failed audit keeps its own wording. This matches the report,
+  which already treated only `failed` as unreadable.
+
+## 2. The mechanism
+
+- `routers/audits.py` computes components and weights for every audit that is
+  not `failed`, from the stored row, with the same function the score was
+  built from.
+- `ClientTechnicalView.tsx` tests `status === 'failed'` instead of
+  `status !== 'ok'`.
+- The UI review found three Mediums, all fixed here: the page never said the
+  audit was partial, "four parts" contradicted a three-part chart, and the
+  "Not measured" card had no name.
+
+## Found, not fixed
+
+- **The failed-audit wording still differs between the two screens.** The
+  report names the URL and says the dimension is "left unscored"; the
+  Technical screen gives a bare reason code. It predates this change.
+- The CI floors in `infra/ci/floors.json` were not raised.
+
+## Verified
+
+**API 1749 → 1751 (+2).**
+- `test_partial_audit_returns_its_measured_components_and_weights`: a partial
+  audit has components and weights, lists `content_freshness` as excluded and
+  leaves it out of `components`, and the weighted components re-sum to
+  `technicalFoundation`.
+- `test_failed_audit_returns_no_components`.
+
+**Web 1056 → 1068 (+12).** The new `ClientTechnicalView.test.tsx`:
+- partial: never "could not be read", with its score, figures, the "Partial
+  audit" badge and sentence (equal to the report's words), "three parts" and
+  never "four parts", and the "Not in this score" card as a named list;
+- failed: the unreadable state with its reason, no figures and no badge;
+- failed with `ROBOTS_DISALLOWED`: the robots wording;
+- ok unchanged, still "four parts"; no audit.
+
+**Negative controls.** Each file was restored byte-for-byte and checked with
+`cmp`.
+- The web condition put back to `!== 'ok'` fails the 4 partial tests.
+- The API condition put back to `is OK` fails the partial-components test.
+- Removing the badge fails its test.
+
+**The rest of the bar.**
+- Workers 13, shared-types 53, and the full design-system suite 649,
+  including the off-scale scan.
+- ruff clean; mypy 47, under its 50 ceiling.
+- Typechecks clean, and all six count gates through `assert_count.py`.
+- Both `uv lock --check` runs pass.
+- The OpenAPI contract regenerates byte-identically.
+- Copy-contract tests pass; no Python copy changed.
+- Exit codes were read from files.
