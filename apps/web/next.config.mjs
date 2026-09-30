@@ -17,6 +17,9 @@ const nextConfig = {
   // `no-referrer` sends nothing. The report's source links already carry
   // rel="noreferrer"; this covers every other request and any future link.
   // Nothing here needs a Referer: the API's CORS reads Origin.
+  //
+  // The same pages also send `X-Robots-Tag: noindex, nofollow`: a credential
+  // address is not for a search index. One list, so the two cannot drift.
   async headers() {
     return [
       '/share',
@@ -27,7 +30,13 @@ const nextConfig = {
       '/invite/:token',
       '/sign-up/google',
     ].map(
-      (source) => ({ source, headers: [{ key: 'Referrer-Policy', value: 'no-referrer' }] }),
+      (source) => ({
+        source,
+        headers: [
+          { key: 'Referrer-Policy', value: 'no-referrer' },
+          { key: 'X-Robots-Tag', value: 'noindex, nofollow' },
+        ],
+      }),
     );
   },
 

@@ -20402,3 +20402,37 @@ contract regenerates byte-identically.
 - Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
 - OpenAPI and `api.gen.ts` regenerate byte-identically.
 - Exit codes were read from files.
+
+# Token pages tell search engines not to index them
+
+**2026-09-30, the ninth entry of the day.** One item, one commit.
+
+**Render: nothing to set.**
+
+## 1. What changed
+
+- **Every token page now sends `X-Robots-Tag: noindex, nofollow` beside `Referrer-Policy: no-referrer`.** The pages are `/share`, `/invite` and `/reset-password` (fragment forms), their legacy `/share/:token`, `/invite/:token` and `/reset-password/:token` path forms, and `/sign-up/google`, which carries the Google sign-up ticket in its query. Before, a token URL posted somewhere public carried no indexing directive. Both headers come from the one route list in `apps/web/next.config.mjs`. Found by the skills-pilot security review of `avp-geo-seo`.
+- **`apps/web/src/app/referrerPolicy.test.ts`** checks that each token page (the `[token]` routes discovered on disk, their fragment parents, `/sign-up/google`) sends both headers, and that every rule sending `no-referrer` also sends `noindex`. It evaluates every `headers()` rule against concrete URLs with Next's own path matcher, so `/`, `/crawler`, `/privacy` and `/terms` provably get no `X-Robots-Tag` while `/share/abc123` and the other token URLs do. Red first: 8 of 20 tests failed before the header existed.
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS.** Its Medium is fixed: the first version of the public-pages test compared `source` strings only, so a catch-all rule such as `/((?!_next).*)` would have noindexed `/` and still passed. The test now matches concrete URLs.
+- **Its Low is recorded, not done:** the test reads `next.config.mjs` output, not a served response. No `next start` curl was run, because a build beside the founder's running `next dev` would share `.next`.
+- **What it confirmed:** Next 15.5 matches header sources strictly on the path; query strings match; the fragment never reaches the server; `/share/abc/` gets a header-less 308 to `/share/abc`, whose HTML carries both headers; there is no basePath, i18n or middleware; no other page reads a credential from the URL.
+
+## Found, not fixed
+
+- **robots.txt will hide this header on the path forms.** Once B5's robots.txt disallows `/share`, `/invite` and `/reset-password`, crawlers that obey it never fetch those pages, so they never see the `noindex`, and a legacy `/share/<token>` URL posted publicly could still be listed URL-only. The founder chose to keep those paths disallowed; this is on the decisions list.
+- **Route discovery only finds directories named `[token]`.** A future `[ticket]` route would be missed.
+
+## Verified
+
+**Web 1068 → 1087 (+19); `web-vitest` floor 818 → 1087.**
+- Negative controls: removing the `X-Robots-Tag` entry fails 8 tests naming the routes; adding a catch-all `noindex` rule fails the public-pages test naming `/`. Both restored with `cp` and checked with `cmp`.
+
+**The rest of the bar.**
+- API pytest 1751, workers 13, shared-types 53, design-system 839, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- OpenAPI and `api.gen.ts` regenerate byte-identically.
+- Exit codes were read from files.
