@@ -171,3 +171,38 @@ def test_policy_is_imported_not_copied():
     assert js.ALLOWED == py.ALLOWED
     assert js.BLOCKING.pattern == py.BLOCKING.pattern
     assert js.NOT_COPYLEFT.pattern == py.NOT_COPYLEFT.pattern
+
+
+@pytest.mark.parametrize(
+    "lic", ["MPL-2.0", "MPL 2.0", "Mozilla Public License 2.0 (MPL 2.0)", "(MPL-2.0)"]
+)
+def test_mpl_2_is_ok_unmodified_and_printed_separately(tmp_path, capsys, lic):
+    rc, out = _run(tmp_path, [("mpl-pkg", "1.0.0", lic)], capsys=capsys)
+    assert rc == 0
+    assert "ok-unmodified" in out and "mpl-pkg" in out
+    assert "REVIEW" not in out
+
+
+def test_mpl_1_1_is_review_in_js(tmp_path, capsys):
+    rc, out = _run(tmp_path, [("old", "1.0.0", "MPL-1.1")], capsys=capsys)
+    assert rc == 0
+    assert "REVIEW" in out
+
+
+def test_mpl_and_gpl_blocks_in_js(tmp_path, capsys):
+    rc, _ = _run(tmp_path, [("x", "1.0.0", "MPL-2.0 AND GPL-3.0")], capsys=capsys)
+    assert rc == 1
+
+
+def test_mpl_or_gpl_passes_in_js(tmp_path, capsys):
+    rc, _ = _run(tmp_path, [("x", "1.0.0", "(MPL-2.0 OR GPL-3.0)")], capsys=capsys)
+    assert rc == 0
+
+
+def test_js_shares_the_unmodified_list():
+    js = _load()
+    spec = importlib.util.spec_from_file_location("license_audit", SCRIPTS / "license_audit.py")
+    assert spec and spec.loader
+    py = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(py)
+    assert js.ALLOWED_UNMODIFIED == py.ALLOWED_UNMODIFIED
