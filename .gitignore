@@ -64,12 +64,35 @@ dump.rdb
 # of the product, and committing them would put ~200k lines of somebody else's
 # content into a product repo where every reviewer would have to scroll past it.
 #
-# Reinstall them with `npx skills add <owner/repo@skill>`; `skills-lock.json` is
-# ignored for the same reason the packages are.
-.agents/
-.claude/
-skills/
-skills-lock.json
+# Reinstall them with `npx skills add <owner/repo@skill>`.
+#
+# The exception is the active skill set the project's workflow relies on: the
+# 14 skill folders named below (each carries its LICENSE and SOURCE.md), the
+# agents, and settings.json, plus skills-lock.json. Everything else under
+# .claude/ stays local: settings.local.json, the impeccable skill, and the
+# symlinks into .agents/. The root skills/ and .agents/ are anchored so that the
+# `skills/` rule does not also match .claude/skills/.
+/.agents/
+/skills/
+/.claude/*
+!/.claude/settings.json
+!/.claude/agents/
+!/.claude/skills/
+/.claude/skills/*
+!/.claude/skills/verification-before-completion/
+!/.claude/skills/intent-driven-development/
+!/.claude/skills/architecture-decision-records/
+!/.claude/skills/supabase-postgres-best-practices/
+!/.claude/skills/production-audit/
+!/.claude/skills/systematic-debugging/
+!/.claude/skills/test-driven-development/
+!/.claude/skills/constraint-driven-development/
+!/.claude/skills/handoff/
+!/.claude/skills/tells/
+!/.claude/skills/avp-geo-seo/
+!/.claude/skills/market-research/
+!/.claude/skills/emil-design-eng/
+!/.claude/skills/review-animations/
 
 # Written by installed skills, not by this project.
 .impeccable/

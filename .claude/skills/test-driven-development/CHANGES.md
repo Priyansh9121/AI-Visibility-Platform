@@ -1,0 +1,26 @@
+# Changes from upstream
+
+Line numbers refer to skills/test-driven-development/SKILL.md (S) and writing-good-tests.md (W) in the source.
+
+- Description narrowed to AVP surfaces (apps/api, apps/workers, apps/web, packages/*), excluding docs-only and config-only work -> upstream "any feature or bugfix" (S:3) over-triggers.
+- Exceptions list (S:24-27) replaced: configuration files exempt only as config-only changes; generated code and prototypes kept -> matches AVP.
+- Iron Law "Delete it. Start over ... Delete means delete" (S:37-45), red flags "Delete code. Start over" (S:254), "Start over" in checklist (S:306) and "Sunk cost" row (S:230-231) -> softened to "stop and ask the founder before discarding written code".
+- Removed the graphviz dot diagram (S:49-69) in favour of a five-step list -> shorter, same content.
+- All `npm test` examples and jest/TypeScript retry and email examples (S:75-106, 117-119, 134-164, 172-174, 258-291) replaced with AVP commands (`uv run pytest -q -p no:cacheprovider`, `corepack pnpm --filter @avp/web exec vitest run`, `node --test` via shared-types), redirected to a file with the tool's own exit code, never piped; names the `avp_test` Postgres 55433 and Redis db 15 requirement -> upstream commands do not exist here and piping hides exit codes.
+- "Bare `pytest`, `npm test`, `cargo test`" paragraph (S:185-193) rewritten to per-package full suites, the CI bar and verification-before-completion -> AVP-specific bar.
+- Added "Count gates, not coverage" section (upstream S:301 "All tests pass", W:194 coverage warning) -> `infra/ci/floors.json` bump in same change, no lowering without a build-log reason, mypy ceiling.
+- Added "Scoring formula changes": FORMULA_VERSION bump and never re-score history, with the tests to write first -> AVP rule in CLAUDE.md, absent upstream.
+- Added "No commit step" (upstream S:234 "catches bugs before commit") -> commits only when the founder asks, after the full bar.
+- Exempted the five guard tests (providers.test.ts, reportIsolation.test.ts, referrerPolicy.test.ts, test_facts_only.py, test_secrets_stay_out_of_logs.py) in writing-good-tests.md, with the matching carve-outs in "Behavior, not text", the gate and warning signs (W:47-52, 72-73, 177, 192) -> upstream treats source-grepping as a warning sign; AVP's guards do it on purpose.
+- Removed `superpowers:writing-skills` reference (W:51) -> not present here; sentence reduced.
+- Removed "your human partner" phrasing and quoted corrections (S:312, 330; W:96, 132) -> replaced with "the founder" or dropped; persona text is not AVP's.
+- Sibling refs: added library `systematic-debugging` and installed `verification-before-completion` -> per AVP library names.
+- JS examples in W (buildSearchQuery, ToolCatalog/MCPServerManager mocks, W:32-38, 104-112) replaced with a Python scoring literal example and AVP mock guidance (real avp_test DB, mock only outbound providers, facts-only fixtures) -> stack fit and facts-only rule.
+- Removed "Never fix bugs without a test / No exceptions without your human partner's permission" absolutism (S:321, 330) -> replaced with "ask the founder" and "Found, not fixed".
+- Restored "Test fails? Fix code, not test" and "Other tests fail? Fix now" (S:181, S:183), strengthened: deleting, skipping (skip, xfail, .only) or loosening an existing test needs the founder's OK and a report line -> stops an agent deleting a failing pin after a FORMULA_VERSION bump while the floor-based count gate misses it.
+- Added `test_scoring.py::test_formula_version_is_recorded` as a deliberate pin exempt from "no change detectors" and "fails on every intentional change" (W:41-45, W:190) -> same failure.
+- Negative control restore made explicit: `cp` backup, `cp` back, `cmp`; never git checkout/restore (S:14 spirit, W:157-169 mutation check) -> those wipe uncommitted work.
+- Docs-only/config-only/generated/prototype exceptions need the founder's OK, and behaviour-changing config is not "config-only" (S:24-27) -> no self-granted exemptions.
+- Command snippets: `LOG` must be set, subshells from the repo root, design-system variant, assert_count called from the root (S:117-119, 172-174) -> avoids a wrong-cwd or wrong-filter false RED.
+- Also dropped or reworded, not previously logged: "Thinking 'skip TDD just this once'? Stop" lead-in and "violating the letter" line (S:14, S:29; kept in spirit via red flags); "Keep as reference" row (S:231, folded into the Iron Law paragraph); "Tests after achieve same goals" row (S:228, shortened to the "I'll test after" row); "Manual test faster", "TDD will slow me down" rows (S:234-235, cut as filler); "Don't know how to test... ask your human partner" wording (S:313); the Debugging Integration and Final Rule blocks (S:317-330, merged into "Bugs"); Verification Checklist "Every new function/method has a test" and "Tests use real code" items (S:297, S:303, folded into other items); the `<Good>/<Bad>` example pairs (S:75-164, dropped with the JS examples). Blank/quoted lines at S:126-128 ("Test passes? You're testing existing behavior") were shortened into the Verify RED step.
+- This list is best-effort, not a guarantee of completeness; diff against the source for the exact set.

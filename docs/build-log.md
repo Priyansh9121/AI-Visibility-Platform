@@ -20334,3 +20334,34 @@ contract regenerates byte-identically.
   `assert_count.py`; both `uv lock --check` runs pass; `alembic upgrade
   head` and `check` pass; the OpenAPI contract regenerates
   byte-identically. Exit codes were read from files.
+
+# The project's agent skills, agents, CLAUDE.md and git guardrails are tracked in git
+
+**2026-09-30, the seventh entry of the day.** Eight skills installed, three archived, six agent files, settings rules, `.gitignore` edits, and one commit.
+
+**Render: nothing to set.**
+
+## 1. What changed
+
+- **Eight adapted skills installed** from `~/Skills-library` into `.claude/skills/`: `production-audit`, `systematic-debugging`, `test-driven-development`, `constraint-driven-development`, `handoff`, `tells`, `avp-geo-seo`, `market-research`. Each carries `LICENSE`, `SOURCE.md` (sha256 of sources) and `CHANGES.md`; `diff -r` against the library shows rc 0 for all eight. They come from the 2026-09-30 skills audit and a pilot in which each got an opus security review (all PASS WITH NITS; every finding fixed) and a risk-pattern grep.
+- **Three skills archived** (moved, not deleted) to `~/Skills-archive/removed-2026-09-30/project/`: `ui-ux-pro-max`, `improve-animations`, `find-animation-opportunities`. `accessibility` was a symlink into `.agents/skills/`; the link was removed (target left in place), recorded in `~/Skills-archive/removed-2026-09-30/project/accessibility.symlink.md`, and its entry removed from `skills-lock.json` so a reinstall does not bring it back. It duplicated the user-level AccessLint skills.
+- **Active set is now exactly 18:** verification-before-completion, intent-driven-development, architecture-decision-records, supabase-postgres-best-practices, fastapi, playwright-cli, playwright-best-practices (these three are symlinks into `.agents/skills`, recorded in `skills-lock.json`), impeccable, emil-design-eng, review-animations, plus the eight new skills.
+- **Tracked third-party skills carry upstream `LICENSE` and `SOURCE.md`:** verification-before-completion (obra/superpowers, MIT), intent-driven-development and architecture-decision-records (ECC, MIT), supabase-postgres-best-practices (supabase/agent-skills, MIT), emil-design-eng and review-animations (emilkowalski/skills, MIT). The repo is public. No `SKILL.md` was edited.
+- **`.claude/settings.json` (new, tracked) holds native permission rules:** deny push to `main` (`* main`, `*:main`, `refs/heads/main`, plain and `git -C/-c` forms), every force-push form (`--force`, `--force-with-lease`, `--force-if-includes`, `-f`, `+refspec`, `--mirror`), `--no-verify`, and `gh pr merge` (a merge lands on `main` like a push; the founder merges). Ask on every other push and destructive local git (`reset --hard`, `clean`, `branch -D`, `stash pop/drop/clear`, whole-tree checkout/restore/switch -f, `add -A/./ --all`). No prompt on commit. Twenty-seven deny rules, fifty-two ask rules. No hook. `.claude/settings.local.json` (ignored) holds read-only git allows which cannot override ask/deny.
+- **Dry push tests run live in this session:** denied with no prompt — `git push --dry-run origin HEAD:main`, `git push --dry-run origin main`, `git -C "<root>" push --dry-run origin HEAD:main`, `--force-with-lease`, leading `--force`, flag-last `--force-if-includes`, `-f`, `+launch-readiness`, `--mirror`, `git -C … --force-with-lease`. `git push --dry-run origin launch-readiness` went through the ask prompt and ran. **Negative control:** `git commit --dry-run --no-verify` denied (the `--no-verify` rule alone matches it); `git commit --dry-run` ran with no prompt.
+- **`.gitignore` anchored `.agents/` and `skills/` to the root** (the unanchored `skills/` also matched `.claude/skills/`), un-ignored `.claude/settings.json`, `.claude/agents/` and exactly 14 skill folders, and stopped ignoring `skills-lock.json`. Still ignored: `settings.local.json`, `impeccable`, the three symlinks. `git check-ignore` evidence: 120 paths not ignored (all to-be-tracked files), seven ignored.
+- **Newly tracked:** `CLAUDE.md`, `.claude/settings.json`, `.claude/agents/*.md` (six files), `skills-lock.json`, and 96 files in the 14 skill folders (105 files total). Key-shaped string scan: zero matches for every secret regex; three hits on `computedHash` sha256 digests in `skills-lock.json`.
+
+## Found, not fixed
+
+- Known gaps in git guardrails (documented in the git-guardrails library skill): a bare `git push` while on `main` (asks, not denied), quoted refspecs, bundled short flags, `bash -c`, aliases and scripts.
+
+## Verified
+
+**No code changed; all counts equal the baseline.**
+- API pytest 1751, workers 13, shared-types 53, design-system 649, web 1068, mypy 47 (ceiling 50).
+- ruff clean; typechecks clean; both `uv lock --check` runs pass; OpenAPI and `api.gen.ts` regenerate byte-identically.
+
+**Negative control:** `git commit --dry-run --no-verify` denied (the `--no-verify` rule matches); `git commit --dry-run` ran.
+
+**The rest of the bar:** all count gates through `assert_count.py` pass; `uv lock --check` clean in both `apps/api` and `apps/workers`; exit codes read from files. No schema change, so Alembic was not run.
