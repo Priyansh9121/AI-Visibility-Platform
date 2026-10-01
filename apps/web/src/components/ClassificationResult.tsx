@@ -7,7 +7,7 @@ import { api, ApiProblem } from '@/lib/api';
 import { ScanLimitNotice } from '@/components/billing/ScanLimitNotice';
 import { ADDRESS_NOT_PUBLIC, ADDRESS_NOT_PUBLIC_SENTENCE } from '@/lib/report/strings';
 import { type ScanLimitProblem, scanLimitProblem } from '@/lib/billing/allowance';
-import { useScanAllowance } from '@/lib/billing/useScanAllowance';
+import { useScanStanding } from '@/lib/billing/useScanAllowance';
 
 /**
  * The result of an intake classification.
@@ -61,7 +61,7 @@ export function ClassificationResult({
   // "12 of 40 scans this month" beside the button, from the billing response;
   // null for a member (403) or an ungated deployment, in which case nothing
   // is shown.
-  const allowance = useScanAllowance(client.agencyId);
+  const { label: allowance, billing, role } = useScanStanding(client.agencyId);
 
   /**
    * Start the scan — Epic 9.12, closing the second dead end Epic 9.11 named.
@@ -187,7 +187,12 @@ export function ClassificationResult({
           )}
 
           {scan.kind === 'limited' && (
-            <ScanLimitNotice problem={scan.problem} agencyId={client.agencyId} />
+            <ScanLimitNotice
+              problem={scan.problem}
+              agencyId={client.agencyId}
+              billing={billing}
+              role={role}
+            />
           )}
 
           {scan.kind === 'started' ? (

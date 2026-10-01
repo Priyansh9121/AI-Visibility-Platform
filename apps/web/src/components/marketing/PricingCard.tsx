@@ -29,7 +29,7 @@
  * Both states are live call sites, not one real branch and one for the tests:
  * the landing page renders the signed-out card, and Settings renders the
  * signed-in card wherever the API will start a checkout: no subscription,
- * `canceled` and `incomplete_expired` (`BillingPanel`'s CHECKOUT_STATUSES).
+ * `canceled` and `incomplete_expired` (`canCheckout`, in `lib/billing/allowance`).
  *
  * The footnote under the button ("Signing up is free…") is the signed-out
  * card's alone. It is sign-up copy, and the signed-in card is for an agency

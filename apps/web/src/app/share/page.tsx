@@ -82,7 +82,7 @@ export default function PublicReportRoute() {
       <main className="mx-auto max-w-page px-6 py-18">
         <ErrorState
           title="This report link is not available"
-          detail="The link may be incomplete, or it may have been withdrawn. Ask whoever sent it for a current one."
+          detail="The link may be incomplete, expired or withdrawn. Ask whoever sent it for a current one."
         />
       </main>
     );

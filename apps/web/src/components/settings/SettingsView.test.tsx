@@ -15,6 +15,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
+import type { BillingStatus } from '@avp/shared-types';
 import { SettingsView, type SettingsState } from './SettingsView';
 import {
   memberMe,
@@ -23,7 +24,10 @@ import {
 } from '@/lib/settings/__fixtures__/seats';
 import {
   activeSubscription,
+  canceledSubscription,
+  freeScanUsed,
   noSubscription,
+  pastDueSubscription,
 } from '@/lib/settings/__fixtures__/billing';
 
 const render = (state: SettingsState) =>
@@ -154,6 +158,100 @@ describe('the "not built yet" list is maintained in both directions', () => {
     for (const tell of ['coming soon', 'shortly', 'next release', 'roadmap']) {
       expect(html, `found "${tell}"`).not.toContain(tell);
     }
+  });
+});
+
+describe('the billing lead depends on what the agency has', () => {
+  const lead = (billing: BillingStatus | null) => render({ ...READY, billing });
+  const BASE = 'One plan, $160 a month, 3 seats.';
+
+  it('says only the plan when billing is not known', () => {
+    const html = lead(null);
+    expect(html).toContain(BASE);
+    expect(html).not.toContain('first scan is free');
+    expect(html).not.toContain('Reports you already have stay open');
+  });
+
+  it('an active subscription says reports stay open even if you cancel', () => {
+    const html = lead(activeSubscription);
+    expect(html).toContain(`${BASE} Reports you already have stay open even if you cancel.`);
+    expect(html).not.toContain('first scan is free');
+  });
+
+  it('free scan unused keeps the sentence it had', () => {
+    expect(lead(noSubscription)).toContain(
+      `${BASE} Your first scan is free with a Google sign-in; subscribing is how you keep scanning. Reports you already have stay open either way.`,
+    );
+  });
+
+  it('free scan used says so', () => {
+    const html = lead(freeScanUsed);
+    expect(html).toContain(
+      `${BASE} Your free scan is used; subscribing is how you keep scanning. Reports you already have stay open either way.`,
+    );
+    // The lead only: BillingPanel's own "No subscription" copy is a separate component.
+    expect(html).not.toContain('Your first scan is free');
+  });
+});
+
+/**
+ * A subscription that is neither live nor over — `past_due`, `unpaid`,
+ * `paused`, `incomplete` and any status this screen has never seen — is still
+ * open at Stripe. Checkout refuses a second one (409), so "subscribing is how
+ * you keep scanning" sends that agency to a button that cannot help it; the
+ * lead points at Manage billing instead, the way the scan-limit notice does
+ * (the UI review of 2026-10-01).
+ */
+describe('the billing lead for a subscription that needs attention', () => {
+  const lead = (billing: BillingStatus) => render({ ...READY, billing });
+  const BASE = 'One plan, $160 a month, 3 seats.';
+  const NEEDS_ATTENTION = ['past_due', 'unpaid', 'paused', 'incomplete', 'some_future_status'];
+  const withStatus = (subscriptionStatus: string, over: Partial<BillingStatus> = {}): BillingStatus => ({
+    ...pastDueSubscription,
+    subscriptionStatus,
+    ...over,
+  });
+  // A static render writes the apostrophe as &#x27;.
+  const USED = `${BASE} Your free scan is used, and this agency&#x27;s subscription needs attention: fix it from Manage billing below. Reports you already have stay open either way.`;
+  const UNUSED = `${BASE} Your first scan is free with a Google sign-in; this agency&#x27;s subscription needs attention: fix it from Manage billing below. Reports you already have stay open either way.`;
+
+  it.each(NEEDS_ATTENTION)('%s with the free scan used: says so, and points at Manage billing', (status) => {
+    const html = lead(withStatus(status));
+    expect(html).toContain(USED);
+    expect(html).not.toContain('subscribing is how you keep scanning');
+  });
+
+  it.each(NEEDS_ATTENTION)(
+    '%s with the free scan unused: keeps the free-scan sentence, and points at Manage billing',
+    (status) => {
+      const html = lead(withStatus(status, { scansUsedThisPeriod: 0 }));
+      expect(html).toContain(UNUSED);
+      expect(html).not.toContain('subscribing is how you keep scanning');
+    },
+  );
+
+  it.each(NEEDS_ATTENTION)('%s: Manage billing is on the screen, below the lead that names it', (status) => {
+    const html = lead(withStatus(status));
+    const named = html.indexOf('fix it from Manage billing below');
+    const button = html.indexOf('>Manage billing<');
+    expect(named).toBeGreaterThan(-1);
+    expect(button).toBeGreaterThan(named);
+  });
+
+  it.each([
+    ['no subscription', noSubscription],
+    ['canceled', canceledSubscription],
+    ['incomplete_expired', { ...canceledSubscription, subscriptionStatus: 'incomplete_expired' }],
+  ])('%s can start a Checkout, so it is still told that subscribing is how to keep scanning', (_what, billing) => {
+    const html = lead(billing);
+    expect(html).toContain('subscribing is how you keep scanning');
+    expect(html).not.toContain('needs attention: fix it from Manage billing below');
+  });
+
+  it('an active subscription is told neither', () => {
+    const html = lead(activeSubscription);
+    expect(html).not.toContain('subscribing is how you keep scanning');
+    expect(html).not.toContain('needs attention');
   });
 });
 

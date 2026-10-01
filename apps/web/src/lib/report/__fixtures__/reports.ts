@@ -1083,3 +1083,25 @@ export const unscoredReport: Report = {
   score: null,
   dimensions: [],
 };
+
+/**
+ * Ran out of time with at least half its prompts answered: it ended PARTIAL
+ * and counts. The report is the helpscout one, which is what a partial scan's
+ * report looks like — it keeps the answers that finished and scores them.
+ */
+export const partialDeadlineReport: Report = {
+  ...helpscoutReport,
+  scanStatus: 'partial',
+  scanErrorCode: 'SCAN_DEADLINE_EXCEEDED',
+};
+
+/**
+ * Every engine call failed: the scan ended FAILED, there is nothing to show,
+ * and it does not count. The API serves a report for a failed scan (it checks
+ * the agency and the id and nothing else), and it is this one.
+ */
+export const failedScanReport: Report = {
+  ...insufficientDataReport,
+  scanStatus: 'failed',
+  scanErrorCode: 'ALL_ENGINE_CALLS_FAILED',
+};

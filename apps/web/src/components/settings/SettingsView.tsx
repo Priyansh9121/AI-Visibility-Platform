@@ -24,6 +24,7 @@ import {
 } from '@avp/design-system';
 import type { BillingStatus, Me, SeatList } from '@avp/shared-types';
 import { BILLING_SECTION_ID } from '@/lib/settings/sections';
+import { canCheckout, freeScanUsed } from '@/lib/billing/allowance';
 import { WorkspaceShell } from '@/components/shell/WorkspaceShell';
 import { SeatsPanel } from '@/components/settings/SeatsPanel';
 import { PasswordChangePanel } from '@/components/settings/PasswordChangePanel';
@@ -46,6 +47,34 @@ export type SettingsState =
       billingError: string | null;
     }
   | { kind: 'error'; title: string; detail: string };
+
+/**
+ * The Billing section's lead, from what the billing response says. Nothing is
+ * claimed about the free scan when billing is not loaded; a subscriber is not
+ * told about a free scan; and an agency that has used it is told so.
+ *
+ * An agency whose subscription is neither live nor over (`past_due`, `unpaid`,
+ * `paused`, `incomplete`, or a status this screen has never seen) is not told
+ * that subscribing is how it keeps scanning: Stripe still holds that
+ * subscription open, Checkout would refuse a second one, and the way back is
+ * Manage billing, in the panel below. The scan-limit notice says the same.
+ */
+function billingLead(billing: BillingStatus | null): string {
+  const plan = `One plan, $${PLAN_PRICE_USD} a month, 3 seats.`;
+  const stayOpen = 'Reports you already have stay open either way.';
+  if (billing === null) return plan;
+  if (billing.isActive) return `${plan} Reports you already have stay open even if you cancel.`;
+  const used = freeScanUsed(billing);
+  if (!canCheckout(billing.subscriptionStatus)) {
+    const needsAttention = "this agency's subscription needs attention: fix it from Manage billing below.";
+    return used
+      ? `${plan} Your free scan is used, and ${needsAttention} ${stayOpen}`
+      : `${plan} Your first scan is free with a Google sign-in; ${needsAttention} ${stayOpen}`;
+  }
+  return used
+    ? `${plan} Your free scan is used; subscribing is how you keep scanning. ${stayOpen}`
+    : `${plan} Your first scan is free with a Google sign-in; subscribing is how you keep scanning. ${stayOpen}`;
+}
 
 /**
  * The screen itself. Pure — every state is reachable by passing a prop.
@@ -214,7 +243,7 @@ export function SettingsView({
             <PageSection
               eyebrow="Billing"
               heading="What you pay"
-              lead={`One plan, $${PLAN_PRICE_USD} a month, 3 seats. Your first scan is free with a Google sign-in; subscribing is how you keep scanning. Reports you already have stay open either way.`}
+              lead={billingLead(state.billing)}
             >
               <BillingPanel
                 agencyId={state.me.agency.id}

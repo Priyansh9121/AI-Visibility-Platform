@@ -47,10 +47,11 @@ import {
   visibilityBandLabel,
 } from '@avp/design-system';
 import type { BadgeTone, Column, LedgerDimension, ScoreAbsence } from '@avp/design-system';
-import type { Dashboard, ScanStatus, ScanSummary } from '@avp/shared-types';
+import type { BillingStatus, Dashboard, ScanStatus, ScanSummary, UserRole } from '@avp/shared-types';
 import { Layers, Users } from 'lucide-react';
 import { formatStamp } from '@/lib/dates';
 import { deriveGettingStarted } from '@/lib/dashboard/gettingStarted';
+import { scanOutcomeSentence } from '@/lib/scans/scanOutcome';
 import { GettingStarted } from './GettingStarted';
 
 /**
@@ -149,6 +150,9 @@ export interface DashboardViewProps {
    * applies on this deployment.
    */
   allowance?: string | null;
+  /** Billing and role, when known: they decide whether the notice offers Subscribe. */
+  billing?: BillingStatus | null;
+  role?: UserRole | null;
   /** The page is refreshing itself. Told to the user, not just done to them. */
   live?: boolean;
   /** Polling has been failing. Surfaced, because a silently stale page lies. */
@@ -169,6 +173,8 @@ export function DashboardView({
   scanLimit,
   agencyId,
   allowance,
+  billing,
+  role,
   live,
   pollProblem,
   onDismissGettingStarted,
@@ -209,17 +215,38 @@ export function DashboardView({
     {
       key: 'status',
       header: 'Status',
-      render: (scan) => (
-        // `live` on the running one only. This screen re-reads itself every 5s
-        // while a scan is in flight and the row it is waiting on is otherwise
-        // indistinguishable from a finished one — same chip, same weight. A
-        // badge that breathes says which row the page is watching, and it is
-        // the only motion here that runs without anybody doing anything,
-        // because it is the only thing that is genuinely still happening.
-        <Badge tone={STATUS_TONE[scan.status]} live={scan.status === 'running'}>
-          {STATUS_LABEL[scan.status]}
-        </Badge>
-      ),
+      render: (scan) => {
+        // WHY A PARTIAL OR FAILED SCAN ENDED AS IT DID — checklist 3.15. The
+        // badge says what happened; this says why, and whether the scan used
+        // up one of the agency's scans, which is the question a failed one
+        // raises. A quiet line under the badge; the code behind it is never
+        // shown. Secondary text, not tertiary like the client's domain beside
+        // it: this is a sentence to be read, and at 12px tertiary is 4.09:1 on
+        // the dark seated surface, under the 4.5:1 AA asks of text this size.
+        const outcome = scanOutcomeSentence(scan.status, scan.errorCode);
+        return (
+          <div className="flex flex-col items-start gap-1">
+            {/* `live` on the running one only. This screen re-reads itself
+                every 5s while a scan is in flight and the row it is waiting on
+                is otherwise indistinguishable from a finished one — same chip,
+                same weight. A badge that breathes says which row the page is
+                watching, and it is the only motion here that runs without
+                anybody doing anything, because it is the only thing that is
+                genuinely still happening. */}
+            <Badge tone={STATUS_TONE[scan.status]} live={scan.status === 'running'}>
+              {STATUS_LABEL[scan.status]}
+            </Badge>
+            {outcome != null && (
+              <span
+                data-testid="scan-outcome"
+                className="max-w-form text-ui-xs leading-prose text-text-secondary"
+              >
+                {outcome}
+              </span>
+            )}
+          </div>
+        );
+      },
     },
     {
       key: 'score',
@@ -253,7 +280,12 @@ export function DashboardView({
             // button and nav item in this product has used since Epic 0. It
             // was the one interactive thing on the screen still behaving
             // exactly like an unstyled anchor.
-            className="text-ui-sm font-medium text-beacon-600 underline underline-offset-2 transition-colors duration-hover ease-out hover:text-beacon-700"
+            //
+            // `whitespace-nowrap`: the status cell can carry a sentence now
+            // (checklist 3.15) and takes its width from this column, so a link
+            // free to wrap read as "View / report" in the running row, where the
+            // button beside it is at its widest.
+            className="whitespace-nowrap text-ui-sm font-medium text-beacon-600 underline underline-offset-2 transition-colors duration-hover ease-out hover:text-beacon-700"
             href={`/scans/${scan.id}/report`}
           >
             View report
@@ -324,7 +356,7 @@ export function DashboardView({
       )}
 
       {scanLimit != null && agencyId != null && (
-        <ScanLimitNotice problem={scanLimit} agencyId={agencyId} />
+        <ScanLimitNotice problem={scanLimit} agencyId={agencyId} billing={billing} role={role} />
       )}
 
       {isEmpty ? <EmptyAgency withAction={!gettingStarted.visible} /> : (

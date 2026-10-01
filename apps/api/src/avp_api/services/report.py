@@ -148,6 +148,7 @@ async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:
     return ReportOut(
         scan_id=scan.id,
         scan_status=scan.status.value,
+        scan_error_code=scan.error_code,
         visibility_flags=_visibility_flags(results, prompts),
         generated_at=datetime.now(UTC),
         scanned_at=scan.finished_at or scan.started_at,
@@ -173,6 +174,22 @@ async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:
         audit=_audit_out(audit),
         action_items=_action_items_out(action_items),
     )
+
+
+async def build_public_report(session: AsyncSession, scan: Scan) -> ReportOut:
+    """`build_report`, for somebody holding a share link rather than a session.
+
+    The same projection, deliberately: a second assembly path would be a second
+    place for something to slip in, and `test_facts_only.py` sweeps this module
+    once. What differs is the one field that is for the agency alone.
+    `scan_error_code` says WHY a scan is partial or failed (`SCAN_DEADLINE_EXCEEDED`,
+    `EXECUTOR_LOST`), which tells the agency whether the scan used up one of its
+    scans and tells a stranger about how this platform runs, so it is null on
+    every public route. The status stays, as it always has been public.
+    """
+    report = await build_report(session, scan)
+    report.scan_error_code = None
+    return report
 
 
 # --------------------------------------------------------------------------

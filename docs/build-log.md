@@ -21206,3 +21206,102 @@ Drift check (north-star §8): Layer 2, Measurement (how a scan ends), and the al
 - Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
 - OpenAPI and `api.gen.ts` regenerate byte-identically.
 - Exit codes were read from files.
+
+# The share bar says links expire and can be withdrawn, scans say why they are partial or failed, and three screens stop saying what is not true
+
+**2026-10-01, the sixteenth entry of the day; branch `pre-pilot`, item 4 of the founder's pre-pilot brief (launch checklist 3.8 and 3.15–3.18).** One item, one commit.
+
+**Render: nothing to set. No migration, no new dependency or outbound host.** Two response fields were added (below); OpenAPI and `api.gen.ts` were regenerated.
+
+Drift check (north-star §8): Layer 1, Delivery (the report, the dashboard, sign-up and billing screens), with one Layer 2 field read back; lifecycle phase: Activation (Epic 9), copy a pilot agency reads.
+
+## 1. What changed
+
+- **3.8, the share bar** (`ShareLinkBar.tsx`). The lead now says "Creates a link anyone can open without an account. Links expire after 30 days. Only share it with the client this report is about." (the founder's sentence; it used to say the link never expires and cannot be withdrawn).
+  - **Withdraw link** is a button with a confirm step ("Withdraw this link? Anyone who opens it will no longer see the report." with **Withdraw link** and **Keep link**).
+  - It calls the existing `DELETE /scans/{scanId}/share` through a new `api.withdrawShareLink`. It reads "Withdrawing…" while it runs, then "Link withdrawn. It no longer opens this report."
+  - On success the link leaves the page and the state entirely. "Get shareable link" then makes a new link: the withdrawal clears the token, so the old address never works again (checked in `services/share.py`).
+  - On failure the link stays. A refusal from the API shows the API's sentence; no answer or a server error shows "The link could not be withdrawn and may still open. Try again."
+  - The token appears nowhere but the existing link field.
+  - Keyboard and screen reader: the question moves focus to **Keep link**, which is described by the question; **Keep link** returns focus to the trigger; results land in status and alert regions mounted before their text.
+  - At 320 px wide the link field keeps its width, and the buttons wrap beneath.
+  - The page a dead link opens (`/share`) now says "The link may be incomplete, expired or withdrawn. Ask whoever sent it for a current one."; only that sentence changed on the token route.
+- **3.15, why a scan is partial or failed.** No payload the web read carried a scan's error code, so two read-only fields were added:
+  - `ReportOut.scanErrorCode` (the report, signed-in and shared);
+  - `ScanSummaryOut.errorCode` (the dashboard's recent scans).
+  - Both come from `scans.error_code`, our own code, from the scan row each route already loads. A statement-count test guards the dashboard list against a query per row.
+  - `lib/scans/scanOutcome.ts` turns status and code into one plain sentence, never the code itself. The cases: deadline partial or failed, every engine failed, an error of ours, a restart, never started, partial with no code, and any other code. Each says whether the scan counts as one of the agency's scans.
+  - The sentence is shown in the signed-in report's header and as a line under the dashboard's Partial / Failed badge. On the public shared report and its PDF the field is blanked to `null` and nothing is shown, because the sentence speaks about the agency's own allowance.
+  - "View report" no longer wraps.
+- **3.16, Google sign-up** (`/sign-up/google`). When the API did not answer (no response, a status of 0, or 500 and above), the page now says "We could not reach the server" with "Check your connection and try again. The sign-in link works for ten minutes." and a **Try again** button. Trying again only re-checks the ticket and does not spend it, and focus follows the check to its result. "Expired" is kept for the API's own refusal (`400 invalid-google-ticket`). The panel's submit failure, on no answer or a server error, now says "We could not reach the server. Check your connection and try again." instead of telling people to check port 8000. One rule, `lib/apiAway.ts`, decides "the API did not answer" for the page, the submit and the share bar.
+- **3.17, the free-scan sentence.** Settings' lead and the Billing panel's "No subscription" text say the first scan is free only while it is unused. Otherwise they say it is used, or nothing about it while billing is unknown. An agency whose subscription needs attention is told to fix it from Manage billing rather than to subscribe. One helper, `freeScanUsed`, decides the free scan and `allowanceLabel` uses it too; one set, `canCheckout`, decides who may check out, and the Billing panel now uses it instead of its own copy.
+- **3.18, who is offered Subscribe** (`ScanLimitNotice.tsx`). The notice now gets the agency's billing status and the user's role from `useScanStanding`. The role comes from `/auth/me`; when that call fails, a 403 on the admin-only billing read means a member.
+  - **Subscribe** appears only for an owner or admin whose subscription can be checked out again: none, `canceled` or `incomplete_expired`, the API's own set.
+  - An owner or admin whose subscription needs attention is told to fix it from Manage billing in Settings, with **Open Settings**.
+  - A member is asked to have the agency's owner or an admin subscribe. (Checkout is owner-or-admin in the API, not owner-only as the checklist said.)
+- **`docs/api-contracts.md`:** both new fields, and that a report is served for a scan of any status.
+
+## 2. The review
+
+- **Security review (opus) of the Withdraw link and the Subscribe gating: PASS WITH NITS.** Checked clean: the token never reaches a log, error text or label; the DELETE path, credentials and no retry; the confirm step cannot be skipped by a double click; tenancy (another agency's scan is a 404); the extra `/auth/me` call keeps only the role.
+  - **Fixed here:**
+    - pressing Copy while a withdrawal ran could bring the withdrawn address back on screen after it was gone;
+    - a member could be shown Subscribe when `/auth/me` failed (the API still refused them);
+    - a missing `.catch` in the allowance hook.
+  - One nit is the founder's (below).
+- **UI review (sonnet):** FAIL, then PASS WITH NITS.
+  - **Round 1 (one High, three Mediums):**
+    - at 320 px wide the link field was squeezed to nothing, so the URL could not be reached if the clipboard was refused;
+    - the dashboard's outcome line failed contrast in the dark theme;
+    - focus fell to the page when the confirm step swapped buttons, and results were not reliably announced;
+    - a server error printed "The server returned 502." instead of the agreed sentence.
+    All fixed, with its Lows: the needs-attention wording in Settings; "engines" rather than "engine calls"; "Manage billing"; danger styling for a failed withdrawal; stale comments; one checkout set; the dead-link sentence; the public `scanErrorCode`.
+  - **Round 2**, checked in a real browser (reflow from 320 to 1,100 px, contrast in both themes, the keyboard path, the live regions, the link gone after withdrawal). Fixed:
+    - its Medium: **Keep link** was not described by the question it answers;
+    - three Lows: focus after a failed withdrawal; the "Checking…" line's contrast; "30 days" now read from the constant the legal pages pin to the API's link lifetime.
+  - **Judged acceptable:** the dashboard table now wraps its dates below about 1,500 px and scrolls sideways from about 1,100–1,180 px.
+
+## Found, not fixed
+
+- **"Links expire after 30 days" counts from the last press of "Get shareable link"**, and reaching Withdraw needs that press, which resets the 30 days. Founder: reword, or offer Withdraw without making a link first (the DELETE works on a scan never shared).
+- **A failed or partial scan can be shared**, with no warning, and a failed one shares as an almost empty report. Product call.
+- **The failed-audit card prints the audit's error code**, also on the public report; and the PDF never says a scan was partial or failed. Both predate this entry.
+- **Four other screens still tell people to check port 8000** when the API does not answer: sign-up, sign-in, the intake form and the intake result. Same fix as 3.16; not in this brief.
+- **The global focus ring is about 1.7:1 on the light seated surface** (WCAG 1.4.11); it predates this entry and is the only focus signal on the borderless **Keep link**.
+- **Checklist 3.17's contrast half** (dark-theme `text-tertiary` on seated cards, about 4.1:1) is untouched.
+
+## Verified
+
+**API pytest 2209 → 2226 (+17); web vitest 1208 → 1399 (+191); both floors raised to match.**
+- **API:**
+  - the report carries `scanErrorCode` for a deadline-partial scan and `null` for a succeeded one;
+  - the public shared report and its PDF carry `null` while the signed-in report carries the code;
+  - the dashboard list carries `errorCode` per scan, with a statement count that a per-row query would break;
+  - a report is served for a failed scan;
+  - the facts-only sweep covers both new fields.
+- **Web, by fix:**
+  - share bar: the lead; the confirm step; withdrawal clearing the link; failures by kind; the Copy-during-withdrawal races; focus and live regions; the wrapping classes;
+  - scan outcome: every status-and-code case; shown in the signed-in report and the dashboard, never on the shared page;
+  - Google sign-up: unreachable versus expired, re-checking, focus;
+  - free-scan and needs-attention sentences in Settings and the Billing panel;
+  - every Subscribe branch in the scan-limit notice, including a member known only from a refused billing read;
+  - the `/share` dead-link sentence;
+  - `apiWasAway`.
+- **Changed existing tests:**
+  - `googleTicket.test.ts` pins the page's new failure expression;
+  - DashboardView's "no third-party prose" sweep sets the outcome lines aside and checks they are exactly the helper's sentences (the partial one contains the word "answer");
+  - the shared-report equality test lets `scanErrorCode` differ.
+- **Negative controls**, each file restored and checked with `cmp`:
+  - Subscribe forced on fails 11 of 48 billing tests;
+  - the report's shared-page gate removed fails 1, and the share route's flag dropped fails its gate test;
+  - a per-row dashboard query fails the statement count;
+  - the Copy race's URL check dropped fails 1;
+  - any API error read as "member" fails 4;
+  - the public blank removed fails 2.
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, shared-types 53 (0 fail), design-system 846, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- OpenAPI and `api.gen.ts` were regenerated for the two fields (and the shared-report route's description); re-running both generators changes neither file.
+- Exit codes were read from files.

@@ -148,15 +148,70 @@ describe('a page opened with no ticket in the fragment', () => {
   });
 });
 
-describe('a ticket the peek fails on', () => {
-  it.each([
-    ['a 400 from the API', refused()],
-    ['an API that does not answer', new TypeError('Failed to fetch')],
-  ])('%s is the expired state, in the words it always had', async (_what, failure) => {
-    googlePending.mockRejectedValue(failure);
+const UNREACHABLE = {
+  title: 'We could not reach the server',
+  detail: 'Check your connection and try again. The sign-in link works for ten minutes.',
+};
+
+/** An ApiProblem as `request` builds it for a response that is not the API's JSON (a proxy's 502). */
+const serverProblem = (status: number) =>
+  new ApiProblem({
+    type: '/problems/unknown',
+    title: 'Request failed',
+    status,
+    detail: `The server returned ${status}.`,
+    instance: '/auth/google/pending',
+  });
+
+describe('a ticket the API refuses', () => {
+  it('a 400 from the API is the expired state, in the words it always had', async () => {
+    googlePending.mockRejectedValue(refused());
     open('#ticket=spent');
     const el = await mount();
     expect(googlePending).toHaveBeenCalledWith('spent');
+    expect(refusal(el)).toEqual([EXPIRED.title, EXPIRED.detail]);
+    expect(button(el, 'Try again')).toBeUndefined();
+  });
+});
+
+describe('an API that did not answer', () => {
+  it.each([
+    ['a network error', new TypeError('Failed to fetch')],
+    ['a 502 from a proxy', serverProblem(502)],
+    ['a 500', serverProblem(500)],
+    ['a problem with no status', serverProblem(0)],
+  ])('%s is the unreachable state, not expired', async (_what, failure) => {
+    googlePending.mockRejectedValue(failure);
+    open('#ticket=abc');
+    const el = await mount();
+    expect(refusal(el)).toEqual([UNREACHABLE.title, UNREACHABLE.detail]);
+    expect(el.textContent).not.toContain('has expired');
+  });
+
+  it('Try again peeks again with the same ticket, and shows the form when the API is back', async () => {
+    googlePending.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    googlePending.mockResolvedValueOnce(pending);
+    open('#ticket=abc');
+    const el = await mount();
+    expect(googlePending).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      button(el, 'Try again')!.click();
+    });
+    await settle();
+    expect(googlePending).toHaveBeenCalledTimes(2);
+    expect(googlePending).toHaveBeenLastCalledWith('abc');
+    expect(el.textContent).toContain('Name your agency');
+  });
+
+  it('Try again that is refused by the API now says expired', async () => {
+    googlePending.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    googlePending.mockRejectedValueOnce(refused());
+    open('#ticket=abc');
+    const el = await mount();
+    await act(async () => {
+      button(el, 'Try again')!.click();
+    });
+    await settle();
     expect(refusal(el)).toEqual([EXPIRED.title, EXPIRED.detail]);
   });
 });
@@ -176,5 +231,111 @@ describe('both refusals link to the sign-in page', () => {
     act(() => back!.click());
     expect(assign).toHaveBeenCalledTimes(1);
     expect(assign).toHaveBeenCalledWith('/');
+  });
+});
+
+
+/**
+ * "Try again" REPLACES the card that holds the focused button — first with the
+ * "Checking…" line, then with whatever the peek finds — so unless focus is
+ * carried along, every step drops it on <body> (the UI review of 2026-10-01).
+ * Each step now hands it to what is there: the line, then the heading of the
+ * form, or the button of the card that replaced the old one. A first visit,
+ * which has nothing to carry, takes none.
+ */
+describe('Try again does not drop focus on the page', () => {
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  /** Away on the first peek; the second is whatever the test hands back. */
+  async function afterTryAgain(second: Promise<GooglePending>) {
+    googlePending.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    googlePending.mockReturnValueOnce(second);
+    open('#ticket=abc');
+    const el = await mount();
+    const tryAgain = button(el, 'Try again')!;
+    act(() => tryAgain.focus());
+    expect(document.activeElement).toBe(tryAgain);
+    await act(async () => {
+      tryAgain.click();
+    });
+    return el;
+  }
+
+  it('while it checks, focus is on the "Checking…" line', async () => {
+    const peek = deferred<GooglePending>();
+    const el = await afterTryAgain(peek.promise);
+    const line = el.querySelector('[role="status"]');
+    expect(line?.textContent).toBe('Checking your Google sign-in…');
+    expect(document.activeElement).toBe(line);
+    await act(async () => peek.resolve(pending));
+    await settle();
+  });
+
+  it('when the form comes back, focus is on its heading', async () => {
+    const peek = deferred<GooglePending>();
+    const el = await afterTryAgain(peek.promise);
+    await act(async () => peek.resolve(pending));
+    await settle();
+    const heading = el.querySelector('h1');
+    expect(heading?.textContent).toBe('Name your agency');
+    expect(document.activeElement).toBe(heading);
+  });
+
+  it('when the API refuses the ticket, focus is on the way back', async () => {
+    const peek = deferred<GooglePending>();
+    const el = await afterTryAgain(peek.promise);
+    await act(async () => peek.reject(refused()));
+    await settle();
+    expect(refusal(el)).toEqual([EXPIRED.title, EXPIRED.detail]);
+    expect(document.activeElement).toBe(button(el, 'Back to sign in'));
+  });
+
+  it('when the API is still away, focus is on the new Try again', async () => {
+    const peek = deferred<GooglePending>();
+    const el = await afterTryAgain(peek.promise);
+    await act(async () => peek.reject(new TypeError('Failed to fetch')));
+    await settle();
+    expect(refusal(el)).toEqual([UNREACHABLE.title, UNREACHABLE.detail]);
+    expect(document.activeElement).toBe(button(el, 'Try again'));
+  });
+
+  it('typing in the form afterwards does not pull focus back to the heading', async () => {
+    const peek = deferred<GooglePending>();
+    const el = await afterTryAgain(peek.promise);
+    await act(async () => peek.resolve(pending));
+    await settle();
+    const field = el.querySelector<HTMLInputElement>('input[autocomplete="organization"]')!;
+    act(() => field.focus());
+    await act(async () => {
+      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+      set.call(field, 'Northlight');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(field.value).toBe('Northlight');
+    expect(document.activeElement).toBe(field);
+  });
+
+  it('a first visit takes no focus: nothing was carried', async () => {
+    googlePending.mockResolvedValue(pending);
+    open('#ticket=abc');
+    const el = await mount();
+    expect(el.textContent).toContain('Name your agency');
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('a first visit to a refusal takes none either', async () => {
+    googlePending.mockRejectedValue(refused());
+    open('#ticket=spent');
+    const el = await mount();
+    expect(refusal(el)).toEqual([EXPIRED.title, EXPIRED.detail]);
+    expect(document.activeElement).toBe(document.body);
   });
 });

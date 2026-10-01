@@ -1057,6 +1057,7 @@ Each entry in `recentScans` is a `ScanSummaryOut`:
   "clientName": "Northaven Dental",
   "clientDomain": "northaven-dental.example",
   "status": "succeeded",
+  "errorCode": null,
   "compositeScore": "38.35",
   "createdAt": "2026-08-20T05:40:11Z",
   "finishedAt": "2026-08-20T05:43:02Z"
@@ -1070,6 +1071,12 @@ determinism rule 3 exists to prevent. It is `null` both when a scan is unscored
 and when scoring returned `INSUFFICIENT_DATA` — **the UI must render null as
 "—", never as 0.** An unrunnable scan must never appear to a client as a bad
 score.
+
+`errorCode` (2026-10-01) is the scan's own code, the same one
+`GET /scans/{scanId}` returns, or `null`: why a `partial` or `failed` scan ended
+that way (`SCAN_DEADLINE_EXCEEDED`, `ALL_ENGINE_CALLS_FAILED`,
+`EXECUTION_FAILED`, `EXECUTOR_LOST`, `EXECUTOR_NEVER_STARTED`). The web turns it
+into a sentence; it never shows the code.
 
 Scans are ordered newest-first by `id`. IDs are ULIDs, so that is creation
 order and the same column serves as the pagination cursor.
@@ -1922,7 +1929,7 @@ place that `tests/test_facts_only.py` can assert over.
 **Response `200`** — `ReportOut`:
 ```json
 {
-  "scanId": "scan_01J...", "scanStatus": "succeeded",
+  "scanId": "scan_01J...", "scanStatus": "succeeded", "scanErrorCode": null,
   "generatedAt": "2026-08-22T00:18:31Z", "scannedAt": "2026-08-21T05:49:24Z",
   "agency": { "id": "agcy_01J...", "name": "Acme SEO", "slug": "acme-seo" },
   "subject": { "clientId": "clnt_01J...", "name": "Help Scout",
@@ -1975,6 +1982,14 @@ place that `tests/test_facts_only.py` can assert over.
   }
 }
 ```
+
+**`scanErrorCode` (2026-10-01)** is the scan's own `errorCode`, or `null`: why a
+`partial` or `failed` scan ended that way (see the scan-level status under
+`GET /scans/{scanId}`). A report is served for a scan of any status. The
+signed-in report turns the code into a sentence and never shows the code. On the
+shared report (the link a prospect opens, and its PDF) the field is always
+`null`: the sentence speaks about the agency's own scan allowance, and the code
+is not the link holder's business.
 
 **`dimensions` is ordered heaviest-weight first.** The Luminance Ledger stacks
 the heaviest segment at the bottom and consumes this list directly, so the order

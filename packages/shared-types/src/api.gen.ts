@@ -1243,7 +1243,9 @@ export interface paths {
          *     * **Same projection as the authenticated route.** `build_report` is reused
          *       rather than reimplemented, so the facts-only guarantee `test_facts_only.py`
          *       sweeps over this module covers this response too — a second assembly path
-         *       would be a second place for a snippet to slip in.
+         *       would be a second place for a snippet to slip in. One field is blanked:
+         *       `scanErrorCode`, which says why a scan is partial or failed and is for the
+         *       agency alone (`build_public_report`).
          *
          *     **Errors:** `404` only.
          */
@@ -3357,6 +3359,8 @@ export interface components {
              */
             generatedAt: string;
             proof: components["schemas"]["ReportProofOut"];
+            /** Scanerrorcode */
+            scanErrorCode?: string | null;
             /** Scanid */
             scanId: string;
             /** Scanstatus */
@@ -3589,6 +3593,8 @@ export interface components {
              * Format: date-time
              */
             createdAt: string;
+            /** Errorcode */
+            errorCode?: string | null;
             /** Finishedat */
             finishedAt?: string | null;
             /** Id */

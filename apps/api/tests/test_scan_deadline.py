@@ -1210,3 +1210,72 @@ class TestWhichEndingsCount:
             await _seeded(session, sid, status=ScanStatus.FAILED, error_code=code)
 
         assert await _slots_held(session, sid) == 2
+
+
+# ---------------------------------------------------------------------------
+# the screens can say why — checklist 3.15
+# ---------------------------------------------------------------------------
+
+
+class TestTheScreensCanSayWhy:
+    """What the executor writes is what the report and the list return.
+
+    The seeded rows in `test_report_endpoint.py` and `test_dashboard.py` pin the
+    projection for every ending. These run the real deadline, so the code the
+    EXECUTOR stamps is the code the READS hand the web, through the routes a
+    browser uses; the web turns the pair into the sentence that says whether the
+    scan counted (`scanOutcome.ts`).
+    """
+
+    async def test_a_partial_scan_says_it_ran_out_of_time_in_its_report_and_in_the_list(
+        self, client: AsyncClient, settings, monkeypatch
+    ) -> None:  # noqa: ANN001
+        sid, job = await _queued_scan(client)
+        fakes = _fake_engines(monkeypatch, {
+            "finished 1": "answers", "finished 2": "answers", "finished 3": "answers",
+            "unfinished 1": "hangs", "unfinished 2": "hangs",
+        })
+        monkeypatch.setattr(executor_module, "MAX_SCAN_DURATION", DEADLINE)
+
+        await execute_scan(job, settings=settings)
+
+        # The precondition, so a clock too slow for DEADLINE says so by name.
+        assert sorted(fakes.returned) == ["finished 1", "finished 2", "finished 3"]
+
+        report = await client.get(f"{BASE}/scans/{sid}/report")
+        assert report.status_code == 200, report.text
+        assert report.json()["scanStatus"] == "partial"
+        assert report.json()["scanErrorCode"] == SCAN_DEADLINE_EXCEEDED
+
+        listed = {
+            entry["id"]: entry
+            for entry in (await client.get(f"{BASE}/dashboard")).json()["recentScans"]
+        }
+        assert listed[sid]["status"] == "partial"
+        assert listed[sid]["errorCode"] == SCAN_DEADLINE_EXCEEDED
+
+    async def test_a_failed_scan_with_nothing_in_it_still_has_a_report_that_says_why(
+        self, client: AsyncClient, settings, monkeypatch
+    ) -> None:  # noqa: ANN001
+        """A report IS served for a FAILED scan, and it is empty but for the cause."""
+        sid, job = await _queued_scan(client)
+        fakes = _fake_engines(monkeypatch, {"unfinished 1": "hangs", "unfinished 2": "hangs"})
+        monkeypatch.setattr(executor_module, "MAX_SCAN_DURATION", DEADLINE)
+
+        await execute_scan(job, settings=settings)
+
+        assert fakes.in_loop.is_set(), "the deadline fell before the engine loop"
+        report = await client.get(f"{BASE}/scans/{sid}/report")
+        assert report.status_code == 200, report.text
+        body = report.json()
+        assert body["scanStatus"] == "failed"
+        assert body["scanErrorCode"] == SCAN_DEADLINE_EXCEEDED
+        assert body["score"] is None
+        assert body["proof"]["engineResults"] == 0
+
+        listed = {
+            entry["id"]: entry
+            for entry in (await client.get(f"{BASE}/dashboard")).json()["recentScans"]
+        }
+        assert listed[sid]["status"] == "failed"
+        assert listed[sid]["errorCode"] == SCAN_DEADLINE_EXCEEDED

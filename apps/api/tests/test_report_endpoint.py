@@ -7,18 +7,30 @@ of these tests is that the report reads what those epics actually persisted.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import update as sa_update
 
+from avp_api.models import Scan, ScanStatus
 from avp_api.models.engine_result import Engine, EngineResultStatus, Sentiment
 from avp_api.models.prompt import PromptIntent
 from avp_api.services import scan_runner
 from avp_api.services.engines import CitedSource, EngineAnswer
 from avp_api.services.prompts import GeneratedPrompt
+from avp_api.services.scan_executor import (
+    EXECUTION_FAILED,
+    EXECUTOR_LOST,
+    EXECUTOR_NEVER_STARTED,
+    SCAN_DEADLINE_EXCEEDED,
+)
 
 BASE = "/api/v1"
+
+# Derived, not retyped: the code `terminal_status_for` writes when every call failed.
+ALL_ENGINE_CALLS_FAILED = scan_runner.terminal_status_for(1, 1)[1]
 
 # The engines these scans name EXPLICITLY — 2026-09-12. Until then the suite's
 # scans posted `{}` and ran the keyed defaults, which included the grounded
@@ -262,6 +274,89 @@ class TestDegradedStates:
         await _sign_up(client)
         sid = await _scored_scan(client, stub_engines)
         assert (await client.get(f"{BASE}/scans/{sid}/report")).json()["audit"] is None
+
+
+# How a scan can end, as `scan_executor` and `scan_runner` write it — the status
+# and the code together, because the web's sentence is chosen by the pair.
+ENDINGS = [
+    pytest.param(ScanStatus.PARTIAL, SCAN_DEADLINE_EXCEEDED, id="partial-deadline"),
+    # Some engine calls failed: PARTIAL with no code at all (`terminal_status_for`).
+    pytest.param(ScanStatus.PARTIAL, None, id="partial-some-calls-failed"),
+    pytest.param(ScanStatus.FAILED, SCAN_DEADLINE_EXCEEDED, id="failed-deadline"),
+    pytest.param(ScanStatus.FAILED, ALL_ENGINE_CALLS_FAILED, id="failed-every-call"),
+    pytest.param(ScanStatus.FAILED, EXECUTION_FAILED, id="failed-our-error"),
+    pytest.param(ScanStatus.FAILED, EXECUTOR_LOST, id="failed-restart-mid-run"),
+    pytest.param(ScanStatus.FAILED, EXECUTOR_NEVER_STARTED, id="failed-restart-before-start"),
+]
+
+
+class TestTheReportSaysHowItsScanEnded:
+    """`scanErrorCode` — checklist 3.15: the screens say why a scan is partial or failed.
+
+    The report carried `scanStatus` and nothing about the cause, so a partial
+    scan that ran out of time and one whose engines were down looked the same,
+    and so did the five ways a scan fails — four of which cost the agency
+    nothing and one of which does. The code is OUR OWN (`scans.error_code`, a
+    constant written by `scan_executor` and `scan_runner`, never a vendor
+    message), so the facts-only rule is not engaged; `error_detail`, the one
+    free-text column on a scan, is not projected.
+    """
+
+    async def test_a_succeeded_scan_carries_a_null_code(
+        self, client: AsyncClient, stub_engines
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        sid = await _scored_scan(client, stub_engines)
+
+        body = (await client.get(f"{BASE}/scans/{sid}/report")).json()
+        assert body["scanStatus"] == "succeeded"
+        # Present and null — part of the contract, not omitted when empty.
+        assert "scanErrorCode" in body
+        assert body["scanErrorCode"] is None
+
+    @pytest.mark.parametrize(("status", "code"), ENDINGS)
+    async def test_the_report_carries_the_code_its_scan_ended_with(
+        self, client: AsyncClient, session, stub_engines, status: ScanStatus, code: str | None
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        sid = await _scan(client, stub_engines)
+        await session.execute(
+            sa_update(Scan)
+            .where(Scan.id == sid)
+            .values(status=status, error_code=code, finished_at=datetime.now(UTC))
+        )
+        await session.commit()
+
+        resp = await client.get(f"{BASE}/scans/{sid}/report")
+        # A report is served whatever the scan's status, FAILED included: the
+        # route checks the agency and the id and nothing else.
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["scanStatus"] == status.value
+        assert body["scanErrorCode"] == code
+
+    async def test_the_scans_diagnostic_detail_is_not_on_the_report(
+        self, client: AsyncClient, session, stub_engines
+    ) -> None:  # noqa: ANN001
+        """The code is ours and a constant. The detail beside it is not projected."""
+        await _sign_up(client)
+        sid = await _scan(client, stub_engines)
+        await session.execute(
+            sa_update(Scan)
+            .where(Scan.id == sid)
+            .values(
+                status=ScanStatus.FAILED,
+                error_code=EXECUTION_FAILED,
+                error_detail="SENTINEL-diagnostic-detail",
+                finished_at=datetime.now(UTC),
+            )
+        )
+        await session.commit()
+
+        resp = await client.get(f"{BASE}/scans/{sid}/report")
+        assert resp.status_code == 200, resp.text
+        assert "SENTINEL-diagnostic-detail" not in resp.text
+        assert not {"scanErrorDetail", "errorDetail", "scanDetail"} & set(resp.json())
 
 
 class TestProofBeat:
