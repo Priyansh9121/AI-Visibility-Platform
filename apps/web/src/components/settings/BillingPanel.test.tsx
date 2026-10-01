@@ -27,6 +27,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { BillingStatus, CheckoutSession, PortalSession } from '@avp/shared-types';
 import { ApiProblem } from '@/lib/api';
+import { canCheckout } from '@/lib/billing/allowance';
 import { PricingCard } from '@/components/marketing/PricingCard';
 import {
   activeEnding,
@@ -83,6 +84,13 @@ describe('no subscription — the state every agency is in today', () => {
     expect(html).toContain('No subscription');
     // With a Google sign-in since 2026-09-29.
     expect(html).toContain('Your agency’s first scan is free with a Google sign-in');
+    expect(html).toContain('stay open, shareable and exportable');
+  });
+
+  it('stops saying the first scan is free once it is used', () => {
+    const html = render({ billing: { ...noSubscription, scansUsedThisPeriod: 1 } });
+    expect(html).toContain('Your free scan is used; subscribing is how you keep scanning.');
+    expect(html).not.toContain('first scan is free');
     expect(html).toContain('stay open, shareable and exportable');
   });
 
@@ -346,6 +354,28 @@ describe('Subscribe is offered exactly where the API will start a checkout — 2
       expect(html).not.toContain('Manage billing');
     },
   );
+
+  // One definition: `canCheckout` in `lib/billing/allowance`, which the scan-limit
+  // notice and the Settings lead read too. The panel used to keep its own copy.
+  it.each([
+    null,
+    'canceled',
+    'incomplete_expired',
+    'active',
+    'trialing',
+    'past_due',
+    'unpaid',
+    'paused',
+    'incomplete',
+    'some_future_status',
+  ])('%s: the plan card is offered exactly when canCheckout says it can start one', (status) => {
+    const billing: BillingStatus = {
+      ...pastDueSubscription,
+      subscriptionStatus: status,
+      isActive: status === 'active' || status === 'trialing',
+    };
+    expect(render({ billing }).includes('>Subscribe<')).toBe(canCheckout(status));
+  });
 
   const REFUSED: Array<[string, BillingStatus]> = [
     ['active', activeSubscription],

@@ -64,24 +64,19 @@ import { Badge, Button, Card, CardBody } from '@avp/design-system';
 import type { BadgeTone } from '@avp/design-system';
 import type { BillingStatus } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
+import { canCheckout, freeScanUsed } from '@/lib/billing/allowance';
 import { isSubscriptionRefusal } from '@/lib/billing/subscriptionRefusal';
 import { formatDay } from '@/lib/dates';
 import { PricingCard } from '@/components/marketing/PricingCard';
 
-/**
- * The subscription states `POST /agencies/{id}/billing/checkout` will start a
- * Checkout for — founder decision 4, 2026-10-01. `null` is no subscription at
- * all.
- *
- * An allow-list on purpose: a status this screen has never seen is not one the
- * API was told about either, and a Subscribe that might 409 is worse than
- * Manage billing, which always has somewhere to go.
- */
-const CHECKOUT_STATUSES: ReadonlySet<string | null> = new Set([
-  null,
-  'canceled',
-  'incomplete_expired',
-]);
+// WHICH SUBSCRIPTIONS CAN START A CHECKOUT is `canCheckout`, in
+// `lib/billing/allowance` — founder decision 4, 2026-10-01 — and not a set kept
+// here. This panel kept its own copy until the UI review of 2026-10-01 found
+// it was the same three values the scan-limit notice and the Settings lead
+// read: no subscription at all (`null`), `canceled` and `incomplete_expired`.
+// It is an allow-list on purpose: a status this screen has never seen is not
+// one the API was told about either, and a Subscribe that might 409 is worse
+// than Manage billing, which always has somewhere to go.
 
 /**
  * How each Stripe status is said out loud, and how it is toned.
@@ -247,8 +242,8 @@ export function BillingPanel({
   // The plan card, exactly as the public page shows it — the same component, in
   // its signed-in state, so the price a customer was quoted on the way in is the
   // price they see on the way to paying it. The same card in every state that
-  // offers it (see CHECKOUT_STATUSES).
-  const plan = CHECKOUT_STATUSES.has(status) ? (
+  // offers it (see `canCheckout`).
+  const plan = canCheckout(status) ? (
     <PricingCard
       signedIn
       onSubscribe={subscribe}
@@ -303,9 +298,10 @@ export function BillingPanel({
             <div className="flex flex-wrap items-center gap-3">
               <Badge tone="neutral">No subscription</Badge>
               <p className="max-w-measure text-ui-base leading-prose text-text-secondary">
-                You are not subscribed. Your agency&rsquo;s first scan is free with a
-                Google sign-in; subscribing is how you keep scanning. Reports you
-                already have stay open, shareable and exportable either way.
+                {freeScanUsed(billing)
+                  ? 'You are not subscribed. Your free scan is used; subscribing is how you keep scanning. '
+                  : 'You are not subscribed. Your agency’s first scan is free with a Google sign-in; subscribing is how you keep scanning. '}
+                Reports you already have stay open, shareable and exportable either way.
               </p>
             </div>
           </CardBody>

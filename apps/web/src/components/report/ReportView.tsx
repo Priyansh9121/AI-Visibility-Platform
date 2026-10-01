@@ -46,6 +46,7 @@ import type { ReactNode } from 'react';
 import type { Report, ReportCompetitorSet } from '@avp/shared-types';
 import { ArrowRight, Bot, Building2, CalendarDays, Globe, MessageSquare } from 'lucide-react';
 import { deriveNarrative, gapHeading, scoreHeading } from '@/lib/report/derive';
+import { scanOutcomeSentence } from '@/lib/scans/scanOutcome';
 import {
   DEGRADATION_FLAG,
   DETECTION_STATUS,
@@ -103,6 +104,15 @@ export function ReportView({
   const narrative = deriveNarrative(report);
   const subjectName = report.subject.brandName || report.subject.name;
   const scanned = report.scannedAt ?? report.generatedAt;
+  // WHY THE SCAN ENDED AS IT DID — checklist 3.15. For a partial or failed scan,
+  // one sentence that says why and whether it counted against the agency's
+  // allowance ("It counts as one of your scans."). That is the agency's
+  // business: the public view never carries it, because to a prospect it is
+  // wrong, and this component is the document that gets sent. The code is
+  // chosen from and never shown.
+  const outcome = publicView
+    ? null
+    : scanOutcomeSentence(report.scanStatus, report.scanErrorCode);
 
   return (
     <ReportPage brand={<Brand agency={report.agency} />}>
@@ -127,6 +137,14 @@ export function ReportView({
           </>
         }
       />
+      {outcome != null && (
+        <p
+          data-testid="scan-outcome"
+          className="mt-4 max-w-measure text-ui-sm leading-prose text-text-secondary"
+        >
+          {outcome}
+        </p>
+      )}
 
       <ScoreBeat report={report} narrative={narrative} subjectName={subjectName} animate={animate} />
       <GapBeat report={report} narrative={narrative} subjectName={subjectName} animate={animate} />

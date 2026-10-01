@@ -24,6 +24,16 @@ describe('GoogleSignUpPanel', () => {
     expect(html).toContain('Create agency');
   });
 
+  it('an unreachable API says so, offers Try again, and does not say expired', () => {
+    const html = renderToStaticMarkup(
+      <GoogleSignUpPanel state={{ kind: 'unreachable' }} ticket="t" onSignedUp={() => {}} onRetry={() => {}} animate={false} />,
+    );
+    expect(html).toContain('We could not reach the server');
+    expect(html).toContain('Check your connection and try again. The sign-in link works for ten minutes.');
+    expect(html).toContain('Try again');
+    expect(html).not.toContain('has expired');
+  });
+
   it('an expired ticket says so and offers the way back', () => {
     const html = renderToStaticMarkup(
       <GoogleSignUpPanel state={{ kind: 'expired' }} ticket="" onSignedUp={() => {}} animate={false} />,
@@ -58,5 +68,16 @@ describe('GoogleSignUpPanel', () => {
       <GoogleSignUpPanel state={{ kind: 'loading' }} ticket="t" onSignedUp={() => {}} animate={false} />,
     );
     expect(html).toContain('Checking your Google sign-in');
+  });
+
+  it('sets the checking line in secondary text: it is a focus target now, and tertiary is under 4.5:1 at 13px', () => {
+    // Measured in a browser on the page ground: 4.35:1 light, 4.42:1 dark. After
+    // "Try again" focus lands on this line, so it is read, not glanced past.
+    const html = renderToStaticMarkup(
+      <GoogleSignUpPanel state={{ kind: 'loading' }} ticket="t" onSignedUp={() => {}} animate={false} />,
+    );
+    const line = html.match(/<p\b[^>]*role="status"[^>]*>/)?.[0] ?? '';
+    expect(line).toContain('text-text-secondary');
+    expect(line).not.toContain('text-text-tertiary');
   });
 });

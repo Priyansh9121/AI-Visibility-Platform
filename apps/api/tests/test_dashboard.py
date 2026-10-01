@@ -16,8 +16,13 @@ from avp_api.models import (
     Score,
     ScoreStatus,
 )
+from avp_api.services import scan_runner
+from avp_api.services.scan_executor import EXECUTOR_LOST, SCAN_DEADLINE_EXCEEDED
 
 BASE = "/api/v1"
+
+# Derived, not retyped: the code `terminal_status_for` writes when every call failed.
+ALL_ENGINE_CALLS_FAILED = scan_runner.terminal_status_for(1, 1)[1]
 
 
 async def _agency(client: AsyncClient, email: str = "dash@test.example") -> str:
@@ -70,6 +75,35 @@ async def _scan_with_score(
                 reason_code=None if composite is not None else "NO_PROMPTS",
             )
         )
+        await s.commit()
+        return scan.id
+
+
+async def _scan_ending(
+    engine,  # noqa: ANN001
+    agency_id: str,
+    status: ScanStatus,
+    error_code: str | None,
+    domain: str,
+    error_detail: str | None = None,
+) -> str:
+    """A finished scan for a fresh client, in a given ending, written directly."""
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+    async with factory() as s:
+        c = Client(
+            id=ids.new_id(ids.CLIENT), agency_id=agency_id, name="Ending Test", domain=domain
+        )
+        s.add(c)
+        await s.flush()
+        scan = Scan(
+            id=ids.new_id(ids.SCAN),
+            client_id=c.id,
+            agency_id=agency_id,
+            status=status,
+            error_code=error_code,
+            error_detail=error_detail,
+        )
+        s.add(scan)
         await s.commit()
         return scan.id
 
@@ -161,6 +195,95 @@ async def test_limit_is_bounded(client: AsyncClient) -> None:
     assert (await client.get(f"{BASE}/dashboard?limit=0")).status_code == 422
     assert (await client.get(f"{BASE}/dashboard?limit=51")).status_code == 422
     assert (await client.get(f"{BASE}/dashboard?limit=50")).status_code == 200
+
+
+# --- why a scan is partial or failed — checklist 3.15 -------------------------
+#
+# The list carried a status and no cause. `errorCode` is `scans.error_code`: our
+# own constant (`scan_executor`, `scan_runner`), never a vendor message. The web
+# turns the pair into a sentence; these pin what crosses the wire.
+
+
+async def test_each_scan_in_the_list_carries_the_code_it_ended_with(
+    client: AsyncClient, engine
+) -> None:  # noqa: ANN001
+    agency_id = await _agency(client)
+    endings = [
+        (ScanStatus.SUCCEEDED, None),
+        (ScanStatus.PARTIAL, SCAN_DEADLINE_EXCEEDED),
+        # Some engine calls failed: PARTIAL with no code at all.
+        (ScanStatus.PARTIAL, None),
+        (ScanStatus.FAILED, ALL_ENGINE_CALLS_FAILED),
+        (ScanStatus.FAILED, EXECUTOR_LOST),
+    ]
+    made = {
+        await _scan_ending(engine, agency_id, status, code, f"ending-{i}.example"): (status, code)
+        for i, (status, code) in enumerate(endings)
+    }
+
+    body = (await client.get(f"{BASE}/dashboard")).json()
+    listed = {entry["id"]: entry for entry in body["recentScans"]}
+    assert set(listed) == set(made)
+    for scan_id, (status, code) in made.items():
+        assert listed[scan_id]["status"] == status.value
+        # Present on every row, null where there is nothing to say.
+        assert "errorCode" in listed[scan_id]
+        assert listed[scan_id]["errorCode"] == code
+
+
+async def test_the_scans_diagnostic_detail_is_not_in_the_list(
+    client: AsyncClient, engine
+) -> None:  # noqa: ANN001
+    """The code is a constant of ours; the free-text detail beside it stays home."""
+    agency_id = await _agency(client)
+    await _scan_ending(
+        engine, agency_id, ScanStatus.FAILED, EXECUTOR_LOST, "detail.example",
+        error_detail="SENTINEL-diagnostic-detail",
+    )
+
+    resp = await client.get(f"{BASE}/dashboard")
+    assert "SENTINEL-diagnostic-detail" not in resp.text
+    entry = resp.json()["recentScans"][0]
+    assert not {"errorDetail", "detail"} & set(entry)
+
+
+async def test_the_list_runs_the_same_statements_however_many_scans_it_holds(
+    client: AsyncClient, engine
+) -> None:  # noqa: ANN001
+    """No N+1: `errorCode` is read off the `Scan` the list query already selects.
+
+    Counted in statements rather than timed. A per-row lookup of the code would
+    add one statement for each scan, so a page of one and a page of four must
+    cost the same.
+    """
+    from sqlalchemy import event
+
+    agency_id = await _agency(client)
+    seen: list[str] = []
+
+    def record(conn, cursor, statement, parameters, context, executemany) -> None:  # noqa: ANN001
+        seen.append(statement)
+
+    async def statements_for_one_read() -> int:
+        seen.clear()
+        resp = await client.get(f"{BASE}/dashboard")
+        assert resp.status_code == 200, resp.text
+        return len(seen)
+
+    event.listen(engine.sync_engine, "before_cursor_execute", record)
+    try:
+        await _scan_ending(engine, agency_id, ScanStatus.FAILED, EXECUTOR_LOST, "one.example")
+        one = await statements_for_one_read()
+        for i in range(3):
+            await _scan_ending(
+                engine, agency_id, ScanStatus.PARTIAL, SCAN_DEADLINE_EXCEEDED, f"more-{i}.example"
+            )
+        four = await statements_for_one_read()
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", record)
+
+    assert one > 0, "the listener saw nothing; it is not on the engine the app uses"
+    assert four == one
 
 
 # --- the getting-started facts — Epic 19 ------------------------------------
