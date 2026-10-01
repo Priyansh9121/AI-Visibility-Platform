@@ -12,7 +12,10 @@
  * `/invite#{token}`: never sent to a server, so in no request log or Referer.
  * It is read once, taken out of the address bar, and sent only in a POST body.
  * Because it leaves the address bar, a reload of this page does not keep the
- * sign-up alive: the person sees the expired state and starts again.
+ * sign-up alive: with no ticket to read, the page shows the no-code state, in
+ * the words /invite and /reset-password use for the same thing, and the person
+ * starts again. A ticket the API refuses, or an API that does not answer, is
+ * the expired state.
  */
 
 import { useEffect, useRef, useState, type JSX } from 'react';
@@ -27,7 +30,7 @@ import {
 export default function GoogleSignUpRoute(): JSX.Element {
   const [ticket, setTicket] = useState('');
   // Held in a ref: React's development double-run of effects would otherwise
-  // read the already-cleared address bar a second time and call it expired.
+  // read the already-cleared address bar a second time and show no-code.
   const taken = useRef<string | null>(null);
   const [state, setState] = useState<GoogleSignUpState>({ kind: 'loading' });
 
@@ -36,7 +39,7 @@ export default function GoogleSignUpRoute(): JSX.Element {
     const found = taken.current;
     setTicket(found);
     if (!found) {
-      setState({ kind: 'expired' });
+      setState({ kind: 'no-code' });
       return;
     }
     let cancelled = false;

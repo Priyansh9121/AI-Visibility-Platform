@@ -7,6 +7,12 @@ const nextConfig = {
   transpilePackages: ['@avp/design-system', '@avp/shared-types'],
   eslint: { ignoreDuringBuilds: true },
 
+  // No next/image is used anywhere in the web app, so the image optimiser is
+  // off: no optimiser, no `sharp`, and none of its LGPL libvips binaries in the
+  // install (root package.json drops `sharp` with ignoredOptionalDependencies).
+  // Founder decision 2026-10-01. If next/image is ever adopted, revisit both.
+  images: { unoptimized: true },
+
   // NO REFERER FROM A PAGE WHOSE ADDRESS IS A CREDENTIAL — 2026-09-29.
   //
   // A shared report's address is its token, and so is a reset or invitation

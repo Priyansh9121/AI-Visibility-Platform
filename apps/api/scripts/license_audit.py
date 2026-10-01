@@ -2,7 +2,8 @@
 
 Walks every installed distribution in the active environment, resolves its
 licence from packaging metadata, and classifies it. Exits non-zero if anything
-copyleft, source-available, or undeclared is present.
+copyleft, source-available, or undeclared is present. MPL-2.0 used unmodified
+is its own passing category (ALLOWED_UNMODIFIED, verdict "ok-unmodified").
 
 Run:  uv run python scripts/license_audit.py
 """
@@ -28,10 +29,24 @@ ALLOWED = {
     "MIT-0",
 }
 
-# MPL-2.0 is deliberately NOT in ALLOWED. It is weak (file-level) copyleft, so it
-# does not infect a proprietary codebase when used unmodified — but the rule is
-# "MIT/Apache-2.0/BSD only", and MPL is none of those. It surfaces as REVIEW
-# so a human decides, rather than being silently waved through.
+# Allowed for UNMODIFIED use only. A category of its own, deliberately NOT part
+# of ALLOWED (founder decision 2, 2026-10-01).
+#
+# MPL-2.0 is file-level copyleft. It is allowed here because AVP uses these
+# packages (today certifi and pathspec) unmodified and does not distribute
+# modified source (hosted SaaS). Modifying an MPL-licensed file would oblige us
+# to publish that file, so vendoring or patching an MPL package is NOT allowed
+# without the founder. The verdict is "ok-unmodified": it does not fail the run
+# and is printed apart from plain "ok" so it stays visible.
+#
+# Only MPL 2.0 is covered. MPL-1.1 and any other MPL version are not: they fall
+# to REVIEW (listed, does not fail), because their terms differ and nobody has
+# decided them. GPL/LGPL/AGPL are unaffected and still BLOCK.
+ALLOWED_UNMODIFIED = {
+    "MPL-2.0",
+    "MPL 2.0",
+    "Mozilla Public License 2.0 (MPL 2.0)",
+}
 
 # Stop-and-ask list.
 BLOCKING = re.compile(
@@ -64,6 +79,44 @@ def normalise(text: str) -> list[str]:
     return [p.strip() for p in re.split(r"\s+(?:OR|AND)\s+|\|", text) if p.strip()]
 
 
+def verdict_of(lic: str) -> str:
+    """ok / ok-unmodified / REVIEW / BLOCK for one licence string.
+
+    SPDX: parentheses are stripped; `A OR B` (and the `|` that joins several
+    classifiers) passes if any alternative passes; `A AND B` needs every part
+    to pass. Plain "ok" wins over "ok-unmodified" when both are available.
+    """
+    whole = lic.strip()
+    if whole in ALLOWED:
+        return "ok"
+    if whole in ALLOWED_UNMODIFIED:  # e.g. the classifier "... (MPL 2.0)" has its own parentheses
+        return "ok-unmodified"
+    text = lic.replace("(", " ").replace(")", " ")
+    alternatives = [
+        [p.strip() for p in re.split(r"\s+AND\s+", alt) if p.strip()]
+        for alt in re.split(r"\s+OR\s+|\|", text)
+        if alt.strip()
+    ]
+
+    def permitted(p: str, pool: set[str]) -> bool:
+        return p in pool or p.rstrip(".") in pool
+
+    if any(all(permitted(p, ALLOWED) for p in parts) for parts in alternatives):
+        return "ok"
+    either = ALLOWED | ALLOWED_UNMODIFIED
+    if any(all(permitted(p, either) for p in parts) for parts in alternatives):
+        return "ok-unmodified"
+
+    def blocking(p: str) -> bool:
+        return bool(BLOCKING.search(p) and not NOT_COPYLEFT.search(p))
+
+    if all(any(blocking(p) for p in parts) for parts in alternatives):
+        return "BLOCK"
+    if "UNDECLARED" in lic:
+        return "BLOCK"
+    return "REVIEW"
+
+
 def main() -> int:
     rows: list[tuple[str, str, str, str]] = []
     for dist in sorted(distributions(), key=lambda d: (d.metadata.get("Name") or "").lower()):
@@ -71,15 +124,7 @@ def main() -> int:
         if not name:
             continue
         lic = licence_of(dist)
-        parts = normalise(lic)
-        if any(BLOCKING.search(p) and not NOT_COPYLEFT.search(p) for p in parts):
-            verdict = "BLOCK"
-        elif any(p in ALLOWED or p.rstrip(".") in ALLOWED for p in parts):
-            verdict = "ok"
-        elif "UNDECLARED" in lic:
-            verdict = "BLOCK"
-        else:
-            verdict = "REVIEW"
+        verdict = verdict_of(lic)
         rows.append((name, dist.version or "?", lic, verdict))
 
     width = max(len(r[0]) for r in rows) if rows else 10
@@ -87,12 +132,12 @@ def main() -> int:
     for name, version, lic, verdict in rows:
         counts[verdict] = counts.get(verdict, 0) + 1
         if verdict != "ok":
-            print(f"  {verdict:<7} {name:<{width}} {version:<12} {lic}")
+            print(f"  {verdict:<13} {name:<{width}} {version:<12} {lic}")
 
     print(f"\n{len(rows)} distributions audited")
-    for verdict in ("ok", "REVIEW", "BLOCK"):
+    for verdict in ("ok", "ok-unmodified", "REVIEW", "BLOCK"):
         if verdict in counts:
-            print(f"  {verdict:<7} {counts[verdict]}")
+            print(f"  {verdict:<13} {counts[verdict]}")
 
     by_licence: dict[str, int] = {}
     for _, _, lic, _ in rows:

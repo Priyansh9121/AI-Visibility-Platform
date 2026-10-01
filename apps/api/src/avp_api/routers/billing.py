@@ -123,8 +123,14 @@ async def read_billing(
     responses={
         409: {
             "description": (
-                "`/problems/subscription-already-active`: the agency already "
-                "has an active or trialing subscription."
+                "Checkout cannot start. One of three problem types: "
+                "`/problems/subscription-already-active` (the agency already "
+                "has an active or trialing subscription), "
+                "`/problems/subscription-needs-attention` (it has one that is "
+                "still live at Stripe but not paid up: past_due, unpaid, paused, "
+                "incomplete, or any status that is not over), or "
+                "`/problems/checkout-in-progress` (another checkout for this "
+                "agency holds its row lock; retry in a moment)."
             ),
             "content": {"application/problem+json": {}},
         }
@@ -150,14 +156,33 @@ async def start_checkout(
     **This endpoint does not subscribe anybody.** It returns a URL. The
     subscription begins when Stripe says it did, over the webhook below.
 
-    **Errors:** `401`, `403` (member role), `404` (another agency's id), `409
-    subscription-already-active` when the agency's status is `active` or
-    `trialing` (checked after auth and tenancy, before any Stripe call), `503
-    checkout-in-progress` when another checkout holds the agency row for over
-    3 s, `503
-    service-unavailable` when Stripe fails expiring the previous open session, `503
-    billing-not-configured` when `STRIPE_SECRET_KEY` or `STRIPE_PRICE_ID` is
-    unset — carrying a detail that names the variable.
+    **Errors:**
+
+    - `401`, `403` (member role), `404` (another agency's id). Authority and
+      tenancy are settled first, so a member or another agency never sees a `409`.
+    - `409 subscription-already-active` when the agency's status is `active` or
+      `trialing`.
+    - `409 subscription-needs-attention` when it is anything else that is not
+      over: `past_due`, `unpaid`, `paused`, `incomplete`, or a status this server
+      has never seen (it denies by default). Those are live at Stripe, so a
+      second checkout would create a second subscription; the detail points at
+      Manage billing in Settings and carries no Stripe id and not the status.
+      Only no subscription, `canceled` and `incomplete_expired` may check out.
+    - The stored status is checked first, before any Stripe call. When the
+      agency already has a customer, Stripe is then asked: its open Checkout
+      Sessions are expired FIRST and its subscriptions listed AFTER, so both
+      subscription refusals also fire when our row has not caught up (or says
+      `canceled`), and a session paid in the meantime is found.
+    - `409 checkout-in-progress` when another checkout holds the agency row for
+      over 3 s. Nothing was created; retrying is safe.
+    - `503 service-unavailable`, with a sentence that says which step: Stripe
+      failed while listing or expiring the open sessions, or there are more of
+      them than one page holds; or Stripe failed while listing the
+      subscriptions, or a full page of them had none live on it (a live one
+      could be on the next page). A full page with a live subscription on it is
+      still the `409`. Nothing is created in any of these.
+    - `503 billing-not-configured` when `STRIPE_SECRET_KEY` or `STRIPE_PRICE_ID`
+      is unset, carrying a detail that names the variable.
     """
     assert_own_agency(principal.agency_id, agency_id)
 

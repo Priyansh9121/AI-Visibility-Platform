@@ -28,7 +28,12 @@
  *
  * Both states are live call sites, not one real branch and one for the tests:
  * the landing page renders the signed-out card, and Settings renders the
- * signed-in card when an agency has no active subscription.
+ * signed-in card wherever the API will start a checkout: no subscription,
+ * `canceled` and `incomplete_expired` (`BillingPanel`'s CHECKOUT_STATUSES).
+ *
+ * The footnote under the button ("Signing up is free…") is the signed-out
+ * card's alone. It is sign-up copy, and the signed-in card is for an agency
+ * that has already signed up.
  *
  * WHAT THE CARD MAY CLAIM
  * -----------------------
@@ -102,6 +107,13 @@ export interface PricingCardProps {
   onSubscribe?: (() => void | Promise<void>) | undefined;
   /** True while a checkout session is being created. */
   busy?: boolean | undefined;
+  /**
+   * Inert without claiming to be busy — 2026-10-01. Settings sets it while the
+   * billing portal is opening: Subscribe must not look pressable and do
+   * nothing, and it must not say "Opening checkout…" either, since checkout is
+   * not what is opening. `busy` is for this card's own call. Signed in only.
+   */
+  disabled?: boolean | undefined;
   /** A failure from the checkout call, in a sentence. */
   error?: string | null | undefined;
 }
@@ -111,6 +123,7 @@ export function PricingCard({
   onGetStarted,
   onSubscribe,
   busy = false,
+  disabled = false,
   error = null,
 }: PricingCardProps): JSX.Element {
   return (
@@ -165,7 +178,7 @@ export function PricingCard({
               <Button
                 variant="primary"
                 onClick={() => void onSubscribe?.()}
-                disabled={busy}
+                disabled={busy || disabled}
               >
                 {busy ? 'Opening checkout…' : 'Subscribe'}
               </Button>
@@ -179,11 +192,19 @@ export function PricingCard({
               one identity here somebody else has vouched for, and what
               keeps "free" from meaning "free per typed address".
               `services/scan_allowance.py` says why.
+
+              Signed out only (2026-10-01). It is sign-up copy, written for
+              somebody deciding whether to sign up. Signed in, the person has
+              signed up, and may have scanned or subscribed before, so in
+              Settings it was wrong for them. Signed in there is no footnote,
+              and no other copy in its place.
             */}
-            <p className="max-w-measure text-ui-sm text-text-tertiary">
-              Signing up is free. Your first scan is free with a Google sign-in.
-              Subscribe to keep scanning.
-            </p>
+            {!signedIn && (
+              <p className="max-w-measure text-ui-sm text-text-tertiary">
+                Signing up is free. Your first scan is free with a Google sign-in.
+                Subscribe to keep scanning.
+              </p>
+            )}
           </div>
         </div>
       </CardBody>

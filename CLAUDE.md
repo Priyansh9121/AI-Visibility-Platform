@@ -23,10 +23,12 @@ brief disagree, stop and ask.
   off-scale spacing do not compile (`packages/design-system/src/tailwind-preset.ts:1-17`).
   The report stays paper in both themes (`packages/design-system/src/tokens/reportIsolation.test.ts`).
 - **Dependency licences.** No copyleft, source-available or undeclared
-  licence. Python deps (API and workers environments) are checked by
-  `apps/api/scripts/license_audit.py`, JS deps by
+  licence; MPL-2.0 is allowed for unmodified use only, as its own category
+  (`ALLOWED_UNMODIFIED` in `license_audit.py`). Python deps (API and workers
+  environments) are checked by `apps/api/scripts/license_audit.py`, JS deps by
   `apps/api/scripts/js_license_audit.py` over `pnpm licenses list`; both run in
-  CI on one policy (`ALLOWED`/`BLOCKING` in `license_audit.py`). Open licence
+  CI on one policy (`ALLOWED`/`ALLOWED_UNMODIFIED`/`BLOCKING` in
+  `license_audit.py`). Open licence
   questions live in `infra/ci/licence-pending-decisions.json` until the founder
   decides; it is not an allow-list. psycopg, vendor LLM SDKs other than
   anthropic, and PDF libraries are deliberately absent.

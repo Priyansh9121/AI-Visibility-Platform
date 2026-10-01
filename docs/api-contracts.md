@@ -71,6 +71,7 @@ listed in `CORS_ALLOW_ORIGINS` — browsers reject wildcard CORS with credential
 | `/problems/email-already-registered` | 409 | Signup email in use |
 | `/problems/seat-limit-reached` | 409 | Carries `seatsUsed`, `seatLimit` |
 | `/problems/subscription-already-active` | 409 | Checkout refused: the agency's subscription is `active` or `trialing`. `detail` points at the billing portal |
+| `/problems/subscription-needs-attention` | 409 | Checkout refused: the agency has a subscription that is live at Stripe but not paid up (`past_due`, `unpaid`, `paused`, `incomplete`, or any status that is not over), so a second checkout would create a second subscription. `detail` points at the billing portal |
 | `/problems/checkout-in-progress` | 409 | Another checkout for the same agency holds its row lock for more than 3 s. Nothing was created; retry |
 | `/problems/invalid-reset-token` | 400 | Reset link unknown, expired, used, or orphaned |
 | `/problems/invalid-invitation` | 400 | Invitation unknown, expired, accepted, revoked, or orphaned |
@@ -782,33 +783,71 @@ lands on reads the database.
 **This endpoint does not subscribe anybody.** It returns a URL. The subscription
 begins when Stripe says so, over the webhook.
 
-**A live subscription refuses a new checkout.** When the agency's
-`subscriptionStatus` is `active` or `trialing` (`services.billing.ACTIVE_STATUSES`,
-the same set as `isActive`), the answer is `409 subscription-already-active`
-and no Stripe call is made: a second Checkout Session would create a second
-subscription and bill the agency twice. `detail` reads "This agency already has
-a current subscription. Manage it from Manage billing in Settings."; it carries
-no Stripe id and not the status. Every
-other state (`null`, `past_due`, `canceled`, `unpaid`, `incomplete`,
-`incomplete_expired`, `paused`) checks out as before. The check runs after auth
-and tenancy, so a member still gets `403` and another agency's id `404`; the
-`409` is only ever seen by that agency's own owner or admin.
+**A subscription that is live at Stripe refuses a new checkout** (founder
+decision 4, 2026-10-01). A second Checkout Session would create a second
+subscription beside it, so the answer is a `409` and no Stripe call is made, in
+two cases:
 
-**Starting a new checkout expires the previous one.** Before creating a session
-for an agency that already has a Stripe customer, every `open` Checkout Session
-of that customer is expired, so at most one payable session exists and two
-cannot both be paid into two subscriptions. If Stripe fails while listing or
-expiring, the checkout fails with `503 service-unavailable` and creates
+- `subscriptionStatus` is `active` or `trialing` (`services.billing.ACTIVE_STATUSES`,
+  the same set as `isActive`): `409 subscription-already-active`. `detail` reads
+  "This agency already has a current subscription. Manage it from Manage billing
+  in Settings."
+- `subscriptionStatus` is anything else that is not over: `past_due`, `unpaid`,
+  `paused`, `incomplete`, or a status this server has never seen
+  (`services.billing.is_live_at_stripe`): `409 subscription-needs-attention`,
+  title "Subscription needs attention". `detail` reads "This agency already has a
+  subscription that needs attention. Manage it from Manage billing in Settings."
+  These are not `isActive` (`isActive` and the scan allowance still count only
+  `active` and `trialing`), but Stripe still holds the subscription open.
+
+Neither `detail` carries a Stripe id or the status. Only `null`, `canceled` and
+`incomplete_expired` (no subscription, or one that is over) check out. That list
+is of what is OVER, not of what is live, on purpose: a status Stripe adds later
+refuses a checkout until somebody decides what it means, instead of letting a
+second subscription through. The check runs after auth and tenancy, so a member
+still gets `403` and another agency's id `404`; the `409` is only ever seen by
+that agency's own owner or admin.
+
+**Starting a new checkout expires the previous one, and only then asks about
+subscriptions.** Before creating a session for an agency that already has a
+Stripe customer, every `open` Checkout Session of that customer is expired, so at
+most one payable session exists and two cannot both be paid into two
+subscriptions. That comes first. Asked the other way round, a session paid after
+we looked at the subscriptions and before we expired it would become a
+subscription we never saw, and we would create a second session beside it. In
+this order a session paid earlier is a subscription by the time Stripe is asked
+(`409`), and one that completes during the expire makes the expire fail (`503`).
+If Stripe fails while listing or expiring, or more open sessions exist than one
+page (100) holds, the checkout fails with `503 service-unavailable` and creates
 nothing; retrying is safe. Concurrent checkouts for one agency serialise on the
-agency row, so two first checkouts create one Stripe customer, not two. The
-session's own lifetime (`expires_at`) is unchanged.
+agency row, so two first checkouts create one Stripe customer, not two.
+
+**The link expires one hour after it is created** (founder decision 5,
+2026-10-01). Every Checkout Session is created with `expires_at` set to now plus
+one hour (`services.billing.CHECKOUT_LINK_LIFETIME`), where Stripe's default is 24
+hours; Stripe accepts 30 minutes to 24 hours. An unpaid Checkout page stops
+accepting payment once the hour is up and Stripe shows it as expired; pressing
+Subscribe again makes a new link. Nothing of ours records the expiry, and
+`checkout.session.expired` is not a handled event. A shorter life also narrows how
+long an older open link can be paid before the next checkout expires it, as above.
 
 **The subscription check also asks Stripe.** For an agency that already has a
-customer, Stripe is asked for that customer's `active` and `trialing`
-subscriptions before anything is created; any hit is the same `409
-subscription-already-active`, even when our row does not say so yet (paid, the
-webhook has not landed). If more open sessions exist than one page (100) holds,
-the answer is `503 service-unavailable` rather than creating another.
+customer, once its open sessions are cleared, Stripe is asked for that customer's
+subscriptions before anything is created: one list call, every status
+(`status=all`), up to 100. Any `active` or `trialing` subscription is `409
+subscription-already-active`; failing that, any subscription that is not over
+(every status but `canceled` and `incomplete_expired`, one with no readable
+status included) is `409
+subscription-needs-attention`, even when our row does not say so yet (paid, the
+webhook has not landed) or says `canceled`. A paid-up subscription outranks one
+that needs attention, whatever order Stripe lists them in. Ended subscriptions
+are on that list and refuse nothing. If Stripe fails while listing, the answer is
+`503 service-unavailable` and nothing is created. So it is when the list comes
+back full (more than 100 subscriptions on one customer, not a real case) with
+nothing live on it, because none can then be proved absent; a full page with a
+live subscription on it is still the `409`. The `503` `detail` says which step
+failed: clearing the previous checkout session, or checking the agency's
+existing subscriptions.
 
 **Bounded waiting.** The agency row is locked for the request, but a checkout
 waits at most 3 s for it (`lock_timeout`) and then answers `409
@@ -819,8 +858,10 @@ lock. The Stripe client used here has a 15 s timeout and one retry per call
 rather than the SDK defaults.
 
 **Errors:** `401`, `403`, `404`, `409 subscription-already-active`, `409
-checkout-in-progress`, `503
-service-unavailable` (Stripe failed while clearing the previous session), `503
+subscription-needs-attention`, `409 checkout-in-progress`, `503
+service-unavailable` (Stripe failed while clearing the previous session or
+checking the customer's subscriptions, or a full page of either left nothing
+provable), `503
 billing-not-configured` when
 `STRIPE_SECRET_KEY` or `STRIPE_PRICE_ID` is unset — `detail` names the exact
 variable, the same courtesy `provider_key()` gives every other integration.
@@ -1465,11 +1506,28 @@ than duplicated, so a detect-then-scan flow does not strand an empty scan.
 that closes that is Epic 9.6, not yet built.
 
 **Failure while running.** A pipeline that raises lands the scan at `failed`
-with `errorCode: "EXECUTION_FAILED"`. A scan whose executor disappears — a
-deploy or a crash — is failed by a reaper after 15 minutes with
-`errorCode: "EXECUTOR_LOST"`, distinguishing "the process running this went
-away" from `ALL_ENGINE_CALLS_FAILED`, where the pipeline ran and every engine
-failed.
+with `errorCode: "EXECUTION_FAILED"` — an error of ours, and it never counts
+against the allowance. A scan whose executor disappears — a deploy or a crash
+— is failed with `errorCode: "EXECUTOR_LOST"` once its lease has gone unrenewed
+for 180 seconds (a live executor renews every 30). The reaper that does it runs
+on the `POST /clients/{clientId}/scans` start route and on the dashboard read,
+not on a timer, and a `running` scan whose lease has expired stops holding an
+allowance slot at once, reaped or not. A restart never counts. `EXECUTOR_LOST`
+distinguishes "the process running this went away" from
+`ALL_ENGINE_CALLS_FAILED`, where the pipeline ran and every engine failed.
+
+**A scan that hits its deadline** — the executor stops a scan still running
+2,400 seconds after it was claimed — keeps the answers that finished and ends by
+what it has, with `errorCode: "SCAN_DEADLINE_EXCEEDED"` either way. With at least
+one answer (a result that is `ok` or `answered_no_mention`) it ends `partial` and
+the scan **counts** against the allowance. The prompts that finished are stored,
+and scored if scoring completes within its own 60-second budget (a deadline
+`partial` can have no score); `engineResultCount` is the number stored (it can be
+fewer than `promptCount` × engines). With none it ends `failed` and does **not**
+count. It also ends `failed`, uncounted and with the same code, when the executor
+cannot complete this finalisation itself. A scan whose lease was already gone when
+the deadline fired — the reaper had failed it — keeps the reaper's `failed` /
+`EXECUTOR_LOST`. The audit, alerts and fix list that had not yet run do not run.
 
 **A scan handed to an executor but never started** (typically after a deploy
 restart) is failed with `errorCode: "EXECUTOR_NEVER_STARTED"` if it remains
@@ -1536,7 +1594,14 @@ exactly as `timeout` is.
 **Scan-level `status`:** `succeeded` (no failed calls), `partial` (some engines
 failed), `failed` (all failed, with `errorCode: ALL_ENGINE_CALLS_FAILED`).
 `partial` exists so a report can say "one engine was down" rather than
-presenting a depressed mention rate as fact.
+presenting a depressed mention rate as fact. `partial` is also how a scan that
+hit its deadline with at least one answer ends: it then carries
+`errorCode: "SCAN_DEADLINE_EXCEEDED"`, and its results are those of the prompts
+that finished. They can ALSO include failed engine calls (each result's `status`
+says which), so that code says the clock ran out and does not rule out an engine
+having been down. With no answer, or when the executor could not complete the
+finalisation, that scan ends `failed` with the same code. The allowance counts
+`succeeded` and `partial` and never `failed`, whatever the `errorCode`.
 
 **`position` is the subject's rank among detected brands by first appearance.**
 Brand detection is scoped to the subject plus **known competitors** — never

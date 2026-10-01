@@ -18,14 +18,27 @@
  * secondary button here, so the free way through is not outshouted by the
  * paid one. If the Google step fails, the person lands back on `/` still
  * signed in, and the front door says why (2026-09-29, `app/page.tsx`).
+ *
+ * A refused Subscribe (2026-10-01). The free allowance also applies to an
+ * agency whose subscription is `past_due`, `unpaid`, `paused` or `incomplete`,
+ * so it can land here, and the API answers a Checkout for it with a 409:
+ * Stripe still holds that subscription open. The API's sentence says to manage
+ * it from Manage billing in Settings, and this card has no billing controls of
+ * its own, so after that refusal it shows the sentence and a link to the
+ * Billing section of Settings, and Subscribe steps back from primary — another
+ * press can only be refused again. Any other failure is the sentence alone, and
+ * Subscribe stays as it was. That includes `checkout-in-progress`: it is a 409
+ * too, but it says to try again in a moment (`lib/billing/subscriptionRefusal`).
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { JSX } from 'react';
 import { Button, Card, CardBody, GoogleSignInButton } from '@avp/design-system';
 import { api, ApiProblem, GOOGLE_SIGN_IN_URL } from '@/lib/api';
 import type { ScanLimitProblem } from '@/lib/billing/allowance';
+import { isSubscriptionRefusal } from '@/lib/billing/subscriptionRefusal';
 import { formatDay } from '@/lib/dates';
+import { BILLING_SETTINGS_HREF } from '@/lib/settings/sections';
 
 export interface ScanLimitNoticeProps {
   problem: ScanLimitProblem;
@@ -37,25 +50,64 @@ export interface ScanLimitNoticeProps {
 
 export function ScanLimitNotice({ problem, agencyId, navigate }: ScanLimitNoticeProps): JSX.Element {
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // What the last Subscribe said, and whether that was the API saying this
+  // agency has a subscription. One state, so the link to Settings cannot outlive
+  // the sentence that points at it.
+  const [refusal, setRefusal] = useState<{ detail: string; hasSubscription: boolean } | null>(
+    null,
+  );
+
+  useEffect(() => {
+    // After the navigation the browser may keep this page in its back/forward
+    // cache and restore it, exactly as it was, when the person comes back from
+    // Stripe. State included: `busy` would still be set and Subscribe still
+    // disabled. `persisted` is true only for that restore; an ordinary load has
+    // nothing to undo.
+    function onPageShow(event: PageTransitionEvent): void {
+      if (event.persisted) setBusy(false);
+    }
+    window.addEventListener('pageshow', onPageShow);
+    return () => window.removeEventListener('pageshow', onPageShow);
+  }, []);
 
   async function subscribe(): Promise<void> {
     setBusy(true);
-    setError(null);
+    setRefusal(null);
     try {
       const session = await api.startCheckout(agencyId);
       (navigate ?? ((url: string) => window.location.assign(url)))(session.url);
     } catch (err) {
-      setError(err instanceof ApiProblem ? err.problem.detail : 'Checkout could not be opened.');
+      setRefusal(
+        err instanceof ApiProblem
+          ? // The type, not the status: the API refuses with a 409 under three
+            // types, and only two of them (`subscription-already-active`,
+            // `subscription-needs-attention`) say this agency has a
+            // subscription and that Settings is where it is dealt with.
+            // `checkout-in-progress` says to try again in a moment.
+            { detail: err.problem.detail, hasSubscription: isSubscriptionRefusal(err.problem) }
+          : { detail: 'Checkout could not be opened.', hasSubscription: false },
+      );
       setBusy(false);
     }
   }
 
   const failure =
-    error != null ? (
-      <p role="alert" className="max-w-measure text-ui-sm leading-prose text-danger">
-        {error}
-      </p>
+    refusal != null ? (
+      <div className="flex flex-col gap-2">
+        <p role="alert" className="max-w-measure text-ui-sm leading-prose text-danger">
+          {refusal.detail}
+        </p>
+        {refusal.hasSubscription && (
+          <p className="text-ui-sm">
+            <a
+              href={BILLING_SETTINGS_HREF}
+              className="font-medium text-beacon-600 underline underline-offset-2 transition-colors duration-hover ease-out hover:text-beacon-700"
+            >
+              Open Settings
+            </a>
+          </p>
+        )}
+      </div>
     ) : null;
 
   return (
@@ -94,7 +146,16 @@ export function ScanLimitNotice({ problem, agencyId, navigate }: ScanLimitNotice
               </p>
               {failure}
               <div>
-                <Button variant="primary" onClick={() => void subscribe()} disabled={busy}>
+                {/*
+                  The one primary action, until the API says this agency has
+                  a subscription: then another press can only be refused
+                  again, and the link above is what is left to do.
+                */}
+                <Button
+                  variant={refusal?.hasSubscription ? 'secondary' : 'primary'}
+                  onClick={() => void subscribe()}
+                  disabled={busy}
+                >
                   {busy ? 'Opening checkout…' : 'Subscribe'}
                 </Button>
               </div>

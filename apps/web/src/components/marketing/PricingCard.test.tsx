@@ -7,8 +7,9 @@
  * does; the click destinations are covered by the live browser pass.
  *
  * Both states are tested because both are live: the landing page renders the
- * signed-out card, and Settings renders the signed-in one when an agency has no
- * active subscription. Neither branch exists only for this file.
+ * signed-out card, and Settings renders the signed-in one wherever the API will
+ * start a checkout (no subscription, canceled, incomplete_expired). Neither
+ * branch exists only for this file.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -73,6 +74,24 @@ describe('signed in', () => {
     expect(render({ signedIn: true })).not.toContain('disabled');
   });
 
+  it('can be disabled without saying it is busy — 2026-10-01', () => {
+    // Settings sets this while the billing portal is opening. The button must
+    // not look pressable and do nothing, and checkout is not what is opening,
+    // so it must not say "Opening checkout…" either.
+    const out = render({ signedIn: true, disabled: true });
+    expect(out).toContain('disabled');
+    expect(out).toContain('Subscribe</span></button>');
+    expect(out).not.toContain('Opening checkout');
+  });
+
+  it('busy is the card’s own call: it says so, and disables, with or without `disabled`', () => {
+    for (const props of [{ busy: true }, { busy: true, disabled: true }]) {
+      const out = render({ signedIn: true, ...props });
+      expect(out).toContain('Opening checkout…');
+      expect(out).toContain('disabled');
+    }
+  });
+
   it('renders a checkout failure as a sentence, in an alert', () => {
     const out = render({
       signedIn: true,
@@ -84,6 +103,42 @@ describe('signed in', () => {
 
   it('shows no error region when there is no error', () => {
     expect(render({ signedIn: true })).not.toContain('role="alert"');
+  });
+});
+
+describe('the footnote is sign-up copy — 2026-10-01', () => {
+  // "Signing up is free. Your first scan is free with a Google sign-in.
+  // Subscribe to keep scanning." answers somebody deciding whether to sign up.
+  // Signed in, the person has signed up, and may have scanned or subscribed
+  // before; in Settings it was wrong for them. So the signed-in card has none,
+  // and no other copy in its place.
+  const FOOTNOTE =
+    'Signing up is free. Your first scan is free with a Google sign-in. Subscribe to keep scanning.';
+
+  it('is on the public card, word for word', () => {
+    expect(render({ signedIn: false })).toContain(FOOTNOTE);
+    // The default is the public card.
+    expect(render()).toContain(FOOTNOTE);
+  });
+
+  it('is not on the signed-in card, in any of its states', () => {
+    for (const props of [
+      { signedIn: true },
+      { signedIn: true, busy: true },
+      { signedIn: true, error: 'x' },
+    ]) {
+      const out = render(props);
+      expect(out).not.toContain('Signing up is free');
+      expect(out).not.toContain('Your first scan is free');
+      expect(out).not.toContain('Subscribe to keep scanning');
+    }
+  });
+
+  it('leaves the signed-in action row to the button: nothing follows it', () => {
+    const out = render({ signedIn: true });
+    const afterButton = out.slice(out.indexOf('Subscribe</span></button>'));
+    expect(out).toContain('Subscribe</span></button>');
+    expect(afterButton).not.toContain('<p');
   });
 });
 

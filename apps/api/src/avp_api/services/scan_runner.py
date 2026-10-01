@@ -9,6 +9,7 @@ this module deliberately computes no rates and no composite.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import structlog
@@ -366,6 +367,52 @@ def persist_result(
     return result
 
 
+@dataclass
+class EnginePhaseProgress:
+    """What the engine loop has finished, for a caller that may have to stop it.
+
+    THE GAP IT CLOSES — decision 7, 2026-10-01. `run_scan` gathers every prompt
+    and writes nothing until the gather returns, so a caller that cancels the
+    loop (the executor's deadline) used to lose every answer already paid for:
+    they lived in the gather's result, which a cancellation discards. This
+    holder is filled as each prompt finishes, so the caller still has them.
+
+    A holder, not a return value, because the caller only ever sees it when
+    `run_scan` did NOT return. It is mutable on purpose and has one writer,
+    `run_scan`, on one event loop: no lock.
+
+    * `competitor_ids` and `engines` are set before the loop starts — what
+      `persist_result` needs, and what a caller persisting these results
+      itself must use for them to read exactly as `run_scan`'s own would.
+    * `completed` gains `(prompt_id, per-engine results)` as each prompt
+      finishes — all of that prompt's engines, as `run_prompt` returns them.
+      Completion order, not prompt order; a prompt that has not finished its
+      engines is not here. It is EMPTIED the moment `persisted` is set: once
+      the results are written the holder has nothing left to keep.
+    * `persisted` turns True right after the commit that writes the loop's
+      results. A caller that finds it False must still ask the DATABASE before
+      writing anything: a cancellation can land after that commit and before
+      this flag, and the table is the truth.
+
+    The results hold the answers' text while they are held, which is what
+    `persist_result` needs to take their digest — memory only, never written
+    (the facts-only rule), and `repr=False` so that logging a holder cannot
+    print it. Emptied on `persisted` so that raw text does not outlive the
+    write: the holder lives for the whole job, through the audit, the score,
+    the alerts and the fixes.
+    """
+
+    competitor_ids: dict[str, str] = field(default_factory=dict)
+    engines: tuple[Engine, ...] = ()
+    completed: list[
+        tuple[
+            str,
+            list[tuple[Engine, extraction_service.ExtractedFacts, engine_service.EngineAnswer]],
+        ]
+    ] = field(default_factory=list, repr=False)
+    persisted: bool = False
+
+
 async def run_scan(
     session: AsyncSession,
     scan: Scan,
@@ -375,6 +422,7 @@ async def run_scan(
     engines: tuple[Engine, ...] = engine_service.DEFAULT_ENGINES,
     prompt_limit: int | None = None,
     defer_terminal_status: bool = False,
+    progress: EnginePhaseProgress | None = None,
 ) -> Scan:
     """Execute a scan end to end and persist every prompt x engine result.
 
@@ -388,6 +436,10 @@ async def run_scan(
     The caller stamps the terminal status with `finalize_scan` once every
     phase has been attempted. Defaults to False, so every existing caller —
     `verify_e2e.py`, the tests, a direct call — behaves exactly as before.
+
+    `progress`, when given, is filled as the loop runs — see
+    `EnginePhaseProgress`. A caller that passes nothing gets exactly the
+    behaviour it always had.
     """
     settings = settings or get_settings()
     subject_name = client.brand_name or client.name or client.domain
@@ -442,11 +494,15 @@ async def run_scan(
     # opens a new row rather than reusing it.
     await session.commit()
 
+    if progress is not None:
+        progress.competitor_ids = competitor_ids
+        progress.engines = engines
+
     semaphore = asyncio.Semaphore(PROMPT_CONCURRENCY)
 
     async def one(prompt: Prompt):  # noqa: ANN202
         async with semaphore:
-            return prompt, await run_prompt(
+            per_engine = await run_prompt(
                 prompt,
                 subject_name=subject_name,
                 subject_domain=client.domain,
@@ -454,6 +510,12 @@ async def run_scan(
                 engines=engines,
                 settings=settings,
             )
+            # Recorded the moment this prompt's engines are all done, not when
+            # the whole loop is: a cancellation that arrives before the gather
+            # returns would otherwise take every finished answer with it.
+            if progress is not None:
+                progress.completed.append((prompt.id, per_engine))
+            return prompt, per_engine
 
     completed = await asyncio.gather(*(one(p) for p in ordered))
 
@@ -484,6 +546,9 @@ async def run_scan(
         # what it looks for.
         await session.flush()
         await session.commit()
+        if progress is not None:
+            progress.persisted = True
+            progress.completed.clear()
         logger.info(
             "scan.engine_phase_completed",
             scan_id=scan.id,
@@ -503,6 +568,9 @@ async def run_scan(
     # commit. A scan that has finished has finished, whatever the caller does
     # next.
     await session.commit()
+    if progress is not None:
+        progress.persisted = True
+        progress.completed.clear()
     logger.info(
         "scan.completed",
         scan_id=scan.id,
@@ -535,6 +603,7 @@ async def _competitor_id_map(session: AsyncSession, scan: Scan) -> dict[str, str
 
 __all__ = [
     "Competitor",
+    "EnginePhaseProgress",
     "build_prompt_set",
     "count_engine_failures",
     "finalize_scan",

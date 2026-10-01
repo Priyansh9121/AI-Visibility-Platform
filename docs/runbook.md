@@ -111,6 +111,22 @@ All of this happens in Stripe's **Test mode**. Never use a live key.
    - (e) Press **Manage billing** in Settings and cancel in Stripe's portal.
      Settings then shows "Ends" and the date, and the `customer.subscription.updated`
      delivery answered handled.
+   - (f) Link expiry. This needs an agency that has not paid, so use a second
+     test agency, or do it before step 6. Press **Subscribe** in Settings and
+     leave the Stripe page unpaid. More than an hour later, open the same Stripe
+     page again: it no longer accepts payment, and Stripe shows it as expired.
+     Press **Subscribe** again in Settings: it makes a new link, and that one
+     pays.
+   - (g) Subscribing again after a cancellation. Step (e) cancels at the end
+     of the period, so the subscription stays active until then. Instead, in
+     the Stripe dashboard (Test mode) open the test subscription and cancel it
+     immediately. When its `customer.subscription.deleted` delivery has
+     answered handled, open Settings in two browser tabs: both show the plan
+     as Canceled, with Subscribe. In the first tab press **Subscribe** and pay
+     with the test card; Settings shows the plan active again. In the second
+     tab, which still shows Subscribe, press **Subscribe**: it answers "This
+     agency already has a current subscription. Manage it from Manage billing
+     in Settings." and shows **Manage billing**, and no second checkout opens.
 
 8. **Stop.** Nothing is ever switched to live mode from this runbook. Going
    live is the founder's key swap after Stripe's business verification.

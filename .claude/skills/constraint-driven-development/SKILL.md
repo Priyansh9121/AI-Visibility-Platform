@@ -1,6 +1,6 @@
 ---
 name: constraint-driven-development
-description: Use before claiming an AVP change is done, and before any commit the founder asked for, to check that the diff did not lower the test or lint floor: no new suppressions, no skipped or deleted tests, no lowered floor or raised mypy ceiling in infra/ci/floors.json, no weakened guard test, no piped or `|| true` test commands. Not for writing tests (library test-driven-development) or for proving the work is complete (installed verification-before-completion).
+description: "Use before claiming an AVP change is done, and before any commit the founder asked for, to check that the diff did not lower the test or lint floor: no new suppressions, no skipped or deleted tests, no lowered floor or raised mypy ceiling in infra/ci/floors.json, no weakened guard test, no piped or `|| true` test commands. Not for writing tests (library test-driven-development) or for proving the work is complete (installed verification-before-completion)."
 ---
 
 # Constraint-Driven Development (the floor)
