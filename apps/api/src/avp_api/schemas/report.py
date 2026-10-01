@@ -421,6 +421,14 @@ class ReportOut(ApiModel):
 
     scan_id: str
     scan_status: str
+    # Why the scan ended as it did: `scans.error_code`, OUR OWN constant
+    # (`scan_executor`, `scan_runner`), never a vendor message. Null when there is
+    # nothing to say, which includes a PARTIAL scan whose only cause is that some
+    # engine calls got no answer. The web chooses its sentence from the pair
+    # (status, code) and never prints the code. `error_detail`, the free-text
+    # column beside it, is deliberately not projected. For the AGENCY only: null
+    # on the public routes (`build_public_report`), whatever the scan ended with.
+    scan_error_code: str | None = None
     generated_at: datetime
     scanned_at: datetime | None = None
 

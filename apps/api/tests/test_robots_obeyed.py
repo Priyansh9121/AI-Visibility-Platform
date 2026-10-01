@@ -14,6 +14,7 @@ asserted on what was actually requested.
 
 from __future__ import annotations
 
+import asyncio
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
@@ -22,12 +23,13 @@ from urllib.parse import urlsplit
 import httpx
 import pytest
 from httpx import AsyncClient
+from playwright.async_api import Error as PlaywrightError
 
 from avp_api.config import Settings
 from avp_api.models.competitor import DetectionStatus
 from avp_api.models.engine_result import EngineResultStatus, Sentiment
 from avp_api.models.prompt import PromptIntent
-from avp_api.services import crawl, technical_audit
+from avp_api.services import crawl, egress, technical_audit
 from avp_api.services.ai_crawlers import AccessVerdict, PolicyBasis, crawl_policy
 from avp_api.services.classify import classify
 from avp_api.services.scoring import (
@@ -136,20 +138,125 @@ class FakeChromium:
     """`async_playwright()` for the crawls: pages from a dict, every navigation recorded.
 
     `landings` maps a URL to where the browser ends up — a redirect only the
-    browser is given.
+    browser is given. `chains` maps a URL to the hops that led to it
+    (`redirected_from`, nearest first). `subresources` maps a page to the URLs
+    it asks for when it loads: each goes through the registered routes the way
+    Playwright runs them — the most recently registered first, `fallback()`
+    passing to the next, and a request nothing handled going to the network
+    (`loaded`). Everything the egress guard installs is recorded.
+
+    `listener_delays` maps a response's URL to how long its `server_addr()` takes
+    (None: never answers); such a response reaches the `response` listeners as a
+    background task, as Playwright's events do, instead of being awaited inline.
+    A page dict may carry an `"evaluate"` dict that overrides what `evaluate`
+    returns, so a page can have facts for the audit to read. `no_response` lists
+    URLs whose navigation yields no response (`goto` returns None), and
+    `close_error` makes closing the browser fail.
     """
 
     def __init__(
         self, pages: dict[str, dict[str, Any]] | None = None,
         landings: dict[str, str] | None = None,
+        subresources: dict[str, list[str]] | None = None,
+        chains: dict[str, list[str]] | None = None,
+        drifts: dict[str, str] | None = None,
+        server_addrs: dict[str, Any] | None = None,
+        listener_delays: dict[str, float | None] | None = None,
+        no_response: set[str] | None = None,
+        close_error: bool = False,
     ) -> None:
         self.pages = pages or {}
         self.landings = landings or {}
+        self.subresources = subresources or {}
+        self.chains = chains or {}
+        # url -> the address the page is at once `evaluate` has run.
+        self.drifts = drifts or {}
+        # url -> what `response.server_addr()` says; a URL not listed says None.
+        self.server_addrs = server_addrs or {}
+        self.listener_delays = listener_delays or {}
+        self.no_response = no_response or set()
+        self.close_error = close_error
+        self.listeners: list[tuple[str, Any]] = []
+        self.init_scripts: list[str] = []
         self.launches = 0
+        self.launch_args: list[list[str]] = []
+        self.evaluations = 0
+        self.cancelled: list[str] = []
         self.navigations: list[str] = []
+        self.context_kwargs: list[dict[str, Any]] = []
+        self.routes: list[tuple[Any, Any]] = []
+        self.web_socket_routes: list[tuple[Any, Any]] = []
+        self.aborted: list[tuple[str, str | None]] = []
+        self.loaded: list[str] = []
 
     def __call__(self) -> _Playwright:
         return _Playwright(self)
+
+    async def request(self, url: str) -> bool:
+        """One request through the routes. True if it reached the network."""
+        matching = [
+            handler for pattern, handler in reversed(self.routes) if _matches(pattern, url)
+        ]
+        before = len(self.loaded)
+        await _Route(self, url, matching).fallback()
+        return len(self.loaded) > before
+
+
+    async def respond(self, url: str) -> None:
+        """Tell the context's `response` listeners a response arrived."""
+        addr = self.server_addrs.get(url)
+        slow = url in self.listener_delays
+        delay = self.listener_delays.get(url)
+
+        async def server_addr() -> Any:
+            if slow:
+                try:
+                    if delay is None:
+                        await asyncio.Event().wait()  # never answers
+                    else:
+                        await asyncio.sleep(delay)
+                except asyncio.CancelledError:
+                    self.cancelled.append(url)
+                    raise
+            return addr
+
+        response = SimpleNamespace(url=url, server_addr=server_addr)
+        for event, handler in self.listeners:
+            if event == "response":
+                result = handler(response)
+                if slow and hasattr(result, "__await__"):
+                    asyncio.ensure_future(result)  # a background task, as Playwright does
+                elif hasattr(result, "__await__"):
+                    await result
+
+
+def _matches(pattern: Any, url: str) -> bool:
+    return pattern == "**/*" if isinstance(pattern, str) else bool(pattern.search(url))
+
+
+class _Route:
+    def __init__(self, web: FakeChromium, url: str, handlers: list[Any]) -> None:
+        self.web = web
+        self.request = SimpleNamespace(url=url)
+        self._handlers = handlers
+
+    async def abort(self, reason: str | None = None) -> None:
+        self.web.aborted.append((self.request.url, reason))
+
+    async def fallback(self) -> None:
+        if not self._handlers:
+            self.web.loaded.append(self.request.url)  # no handler left: the network
+            return
+        handler = self._handlers.pop(0)
+        result = handler(self)
+        if hasattr(result, "__await__"):
+            await result
+
+
+class _Request:
+    def __init__(self, url: str, redirected_from: _Request | None = None) -> None:
+        self.url = url
+        self.redirected_from = redirected_from
 
 
 class _Playwright:
@@ -163,8 +270,9 @@ class _Playwright:
     async def __aexit__(self, *exc: object) -> bool:
         return False
 
-    async def launch(self, **kwargs: Any) -> _Browser:  # noqa: ARG002
+    async def launch(self, **kwargs: Any) -> _Browser:
         self.web.launches += 1
+        self.web.launch_args.append(list(kwargs.get("args") or []))
         return _Browser(self.web)
 
 
@@ -172,17 +280,28 @@ class _Browser:
     def __init__(self, web: FakeChromium) -> None:
         self.web = web
 
-    async def new_context(self, **kwargs: Any) -> _Browser:  # noqa: ARG002
+    async def new_context(self, **kwargs: Any) -> _Browser:
+        self.web.context_kwargs.append(kwargs)
         return self
 
-    async def route(self, *args: Any, **kwargs: Any) -> None:
-        return None
+    async def route(self, pattern: Any, handler: Any, **kwargs: Any) -> None:  # noqa: ARG002
+        self.web.routes.append((pattern, handler))
+
+    async def route_web_socket(self, pattern: Any, handler: Any) -> None:
+        self.web.web_socket_routes.append((pattern, handler))
+
+    def on(self, event: str, handler: Any) -> None:
+        self.web.listeners.append((event, handler))
+
+    async def add_init_script(self, script: str) -> None:
+        self.web.init_scripts.append(script)
 
     async def new_page(self) -> _Page:
         return _Page(self.web)
 
     async def close(self) -> None:
-        return None
+        if self.web.close_error:
+            raise PlaywrightError("Target page, context or browser has been closed")
 
 
 class _Page:
@@ -193,27 +312,71 @@ class _Page:
     def set_default_timeout(self, ms: int) -> None:
         return None
 
+    async def add_init_script(self, script: str) -> None:  # noqa: ARG002
+        return None
+
+    async def wait_for_timeout(self, ms: int) -> None:  # noqa: ARG002
+        return None
+
     async def goto(self, url: str, **kwargs: Any) -> SimpleNamespace:  # noqa: ARG002
         # As Chromium does: an address with no path is its root.
         if not urlsplit(url).path:
             url += "/"
         self.web.navigations.append(url)
+        # The navigation itself goes through the routes; an aborted one fails.
+        if not await self.web.request(url):
+            raise PlaywrightError("net::ERR_BLOCKED_BY_CLIENT")
         self.url = self.web.landings.get(url, url)
+        await self.web.respond(self.url)
+        for resource in self.web.subresources.get(self.url, []):
+            if await self.web.request(resource):
+                await self.web.respond(resource)
+        request = _Request(self.url)
+        for hop in self.web.chains.get(self.url, []):
+            # nearest hop first: each is the one before the request so far
+            tail = request
+            while tail.redirected_from is not None:
+                tail = tail.redirected_from
+            tail.redirected_from = _Request(hop)
+        if url in self.web.no_response:
+            return None
         page = self.web.pages.get(self.url)
-        return SimpleNamespace(status=page["status"] if page else 404, headers={})
+        return SimpleNamespace(
+            status=page["status"] if page else 404, headers={}, request=request
+        )
 
     async def evaluate(self, script: str) -> dict[str, Any]:  # noqa: ARG002
+        self.web.evaluations += 1
+        data = await self._evaluate()
+        # Where the page is once evaluate has run; nothing from a page that is not public is kept.
+        self.url = self.web.drifts.get(self.url, self.url)
+        return data
+
+    async def _evaluate(self) -> dict[str, Any]:
         page = self.web.pages.get(self.url, {})
         return {
             "text": page.get("text", "A business that does a thing, described at length."),
             "title": page.get("title", "A page"),
             "hasMetaDescription": True, "lang": "en", "h1": 1, "h2": 0,
             "jsonLd": "", "microdata": [], "links": page.get("links", []),
+            **page.get("evaluate", {}),
         }
 
 
 def page(*links: str) -> dict[str, Any]:
     return {"status": 200, "links": list(links)}
+
+
+def rich_page(*links: str) -> dict[str, Any]:
+    """A page with facts for the audit to read: schema, words, a title, vitals, a date."""
+    return {
+        "status": 200, "links": list(links),
+        "evaluate": {
+            "jsonLd": '{"@type": "Organization", "dateModified": "2026-01-01"}',
+            "words": 640, "hasTitle": True, "canonical": True, "ogCount": 3,
+            "vitals": {"lcp": 1800, "cls": 0.02},
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -449,6 +612,13 @@ class TestAudit:
         assert side.sitemap_present is True and side.sitemap_disallowed is False
 
 
+# Digests of RESULTS/COMPETITORS below, computed before ADDRESS_NOT_PUBLIC existed.
+PINNED_DIGESTS: dict[str, str] = {
+    "none": "1326be29c2fcf015b5053b7a7862caca93a05a252c3d100a88f8007d67953778",
+    "not_yet_measured": "43b9782e5ec5d182842149f8290648a0bb124e748ccf62fb7855ffc35f02c7b7",
+    "crawl_disallowed": "91c56f3607d7d3da41a69e5f9d802d709d52792c0a5246e34268900ef5788419",
+}
+
 # ---------------------------------------------------------------------------
 # scoring: excluded, never a zero — and the formula unchanged
 # ---------------------------------------------------------------------------
@@ -509,6 +679,74 @@ class TestScoring:
             RESULTS, COMPETITORS, None, technical_foundation_exclusion="CRAWL_DISALLOWED"
         ) != plain
 
+    def test_an_address_that_is_not_public_scores_as_if_technical_foundation_were_excluded(
+        self,
+    ) -> None:
+        refused = _score(
+            technical_foundation=None, technical_foundation_exclusion="CRAWL_ADDRESS_NOT_PUBLIC"
+        )
+        not_measured = _score(technical_foundation=None)
+        disallowed = _score(
+            technical_foundation=None, technical_foundation_exclusion="CRAWL_DISALLOWED"
+        )
+        tf = Dimension.TECHNICAL_FOUNDATION.value
+
+        assert refused.composite == not_measured.composite == disallowed.composite
+        assert refused.excluded_dimensions[tf] == "CRAWL_ADDRESS_NOT_PUBLIC"
+        assert "TECHNICAL_FOUNDATION_NOT_MEASURED" not in refused.degradation_flags
+        assert {d: s.weight for d, s in refused.sub_scores.items() if s.included} == {
+            d: s.weight for d, s in not_measured.sub_scores.items() if s.included
+        }
+        # No re-scoring of history: a new reason is not a formula change.
+        assert FORMULA_VERSION == "v5"
+
+    def test_digests_computed_before_the_new_reason_are_unchanged(self) -> None:
+        # Pinned from the code as it stood before ADDRESS_NOT_PUBLIC existed.
+        plain = compute_inputs_digest(RESULTS, COMPETITORS, None)
+        assert plain == PINNED_DIGESTS["none"]
+        assert compute_inputs_digest(
+            RESULTS, COMPETITORS, None, technical_foundation_exclusion="NOT_YET_MEASURED"
+        ) == PINNED_DIGESTS["not_yet_measured"]
+        assert compute_inputs_digest(
+            RESULTS, COMPETITORS, None, technical_foundation_exclusion="CRAWL_DISALLOWED"
+        ) == PINNED_DIGESTS["crawl_disallowed"]
+        # The new reason enters the digest only when it is set.
+        assert compute_inputs_digest(
+            RESULTS, COMPETITORS, None, technical_foundation_exclusion="CRAWL_ADDRESS_NOT_PUBLIC"
+        ) not in PINNED_DIGESTS.values()
+
+    def test_the_report_has_words_for_it(self) -> None:
+        from avp_api.services.report_narrative import EXCLUSION_DETAIL, EXCLUSION_REASON
+
+        assert EXCLUSION_REASON["CRAWL_ADDRESS_NOT_PUBLIC"] == "Address not public"
+        assert EXCLUSION_DETAIL["CRAWL_ADDRESS_NOT_PUBLIC"] == (
+            "The site’s address, or an address the site sent the crawler to, is on a private or "
+            "reserved network, so the crawler did not read the site. Technical Foundation is "
+            "left out of the score."
+        )
+
+    async def test_a_refused_audit_excludes_technical_foundation_under_its_reason(self) -> None:
+        from avp_api.models.technical_audit import AuditStatus
+        from avp_api.services import scoring_runner
+
+        audit = SimpleNamespace(
+            status=AuditStatus.FAILED, error_code="ADDRESS_NOT_PUBLIC", technical_foundation=None
+        )
+
+        class _Result:
+            def scalar_one_or_none(self) -> Any:
+                return audit
+
+        class _Session:
+            async def execute(self, *_a: Any, **_k: Any) -> _Result:
+                return _Result()
+
+        assert await scoring_runner.load_technical_foundation(_Session(), "scan_x") == (
+            None, "CRAWL_ADDRESS_NOT_PUBLIC"
+        )
+        audit.error_code = "BROWSER_ERROR"  # any other failure keeps the default reason
+        assert await scoring_runner.load_technical_foundation(_Session(), "scan_x") == (None, None)
+
     def test_a_measured_value_ignores_an_exclusion_reason(self) -> None:
         measured = _score(technical_foundation=Decimal("80"))
         assert _score(
@@ -518,6 +756,984 @@ class TestScoring:
     def test_an_unknown_reason_is_refused(self) -> None:
         with pytest.raises(ValueError, match="unknown Technical Foundation exclusion"):
             _score(technical_foundation=None, technical_foundation_exclusion="NOPE")
+
+
+# ---------------------------------------------------------------------------
+# the egress guard (2026-10-01): a site whose address is not a public one
+# ---------------------------------------------------------------------------
+
+INTERNAL = "https://internal.test"
+METADATA = "http://169.254.169.254/latest/meta-data/"
+
+
+TYPED = "https://prospect-site.com"  # what `crawl_site("prospect-site.com")` starts from
+
+
+def _refused(result: Any) -> bool:
+    """True if the crawl ended refused — after checking that it kept nothing it read.
+
+    A refusal can arrive after a page's facts were read; the result must be a
+    fresh one, as if nothing had been (`crawl._address_not_public`).
+    """
+    assert result.signals == crawl.CrawlSignals(
+        final_url=TYPED, registrable_domain="prospect-site.com"
+    )
+    assert result.text_extract == "" and result.titles == []
+    return (result.ok, result.error_code) == (False, "ADDRESS_NOT_PUBLIC")
+
+
+class TestACrawlThatIsRefused:
+    async def test_a_homepage_redirecting_into_a_private_name_is_never_requested(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        robots_web.serve(SITE, status=301, headers={"location": f"{INTERNAL}/"})
+        robots_web.resolve_to("internal.test", "10.0.0.5")
+        chromium = FakeChromium(pages={f"{SITE}/": page(), f"{INTERNAL}/": page()})
+        monkeypatch.setattr(crawl, "async_playwright", chromium)
+
+        result = await crawl.crawl_site("prospect-site.com")
+
+        assert _refused(result)
+        assert chromium.launches == 0 and chromium.navigations == []
+        # Not even its robots.txt: the private host was never asked anything.
+        assert all(url.startswith(SITE) for url in robots_web.fetched())
+        assert result.signals.pages_fetched == 0 and result.text_extract == ""
+
+    async def test_a_homepage_redirecting_to_the_metadata_address_is_never_requested(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        robots_web.serve(SITE, status=302, headers={"location": METADATA})
+        chromium = FakeChromium()
+        monkeypatch.setattr(crawl, "async_playwright", chromium)
+
+        result = await crawl.crawl_site("prospect-site.com")
+
+        assert _refused(result)
+        assert not [u for u in robots_web.fetched() if "169.254" in u]
+        assert chromium.launches == 0
+
+    async def test_a_start_name_that_is_private_is_refused_before_any_request(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        robots_web.resolve_to("prospect-site.com", "192.168.1.10")
+        chromium = FakeChromium()
+        monkeypatch.setattr(crawl, "async_playwright", chromium)
+
+        result = await crawl.crawl_site("prospect-site.com")
+
+        assert _refused(result)
+        assert robots_web.requests == [] and chromium.launches == 0
+
+    async def test_a_robots_txt_that_redirects_into_a_private_address_is_refused(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        robots_web.serve(f"{SITE}/robots.txt", status=301, headers={"location": METADATA})
+        monkeypatch.setattr(crawl, "async_playwright", FakeChromium())
+
+        result = await crawl.crawl_site("prospect-site.com")
+
+        assert _refused(result)
+        assert robots_web.fetched() == [f"{SITE}/robots.txt"]
+
+    async def test_robots_txt_redirects_are_still_followed_by_hand_when_public(
+        self, robots_web: Any
+    ) -> None:
+        robots_web.serve(
+            f"{SITE}/robots.txt", status=301,
+            headers={"location": "https://www.prospect-site.com/robots.txt"},
+        )
+        robots_web.serve(
+            "https://www.prospect-site.com/robots.txt", body="User-agent: *\nDisallow: /x\n"
+        )
+        robots = await crawl.RobotsGate(user_agent="ua").file(SITE)
+        assert (robots.status, robots.body) == (200, "User-agent: *\nDisallow: /x\n")
+
+    async def test_endless_robots_txt_redirects_leave_no_answer(self, robots_web: Any) -> None:
+        robots_web.serve(
+            f"{SITE}/robots.txt", status=301, headers={"location": f"{SITE}/robots.txt"}
+        )
+        assert (await crawl.RobotsGate(user_agent="ua").file(SITE)).status is None
+        assert len(robots_web.fetched()) == crawl.MAX_REDIRECTS + 1
+
+    async def test_a_name_that_will_not_resolve_is_no_answer_not_a_refusal(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        robots_web.dns_fails("prospect-site.com")
+        monkeypatch.setattr(crawl, "async_playwright", FakeChromium())
+
+        result = await crawl.crawl_site("prospect-site.com")
+
+        assert result.error_code == "ROBOTS_DISALLOWED"  # no robots.txt answer, as before
+        assert robots_web.requests == []
+
+    async def test_a_subresource_to_a_private_address_is_aborted_and_ends_the_crawl(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        robots_web.resolve_to("internal.test", "10.0.0.5")
+        chromium = FakeChromium(
+            pages={f"{SITE}/": page()},
+            subresources={f"{SITE}/": [f"{INTERNAL}/api.json", f"{SITE}/app.js"]},
+        )
+        monkeypatch.setattr(crawl, "async_playwright", chromium)
+
+        result = await crawl.crawl_site("prospect-site.com")
+
+        assert _refused(result)
+        assert (f"{INTERNAL}/api.json", "blockedbyclient") in chromium.aborted
+        assert f"{INTERNAL}/api.json" not in chromium.loaded
+        assert result.text_extract == ""
+
+    async def test_a_public_subresource_continues_and_images_are_still_blocked(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        chromium = FakeChromium(
+            pages={f"{SITE}/": page()},
+            subresources={f"{SITE}/": [f"{SITE}/app.js", f"{SITE}/hero.png", f"{SITE}/f.woff2"]},
+        )
+        monkeypatch.setattr(crawl, "async_playwright", chromium)
+
+        result = await crawl.crawl_site("prospect-site.com")
+
+        assert result.ok
+        assert f"{SITE}/app.js" in chromium.loaded
+        assert f"{SITE}/hero.png" not in chromium.loaded
+        assert {u for u, _ in chromium.aborted} == {f"{SITE}/hero.png", f"{SITE}/f.woff2"}
+
+    async def test_a_subresource_that_will_not_resolve_is_aborted_but_not_a_refusal(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        robots_web.dns_fails("cdn.gone.test")
+        chromium = FakeChromium(
+            pages={f"{SITE}/": page()}, subresources={f"{SITE}/": ["https://cdn.gone.test/a.js"]}
+        )
+        monkeypatch.setattr(crawl, "async_playwright", chromium)
+
+        result = await crawl.crawl_site("prospect-site.com")
+
+        assert result.ok
+        assert ("https://cdn.gone.test/a.js", "namenotresolved") in chromium.aborted
+
+    async def test_a_navigation_whose_redirect_chain_passed_a_private_host_is_refused(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        robots_web.resolve_to("internal.test", "10.0.0.5")
+        chromium = FakeChromium(
+            pages={f"{SITE}/": page()}, chains={f"{SITE}/": [f"{INTERNAL}/hop"]}
+        )
+        monkeypatch.setattr(crawl, "async_playwright", chromium)
+
+        result = await crawl.crawl_site("prospect-site.com")
+
+        assert _refused(result)
+        assert result.text_extract == "" and result.signals.pages_fetched == 0
+
+    async def test_a_page_the_browser_lands_on_at_a_private_address_is_refused(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        robots_web.resolve_to("internal.test", "10.0.0.5")
+        chromium = FakeChromium(
+            pages={f"{INTERNAL}/": page()}, landings={f"{SITE}/": f"{INTERNAL}/"}
+        )
+        monkeypatch.setattr(crawl, "async_playwright", chromium)
+
+        assert _refused(await crawl.crawl_site("prospect-site.com"))
+
+    async def test_the_browser_blocks_service_workers_and_websockets_and_is_routed(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        chromium = FakeChromium(pages={f"{SITE}/": page()})
+        monkeypatch.setattr(crawl, "async_playwright", chromium)
+
+        await crawl.crawl_site("prospect-site.com")
+
+        assert chromium.context_kwargs[0]["service_workers"] == "block"
+        assert "**/*" in [pattern for pattern, _ in chromium.routes]
+        # The guard registered last, so it runs first (Playwright's order).
+        assert chromium.routes[-1][0] == "**/*"
+        await _a_websocket_is_closed_never_connected(chromium)
+
+    async def test_the_refusal_is_logged_with_the_host_and_no_page_text(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from structlog.testing import capture_logs
+
+        robots_web.resolve_to("prospect-site.com", "10.0.0.5")
+        monkeypatch.setattr(crawl, "async_playwright", FakeChromium())
+        with capture_logs() as logs:
+            await crawl.crawl_site("prospect-site.com")
+        entry = next(e for e in logs if e["event"] == "crawl.address_not_public")
+        assert set(entry) == {"event", "log_level", "url", "host"}
+        assert entry["host"] == "prospect-site.com"
+
+
+async def _a_websocket_is_closed_never_connected(chromium: FakeChromium) -> None:
+    assert len(chromium.web_socket_routes) == 1
+    _pattern, handler = chromium.web_socket_routes[0]
+    closed: list[bool] = []
+
+    class _Socket:
+        async def close(self, **kwargs: Any) -> None:  # noqa: ARG002
+            closed.append(True)
+
+        async def connect_to_server(self) -> None:
+            raise AssertionError("a WebSocket was connected to the server")
+
+    await handler(_Socket())
+    assert closed == [True]
+
+
+class TestAnAuditThatIsRefused:
+    async def _audit(self, monkeypatch: pytest.MonkeyPatch, chromium: FakeChromium) -> Any:
+        monkeypatch.setattr(technical_audit, "async_playwright", chromium)
+        return await technical_audit.audit_site(SITE)
+
+    @staticmethod
+    def _assert_nothing_read(signals: Any) -> None:
+        assert (signals.ok, signals.error_code) == (False, "ADDRESS_NOT_PUBLIC")
+        # Fresh signals: nothing read before the refusal is kept — not the page's
+        # facts, not what robots.txt said, not the AI crawler table.
+        assert signals == technical_audit.AuditSignals(
+            url=SITE, domain="prospect-site.com", ok=False, error_code="ADDRESS_NOT_PUBLIC"
+        )
+        assert signals.schema_types == [] and signals.ai_crawler_access == []
+        assert (signals.word_count, signals.h1_count, signals.open_graph_tag_count) == (0, 0, 0)
+        assert not (signals.has_title or signals.has_meta_description or signals.canonical_present)
+        assert (signals.lcp_ms, signals.cls, signals.inp_ms) == (None, None, None)
+        assert (signals.content_age_days, signals.http_status) == (None, None)
+        checks = technical_audit.build_checks(signals)
+        assert {c.key for c in checks} >= {"indexable", "sitemap_present", "meta_title"}
+        assert all(
+            (c.status, c.detail_code) == ("not_applicable", "ADDRESS_NOT_PUBLIC") for c in checks
+        )
+        outcome = technical_audit.score_audit(signals)
+        assert (outcome.scored, outcome.score) == (False, None)
+
+    async def test_a_start_name_that_is_private(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        robots_web.resolve_to("prospect-site.com", "10.1.2.3")
+        chromium = FakeChromium()
+        signals = await self._audit(monkeypatch, chromium)
+        self._assert_nothing_read(signals)
+        assert robots_web.requests == [] and chromium.launches == 0
+
+    async def test_a_homepage_redirect_into_a_private_name_is_never_requested(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        robots_web.serve(SITE, status=301, headers={"location": f"{INTERNAL}/"})
+        robots_web.resolve_to("internal.test", "10.0.0.5")
+        chromium = FakeChromium()
+        signals = await self._audit(monkeypatch, chromium)
+        self._assert_nothing_read(signals)
+        assert all(url.startswith(SITE) for url in robots_web.fetched())
+        assert chromium.launches == 0
+
+    async def test_a_homepage_redirect_to_the_metadata_address(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        robots_web.serve(SITE, status=302, headers={"location": METADATA})
+        signals = await self._audit(monkeypatch, FakeChromium())
+        self._assert_nothing_read(signals)
+        assert not [u for u in robots_web.fetched() if "169.254" in u]
+
+    async def test_a_robots_txt_redirect_is_not_swallowed_by_the_side_file_handler(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        robots_web.serve(f"{SITE}/robots.txt", status=301, headers={"location": METADATA})
+        chromium = FakeChromium()
+        signals = await self._audit(monkeypatch, chromium)
+        self._assert_nothing_read(signals)
+        assert chromium.launches == 0
+
+    async def test_a_sitemap_redirect_into_a_private_address(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        robots_web.serve(f"{SITE}/sitemap.xml", status=301, headers={"location": METADATA})
+        chromium = FakeChromium()
+        signals = await self._audit(monkeypatch, chromium)
+        self._assert_nothing_read(signals)
+        assert chromium.launches == 0
+
+    async def test_a_private_subresource(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        robots_web.resolve_to("internal.test", "10.0.0.5")
+        chromium = FakeChromium(
+            pages={f"{SITE}/": page()},
+            subresources={f"{SITE}/": [f"{INTERNAL}/x.js"]},
+        )
+        signals = await self._audit(monkeypatch, chromium)
+        self._assert_nothing_read(signals)
+        assert (f"{INTERNAL}/x.js", "blockedbyclient") in chromium.aborted
+
+    async def test_a_public_subresource_and_an_image_still_load_in_the_audit(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        chromium = FakeChromium(
+            pages={f"{SITE}/": page()},
+            subresources={f"{SITE}/": [f"{SITE}/app.js", f"{SITE}/hero.png"]},
+        )
+        signals = await self._audit(monkeypatch, chromium)
+        assert signals.ok
+        # No resource blocking in the audit: LCP needs the images.
+        assert chromium.aborted == []
+        assert {f"{SITE}/app.js", f"{SITE}/hero.png"} <= set(chromium.loaded)
+
+    async def test_a_redirect_chain_through_a_private_host(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        robots_web.resolve_to("internal.test", "10.0.0.5")
+        chromium = FakeChromium(
+            pages={f"{SITE}/": page()}, chains={f"{SITE}/": [f"{INTERNAL}/hop"]}
+        )
+        self._assert_nothing_read(await self._audit(monkeypatch, chromium))
+
+    async def test_the_audit_browser_is_guarded_like_the_crawl(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        chromium = FakeChromium(pages={f"{SITE}/": page()})
+        await self._audit(monkeypatch, chromium)
+        assert chromium.context_kwargs[0]["service_workers"] == "block"
+        assert chromium.routes[-1][0] == "**/*"
+        await _a_websocket_is_closed_never_connected(chromium)
+
+    async def test_the_refusal_is_logged_with_the_domain_only(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from structlog.testing import capture_logs
+
+        robots_web.resolve_to("prospect-site.com", "10.1.2.3")
+        with capture_logs() as logs:
+            await self._audit(monkeypatch, FakeChromium())
+        entry = next(e for e in logs if e["event"] == "audit.address_not_public")
+        assert set(entry) == {"event", "log_level", "domain"}
+
+
+class TestAPageThatEndsAtANonPublicAddress:
+    """A page at an address that is not public once its facts are read: nothing is kept."""
+
+    async def test_the_crawl_keeps_nothing_from_it(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        robots_web.resolve_to("internal.test", "10.0.0.5")
+        chromium = FakeChromium(
+            pages={f"{SITE}/": page(), f"{INTERNAL}/": page()},
+            drifts={f"{SITE}/": f"{INTERNAL}/"},
+        )
+        monkeypatch.setattr(crawl, "async_playwright", chromium)
+
+        result = await crawl.crawl_site("prospect-site.com")
+
+        assert _refused(result)
+        assert result.text_extract == "" and result.signals.pages_fetched == 0
+
+    async def test_the_audit_keeps_nothing_from_it(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        robots_web.resolve_to("internal.test", "10.0.0.5")
+        chromium = FakeChromium(
+            pages={f"{SITE}/": page(), f"{INTERNAL}/": page()},
+            drifts={f"{SITE}/": f"{INTERNAL}/"},
+        )
+        monkeypatch.setattr(technical_audit, "async_playwright", chromium)
+
+        signals = await technical_audit.audit_site(SITE)
+
+        TestAnAuditThatIsRefused._assert_nothing_read(signals)  # noqa: SLF001
+        assert signals.h1_count == 0 and signals.word_count == 0 and not signals.has_title
+
+
+class TestTheAddressChromiumConnectedTo:
+    def _fake(self, addr: Any, **kwargs: Any) -> FakeChromium:
+        return FakeChromium(
+            pages={f"{SITE}/": page()}, server_addrs={f"{SITE}/": addr}, **kwargs
+        )
+
+    @pytest.mark.parametrize(
+        "addr",
+        [{"ipAddress": "10.0.0.5", "port": 443}, {"ipAddress": "[::1]", "port": 443},
+         {"ipAddress": "[fe80::1%eth0]", "port": 443}],
+    )
+    async def test_a_non_public_address_ends_the_crawl_and_the_audit(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch, addr: dict[str, Any]
+    ) -> None:
+        monkeypatch.setattr(crawl, "async_playwright", self._fake(addr))
+        result = await crawl.crawl_site("prospect-site.com")
+        assert _refused(result) and result.text_extract == ""
+
+        monkeypatch.setattr(technical_audit, "async_playwright", self._fake(addr))
+        TestAnAuditThatIsRefused._assert_nothing_read(  # noqa: SLF001
+            await technical_audit.audit_site(SITE)
+        )
+
+    @pytest.mark.parametrize(
+        "addr",
+        [{"ipAddress": "93.184.216.34", "port": 443},
+         {"ipAddress": "[2606:4700:10::ac42:93f3]", "port": 443},
+         None, {}, {"ipAddress": None}, {"ipAddress": "not an address"},
+         {"ipAddress": 12}, "10.0.0.5"],
+    )
+    async def test_a_public_missing_or_unreadable_address_is_ignored(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch, addr: Any
+    ) -> None:
+        monkeypatch.setattr(crawl, "async_playwright", self._fake(addr))
+        assert (await crawl.crawl_site("prospect-site.com")).ok
+
+        monkeypatch.setattr(technical_audit, "async_playwright", self._fake(addr))
+        assert (await technical_audit.audit_site(SITE)).ok
+
+    async def test_a_subresource_connected_to_a_private_address_is_caught(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A connection to a non-public address ends the run, and nothing is kept.
+        chromium = FakeChromium(
+            pages={f"{SITE}/": page()},
+            subresources={f"{SITE}/": [f"{SITE}/app.js"]},
+            server_addrs={f"{SITE}/app.js": {"ipAddress": "127.0.0.1", "port": 443}},
+        )
+        monkeypatch.setattr(technical_audit, "async_playwright", chromium)
+        TestAnAuditThatIsRefused._assert_nothing_read(  # noqa: SLF001
+            await technical_audit.audit_site(SITE)
+        )
+
+    async def test_a_listener_still_reading_when_the_page_is_done_is_waited_for(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import asyncio
+
+        late = FakeChromium(pages={f"{SITE}/": page()})
+
+        async def slow_respond(url: str) -> None:
+            async def server_addr() -> Any:
+                await asyncio.sleep(0.05)
+                return {"ipAddress": "10.0.0.5", "port": 443}
+
+            response = SimpleNamespace(url=url, server_addr=server_addr)
+            for event, handler in late.listeners:
+                if event == "response":
+                    asyncio.ensure_future(handler(response))  # as Playwright does
+
+        late.respond = slow_respond  # type: ignore[method-assign]
+        monkeypatch.setattr(technical_audit, "async_playwright", late)
+        TestAnAuditThatIsRefused._assert_nothing_read(  # noqa: SLF001
+            await technical_audit.audit_site(SITE)
+        )
+
+
+class TestWebRtcMeasures:
+    async def test_both_browsers_register_the_init_script(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        for module, run in (
+            (crawl, lambda: crawl.crawl_site("prospect-site.com")),
+            (technical_audit, lambda: technical_audit.audit_site(SITE)),
+        ):
+            chromium = FakeChromium(pages={f"{SITE}/": page()})
+            monkeypatch.setattr(module, "async_playwright", chromium)
+            await run()
+            joined = " ".join(chromium.init_scripts)
+            assert "window.RTCPeerConnection = undefined" in joined
+            assert "window.webkitRTCPeerConnection = undefined" in joined
+
+    async def test_both_launches_pass_the_chromium_webrtc_policy(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        flag = "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"
+        for module, run in (
+            (crawl, lambda: crawl.crawl_site("prospect-site.com")),
+            (technical_audit, lambda: technical_audit.audit_site(SITE)),
+        ):
+            chromium = FakeChromium(pages={f"{SITE}/": page()})
+            monkeypatch.setattr(module, "async_playwright", chromium)
+            await run()
+            (args,) = chromium.launch_args
+            assert flag in args
+            # What was already passed is still passed.
+            assert {"--no-sandbox", "--disable-dev-shm-usage"} <= set(args)
+
+
+class TestAMalformedRedirectIsNoAnswer:
+    async def test_a_robots_txt_redirect_with_a_bad_port(self, robots_web: Any) -> None:
+        robots_web.serve(
+            f"{SITE}/robots.txt", status=301,
+            headers={"location": "https://prospect-site.com:notaport/robots.txt"},
+        )
+        assert (await crawl.RobotsGate(user_agent="ua").file(SITE)).status is None
+
+    async def test_a_robots_txt_redirect_that_is_not_a_url(self, robots_web: Any) -> None:
+        robots_web.serve(
+            f"{SITE}/robots.txt", status=301, headers={"location": "http://[::1/robots.txt"}
+        )
+        assert (await crawl.RobotsGate(user_agent="ua").file(SITE)).status is None
+
+    async def test_a_page_redirect_with_a_bad_port(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        robots_web.serve(
+            SITE, status=301, headers={"location": "https://prospect-site.com:notaport/x"}
+        )
+        gate = crawl.RobotsGate(user_agent="ua")
+
+        async def allows(url: str) -> bool:  # robots.txt is not what is under test
+            return True
+
+        monkeypatch.setattr(gate, "allows", allows)
+        followed = await gate.follow("HEAD", SITE)
+        assert followed.response is None and followed.disallowed is False
+
+    async def test_a_page_redirect_that_is_not_a_url(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        robots_web.serve(SITE, status=301, headers={"location": "http://[::1/x"})
+        gate = crawl.RobotsGate(user_agent="ua")
+
+        async def allows(url: str) -> bool:
+            return True
+
+        monkeypatch.setattr(gate, "allows", allows)
+        followed = await gate.follow("HEAD", SITE)
+        assert followed.response is None
+
+
+@pytest.fixture
+def quick_settle(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Intermediate settles give up at once; the final one waits for a slow listener."""
+    monkeypatch.setattr(egress, "SETTLE_TIMEOUT_S", 0.001)
+    monkeypatch.setattr(egress, "FINAL_SETTLE_TIMEOUT_S", 5.0)
+
+
+PRIVATE_ADDR = {"ipAddress": "10.0.0.5", "port": 443}
+
+
+def _site_with_about(**extra: Any) -> FakeChromium:
+    """A homepage with facts, linking to /about."""
+    return FakeChromium(
+        pages={f"{SITE}/": page("/about"), f"{SITE}/about": page()}, **extra
+    )
+
+
+class TestARefusalKeepsNothingAlreadyRead:
+    """A refusal can arrive after a page's facts were read. None of them is kept.
+
+    Each test first shows, on the same arrangement without the refusal, that
+    there were facts to keep, so "nothing kept" is not true of an empty page.
+    """
+
+    @pytest.mark.parametrize("how", ["subresource", "connected_address", "redirect_chain"])
+    async def test_a_secondary_page_refused_after_the_home_page_was_read(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch, how: str
+    ) -> None:
+        robots_web.resolve_to("internal.test", "10.0.0.5")
+        monkeypatch.setattr(crawl, "async_playwright", _site_with_about())
+        clean = await crawl.crawl_site("prospect-site.com")
+        # The control: the home page and /about were read, and left facts.
+        assert clean.ok and clean.signals.pages_fetched == 2
+        assert clean.signals.word_count > 0 and clean.signals.has_title and clean.titles
+
+        extra: dict[str, Any] = {
+            "subresource": {"subresources": {f"{SITE}/about": [f"{INTERNAL}/x.js"]}},
+            "connected_address": {"server_addrs": {f"{SITE}/about": PRIVATE_ADDR}},
+            "redirect_chain": {"chains": {f"{SITE}/about": [f"{INTERNAL}/hop"]}},
+        }[how]
+        chromium = _site_with_about(**extra)
+        monkeypatch.setattr(crawl, "async_playwright", chromium)
+
+        result = await crawl.crawl_site("prospect-site.com")
+
+        assert chromium.navigations == [f"{SITE}/", f"{SITE}/about"]  # home was read first
+        assert _refused(result)
+        assert result.signals.urls_fetched == [] and result.signals.pages_fetched == 0
+
+    async def test_a_crawl_refused_at_the_final_settle(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch, quick_settle: None
+    ) -> None:
+        chromium = _site_with_about(
+            server_addrs={f"{SITE}/about": PRIVATE_ADDR}, listener_delays={f"{SITE}/about": 0.2}
+        )
+        monkeypatch.setattr(crawl, "async_playwright", chromium)
+
+        result = await crawl.crawl_site("prospect-site.com")
+
+        # Both pages were read before the listener answered; none of it is kept.
+        assert chromium.navigations == [f"{SITE}/", f"{SITE}/about"]
+        assert chromium.evaluations == 2
+        assert _refused(result)
+
+    async def test_an_audit_refused_at_the_final_settle(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch, quick_settle: None
+    ) -> None:
+        robots_web.serve(f"{SITE}/robots.txt", body="User-agent: GPTBot\nDisallow: /\n")
+        monkeypatch.setattr(
+            technical_audit, "async_playwright", FakeChromium(pages={f"{SITE}/": rich_page()})
+        )
+        clean = await technical_audit.audit_site(SITE)
+        # The control: facts of every kind the audit stores.
+        assert clean.ok and clean.schema_types == ["Organization"]
+        assert (clean.word_count, clean.h1_count, clean.lcp_ms) == (640, 1, 1800)
+        assert clean.has_title and clean.cls is not None and clean.content_age_days is not None
+        assert any(a.verdict is AccessVerdict.BLOCKED for a in clean.ai_crawler_access)
+
+        chromium = FakeChromium(
+            pages={f"{SITE}/": rich_page()},
+            server_addrs={f"{SITE}/": PRIVATE_ADDR}, listener_delays={f"{SITE}/": 0.2},
+        )
+        monkeypatch.setattr(technical_audit, "async_playwright", chromium)
+
+        signals = await technical_audit.audit_site(SITE)
+
+        assert chromium.evaluations == 1  # the page was read first
+        TestAnAuditThatIsRefused._assert_nothing_read(signals)  # noqa: SLF001
+
+    async def test_the_stored_audit_row_holds_nothing_read(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch, quick_settle: None
+    ) -> None:
+        from avp_api.models.technical_audit import AuditStatus, TechnicalAudit
+        from avp_api.services import audit_runner
+
+        robots_web.serve(f"{SITE}/robots.txt", body="User-agent: GPTBot\nDisallow: /\n")
+        chromium = FakeChromium(
+            pages={f"{SITE}/": rich_page()},
+            server_addrs={f"{SITE}/": PRIVATE_ADDR}, listener_delays={f"{SITE}/": 0.2},
+        )
+        monkeypatch.setattr(technical_audit, "async_playwright", chromium)
+        signals = await technical_audit.audit_site(SITE)
+
+        row = TechnicalAudit()
+        audit_runner._apply(row, signals, technical_audit.score_audit(signals))  # noqa: SLF001
+
+        assert (row.status, row.error_code, row.pages_crawled) == (
+            AuditStatus.FAILED, "ADDRESS_NOT_PUBLIC", 0
+        )
+        assert row.schema_types == [] and (row.word_count, row.h1_count) == (0, 0)
+        assert (row.lcp_ms, row.cls, row.content_age_days) == (None, None, None)
+        assert row.technical_foundation is None
+        assert not (row.has_organization_schema or row.canonical_present or row.has_sitemap)
+
+
+class TestAListenerThatNeverAnswers:
+    """A connected address that was never read is not known to be public: fail closed.
+
+    Not as `ADDRESS_NOT_PUBLIC` — nothing says the address is not public — but as
+    the plain browser failure, with nothing kept.
+    """
+
+    @pytest.fixture(autouse=True)
+    def impatient(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(egress, "SETTLE_TIMEOUT_S", 0.001)
+        monkeypatch.setattr(egress, "FINAL_SETTLE_TIMEOUT_S", 0.05)
+
+    async def test_the_crawl_ends_as_a_browser_error_and_keeps_nothing(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from structlog.testing import capture_logs
+
+        chromium = _site_with_about(listener_delays={f"{SITE}/about": None})
+        monkeypatch.setattr(crawl, "async_playwright", chromium)
+
+        with capture_logs() as logs:
+            result = await crawl.crawl_site("prospect-site.com")
+
+        assert (result.ok, result.error_code) == (False, "BROWSER_ERROR")
+        assert result.signals == crawl.CrawlSignals(
+            final_url=TYPED, registrable_domain="prospect-site.com"
+        )
+        assert result.text_extract == "" and result.titles == []
+        assert chromium.evaluations == 2  # both pages were read, and nothing is kept
+        assert chromium.cancelled == [f"{SITE}/about"]  # the leftover listener was cancelled
+        entry = next(e for e in logs if e["event"] == "crawl.egress_unverified")
+        assert set(entry) == {"event", "log_level", "url"}
+        assert not [e for e in logs if e["event"] == "crawl.address_not_public"]
+
+    async def test_the_audit_fails_as_a_browser_error_and_keeps_nothing(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from structlog.testing import capture_logs
+
+        robots_web.serve(f"{SITE}/robots.txt", body="User-agent: GPTBot\nDisallow: /\n")
+        chromium = FakeChromium(
+            pages={f"{SITE}/": rich_page()}, listener_delays={f"{SITE}/": None}
+        )
+        monkeypatch.setattr(technical_audit, "async_playwright", chromium)
+
+        with capture_logs() as logs:
+            signals = await technical_audit.audit_site(SITE)
+
+        assert signals == technical_audit.AuditSignals(
+            url=SITE, domain="prospect-site.com", ok=False, error_code="BROWSER_ERROR"
+        )
+        assert chromium.evaluations == 1 and chromium.cancelled == [f"{SITE}/"]
+        # An unknown is not a finding about the site: the plain failure check.
+        (check,) = technical_audit.build_checks(signals)
+        assert (check.key, check.status, check.detail_code) == (
+            "site_reachable", "error", "BROWSER_ERROR"
+        )
+        entry = next(e for e in logs if e["event"] == "audit.egress_unverified")
+        assert set(entry) == {"event", "log_level", "domain"}
+        assert not [e for e in logs if e["event"] == "audit.address_not_public"]
+
+    async def test_a_listener_that_answers_in_time_is_not_a_failure(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        chromium = FakeChromium(
+            pages={f"{SITE}/": rich_page()},
+            server_addrs={f"{SITE}/": {"ipAddress": "93.184.216.34", "port": 443}},
+            listener_delays={f"{SITE}/": 0.01},
+        )
+        monkeypatch.setattr(technical_audit, "async_playwright", chromium)
+        assert (await technical_audit.audit_site(SITE)).ok
+
+
+def _assert_fresh(kind: str, result: Any, code: str) -> None:
+    """The run ended as `code` and kept nothing it had read: a crawl result or audit signals."""
+    if kind == "crawl":
+        assert (result.ok, result.error_code) == (False, code)
+        assert result.signals == crawl.CrawlSignals(
+            final_url=TYPED, registrable_domain="prospect-site.com"
+        )
+        assert result.text_extract == "" and result.titles == []
+    else:
+        assert result == technical_audit.AuditSignals(
+            url=SITE, domain="prospect-site.com", ok=False, error_code=code
+        )
+
+
+async def _run(
+    kind: str, monkeypatch: pytest.MonkeyPatch, chromium: FakeChromium
+) -> Any:
+    if kind == "crawl":
+        monkeypatch.setattr(crawl, "async_playwright", chromium)
+        return await crawl.crawl_site("prospect-site.com")
+    monkeypatch.setattr(technical_audit, "async_playwright", chromium)
+    return await technical_audit.audit_site(SITE)
+
+
+def _a_site_with_facts(kind: str, **extra: Any) -> FakeChromium:
+    return FakeChromium(
+        pages={f"{SITE}/": rich_page() if kind == "audit" else page()}, **extra
+    )
+
+
+def _impatient(monkeypatch: pytest.MonkeyPatch, how: str) -> None:
+    monkeypatch.setattr(egress, "SETTLE_TIMEOUT_S", 0.001)
+    monkeypatch.setattr(
+        egress, "FINAL_SETTLE_TIMEOUT_S", 0.05 if how == "never_answers" else 5.0
+    )
+
+
+def _listener_trouble(how: str, url: str) -> dict[str, Any]:
+    """`FakeChromium` arguments: the response at `url` is read late, as private, or never."""
+    if how == "never_answers":
+        return {"listener_delays": {url: None}}
+    return {"server_addrs": {url: PRIVATE_ADDR}, "listener_delays": {url: 0.1}}
+
+
+EXPECTED_AFTER = {"late_refusal": "ADDRESS_NOT_PUBLIC", "never_answers": "BROWSER_ERROR"}
+
+
+class TestAFailingCloseDoesNotMaskTheEgressOutcome:
+    """A browser that fails to close, while an egress outcome is on its way out, replaces it.
+
+    The outcome stands, and nothing that was read is kept.
+    """
+
+    @pytest.mark.parametrize("kind", ["crawl", "audit"])
+    @pytest.mark.parametrize("how", ["late_refusal", "never_answers"])
+    async def test_a_listener_outcome_stands(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch, kind: str, how: str
+    ) -> None:
+        _impatient(monkeypatch, how)
+        chromium = _a_site_with_facts(
+            kind, close_error=True, **_listener_trouble(how, f"{SITE}/")
+        )
+
+        result = await _run(kind, monkeypatch, chromium)
+
+        assert chromium.evaluations == 1  # the page was read, and then it was not kept
+        _assert_fresh(kind, result, EXPECTED_AFTER[how])
+
+    @pytest.mark.parametrize("kind", ["crawl", "audit"])
+    async def test_a_refusal_the_gate_raised_stands(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch, kind: str
+    ) -> None:
+        real = crawl.RobotsGate.allows
+
+        async def allows(self: Any, url: str) -> bool:
+            if url == f"{SITE}/":  # where the browser landed: the gate's own verdict
+                raise egress.EgressRefused("prospect-site.com", "10.0.0.5")
+            return await real(self, url)
+
+        monkeypatch.setattr(crawl.RobotsGate, "allows", allows)
+        chromium = _a_site_with_facts(kind, close_error=True)
+
+        result = await _run(kind, monkeypatch, chromium)
+
+        _assert_fresh(kind, result, "ADDRESS_NOT_PUBLIC")
+
+    @pytest.mark.parametrize("kind", ["crawl", "audit"])
+    async def test_a_close_that_fails_with_nothing_wrong_is_still_a_browser_error(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch, kind: str
+    ) -> None:
+        result = await _run(kind, monkeypatch, _a_site_with_facts(kind, close_error=True))
+        assert result.error_code == "BROWSER_ERROR"  # as before: nothing egress changed here
+
+
+class TestEveryWayOutOfTheBrowserIsChecked:
+    """No result leaves a browser run without the final check — the early returns included.
+
+    Each test runs the arrangement twice: once plain, to show which return it
+    reaches and what it keeps, and once with a response whose address is read late
+    as private, or never.
+    """
+
+    # path -> (the plain outcome's error code, the URL the response listener sees)
+    PATHS: dict[str, tuple[str, str]] = {
+        "http_error": ("HTTP_404", f"{SITE}/"),
+        "no_page": ("FETCH_FAILED", f"{SITE}/"),
+        "robots_landing": ("ROBOTS_DISALLOWED", "https://elsewhere-host.com/"),
+    }
+
+    @staticmethod
+    def _arrangement(kind: str, path: str, robots_web: Any, **extra: Any) -> FakeChromium:
+        if path == "http_error":
+            return FakeChromium(pages={f"{SITE}/": {"status": 404, "links": []}}, **extra)
+        if path == "no_page":
+            return FakeChromium(pages={f"{SITE}/": page()}, no_response={f"{SITE}/"}, **extra)
+        robots_web.serve(
+            "https://elsewhere-host.com/robots.txt", body="User-agent: *\nDisallow: /\n"
+        )
+        return FakeChromium(
+            pages={"https://elsewhere-host.com/": page()},
+            landings={f"{SITE}/": "https://elsewhere-host.com/"}, **extra,
+        )
+
+    @pytest.mark.parametrize("kind", ["crawl", "audit"])
+    @pytest.mark.parametrize("path", list(PATHS))
+    @pytest.mark.parametrize("how", ["late_refusal", "never_answers"])
+    async def test_a_response_read_late_or_never_ends_the_run(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch, kind: str, path: str, how: str
+    ) -> None:
+        plain_code, listener_url = self.PATHS[path]
+
+        plain = await _run(kind, monkeypatch, self._arrangement(kind, path, robots_web))
+        # The control: this is the return the arrangement reaches when nothing is wrong.
+        assert plain.error_code == plain_code
+        if path == "http_error":
+            # ... and it kept the browser's status, which is what the final check guards.
+            assert (plain.signals if kind == "crawl" else plain).http_status == 404
+
+        _impatient(monkeypatch, how)
+        chromium = self._arrangement(
+            kind, path, robots_web, **_listener_trouble(how, listener_url)
+        )
+        result = await _run(kind, monkeypatch, chromium)
+
+        _assert_fresh(kind, result, EXPECTED_AFTER[how])
+
+
+class TestTheClientIsStillCreated:
+    async def test_a_refused_site_is_unclassifiable_with_the_reason(
+        self, client: AsyncClient, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        robots_web.resolve_to("prospect-site.com", "10.0.0.5")
+        chromium = FakeChromium()
+        monkeypatch.setattr(crawl, "async_playwright", chromium)
+        await client.post(
+            f"{BASE}/auth/sign-up",
+            json={"agencyName": "Egress Agency", "fullName": "Op", "email": "egress@test.example",
+                  "password": "correct-horse-battery-staple"},
+        )
+
+        resp = await client.post(f"{BASE}/clients", json={"url": SITE, "classify": True})
+
+        assert resp.status_code == 201, resp.text
+        body = resp.json()
+        assert body["classificationStatus"] == "unclassifiable"
+        assert body["classificationReasonCode"] == "ADDRESS_NOT_PUBLIC"
+        assert body["industry"] is None
+        assert chromium.launches == 0 and robots_web.requests == []
+        assert body["crawl"] == EMPTY_CRAWL_SUMMARY
+
+    async def test_a_site_refused_after_its_home_page_was_read_returns_no_facts(
+        self, client: AsyncClient, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        robots_web.resolve_to("internal.test", "10.0.0.5")
+        chromium = _site_with_about(subresources={f"{SITE}/about": [f"{INTERNAL}/x.js"]})
+        monkeypatch.setattr(crawl, "async_playwright", chromium)
+        await _sign_up(client, "egress2@test.example")
+
+        resp = await client.post(f"{BASE}/clients", json={"url": SITE, "classify": True})
+
+        assert resp.status_code == 201, resp.text
+        body = resp.json()
+        assert chromium.navigations == [f"{SITE}/", f"{SITE}/about"]  # the home page was read
+        assert body["classificationReasonCode"] == "ADDRESS_NOT_PUBLIC"
+        # What the response says about the crawl: none of what was read.
+        assert body["crawl"] == EMPTY_CRAWL_SUMMARY
+
+
+class TestTheStoredAuditOfARefusedSite:
+    async def test_the_audit_endpoint_returns_and_stores_nothing_that_was_read(
+        self, client: AsyncClient, session: Any, robots_web: Any,
+        monkeypatch: pytest.MonkeyPatch, quick_settle: None,
+    ) -> None:
+        from avp_api import ids
+        from avp_api.models import Client, Scan
+        from avp_api.models.scan import ScanStatus
+        from avp_api.services import audit_runner
+
+        site = "https://helpscout.com"
+        robots_web.serve(f"{site}/robots.txt", body="User-agent: GPTBot\nDisallow: /\n")
+        chromium = FakeChromium(
+            pages={f"{site}/": rich_page()},
+            server_addrs={f"{site}/": PRIVATE_ADDR}, listener_delays={f"{site}/": 0.2},
+        )
+        monkeypatch.setattr(audit_runner, "audit_site", technical_audit.audit_site)
+        monkeypatch.setattr(technical_audit, "async_playwright", chromium)
+        await _sign_up(client, "egress3@test.example")
+        cid = (await client.post(
+            f"{BASE}/clients", json={"url": "helpscout.com", "classify": False}
+        )).json()["id"]
+        row = await session.get(Client, cid)
+        scan = Scan(
+            id=ids.new_id(ids.SCAN), client_id=cid, agency_id=row.agency_id,
+            status=ScanStatus.QUEUED,
+        )
+        session.add(scan)
+        await session.commit()
+
+        resp = await client.post(f"{BASE}/scans/{scan.id}/audit")
+
+        assert resp.status_code == 201, resp.text
+        body = resp.json()
+        assert chromium.evaluations == 1  # the page was read, then the refusal came
+        assert (body["status"], body["errorCode"], body["pagesCrawled"]) == (
+            "failed", "ADDRESS_NOT_PUBLIC", 0
+        )
+        assert body["schemaTypes"] == [] and (body["wordCount"], body["h1Count"]) == (0, 0)
+        assert (body["lcpMs"], body["cls"], body["contentAgeDays"]) == (None, None, None)
+        assert body["technicalFoundation"] is None
+        assert body["checks"] and all(
+            (c["status"], c["detailCode"]) == ("not_applicable", "ADDRESS_NOT_PUBLIC")
+            for c in body["checks"]
+        )
+        # No AI crawler table was stored, so the Crawler screen has nothing to offer.
+        access = await client.get(f"{BASE}/clients/{cid}/ai-crawler-access")
+        assert access.status_code == 200 and access.json() is None
+
+
+async def _sign_up(client: AsyncClient, email: str) -> None:
+    resp = await client.post(
+        f"{BASE}/auth/sign-up",
+        json={"agencyName": "Egress Agency", "fullName": "Op", "email": email,
+              "password": "correct-horse-battery-staple"},
+    )
+    assert resp.status_code == 201, resp.text
+
+
+EMPTY_CRAWL_SUMMARY = {
+    "pagesFetched": 0, "urlsFetched": [], "schemaTypes": [], "wordCount": 0, "h1Count": 0,
+    "hasTitle": False, "hasMetaDescription": False, "detectedLanguage": None,
+}
 
 
 def test_the_product_token_is_the_one_in_the_user_agent() -> None:

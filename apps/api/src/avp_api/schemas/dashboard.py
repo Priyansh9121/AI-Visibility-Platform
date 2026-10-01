@@ -21,6 +21,11 @@ class ScanSummaryOut(ApiModel):
     client_name: str
     client_domain: str
     status: ScanStatus
+    # Why a partial or failed scan ended as it did: `scans.error_code`, OUR OWN
+    # constant (`scan_executor`, `scan_runner`), never a vendor message. Null when
+    # there is nothing to say. The web turns (status, code) into a sentence and
+    # never prints the code; `error_detail` is deliberately not projected.
+    error_code: str | None = None
     # Null until Epic 5 scores the scan — and null also means INSUFFICIENT_DATA,
     # which the UI must render as "—", never as zero.
     composite_score: Decimal | None = None

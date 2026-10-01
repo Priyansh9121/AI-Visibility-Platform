@@ -38,6 +38,15 @@ TEST_DATABASE_URL = os.environ.get(
 )
 TEST_REDIS_URL = os.environ.get("AVP_TEST_REDIS_URL", "redis://127.0.0.1:6379/15")
 
+# The one origin the suite's "browser" comes from. The `settings` fixture lists
+# exactly this in CORS_ALLOW_ORIGINS and the `client` fixture sends it on every
+# request, because the API refuses a write whose Origin is not a listed one, and
+# a write that carries a session cookie and names none (`avp_api/origin_check.py`)
+# — a real browser's writes name theirs, and a bare HTTP client's do not. A second
+# client built in a test that signs in and then writes must send it too:
+# `headers={"Origin": client.headers["Origin"]}`.
+TEST_ORIGIN = "http://localhost:3000"
+
 
 @pytest.fixture(scope="session")
 def settings() -> Settings:
@@ -76,6 +85,10 @@ def settings() -> Settings:
         argon2_memory_cost_kib=8,
         argon2_parallelism=1,
         default_seat_limit=3,
+        # Pinned for the same hermetic reason as the rest: a CORS_ALLOW_ORIGINS
+        # in the developer's shell would otherwise change which Origin the
+        # suite's client is allowed to send.
+        cors_allow_origins=[TEST_ORIGIN],
     )
 
 
@@ -252,7 +265,13 @@ async def client(  # noqa: ANN001
 
     transport = ASGITransport(app=app)
     async with AsyncClient(
-        transport=transport, base_url="http://testserver", follow_redirects=True
+        transport=transport,
+        base_url="http://testserver",
+        follow_redirects=True,
+        # What a browser on the web app sends with every write. Tests that need
+        # a request with another Origin, or none, build a second client; see
+        # `test_origin_check.py`.
+        headers={"Origin": TEST_ORIGIN},
     ) as ac:
         yield ac
 
@@ -496,6 +515,21 @@ def stub_chain_externals(monkeypatch, request):  # noqa: ANN001, ANN201
         )
 
 
+@pytest.fixture(autouse=True)
+def no_real_dns(monkeypatch):  # noqa: ANN001, ANN201
+    """No test reaches the real resolver (2026-10-01, the egress guard).
+
+    A test that exercises the crawler's fetching overrides it: `robots_web`
+    with a `FakeWeb`, `test_egress.py` with its own table.
+    """
+    from avp_api.services import egress
+
+    async def refuse(host, port):  # noqa: ANN001, ANN202, ARG001
+        raise OSError("real DNS is not allowed in tests")
+
+    monkeypatch.setattr(egress, "_getaddrinfo", refuse)
+
+
 class FakeWeb:
     """The sites the robots gate talks to, served from memory — 2026-09-29.
 
@@ -503,9 +537,19 @@ class FakeWeb:
     answers 404. Every request the gate makes is recorded in `requests` as
     `(method, url, user_agent)`, so a test can assert what was — and was not —
     fetched. `fail(url, exc)` makes a URL raise a transport error instead.
+
+    DNS is faked too (2026-10-01, the egress guard): every host resolves to
+    `PUBLIC_ADDRESS` unless `resolve_to(host, *addresses)` says otherwise —
+    `dns_fails(host)` makes a name not resolve. Nothing here touches the real
+    network, and `lookups` records every name asked for.
     """
 
+    # A public address that is not in a documentation range (those are refused).
+    PUBLIC_ADDRESS = "93.184.216.34"
+
     def __init__(self) -> None:
+        self.resolutions: dict[str, list[str] | Exception] = {}
+        self.lookups: list[str] = []
         self.routes: dict[str, tuple[int, str, dict[str, str]]] = {}
         self.failures: dict[str, Exception] = {}
         self.requests: list[tuple[str, str, str]] = []
@@ -518,6 +562,27 @@ class FakeWeb:
 
     def fail(self, url: str, exc: Exception) -> None:
         self.failures[url] = exc
+
+    def resolve_to(self, host: str, *addresses: str) -> None:
+        self.resolutions[host.lower()] = list(addresses)
+
+    def dns_fails(self, host: str) -> None:
+        self.resolutions[host.lower()] = OSError(f"{host} did not resolve")
+
+    async def getaddrinfo(self, host: str, port: int) -> list[tuple]:
+        import socket
+
+        self.lookups.append(host)
+        found = self.resolutions.get(host.lower(), [self.PUBLIC_ADDRESS])
+        if isinstance(found, Exception):
+            raise found
+        return [
+            (
+                socket.AF_INET6 if ":" in address else socket.AF_INET,
+                socket.SOCK_STREAM, 6, "", (address, port),
+            )
+            for address in found
+        ]
 
     def handler(self, request):  # noqa: ANN001, ANN201
         import httpx
@@ -543,7 +608,7 @@ def robots_web(monkeypatch):  # noqa: ANN001, ANN201
     """
     import httpx
 
-    from avp_api.services import crawl
+    from avp_api.services import crawl, egress
 
     web = FakeWeb()
     real = httpx.AsyncClient
@@ -557,4 +622,7 @@ def robots_web(monkeypatch):  # noqa: ANN001, ANN201
         )
 
     monkeypatch.setattr(crawl.RobotsGate, "_client", client)
+    # Every host resolves to a public address unless a test says otherwise, so
+    # the gate's egress check never reaches the real resolver.
+    monkeypatch.setattr(egress, "_getaddrinfo", web.getaddrinfo)
     return web

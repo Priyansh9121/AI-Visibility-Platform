@@ -109,8 +109,14 @@ FORMULA_VERSION = "v5"
 # Why Technical Foundation can be missing — the reason `compute_score` records.
 # NOT_YET_MEASURED: no audit, or one that could not read the site.
 # CRAWL_DISALLOWED (2026-09-29): the site's robots.txt forbids its pages to
-# this crawler. Neither moves the formula: both exclude and redistribute.
-TECHNICAL_FOUNDATION_EXCLUSIONS = ("NOT_YET_MEASURED", "CRAWL_DISALLOWED")
+# this crawler.
+# CRAWL_ADDRESS_NOT_PUBLIC: the site's address (or a redirect's) is not a public
+# one, so the crawler's egress guard refused to connect.
+# None moves the formula: each excludes and redistributes, and the reason
+# enters the digest only when set.
+TECHNICAL_FOUNDATION_EXCLUSIONS = (
+    "NOT_YET_MEASURED", "CRAWL_DISALLOWED", "CRAWL_ADDRESS_NOT_PUBLIC",
+)
 
 TWO_PLACES = Decimal("0.01")
 HUNDRED = Decimal("100")

@@ -14,13 +14,15 @@
  * Because it leaves the address bar, a reload of this page does not keep the
  * sign-up alive: with no ticket to read, the page shows the no-code state, in
  * the words /invite and /reset-password use for the same thing, and the person
- * starts again. A ticket the API refuses, or an API that does not answer, is
- * the expired state.
+ * starts again. A ticket the API refuses (a 400) is the expired state. An API
+ * that does not answer, or answers 5xx, is not a refusal and is the unreachable
+ * state, with a Try again that peeks once more.
  */
 
 import { useEffect, useRef, useState, type JSX } from 'react';
 import { Button } from '@avp/design-system';
-import { api, ApiProblem } from '@/lib/api';
+import { api } from '@/lib/api';
+import { apiWasAway } from '@/lib/apiAway';
 import { takeGoogleTicket } from '@/lib/googleTicket';
 import {
   GoogleSignUpPanel,
@@ -33,6 +35,8 @@ export default function GoogleSignUpRoute(): JSX.Element {
   // read the already-cleared address bar a second time and show no-code.
   const taken = useRef<string | null>(null);
   const [state, setState] = useState<GoogleSignUpState>({ kind: 'loading' });
+  // Bumped by "Try again": re-runs the peek, which does not spend the ticket.
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     taken.current ??= takeGoogleTicket(window);
@@ -49,16 +53,17 @@ export default function GoogleSignUpRoute(): JSX.Element {
         if (!cancelled) setState({ kind: 'ask', pending });
       } catch (err) {
         if (cancelled) return;
-        // 400 is the ticket's own verdict; anything else is the API being
-        // away, and the honest thing is still "start again".
-        if (err instanceof ApiProblem) setState({ kind: 'expired' });
-        else setState({ kind: 'expired' });
+        // The API's own refusal of the ticket (a 400) is "expired". No answer
+        // at all, or a 5xx (a proxy's non-JSON 502 reaches here as an
+        // ApiProblem carrying that status), is the API being away: the ticket
+        // may be fine, so say that and offer another try.
+        setState({ kind: apiWasAway(err) ? 'unreachable' : 'expired' });
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [attempt]);
 
   return (
     <main className="mx-auto max-w-page px-6 py-18">
@@ -71,6 +76,10 @@ export default function GoogleSignUpRoute(): JSX.Element {
         <GoogleSignUpPanel
           state={state}
           ticket={ticket}
+          onRetry={() => {
+            setState({ kind: 'loading' });
+            setAttempt((n) => n + 1);
+          }}
           onSignedUp={() => window.location.assign('/welcome')}
         />
       </div>

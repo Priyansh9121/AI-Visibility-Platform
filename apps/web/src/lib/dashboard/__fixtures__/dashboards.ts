@@ -29,6 +29,8 @@ interface ScanOverrides {
   clientName?: string;
   clientDomain?: string;
   status?: ScanStatus;
+  /** Why a partial or failed scan ended as it did — `scans.error_code`. */
+  errorCode?: string | null;
   compositeScore?: string | null;
   createdAt?: string;
   finishedAt?: string | null;
@@ -41,6 +43,8 @@ export function scan(overrides: ScanOverrides = {}): ScanSummary {
     clientName: overrides.clientName ?? 'Help Scout',
     clientDomain: overrides.clientDomain ?? 'helpscout.com',
     status: overrides.status ?? 'succeeded',
+    // Always on the wire, null when there is nothing to say (`test_dashboard.py`).
+    errorCode: overrides.errorCode ?? null,
     compositeScore: overrides.compositeScore === undefined ? '38.35' : overrides.compositeScore,
     createdAt: overrides.createdAt ?? '2026-08-24T10:15:00Z',
     finishedAt: overrides.finishedAt === undefined ? '2026-08-24T10:21:01Z' : overrides.finishedAt,
@@ -195,6 +199,52 @@ export const partialDashboard: Dashboard = dashboard([
 
 export const failedDashboard: Dashboard = dashboard([
   scan({ status: 'failed', compositeScore: null, finishedAt: '2026-08-24T10:16:30Z' }),
+]);
+
+/**
+ * One scan per way a scan can end — the rows the line that says why, and whether
+ * the scan counted, is built from. The client name says which ending a row is.
+ */
+export const endingsDashboard: Dashboard = dashboard([
+  scan({
+    id: 'scan_01M0ENDINGFIXTURE00000001', clientId: 'clnt_end_1',
+    clientName: 'Clean Run Co', clientDomain: 'clean.example', status: 'succeeded',
+  }),
+  scan({
+    id: 'scan_01M0ENDINGFIXTURE00000002', clientId: 'clnt_end_2',
+    clientName: 'Out Of Time Co', clientDomain: 'late.example',
+    status: 'partial', errorCode: 'SCAN_DEADLINE_EXCEEDED', compositeScore: '47.10',
+  }),
+  scan({
+    id: 'scan_01M0ENDINGFIXTURE00000003', clientId: 'clnt_end_3',
+    clientName: 'Some Calls Co', clientDomain: 'calls.example',
+    status: 'partial', compositeScore: '52.30',
+  }),
+  scan({
+    id: 'scan_01M0ENDINGFIXTURE00000004', clientId: 'clnt_end_4',
+    clientName: 'No Answers Co', clientDomain: 'silent.example',
+    status: 'failed', errorCode: 'ALL_ENGINE_CALLS_FAILED', compositeScore: null,
+  }),
+  scan({
+    id: 'scan_01M0ENDINGFIXTURE00000005', clientId: 'clnt_end_5',
+    clientName: 'Restarted Co', clientDomain: 'restart.example',
+    status: 'failed', errorCode: 'EXECUTOR_LOST', compositeScore: null,
+  }),
+  scan({
+    id: 'scan_01M0ENDINGFIXTURE00000006', clientId: 'clnt_end_6',
+    clientName: 'Waiting Co', clientDomain: 'waiting.example',
+    status: 'queued', compositeScore: null, finishedAt: null,
+  }),
+  scan({
+    id: 'scan_01M0ENDINGFIXTURE00000007', clientId: 'clnt_end_7',
+    clientName: 'Busy Co', clientDomain: 'busy.example',
+    status: 'running', compositeScore: null, finishedAt: null,
+  }),
+  scan({
+    id: 'scan_01M0ENDINGFIXTURE00000008', clientId: 'clnt_end_8',
+    clientName: 'Called Off Co', clientDomain: 'calledoff.example',
+    status: 'cancelled', compositeScore: null,
+  }),
 ]);
 
 /** Newest first, the order the endpoint returns and the screen must preserve. */

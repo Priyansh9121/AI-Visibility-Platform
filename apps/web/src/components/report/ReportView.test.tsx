@@ -17,6 +17,7 @@ import type { Report } from '@avp/shared-types';
 import { deriveNarrative } from '@/lib/report/derive';
 import { EXCLUSION_REASON, checkLabel } from '@/lib/report/strings';
 import {
+  addressNotPublicReport,
   crawlDisallowedReport,
   failedAuditReport,
   generatedFixesReport,
@@ -26,6 +27,8 @@ import {
   insufficientDataReport,
   noCompetitorSetReport,
   notYetMeasuredReport,
+  failedScanReport,
+  partialDeadlineReport,
   unscoredReport,
   weakSignalReport,
 } from '@/lib/report/__fixtures__/reports';
@@ -821,5 +824,130 @@ describe('a site whose robots.txt keeps the crawler out — 2026-09-29', () => {
 
   it('a failed crawl is still worded as one', () => {
     expect(render(failedAuditReport)).toContain('The site could not be read');
+  });
+});
+
+describe('a site whose address is not public — the egress guard', () => {
+  const html = render(addressNotPublicReport);
+
+  it('says so in the shared copy, and never blames robots.txt', () => {
+    expect(html).toContain(EXCLUSION_REASON.CRAWL_ADDRESS_NOT_PUBLIC!.label);
+    expect(html).toContain(
+      'The site’s address, or an address the site sent the crawler to, is on a private or reserved network, so the crawler did not read the site.',
+    );
+    expect(html).not.toContain('robots.txt');
+    expect(html).not.toContain('The site could not be read');
+    expect(html).not.toContain('Audit failed');
+  });
+
+  it('derives the exclusion under its own reason', () => {
+    const narrative = deriveNarrative(addressNotPublicReport);
+    expect(narrative.exclusions.map((e) => [e.key, e.reason])).toEqual([
+      ['technical_foundation', 'CRAWL_ADDRESS_NOT_PUBLIC'],
+    ]);
+  });
+});
+
+/**
+ * WHY THE SCAN ENDED AS IT DID — checklist 3.15.
+ *
+ * The signed-in report says why a scan is partial or failed, and whether it
+ * counted against the agency's allowance: "It counts as one of your scans." The
+ * public `/share` report must never say it — to a prospect that sentence is
+ * wrong, and the report is the document being sent. `ReportView` serves both
+ * routes, and `publicView` is what tells them apart (the pitch beat's operator
+ * CTA is already gated on it); `app/share/scanOutcomeGate.test.ts` pins that the
+ * share route passes it.
+ */
+describe('the signed-in report says how its scan ended — checklist 3.15', () => {
+  const COUNTS = 'It counts as one of your scans.';
+  const FREE = 'It does not use up one of your scans.';
+  const OUTCOME = 'data-testid="scan-outcome"';
+  const renderPublic = (report: Report) =>
+    renderToStaticMarkup(<ReportView report={report} publicView animate={false} />);
+  // Everything before the first beat: the line belongs to the header.
+  const header = (html: string) => html.slice(0, html.indexOf('avp-beat--score'));
+
+  it('a partial scan that ran out of time says so, and that it counts', () => {
+    const head = header(render(partialDeadlineReport));
+    expect(head).toContain(OUTCOME);
+    expect(head).toContain(
+      `This scan ran out of time. These results use the prompts that finished. ${COUNTS}`,
+    );
+  });
+
+  it('a partial scan with no code says some engines did not answer', () => {
+    const head = header(render({ ...helpscoutReport, scanStatus: 'partial' }));
+    expect(head).toContain(
+      `Some engines did not answer. These results use the answers that came back. ${COUNTS}`,
+    );
+  });
+
+  it('a failed scan says why, and that it does not count — the API serves a report for one', () => {
+    const html = render(failedScanReport);
+    expect(header(html)).toContain(
+      `None of the AI engines answered, so there are no results. ${FREE}`,
+    );
+    // Still the whole document: the line explains the report, it does not replace it.
+    expect(html).toContain('avp-beat--score');
+    expect(html).toContain('avp-beat--pitch');
+  });
+
+  it('says it once, as one line', () => {
+    const html = render(partialDeadlineReport);
+    expect(html.match(/data-testid="scan-outcome"/g)).toHaveLength(1);
+  });
+
+  it('says nothing for a scan that succeeded or has not finished', () => {
+    // `scanErrorCode` is set on purpose: a stale code on a clean scan is not a story.
+    for (const scanStatus of ['succeeded', 'queued', 'running', 'cancelled']) {
+      const html = render({ ...helpscoutReport, scanStatus, scanErrorCode: 'EXECUTION_FAILED' });
+      expect(html, scanStatus).not.toContain(OUTCOME);
+      expect(html, scanStatus).not.toContain('one of your scans');
+    }
+    // And the plain fixture, which predates the field entirely.
+    expect(render(helpscoutReport)).not.toContain(OUTCOME);
+  });
+
+  it('the public report never says it — a prospect is not spending a scan', () => {
+    const reports: Report[] = [
+      partialDeadlineReport,
+      failedScanReport,
+      { ...helpscoutReport, scanStatus: 'partial' },
+    ];
+    for (const report of reports) {
+      const html = renderPublic(report);
+      expect(html).not.toContain(OUTCOME);
+      expect(html).not.toContain('one of your scans');
+      expect(html).not.toContain('use up');
+      // A whole document, so the absence is not a failed render passing.
+      expect(html).toContain('avp-beat--score');
+      expect(html).toContain('avp-beat--pitch');
+      // The same report, signed in, DOES say it: the gate is `publicView`, nothing else.
+      expect(render(report)).toContain(OUTCOME);
+    }
+  });
+
+  it('never prints the code, signed in or public', () => {
+    const codes =
+      /SCAN_DEADLINE_EXCEEDED|ALL_ENGINE_CALLS_FAILED|EXECUTION_FAILED|EXECUTOR_LOST|EXECUTOR_NEVER_STARTED/;
+    for (const report of [partialDeadlineReport, failedScanReport]) {
+      expect(render(report)).not.toMatch(codes);
+      expect(renderPublic(report)).not.toMatch(codes);
+    }
+  });
+
+  it('is a line of design-token type on the paper, not a new piece of chrome', () => {
+    const html = render(partialDeadlineReport);
+    const line = html.match(/<p\b[^>]*data-testid="scan-outcome"[^>]*>/)?.[0] ?? '';
+    expect(line, 'the outcome line is a <p>').not.toBe('');
+    expect(line).toContain('text-text-secondary');
+    expect(line).not.toMatch(/\b(slate|gray|zinc|blue|red|green|amber|yellow)-\d{2,3}\b/);
+    expect(line).not.toContain('dark:');
+    expect(line).not.toContain('style=');
+    // Inside the document, so it sits on the paper scope in both themes.
+    expect(html.indexOf('class="avp-report')).toBeLessThan(html.indexOf(OUTCOME));
+    // Not a Badge or a live dot: a finished measurement carries no motion.
+    expect(header(html)).not.toContain('avp-badge__pulse');
   });
 });

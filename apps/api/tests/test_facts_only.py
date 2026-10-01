@@ -1290,3 +1290,34 @@ def test_the_unclaimed_domain_list_is_domains_and_counts() -> None:
     # Same row type as the evidence table, whose shape is already asserted above.
     annotation = str(ReportProofOut.model_fields["unclaimed_cited_domains"].annotation)
     assert CitedDomainOut.__name__ in annotation
+
+
+# ---------------------------------------------------------------------------
+# Checklist 3.15 — a scan's outcome reaches the screens.
+#
+# The report and the dashboard list now carry WHY a scan is partial or failed,
+# so the web can say whether it counted. What crosses is `scans.error_code`.
+# ---------------------------------------------------------------------------
+
+
+def test_a_scans_outcome_reaches_the_screens_as_our_own_code_and_never_its_detail() -> None:
+    """`scans.error_code` is a constant of ours; `scans.error_detail` is a TEXT column.
+
+    The detail beside the code ("our own diagnostics only", models/scan.py) is the
+    one place a scan row could hold a stray string, and it must not ride along: both
+    projections are asserted to carry the code and no field naming a detail, and the
+    column the code is read from stays bounded the way a fact is.
+    """
+    from avp_api.models import Scan
+    from avp_api.schemas.dashboard import ScanSummaryOut
+    from avp_api.schemas.report import ReportOut
+
+    assert "scan_error_code" in ReportOut.model_fields
+    assert "error_code" in ScanSummaryOut.model_fields
+    for model in (ReportOut, ScanSummaryOut):
+        leaks = {name for name in model.model_fields if "detail" in name}
+        assert not leaks, f"{model.__name__}.{sorted(leaks)} would project a scan's diagnostic text"
+
+    column = Scan.__table__.c.error_code
+    assert isinstance(column.type, String)
+    assert column.type.length is not None and column.type.length <= 64

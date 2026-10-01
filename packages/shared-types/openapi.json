@@ -3818,6 +3818,17 @@
           "proof": {
             "$ref": "#/components/schemas/ReportProofOut"
           },
+          "scanErrorCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scanerrorcode"
+          },
           "scanId": {
             "title": "Scanid",
             "type": "string"
@@ -4373,6 +4384,17 @@
             "format": "date-time",
             "title": "Createdat",
             "type": "string"
+          },
+          "errorCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Errorcode"
           },
           "finishedAt": {
             "anyOf": [
@@ -7097,7 +7119,7 @@
     },
     "/api/v1/reports/shared": {
       "post": {
-        "description": "A report, by share token. **No session required** \u2014 Epic 9.8.\n\nThis is the send path Epic 9's acceptance criterion needs: the prospect a\nreport is about has no account, and must not need one to read it.\n\n**The token is the whole credential**, so the rules are narrow and worth\nstating:\n\n* **Read-only.** There is no sibling route that mutates anything by token.\n  A holder cannot edit the competitor set, re-run the scan, or reach any\n  other scan \u2014 the token resolves to exactly one row.\n* **`404` for every rejection, with one code path.** An unknown, revoked or\n  expired token is indistinguishable in both status and body. The only\n  pre-check is the body's length bound (`422` for an empty or over-512\n  token); it says nothing about whether any token is real. Every plausible\n  guess pays for the same index lookup.\n* **The token is in the POST body, not the path**, so it stays out of\n  request logs.\n* **No `401`, ever.** A `401` would say \"this token is real, authenticate to\n  use it\", which is precisely the bit an enumerator wants.\n* **Same projection as the authenticated route.** `build_report` is reused\n  rather than reimplemented, so the facts-only guarantee `test_facts_only.py`\n  sweeps over this module covers this response too \u2014 a second assembly path\n  would be a second place for a snippet to slip in.\n\n**Errors:** `404` only.",
+        "description": "A report, by share token. **No session required** \u2014 Epic 9.8.\n\nThis is the send path Epic 9's acceptance criterion needs: the prospect a\nreport is about has no account, and must not need one to read it.\n\n**The token is the whole credential**, so the rules are narrow and worth\nstating:\n\n* **Read-only.** There is no sibling route that mutates anything by token.\n  A holder cannot edit the competitor set, re-run the scan, or reach any\n  other scan \u2014 the token resolves to exactly one row.\n* **`404` for every rejection, with one code path.** An unknown, revoked or\n  expired token is indistinguishable in both status and body. The only\n  pre-check is the body's length bound (`422` for an empty or over-512\n  token); it says nothing about whether any token is real. Every plausible\n  guess pays for the same index lookup.\n* **The token is in the POST body, not the path**, so it stays out of\n  request logs.\n* **No `401`, ever.** A `401` would say \"this token is real, authenticate to\n  use it\", which is precisely the bit an enumerator wants.\n* **Same projection as the authenticated route.** `build_report` is reused\n  rather than reimplemented, so the facts-only guarantee `test_facts_only.py`\n  sweeps over this module covers this response too \u2014 a second assembly path\n  would be a second place for a snippet to slip in. One field is blanked:\n  `scanErrorCode`, which says why a scan is partial or failed and is for the\n  agency alone (`build_public_report`).\n\n**Errors:** `404` only.",
         "operationId": "get_public_report_api_v1_reports_shared_post",
         "requestBody": {
           "content": {

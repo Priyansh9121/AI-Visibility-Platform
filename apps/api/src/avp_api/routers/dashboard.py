@@ -92,6 +92,7 @@ async def dashboard(
             client_name=client_name,
             client_domain=client_domain,
             status=scan.status,
+            error_code=scan.error_code,
             composite_score=composite,
             created_at=scan.created_at,
             finished_at=scan.finished_at,

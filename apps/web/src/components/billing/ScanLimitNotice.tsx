@@ -34,8 +34,9 @@
 import { useEffect, useState } from 'react';
 import type { JSX } from 'react';
 import { Button, Card, CardBody, GoogleSignInButton } from '@avp/design-system';
+import type { BillingStatus, UserRole } from '@avp/shared-types';
 import { api, ApiProblem, GOOGLE_SIGN_IN_URL } from '@/lib/api';
-import type { ScanLimitProblem } from '@/lib/billing/allowance';
+import { canCheckout, type ScanLimitProblem } from '@/lib/billing/allowance';
 import { isSubscriptionRefusal } from '@/lib/billing/subscriptionRefusal';
 import { formatDay } from '@/lib/dates';
 import { BILLING_SETTINGS_HREF } from '@/lib/settings/sections';
@@ -46,9 +47,29 @@ export interface ScanLimitNoticeProps {
   agencyId: string;
   /** Test seam: what to do with the Checkout URL. Defaults to navigating. */
   navigate?: ((url: string) => void) | undefined;
+  /**
+   * The agency's billing, when the page has it (owner and admin only: a member
+   * gets a 403). With it, a subscription that Checkout would refuse is sent to
+   * Billing in Settings instead of to Subscribe. Absent: Subscribe, as before.
+   */
+  billing?: BillingStatus | null | undefined;
+  /** The signed-in user's role. A member cannot open Checkout (403). Absent: as before. */
+  role?: UserRole | null | undefined;
 }
 
-export function ScanLimitNotice({ problem, agencyId, navigate }: ScanLimitNoticeProps): JSX.Element {
+export function ScanLimitNotice({
+  problem,
+  agencyId,
+  navigate,
+  billing,
+  role,
+}: ScanLimitNoticeProps): JSX.Element {
+  // Checkout is for owner and admin (`RequireAdmin`); a member is asked to
+  // find the owner. For the rest, it works only from the statuses in
+  // `canCheckout`; any other status is a subscription that needs attention.
+  const isMember = role === 'member';
+  const needsAttention = !isMember && billing != null && !canCheckout(billing.subscriptionStatus);
+  const canSubscribe = !isMember && !needsAttention;
   const [busy, setBusy] = useState(false);
   // What the last Subscribe said, and whether that was the API saying this
   // agency has a subscription. One state, so the link to Settings cannot outlive
@@ -91,22 +112,24 @@ export function ScanLimitNotice({ problem, agencyId, navigate }: ScanLimitNotice
     }
   }
 
+  const settingsLink = (
+    <p className="text-ui-sm">
+      <a
+        href={BILLING_SETTINGS_HREF}
+        className="font-medium text-beacon-600 underline underline-offset-2 transition-colors duration-hover ease-out hover:text-beacon-700"
+      >
+        Open Settings
+      </a>
+    </p>
+  );
+
   const failure =
     refusal != null ? (
       <div className="flex flex-col gap-2">
         <p role="alert" className="max-w-measure text-ui-sm leading-prose text-danger">
           {refusal.detail}
         </p>
-        {refusal.hasSubscription && (
-          <p className="text-ui-sm">
-            <a
-              href={BILLING_SETTINGS_HREF}
-              className="font-medium text-beacon-600 underline underline-offset-2 transition-colors duration-hover ease-out hover:text-beacon-700"
-            >
-              Open Settings
-            </a>
-          </p>
-        )}
+        {refusal.hasSubscription && settingsLink}
       </div>
     ) : null;
 
@@ -127,16 +150,33 @@ export function ScanLimitNotice({ problem, agencyId, navigate }: ScanLimitNotice
               */}
               <p className="max-w-measure text-ui-base leading-prose text-text-primary">
                 Your free scan needs a Google sign-in, so we know one person gets one. Continue
-                with Google using the same address you sign in with here, or subscribe. A
-                different Google account would start a new agency instead.
+                with Google using the same address you sign in with here, or{' '}
+                {isMember
+                  ? "ask your agency's owner or an admin to subscribe"
+                  : needsAttention
+                    ? "fix this agency's subscription from Manage billing in Settings"
+                    : 'subscribe'}
+                . A different Google account would start a new agency instead.
               </p>
               {failure}
               <div className="flex flex-wrap items-center gap-3">
                 <GoogleSignInButton href={GOOGLE_SIGN_IN_URL} label="Continue with Google" />
-                <Button variant="secondary" onClick={() => void subscribe()} disabled={busy}>
-                  {busy ? 'Opening checkout…' : 'Subscribe'}
-                </Button>
+                {canSubscribe && (
+                  <Button variant="secondary" onClick={() => void subscribe()} disabled={busy}>
+                    {busy ? 'Opening checkout…' : 'Subscribe'}
+                  </Button>
+                )}
               </div>
+              {needsAttention && settingsLink}
+            </>
+          ) : problem.code === 'SCAN_LIMIT_FREE_USED' && !canSubscribe ? (
+            <>
+              <p className="max-w-measure text-ui-base leading-prose text-text-primary">
+                {isMember
+                  ? "Your free scan is used. Ask your agency's owner or an admin to subscribe to keep scanning. The reports you already have stay open."
+                  : "Your free scan is used. This agency's subscription needs attention: fix it from Manage billing in Settings to keep scanning."}
+              </p>
+              {!isMember && settingsLink}
             </>
           ) : problem.code === 'SCAN_LIMIT_FREE_USED' ? (
             <>

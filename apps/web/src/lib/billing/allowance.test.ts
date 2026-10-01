@@ -5,13 +5,13 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { allowanceLabel, scanLimitProblem } from './allowance';
+import { allowanceLabel, canCheckout, freeScanUsed, scanLimitProblem } from './allowance';
 import {
   activeAtCap,
   activeSubscription,
   canceledSubscription,
   freeScanNeedsGoogle,
-  freeScanUsed,
+  freeScanUsed as freeScanUsedBilling,
   noSubscription,
   pastDueSubscription,
   ungated,
@@ -23,7 +23,7 @@ describe('the remaining-count label', () => {
   });
 
   it('free with the scan used', () => {
-    expect(allowanceLabel(freeScanUsed)).toBe('Free scan used');
+    expect(allowanceLabel(freeScanUsedBilling)).toBe('Free scan used');
   });
 
   it('a lapsed subscription is free', () => {
@@ -101,5 +101,33 @@ describe('narrowing a 402', () => {
     expect(scanLimitProblem({ ...base, type: '/problems/other', detail: 'x' })).toBeNull();
     expect(scanLimitProblem({ ...base, status: 409, type: '/problems/scan-limit-reached', detail: 'x', code: 'SCAN_LIMIT_MONTHLY' })).toBeNull();
     expect(scanLimitProblem({ ...base, type: '/problems/scan-limit-reached', detail: 'x', code: 'SOMETHING_ELSE' })).toBeNull();
+  });
+});
+
+describe('freeScanUsed, the one reading of "the free scan is gone"', () => {
+  it('is true only for a non-subscriber at or over the limit', () => {
+    expect(freeScanUsed(freeScanUsedBilling)).toBe(true);
+    expect(freeScanUsed(pastDueSubscription)).toBe(true);
+    expect(freeScanUsed(noSubscription)).toBe(false);
+    expect(freeScanUsed(activeAtCap)).toBe(false);
+    expect(freeScanUsed(activeSubscription)).toBe(false);
+    expect(freeScanUsed(ungated)).toBe(false);
+  });
+
+  it('agrees with the label wherever the label speaks of the free scan', () => {
+    for (const b of [noSubscription, freeScanUsedBilling, canceledSubscription, pastDueSubscription]) {
+      expect(allowanceLabel(b) === 'Free scan used').toBe(freeScanUsed(b));
+    }
+  });
+});
+
+describe('canCheckout, the statuses Checkout accepts', () => {
+  it('is no subscription, canceled and incomplete_expired, and nothing else', () => {
+    expect(canCheckout(null)).toBe(true);
+    expect(canCheckout('canceled')).toBe(true);
+    expect(canCheckout('incomplete_expired')).toBe(true);
+    for (const s of ['active', 'trialing', 'past_due', 'unpaid', 'paused', 'incomplete', 'never_seen']) {
+      expect(canCheckout(s), s).toBe(false);
+    }
   });
 });

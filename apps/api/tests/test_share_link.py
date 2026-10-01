@@ -17,14 +17,18 @@ from decimal import Decimal
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import update as sa_update
 from sqlalchemy.exc import IntegrityError
 
+from avp_api.models import Scan, ScanStatus
 from avp_api.models.engine_result import Engine, Sentiment
 from avp_api.models.prompt import PromptIntent
+from avp_api.services import report_pdf as pdf_service
 from avp_api.services import scan_runner
 from avp_api.services import share as share_service
 from avp_api.services.engines import CitedSource, EngineAnswer
 from avp_api.services.prompts import GeneratedPrompt
+from avp_api.services.scan_executor import SCAN_DEADLINE_EXCEEDED
 
 BASE = "/api/v1"
 
@@ -187,8 +191,10 @@ class TestPublicRead:
 
         `build_report` is reused rather than reimplemented, so the facts-only
         sweep in test_facts_only.py covers this response too. A second assembly
-        path would be a second place for a snippet to slip in. `generatedAt` is
-        a clock read and is the only field allowed to differ.
+        path would be a second place for a snippet to slip in. Two fields may
+        differ: `generatedAt`, a clock read, and `scanErrorCode`, which says why
+        a scan is partial or failed and is for the agency alone (the next test
+        pins that it is blanked, and the signed-in report keeps it).
         """
         await _sign_up(client, "Share Agency", "share5@test.example")
         sid = await _scored_scan(client, stub_engines)
@@ -198,9 +204,84 @@ class TestPublicRead:
         client.cookies.clear()
         public = (await _shared(client, token)).json()
 
-        private.pop("generatedAt")
-        public.pop("generatedAt")
+        for differs in ("generatedAt", "scanErrorCode"):
+            private.pop(differs)
+            public.pop(differs)
         assert public == private
+
+    async def test_a_partial_scan_s_public_report_keeps_its_status_and_drops_its_cause(
+        self, client: AsyncClient, session, stub_engines
+    ) -> None:  # noqa: ANN001
+        """checklist 3.15 — `scanErrorCode` is for the agency, not for a link holder.
+
+        It says WHY a scan is partial or failed (`SCAN_DEADLINE_EXCEEDED`,
+        `EXECUTOR_LOST`), which tells the agency whether the scan used up one of
+        its scans and tells a stranger about our infrastructure, so the public
+        route blanks it. The status stays: it has always been on the public
+        report. The signed-in report keeps the code, and the web turns the pair
+        into the sentence only on that screen.
+        """
+        await _sign_up(client, "Share Agency", "share5b@test.example")
+        sid = await _scored_scan(client, stub_engines)
+        await session.execute(
+            sa_update(Scan).where(Scan.id == sid).values(
+                status=ScanStatus.PARTIAL, error_code=SCAN_DEADLINE_EXCEEDED,
+                finished_at=datetime.now(UTC),
+            )
+        )
+        await session.commit()
+        token = (await client.post(f"{BASE}/scans/{sid}/share")).json()["token"]
+
+        private = (await client.get(f"{BASE}/scans/{sid}/report")).json()
+        client.cookies.clear()
+        resp = await _shared(client, token)
+
+        assert resp.status_code == 200, resp.text
+        public = resp.json()
+        assert public["scanStatus"] == "partial"
+        # Present and null, like every other absence on this payload.
+        assert "scanErrorCode" in public
+        assert public["scanErrorCode"] is None
+        assert SCAN_DEADLINE_EXCEEDED not in resp.text
+        # The agency's own view of the same scan still has it.
+        assert private["scanStatus"] == "partial"
+        assert private["scanErrorCode"] == SCAN_DEADLINE_EXCEEDED
+
+    async def test_the_public_pdf_is_built_from_the_blanked_report_too(
+        self, client: AsyncClient, session, stub_engines, monkeypatch
+    ) -> None:  # noqa: ANN001
+        """The share PDF builds a `ReportOut` of its own, and it is the public one.
+
+        The renderer reads no scan status today, so this is about the day it
+        does: the report handed to it by a link holder's route has no cause in
+        it, and the agency's own PDF route hands it the same report with one.
+        """
+        handed: list = []
+
+        def capture(report):  # noqa: ANN001, ANN202
+            handed.append(report)
+            return b"%PDF-1.4 stub"
+
+        monkeypatch.setattr(pdf_service, "render_report_pdf", capture)
+        await _sign_up(client, "Share Agency", "share5c@test.example")
+        sid = await _scored_scan(client, stub_engines)
+        await session.execute(
+            sa_update(Scan).where(Scan.id == sid).values(
+                status=ScanStatus.PARTIAL, error_code=SCAN_DEADLINE_EXCEEDED,
+                finished_at=datetime.now(UTC),
+            )
+        )
+        await session.commit()
+        token = (await client.post(f"{BASE}/scans/{sid}/share")).json()["token"]
+
+        assert (await client.get(f"{BASE}/scans/{sid}/report.pdf")).status_code == 200
+        client.cookies.clear()
+        assert (await _shared_pdf(client, token)).status_code == 200
+
+        signed_in, public = handed
+        assert signed_in.scan_error_code == SCAN_DEADLINE_EXCEEDED
+        assert public.scan_status == "partial"
+        assert public.scan_error_code is None
 
     async def test_the_public_response_carries_no_operator_or_account_surface(
         self, client: AsyncClient, stub_engines

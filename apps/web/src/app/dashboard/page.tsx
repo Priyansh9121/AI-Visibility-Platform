@@ -18,7 +18,7 @@ import { Button, Card, CardBody, ErrorState, LoadingState } from '@avp/design-sy
 import type { Dashboard } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
 import { type ScanLimitProblem, scanLimitProblem } from '@/lib/billing/allowance';
-import { useScanAllowance } from '@/lib/billing/useScanAllowance';
+import { useScanStanding } from '@/lib/billing/useScanAllowance';
 import { DashboardView } from '@/components/dashboard/DashboardView';
 import { WorkspaceShell } from '@/components/shell/WorkspaceShell';
 import { type Poller, createPoller, settled, shouldPoll } from '@/lib/dashboard/polling';
@@ -40,7 +40,7 @@ export default function DashboardRoute() {
   const [rerunError, setRerunError] = useState<string | null>(null);
   const [scanLimit, setScanLimit] = useState<ScanLimitProblem | null>(null);
   const agencyId = view.kind === 'ready' ? view.dashboard.agency.id : null;
-  const allowance = useScanAllowance(agencyId);
+  const { label: allowance, billing, role } = useScanStanding(agencyId);
   const [pollProblem, setPollProblem] = useState<string | null>(null);
   const [live, setLive] = useState(false);
 
@@ -244,6 +244,8 @@ export default function DashboardRoute() {
         scanLimit={scanLimit}
         agencyId={view.dashboard.agency.id}
         allowance={allowance}
+        billing={billing}
+        role={role}
         live={live}
         pollProblem={pollProblem}
         onDismissGettingStarted={dismissGettingStarted}

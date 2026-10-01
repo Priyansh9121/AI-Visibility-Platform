@@ -1,0 +1,19 @@
+# Changes from ECC deployment-patterns (source: deployment-patterns/SKILL.md, line cites re-checked 2026-10-01)
+- Removed the Node, Go and Django multi-stage Dockerfiles (:84-:167) -> AVP has one real Dockerfile (apps/api/Dockerfile); generic copies invite edits to it.
+- Removed `gunicorn config.wsgi:application ... --workers 4` (:166) -> wrong server for FastAPI; AVP's entrypoint runs uvicorn.
+- Removed "Docker Best Practices" (:169-:187) -> generic list; AVP's Dockerfile already pins, is non-root and has a HEALTHCHECK, and CI's image job checks it.
+- Removed blue-green, canary and rolling sections (:21-:80) -> Render offers none of the traffic splitting described and AVP configures none; replaced by "how deploys work here".
+- Removed the GitHub Actions build/push/deploy pipeline with ghcr.io, Railway, Vercel and `kubectl set image` (:191-:253) -> AVP deploys through Render's git hook on push to main, before CI finishes; deploy.yml deploys nothing.
+- Removed "Pipeline Stages" (:255-:263) -> describes a staging environment and preview deploys AVP does not have.
+- Removed Kubernetes probes with invented thresholds (:304-:330, "30 * 5s = 150s" at :329) -> unmeasured; paths replaced with `/api/v1/health` and `/api/v1/ready`.
+- Removed the `latency_ms: 2` health payload (:297) -> invented number; AVP's /ready returns status and per-store ok/error only.
+- Removed the `/health/detailed` external API check and `process.env` code (:267-:302) -> TypeScript example for a different stack.
+- Removed the twelve-factor sample and zod env schema (:332-:365) -> AVP validates in config.py; presence checks use `[ -n "${VAR:+x}" ]` only.
+- Removed rollback commands for kubectl, vercel, railway, prisma (:367-:383) -> replaced by a founder-run dashboard rollback for migration-free deploys, and a forward fix when a migration shipped (an older image's `alembic upgrade head` fails on a newer DB revision).
+- Removed "Rollback tested in staging", "Horizontal scaling", feature-flag, alert and on-call items (:385-:391, :404-:428) -> AVP has no staging, scaling config or feature flags recorded in the repo.
+- Kept the checklist idea (:393-:428), rewritten as a pre-merge checklist (CI, migrations with lock_timeout, env vars, deploy window) and a post-deploy check.
+- Dropped `npm test -- --coverage` and the coverage artifact (:214, :218-:219) -> AVP uses count floors (infra/ci/floors.json).
+- Added the CI-before-main rule, never pushing to main, never calling Render's API -> Render deploys before CI finishes (infra/deploy/README.md).
+- Added Redis, rate-limit, Stripe and scan warning event names from apps/api/src; noted which the runbook covers (ip_header_missing, second_subscription) and which it does not.
+- Review fixes 2026-10-01: rollback past a migration fails (docker-entrypoint.sh:14 under `set -e`) -> forward fix only; a deploy fails in-flight scans via reap_stale_scans (scan_executor.py), not resumes them; migration precedent 20260929_1325_55c6b4395e7d and the "waiting on a lock" log sign; `--sql` for a dry run and no avp_dev/avp_test as scratch; CI scope is PRs and pushes to main (ci.yml:40-44); description rewritten in the third person.
+- Re-review nits 2026-10-01: rollback condition is "no migration applied after the build you roll back to"; a silent log at `alembic upgrade head` is "probably a lock (or unreachable DB)"; `--sql` still needs `-x db_url=<scratch>` (env.py:110-112).
