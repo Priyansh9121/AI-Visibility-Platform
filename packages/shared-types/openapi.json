@@ -2331,7 +2331,7 @@
         "type": "string"
       },
       "GooglePendingOut": {
-        "description": "What Google told us about a person who has no account yet \u2014 Epic 20.\n\nRead by the sign-up completion page so it can show the address the\naccount will be under and pre-fill the name. Nothing here is a credential;\nthe ticket in the query string is.",
+        "description": "What Google told us about a person who has no account yet \u2014 Epic 20.\n\nRead by the sign-up completion page so it can show the address the\naccount will be under and pre-fill the name. Nothing here is a credential;\nthe ticket is.",
         "properties": {
           "email": {
             "title": "Email",
@@ -2347,6 +2347,22 @@
           "suggestedName"
         ],
         "title": "GooglePendingOut",
+        "type": "object"
+      },
+      "GooglePendingRequest": {
+        "description": "The ticket to peek at, in a body so it never lands in a URL.",
+        "properties": {
+          "ticket": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Ticket",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticket"
+        ],
+        "title": "GooglePendingRequest",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -4856,6 +4872,22 @@
         "title": "ShareLinkOut",
         "type": "object"
       },
+      "SharedReportRequest": {
+        "description": "The body of `POST /reports/shared` and `POST /reports/shared/pdf`.\n\nThe share token travels here, not in the URL path, so it never reaches a\nrequest log. The bounds are the same ones every other token body uses\n(`ConfirmResetIn`); a real token is far shorter than 512.",
+        "properties": {
+          "token": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "title": "SharedReportRequest",
+        "type": "object"
+      },
       "ShelfSlotOut": {
         "description": "One brand standing in one ordinal slot of one answer.\n\nThe facts-only rule names exactly this shape as permitted: \"counts and ordinal\npositions (e.g. 'mentioned 3rd')\" plus \"names of entities mentioned\". There\nis no field here that could carry what the answer SAID about the brand \u2014\nonly that it named it, and where in the order.",
         "properties": {
@@ -5293,6 +5325,47 @@
         ],
         "title": "ValidationError",
         "type": "object"
+      },
+      "WebhookAck": {
+        "description": "The webhook's answer to Stripe. Read by a human running `stripe listen`.\n\n`duplicate` and `stale` are present only when true (the route drops `None`),\nso an applied, ignored or unmatched event keeps the two-key body it always\nhad. Stripe only looks at the status code.",
+        "properties": {
+          "duplicate": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duplicate"
+          },
+          "handled": {
+            "title": "Handled",
+            "type": "boolean"
+          },
+          "received": {
+            "title": "Received",
+            "type": "boolean"
+          },
+          "stale": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stale"
+          }
+        },
+        "required": [
+          "received",
+          "handled"
+        ],
+        "title": "WebhookAck",
+        "type": "object"
       }
     }
   },
@@ -5347,7 +5420,7 @@
     },
     "/api/v1/agencies/{agencyId}/billing/checkout": {
       "post": {
-        "description": "Create a Stripe Checkout Session. Returns the URL to navigate to.\n\n**`201`, because a session really is created** \u2014 at Stripe, with an id and a\nlifetime, and this call is what makes it. That it lives in someone else's\ndatabase does not make it less of a created resource.\n\nThe agency's Stripe customer is created here too, if it does not have one\nyet, and REUSED if it does. A second visit to this endpoint does not mint a\nsecond customer \u2014 see `services/billing.py`, where the reuse and the unique\nconstraint under it are explained.\n\n**This endpoint does not subscribe anybody.** It returns a URL. The\nsubscription begins when Stripe says it did, over the webhook below.\n\n**Errors:** `401`, `403` (member role), `404` (another agency's id), `503\nbilling-not-configured` when `STRIPE_SECRET_KEY` or `STRIPE_PRICE_ID` is\nunset \u2014 carrying a detail that names the variable.",
+        "description": "Create a Stripe Checkout Session. Returns the URL to navigate to.\n\n**`201`, because a session really is created** \u2014 at Stripe, with an id and a\nlifetime, and this call is what makes it. That it lives in someone else's\ndatabase does not make it less of a created resource.\n\nThe agency's Stripe customer is created here too, if it does not have one\nyet, and REUSED if it does. A second visit to this endpoint does not mint a\nsecond customer \u2014 see `services/billing.py`, where the reuse and the unique\nconstraint under it are explained.\n\n**This endpoint does not subscribe anybody.** It returns a URL. The\nsubscription begins when Stripe says it did, over the webhook below.\n\n**Errors:** `401`, `403` (member role), `404` (another agency's id), `409\nsubscription-already-active` when the agency's status is `active` or\n`trialing` (checked after auth and tenancy, before any Stripe call), `503\ncheckout-in-progress` when another checkout holds the agency row for over\n3 s, `503\nservice-unavailable` when Stripe fails expiring the previous open session, `503\nbilling-not-configured` when `STRIPE_SECRET_KEY` or `STRIPE_PRICE_ID` is\nunset \u2014 carrying a detail that names the variable.",
         "operationId": "start_checkout_api_v1_agencies__agencyId__billing_checkout_post",
         "parameters": [
           {
@@ -5370,6 +5443,12 @@
               }
             },
             "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "`/problems/subscription-already-active`: the agency already has an active or trialing subscription."
           },
           "422": {
             "content": {
@@ -5625,7 +5704,7 @@
     },
     "/api/v1/auth/change-password": {
       "post": {
-        "description": "Change your own password while signed in. **Auth required.**\n\nThe current password is re-verified server-side. A session proves somebody\ngot in once; it does not prove they are still the account holder, and an\nunlocked laptop or a stolen cookie presents a perfectly valid one.\n\nEVERY OTHER SESSION IS REVOKED. THIS ONE IS NOT.\n------------------------------------------------\n**This is not the reset flow's answer copied over.** `reset-password/confirm`\nrevokes everything and leaves the caller signed OUT, because the person\nholding a reset link proved control of an inbox rather than knowledge of a\npassword \u2014 they may be recovering from a compromise, they might not be the\naccount holder at all, and making them sign in once with the new password\nconfirms they hold it.\n\nNeither of those applies here. The caller just demonstrated knowledge of the\ncurrent password, so the caller is not the suspect and signing them out of\nthe session they are actively using would be friction with no security\nvalue \u2014 the same argument api-contracts.md already makes for signing a user\nin at sign-up.\n\nThe OTHER sessions are a different question, and the answer is still revoke.\nThe commonest reason someone changes a password while signed in is that they\nthink somebody else has it; a change that left every other device alive\nwould fail at the one job the user believed they were doing. `logout-all`\nexists for the explicit version, but requiring two deliberate actions to\naccomplish the obvious intent of one is a trap.\n\nSo: `revoke_all_for_user`, then a FRESH session for this caller and a new\ncookie. Every other device is signed out; this one keeps working. The new\ntoken is minted rather than the old one spared, because \"spare this digest\"\nis a special case in the revocation path and a bulk revoke with an exception\nin it is the kind of code that later fails to revoke.\n\n**Errors:** `401 authentication-required` (no session), `401\ninvalid-credentials` (wrong current password \u2014 no \"no such user\" branch\nexists, because the caller is authenticated), `422 validation-failed` for a\nnew password that fails the SIGN-UP rules or that is the current one.",
+        "description": "Change your own password while signed in. **Auth required.**\n\nThe current password is re-verified server-side. A session proves somebody\ngot in once; it does not prove they are still the account holder, and an\nunlocked laptop or a stolen cookie presents a perfectly valid one.\n\nEVERY OTHER SESSION IS REVOKED. THIS ONE IS NOT.\n------------------------------------------------\n**This is not the reset flow's answer copied over.** `reset-password/confirm`\nrevokes everything and leaves the caller signed OUT, because the person\nholding a reset link proved control of an inbox rather than knowledge of a\npassword \u2014 they may be recovering from a compromise, they might not be the\naccount holder at all, and making them sign in once with the new password\nconfirms they hold it.\n\nNeither of those applies here. The caller just demonstrated knowledge of the\ncurrent password, so the caller is not the suspect and signing them out of\nthe session they are actively using would be friction with no security\nvalue \u2014 the same argument api-contracts.md already makes for signing a user\nin at sign-up.\n\nThe OTHER sessions are a different question, and the answer is still revoke.\nThe commonest reason someone changes a password while signed in is that they\nthink somebody else has it; a change that left every other device alive\nwould fail at the one job the user believed they were doing. `logout-all`\nexists for the explicit version, but requiring two deliberate actions to\naccomplish the obvious intent of one is a trap.\n\nSo: `revoke_all_for_user`, then a FRESH session for this caller and a new\ncookie. Every other device is signed out; this one keeps working. The new\ntoken is minted rather than the old one spared, because \"spare this digest\"\nis a special case in the revocation path and a bulk revoke with an exception\nin it is the kind of code that later fails to revoke.\n\n**Errors:** `401 authentication-required` (no session), `401\ninvalid-credentials` (wrong current password \u2014 no \"no such user\" branch\nexists, because the caller is authenticated), `422 validation-failed` for a\nnew password that fails the SIGN-UP rules or that is the current one, `429\nrate-limited` (10 failed attempts per account and 30 per IP per 15 minutes,\ncounted before the password is verified; a success gives its attempt back),\n`503` (Redis down).",
         "operationId": "change_password_api_v1_auth_change_password_post",
         "requestBody": {
           "content": {
@@ -5667,7 +5746,7 @@
     },
     "/api/v1/auth/google/callback": {
       "get": {
-        "description": "Where Google sends the browser back. **No auth.** Always a 302.\n\nIn order: the state must be one this process minted and not yet used;\nthe code is exchanged and the ID token verified (signature, audience,\nissuer, expiry); the token's nonce must be the state's; then the\nlinking policy decides. Three destinations:\n\n- an existing account \u2192 the session cookie is set and the browser goes\n  to `/dashboard`;\n- a new address \u2192 a ten-minute ticket is minted and the browser goes to\n  `/sign-up/google?ticket=\u2026` to name the agency;\n- anything else \u2192 `/?google=error&reason=\u2026` with one of `not-configured`,\n  `denied`, `invalid-state`, `exchange-failed`, `email-unverified`,\n  `account-suspended`, `email-claimed`, `invitation-expired`,\n  `account-unavailable`, or `unavailable` when something this route\n  depends on \u2014 Redis, Postgres, the session store \u2014 failed underneath it\n  (2026-09-21; until then that was the one way this route showed a raw\n  500 page).\n\n**Errors:** none as status codes. A person arriving here is not a script\nand gets a page, not a problem document.",
+        "description": "Where Google sends the browser back. **No auth.** Always a 302.\n\nIn order: the state must be one this process minted and not yet used;\nthe code is exchanged and the ID token verified (signature, audience,\nissuer, expiry); the token's nonce must be the state's; then the\nlinking policy decides. Three destinations:\n\n- an existing account \u2192 the session cookie is set and the browser goes\n  to `/dashboard`;\n- a new address \u2192 a ten-minute ticket is minted and the browser goes to\n  `/sign-up/google#ticket=\u2026` (the fragment, never the query, so it is in\n  no request log and no Referer) to name the agency;\n- anything else \u2192 `/?google=error&reason=\u2026` with one of `not-configured`,\n  `denied`, `invalid-state`, `exchange-failed`, `email-unverified`,\n  `account-suspended`, `email-claimed`, `invitation-expired`,\n  `account-unavailable`, or `unavailable` when something this route\n  depends on \u2014 Redis, Postgres, the session store \u2014 failed underneath it\n  (2026-09-21; until then that was the one way this route showed a raw\n  500 page).\n\n**Errors:** none as status codes. A person arriving here is not a script\nand gets a page, not a problem document.",
         "operationId": "google_callback_api_v1_auth_google_callback_get",
         "parameters": [
           {
@@ -5783,22 +5862,19 @@
       }
     },
     "/api/v1/auth/google/pending": {
-      "get": {
-        "description": "What the completion page shows before asking for an agency name. **No auth.**\n\nReads the ticket without consuming it, so a reload of the page is not a\nsecond sign-in. The ticket is a bearer credential with a session token's\nentropy and a reset link's lifetime; carrying it in a query string is the\nsame trade `/reset-password/{token}` makes, for the same reason \u2014 there\nis no session yet to carry it any other way.\n\n**Errors:** `400 invalid-google-ticket` for unknown, used and expired alike.",
-        "operationId": "google_pending_api_v1_auth_google_pending_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "ticket",
-            "required": true,
-            "schema": {
-              "maxLength": 512,
-              "minLength": 1,
-              "title": "Ticket",
-              "type": "string"
+      "post": {
+        "description": "What the completion page shows before asking for an agency name. **No auth.**\n\nA POST so the ticket rides in the body: it is a bearer credential with a\nsession token's entropy, and a URL is logged. It is not a mutation: the\nticket is read without being consumed, so asking twice is not a second\nsign-in. The web page removes the ticket from the address bar once read\n(like invite and reset), so reloading that page does not bring it back and\nthe person starts again. `GET` with a `?ticket=` is `405`.\n\n**Errors:** `400 invalid-google-ticket` for unknown, used and expired alike.",
+        "operationId": "google_pending_api_v1_auth_google_pending_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GooglePendingRequest"
+              }
             }
-          }
-        ],
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
@@ -6023,7 +6099,7 @@
     },
     "/api/v1/auth/reset-password/request": {
       "post": {
-        "description": "Ask for a reset link. **Always `200`, and the same body for every address.**\n\nThe response is byte-identical whether the address has an account, has a\nsuspended one, or has never been seen. Any observable difference is an\noracle for enumerating who banks here, which is precisely what\n`authenticate` already burns a dummy Argon2 hash to avoid on the login path.\n\n**It does differ by deployment, honestly** (2026-09-29): `emailConfigured`\nsays whether this service can send email at all, and the `detail` says\nwhat that means. With no `RESEND_API_KEY` nothing is sent \u2014 and nothing is\nlogged in its place any more, because the link it used to log is a live\ncredential. Neither field depends on the address.\n\nThe email is best-effort by construction: `send_password_reset` never raises\nand never reports its outcome, so a provider outage cannot become a\ndifferent status code.\n\n**Errors:** none. `422` only if the body is not an email address.",
+        "description": "Ask for a reset link. **Always `200`, and the same body for every address.**\n\nThe response is byte-identical whether the address has an account, has a\nsuspended one, or has never been seen. Any observable difference is an\noracle for enumerating who banks here, which is precisely what\n`authenticate` already burns a dummy Argon2 hash to avoid on the login path.\n\n**It does differ by deployment, honestly** (2026-09-29): `emailConfigured`\nsays whether this service can send email at all, and the `detail` says\nwhat that means. With no `RESEND_API_KEY` nothing is sent \u2014 and nothing is\nlogged in its place any more, because the link it used to log is a live\ncredential. Neither field depends on the address.\n\nThe email is best-effort by construction: `send_password_reset` never raises\nand never reports its outcome, so a provider outage cannot become a\ndifferent status code.\n\n**Errors:** `429` when the per-email or per-IP limit is spent. The per-email\nlimit trips identically for every address, so it reveals nothing about\naccounts. `422` if the body is not an email address.",
         "operationId": "request_password_reset_api_v1_auth_reset_password_request_post",
         "requestBody": {
           "content": {
@@ -6107,7 +6183,7 @@
     },
     "/api/v1/billing/webhook": {
       "post": {
-        "description": "Stripe telling us what happened. **The only writer of subscription state.**\n\n**No session auth, and that is not a hole.** The caller is a machine with no\naccount; what authenticates it is an HMAC over the exact bytes of this\nrequest body, keyed on `STRIPE_WEBHOOK_SECRET`. That is a stronger claim\nthan a session cookie makes, because it is a claim about the payload and not\nmerely about the sender.\n\n**The raw body is read, not a parsed model.** `await request.body()` rather\nthan a Pydantic parameter, because the signature covers the bytes Stripe\nsent. Letting FastAPI parse and re-serialise first would verify a signature\nagainst a payload that is equal as JSON and different as bytes, which fails\nfor something as ordinary as key order. This is the single most common way\nwebhook verification is written wrongly, and it fails closed and confusingly\nrather than obviously.\n\n**With no secret configured this refuses.** `503`, naming the variable, and\nit does not fall back to trusting the body \u2014 see `verify_webhook`, which\nexplains why this is the opposite of the answer `services/email.py` gives\nfor its own unset key.\n\n**An unrecognised event type is a `200`.** Stripe sends whatever the account\nis configured to send, and answering non-2xx to an event nobody wants makes\nStripe retry it, back off, and eventually mark the endpoint unhealthy \u2014\nwhich degrades delivery of the events that DO matter. The body says whether\nit was acted on, so a human reading `stripe listen` output can tell the\ndifference between \"handled\" and \"politely ignored\".\n\n**Errors:** `400 invalid-webhook-signature` for a missing, malformed or\nwrong signature, and for a body that is not JSON. `503\nbilling-not-configured` when `STRIPE_WEBHOOK_SECRET` is unset.",
+        "description": "Stripe telling us what happened. **The only writer of subscription state.**\n\n**No session auth, and that is not a hole.** The caller is a machine with no\naccount; what authenticates it is an HMAC over the exact bytes of this\nrequest body, keyed on `STRIPE_WEBHOOK_SECRET`. That is a stronger claim\nthan a session cookie makes, because it is a claim about the payload and not\nmerely about the sender.\n\n**The raw body is read, not a parsed model.** `await request.body()` rather\nthan a Pydantic parameter, because the signature covers the bytes Stripe\nsent. Letting FastAPI parse and re-serialise first would verify a signature\nagainst a payload that is equal as JSON and different as bytes, which fails\nfor something as ordinary as key order. This is the single most common way\nwebhook verification is written wrongly, and it fails closed and confusingly\nrather than obviously.\n\n**With no secret configured this refuses.** `503`, naming the variable, and\nit does not fall back to trusting the body \u2014 see `verify_webhook`, which\nexplains why this is the opposite of the answer `services/email.py` gives\nfor its own unset key.\n\n**An unrecognised event type is a `200`.** Stripe sends whatever the account\nis configured to send, and answering non-2xx to an event nobody wants makes\nStripe retry it, back off, and eventually mark the endpoint unhealthy \u2014\nwhich degrades delivery of the events that DO matter. The body says whether\nit was acted on, so a human reading `stripe listen` output can tell the\ndifference between \"handled\" and \"politely ignored\".\n\n**Idempotent and ordered.** Each handled event id is recorded once; a\nredelivery answers `{\"received\": true, \"handled\": false, \"duplicate\": true}`\nand applies nothing. An event older than the agency's newest applied one\nanswers `{\"received\": true, \"handled\": false, \"stale\": true}` and applies\nnothing. Unmatched and unhandled events answer `handled: false` alone.\n\n**Errors:** `400 invalid-webhook-signature` for a missing, malformed or\nwrong signature, and for a body that is not JSON. `503\nbilling-not-configured` when `STRIPE_WEBHOOK_SECRET` is unset.",
         "operationId": "stripe_webhook_api_v1_billing_webhook_post",
         "parameters": [
           {
@@ -6132,9 +6208,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Stripe Webhook Api V1 Billing Webhook Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/WebhookAck"
                 }
               }
             },
@@ -7021,21 +7095,20 @@
         ]
       }
     },
-    "/api/v1/reports/{token}": {
-      "get": {
-        "description": "A report, by share token. **No session required** \u2014 Epic 9.8.\n\nThis is the send path Epic 9's acceptance criterion needs: the prospect a\nreport is about has no account, and must not need one to read it.\n\n**The token is the whole credential**, so the rules are narrow and worth\nstating:\n\n* **Read-only.** There is no sibling route that mutates anything by token.\n  A holder cannot edit the competitor set, re-run the scan, or reach any\n  other scan \u2014 the token resolves to exactly one row.\n* **`404` for every rejection, with one code path.** A malformed token, an\n  unknown token and a well-formed miss are indistinguishable in both status\n  and body. There is no shape or length pre-check, deliberately: rejecting\n  an implausible token faster than a plausible one is a timing oracle that\n  makes enumeration cheaper. Every guess pays for the same index lookup.\n* **No `401`, ever.** A `401` would say \"this token is real, authenticate to\n  use it\", which is precisely the bit an enumerator wants.\n* **Same projection as the authenticated route.** `build_report` is reused\n  rather than reimplemented, so the facts-only guarantee `test_facts_only.py`\n  sweeps over this module covers this response too \u2014 a second assembly path\n  would be a second place for a snippet to slip in.\n\n**Errors:** `404` only.",
-        "operationId": "get_public_report_api_v1_reports__token__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "token",
-            "required": true,
-            "schema": {
-              "title": "Token",
-              "type": "string"
+    "/api/v1/reports/shared": {
+      "post": {
+        "description": "A report, by share token. **No session required** \u2014 Epic 9.8.\n\nThis is the send path Epic 9's acceptance criterion needs: the prospect a\nreport is about has no account, and must not need one to read it.\n\n**The token is the whole credential**, so the rules are narrow and worth\nstating:\n\n* **Read-only.** There is no sibling route that mutates anything by token.\n  A holder cannot edit the competitor set, re-run the scan, or reach any\n  other scan \u2014 the token resolves to exactly one row.\n* **`404` for every rejection, with one code path.** An unknown, revoked or\n  expired token is indistinguishable in both status and body. The only\n  pre-check is the body's length bound (`422` for an empty or over-512\n  token); it says nothing about whether any token is real. Every plausible\n  guess pays for the same index lookup.\n* **The token is in the POST body, not the path**, so it stays out of\n  request logs.\n* **No `401`, ever.** A `401` would say \"this token is real, authenticate to\n  use it\", which is precisely the bit an enumerator wants.\n* **Same projection as the authenticated route.** `build_report` is reused\n  rather than reimplemented, so the facts-only guarantee `test_facts_only.py`\n  sweeps over this module covers this response too \u2014 a second assembly path\n  would be a second place for a snippet to slip in.\n\n**Errors:** `404` only.",
+        "operationId": "get_public_report_api_v1_reports_shared_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SharedReportRequest"
+              }
             }
-          }
-        ],
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
@@ -7064,21 +7137,20 @@
         ]
       }
     },
-    "/api/v1/reports/{token}.pdf": {
-      "get": {
-        "description": "A report PDF, by share token. **No session required** \u2014 Epic 9.14.\n\nTHE DECISION, STATED RATHER THAN DEFAULTED\n------------------------------------------\nA stranger holding a share token CAN download the PDF, and the share page\noffers it. Three reasons, in order of weight:\n\n1. **It exposes nothing new.** The PDF carries strictly the facts\n   `GET /reports/{token}` already serves to the same holder, rendered\n   differently. Withholding it would not protect a single datum.\n2. **The send path is the point.** Epic 9.8 built this token because \"the\n   prospect a report is about has no account, and must not need one to read\n   it\". Granting the harder-to-forward form (a live URL) while withholding\n   the easy one (a file they can keep) is backwards for a mechanism whose\n   whole job is *send*.\n3. **A prospect wants a file.** The realistic next step for someone sent a\n   report is forwarding it to a colleague or putting it in front of a\n   budget holder, and a link that dies when they change jobs is worse for\n   the agency than a PDF that does not.\n\n**What it costs, said plainly: a downloaded PDF outlives revocation.**\nEpic 9.14 accepted that cost when it was zero \u2014 links had no expiry and no\nrevocation, so the file took away nothing the link did not already give\naway permanently \u2014 and marked this \"the route to revisit when revocation\nships\". Epic 9.21 shipped it, so this is that revisit, and the decision is\nrecorded rather than inherited.\n\n**A revoked or expired link stops serving files immediately**, on the same\nlookup as the JSON route: `scan_for_share_token` returns nothing and this\nroute 404s like any other miss. What revocation cannot do is recall a copy\nalready on someone's disk, and nothing can \u2014 the alternative would be\nserving a watermarked or phone-home document, which is a different product\nwith different privacy properties. So the residual gap is real, bounded,\nand named: revocation governs the LINK from the moment it is invoked, never\na file already downloaded.\n\nEvery rule the JSON share route states holds here unchanged, because it is\nthe same lookup: read-only, one code path, `404` for every rejection with no\nshape pre-check, and never a `401` \u2014 which would say \"this token is real,\nauthenticate to use it\".\n\n**Errors:** `404` only.",
-        "operationId": "get_public_report_pdf_api_v1_reports__token__pdf_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "token",
-            "required": true,
-            "schema": {
-              "title": "Token",
-              "type": "string"
+    "/api/v1/reports/shared/pdf": {
+      "post": {
+        "description": "A report PDF, by share token. **No session required** \u2014 Epic 9.14.\n\nTHE DECISION, STATED RATHER THAN DEFAULTED\n------------------------------------------\nA stranger holding a share token CAN download the PDF, and the share page\noffers it. Three reasons, in order of weight:\n\n1. **It exposes nothing new.** The PDF carries strictly the facts\n   `POST /reports/shared` already serves to the same holder, rendered\n   differently. Withholding it would not protect a single datum.\n2. **The send path is the point.** Epic 9.8 built this token because \"the\n   prospect a report is about has no account, and must not need one to read\n   it\". Granting the harder-to-forward form (a live URL) while withholding\n   the easy one (a file they can keep) is backwards for a mechanism whose\n   whole job is *send*.\n3. **A prospect wants a file.** The realistic next step for someone sent a\n   report is forwarding it to a colleague or putting it in front of a\n   budget holder, and a link that dies when they change jobs is worse for\n   the agency than a PDF that does not.\n\n**What it costs, said plainly: a downloaded PDF outlives revocation.**\nEpic 9.14 accepted that cost when it was zero \u2014 links had no expiry and no\nrevocation, so the file took away nothing the link did not already give\naway permanently \u2014 and marked this \"the route to revisit when revocation\nships\". Epic 9.21 shipped it, so this is that revisit, and the decision is\nrecorded rather than inherited.\n\n**A revoked or expired link stops serving files immediately**, on the same\nlookup as the JSON route: `scan_for_share_token` returns nothing and this\nroute 404s like any other miss. What revocation cannot do is recall a copy\nalready on someone's disk, and nothing can \u2014 the alternative would be\nserving a watermarked or phone-home document, which is a different product\nwith different privacy properties. So the residual gap is real, bounded,\nand named: revocation governs the LINK from the moment it is invoked, never\na file already downloaded.\n\nEvery rule the JSON share route states holds here unchanged, because it is\nthe same lookup: read-only, one code path, `404` for every rejection (the body's\ntoken is bounded 1..512 by the schema, a `422` alike for real and fake\ntokens, and no other shape check runs), and never a `401` \u2014 which would say \"this token is real,\nauthenticate to use it\".\n\n**Errors:** `404` only.",
+        "operationId": "get_public_report_pdf_api_v1_reports_shared_pdf_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SharedReportRequest"
+              }
             }
-          }
-        ],
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {

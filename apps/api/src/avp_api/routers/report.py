@@ -4,7 +4,7 @@ Recorded in docs/api-contracts.md.
 
 **This module holds the first unauthenticated read surface in the product.**
 Everything else behind `/api/v1` resolves a session cookie to a Principal and
-scopes every query to that agency. `GET /reports/{token}` does not: it is
+scopes every query to that agency. `POST /reports/shared` does not: it is
 reached by a stranger with a link. The rules that keeps safe are stated on the
 route itself rather than assumed.
 """
@@ -20,17 +20,18 @@ from sqlalchemy import select
 from ..deps import DbDep, PrincipalDep, SettingsDep
 from ..errors import NotFound
 from ..models import Scan
-from ..schemas.report import ReportOut, ShareLinkOut
+from ..schemas.report import ReportOut, SharedReportRequest, ShareLinkOut
 from ..services import report as report_service
 from ..services import report_pdf as pdf_service
 from ..services import share as share_service
+from ..services.links import share_link
 
 router = APIRouter(tags=["reports"])
 
 
 def _share_url(base_url: str, token: str) -> str:
     """The public URL for a token. One definition, used by every caller."""
-    return f"{base_url.rstrip('/')}/share/{token}"
+    return share_link(base_url, token)
 
 
 _UNSAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]+")
@@ -248,24 +249,17 @@ async def revoke_share_link(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-# The `.pdf` route MUST be registered before `/reports/{token}`.
-#
-# Starlette's default path converter matches everything except `/`, so
-# `/reports/abc.pdf` is a perfectly good match for `/reports/{token}` with a
-# token of "abc.pdf" — and routes are tried in registration order, so whichever
-# is declared first wins. Declared the other way round, every PDF request
-# silently became a JSON request for a token nobody minted, and answered 404.
-# `/scans/{scanId}/report.pdf` has no such problem because its final segment is
-# a literal. A test asserts this ordering rather than trusting the file to stay
-# in this shape.
-@router.get(
-    "/reports/{token}.pdf",
+# The share token is in the POST body, never the path, so it cannot reach a
+# request log. `GET /reports/{token}` and `GET /reports/{token}.pdf` are gone
+# on purpose: keeping them would keep a token-in-path surface.
+@router.post(
+    "/reports/shared/pdf",
     response_class=Response,
     responses={200: {"content": {"application/pdf": {}}}},
 )
 async def get_public_report_pdf(
     db: DbDep,
-    token: str = Path(),
+    payload: SharedReportRequest,
 ) -> Response:
     """A report PDF, by share token. **No session required** — Epic 9.14.
 
@@ -275,7 +269,7 @@ async def get_public_report_pdf(
     offers it. Three reasons, in order of weight:
 
     1. **It exposes nothing new.** The PDF carries strictly the facts
-       `GET /reports/{token}` already serves to the same holder, rendered
+       `POST /reports/shared` already serves to the same holder, rendered
        differently. Withholding it would not protect a single datum.
     2. **The send path is the point.** Epic 9.8 built this token because "the
        prospect a report is about has no account, and must not need one to read
@@ -304,23 +298,25 @@ async def get_public_report_pdf(
     a file already downloaded.
 
     Every rule the JSON share route states holds here unchanged, because it is
-    the same lookup: read-only, one code path, `404` for every rejection with no
-    shape pre-check, and never a `401` — which would say "this token is real,
+    the same lookup: read-only, one code path, `404` for every rejection (the body's
+    token is bounded 1..512 by the schema, a `422` alike for real and fake
+    tokens, and no other shape check runs), and never a `401` — which would say "this token is real,
     authenticate to use it".
 
     **Errors:** `404` only.
     """
-    scan = await share_service.scan_for_share_token(db, token)
+    scan = await share_service.scan_for_share_token(db, payload.token)
     if scan is None:
         raise NotFound(detail="No report with that link.")
 
     return _pdf_response(await report_service.build_report(db, scan))
 
 
-@router.get("/reports/{token}", response_model=ReportOut)
+@router.post("/reports/shared", response_model=ReportOut)
 async def get_public_report(
     db: DbDep,
-    token: str = Path(),
+    payload: SharedReportRequest,
+    response: Response,
 ) -> Any:
     """A report, by share token. **No session required** — Epic 9.8.
 
@@ -333,11 +329,13 @@ async def get_public_report(
     * **Read-only.** There is no sibling route that mutates anything by token.
       A holder cannot edit the competitor set, re-run the scan, or reach any
       other scan — the token resolves to exactly one row.
-    * **`404` for every rejection, with one code path.** A malformed token, an
-      unknown token and a well-formed miss are indistinguishable in both status
-      and body. There is no shape or length pre-check, deliberately: rejecting
-      an implausible token faster than a plausible one is a timing oracle that
-      makes enumeration cheaper. Every guess pays for the same index lookup.
+    * **`404` for every rejection, with one code path.** An unknown, revoked or
+      expired token is indistinguishable in both status and body. The only
+      pre-check is the body's length bound (`422` for an empty or over-512
+      token); it says nothing about whether any token is real. Every plausible
+      guess pays for the same index lookup.
+    * **The token is in the POST body, not the path**, so it stays out of
+      request logs.
     * **No `401`, ever.** A `401` would say "this token is real, authenticate to
       use it", which is precisely the bit an enumerator wants.
     * **Same projection as the authenticated route.** `build_report` is reused
@@ -347,7 +345,8 @@ async def get_public_report(
 
     **Errors:** `404` only.
     """
-    scan = await share_service.scan_for_share_token(db, token)
+    response.headers["Cache-Control"] = "private, no-store"
+    scan = await share_service.scan_for_share_token(db, payload.token)
     if scan is None:
         # Identical to every other miss. Never "malformed", never "expired",
         # never 401 — each of those is a bit of information about a guess.

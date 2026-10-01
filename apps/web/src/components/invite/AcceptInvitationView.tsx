@@ -1,11 +1,11 @@
 'use client';
 
 /**
- * /invite/{token} — the screen. Epic 9.14.
+ * /invite#{token} — the screen. Epic 9.14.
  *
  * The THIRD unauthenticated token-bearing route in this product, and it follows
  * the first two rather than inventing a third set of rules. Epic 9.8's
- * `/share/{token}` established them and Epic 9.13's `/reset-password/{token}`
+ * `/share#{token}` established them and Epic 9.13's `/reset-password#{token}`
  * confirmed them: the token is the whole credential, every refusal looks the
  * same, and the screen has exactly one thing to say when it does not work.
  *

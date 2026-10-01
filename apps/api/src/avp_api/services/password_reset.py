@@ -28,6 +28,7 @@ from ..config import Settings
 from ..models import PasswordResetToken, User, UserStatus
 from ..security import hash_password, new_session_token, token_digest
 from .auth import normalise_email
+from .links import reset_link
 
 logger = structlog.get_logger(__name__)
 
@@ -117,7 +118,7 @@ def reset_url(settings: Settings, token: str) -> str:
     different links. It carries a live credential: send it or print it to the
     operator, and never log it.
     """
-    return f"{settings.public_web_base_url.rstrip('/')}/reset-password/{token}"
+    return reset_link(settings.public_web_base_url, token)
 
 
 async def confirm_reset(
@@ -134,6 +135,9 @@ async def confirm_reset(
             select(PasswordResetToken).where(
                 PasswordResetToken.token_digest == token_digest(token)
             )
+            # Row lock: a second concurrent confirm waits for the first to
+            # commit, then sees `used_at` set and is refused.
+            .with_for_update()
         )
     ).scalar_one_or_none()
 
@@ -153,5 +157,4 @@ async def confirm_reset(
     user.password_hash = hash_password(new_password, settings)
     row.used_at = now
     await session.flush()
-    logger.info("password_reset.confirm.succeeded", user_id=user.id)
     return user

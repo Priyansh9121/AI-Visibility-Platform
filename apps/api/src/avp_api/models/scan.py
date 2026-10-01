@@ -69,6 +69,17 @@ class Scan(Base, TimestampMixin):
         DateTime(timezone=True), nullable=True
     )
 
+    # When this scan was handed to an executor (`routers/scans.py`, set in the
+    # same transaction that releases the allowance lock). NULL for a row that
+    # only competitor detection has opened: detection never submits. Two
+    # readers, both keyed on it: `scan_allowance.count_scans` counts an
+    # in-flight scan from its submission rather than its creation (an adopted
+    # detection row can be old), and `scan_executor.reap_stale_scans` fails a
+    # QUEUED scan submitted long ago that no executor ever claimed.
+    submitted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     # Machine-readable code plus a SAFE detail string. `error_detail` carries
     # our own diagnostics only — never a vendor response body, which could
     # contain third-party content (the facts-only rule).
@@ -162,7 +173,7 @@ class Scan(Base, TimestampMixin):
             unique=True,
             postgresql_where=text("status IN ('queued', 'running')"),
         ),
-        # Unique, and the lookup index for GET /reports/{token} — Epic 9.8.
+        # Unique, and the lookup index for POST /reports/shared (token in the body) — Epic 9.8.
         #
         # Partial on NOT NULL for both halves of that. Postgres treats NULLs as
         # distinct so a plain unique index would already permit many unshared

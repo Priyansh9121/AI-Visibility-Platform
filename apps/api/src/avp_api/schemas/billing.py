@@ -87,3 +87,17 @@ class PortalSessionOut(ApiModel):
     """
 
     url: str
+
+
+class WebhookAck(ApiModel):
+    """The webhook's answer to Stripe. Read by a human running `stripe listen`.
+
+    `duplicate` and `stale` are present only when true (the route drops `None`),
+    so an applied, ignored or unmatched event keeps the two-key body it always
+    had. Stripe only looks at the status code.
+    """
+
+    received: bool
+    handled: bool
+    duplicate: bool | None = None
+    stale: bool | None = None

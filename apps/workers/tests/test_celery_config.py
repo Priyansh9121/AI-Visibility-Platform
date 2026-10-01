@@ -7,6 +7,8 @@ for none of that.
 
 from __future__ import annotations
 
+import pytest
+
 from avp_workers.celery_app import celery_app
 from avp_workers.config import WorkerSettings
 
@@ -73,3 +75,57 @@ def test_settings_honour_explicit_overrides(monkeypatch) -> None:  # noqa: ANN00
     monkeypatch.setenv("CELERY_BROKER_URL", "redis://elsewhere:6379/7")
     s = WorkerSettings.from_env()
     assert s.broker_url == "redis://elsewhere:6379/7"
+
+
+def test_redis_timeouts_default_and_honour_env(monkeypatch) -> None:  # noqa: ANN001
+    """A dead Redis must fail a worker's connect fast, not hang it."""
+    monkeypatch.delenv("REDIS_CONNECT_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("REDIS_SOCKET_TIMEOUT_SECONDS", raising=False)
+    s = WorkerSettings.from_env()
+    assert (s.redis_connect_timeout, s.redis_socket_timeout) == (2.0, 2.0)
+    monkeypatch.setenv("REDIS_CONNECT_TIMEOUT_SECONDS", "1.5")
+    monkeypatch.setenv("REDIS_SOCKET_TIMEOUT_SECONDS", "4")
+    s = WorkerSettings.from_env()
+    assert (s.redis_connect_timeout, s.redis_socket_timeout) == (1.5, 4.0)
+
+
+def test_celery_bounds_connect_but_not_the_broker_read() -> None:
+    """Connect is bounded on broker and result backend. The broker's blocking
+    BRPOP/pub-sub reads get NO socket_timeout (kombu already bounds BRPOP at 1s;
+    a socket timeout would fire on an idle listener)."""
+    from avp_workers.config import settings
+
+    broker = celery_app.conf.broker_transport_options
+    assert broker["socket_connect_timeout"] == settings.redis_connect_timeout
+    assert "socket_timeout" not in broker
+    assert celery_app.conf.redis_socket_connect_timeout == settings.redis_connect_timeout
+
+
+def test_health_check_redis_client_carries_the_timeouts(monkeypatch) -> None:  # noqa: ANN001
+    import redis as redis_lib
+
+    from avp_workers.config import settings
+    from avp_workers.tasks import health
+
+    seen: dict[str, object] = {}
+
+    class _Fake:
+        def ping(self) -> None: ...
+        def close(self) -> None: ...
+
+    def _from_url(url: str, **kwargs: object) -> _Fake:
+        seen.update(kwargs)
+        return _Fake()
+
+    monkeypatch.setattr(redis_lib.Redis, "from_url", staticmethod(_from_url))
+    health.check_datastores()
+    assert seen["socket_connect_timeout"] == settings.redis_connect_timeout
+    assert seen["socket_timeout"] == settings.redis_socket_timeout
+
+
+@pytest.mark.parametrize("name", ["REDIS_CONNECT_TIMEOUT_SECONDS", "REDIS_SOCKET_TIMEOUT_SECONDS"])
+@pytest.mark.parametrize("bad", ["0", "-1", "nan", "inf", "-inf"])
+def test_a_timeout_that_disables_the_bound_is_rejected(name, bad, monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.setenv(name, bad)
+    with pytest.raises(ValueError):
+        WorkerSettings.from_env()

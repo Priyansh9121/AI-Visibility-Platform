@@ -1103,6 +1103,41 @@ has. `tokens.test.ts` now checks every `var()` the preset references against the
 stylesheet, so a token exposed in one place and missing from the other fails
 CI.
 
+### Tailwind traps the preset cannot catch at build time
+
+Replacing the palette makes a wrong *colour* fail loudly. Three traps go the
+other way: the class exists, compiles, and paints a Tailwind default the
+preset never touched. `stockClasses.test.ts` scans `apps/web/src` and every
+`packages/*/src` for all three (all clean at the time of writing).
+
+1. **`dark:` follows the OS, not the theme switch.** Neither
+   `apps/web/tailwind.config.ts` nor the preset sets `darkMode`, so Tailwind 3's
+   default (`darkMode: 'media'`, `tailwindcss/stubs/config.full.js:4`) applies
+   and `dark:` answers `prefers-color-scheme`. AVP's theme is
+   `[data-theme='dark']` in `tokens.css`. A `dark:` class would disagree with
+   the switch. **Rule:** never write `dark:`. Every surface, text and line
+   token already resolves per theme.
+2. **A bare `ring` paints stock blue.** `ring` and `ring-1/2/4/8` take their
+   colour from `ringColor.DEFAULT`, which stock config sets to
+   `theme('colors.blue.500', '#3b82f6')` at 0.5 opacity
+   (`config.full.js:761-769`, `ringOpacity` `:771`). The preset replaces
+   `colors` and defines no ring colour, so `blue.500` is absent and the
+   `#3b82f6` fallback wins. **Rule:** never use a ring width. Focus is
+   `shadow-focus` (`focus-visible:shadow-focus`) or the global `:focus-visible`
+   rule in `base.css`, both on `--avp-focus-ring`.
+3. **A bare `border` draws `currentColor`.** Preflight sets
+   `border-color: theme('borderColor.DEFAULT', currentColor)`
+   (`preflight.css:12`); stock `borderColor.DEFAULT` is
+   `theme('colors.gray.200', 'currentColor')` (`config.full.js:82-85`), and the
+   preset has no `gray`. So a width alone gives a line in the text colour.
+   **Rule:** pair every `border`, `border-t`, `border-2` and so on with a
+   line colour in the same class list: `border-line-hairline`,
+   `border-line-strong` or `border-line-ink`.
+
+The test checks "same class list" (one string literal), so a colour applied
+by a wrapping component or a global rule is not seen; that shape is a
+finding to fix, not an exception to allow.
+
 ---
 
 ## 9. Token parity

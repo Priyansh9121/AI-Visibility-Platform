@@ -1114,7 +1114,7 @@ class TestTheCrossEngineReading:
         private = (await client.get(f"{BASE}/scans/{sid}/report")).json()
         token = (await client.post(f"{BASE}/scans/{sid}/share")).json()["token"]
         client.cookies.clear()
-        public = (await client.get(f"{BASE}/reports/{token}")).json()
+        public = (await client.post(f"{BASE}/reports/shared", json={"token": token})).json()
 
         assert public["proof"]["crossEngine"] == private["proof"]["crossEngine"]
 

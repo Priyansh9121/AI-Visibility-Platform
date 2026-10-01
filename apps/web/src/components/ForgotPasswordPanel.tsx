@@ -36,7 +36,7 @@ import {
   Reveal,
   TextField,
 } from '@avp/design-system';
-import { api, GOOGLE_SIGN_IN_URL } from '@/lib/api';
+import { api, ApiProblem, GOOGLE_SIGN_IN_URL } from '@/lib/api';
 import { OPERATOR } from '@/lib/legal/operator';
 
 /** What the API said it did: emailed a link, or could not email at all. */
@@ -75,8 +75,15 @@ export function ForgotPasswordPanel({
       // The one branch, and it is on the deployment, never on the address:
       // every address gets the same body, which says whether email is on.
       setSent(result.emailConfigured ? 'emailed' : 'email-off');
-    } catch {
-      setError('The request did not complete. Check your connection and try again.');
+    } catch (err) {
+      // A 429 is the same for every address (the per-email limit trips
+      // identically), so showing the server's words reveals nothing about
+      // accounts. Anything else is the request not completing.
+      if (err instanceof ApiProblem && err.status === 429) {
+        setError(err.problem.detail);
+      } else {
+        setError('The request did not complete. Check your connection and try again.');
+      }
     } finally {
       setBusy(false);
     }

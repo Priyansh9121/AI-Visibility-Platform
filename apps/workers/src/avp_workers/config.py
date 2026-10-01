@@ -17,9 +17,18 @@ exactly the wrong moment.
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 from urllib.parse import urlsplit, urlunsplit
+
+
+def _positive_seconds(name: str, default: str) -> float:
+    """A timeout of 0, a negative, nan or inf would disable the bound; refuse."""
+    value = float(os.environ.get(name, default))
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{name} must be a finite number greater than 0")
+    return value
 
 
 def _redis_db(url: str, db: int) -> str:
@@ -34,6 +43,9 @@ class WorkerSettings:
     broker_url: str
     result_backend: str
     task_default_queue: str = "scans"
+    # Same defaults and env names as the API, so one setting bounds both.
+    redis_connect_timeout: float = 2.0
+    redis_socket_timeout: float = 2.0
 
     @classmethod
     def from_env(cls) -> WorkerSettings:
@@ -45,6 +57,8 @@ class WorkerSettings:
             ),
             broker_url=os.environ.get("CELERY_BROKER_URL", _redis_db(redis_url, 1)),
             result_backend=os.environ.get("CELERY_RESULT_BACKEND", _redis_db(redis_url, 2)),
+            redis_connect_timeout=_positive_seconds("REDIS_CONNECT_TIMEOUT_SECONDS", "2"),
+            redis_socket_timeout=_positive_seconds("REDIS_SOCKET_TIMEOUT_SECONDS", "2"),
         )
 
 

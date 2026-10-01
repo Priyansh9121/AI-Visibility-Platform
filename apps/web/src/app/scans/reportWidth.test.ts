@@ -3,7 +3,7 @@
  * Epic 14.1 (corrected), reversed on purpose by Epic 17.
  *
  * design-direction.md's width table governs every route. Since Epic 9.19 it
- * put `/scans/{id}/report` and `/share/{token}` at `--avp-report-width`,
+ * put `/scans/{id}/report` and `/share` at `--avp-report-width`,
  * 52rem, and this file's first version asserted the route never carried
  * `wide`, because Epic 14.1's first cut had used `wide` to solve a framing
  * problem and quietly moved the route to the Working measure — the desk it
@@ -30,7 +30,7 @@ const read = (rel: string): string =>
   readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
 
 const REPORT_ROUTE = read('./[scanId]/report/page.tsx');
-const SHARE_ROUTE = read('../share/[token]/page.tsx');
+const SHARE_ROUTE = read('../share/page.tsx');
 const COMPARE_ROUTE = read('../page.tsx');
 const SHELL_CSS = read('../../../../../packages/design-system/src/styles/components.css');
 const TOKENS_CSS = read('../../../../../packages/design-system/src/styles/tokens.css');

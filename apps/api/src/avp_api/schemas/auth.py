@@ -144,12 +144,18 @@ class UserOut(ApiModel):
     sign_in_methods: list[SignInMethod]
 
 
+class GooglePendingRequest(ApiModel):
+    """The ticket to peek at, in a body so it never lands in a URL."""
+
+    ticket: str = Field(min_length=1, max_length=512)
+
+
 class GooglePendingOut(ApiModel):
     """What Google told us about a person who has no account yet — Epic 20.
 
     Read by the sign-up completion page so it can show the address the
     account will be under and pre-fill the name. Nothing here is a credential;
-    the ticket in the query string is.
+    the ticket is.
     """
 
     email: str

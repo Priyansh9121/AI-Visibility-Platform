@@ -1,0 +1,23 @@
+# Changes from the source (skills/market-research/SKILL.md)
+- Description rewritten (source :3): generic "investor due diligence, fund research" trigger -> AVP competitor, pricing, market-size and ICP research; excludes copy writing and points to `tells` and `deep-research`. Removes over-triggering.
+- Dropped `metadata: origin: ECC` (:4-5): not part of the library's frontmatter contract.
+- Removed the Investor / Fund Diligence mode and investor dossier triggers (:14, :16-17, :41-47): no fundraising job in AVP's brief; scope creep.
+- Research Standards (:20-27) kept and tightened: rule 1 now requires a source URL and as-of date, or an "estimate" label with reasoning (from Quality Gate :83; Research Standards :22-26); adds facts-only and internal-only-estimates rules.
+- Untrusted Sources section (:29-37) kept in condensed form under rule 7, the no-form/no-API rule comes from source :35; no-signup is new -> prevents prompt injection from vendor pages.
+- Competitive Analysis (:49-55) rebuilt around AI visibility / GEO tools with concrete fields (prices, plan limits, feature yes/no); funding and investor history removed (:52) as out of scope. Adds "record facts, never paste competitor copy" -> facts-only house rule.
+- Added "Start from what exists" pointing to `docs/competitor-research-2026-09-10.md` (structure only, not quoted) -> avoids restarting research.
+- Added Pricing check and Agency ICP modes, with the price marked as the founder's decision -> product-decision rule.
+- Market Sizing (:57-61) kept; added "internal only, never in landing or pricing copy" and pointer to `tells` -> unsourced/invented numbers must not reach public copy.
+- Technology / Vendor Research (:63-68) kept; added the providers.test.ts, /privacy and license_audit.py classification step for any new dependency or host.
+- Added workflow step using built-in `deep-research` for broad sweeps -> removes overlap.
+- Output Format (:70-78) split "key findings" into Facts and Inference sections -> enforces fact/inference separation (:26).
+- Quality Gate (:80-87) kept, with added checks for no pasted copy, estimates internal, price left to founder, no source instruction followed.
+- No ECC-only tools, MCP servers, sibling skills, install steps, hooks or allowed-tools were present in the source; none added.
+- Added rule 8 on competitor-reference rules (`docs/north-star.md:79-103`, `:111-114`): rendered pages only, no source/DOM scraping, recommendations from AVP's data model, no public comparative claim without re-check and `tells` review -> security review Medium.
+- Rule 5 extended: no screenshots or images of competitor pages (`apps/api/tests/test_facts_only.py`) -> facts-only.
+- Untrusted sources (source :37): agent-directed text is noted in one line of own words, never quoted -> prevents re-injecting it.
+- Rule 6: default output is chat only, files only where the founder says -> repo remote may be public.
+- Start-from-what-exists: added north-star §2.1 (:116-147) and §9.2 (:1016-1027); widening the competitor set is the founder's call; "carry forward facts, not text, re-verified" replaces the contradictory quote/carry wording.
+- Vendor research: `license_audit.py` covers Python only; JS licences checked by hand -> avoids false assurance.
+- Description: "$160" replaced by "AVP's current published plan", "competitors' pricing", excludes pricing-card code work -> avoids over-triggering and a stale hard-coded price.
+- Dropped as separate items (previously unlogged): "adoption signals" (source :66, folded into "trade-offs" only), the standalone "implications" output section (:75, folded into Facts/Inference/Recommendation), and the quality-gate line "the output makes a decision easier" (:87, replaced by the decision restated in workflow step 1) -> shorter, no unmeasurable checks.

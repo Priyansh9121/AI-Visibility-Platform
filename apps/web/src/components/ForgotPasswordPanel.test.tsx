@@ -20,6 +20,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ResetRequestResult } from '@avp/shared-types';
 import { OPERATOR } from '@/lib/legal/operator';
+import { ApiProblem } from '@/lib/api';
 
 const requestPasswordReset = vi.fn<(email: string) => Promise<ResetRequestResult>>();
 
@@ -222,5 +223,34 @@ describe('with email set up', () => {
     expect(text).not.toContain('isn’t available yet');
     expect(text).not.toContain(OPERATOR.email);
     expect(text).toContain('Use a different address');
+  });
+});
+
+describe('when the server answers 429', () => {
+  beforeEach(() => {
+    requestPasswordReset.mockReset();
+  });
+
+  it('shows the server detail, not the network message', async () => {
+    requestPasswordReset.mockRejectedValue(
+      new ApiProblem({
+        type: '/problems/rate-limited',
+        title: 'Too many requests',
+        status: 429,
+        detail: 'Too many attempts. Try again in 60 minutes.',
+        instance: '/api/v1/auth/reset-password/request',
+      }),
+    );
+    const el = await submitted('someone@example.com');
+    const text = el.textContent ?? '';
+    expect(text).toContain('Too many attempts. Try again in 60 minutes.');
+    expect(text).not.toContain('did not complete');
+    expect(el.querySelector('.avp-errorstate')).not.toBeNull();
+  });
+
+  it('still shows the network message for a non-problem failure', async () => {
+    requestPasswordReset.mockRejectedValue(new TypeError('Failed to fetch'));
+    const el = await submitted('someone@example.com');
+    expect(el.textContent).toContain('The request did not complete.');
   });
 });

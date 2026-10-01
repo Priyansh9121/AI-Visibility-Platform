@@ -51,6 +51,8 @@ import {
   DETECTION_STATUS,
   DIMENSION_NOTE,
   EXCLUSION_REASON,
+  PARTIAL_AUDIT_LABEL,
+  PARTIAL_AUDIT_NOTE,
   POSITION_COPY,
   ROBOTS_DISALLOWED,
   VISIBILITY_FLAG,
@@ -76,7 +78,7 @@ export interface ReportViewProps {
    */
   competitorEditor?: ReactNode;
   /**
-   * Render as a PUBLIC document — Epic 9.8, `/share/{token}`.
+   * Render as a PUBLIC document — Epic 9.8, `/share#{token}`.
    *
    * Omitting `competitorEditor` already removes the only *editing* affordance,
    * which is why this component was almost public-ready by construction. What
@@ -1090,7 +1092,7 @@ function AuditEvidence({ report }: { report: Report }) {
     <div>
       <h3 className="flex items-center gap-3 text-ui-sm font-medium text-text-primary">
         {disallowed ? 'What the site’s robots.txt says' : 'What the site itself says'}
-        {audit.status === 'partial' && <Badge tone="warn">Partial audit</Badge>}
+        {audit.status === 'partial' && <Badge tone="warn">{PARTIAL_AUDIT_LABEL}</Badge>}
         {disallowed && <Badge tone="neutral">{EXCLUSION_REASON.CRAWL_DISALLOWED!.label}</Badge>}
       </h3>
       {disallowed ? (
@@ -1105,8 +1107,7 @@ function AuditEvidence({ report }: { report: Report }) {
         <p className="mt-2 text-ui-sm leading-prose text-text-secondary">
           {audit.passed} checks passed, {audit.warned} raised a warning and {audit.failed} failed
           {audit.notApplicable > 0 ? `; ${audit.notApplicable} could not apply` : ''}.
-          {audit.status === 'partial' &&
-            ' Some signals were unavailable, so the sub-score was computed from what could be measured.'}
+          {audit.status === 'partial' && ` ${PARTIAL_AUDIT_NOTE}`}
         </p>
       )}
       {audit.findings.length > 0 && (

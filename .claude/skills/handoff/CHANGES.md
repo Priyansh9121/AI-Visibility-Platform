@@ -1,0 +1,15 @@
+# Changes from upstream
+- Description rewritten to trigger only on a handoff or fresh-session summary request, or ahead of a context or usage limit -> removes vague triggering (SKILL.md:3).
+- Kept `disable-model-invocation: true` and the `argument-hint` -> stays user-invoked (SKILL.md:4-5).
+- Save location made explicit: never the workspace or AVP repo (SKILL.md:8).
+- Suggested-skills section limited to installed or library names -> avoids pointing at skills that do not exist here (SKILL.md:10).
+- Added `docs/build-log.md` to the do-not-duplicate list (SKILL.md:12).
+- Added AVP checklist: branch and unpushed commits (never push), working tree with explicit-path staging, bar state with counts and log paths, changed floors, founder decisions, found-not-fixed, background runs, next step -> a handoff otherwise loses lost-run and "green" detail.
+- Redaction (SKILL.md:14) extended: names only, no env values, tokens, emails, or contents of `apps/api/.env`, `.mcp.json`, `.claude/settings.local.json` -> AVP secrets rule.
+- Dropped `agents/openai.yaml` -> non-Claude agent metadata, not part of the contract.
+- Redaction now names AVP's live credentials (reset/invite/share URL tokens, `avp_session`/Cookie, Authorization, Stripe `sk_`/`whsec_` keys, DB/Redis URLs with `user:pass@`, `issue_password_reset.py` output) -> a handoff cannot leak them by omission (SKILL.md redaction section; source SKILL.md:14).
+- Never-read list adds `dump.rdb` and `.devdata/` -> dev cluster holds user emails and plaintext tokens.
+- Unpushed commits via `git log --format='%h %s' HEAD --not --remotes`; "no upstream" is not "nothing unpushed" -> works without an upstream, prints no author emails.
+- Save location uses `mktemp -t avp-handoff` and reports the absolute path -> avoids a predictable /tmp name (source SKILL.md:8).
+- Description reworded to "when the user asks ..., e.g. before a limit" -> the skill is user-invoked, not an auto-trigger (SKILL.md:3,5).
+- SOURCE.md: added sha256 for agents/openai.yaml (read, not copied); LICENSE hash formatted like the others.

@@ -114,16 +114,17 @@ class TestAnInvitationWithoutEmail:
         assert link is not None
         url = urlparse(link)
         assert f"{url.scheme}://{url.netloc}" == settings.public_web_base_url.rstrip("/")
-        assert url.path.startswith("/invite/")
+        assert url.path == "/invite"
+        assert url.fragment
 
         # The roster never shows it again: the link is handed over once.
         roster = await client.get(f"{BASE}/agencies/{agency_id}/seats")
         assert roster.status_code == 200, roster.text
-        assert "/invite/" not in roster.text
+        assert "/invite#" not in roster.text
 
         # And it is a real link: the invitee can redeem it.
         await client.post(f"{BASE}/auth/logout")
-        token = url.path.removeprefix("/invite/")
+        token = url.fragment
         accepted = await client.post(
             f"{BASE}/auth/invitations/accept",
             json={"token": token, "fullName": "New Seat", "password": PASSWORD},
@@ -147,4 +148,4 @@ class TestAnInvitationWithEmail:
         body = await _invite(client, agency_id, "new.seat@invite.example")
         assert body["acceptUrl"] is None
         assert [m["to"] for m in resend_configured] == [["new.seat@invite.example"]]
-        assert "/invite/" in resend_configured[0]["text"]
+        assert "/invite#" in resend_configured[0]["text"]

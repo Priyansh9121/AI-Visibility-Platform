@@ -21,7 +21,17 @@ def get_redis(settings: Settings | None = None) -> Redis:
     global _pool
     if _pool is None:
         s = settings or get_settings()
-        _pool = ConnectionPool.from_url(s.redis_url, decode_responses=True)
+        _pool = ConnectionPool.from_url(
+            s.redis_url,
+            decode_responses=True,
+            socket_connect_timeout=s.redis_connect_timeout_seconds,
+            socket_timeout=s.redis_socket_timeout_seconds,
+            # Ping a connection idle for 30 s before reuse. There is no retry
+            # (a retried rate-limit EVAL could double-count), so a dead
+            # connection fails that request, which answers 503; the next
+            # request opens a fresh connection.
+            health_check_interval=30,
+        )
     return Redis(connection_pool=_pool)
 
 

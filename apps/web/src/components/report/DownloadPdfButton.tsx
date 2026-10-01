@@ -22,7 +22,7 @@
  * control was looked at.
  */
 
-import { useState, type JSX } from 'react';
+import { useId, useState, type JSX } from 'react';
 import { Button } from '@avp/design-system';
 import { api, ApiProblem, saveBlob } from '@/lib/api';
 
@@ -53,18 +53,24 @@ export function DownloadPdfButton({
 }: DownloadPdfButtonProps): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+  const errorId = useId();
 
   async function download() {
+    // aria-disabled keeps focus on the button while busy; a second click is ignored.
+    if (busy) return;
     setBusy(true);
+    setDone(false);
     setError(null);
     try {
       const blob = token
         ? await api.publicReportPdf(token)
         : await api.reportPdf(scanId ?? '');
-      // The server sets the real filename in Content-Disposition; a blob URL
-      // cannot read it back, so this mirrors the server's own rule rather than
-      // inventing a different one.
-      saveBlob(blob, `${slug(subjectName)}-ai-visibility.pdf`);
+      // `requestBlob` returns a File carrying the server's Content-Disposition
+      // name when the browser exposes it; otherwise this mirrors the server's
+      // own naming rule.
+      saveBlob(blob, blob instanceof File && blob.name ? blob.name : `${slug(subjectName)}-ai-visibility.pdf`);
+      setDone(true);
     } catch (err) {
       setError(
         err instanceof ApiProblem
@@ -79,9 +85,17 @@ export function DownloadPdfButton({
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-3">
-        <Button variant="secondary" onClick={download} disabled={busy}>
+        <Button
+          variant="secondary"
+          onClick={download}
+          aria-disabled={busy ? true : undefined}
+          aria-describedby={error != null ? errorId : undefined}
+        >
           {busy ? 'Preparing…' : 'Download PDF'}
         </Button>
+        <span role="status" className="sr-only">
+          {busy ? 'Preparing the PDF…' : done ? 'PDF downloaded' : ''}
+        </span>
         <p className="max-w-measure text-ui-sm leading-prose text-text-tertiary">
           {unscored
             ? // Said before the click. A PDF that turns out to say "Not scored"
@@ -93,7 +107,7 @@ export function DownloadPdfButton({
       </div>
 
       {error != null && (
-        <p role="alert" className="text-ui-sm leading-prose text-danger">
+        <p id={errorId} role="alert" className="text-ui-sm leading-prose text-danger">
           {error}
         </p>
       )}

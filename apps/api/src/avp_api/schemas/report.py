@@ -52,6 +52,17 @@ from .competitor import CompetitorOut
 from .score import ScoreDetailOut
 
 
+class SharedReportRequest(ApiModel):
+    """The body of `POST /reports/shared` and `POST /reports/shared/pdf`.
+
+    The share token travels here, not in the URL path, so it never reaches a
+    request log. The bounds are the same ones every other token body uses
+    (`ConfirmResetIn`); a real token is far shorter than 512.
+    """
+
+    token: str = Field(min_length=1, max_length=512)
+
+
 class ShareLinkOut(ApiModel):
     """The public link for a report — Epic 9.8.
 

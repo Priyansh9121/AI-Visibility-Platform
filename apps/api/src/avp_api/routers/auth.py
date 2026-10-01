@@ -6,7 +6,7 @@ import contextlib
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Query, Response, status
+from fastapi import APIRouter, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 
@@ -16,22 +16,25 @@ from ..deps import (
     GoogleFlowStoreDep,
     GoogleProviderDep,
     PrincipalDep,
+    RedisDep,
     SessionStoreDep,
     SettingsDep,
 )
 from ..errors import (
     GoogleSignInNotConfigured,
+    InvalidCredentials,
     InvalidGoogleTicket,
     InvalidInvitation,
     InvalidResetToken,
 )
-from ..models import Agency
+from ..models import Agency, User
 from ..schemas.auth import (
     AcceptInvitationRequest,
     AgencyOut,
     ChangePasswordRequest,
     CompleteGoogleSignUpRequest,
     GooglePendingOut,
+    GooglePendingRequest,
     LoginRequest,
     MeOut,
     ResetPasswordConfirm,
@@ -43,7 +46,7 @@ from ..schemas.auth import (
 )
 from ..services import auth as auth_service
 from ..services import email as email_service
-from ..services import google_oauth
+from ..services import google_oauth, rate_limit
 from ..services import invitations as invitation_service
 from ..services import password_reset as reset_service
 from ..services import seats as seat_service
@@ -82,6 +85,8 @@ def _clear_session_cookie(response: Response, settings: Settings) -> None:
 @router.post("/sign-up", response_model=MeOut, status_code=status.HTTP_201_CREATED)
 async def sign_up(
     payload: SignUpRequest,
+    request: Request,
+    redis: RedisDep,
     response: Response,
     db: DbDep,
     store: SessionStoreDep,
@@ -92,6 +97,9 @@ async def sign_up(
     Signing in as part of signup is deliberate: requiring a fresh login
     immediately after choosing a password is friction with no security value.
     """
+    # Before the "already registered" 409, so that answer cannot be probed
+    # faster than the limit.
+    await rate_limit.enforce(redis, settings, request, action="signup", email=payload.email)
     agency, user = await auth_service.sign_up_agency(
         db,
         agency_name=payload.agency_name,
@@ -118,14 +126,19 @@ async def sign_up(
 @router.post("/login", response_model=MeOut)
 async def login(
     payload: LoginRequest,
+    request: Request,
+    redis: RedisDep,
     response: Response,
     db: DbDep,
     store: SessionStoreDep,
     settings: SettingsDep,
 ) -> Any:
+    # Before Argon2: a limited attempt costs nothing.
+    await rate_limit.enforce(redis, settings, request, action="login", email=payload.email)
     user = await auth_service.authenticate(
         db, email=payload.email, password=payload.password, settings=settings
     )
+    verified_hash = user.password_hash
     await db.commit()
     await db.refresh(user)
 
@@ -134,6 +147,17 @@ async def login(
     ).scalar_one()
 
     token, _ = await store.create(user_id=user.id, agency_id=user.agency_id)
+    # A password change that committed after the hash was verified has already
+    # run its revoke, so this session would outlive it. Re-read the hash; if it
+    # moved, kill the session just minted and refuse (counted, not refunded).
+    current_hash = (
+        await db.execute(select(User.password_hash).where(User.id == user.id))
+    ).scalar_one_or_none()
+    if current_hash != verified_hash:
+        await store.revoke(token)
+        raise InvalidCredentials()
+    # A failed login raised above and stays counted; a success is given back.
+    await rate_limit.release_login(redis, settings, request, email=payload.email)
     _set_session_cookie(response, token, settings)
 
     used, limit = await seat_service.seat_usage(db, user.agency_id)
@@ -172,6 +196,8 @@ async def logout_everywhere(
 @router.post("/change-password", response_model=MeOut)
 async def change_password(
     payload: ChangePasswordRequest,
+    request: Request,
+    redis: RedisDep,
     response: Response,
     principal: PrincipalDep,
     db: DbDep,
@@ -215,8 +241,18 @@ async def change_password(
     **Errors:** `401 authentication-required` (no session), `401
     invalid-credentials` (wrong current password — no "no such user" branch
     exists, because the caller is authenticated), `422 validation-failed` for a
-    new password that fails the SIGN-UP rules or that is the current one.
+    new password that fails the SIGN-UP rules or that is the current one, `429
+    rate-limited` (10 failed attempts per account and 30 per IP per 15 minutes,
+    counted before the password is verified; a success gives its attempt back),
+    `503` (Redis down).
     """
+    # Before Argon2: a limited attempt costs nothing, is not a timing oracle and
+    # revokes nothing. Keyed on the signed-in account's email, HMAC-hashed. Safe
+    # today because no route changes users.email; if an email-change route is
+    # ever added, key on user.id instead or the budget resets with the address.
+    await rate_limit.enforce(
+        redis, settings, request, action="change_password", email=principal.user.email
+    )
     user = await auth_service.change_password(
         db,
         user=principal.user,
@@ -224,15 +260,27 @@ async def change_password(
         new_password=payload.new_password,
         settings=settings,
     )
+    # Revoke BEFORE the commit as well as after it (see below). The current
+    # password is already verified here, so a wrong guess never reaches this
+    # line. If Redis fails now the request is a 503 and nothing has changed.
+    await store.revoke_all_for_user(principal.user_id)
     await db.commit()
+    # After the commit, so a failed commit does not refund an attempt.
+    await rate_limit.release_change_password(
+        redis, settings, request, email=principal.user.email
+    )
     await db.refresh(user)
 
     agency = (
         await db.execute(select(Agency).where(Agency.id == user.agency_id))
     ).scalar_one()
 
-    # Revoke AFTER the commit. Revoking first and then failing to commit would
-    # sign every device out over a password that never changed.
+    # Revoked twice on purpose. The pre-commit revoke means a Redis failure
+    # leaves the password unchanged (503, retry works); if the commit then
+    # fails, devices are signed out over an unchanged password, the safe
+    # direction. This post-commit revoke catches a session minted in between.
+    # The durable fix would be a `users.sessions_valid_after` column checked by
+    # `current_principal`, which needs no Redis at write time; not implemented.
     await store.revoke_all_for_user(user.id)
     token, _ = await store.create(user_id=user.id, agency_id=user.agency_id)
     _set_session_cookie(response, token, settings)
@@ -250,6 +298,8 @@ async def change_password(
 )
 async def request_password_reset(
     payload: ResetPasswordRequest,
+    request: Request,
+    redis: RedisDep,
     db: DbDep,
     settings: SettingsDep,
 ) -> Any:
@@ -270,8 +320,11 @@ async def request_password_reset(
     and never reports its outcome, so a provider outage cannot become a
     different status code.
 
-    **Errors:** none. `422` only if the body is not an email address.
+    **Errors:** `429` when the per-email or per-IP limit is spent. The per-email
+    limit trips identically for every address, so it reveals nothing about
+    accounts. `422` if the body is not an email address.
     """
+    await rate_limit.enforce(redis, settings, request, action="reset", email=payload.email)
     minted = await reset_service.request_reset(
         db, email=payload.email, settings=settings
     )
@@ -311,6 +364,7 @@ async def request_password_reset(
 async def confirm_password_reset(
     payload: ResetPasswordConfirm,
     response: Response,
+    redis: RedisDep,
     db: DbDep,
     store: SessionStoreDep,
     settings: SettingsDep,
@@ -341,8 +395,19 @@ async def confirm_password_reset(
             detail="That reset link is not valid. Links work once and expire after an hour."
         ) from None
 
+    # Revoke before the commit as well as after it: if Redis fails here the
+    # request is a 503 with the password unchanged and the reset link not yet
+    # consumed (the session_scope rollback discards it), so the retry works.
+    # The post-commit revoke catches a session minted in between. Durable fix,
+    # not implemented: a `users.sessions_valid_after` column checked by
+    # `current_principal`.
+    await store.revoke_all_for_user(user.id)
     await db.commit()
     await store.revoke_all_for_user(user.id)
+    logger.info("password_reset.confirm.succeeded", user_id=user.id)
+    # Best effort: the person proved control of the inbox, so forget the failed
+    # logins that may have locked them out. Never changes the reply.
+    await rate_limit.clear_login(redis, settings, email=user.email)
     _clear_session_cookie(response, settings)
     return {
         "status": "reset",
@@ -492,7 +557,8 @@ async def google_callback(
     - an existing account → the session cookie is set and the browser goes
       to `/dashboard`;
     - a new address → a ten-minute ticket is minted and the browser goes to
-      `/sign-up/google?ticket=…` to name the agency;
+      `/sign-up/google#ticket=…` (the fragment, never the query, so it is in
+      no request log and no Referer) to name the agency;
     - anything else → `/?google=error&reason=…` with one of `not-configured`,
       `denied`, `invalid-state`, `exchange-failed`, `email-unverified`,
       `account-suspended`, `email-claimed`, `invitation-expired`,
@@ -555,7 +621,9 @@ async def _google_callback(
     base = settings.public_web_base_url.rstrip("/")
     if user is None:
         ticket = await flow.issue_ticket(identity)
-        return RedirectResponse(f"{base}/sign-up/google?ticket={ticket}", status_code=302)
+        # A fragment is never sent to a server: the ticket stays out of the web
+        # host's request log, browser history as a query, and every Referer.
+        return RedirectResponse(f"{base}/sign-up/google#ticket={ticket}", status_code=302)
 
     await db.commit()
     token, _ = await store.create(user_id=user.id, agency_id=user.agency_id)
@@ -564,20 +632,20 @@ async def _google_callback(
     return redirect
 
 
-@router.get("/google/pending", response_model=GooglePendingOut)
-async def google_pending(
-    flow: GoogleFlowStoreDep, ticket: str = Query(min_length=1, max_length=512)
-) -> Any:
+@router.post("/google/pending", response_model=GooglePendingOut)
+async def google_pending(payload: GooglePendingRequest, flow: GoogleFlowStoreDep) -> Any:
     """What the completion page shows before asking for an agency name. **No auth.**
 
-    Reads the ticket without consuming it, so a reload of the page is not a
-    second sign-in. The ticket is a bearer credential with a session token's
-    entropy and a reset link's lifetime; carrying it in a query string is the
-    same trade `/reset-password/{token}` makes, for the same reason — there
-    is no session yet to carry it any other way.
+    A POST so the ticket rides in the body: it is a bearer credential with a
+    session token's entropy, and a URL is logged. It is not a mutation: the
+    ticket is read without being consumed, so asking twice is not a second
+    sign-in. The web page removes the ticket from the address bar once read
+    (like invite and reset), so reloading that page does not bring it back and
+    the person starts again. `GET` with a `?ticket=` is `405`.
 
     **Errors:** `400 invalid-google-ticket` for unknown, used and expired alike.
     """
+    ticket = payload.ticket
     identity = await flow.peek_ticket(ticket)
     if identity is None:
         raise InvalidGoogleTicket(

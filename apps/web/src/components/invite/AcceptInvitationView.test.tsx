@@ -1,5 +1,5 @@
 /**
- * /invite/{token} — Epic 9.14.
+ * /invite#{token} — Epic 9.14.
  *
  * The load-bearing assertions are the same shape as the reset screen's: this is
  * an unauthenticated token-bearing route, so its refusal must not say which
@@ -135,7 +135,7 @@ describe('an invalid link cannot say WHICH kind of invalid', () => {
 });
 
 describe('no workspace chrome for someone with no workspace', () => {
-  it('renders no sidebar — the same rule /share/{token} follows', () => {
+  it('renders no sidebar — the same rule /share follows', () => {
     for (const state of [
       { kind: 'form' } as const,
       { kind: 'invalid', detail: 'no' } as const,
