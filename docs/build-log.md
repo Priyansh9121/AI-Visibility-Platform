@@ -21349,3 +21349,36 @@ Drift check (north-star §8): no product layer; the agent tooling the project is
 - **`git check-ignore -v`** on each of the 43 folders and its `SKILL.md`: no rule ignores any of them. All 436 files on disk under `.claude/skills` (`INDEX.md` aside) are visible to git.
 - **Newly tracked:** 340 files in 29 folders, 4.26 MiB (impeccable is 3.3 MB of it, mostly its hook scripts). Key-shaped strings (Stripe, Anthropic, AWS, GitHub, Google, Resend, Slack, private keys, JWTs) in those files: 0.
 - **No test, script or workflow reads `.claude/`, `skills-lock.json` or `CLAUDE.md`** (a grep of the test, script, CI and workflow directories finds only two comments citing a `platform.claude.com` URL). The files already sat on disk during every bar run on this branch, so tracking them changes no result; the full bar on the branch's last tree is in the next entry.
+
+# The launch checklist says what `pre-pilot` closed and what is still open
+
+**2026-10-02, the second entry of the day; branch `pre-pilot`, item 6 of the founder's pre-pilot brief.** Documentation only; one commit.
+
+**Render: nothing to set.** Before merging this branch, the founder checks the session cookie's SameSite value (checklist 3.7) and `CORS_ALLOW_ORIGINS` (1.1b).
+
+## 1. What changed
+
+- **`docs/launch-checklist.md`:**
+  - **Status:** PR #2 and PR #3 are merged; 1.1 is marked done (its last step, 3.10, is still open). A new 1.1b covers merging `pre-pilot`: the two checks above, then sign in, add a client, run a scan, and get and withdraw a share link on the deployed app.
+  - **Closed here, each naming its commit:** 3.2's app-level half (the network-level control and the Chromium sandbox stay the founder's), 3.8, 3.15, 3.16, 3.17's copy half (its contrast half stays open), 3.18 and 3.19. The Origin check is a new row, 3.21, marked done.
+  - **3.7 corrected:** the production web app and API are on different sites, so the session cookie needs `SameSite=None`, not the `lax` the row asked the founder to confirm. The lasting fix (one registrable domain, then `lax` and a `__Host-` cookie) is in the row.
+  - **New open rows from this branch's reviews, as what to fix:**
+    - 3.21's two Origin-check details;
+    - binding the Google sign-in state to the browser (3.22);
+    - the four "port 8000" screens (3.23);
+    - sharing failed scans and a failed scan's score (3.24, founder);
+    - the share link's 30 days restarting on each press (3.25, founder);
+    - report details that predate the branch (3.26);
+    - the crawler's strictness, and one residual of the egress review (3.27).
+  - The founder's dashboard items in sections 1 and 2 are otherwise as they were.
+
+## Verified
+
+- Every commit, file, host and route the checklist names was checked against this branch's tree.
+- **The full bar on the branch's final tree** (all five commits before this one, plus this documentation; one run):
+  - API pytest 2226, workers 26, web 1399, design-system 846, shared-types 53 (0 fail), mypy 47 (ceiling 50); every count meets its floor through `assert_count.py`.
+  - ruff clean; all typechecks clean; both `uv lock --check` runs pass.
+  - The Python and JavaScript licence audits pass.
+  - OpenAPI and `api.gen.ts` regenerate with no change to the committed files.
+  - Exit codes were read from files.
+- **Over the branch:** API pytest 1955 → 2226 and web vitest 1203 → 1399; the workers, shared-types and design-system counts and the mypy count are unchanged.
