@@ -17,6 +17,7 @@ import type { Report } from '@avp/shared-types';
 import { deriveNarrative } from '@/lib/report/derive';
 import { EXCLUSION_REASON, checkLabel } from '@/lib/report/strings';
 import {
+  addressNotPublicReport,
   crawlDisallowedReport,
   failedAuditReport,
   generatedFixesReport,
@@ -821,5 +822,26 @@ describe('a site whose robots.txt keeps the crawler out — 2026-09-29', () => {
 
   it('a failed crawl is still worded as one', () => {
     expect(render(failedAuditReport)).toContain('The site could not be read');
+  });
+});
+
+describe('a site whose address is not public — the egress guard', () => {
+  const html = render(addressNotPublicReport);
+
+  it('says so in the shared copy, and never blames robots.txt', () => {
+    expect(html).toContain(EXCLUSION_REASON.CRAWL_ADDRESS_NOT_PUBLIC!.label);
+    expect(html).toContain(
+      'The site’s address, or an address the site sent the crawler to, is on a private or reserved network, so the crawler did not read the site.',
+    );
+    expect(html).not.toContain('robots.txt');
+    expect(html).not.toContain('The site could not be read');
+    expect(html).not.toContain('Audit failed');
+  });
+
+  it('derives the exclusion under its own reason', () => {
+    const narrative = deriveNarrative(addressNotPublicReport);
+    expect(narrative.exclusions.map((e) => [e.key, e.reason])).toEqual([
+      ['technical_foundation', 'CRAWL_ADDRESS_NOT_PUBLIC'],
+    ]);
   });
 });

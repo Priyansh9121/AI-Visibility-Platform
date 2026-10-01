@@ -21010,3 +21010,65 @@ contract regenerates byte-identically.
 ## Verified
 
 - No test, script or workflow reads `docs/launch-checklist.md` or `docs/runbook.md` (a grep of `apps/*/tests`, `apps/web/src`, `packages/*/src` and `.github/workflows` finds only comments that mention `docs/`), so the bar run for the previous entry covers this tree: API pytest 1955, workers 26, shared-types 53, design-system 846, web 1203, mypy 47 (ceiling 50); ruff, typechecks and both lock checks clean; OpenAPI and `api.gen.ts` regenerate byte-identically.
+
+# The crawler refuses any address that is not on the public internet, on every fetch and every redirect
+
+**2026-10-01, the thirteenth entry of the day; branch `pre-pilot`, item 1 of the founder's pre-pilot brief.** One item, one commit.
+
+**Render: nothing to set. No migration. No new dependency or outbound host.**
+
+Drift check (north-star §8): Layer 2, Measurement (the crawl and the technical audit), with a Layer 0 trust concern; lifecycle phase: Activation (Epic 9), hardening before pilots.
+
+## 1. What changed
+
+- **Brief item 1:** "Every outbound fetch the crawler makes — robots.txt, sitemap, redirects, the HTTP client, and every Playwright request via route interception — resolves the host and refuses non-public addresses … Re-check on every redirect hop; pin the resolved IP for the connection where the client allows it." Before this, the crawler fetched whatever address a site's name resolved to.
+- **New `services/egress.py`.**
+  - `is_public_address` refuses private, loopback, link-local (169.254.0.0/16, fe80::/10), carrier-grade NAT (100.64.0.0/10), multicast, reserved, unspecified and documentation ranges. It also refuses every IPv6 form that carries an IPv4 address (mapped, compatible, 6to4, NAT64, Teredo). An explicit network list backs up `ipaddress.is_global`, so a change in the standard library's tables cannot open one.
+  - `resolve_public` checks the RESOLVED addresses, never the string, and refuses the host if any one of them is not public. A name that does not resolve is "no answer", not a refusal.
+  - `EgressRefused` is deliberately not an `httpx.HTTPError` or a Playwright error, so no "no answer" handler can swallow it.
+- **Three layers:**
+  1. **`RobotsGate`** checks the host before every request it sends: robots.txt, which is now followed by hand rather than by httpx, so each hop is checked; `follow()`; and so the homepage and sitemap redirects.
+  2. **Its HTTP client** uses `guarded_transport`. The connection pool's network backend resolves again at connect time and connects to the address it checked; TLS still verifies the host name. Proxies and unix sockets are refused. A test builds a real client and proves the swap, so an httpx upgrade that breaks it fails loudly.
+  3. **Both browser contexts** (the intake crawl and the technical audit) route every request through `BrowserGuard`, block service workers and WebSockets, disable WebRTC's UDP (Chromium's launch switch) and remove its constructors (an init script), and check each page's landing and the address the browser connected to. Any request or landing that is not public ends the run. If the connected-address check has not answered by the end, the run fails closed as an ordinary `BROWSER_ERROR`, keeping nothing.
+- **Outcome, handled like robots.txt (2026-09-29).** A refusal anywhere ends the run with `ADDRESS_NOT_PUBLIC` and keeps nothing:
+  - the intake crawl creates the client `unclassifiable` with that reason;
+  - the audit is stored `failed` with that error code, every check `not_applicable`;
+  - the score excludes Technical Foundation as `CRAWL_ADDRESS_NOT_PUBLIC`. That is the same composite as `NOT_YET_MEASURED` and `CRAWL_DISALLOWED`, so `FORMULA_VERSION` is unchanged; a test pins existing digests.
+  - New log events: `crawl.address_not_public`, `audit.address_not_public`, `crawl.egress_unverified`, `audit.egress_unverified` (URL or domain, and host, only) and `egress.server_addr_unparsed` (no value).
+- **Web:** the report, the client's Technical screen and the intake result say so in their own words ("Address not public"), never the robots.txt wording. The shared copy fixture `packages/shared-types/fixtures/report-copy.json` carries the new exclusion. The `/crawler` page test's two call literals follow the new `_fetch_page(…, guard)` signature; the order check it makes is unchanged.
+- **`docs/api-contracts.md`:** the two new codes, and the two robots codes from 2026-09-29 that were never listed (`ROBOTS_DISALLOWED` as a classification reason, `CRAWL_DISALLOWED` as an exclusion), plus what a failed audit's `errorCode` means for each.
+- **Tests never reach real DNS:** FakeWeb resolves every host to one fixed public address unless a test says otherwise, and an autouse fixture makes any other name lookup fail.
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS, three rounds** (the first attempt stalled at the watchdog and was re-run). Checked clean: the address policy for every class; every fetch path; the `EgressRefused` handlers; the transport swap (connects to the checked address, SNI and verification on the name, environment proxies off); route ordering and fallback; service-worker and WebSocket blocking; outcomes, digests and log lines; no exploit detail in committed text.
+- **Fixed here:** three review rounds.
+  - Round 1 (one Medium, three Lows): the page's location is checked again after its facts are read (the audit read them after a settle without re-checking); a malformed host name or `Location` header is "no answer" instead of an unhandled error; the copy no longer says the site's own address is private when the refused address was one the site sent the crawler to. Added with it: the check of the address Chromium actually connected to, WebRTC's constructors removed, and the autouse no-real-DNS fixture.
+  - Round 2 (four Lows): a refusal now returns empty results, so nothing read before it is stored or returned (before, a late refusal kept the homepage's facts); a connected-address check still unanswered at the end fails the run closed, as an ordinary `BROWSER_ERROR` with nothing kept, rather than passing; the module docstring says what remains to fix instead of claiming a control that does not exist yet; Chromium's launch switch now also disables WebRTC's UDP. Its nits (record a refusal before anything that can raise; log when Chromium reports an address that cannot be parsed) are fixed too.
+  - Round 3 (two Lows, three nits; no Medium): a failing browser close can no longer hide an unverified result and keep the page's facts; the early returns for an HTTP error status run the final check too; the comments say the WebRTC launch switch disables UDP rather than WebRTC; and committed text states only the outcome of the browser checks. One Low is recorded below.
+- **UI review (sonnet): PASS WITH NITS.** Its Low, a second sentence repeating "left out of the score", was removed; two optional Lows were left (below).
+
+## Found, not fixed
+
+- **The browser layer cannot prevent every request on its own**; it ends the run and keeps nothing when one is not public. A network-level egress control in front of the browser is what closes that; it stays on the launch checklist as a founder item, with the Chromium sandbox. (Details went to the founder directly.)
+- **A refused request for something a page loads ends the whole run**, as the brief asks: a public site that still loads a resource from a private address becomes unclassifiable. The copy now says "the site's address, or an address the site sent the crawler to". Product call if that is too strict.
+- **`ROBOTS_DISALLOWED` as a client's classification reason** still gets the intake card's generic sentence; only `ADDRESS_NOT_PUBLIC` has its own.
+- **UI review Lows left:** the intake sentence gives no next step (its neighbours give none either), and the report card shows no "Reason: …" line where the client screens do.
+- **A host with several addresses** gets the full connect timeout per address it tries.
+- **One kind of failed read in the connected-address check is treated as checked** (round 3, Low). Failing closed there risks failing real sites, and the case is unlikely in a crawl of a few pages; details went to the founder.
+
+## Verified
+
+**API pytest 1955 → 2109 (+154); web vitest 1203 → 1208 (+5); both floors raised to match.**
+- New `tests/test_egress.py` (73 tests): every refused address class (private, loopback, link-local including 169.254.169.254 and fe80::1, carrier-grade NAT, multicast, reserved, unspecified, documentation, IPv4-mapped and the other IPv4-carrying IPv6 forms) and the public ones that pass; a name resolving to a private address, or to a public and a private one; an IP literal; DNS failures and malformed names as "no answer"; the network backend connecting to the checked address with TLS on the name; a real `RobotsGate` client refusing before any connection.
+- `tests/test_robots_obeyed.py` (41 → 122 collected): a homepage redirect into a private address and into 169.254.169.254, with the private hop never requested; robots.txt and sitemap redirects into one; a start host resolving to one; a malformed `Location`; a browser subresource refused; a navigation whose redirect chain passed a private host; a page that moves to one before its facts are read; a non-public address Chromium connected to, including late; a refusal on a secondary page after the home page was read, and one at the very end, each keeping nothing (checked in the crawl result, the stored audit row, `POST /clients` and `POST /scans/{id}/audit`); a connected-address check still unanswered at the end failing the run as `BROWSER_ERROR`; a browser that fails to close while a refusal or an unverified result is on its way out; the early returns (an HTTP error status, no page, a robots.txt landing) running the final check; service workers and WebSockets blocked and both WebRTC measures in place, in both contexts; the intake result `unclassifiable` / `ADDRESS_NOT_PUBLIC`; the audit `failed` with every check `not_applicable`; the score's exclusion and unchanged digests.
+- Web: the report, the client's Technical screen and the intake result each show the new copy and never "robots.txt"; copy coverage and the shared copy fixture include the new exclusion.
+- **Negative controls**, each file restored and checked with `cmp`: the gate check made a no-op fails 11 tests; a plain transport instead of the guarded one fails 5; the audit's refusal handler removed from before the broad side-file handler fails the sitemap test; the post-`evaluate` landing check removed fails the audit's moved-page test; the connected-address listener removed fails 5; a refusal that returns the same signals object again (facts already read) fails 19, and the old code's log showed 14 AI-crawler rows and an LCP stored on a refused audit; the final settle failing open fails 4; the three nit fixes reverted fail 3; the close-failure checks reverted fail 4; the final check removed from the six early returns fails 12.
+- An autouse fixture makes any real name lookup fail; the whole API suite passed with it on.
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, shared-types 53 (0 fail), design-system 846, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- OpenAPI and `api.gen.ts` regenerate byte-identically.
+- Exit codes were read from files.

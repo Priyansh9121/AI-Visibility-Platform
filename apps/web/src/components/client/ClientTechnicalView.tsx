@@ -51,6 +51,7 @@ import {
   EXCLUSION_REASON,
   PARTIAL_AUDIT_LABEL,
   PARTIAL_AUDIT_NOTE,
+  ADDRESS_NOT_PUBLIC,
   ROBOTS_DISALLOWED,
 } from '@/lib/report/strings';
 
@@ -178,6 +179,18 @@ function Audited({ audit }: { audit: TechnicalAudit }): JSX.Element {
         title="This site asks crawlers like ours to stay out"
         body={`${EXCLUSION_REASON.CRAWL_DISALLOWED!.detail} This crawler obeys robots.txt, so nothing here is scored. What the file says to AI crawlers is on the Crawler screen.`}
         note={`Reason: ${ROBOTS_DISALLOWED}`}
+      />
+    );
+  }
+  // The egress guard refused the site's address. Not robots.txt's doing, so
+  // none of the robots wording applies.
+  if (audit.status === 'failed' && audit.errorCode === ADDRESS_NOT_PUBLIC) {
+    return (
+      <EmptyState
+        eyebrow="Technical"
+        title={EXCLUSION_REASON.CRAWL_ADDRESS_NOT_PUBLIC!.label}
+        body={EXCLUSION_REASON.CRAWL_ADDRESS_NOT_PUBLIC!.detail}
+        note={`Reason: ${ADDRESS_NOT_PUBLIC}`}
       />
     );
   }

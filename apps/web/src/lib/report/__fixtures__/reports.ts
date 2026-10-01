@@ -1014,6 +1014,33 @@ export const crawlDisallowedReport: Report = {
 };
 
 /**
+ * The crawler's egress guard refused the site's address — nothing was read, so
+ * Technical Foundation is excluded under CRAWL_ADDRESS_NOT_PUBLIC and there are
+ * no findings (every check was not_applicable).
+ */
+export const addressNotPublicReport: Report = {
+  ...crawlDisallowedReport,
+  score: {
+    ...crawlDisallowedReport.score!,
+    excludedDimensions: { technical_foundation: 'CRAWL_ADDRESS_NOT_PUBLIC' },
+  },
+  dimensions: crawlDisallowedReport.dimensions.map((d) =>
+    d.key === 'technical_foundation'
+      ? { ...d, exclusionReason: 'CRAWL_ADDRESS_NOT_PUBLIC' }
+      : d,
+  ),
+  audit: {
+    ...crawlDisallowedReport.audit!,
+    errorCode: 'ADDRESS_NOT_PUBLIC',
+    passed: 0,
+    warned: 0,
+    failed: 0,
+    notApplicable: 17,
+    findings: [],
+  },
+};
+
+/**
  * A set that has been corrected AND re-detected — Finding 3's actual case.
  *
  * `apply_override` clears the confidence, so an overridden set alone never

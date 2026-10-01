@@ -136,6 +136,17 @@ describe('a failed audit is the only unreadable one', () => {
   });
 });
 
+describe('a site whose address is not public', () => {
+  it('says the crawler did not read it, and never mentions robots.txt', () => {
+    const html = render({ ...FAILED, errorCode: 'ADDRESS_NOT_PUBLIC' });
+    expect(html).toContain('Address not public');
+    expect(html).toContain('is on a private or reserved network, so the crawler did not read the site');
+    expect(html).toContain('Reason: ADDRESS_NOT_PUBLIC');
+    expect(html).not.toContain('robots.txt');
+    expect(html).not.toContain('could not be read');
+  });
+});
+
 describe('an ok audit is unchanged', () => {
   const html = render(BASE);
 

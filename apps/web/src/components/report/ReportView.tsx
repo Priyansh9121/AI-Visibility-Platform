@@ -54,6 +54,7 @@ import {
   PARTIAL_AUDIT_LABEL,
   PARTIAL_AUDIT_NOTE,
   POSITION_COPY,
+  ADDRESS_NOT_PUBLIC,
   ROBOTS_DISALLOWED,
   VISIBILITY_FLAG,
   checkLabel,
@@ -1068,6 +1069,24 @@ function AuditEvidence({ report }: { report: Report }) {
   // is still a finding — a blanket `Disallow: /` above all — so the checks that
   // did not pass are shown, as they are for an audit that read the page.
   const disallowed = audit.status === 'failed' && audit.errorCode === ROBOTS_DISALLOWED;
+
+  // The egress guard refused the site's address — nothing was read, and it is
+  // not robots.txt's doing, so it gets its own sentence and none of the above.
+  if (audit.status === 'failed' && audit.errorCode === ADDRESS_NOT_PUBLIC) {
+    return (
+      <Card elevation="flat">
+        <CardBody>
+          <p className="flex items-center gap-3 text-ui-base font-medium text-text-primary">
+            The site was not read
+            <Badge tone="neutral">{EXCLUSION_REASON.CRAWL_ADDRESS_NOT_PUBLIC!.label}</Badge>
+          </p>
+          <p className="mt-2 text-ui-sm leading-prose text-text-secondary">
+            {EXCLUSION_REASON.CRAWL_ADDRESS_NOT_PUBLIC!.detail}
+          </p>
+        </CardBody>
+      </Card>
+    );
+  }
 
   if (audit.status === 'failed' && !disallowed) {
     return (
