@@ -21149,3 +21149,60 @@ Drift check (north-star §8): Layer 1, Delivery (sessions and the API's front do
 - Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
 - OpenAPI and `api.gen.ts` regenerate byte-identically (a middleware adds no route or schema).
 - Exit codes were read from files.
+
+# A scan that runs out of time counts only when at least half of its prompts were answered
+
+**2026-10-01, the fifteenth entry of the day; branch `pre-pilot`, item 3 of the founder's pre-pilot brief.** One item, one commit.
+
+**Render: nothing to set. No migration.**
+
+Drift check (north-star §8): Layer 2, Measurement (how a scan ends), and the allowance it feeds; lifecycle phase: Activation (Epic 9), the last decision before pilots.
+
+## 1. What changed
+
+- **Founder decision D7 (2026-10-01):** "a deadline-partial counts only if at least 50% of its planned prompts have at least one answered engine result; below that it ends FAILED / SCAN_DEADLINE_EXCEEDED and does not count." The zero-answer reading and the error code as the reason were confirmed as built in decision 7 (775cdf7).
+- **`scan_runner.count_answered_prompts`:** the number of distinct prompts with at least one `OK` or `ANSWERED_NO_MENTION` result. A prompt that one engine answered and another failed on is answered.
+- **`scan_executor.deadline_partial_counts(answered, planned)`:** the rule, in integer arithmetic against `DEADLINE_PARTIAL_MIN_ANSWERED_SHARE = 1/2`. `planned` is `Scan.prompt_count`, committed before the engine loop starts. A plan that was never recorded never counts.
+- **`_finalize_after_deadline`** decides from that rule both the ending and whether to score:
+  - **at or above half:** scored if it has no score, ends `partial` / `SCAN_DEADLINE_EXCEEDED`, counts;
+  - **below:** ends `failed` / `SCAN_DEADLINE_EXCEEDED`, is not scored by the finalise, does not count, and keeps the results that finished.
+  - The log line `scan.finalized_after_deadline` now carries `answered_prompts` and `planned_prompts` (counts only).
+- **Founder decision in review (2026-10-01), option (a): the rule applies to every deadline,** including one that fires after the engine phase (during the audit, alerts or fixes). There a scan with fewer than half its prompts answered ends `failed` and uncounted, and the score made before the deadline stays on the row.
+- Docstrings and comments that still stated the old one-answer rule now state this one. `docs/api-contracts.md` says it under "A scan that hits its deadline" and in the scan-level status.
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS**, no Critical, High or Medium. Checked clean:
+  - the distinct-prompt count, scoped to the scan, with no duplicates (one row per prompt and engine, and the empty-table guard);
+  - `prompt_count` is never stale or zero when answers exist;
+  - integer rounding (3 planned need 2 answered);
+  - the allowance still decides by status alone;
+  - the conditional stamp and its fallback are unchanged;
+  - counts-only logging.
+- **Its Low was the after-the-engine-phase case above**, settled by the founder as (a). Its nits are fixed: the old rule was still stated in two comments and the contract.
+- **Not changed:** the `answered >= 1` guard inside the rule, which is redundant at one half; it is kept in case the share is ever set lower.
+
+## Found, not fixed
+
+- **A `failed` scan can carry a score** when its deadline came after scoring (option (a)). The report, the score route and the dashboard read that score without checking the status, and the dashboard's scored-scan count includes it. History, alert baselines and the answer-gap grid already leave failed scans out. The same state could already arise after a reaper failure following scoring. Product call whether a failed scan's score should be hidden.
+
+## Verified
+
+**API pytest 2197 → 2209 (+12); `api-pytest` floor raised to match.** `tests/test_scan_deadline.py` 30 → 42.
+- **The rule on its own:** 49 of 100 no; 50 of 100 yes; 0 of 10 no; 10 of 10 yes; 1 of 2 yes; 1 of 3 no; 5 answered of 0 planned no.
+- **Through the finalise:**
+  - 2 of 5 planned prompts answered: failed / `SCAN_DEADLINE_EXCEEDED`, no score row, no allowance slot, the results kept;
+  - exactly half (2 of 4): partial, scored, holding a slot;
+  - 2 of 4 prompts each answered by one engine and failed by the other: partial;
+  - 1 of 4 answered, the rest only engine errors: failed, no slot;
+  - a deadline during fix generation, after scoring, with 1 of 4 answered: failed, the one score row still there, no slot, the results kept.
+- Zero answers, and every prompt answered, keep their existing tests unchanged.
+- **One existing test changed:** the finalise-failure fallback test now breaks `count_answered_prompts` instead of `count_engine_failures`, which the finalise no longer calls.
+- **Negative control:** the decision reverted to `answered >= 1` fails the 2-of-5, the 1-of-4 and the after-scoring tests; the file was restored and checked with `cmp`.
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, web 1208, shared-types 53 (0 fail), design-system 846, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- OpenAPI and `api.gen.ts` regenerate byte-identically.
+- Exit codes were read from files.
