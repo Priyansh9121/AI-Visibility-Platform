@@ -1506,11 +1506,28 @@ than duplicated, so a detect-then-scan flow does not strand an empty scan.
 that closes that is Epic 9.6, not yet built.
 
 **Failure while running.** A pipeline that raises lands the scan at `failed`
-with `errorCode: "EXECUTION_FAILED"`. A scan whose executor disappears — a
-deploy or a crash — is failed by a reaper after 15 minutes with
-`errorCode: "EXECUTOR_LOST"`, distinguishing "the process running this went
-away" from `ALL_ENGINE_CALLS_FAILED`, where the pipeline ran and every engine
-failed.
+with `errorCode: "EXECUTION_FAILED"` — an error of ours, and it never counts
+against the allowance. A scan whose executor disappears — a deploy or a crash
+— is failed with `errorCode: "EXECUTOR_LOST"` once its lease has gone unrenewed
+for 180 seconds (a live executor renews every 30). The reaper that does it runs
+on the `POST /clients/{clientId}/scans` start route and on the dashboard read,
+not on a timer, and a `running` scan whose lease has expired stops holding an
+allowance slot at once, reaped or not. A restart never counts. `EXECUTOR_LOST`
+distinguishes "the process running this went away" from
+`ALL_ENGINE_CALLS_FAILED`, where the pipeline ran and every engine failed.
+
+**A scan that hits its deadline** — the executor stops a scan still running
+2,400 seconds after it was claimed — keeps the answers that finished and ends by
+what it has, with `errorCode: "SCAN_DEADLINE_EXCEEDED"` either way. With at least
+one answer (a result that is `ok` or `answered_no_mention`) it ends `partial` and
+the scan **counts** against the allowance. The prompts that finished are stored,
+and scored if scoring completes within its own 60-second budget (a deadline
+`partial` can have no score); `engineResultCount` is the number stored (it can be
+fewer than `promptCount` × engines). With none it ends `failed` and does **not**
+count. It also ends `failed`, uncounted and with the same code, when the executor
+cannot complete this finalisation itself. A scan whose lease was already gone when
+the deadline fired — the reaper had failed it — keeps the reaper's `failed` /
+`EXECUTOR_LOST`. The audit, alerts and fix list that had not yet run do not run.
 
 **A scan handed to an executor but never started** (typically after a deploy
 restart) is failed with `errorCode: "EXECUTOR_NEVER_STARTED"` if it remains
@@ -1577,7 +1594,14 @@ exactly as `timeout` is.
 **Scan-level `status`:** `succeeded` (no failed calls), `partial` (some engines
 failed), `failed` (all failed, with `errorCode: ALL_ENGINE_CALLS_FAILED`).
 `partial` exists so a report can say "one engine was down" rather than
-presenting a depressed mention rate as fact.
+presenting a depressed mention rate as fact. `partial` is also how a scan that
+hit its deadline with at least one answer ends: it then carries
+`errorCode: "SCAN_DEADLINE_EXCEEDED"`, and its results are those of the prompts
+that finished. They can ALSO include failed engine calls (each result's `status`
+says which), so that code says the clock ran out and does not rule out an engine
+having been down. With no answer, or when the executor could not complete the
+finalisation, that scan ends `failed` with the same code. The allowance counts
+`succeeded` and `partial` and never `failed`, whatever the `errorCode`.
 
 **`position` is the subject's rank among detected brands by first appearance.**
 Brand detection is scoped to the subject plus **known competitors** — never

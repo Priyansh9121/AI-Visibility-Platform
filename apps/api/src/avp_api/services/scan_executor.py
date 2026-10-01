@@ -47,12 +47,12 @@ from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
 import structlog
-from sqlalchemy import or_, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings
 from ..db import get_sessionmaker
-from ..models import Client, Scan, ScanStatus
+from ..models import Client, EngineResult, Prompt, Scan, ScanStatus
 from ..models.engine_result import Engine
 from . import alerts as alerts_service
 from . import audit_runner, fix_runner, scan_runner, scoring_runner
@@ -129,6 +129,27 @@ LEASE = timedelta(seconds=180)
 # backs is not a backstop. Same 1.6x margin as before, on the new number.
 MAX_SCAN_DURATION = timedelta(seconds=2_400)
 
+# WHAT THE DEADLINE KEEPS — decision 7, the founder, 2026-10-01
+# --------------------------------------------------------------
+# "A scan that hits its deadline finalises as PARTIAL with the answers it has,
+# and counts." Until then the deadline ended every scan FAILED, however much of
+# it was done and paid for, and the engine loop made that expensive: it holds
+# its answers in memory until the whole loop ends (`scan_runner.run_scan`).
+#
+# So the deadline is now a CAUSE and not a verdict. `_finalize_after_deadline`
+# keeps the answers the loop had finished (`scan_runner.EnginePhaseProgress`),
+# scores them, and stamps PARTIAL when there is at least one answer, FAILED
+# when there is none. Only the deadline does this: a restart (`EXECUTOR_LOST`,
+# `EXECUTOR_NEVER_STARTED`) and an error of ours (`EXECUTION_FAILED`) end FAILED
+# and never count, which is the allowance's own rule — it reads the status and
+# never the code (`scan_allowance.COUNTED_STATUSES`).
+#
+# The scoring is the one piece of work the finalise adds, and it is DB-only
+# (`scoring_runner.score_scan` reads persisted rows and writes one Score; no
+# engine, no vendor). A minute is generous for that and sits well inside the
+# 180s lease the finalise renews before it starts.
+DEADLINE_SCORING_BUDGET = timedelta(seconds=60)
+
 
 class ScanDeadlineError(Exception):
     """The chain ran past `MAX_SCAN_DURATION` while its lease was still live."""
@@ -143,7 +164,9 @@ EXECUTOR_LOST = "EXECUTOR_LOST"
 EXECUTOR_NEVER_STARTED = "EXECUTOR_NEVER_STARTED"
 EXECUTION_FAILED = "EXECUTION_FAILED"
 # The chain was alive and renewing, and still did not finish in time. Distinct
-# from EXECUTOR_LOST (it went silent) and EXECUTION_FAILED (it raised).
+# from EXECUTOR_LOST (it went silent) and EXECUTION_FAILED (it raised). A CAUSE,
+# not a verdict — decision 7: it sits on a PARTIAL scan that had answers to keep
+# (which counts) and on a FAILED one that had none (which does not).
 SCAN_DEADLINE_EXCEEDED = "SCAN_DEADLINE_EXCEEDED"
 
 
@@ -190,11 +213,21 @@ async def _until_deadline(chain: Awaitable[None]) -> None:
     it was. An external cancellation — the heartbeat taking the lease away —
     passes through untouched, because `asyncio.timeout` only converts the one
     it caused.
+
+    **Only the CLOCK's timeout is a deadline.** The `except` below catches every
+    `TimeoutError` that leaves the block, and the chain can raise one of its own
+    (a bug, a connect that timed out). Called a deadline, it would end the scan
+    PARTIAL and count it (decision 7), which makes an error of ours cost the
+    customer an allowance slot. So it asks the timeout whether the clock is what
+    fired, and re-raises anything else untouched: that takes `execute_scan`'s
+    plain path, FAILED / EXECUTION_FAILED, which never counts.
     """
     try:
-        async with asyncio.timeout(MAX_SCAN_DURATION.total_seconds()):
+        async with asyncio.timeout(MAX_SCAN_DURATION.total_seconds()) as deadline:
             await chain
     except TimeoutError:
+        if not deadline.expired():
+            raise
         raise ScanDeadlineError from None
 
 
@@ -422,8 +455,22 @@ async def execute_scan(job: ScanJob, *, settings: Settings) -> None:
     the WHERE is worth revisiting only alongside a resumable chain and a
     fencing token, because after a re-claim the row is still RUNNING and the
     old executor's renewal would match it and renew somebody else's lease.
+
+    THE DEADLINE — decision 7, 2026-10-01
+    -------------------------------------
+    A chain that outruns `MAX_SCAN_DURATION` is stopped, and what it had
+    finished is kept (`_finalize_after_deadline`): PARTIAL / SCAN_DEADLINE_
+    EXCEEDED with at least one answer, which counts; FAILED with the same code
+    with none, which does not. The engine loop reports each finished prompt
+    into `progress` as it goes, because it writes nothing itself until the
+    whole loop is done. Every OTHER exception is an error of ours: it keeps
+    `_mark_failed`'s EXECUTION_FAILED and never counts.
     """
     factory = get_sessionmaker(settings)
+    # One per job. Filled by the engine loop as prompts finish, and read only
+    # by the deadline's finalise — the one caller that learns of the loop's
+    # results from somewhere other than `run_scan`'s return.
+    progress = scan_runner.EnginePhaseProgress()
     try:
         async with factory() as session:
             scan = await session.get(Scan, job.scan_id)
@@ -486,7 +533,7 @@ async def execute_scan(job: ScanJob, *, settings: Settings) -> None:
             # rows. Everything the chain would have gone on to spend is
             # what that cancellation saves.
             held = await run_under_lease(
-                _run_chain(session, scan, client, job, settings=settings),
+                _run_chain(session, scan, client, job, settings=settings, progress=progress),
                 scan_id=scan.id,
                 settings=settings,
             )
@@ -496,6 +543,20 @@ async def execute_scan(job: ScanJob, *, settings: Settings) -> None:
                 # one here would be this executor's last act of trespass.
                 logger.warning("scan.execute.lease_lost", scan_id=scan.id)
                 return
+    except ScanDeadlineError:
+        # Not a crash: the chain was alive and renewing, and ran out of time.
+        # By the time this runs the chain's session is closed (the `async with`
+        # above has exited), so the finalise has the table to itself. Ids and
+        # counts only in the log: `held_prompts` is the finished prompts whose
+        # results are not written yet (the holder is emptied once they are, so
+        # a deadline after the engine phase reads 0).
+        logger.warning(
+            "scan.deadline_exceeded",
+            scan_id=job.scan_id,
+            limit_s=MAX_SCAN_DURATION.total_seconds(),
+            held_prompts=len(progress.completed),
+        )
+        await _finalize_after_deadline(job.scan_id, progress, settings=settings)
     except Exception as exc:  # noqa: BLE001 - recorded on the row, never re-raised
         logger.exception("scan.execute.failed", scan_id=job.scan_id)
         await _mark_failed(job.scan_id, exc, settings=settings)
@@ -508,13 +569,15 @@ async def _run_chain(
     job: ScanJob,
     *,
     settings: Settings,
+    progress: scan_runner.EnginePhaseProgress,
 ) -> None:
     """Every phase, in order, on the claimed scan.
 
     Extracted from `execute_scan` so it can run as its own task under
     `run_under_lease` — losing the lease has to cancel THIS and nothing
     above it. The order and the reasoning for it are unchanged and are
-    documented on `execute_scan`.
+    documented on `execute_scan`. `progress` goes to the engine loop and to
+    nothing else: it is how the deadline finds what the loop had finished.
     """
     # -- phase 3: the competitor set, BEFORE the loop that reads it --
     #
@@ -539,7 +602,7 @@ async def _run_chain(
     await scan_runner.run_scan(
         session, scan, client,
         settings=settings, engines=job.engines, prompt_limit=job.prompt_limit,
-        defer_terminal_status=True,
+        defer_terminal_status=True, progress=progress,
     )
 
     # -- phase 6: the technical audit --------------------------------
@@ -581,6 +644,179 @@ async def _run_chain(
     await scan_runner.finalize_scan(session, scan)
 
 
+async def _count_results(session: AsyncSession, scan_id: str) -> int:
+    return int(
+        (
+            await session.execute(
+                select(func.count())
+                .select_from(EngineResult)
+                .where(EngineResult.scan_id == scan_id)
+            )
+        ).scalar_one()
+    )
+
+
+async def _persist_finished(
+    session: AsyncSession, scan: Scan, progress: scan_runner.EnginePhaseProgress
+) -> None:
+    """Write what the engine loop had finished, once, and commit it.
+
+    With `persist_result` — the loop's own writer — so a row written here is
+    the row the loop would have written: same facts, same digest, same
+    competitor links (`progress.competitor_ids`). The prompts are loaded by id
+    in THIS session (the loop's own is closed) and written in prompt order, as
+    `run_scan` writes them; completion order is the order the loop happened to
+    finish in, not the order the rest of the product reads the rows.
+    """
+    prompts = {
+        prompt.id: prompt
+        for prompt in (
+            await session.execute(
+                select(Prompt).where(
+                    Prompt.id.in_([prompt_id for prompt_id, _ in progress.completed])
+                )
+            )
+        ).scalars()
+    }
+    for prompt_id, per_engine in sorted(
+        progress.completed, key=lambda finished: prompts[finished[0]].position
+    ):
+        for engine, facts, answer in per_engine:
+            scan_runner.persist_result(
+                session,
+                scan=scan,
+                prompt=prompts[prompt_id],
+                engine=engine,
+                facts=facts,
+                answer=answer,
+                competitor_ids=progress.competitor_ids,
+            )
+    await session.commit()
+
+
+async def _finalize_after_deadline(
+    scan_id: str, progress: scan_runner.EnginePhaseProgress, *, settings: Settings
+) -> None:
+    """End a scan that ran out of time, keeping the answers it had — decision 7.
+
+    The founder's decision (2026-10-01): "A scan that hits its deadline
+    finalises as PARTIAL with the answers it has, and counts." With no answer
+    to keep it stays FAILED and does not count. Which of the two is read from
+    the TABLE, after anything the loop had finished has been written to it:
+
+    * one answer or more (`OK` or `ANSWERED_NO_MENTION` — the predicate
+      `scan_runner.count_engine_failures` applies): the scan is scored if it has
+      no score, and ends PARTIAL / SCAN_DEADLINE_EXCEEDED. It counts.
+    * none — nothing finished, or everything that finished was an engine error:
+      FAILED / SCAN_DEADLINE_EXCEEDED. It does not.
+
+    No audit, no alerts and no fixes: the deadline stopped them, and fixes
+    spend money. The report renders each absence honestly, as it does for a
+    phase that failed.
+
+    THE ORDER IS THE POINT.
+
+    1. **The lease is renewed first.** False means the row is no longer RUNNING
+       — the reaper failed it, or a finalise beat us — and its status is not
+       ours to write: return, and the reaper's verdict stands. True also gives
+       everything below a fresh 180 seconds, so the finalise cannot be reaped
+       half done, and the scan keeps its allowance slot until it is stamped. It
+       also queues this UPDATE behind any transaction of the loop's that the
+       cancellation interrupted mid-commit, so the count below is taken after
+       that commit has landed or been abandoned.
+    2. **The table is the truth, not the holder.** Results are written from
+       `progress` only if the scan has NO rows: the loop's own commit may have
+       landed after the deadline fired and before it set `progress.persisted`,
+       and a second write would double every row.
+    3. **One conditional UPDATE stamps it** (`WHERE status = 'running'`), so a
+       row that stopped being ours between step 1 and here is left alone.
+
+    A FRESH session, for the reason `_mark_failed` gives: the chain's own is
+    closed and may be broken. Anything that goes wrong falls back to
+    `_mark_failed`: FAILED, which never counts — the ending that costs the
+    customer nothing when this cannot say what the scan kept.
+    """
+    try:
+        if not await renew_lease(scan_id, settings=settings):
+            logger.warning("scan.deadline.lease_gone", scan_id=scan_id)
+            return
+
+        factory = get_sessionmaker(settings)
+        async with factory() as session:
+            scan = await session.get(Scan, scan_id)
+            if scan is None:
+                logger.warning("scan.deadline.vanished", scan_id=scan_id)
+                return
+
+            # -- keep what finished ------------------------------------------
+            rows = await _count_results(session, scan_id)
+            if rows == 0 and progress.completed and not progress.persisted:
+                await _persist_finished(session, scan, progress)
+                rows = await _count_results(session, scan_id)
+            answered = rows - await scan_runner.count_engine_failures(session, scan_id)
+
+            # -- score it, once, if there is anything to score ---------------
+            #
+            # A score the chain already made is never redone. A failure here
+            # costs the score and nothing else: the answers are kept and the
+            # scan is stamped without one. Rolled back, because Postgres
+            # aborts a transaction on error and the stamp below runs on this
+            # session — which stays usable even when the budget cancels a
+            # statement mid-flight (the test pins that case). `scan_id`, not
+            # `scan.id`: the rollback expires `scan`.
+            if answered >= 1 and await scoring_runner.latest_score(session, scan_id) is None:
+                try:
+                    # DB-only work, well inside the fresh lease — see the constant.
+                    async with asyncio.timeout(DEADLINE_SCORING_BUDGET.total_seconds()):
+                        await scoring_runner.score_scan(session, scan)
+                    await session.commit()
+                except Exception as exc:  # noqa: BLE001 - the scan is stamped without a score
+                    # The exception CLASS only: a message can carry anything.
+                    logger.warning(
+                        "scan.deadline.scoring_failed",
+                        scan_id=scan_id,
+                        error=type(exc).__name__,
+                    )
+                    await session.rollback()
+
+            # -- stamp it, if it is still ours -------------------------------
+            status = ScanStatus.PARTIAL if answered >= 1 else ScanStatus.FAILED
+            stamped = (
+                await session.execute(
+                    update(Scan)
+                    .where(Scan.id == scan_id, Scan.status == ScanStatus.RUNNING)
+                    .values(
+                        status=status,
+                        error_code=SCAN_DEADLINE_EXCEEDED,
+                        # The exception TYPE only, as `_mark_failed` writes it.
+                        error_detail=ScanDeadlineError.__name__,
+                        finished_at=datetime.now(UTC),
+                        # What is actually in the table, not what the loop set
+                        # out to write.
+                        engine_result_count=rows,
+                    )
+                    .returning(Scan.id)
+                    .execution_options(synchronize_session=False)
+                )
+            ).scalar_one_or_none()
+            await session.commit()
+        if stamped is None:
+            logger.warning("scan.deadline.lease_lost_before_stamp", scan_id=scan_id)
+            return
+        logger.info(
+            "scan.finalized_after_deadline",
+            scan_id=scan_id,
+            status=status.value,
+            results=rows,
+            answered=answered,
+        )
+    except Exception as exc:  # noqa: BLE001 - the plain failure is the safe ending
+        logger.warning(
+            "scan.deadline.finalize_failed", scan_id=scan_id, error=type(exc).__name__
+        )
+        await _mark_failed(scan_id, ScanDeadlineError(), settings=settings)
+
+
 async def _mark_failed(scan_id: str, exc: Exception, *, settings: Settings) -> None:
     """Record a crashed scan, on a session that is definitely usable.
 
@@ -589,24 +825,46 @@ async def _mark_failed(scan_id: str, exc: Exception, *, settings: Settings) -> N
     rolled back — writing the failure through it is exactly as likely to fail as
     the thing that just did. `session_scope` makes the same assumption for
     requests; a background task has no such wrapper, so it is explicit here.
+
+    FAILED, so it never counts against the allowance, whatever the cause. A
+    `ScanDeadlineError` reaches here only as `_finalize_after_deadline`'s
+    fallback (decision 7): a deadline ordinarily ends PARTIAL or FAILED
+    through that function, and this is what is left when it cannot be written.
+    Every other exception is an error of ours and ends EXECUTION_FAILED.
+
+    **ONE conditional UPDATE, not a read and then a write.** A finished scan is
+    never re-marked, and that has to be a condition of the statement itself:
+    this is the fallback of a finalise that may have just landed a PARTIAL (its
+    commit can be in flight, or its reply lost), and a write decided on an
+    earlier READ of the row would wait for that commit and then replace the
+    PARTIAL with FAILED. `WHERE status IN ('queued', 'running')` is checked
+    again once the row is free, so it matches nothing instead. The same rule as
+    the old guard (`scan.status in TERMINAL`), without its window.
     """
     factory = get_sessionmaker(settings)
     try:
         async with factory() as session:
-            scan = await session.get(Scan, scan_id)
-            if scan is None or scan.status in TERMINAL:
-                return
-            scan.status = ScanStatus.FAILED
-            scan.error_code = (
-                SCAN_DEADLINE_EXCEEDED
-                if isinstance(exc, ScanDeadlineError)
-                else EXECUTION_FAILED
+            await session.execute(
+                update(Scan)
+                .where(
+                    Scan.id == scan_id,
+                    Scan.status.in_((ScanStatus.QUEUED, ScanStatus.RUNNING)),
+                )
+                .values(
+                    status=ScanStatus.FAILED,
+                    error_code=(
+                        SCAN_DEADLINE_EXCEEDED
+                        if isinstance(exc, ScanDeadlineError)
+                        else EXECUTION_FAILED
+                    ),
+                    # The exception TYPE only. `error_detail` carries our own
+                    # diagnostics and never a vendor response body, which could
+                    # hold third-party content (the facts-only rule).
+                    error_detail=type(exc).__name__,
+                    finished_at=datetime.now(UTC),
+                )
+                .execution_options(synchronize_session=False)
             )
-            # The exception TYPE only. `error_detail` carries our own
-            # diagnostics and never a vendor response body, which could hold
-            # third-party content (the facts-only rule).
-            scan.error_detail = type(exc).__name__
-            scan.finished_at = datetime.now(UTC)
             await session.commit()
     except Exception:  # noqa: BLE001 - the datastore is gone; the reaper covers it
         logger.exception("scan.execute.failed_to_record", scan_id=scan_id)
