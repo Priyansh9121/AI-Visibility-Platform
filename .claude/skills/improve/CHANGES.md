@@ -1,0 +1,31 @@
+# Changes from upstream (source: improve-main/skills/improve/)
+
+## Required by the audit
+- plan-template "Git workflow": `Commit per step or per logical unit` (references/plan-template.md:101) became "Do not commit; the founder commits after the full bar passes", repeated in the executor instructions and done criteria. Removes: a plan in the main tree committing without the founder asking. The upstream `Do NOT push or open a PR` line (:102) is kept and widened to stash/reset/checkout/clean and "never push to main" (Render deploys main before CI).
+- Commits are allowed only on an `execute` worktree branch when the dispatcher says so (references/closing-the-loop.md:30 told the executor to commit). Removes: commits on the founder's branch.
+- Plans location: `plans/` or `advisor-plans/` created unasked (SKILL.md:18, :82-93) became "ask the founder; propose `docs/plans/` (absent today); do not create until told; otherwise return plan text". Removes: an untracked root directory the founder did not choose.
+- Plan template gained "The bar" block (template Commands table, plan-template.md:65-74, was generic `pnpm` commands): ruff and pytest with exit codes from files, mypy through `assert_count.py`, `corepack pnpm` vitest and `node --test`, `uv lock --check` for apps/api and apps/workers, floors in `infra/ci/floors.json`. Removes: generic gates, piped output, bare `pnpm`.
+- `--issues` removed (SKILL.md:19, :110, :118; references/closing-the-loop.md:86-96), including the `gh issue create` exception to rule 2 and the plan `Issue` status field (plan-template.md:40). Removes: GitHub issue creation (public-visibility leak risk for security plans).
+
+## Other AVP adaptations
+- SKILL.md:19 exception permitting `gh issue create` deleted; hard rules gained: presence-only env checks, never read `.env`/`.mcp.json`/`settings.local.json`, stop on product decisions, never rewrite legal pages, no new edit or commit path. Matches CLAUDE.md.
+- Audit playbook (references/audit-playbook.md:30-36 security, :50-58 tests, :34 `npm audit`): AVP surfaces added (Stripe webhook, auth and rate limits, crawler `RobotsGate`, token routes, facts-only, log redaction, design-system drift); coverage goals replaced by count gates; `pip-audit`/`npm audit`/`pnpm audit` need the founder's OK (outbound registry calls), pointing to the library `dependency-audit` skill; the five guard tests named as settled. Removes: false findings on deliberate greps, network calls without consent.
+- Recon (SKILL.md:31-35): reads CLAUDE.md, north-star §8 drift check, "Found, not fixed"; ADR globbing replaced by the fact that `docs/adr/` does not exist. Plans record the §8 answer.
+- Stack assumptions (README-style generic `pnpm`, `tsc`, `npm` in SKILL.md:32, plan-template.md:69-72) replaced by uv/corepack pnpm/Alembic. Schema plans use Alembic only against a scratch database via `-x db_url=`; endpoint plans run the OpenAPI export and shared-types generate.
+- `execute` (references/closing-the-loop.md:11-69): requires the founder's go-ahead each time; install in a worktree (line 50: executor "must install dependencies") limited to lockfile-frozen installs and raised as a founder decision; warns about the shared `avp_test`/Redis db 15; review delegates to `security-reviewer` and `ui-reviewer`; executor preamble forbids stash/reset/checkout/clean and secret access.
+- Sibling references: upstream mentioned `vercel-react-best-practices` (plan-template.md:82) and `Explore` agents; replaced by `fastapi`, `supabase-postgres-best-practices`, `test-driven-development`, `verification-before-completion` and the `explorer` agent.
+- Unsourced numbers: subagent counts and effort tiers (SKILL.md:54-60) are design parameters, kept; "top ~6" kept. No statistics existed.
+- Frontmatter: description rewritten third person with when/when-not and AVP surfaces; `license`, `metadata` author/version dropped from frontmatter (licence shipped as LICENSE, provenance in SOURCE.md); no `allowed-tools`.
+- Shortened throughout; upstream workflow, variants (`quick`/`deep`, `branch`, `next`, `plan`, `review-plan`, `execute`, `reconcile`) and the finding format are kept.
+
+## Security review fixes (2026-10-01)
+- M1 references/plan-template.md bar block: each step now stops on failure (`[ "$rc" = 0 ] || { echo FAIL; exit "$rc"; }`; mypy accepts 0 or 1 and the ceiling decides; `assert_count` and `typecheck` also `|| exit 1`; `cd ... || exit 1`). Removes: subshells returning only the last command's status, and "2 failed, N passed" clearing the count gate.
+- M2 plan-template.md bar block and references/closing-the-loop.md:9: `uv lock --check` runs first, `uv run --locked --extra dev`, installs via `uv sync --locked --extra dev` in both apps, never unpinned `uv pip install`. Removes: silent re-lock or fetch on pyproject drift.
+- M3 closing-the-loop.md: base SHA recorded at dispatch; scope check is `git diff --stat <base>` plus `git status --porcelain --untracked-files=all`; committing executors stage explicit paths; template "nothing committed" criterion reconciled with the worktree-commit exception.
+- L4 plan-template.md schema bullet: `alembic check` uses the same `-x db_url=` form; `avp_dev` and `avp_test` named off-limits as scratch DBs.
+- L5 closing-the-loop.md precondition and template Git workflow: worktree commits default to NO, allowed only if the founder's go-ahead says so.
+- L6 closing-the-loop.md executor prompt: the no-secret-files and presence-only env rule pasted in.
+- L7 closing-the-loop.md:9 and prompt: one API test-suite run at a time (conftest flushes Redis db 15); covers the advisor, `test-runner` and the executor.
+- L8 plan-template.md executor instructions and closing-the-loop.md preconditions: `git status --porcelain -- <scope>` must be empty before a worktree is built.
+- L9 plan-template.md endpoint bullet: `git diff --exit-code` returning 1 is expected when the intended change is present.
+- Re-review nits: plan-template.md OpenAPI export now `uv run --locked --extra dev` with exit code checked; each bar block ends `) || fails=1` and the script ends with `[ "${fails:-0}" = 0 ]`; closing-the-loop.md:9 says `uv lock --check` runs inside apps/api and apps/workers (no root pyproject).

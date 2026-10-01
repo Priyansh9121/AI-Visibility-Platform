@@ -1,0 +1,23 @@
+# Changes from upstream (source SKILL.md, 23 lines)
+- Description rewritten, third person, names the three lockfiles, says when not to use it (licences, applying upgrades) -> upstream "Scan lockfiles..." (line 3) would trigger on any project (audit risk: over-broad trigger).
+- Ecosystem list (src:7-8: package-lock, yarn, requirements, poetry, go.sum, Cargo) replaced by AVP's three lockfiles, confirmed present -> stack mismatch.
+- Scanner step (src:9-11) now says "check what exists": `uv audit` and `corepack pnpm audit --json` exist; osv-scanner, pip-audit, trivy absent and any install is a founder decision (new tool) -> audit risk "scanner binaries are Tier 2 installs"; keeps upstream's "ask before installing".
+- `npm audit` -> `corepack pnpm audit`; bare `npm ls`/`pipdeptree` (src:14) -> `corepack pnpm why` / `uv tree --invert` -> AVP package-manager rules.
+- Added: scanners make outbound advisory lookups, state it -> outbound-host honesty.
+- Added: `--frozen` for uv audit (no re-lock), forbid `pnpm audit --fix` and `--ignore-registry-errors` -> avoids manifest writes and false-clean results.
+- Shell snippets: LOG guard, subshells, output to files, rc read from the tool, no pipes -> house verification rules.
+- Triage (src:13-16) keeps the reachability ideas; added AVP exposure context (authenticated scan creation, public token routes, webhook, crawler) and runtime-vs-dev split.
+- Step 4 "hand off to `safe-upgrade-pr`" (src:21) removed: skill does not exist here. Replaced by "upgrades are proposals", with both-uv-projects re-lock, `uv lock --check`, providers.test.ts and /privacy classification, licence scripts referenced not duplicated, floors gate, commit/push rules.
+- "Offer a CI guard (e.g. an osv-scanner step)" (src:22-23) -> proposal only, separate founder-approved change, respects the gated CI and asks block-vs-report; does not edit the workflow.
+- Audit results recorded as ids/names/versions/counts only -> facts-only rule.
+- Security review fixes (2026-10-01): rc handling now CLEAN / FOUND / NOT AUDITED, never "failure = advisories found" (SKILL.md step 1) -> false-result risk.
+- `uv tree` given `--frozen` -> unfrozen it can rewrite uv.lock.
+- Dev tools named as the `dev` extra (`--extra dev` in CI; `--no-extra dev` to exclude), not a uv dev group -> factual mismatch (apps/api/pyproject.toml:34, apps/workers/pyproject.toml:16).
+- Exposure facts corrected: no public /scan, no file fetching, crawling is in apps/api services/crawl.py; added `POST /reports/shared` -> invented-fact risk.
+- Workers depend on avp-api by path (apps/workers/pyproject.toml:13,27): any lock change runs in both projects, then re-audit both.
+- Outbound hosts named (api.osv.dev; registry.npmjs.org), unconfirmed parts labelled.
+- Second re-review fixes (2026-10-01): added a runtime-only audit snippet `uv audit --frozen --no-extra dev --output-format json` in LOG/rc form (unfrozen it locks the project and can rewrite a stale uv.lock) -> manifest-write risk.
+- Removed "workers run Celery tasks that call into avp-api": workers run only health tasks today (apps/workers/src/avp_workers/celery_app.py:70 discovers avp_workers.tasks; no worker code imports avp_api) -> unsupported claim.
+- FOUND now covers any adverse status (vulnerability, deprecation, quarantine); quarantine reporting by `uv audit` marked unconfirmed -> false-clean risk.
+- npm registry line says "no .npmrc in the repo" (checked with find), a user-level one may exist and is never read -> overclaim.
+- Triage bullet in this file (line 9) now names authenticated scan creation and public token routes, matching the corrected SKILL.md exposure facts.

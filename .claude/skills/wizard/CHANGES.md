@@ -1,0 +1,24 @@
+# Changes from upstream
+- Default `ENV_FILE` `.env` -> `apps/api/.env`, and `write_env` now refuses any file git tracks or does not ignore (`git ls-files --error-unmatch`, `git check-ignore`) -> removes the risk of a secret landing in a tracked file (source template.sh:26, 130-139). `apps/api/.env` is git-ignored (`.gitignore:15`).
+- `write_env` validates the key name, rejects newline values, sets `umask 077` and `chmod 600`, creates the temp file beside the target -> removes world-readable secret files and injection via a value (template.sh:130-139).
+- Refuse any value containing `sk_live_` or `rk_live_` anywhere (quotes or a pasted `KEY=sk_live_...` line do not hide it) in `ask`, `ask_secret` and `write_env` -> live keys are the founder's to set on Render, never in a file or script (`CLAUDE.md` "Secrets"). `whsec_` is the prefix for test and live webhook secrets alike, so any value containing it needs an explicit confirm that it came from `stripe listen` or a TEST-mode endpoint (an earlier `whsec_live_` check was not a real prefix).
+- Added `dashboard_set` (copy from provider dashboard, paste into Render dashboard, confirm) -> Render env vars are set in the Render dashboard, not by a local script.
+- Removed `set_secret` and `set_var` (`gh secret set`, `gh variable set`, template.sh:141-167) -> outbound writes to GitHub with secret values are out of scope; also removed their use in the example stage (:201) and the "GitHub secret" lines in `finish`.
+- `ask` refuses secret-looking variable names (SECRET, TOKEN, PASSWORD, PRIVATE, WEBHOOK, API_KEY) -> prevents a secret being typed visibly (template.sh:100-111).
+- "Enter keeps current" now reports presence only via `_has_existing`; the existing value is never printed -> no value echo on re-run (template.sh:92-126). Added `forget` to clear captured variables after writing.
+- Script refuses to run under `set -x` -> xtrace would print every captured value.
+- `open_url` accepts `https://` only -> no other scheme is opened.
+- Example stages replaced: Stripe publishable/secret test keys with CI secret write (template.sh:187-201) -> a test-mode key to the untracked file, and `STRIPE_PRICE_ID` set on Render in the dashboard. Names checked against `apps/api/.env.example`.
+- SKILL.md rewritten shorter: stack-neutral "commit it and link it from the README" (SKILL.md:44) -> commit only when the founder asks, explicit paths; CI-secret trace step (SKILL.md:43) removed with `set_secret`; description narrowed to AVP cutover surfaces; added secret rules and the no-run rule.
+- Not copied: `agents/openai.yaml` (agent metadata, not needed).
+- `_is_secret_name` now also matches `KEY$`, `DATABASE_URL`, `REDIS_URL`, `DSN` (they carry passwords); `ask` (visible input) also refuses values matching `*://*:*@*` or starting `sk_`, `rk_`, `whsec_`.
+- Temp file is `mktemp "$ENV_FILE.wizard.XXXXXX"` (covered by `.gitignore:16` `.env.*`, confirmed with `git check-ignore`, and re-checked at runtime), its path is held in `_TMP`, and an EXIT trap (plus INT/TERM -> exit) `rm -f`s it, so an early stop leaves nothing untracked behind.
+- `_no_xtrace` runs at the start of `ask`, `ask_secret` and `write_env`, not only at startup. `write_env` now takes the NAME only and reads the value with `${!key}`, so neither a trace nor the call line holds the value. Example stage updated.
+- `unset "$key"` before `printf -v` in `ask` and `ask_secret`, and `forget` uses `unset`, so a captured value is never exported into child processes.
+- Enter ("keep current") no longer reads the saved value back: `_existing_value` removed; the name goes in `KEPT` and `write_env` skips the rewrite. Values containing `\r` are rejected as well as `\n`.
+- `set +a` after `set -euo pipefail` -> an inherited allexport would re-export values set by `printf -v`.
+- `write_env` no longer asks the `whsec_` confirm again (`_refuse_live ... nowhsec`); it was already asked when the value was typed, and a second "n" aborted.
+- A non-empty value typed for a key removes it from `KEPT` (`_unkeep`) -> a re-asked key no longer prints "kept" and drops the new value.
+- `write_env` grep now treats only rc 1 (no other lines) as fine and dies on a read error (rc 2) -> a failed read can no longer let `mv` replace the env file with a truncated copy.
+- `ask` refusal message now says the value is on screen: clear scrollback and rotate the key.
+- SKILL.md states that `write_env` takes only the NAME and that `whsec_` needs a test-mode confirm.

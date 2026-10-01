@@ -1,0 +1,12 @@
+# Source
+- Repo folder: improve-main/skills/improve/
+- Source paths (read, all under ~/Skills-archive/All-Skills/improve-main/): skills/improve/SKILL.md, skills/improve/references/audit-playbook.md, skills/improve/references/closing-the-loop.md, skills/improve/references/plan-template.md, LICENSE.md
+- Upstream URL: not stated in the skill files (a grep of README.md for github.com found only an unrelated example link).
+- Licence: MIT, copied byte-for-byte from LICENSE.md to LICENSE. Copyright (c) 2026 shadcn (SKILL.md frontmatter also says license: MIT, author shadcn, version 1.0.0).
+- Date copied: 2026-10-01
+- sha256 skills/improve/SKILL.md: 1599aa29e9b16424cb767779efac53fa56e3f38be92dff4ac587393a1ad5070a
+- sha256 skills/improve/references/audit-playbook.md: 587c1b927070f3c28139ad95ac34cc21a7da32618cfeb966cb774e58a865d4c8
+- sha256 skills/improve/references/closing-the-loop.md: 5d526bb378e1783bbeb68d7af527776cbe98cde27a1aeccbd13e818e5b73b454
+- sha256 skills/improve/references/plan-template.md: 7be76dd3c29442288fa7cee4432fc6e95c2fdbf748c9b356344bf647c5f8722e
+- sha256 LICENSE.md: 00ff8408e93e2ecc4d90c0edeabdf434100c3aff50acc5d330e17eccd4a3faa5
+- Not copied: README.md, examples/.
