@@ -1,0 +1,24 @@
+# Changes from upstream (source path:line)
+
+- Description rewritten: third person, names code-review, security-review, security-reviewer, ui-reviewer, and says when not to use it -> upstream trigger ("any feedback") was broad (SKILL.md:3).
+- Removed "your human partner" phrasing and the "explicit instruction-file violation" line -> referred to an instruction file AVP does not have (SKILL.md:52,61,82,83,86,98,121,127,198; the instruction-file wording is at :30).
+- Removed the "uncomfortable pushing back out loud" paragraph and the macOS/bundle-ID example -> filler, wrong stack (SKILL.md:129,185-188).
+- Added an AVP verification checklist (policy tests, CLAUDE.md house rules, product decisions, scope) -> generic checks did not protect AVP's guard tests and rules (SKILL.md:69-74).
+- Added "fix with a failing test first", reviewer-agent reruns, and the verification bar (file-redirected output, exit codes, assert_count floors) -> upstream had "test each" with no AVP bar (SKILL.md:102-111).
+- Added "Found, not fixed" recording in docs/build-log.md -> deferred findings would otherwise vanish.
+- Added no-commit / no-push-to-main and founder-decides lines -> CLAUDE.md git rules.
+- GitHub thread replies kept but gated on an existing PR plus the founder asking; never resolve or merge -> upstream replied unconditionally (SKILL.md:203-205; audit risk note at SKILL.md:106 refers to this section).
+- Cross-references point only to names in the library/installed lists (test-driven-development, verification-before-completion) -> no dangling sibling skills.
+- Dropped Real Examples and duplicate "Unclear item" example; shortened -> prefer shorter (SKILL.md:176-201).
+- Dropped upstream check "Works on all platforms/versions?" -> macOS/bundle-ID concern, not AVP's single Render stack (SKILL.md:73).
+- Security findings: "does not hold" needs attack-path evidence (blocking check or failed reproduction); a pinning test shows intent, not safety; fix-vs-pinned-behaviour goes to the founder -> upstream "reference working tests" (SKILL.md:126) could close a real finding.
+- Security findings that hold are deferred only by the founder, listed with severity; exploit details of unfixed findings stay out of build-log/PR text (public repo); rejected security findings re-run security-reviewer first -> agent could park or close a real finding.
+- "Decline the suggested fix, not the defect" -> upstream push-back (SKILL.md:115-121) could discard a real defect along with a bad fix.
+- Untestable/unverified findings (races etc.) go to the founder, not closed -> upstream "can't verify" (SKILL.md:79-80) left closure open.
+- GitHub replies post from a file via `-F body=@"$LOG/reply.md"`, no inline double-quoted body; no tokens, emails or exploit details -> shell expansion in reply text (SKILL.md:205).
+- Raw hex and stock Tailwind cited as test-enforced (render.test.tsx, ReportView.test.tsx), not as CLAUDE.md rules -> misattribution.
+- Defined "security finding" (reviewer agents, built-in security-review, or CLAUDE.md's list incl. agency_id scoping, CORS) -> a code-review finding in those areas could be relabelled non-security and parked.
+- Failed reproductions run locally only (avp_test 55433, Redis db 15, localhost:3000) -> no probing of Render, Stripe live or Supabase.
+- Commit messages added to the exploit-detail rule; founder-deferred security findings recorded with severity and area only -> public repo.
+- Reply file written via Write tool or quoted heredoc -> backticks in replies would execute.
+- Condensed wording sections (upstream SKILL.md:27-38 Forbidden Responses, :131-162 Acknowledging/Correcting) into the short "Wording" section -> shorter.

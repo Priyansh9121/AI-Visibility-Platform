@@ -21305,3 +21305,47 @@ Drift check (north-star §8): Layer 1, Delivery (the report, the dashboard, sign
 - Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
 - OpenAPI and `api.gen.ts` were regenerated for the two fields (and the shared-report route's description); re-running both generators changes neither file.
 - Exit codes were read from files.
+
+# Every installed skill is tracked in git, with its licence and where it came from
+
+**2026-10-02, the first entry of the day; branch `pre-pilot`, item 5 of the founder's pre-pilot brief.** Configuration and documentation only; one commit.
+
+**Render: nothing to set.** No code, test, schema or dependency changes.
+
+Drift check (north-star §8): no product layer; the agent tooling the project is built with. Lifecycle phase: none directly (it keeps the workflow that builds Activation reproducible).
+
+## 1. What changed
+
+- **Founder decisions (brief and 2026-10-01):** everything in `.claude/skills` stays installed and is tracked; restore the harmless archived skills, keep the conflicting design skills out.
+- **Stray copies archived, at the founder's choice.** The founder's copy of the 30 library skills (2026-10-01) had also landed in `.claude/agents/`, where they loaded as agent types, and inside `.agents/skills/fastapi/`. Each of the 62 entries was checked byte-identical to `~/Skills-library` and moved, not deleted, to `~/Skills-archive/stray-copies-2026-10-01/` (a README there says where each came from). `.claude/agents/` again holds only the six cost-tier agents.
+- **Restored:**
+  - `improve-animations` and `find-animation-opportunities` from `~/Skills-archive/removed-2026-09-30/project/`;
+  - `accessibility` as a real folder from its recorded symlink target, with its `skills-lock.json` entry put back exactly as recorded.
+  - Not restored, as the brief says: ui-ux-pro-max, ui-styling, design-system, design-suite, brand, slides, banner-design and the two bencium skills.
+- **Symlinks replaced by real copies:** `fastapi`, `playwright-cli` and `playwright-best-practices`. Each was identical to its target under `diff -r`; the only differences now are the `LICENSE` and `SOURCE.md` added below.
+- **Licences for the seven skills that had none.** Each gets a byte copy of the upstream licence, fetched from the repository named in `skills-lock.json` or the skill's own frontmatter, and a `SOURCE.md` recording the repository, path, the HEAD it was read at, the licence's sha256, its history, and how the installed copy compares with upstream:
+  - `fastapi` (MIT, fastapi/fastapi);
+  - `playwright-cli` (Apache-2.0, microsoft/playwright-cli);
+  - `playwright-best-practices` (MIT, currents-dev; the upstream file is `LICENSE.md`);
+  - `accessibility` (MIT, addyosmani/web-quality-skills);
+  - `impeccable` (Apache-2.0, pbakaus/impeccable, with its `NOTICE.md`; upstream moved from MIT to Apache-2.0 on 2026-01-07 and the installed version 4.0.4 post-dates it);
+  - `improve-animations` and `find-animation-opportunities` (MIT, emilkowalski/skills, the source of the installed `emil-design-eng` and `review-animations`).
+- **`.gitignore`** tracks every folder in `.claude/skills`, impeccable included, in place of the list of 14. The skills library's `INDEX.md`, `.claude/settings.local.json` and agent worktrees stay ignored.
+- **`CLAUDE.md`** has an "Installed skills" section:
+  - Claude picks a skill by its description;
+  - git-guardrails' rules are already in `.claude/settings.json`;
+  - avp-ui-styling's rules also live in `docs/design-system.md`;
+  - the archived design skills stay out because they conflict with the design system.
+- **impeccable's hooks are unchanged, and their paths resolve:** `.claude/settings.local.json` points at `.claude/skills/impeccable/scripts/hook.mjs`, and `.github/hooks/impeccable.json` at `.github/skills/impeccable/scripts/hook.mjs`. Both exist (`.github/hooks/` and `.github/skills/` stay ignored).
+
+## Found, not fixed
+
+- **`avp-geo-seo` differs from `~/Skills-library`.** The repo's tracked copy is the newer one (updated for founder decision 3 in 38af315); the library copy is stale. The other 29 library folders are byte-identical.
+- **Five of the seven newly licensed skills are earlier versions than their upstream HEAD** (each `SOURCE.md` says which files differ); `accessibility` and `playwright-best-practices` match upstream exactly. Updating them is a separate choice.
+
+## Verified
+
+- **43 skills.** Every `SKILL.md` header parses as YAML, its `name` matches its folder, and no two share a name; nothing needed fixing. Every folder has `SKILL.md`, a `LICENSE` (or `LICENSE-DECLARATION.md`) and `SOURCE.md`.
+- **`git check-ignore -v`** on each of the 43 folders and its `SKILL.md`: no rule ignores any of them. All 436 files on disk under `.claude/skills` (`INDEX.md` aside) are visible to git.
+- **Newly tracked:** 340 files in 29 folders, 4.26 MiB (impeccable is 3.3 MB of it, mostly its hook scripts). Key-shaped strings (Stripe, Anthropic, AWS, GitHub, Google, Resend, Slack, private keys, JWTs) in those files: 0.
+- **No test, script or workflow reads `.claude/`, `skills-lock.json` or `CLAUDE.md`** (a grep of the test, script, CI and workflow directories finds only two comments citing a `platform.claude.com` URL). The files already sat on disk during every bar run on this branch, so tracking them changes no result; the full bar on the branch's last tree is in the next entry.

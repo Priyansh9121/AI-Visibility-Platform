@@ -1,0 +1,13 @@
+# Source
+- Repo folder: skills-main/skills/engineering/wizard/
+- Source paths (all read-only, none executed):
+  - ~/Skills-archive/All-Skills/skills-main/skills/engineering/wizard/SKILL.md
+  - ~/Skills-archive/All-Skills/skills-main/skills/engineering/wizard/template.sh
+  - ~/Skills-archive/All-Skills/skills-main/skills/engineering/wizard/agents/openai.yaml (read, not copied)
+- Upstream URL: not stated in the source files.
+- Licence: MIT (~/Skills-archive/All-Skills/skills-main/LICENSE), copied byte-for-byte to LICENSE. Copyright (c) 2026 Matt Pocock.
+- Date copied: 2026-10-01
+- sha256 SKILL.md: bdf31d48211ea559878f95a4f344aeabf8d85897488ba564382bab0b000daac1
+- sha256 template.sh: 33cbe9dfb1d0e9185b60248a52aabed14bc64785a00cac695e302e739dd6c153
+- sha256 agents/openai.yaml: 98f44d682d58e262f160dc59a8befc365e0aa65820dd0261864af26aa8e59d83
+- sha256 LICENSE: 0e7ac423bf2c6e223b7c5b156f8cf72da49d748e56a1641402c31f22ad07dbb5
