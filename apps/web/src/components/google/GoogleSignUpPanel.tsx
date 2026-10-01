@@ -8,7 +8,31 @@ import { api, ApiProblem } from '@/lib/api';
 export type GoogleSignUpState =
   | { kind: 'loading' }
   | { kind: 'ask'; pending: GooglePending }
+  | { kind: 'no-code' }
   | { kind: 'expired' };
+
+/**
+ * What each refusal says. Both are the same card with the same way out.
+ *
+ * `no-code` is built like /invite's and /reset-password's refusal ("This
+ * invitation link is not valid", "This page no longer has the link's code (it
+ * is removed from the address bar once read)."): the same title shape and the
+ * same first sentence, then the action that fits a code that came from Google
+ * and not from an email, which is to start again from the sign-in page. The
+ * title does not say the sign-in was used: the page cannot know that (the peek
+ * spends nothing, and a typed address never had a ticket).
+ */
+const REFUSALS = {
+  'no-code': {
+    title: 'This sign-in link is not valid',
+    detail:
+      "This page no longer has the link's code (it is removed from the address bar once read). Start again from the sign-in page.",
+  },
+  expired: {
+    title: 'That Google sign-in has expired',
+    detail: 'It works for ten minutes and once. Start again from the sign-in page.',
+  },
+} as const;
 
 /**
  * The Google half of "Create your agency" — Epic 20.
@@ -19,8 +43,11 @@ export type GoogleSignUpState =
  * account will be under, and asks for no password — that is the point.
  *
  * Pure and prop-driven like `SignUpPanel`: the route owns the ticket and the
- * fetch, this owns the form. The `expired` state is the ticket's ten minutes
- * running out or the page being opened twice; the way out is the front door.
+ * fetch, this owns the form. Two states are refusals, and the way out of both
+ * is the front door. `no-code` is a page with no ticket to ask about, typically
+ * a reload (the ticket is taken out of the address bar once read). `expired` is
+ * the API refusing the ticket (unknown, already used, or past its ten minutes)
+ * or not answering. Which one applies is the route's call.
  */
 export function GoogleSignUpPanel({
   state,
@@ -47,12 +74,13 @@ export function GoogleSignUpPanel({
     );
   }
 
-  if (state.kind === 'expired') {
+  if (state.kind === 'no-code' || state.kind === 'expired') {
+    const { title, detail } = REFUSALS[state.kind];
     return (
       <div className="mx-auto max-w-form">
         <ErrorState
-          title="That Google sign-in has expired"
-          detail="It works for ten minutes and once. Start again from the sign-in page."
+          title={title}
+          detail={detail}
           action={
             <Button variant="secondary" onClick={() => window.location.assign('/')}>
               Back to sign in
