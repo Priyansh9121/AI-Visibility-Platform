@@ -64,7 +64,7 @@ our own customers.
 from __future__ import annotations
 
 import enum
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import stripe
@@ -91,6 +91,11 @@ STRIPE_TIMEOUT_SECONDS = 15
 STRIPE_MAX_RETRIES = 1
 # How long a checkout waits for another checkout of the same agency.
 CHECKOUT_LOCK_TIMEOUT = "3s"
+# How long a Checkout link stays payable (founder decision 5, 2026-10-01).
+# Stripe's default is 24 hours and it accepts 30 minutes to 24 hours. A shorter
+# link also narrows the window the open-session expiry in
+# `create_checkout_session` guards: an older session stays payable until then.
+CHECKOUT_LINK_LIFETIME = timedelta(hours=1)
 # The two 409 refusals of a second checkout. Neither detail carries a Stripe id
 # or the status itself; both point at the billing portal.
 _ALREADY_ACTIVE_DETAIL = (
@@ -506,6 +511,9 @@ async def create_checkout_session(
             "subscription_data": {"metadata": {"agency_id": agency.id}},
             "success_url": f"{base}/settings?checkout=success",
             "cancel_url": f"{base}/settings?checkout=cancelled",
+            # Whole Unix seconds, as Stripe takes them. Read per call, so every
+            # link gets its own hour.
+            "expires_at": int((datetime.now(UTC) + CHECKOUT_LINK_LIFETIME).timestamp()),
         }
     )
 

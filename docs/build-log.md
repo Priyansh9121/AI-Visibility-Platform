@@ -20874,3 +20874,36 @@ contract regenerates byte-identically.
 - Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
 - `openapi.json` and `api.gen.ts` were regenerated for this change, and regenerating again produces the same files.
 - Exit codes were read from files.
+
+# A Stripe Checkout link stays payable for one hour, not a day
+
+**2026-10-01, the ninth entry of the day.** One item, one commit.
+
+**Render: nothing to set.**
+
+## 1. What changed
+
+- **Founder decision 5.** `create_checkout_session` (`services/billing.py`) passes `expires_at` = now + one hour (`CHECKOUT_LINK_LIFETIME`), in whole Unix seconds, on the only Checkout Session create call. Stripe's default is 24 hours; it accepts 30 minutes to 24 hours. A shorter link also narrows the time an older, unpaid link stays payable; the open-session expiry from the previous entry still runs first.
+- **`docs/api-contracts.md`:** the checkout section says the link expires after one hour (it said the lifetime was unchanged).
+- **`docs/runbook.md`, "Live Stripe test":** new check (f): leave a Checkout page unpaid for more than an hour and it stops accepting payment; pressing Subscribe again makes a new link that pays. It needs an agency that has not paid, because one that has gets the 409.
+- **Test:** `test_each_checkout_link_expires_an_hour_after_it_is_created` reads the clock just before and just after each request and requires `expires_at` to fall inside that bracket plus one hour, over two checkouts; no sleeps, no frozen clock. Red first: `expires_at` was absent.
+
+## 2. The review
+
+- **Security review (opus): PASS.** The clock is UTC-aware, so the server's timezone cannot shift it. The limit that matters is Stripe's 30-minute minimum, measured on Stripe's clock: one hour leaves 30 minutes of margin, used only by our clock running behind Stripe's, the rounding (under a second) and the create call's own timeout and single retry (about 30 seconds); the time is read right before the create call, after the expire and list calls. Portal sessions and the expire-first loop are unchanged.
+
+## Found, not fixed
+
+- The earlier checkout entry ("Checkout is refused while a subscription is live…") says the link keeps Stripe's 24-hour default. That was true then; this entry supersedes it.
+
+## Verified
+
+**API pytest 1924 → 1925 (+1); `api-pytest` floor raised to match.**
+- **Negative control:** without the `expires_at` line the test fails; a 24-hour value fails on the value and a float fails on the type. The file was restored with `cp` and checked with `cmp`.
+
+**The rest of the bar.** One bar run covered this entry and the next (decision 6). They touch disjoint files: this commit's API and docs are what that run tested, and its web side is the previous commit's, whose bar passed (web 1196).
+- Workers 26, shared-types 53 (0 fail), design-system 846, web 1203, API 1925, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- OpenAPI and `api.gen.ts` regenerate byte-identically.
+- Exit codes were read from files.
