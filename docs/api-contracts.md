@@ -1143,6 +1143,8 @@ the database by `ck_clients_industry_matches_classification_status`.
 | `PROVIDER_RATE_LIMITED` / `PROVIDER_UNREACHABLE` / `PROVIDER_ERROR` | Upstream model call failed |
 | `PROVIDER_REFUSED` | Model declined to answer |
 | `PROVIDER_SCHEMA_VIOLATION` | Model answered, but its answer did not fit the classifier's schema (2026-09-11) |
+| `ROBOTS_DISALLOWED` | The site's robots.txt forbids AVPScanBot its homepage, so nothing was read (2026-09-29) |
+| `ADDRESS_NOT_PUBLIC` | The site's address, or an address the site sent the crawler to (a redirect, or something a page loads), is not on the public internet (private, loopback, link-local, carrier-grade NAT, multicast, reserved or unspecified, including those forms inside an IPv6 address), so the crawl stopped and nothing was kept (2026-10-01) |
 
 `industryConfidenceScore` is a **string-encoded decimal or `null`**
 (`NUMERIC(4,3)`), for the same reason as `compositeScore`: a JSON number is an
@@ -1702,6 +1704,8 @@ interchangeable:
 | `NO_AWARENESS_POPULATION` | The prompt set had no unprompted questions (v2) | "nothing unprompted to measure" |
 | `NO_AUTHORITY_DATA` | No cited domain in this scan has an authority tier, so there is no input to measure Citation Strength with. v2.1–v2.2: fired on every scan, because no authority source existed at all; since v3 only when the scan's citations are all unclassified | "no authority source" |
 | `NO_COMPETITOR_SET` (Citation Strength, v3) | Tiered domains were cited but no competitor set exists to normalise against — same code, same reason as Share of Voice | "no comparison was made" |
+| `CRAWL_DISALLOWED` | Technical Foundation: the site's robots.txt forbids AVPScanBot, so the audit read nothing (2026-09-29) | "Blocked by robots.txt" |
+| `CRAWL_ADDRESS_NOT_PUBLIC` | Technical Foundation: the site's address, or an address the site sent the crawler to, is not on the public internet, so the audit kept nothing (2026-10-01) | "Address not public" |
 
 An excluded dimension's weight is redistributed proportionally across the rest.
 **A null sub-score is never a zero** — a brand nobody mentioned has not been
@@ -1812,6 +1816,20 @@ number, which is why `status: "failed"` exists.
 | `partial` | Read the page, but a component had no signal (e.g. no date anywhere). Scored on what was measurable; `components` and `componentWeights` show the measured ones, and `excludedComponents` lists those left out with their reason (e.g., `content_freshness: NO_DATE_SIGNAL_AVAILABLE`). |
 | `failed` | Could not read the site. `technicalFoundation`, `components` and `componentWeights` are all empty. |
 
+A `failed` audit's `errorCode` says why. Two codes mean the crawler declined to
+read the site rather than failed to:
+
+- `ROBOTS_DISALLOWED` (2026-09-29): the site's robots.txt forbids AVPScanBot the
+  homepage. Page checks are `not_applicable` with that `detailCode`; a blanket
+  `Disallow: /` under `User-agent: *` still fails `indexable` with
+  `ROBOTS_TXT_DISALLOW`, because robots.txt itself was read.
+- `ADDRESS_NOT_PUBLIC` (2026-10-01): the site's address, an address it
+  redirected to, or an address the page asked the browser to load, is not on
+  the public internet. The crawler's own fetches (robots.txt, sitemap.xml and
+  each redirect hop) are checked before they are sent, and any request or
+  landing of the browser's that is not public ends the run. Nothing is kept,
+  so every check is `not_applicable` with that `detailCode`.
+
 **Core Web Vitals are measured and reported, but carry NO weight in the
 sub-score.** `lcpMs` and `cls` are single-cold-load **lab** measurements, not
 field data — every CWV check carries `LAB_MEASUREMENT_NOT_FIELD_DATA`. Letting a
@@ -1855,6 +1873,10 @@ Once an audit exists, `POST /scans/{scanId}/score` includes Technical Foundation
 instead of excluding it as `NOT_YET_MEASURED`, and the effective weights return
 to §6's table exactly (30/25/20/15/10). A **failed** audit leaves the dimension
 excluded — an unreadable site is not a measured zero.
+The exclusion reason is `NOT_YET_MEASURED`, except `CRAWL_DISALLOWED` for an
+audit failed with `ROBOTS_DISALLOWED` and `CRAWL_ADDRESS_NOT_PUBLIC` for one
+failed with `ADDRESS_NOT_PUBLIC`. All three give the same composite; only the
+reason differs, so `FORMULA_VERSION` did not change for either.
 
 ---
 

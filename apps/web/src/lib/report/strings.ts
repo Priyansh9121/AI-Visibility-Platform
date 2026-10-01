@@ -66,6 +66,18 @@ export const DIMENSION_MEANING: Record<string, string> = {
 export const ROBOTS_DISALLOWED = 'ROBOTS_DISALLOWED';
 
 /**
+ * The reason code when the site's address is not a public one — a client's
+ * `classificationReasonCode` and a failed audit's `errorCode` alike.
+ * `ADDRESS_NOT_PUBLIC` in the API's `services/egress.py`. Not a robots.txt
+ * matter and not an unreachable site: the crawler's egress guard refused it.
+ */
+export const ADDRESS_NOT_PUBLIC = 'ADDRESS_NOT_PUBLIC';
+
+/** The client-facing sentence for `ADDRESS_NOT_PUBLIC` on a client's classification. */
+export const ADDRESS_NOT_PUBLIC_SENTENCE =
+  'The site’s address, or an address the site sent the crawler to, is on a private or reserved network, so the crawler did not read the site.';
+
+/**
  * How a `partial` technical audit is worded, on the report and on the client's
  * Technical screen alike: one place, so the two cannot drift.
  */
@@ -120,6 +132,13 @@ export const EXCLUSION_REASON: Record<string, { label: string; detail: string }>
     label: 'Blocked by robots.txt',
     detail:
       'This site’s robots.txt asks crawlers like ours not to load its pages, so its technical foundation wasn’t measured.',
+  },
+  // The crawler's egress guard refused the site's address. Mirrored word for
+  // word in `report_narrative.EXCLUSION_LABEL` / `EXCLUSION_DETAIL`.
+  CRAWL_ADDRESS_NOT_PUBLIC: {
+    label: 'Address not public',
+    detail:
+      'The site’s address, or an address the site sent the crawler to, is on a private or reserved network, so the crawler did not read the site. Technical Foundation is left out of the score.',
   },
 };
 

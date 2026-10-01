@@ -496,6 +496,21 @@ def stub_chain_externals(monkeypatch, request):  # noqa: ANN001, ANN201
         )
 
 
+@pytest.fixture(autouse=True)
+def no_real_dns(monkeypatch):  # noqa: ANN001, ANN201
+    """No test reaches the real resolver (2026-10-01, the egress guard).
+
+    A test that exercises the crawler's fetching overrides it: `robots_web`
+    with a `FakeWeb`, `test_egress.py` with its own table.
+    """
+    from avp_api.services import egress
+
+    async def refuse(host, port):  # noqa: ANN001, ANN202, ARG001
+        raise OSError("real DNS is not allowed in tests")
+
+    monkeypatch.setattr(egress, "_getaddrinfo", refuse)
+
+
 class FakeWeb:
     """The sites the robots gate talks to, served from memory — 2026-09-29.
 
@@ -503,9 +518,19 @@ class FakeWeb:
     answers 404. Every request the gate makes is recorded in `requests` as
     `(method, url, user_agent)`, so a test can assert what was — and was not —
     fetched. `fail(url, exc)` makes a URL raise a transport error instead.
+
+    DNS is faked too (2026-10-01, the egress guard): every host resolves to
+    `PUBLIC_ADDRESS` unless `resolve_to(host, *addresses)` says otherwise —
+    `dns_fails(host)` makes a name not resolve. Nothing here touches the real
+    network, and `lookups` records every name asked for.
     """
 
+    # A public address that is not in a documentation range (those are refused).
+    PUBLIC_ADDRESS = "93.184.216.34"
+
     def __init__(self) -> None:
+        self.resolutions: dict[str, list[str] | Exception] = {}
+        self.lookups: list[str] = []
         self.routes: dict[str, tuple[int, str, dict[str, str]]] = {}
         self.failures: dict[str, Exception] = {}
         self.requests: list[tuple[str, str, str]] = []
@@ -518,6 +543,27 @@ class FakeWeb:
 
     def fail(self, url: str, exc: Exception) -> None:
         self.failures[url] = exc
+
+    def resolve_to(self, host: str, *addresses: str) -> None:
+        self.resolutions[host.lower()] = list(addresses)
+
+    def dns_fails(self, host: str) -> None:
+        self.resolutions[host.lower()] = OSError(f"{host} did not resolve")
+
+    async def getaddrinfo(self, host: str, port: int) -> list[tuple]:
+        import socket
+
+        self.lookups.append(host)
+        found = self.resolutions.get(host.lower(), [self.PUBLIC_ADDRESS])
+        if isinstance(found, Exception):
+            raise found
+        return [
+            (
+                socket.AF_INET6 if ":" in address else socket.AF_INET,
+                socket.SOCK_STREAM, 6, "", (address, port),
+            )
+            for address in found
+        ]
 
     def handler(self, request):  # noqa: ANN001, ANN201
         import httpx
@@ -543,7 +589,7 @@ def robots_web(monkeypatch):  # noqa: ANN001, ANN201
     """
     import httpx
 
-    from avp_api.services import crawl
+    from avp_api.services import crawl, egress
 
     web = FakeWeb()
     real = httpx.AsyncClient
@@ -557,4 +603,7 @@ def robots_web(monkeypatch):  # noqa: ANN001, ANN201
         )
 
     monkeypatch.setattr(crawl.RobotsGate, "_client", client)
+    # Every host resolves to a public address unless a test says otherwise, so
+    # the gate's egress check never reaches the real resolver.
+    monkeypatch.setattr(egress, "_getaddrinfo", web.getaddrinfo)
     return web

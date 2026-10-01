@@ -5,6 +5,7 @@ import { Badge, Button, Card, CardBody, ErrorState, LoadingState } from '@avp/de
 import type { ClientDetail } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
 import { ScanLimitNotice } from '@/components/billing/ScanLimitNotice';
+import { ADDRESS_NOT_PUBLIC, ADDRESS_NOT_PUBLIC_SENTENCE } from '@/lib/report/strings';
 import { type ScanLimitProblem, scanLimitProblem } from '@/lib/billing/allowance';
 import { useScanAllowance } from '@/lib/billing/useScanAllowance';
 
@@ -145,8 +146,12 @@ export function ClassificationResult({
           {status === 'unclassifiable' && (
             <Explain
               heading="We could not read this site."
-              body="Nothing was classified. This usually means the site did not load, or the
-                    page carried no description of a business."
+              body={
+                client.classificationReasonCode === ADDRESS_NOT_PUBLIC
+                  ? ADDRESS_NOT_PUBLIC_SENTENCE
+                  : `Nothing was classified. This usually means the site did not load, or the
+                    page carried no description of a business.`
+              }
               code={client.classificationReasonCode}
             />
           )}

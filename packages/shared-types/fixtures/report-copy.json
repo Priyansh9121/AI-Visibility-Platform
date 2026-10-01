@@ -37,6 +37,10 @@
     "CRAWL_DISALLOWED": {
       "label": "Blocked by robots.txt",
       "detail": "This site’s robots.txt asks crawlers like ours not to load its pages, so its technical foundation wasn’t measured."
+    },
+    "CRAWL_ADDRESS_NOT_PUBLIC": {
+      "label": "Address not public",
+      "detail": "The site’s address, or an address the site sent the crawler to, is on a private or reserved network, so the crawler did not read the site. Technical Foundation is left out of the score."
     }
   },
   "degradationFlag": {

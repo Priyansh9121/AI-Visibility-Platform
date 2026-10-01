@@ -55,6 +55,7 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
 
+from . import egress
 from .ai_crawlers import AgentAccess, evaluate_robots, unknown_access
 from .crawl import (
     ROBOTS_DISALLOWED,
@@ -63,6 +64,7 @@ from .crawl import (
     normalise_url,
     registrable_domain,
 )
+from .egress import ADDRESS_NOT_PUBLIC, BrowserGuard, EgressRefused, EgressUnverified
 
 logger = structlog.get_logger(__name__)
 
@@ -294,6 +296,34 @@ def _robots_disallowed(signals: AuditSignals) -> AuditSignals:
     return signals
 
 
+def _address_not_public(signals: AuditSignals) -> AuditSignals:
+    """The audit of a site whose address, or a redirect's, is not a public one.
+
+    Nothing is kept. The refusal can arrive after the page's facts, or
+    robots.txt's, were read, and `audit_runner` stores whatever it is handed, so
+    this is a FRESH object: no schema types, counts, vitals or AI crawler table.
+    (`_robots_disallowed` keeps robots.txt's facts on purpose; this does not,
+    because nothing read from an address that is not public is ours to keep.)
+    Every check is `not_applicable` (`build_checks`) and Technical Foundation is
+    excluded.
+    """
+    logger.info("audit.address_not_public", domain=signals.domain)
+    return AuditSignals(
+        url=signals.url, domain=signals.domain, ok=False, error_code=ADDRESS_NOT_PUBLIC
+    )
+
+
+def _egress_unverified(signals: AuditSignals) -> AuditSignals:
+    """A connected address was never read: not a refusal, so the plain browser failure.
+
+    Nothing is kept, for the same reason as `_address_not_public`.
+    """
+    logger.warning("audit.egress_unverified", domain=signals.domain)
+    return AuditSignals(
+        url=signals.url, domain=signals.domain, ok=False, error_code="BROWSER_ERROR"
+    )
+
+
 async def audit_site(url: str, *, timeout_ms: int = PAGE_TIMEOUT_MS) -> AuditSignals:
     """Crawl one site for structural signals. Never raises for an unreachable site."""
     start_url = normalise_url(url)
@@ -312,6 +342,9 @@ async def audit_site(url: str, *, timeout_ms: int = PAGE_TIMEOUT_MS) -> AuditSig
         signals.has_sitemap = side.sitemap_present
         signals.sitemap_disallowed = side.sitemap_disallowed
         signals.ai_crawler_access = side.ai_access
+    except EgressRefused:
+        # Before the broad handler below: a refusal ends the audit.
+        return _address_not_public(signals)
     except Exception:  # noqa: BLE001 - side files must never fail the audit
         logger.warning("audit.side_fetch_failed", domain=domain)
         # The fetch raised outside its own handlers, so nothing about the
@@ -322,19 +355,29 @@ async def audit_site(url: str, *, timeout_ms: int = PAGE_TIMEOUT_MS) -> AuditSig
     # robots.txt decides whether the page is loaded at all — 2026-09-29. The
     # homepage's redirects are followed by the gate, each hop checked on its
     # own host, so the browser is handed an address robots.txt allows.
-    home_url = await gate.resolve(start_url)
+    try:
+        home_url = await gate.resolve(start_url)
+    except EgressRefused:
+        return _address_not_public(signals)
     if home_url is None:
         return _robots_disallowed(signals)
 
+    guard = BrowserGuard()
     try:
         async with async_playwright() as pw:
-            browser = await pw.chromium.launch(args=["--disable-dev-shm-usage", "--no-sandbox"])
+            browser = await pw.chromium.launch(
+                args=["--disable-dev-shm-usage", "--no-sandbox", egress.WEBRTC_LAUNCH_ARG]
+            )
             try:
                 # NO resource blocking — see the module note. Images must load
                 # or LCP is meaningless.
                 context = await browser.new_context(
-                    user_agent=user_agent, viewport={"width": 1280, "height": 900}
+                    user_agent=user_agent, viewport={"width": 1280, "height": 900},
+                    # Blocked, so the route guard sees the page's requests.
+                    service_workers="block",
                 )
+                # Refuses non-public hosts and blocks WebSockets; images still load.
+                await guard.install(context)
                 page = await context.new_page()
                 page.set_default_timeout(timeout_ms)
 
@@ -385,6 +428,7 @@ async def audit_site(url: str, *, timeout_ms: int = PAGE_TIMEOUT_MS) -> AuditSig
                         home_url, wait_until="load", timeout=timeout_ms
                     )
                 except PlaywrightTimeoutError:
+                    guard.raise_if_refused()
                     logger.info(
                         "audit.load_timeout_fell_back",
                         domain=domain, timeout_ms=timeout_ms,
@@ -393,14 +437,20 @@ async def audit_site(url: str, *, timeout_ms: int = PAGE_TIMEOUT_MS) -> AuditSig
                     response = await page.goto(
                         home_url, wait_until="domcontentloaded", timeout=timeout_ms
                     )
+                guard.raise_if_refused()
                 if response is None:
+                    await guard.finish()
                     signals.ok = False
                     signals.error_code = "FETCH_FAILED"
                     return signals
                 # Where the browser landed, if the gate did not send it there
                 # (a redirect only a browser is given, or a script's): that
                 # host's robots.txt decides whether anything is read from it.
+                # Every hop that led here, and where it ended, must be public
+                # before anything is read from it.
+                await guard.check_landing(response, page.url)
                 if not await gate.allows(page.url):
+                    await guard.finish()
                     return _robots_disallowed(signals)
 
                 signals.http_status = response.status
@@ -408,11 +458,14 @@ async def audit_site(url: str, *, timeout_ms: int = PAGE_TIMEOUT_MS) -> AuditSig
                     response.headers.get("last-modified")
                 )
                 if response.status >= 400:
+                    # Every way out of the browser run goes through the final check.
+                    await guard.finish()
                     signals.ok = False
                     signals.error_code = f"HTTP_{response.status}"
                     return signals
 
                 await page.wait_for_timeout(SETTLE_MS)
+                guard.raise_if_refused()
 
                 data = await page.evaluate(
                     """() => {
@@ -437,6 +490,8 @@ async def audit_site(url: str, *, timeout_ms: int = PAGE_TIMEOUT_MS) -> AuditSig
                     }"""
                 )
 
+                # What evaluate read is kept only if the page is still somewhere public.
+                await guard.check_landing(response, page.url)
                 json_ld = data.get("jsonLd", "")
                 types: list[str] = []
                 for match in re.finditer(r'"@type"\s*:\s*("([^"]+)"|\[([^\]]+)\])', json_ld):
@@ -513,11 +568,25 @@ async def audit_site(url: str, *, timeout_ms: int = PAGE_TIMEOUT_MS) -> AuditSig
                 # one, and inventing a lab proxy would be worse than a null.
                 signals.inp_ms = None
 
+                # The last check before anything read is kept: a refusal ends the
+                # audit as one, and a connected address never read fails it closed.
+                await guard.finish()
                 return signals
             finally:
                 await browser.close()
 
+    except EgressRefused:
+        return _address_not_public(signals)
+    except EgressUnverified:
+        return _egress_unverified(signals)
     except PlaywrightError as exc:
+        # A request the guard aborted fails the navigation that asked for it. And a
+        # browser that fails to close while an egress outcome is on its way out
+        # replaces it with this error: the outcome stands, and nothing is kept.
+        if guard.refused is not None or isinstance(exc.__context__, EgressRefused):
+            return _address_not_public(signals)
+        if guard.unverified:
+            return _egress_unverified(signals)
         logger.warning("audit.playwright_error", domain=domain, error=type(exc).__name__)
         signals.ok = False
         signals.error_code = "BROWSER_ERROR"
@@ -642,6 +711,10 @@ def build_checks(signals: AuditSignals) -> list[CheckVerdict]:
     `scored=False` whenever the signals are not ok), so neither kind silently
     scores a client down.
 
+    **A FOURTH KIND: the site's address is not a public one** (`ADDRESS_NOT_PUBLIC`).
+    Nothing was fetched, robots.txt included, so nothing is known and every
+    check is `not_applicable` — never a finding.
+
     **A THIRD KIND, 2026-09-29: the site's robots.txt forbids the page.** Not
     a failure — this crawler obeys the file. What the file itself says is
     still reported (`_robots_disallowed_checks`), and everything that needs
@@ -650,6 +723,8 @@ def build_checks(signals: AuditSignals) -> list[CheckVerdict]:
     """
     if not signals.ok and signals.error_code == ROBOTS_DISALLOWED:
         return _robots_disallowed_checks(signals)
+    if not signals.ok and signals.error_code == ADDRESS_NOT_PUBLIC:
+        return _address_not_public_checks()
     if not signals.ok:
         code = signals.error_code or "FETCH_FAILED"
         site_answered = code.startswith(SITE_ANSWERED_CODES)
@@ -818,6 +893,12 @@ def _robots_disallowed_checks(signals: AuditSignals) -> list[CheckVerdict]:
         *(CheckVerdict(key, "not_applicable", None, ROBOTS_DISALLOWED) for key in PAGE_CHECKS),
         CheckVerdict("cwv_inp", "not_applicable", None, "FIELD_METRIC_REQUIRES_REAL_USER_DATA"),
     ]
+
+
+def _address_not_public_checks() -> list[CheckVerdict]:
+    """Every check, `not_applicable`: the crawler refused to connect, so nothing was read."""
+    keys = ("indexable", "robots_txt_present", "sitemap_present", *PAGE_CHECKS, "cwv_inp")
+    return [CheckVerdict(key, "not_applicable", None, ADDRESS_NOT_PUBLIC) for key in keys]
 
 
 def compute_components(signals: AuditSignals) -> tuple[dict[str, Decimal], dict[str, str]]:

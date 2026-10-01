@@ -43,6 +43,7 @@ from ..models.score import ScoreStatus
 from ..models.technical_audit import AuditStatus
 from .crawl import ROBOTS_DISALLOWED
 from .domain_authority import load_domain_authority
+from .egress import ADDRESS_NOT_PUBLIC
 from .scoring import (
     CompetitorComparison,
     CompetitorFacts,
@@ -185,7 +186,8 @@ async def load_technical_foundation(
     The reason is None (NOT_YET_MEASURED, `compute_score`'s default) except
     for an audit that robots.txt kept off the page: CRAWL_DISALLOWED
     (2026-09-29). Stored as a failed audit with `ROBOTS_DISALLOWED`, it is
-    excluded like any failed one — its reason is the only difference.
+    excluded like any failed one — its reason is the only difference. So is an
+    audit the egress guard refused (`ADDRESS_NOT_PUBLIC`): CRAWL_ADDRESS_NOT_PUBLIC.
     """
     audit = (
         await session.execute(
@@ -200,6 +202,8 @@ async def load_technical_foundation(
     if audit.status is AuditStatus.FAILED:
         if audit.error_code == ROBOTS_DISALLOWED:
             return None, "CRAWL_DISALLOWED"
+        if audit.error_code == ADDRESS_NOT_PUBLIC:
+            return None, "CRAWL_ADDRESS_NOT_PUBLIC"
         return None, None
     return audit.technical_foundation, None
 
