@@ -81,6 +81,7 @@ from ..errors import (
     InvalidWebhookSignature,
     ServiceUnavailable,
     SubscriptionAlreadyActive,
+    SubscriptionNeedsAttention,
 )
 from ..models import Agency, StripeWebhookEvent, StripeWebhookOutcome
 
@@ -90,9 +91,22 @@ STRIPE_TIMEOUT_SECONDS = 15
 STRIPE_MAX_RETRIES = 1
 # How long a checkout waits for another checkout of the same agency.
 CHECKOUT_LOCK_TIMEOUT = "3s"
+# The two 409 refusals of a second checkout. Neither detail carries a Stripe id
+# or the status itself; both point at the billing portal.
 _ALREADY_ACTIVE_DETAIL = (
     "This agency already has a current subscription. "
     "Manage it from Manage billing in Settings."
+)
+_NEEDS_ATTENTION_DETAIL = (
+    "This agency already has a subscription that needs attention. "
+    "Manage it from Manage billing in Settings."
+)
+# The 503 for asking Stripe about the customer's subscriptions, whether the call
+# failed or came back with a full page and nothing live on it. Its own sentence,
+# so an operator can tell it from the one for clearing the previous session.
+_SUBSCRIPTION_CHECK_FAILED_DETAIL = (
+    "Could not check this agency's existing subscriptions at Stripe. "
+    "Try again in a moment."
 )
 
 # Which of Stripe's statuses mean "this agency is paid up".
@@ -107,7 +121,17 @@ _ALREADY_ACTIVE_DETAIL = (
 # -star.md §5.4 row 4 asks for a billing-failure state "rendered as honestly as
 # `partial` is today", and quietly counting a failed payment as active would be
 # the silent degradation that row exists to forbid.
+#
+# "Not active" is not "over", though: past_due, unpaid, paused and incomplete are
+# all still open at Stripe. See TERMINAL_STATUSES and `is_live_at_stripe`.
 ACTIVE_STATUSES = frozenset({"active", "trialing"})
+
+# Statuses a Stripe subscription never leaves: it is OVER. They, and having no
+# subscription at all, are the only states from which a checkout may start.
+#
+# Deliberately a list of what is over and not of what is live (founder decision
+# 4, and security review L1): see `is_live_at_stripe` for why.
+TERMINAL_STATUSES = frozenset({"canceled", "incomplete_expired"})
 
 # The events this service acts on. Anything else is acknowledged and ignored —
 # see `apply_event`.
@@ -170,6 +194,32 @@ def is_active(agency: Agency) -> bool:
     that encodes it.
     """
     return agency.subscription_status in ACTIVE_STATUSES
+
+
+def is_live_at_stripe(status: str | None) -> bool:
+    """Whether a subscription in this status is still open at Stripe.
+
+    **Deny by default.** Everything is live except having no subscription at
+    all and the TERMINAL statuses (`canceled`, `incomplete_expired`). So
+    `past_due`, `unpaid`, `paused` and `incomplete` are live, and so is a status
+    this code has never seen. Checkout refuses on it, and the webhook's
+    second-subscription backstop warns on it.
+
+    Written the other way, as a list of the live statuses, it would fail OPEN
+    the day Stripe adds one, and a second subscription billing the agency twice
+    is the one outcome a checkout exists to prevent. Listing what is over fails
+    closed: a status nobody has decided about refuses a checkout until somebody
+    does.
+
+    `None` here means no subscription at all: it is the answer for a STORED
+    status, where our own row has never had one. A subscription that Stripe
+    LISTS always exists, so there a null or missing status is not "none"; the
+    Stripe-side check in `create_checkout_session` counts it live.
+
+    Not `is_active`. That still counts only `active` and `trialing`, because it
+    answers "is this agency paid up", and so does the scan allowance.
+    """
+    return status is not None and status not in TERMINAL_STATUSES
 
 
 def period_end_of(subscription: Any) -> datetime | None:
@@ -309,9 +359,13 @@ async def create_checkout_session(
     _require(settings, "stripe_secret_key")
     price_id = _require(settings, "stripe_price_id")
 
-    # A live subscription means a second checkout would bill the agency twice.
-    # Refused before `ensure_customer`, so nothing is created at Stripe. Caller
-    # authority is settled by the router before this is reached.
+    # A subscription that is live at Stripe means a second checkout would create
+    # a second subscription beside it: one the agency pays for (ACTIVE_STATUSES)
+    # or one that is open but needs attention (founder decision 4). "Live" is
+    # `is_live_at_stripe`, which denies by default: only no subscription and an
+    # ended one may start a checkout. Refused before `ensure_customer`, so
+    # nothing is created at Stripe. Caller authority is settled by the router
+    # before this is reached.
     #
     # The agency is re-read `FOR UPDATE` in this request's transaction and the
     # guard and `ensure_customer` run against THAT row, so concurrent checkouts
@@ -348,6 +402,8 @@ async def create_checkout_session(
 
     if is_active(agency):
         raise SubscriptionAlreadyActive(_ALREADY_ACTIVE_DETAIL)
+    if is_live_at_stripe(agency.subscription_status):
+        raise SubscriptionNeedsAttention(_NEEDS_ATTENTION_DETAIL)
 
     had_customer = bool(agency.stripe_customer_id)
     customer_id = await ensure_customer(db, agency, settings=settings)
@@ -356,22 +412,23 @@ async def create_checkout_session(
     client = _client(settings)
 
     # An older open Checkout Session stays payable at Stripe until it expires,
-    # so paying two of them would create two subscriptions. Expire every open
-    # one for this customer first: at most one is ever open. A brand-new
-    # customer cannot have any, so it is not asked. If Stripe fails here the
-    # checkout FAILS (503) rather than carrying on, because carrying on is
-    # exactly the double-subscription case; the caller can simply retry.
+    # so paying two of them would create two subscriptions. Two checks against
+    # Stripe, IN THIS ORDER (security review L2): expire every open session of
+    # this customer first, THEN ask what subscriptions it has.
+    #
+    # The other way round leaves a window: the customer pays an open session
+    # after we looked at their subscriptions and before we expired it, and we
+    # would create a second session beside a subscription we never saw. Expiring
+    # first closes it. A session that completed earlier is a subscription by the
+    # time we ask, and one that completes DURING the expire makes the expire
+    # fail, which fails the checkout.
+    #
+    # A brand-new customer cannot have either, so it is not asked. If Stripe
+    # fails in either step the checkout FAILS (503) rather than carrying on,
+    # because carrying on is exactly the double-subscription case; the caller
+    # can simply retry. Each step answers with its own sentence and log event.
     if had_customer:
         try:
-            # A subscription that is live at Stripe refuses the checkout even
-            # when our row does not say so yet (paid, webhook not landed).
-            for live in sorted(ACTIVE_STATUSES):
-                subs = await client.v1.subscriptions.list_async(
-                    params={"customer": customer_id, "status": live, "limit": 1}
-                )
-                if subs.data:
-                    raise SubscriptionAlreadyActive(_ALREADY_ACTIVE_DETAIL)
-
             open_sessions = await client.v1.checkout.sessions.list_async(
                 params={"customer": customer_id, "status": "open", "limit": 100}
             )
@@ -393,6 +450,48 @@ async def create_checkout_session(
                 "Could not clear the previous checkout session at Stripe. "
                 "Try again in a moment."
             ) from exc
+
+        # A subscription that is live at Stripe refuses the checkout even when
+        # our row does not say so yet (paid, webhook not landed) or says
+        # `canceled`. ONE call for the customer's subscriptions of every status:
+        # this runs under the agency row lock, and a call per status held it for
+        # six round trips. Paid-up outranks needs-attention, so which refusal is
+        # reported never depends on the order Stripe lists them in; either one
+        # points at the same place.
+        try:
+            subs = await client.v1.subscriptions.list_async(
+                params={"customer": customer_id, "status": "all", "limit": 100}
+            )
+        except stripe.StripeError as exc:
+            logger.warning(
+                "billing.checkout_subscription_check_failed",
+                agency_id=agency.id,
+                error_type=type(exc).__name__,
+            )
+            raise ServiceUnavailable(_SUBSCRIPTION_CHECK_FAILED_DETAIL) from exc
+        # Read through `_get`, and tested against what is OVER rather than through
+        # `is_live_at_stripe`: a subscription Stripe LISTS exists, so a status
+        # that is null or missing is not "no subscription" (which is all that
+        # None means on our own row). It is one we cannot tell is over, so it
+        # counts as live. Fail closed.
+        statuses = [_get(sub, "status") for sub in subs.data]
+        if any(status in ACTIVE_STATUSES for status in statuses):
+            raise SubscriptionAlreadyActive(_ALREADY_ACTIVE_DETAIL)
+        if any(status not in TERMINAL_STATUSES for status in statuses):
+            raise SubscriptionNeedsAttention(_NEEDS_ATTENTION_DETAIL)
+        if subs.has_more:
+            # Reached only when a full page had nothing live on it. More than
+            # 100 subscriptions on ONE customer is not a real case (one plan,
+            # one agency). But if it ever happened, a live one could be on the
+            # next page, and not being able to prove there is none is not the
+            # same as there being none: fail closed, as the open-sessions check
+            # above does, and say so, since nothing else would.
+            logger.warning(
+                "billing.checkout_subscriptions_truncated",
+                agency_id=agency.id,
+                customer_id=customer_id,
+            )
+            raise ServiceUnavailable(_SUBSCRIPTION_CHECK_FAILED_DETAIL)
 
     session = await client.v1.checkout.sessions.create_async(
         params={
@@ -589,8 +688,8 @@ class WebhookResult(str, enum.Enum):
         return self in (WebhookResult.APPLIED, WebhookResult.STALE)
 
 
-# Statuses a Stripe subscription never leaves.
-TERMINAL_STATUSES = frozenset({"canceled", "incomplete_expired"})
+# TERMINAL_STATUSES, the statuses a Stripe subscription never leaves, is defined
+# beside ACTIVE_STATUSES at the top of this module: checkout reads it too.
 
 
 def _blocked_by_state_machine(
@@ -772,10 +871,13 @@ async def apply_event(db: AsyncSession, event: Any) -> WebhookResult:
         and sub_id
         and agency.stripe_subscription_id
         and sub_id != agency.stripe_subscription_id
-        and is_active(agency)
+        and is_live_at_stripe(agency.subscription_status)
     ):
         # Backstop signal, behaviour unchanged: a second subscription was
-        # created for an agency that already has a live one. Ids only.
+        # created for an agency that already has a live one. "Live" is
+        # `is_live_at_stripe`, the same test checkout refuses on (anything but
+        # no subscription and an ended one), so one arriving over any of them
+        # got past that refusal. Ids only.
         logger.warning(
             "stripe.webhook.second_subscription",
             event_id=event_id,

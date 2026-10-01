@@ -61,6 +61,36 @@ FAKE_WEBHOOK_SECRET = "whsec_test_fake_signing_secret"
 PERIOD_END_TS = 1790000000  # 2026-09-21T14:13:20Z
 PERIOD_END = datetime.fromtimestamp(PERIOD_END_TS, tz=UTC)
 
+# Founder decision 4 (2026-10-01): these four statuses are live at Stripe, so a
+# second checkout would create a second subscription. Written out here rather
+# than imported from `services.billing`, so editing the code cannot quietly
+# edit the decision these tests pin. `active` and `trialing` are the paid-up
+# pair and keep `subscription-already-active`.
+NEEDS_ATTENTION = ["incomplete", "past_due", "paused", "unpaid"]
+# Security review L1: checkout DENIES BY DEFAULT. Only no subscription and the
+# two ended statuses may start one, so a status Stripe does not have today is
+# refused as well, and a status Stripe adds later cannot quietly let a second
+# subscription through.
+UNKNOWN_STATUS = "on_hold"
+REFUSED_AS_NEEDS_ATTENTION = [*NEEDS_ATTENTION, UNKNOWN_STATUS]
+ENDED = ["canceled", "incomplete_expired"]
+NEEDS_ATTENTION_DETAIL = (
+    "This agency already has a subscription that needs attention. "
+    "Manage it from Manage billing in Settings."
+)
+# The ONE call checkout makes to ask Stripe about a customer's subscriptions:
+# every status at once, a full page.
+LIST_ALL_SUBSCRIPTIONS = {"customer": "cus_test_001", "status": "all", "limit": 100}
+# Two different 503 sentences, so an operator can tell which step failed: asking
+# Stripe about the customer's subscriptions, or clearing its open sessions.
+SUBSCRIPTION_CHECK_FAILED_DETAIL = (
+    "Could not check this agency's existing subscriptions at Stripe. "
+    "Try again in a moment."
+)
+EXPIRE_FAILED_DETAIL = (
+    "Could not clear the previous checkout session at Stripe. Try again in a moment."
+)
+
 
 # ---------------------------------------------------------------------------
 # guards
@@ -118,9 +148,21 @@ class _StripeStub:
         self.expire_error: Exception | None = None
         self.customer_delay = 0.0
         self.open_has_more = False
-        # Stripe-side subscriptions per status, e.g. {"active": ["sub_x"]}.
-        self.live_subscriptions: dict[str, list[str]] = {}
+        # The customer's subscriptions at Stripe, per status, in the order they
+        # are listed: e.g. {"active": ["sub_x"], "canceled": ["sub_old"]}. Ended
+        # ones count: `status: "all"` returns them too.
+        self.subscriptions_at_stripe: dict[str, list[str]] = {}
+        # If set, listed verbatim instead: for shapes the per-status dict above
+        # cannot express (a null status, or no status field at all).
+        self.subscription_objects: list[Any] | None = None
         self.subscriptions_listed: list[dict[str, Any]] = []
+        self.subscriptions_has_more = False
+        self.list_subscriptions_error: Exception | None = None
+        # Every Stripe call, in the order it was made: "<resource>.<verb>".
+        self.call_log: list[str] = []
+        # Called at the start of `checkout.sessions.list`, to stage what happened
+        # at Stripe in the moment between two of our calls (a customer paying).
+        self.on_sessions_list: Any = None
 
     # -- shape mirroring `client.v1.<resource>.<verb>_async` ----------------
     @property
@@ -129,6 +171,7 @@ class _StripeStub:
 
         class _Customers:
             async def create_async(self, params: dict[str, Any]) -> Any:
+                stub.call_log.append("customers.create")
                 stub.customers_created.append(params)
                 n = len(stub.customers_created)
                 if stub.customer_delay:
@@ -138,6 +181,7 @@ class _StripeStub:
 
         class _Sessions:
             async def create_async(self, params: dict[str, Any]) -> Any:
+                stub.call_log.append("checkout.sessions.create")
                 stub.sessions_created.append(params)
                 sid = f"cs_test_{len(stub.sessions_created):03d}"
                 stub.open_sessions.append(sid)
@@ -149,13 +193,17 @@ class _StripeStub:
                 return SimpleNamespace(id=sid, url=url)
 
             async def list_async(self, params: dict[str, Any]) -> Any:
+                stub.call_log.append("checkout.sessions.list")
                 stub.sessions_listed.append(params)
+                if stub.on_sessions_list is not None:
+                    stub.on_sessions_list()
                 return SimpleNamespace(
                     data=[SimpleNamespace(id=i) for i in stub.open_sessions],
                     has_more=stub.open_has_more,
                 )
 
             async def expire_async(self, session: str, params: Any = None) -> Any:  # noqa: ARG002
+                stub.call_log.append("checkout.sessions.expire")
                 if stub.expire_error is not None:
                     raise stub.expire_error
                 stub.sessions_expired.append(session)
@@ -164,14 +212,29 @@ class _StripeStub:
 
         class _PortalSessions:
             async def create_async(self, params: dict[str, Any]) -> Any:
+                stub.call_log.append("billing_portal.sessions.create")
                 stub.portals_created.append(params)
                 return SimpleNamespace(id="bps_test_001", url=stub.next_portal_url)
 
         class _Subscriptions:
             async def list_async(self, params: dict[str, Any]) -> Any:
+                stub.call_log.append("subscriptions.list")
                 stub.subscriptions_listed.append(params)
-                ids = stub.live_subscriptions.get(params.get("status", ""), [])
-                return SimpleNamespace(data=[SimpleNamespace(id=i) for i in ids])
+                if stub.list_subscriptions_error is not None:
+                    raise stub.list_subscriptions_error
+                if stub.subscription_objects is not None:
+                    return SimpleNamespace(
+                        data=stub.subscription_objects, has_more=stub.subscriptions_has_more
+                    )
+                # As at Stripe: `"all"` is every status, any other value filters.
+                wanted = params.get("status", "")
+                data = [
+                    SimpleNamespace(id=sub_id, status=status)
+                    for status, ids in stub.subscriptions_at_stripe.items()
+                    if wanted in ("all", status)
+                    for sub_id in ids
+                ]
+                return SimpleNamespace(data=data, has_more=stub.subscriptions_has_more)
 
         return SimpleNamespace(
             subscriptions=_Subscriptions(),
@@ -520,13 +583,12 @@ async def test_checkout_is_refused_while_a_subscription_is_live(
     assert stripe_stub.customers_created == []
 
 
-@pytest.mark.parametrize(
-    "state",
-    [None, "past_due", "canceled", "unpaid", "incomplete", "incomplete_expired", "paused"],
-)
-async def test_checkout_still_works_for_every_non_live_state(
+@pytest.mark.parametrize("state", [None, "canceled", "incomplete_expired"])
+async def test_checkout_still_works_when_there_is_no_subscription_or_it_is_over(
     client: AsyncClient, engine, stripe_stub: _StripeStub, state: str | None  # noqa: ANN001
 ) -> None:
+    """`past_due`, `unpaid`, `paused` and `incomplete` are NOT in this list any
+    more: founder decision 4 made them live at Stripe, so they are refused."""
     me = await _sign_up(client)
     agency_id = me["agency"]["id"]
     await _set_status(engine, agency_id, state)
@@ -535,6 +597,428 @@ async def test_checkout_still_works_for_every_non_live_state(
     assert resp.status_code == 201, resp.text
     assert resp.json() == {"url": stripe_stub.next_session_url}
     assert len(stripe_stub.sessions_created) == 1
+
+
+@pytest.mark.parametrize("state", ["canceled", "incomplete_expired"])
+async def test_checkout_proceeds_for_an_ended_subscription_with_an_existing_customer(
+    client: AsyncClient, engine, stripe_stub: _StripeStub, state: str  # noqa: ANN001
+) -> None:
+    """The returning customer: a subscription that is over, and a card on file.
+
+    The previous open session is expired first, then Stripe is asked about the
+    customer's subscriptions and finds none live, and a new session is created
+    against the SAME customer.
+    """
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    assert (await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")).status_code == 201
+    await _set_status(engine, agency_id, state)
+
+    resp = await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")
+    assert resp.status_code == 201, resp.text
+    assert resp.json() == {"url": stripe_stub.next_session_url}
+    assert len(stripe_stub.sessions_created) == 2
+    assert len(stripe_stub.customers_created) == 1
+    assert stripe_stub.sessions_expired == ["cs_test_001"]
+    assert stripe_stub.subscriptions_listed == [LIST_ALL_SUBSCRIPTIONS]
+
+
+# ---------------------------------------------------------------------------
+# checkout — refused while a subscription needs attention (decision 4, 2026-10-01)
+# ---------------------------------------------------------------------------
+
+
+def _stripe_calls(stub: _StripeStub) -> dict[str, int]:
+    """How many times each Stripe call has been made, to prove one was NOT."""
+    return {
+        "customers_created": len(stub.customers_created),
+        "sessions_created": len(stub.sessions_created),
+        "portals_created": len(stub.portals_created),
+        "sessions_listed": len(stub.sessions_listed),
+        "sessions_expired": len(stub.sessions_expired),
+        "subscriptions_listed": len(stub.subscriptions_listed),
+    }
+
+
+def _assert_needs_attention_refusal(resp: Any, *, state: str | None) -> None:
+    """The refusal's exact shape, and what it must not carry."""
+    assert resp.status_code == 409, resp.text
+    assert resp.headers["content-type"].startswith("application/problem+json")
+    body = resp.json()
+    assert body["type"] == "/problems/subscription-needs-attention"
+    assert body["title"] == "Subscription needs attention"
+    assert body["status"] == 409
+    assert body["detail"] == NEEDS_ATTENTION_DETAIL
+    assert "Manage billing" in body["detail"]
+    # Neither a Stripe id nor the raw status (when there is one) comes back.
+    for leaked in ("cus_", "sub_", *([state] if state else [])):
+        assert leaked not in resp.text, leaked
+
+
+@pytest.mark.parametrize("has_customer", [False, True])
+@pytest.mark.parametrize("state", REFUSED_AS_NEEDS_ATTENTION)
+async def test_checkout_is_refused_while_a_subscription_needs_attention(
+    client: AsyncClient,
+    engine,  # noqa: ANN001
+    stripe_stub: _StripeStub,
+    state: str,
+    has_customer: bool,
+) -> None:
+    """Live at Stripe, just not paid up: a second checkout would be a second
+    subscription. Refused before any Stripe call, with or without a customer.
+
+    Includes a status Stripe does not have (`on_hold`): checkout denies by
+    default, and only no subscription or an ended one may start another."""
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    if has_customer:
+        assert (
+            await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")
+        ).status_code == 201
+    await _set_status(engine, agency_id, state)
+    before = _stripe_calls(stripe_stub)
+
+    resp = await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")
+    _assert_needs_attention_refusal(resp, state=state)
+
+    # No Stripe call of any kind: not asked, not listed, not expired, not minted.
+    assert _stripe_calls(stripe_stub) == before
+    agency = await _agency(engine, agency_id)
+    assert agency.subscription_status == state
+    assert bool(agency.stripe_customer_id) is has_customer
+
+
+@pytest.mark.parametrize("stored", [None, "canceled"])
+@pytest.mark.parametrize("at_stripe", REFUSED_AS_NEEDS_ATTENTION)
+async def test_a_needs_attention_subscription_at_stripe_refuses_checkout_despite_our_row(
+    client: AsyncClient,
+    engine,  # noqa: ANN001
+    stripe_stub: _StripeStub,
+    stored: str | None,
+    at_stripe: str,
+) -> None:
+    """Our row says nothing (or `canceled`); Stripe still has the subscription.
+
+    Anything at Stripe that is neither paid up nor over is refused, including a
+    status this server has never seen."""
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    assert (await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")).status_code == 201
+    await _set_status(engine, agency_id, stored)
+    stripe_stub.subscriptions_at_stripe = {at_stripe: ["sub_elsewhere_001"]}
+    before = _stripe_calls(stripe_stub)
+
+    resp = await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")
+    _assert_needs_attention_refusal(resp, state=at_stripe)
+
+    # Stripe WAS asked (the customer exists): the open session was cleared first,
+    # then the subscriptions were listed, once. Nothing was created.
+    assert stripe_stub.call_log[2:] == [
+        "checkout.sessions.list",
+        "checkout.sessions.expire",
+        "subscriptions.list",
+    ]
+    assert stripe_stub.subscriptions_listed == [LIST_ALL_SUBSCRIPTIONS]
+    after = _stripe_calls(stripe_stub)
+    assert after["customers_created"] == before["customers_created"]
+    assert after["sessions_created"] == before["sessions_created"]
+    assert (await _agency(engine, agency_id)).subscription_status == stored
+
+
+@pytest.mark.parametrize("stored", [None, "canceled"])
+@pytest.mark.parametrize(
+    "listed",
+    [
+        pytest.param([SimpleNamespace(id="sub_x", status=None)], id="null-status"),
+        pytest.param([{"id": "sub_x"}], id="no-status-field"),
+    ],
+)
+async def test_a_listed_subscription_with_no_readable_status_refuses_checkout(
+    client: AsyncClient,
+    engine,  # noqa: ANN001
+    stripe_stub: _StripeStub,
+    stored: str | None,
+    listed: list[Any],
+) -> None:
+    """Fail closed. Stripe LISTED it, so it exists: a status we cannot read is
+    not "no subscription" (which is what a null status means on OUR row), it is
+    one we cannot tell is over, and a second checkout beside it could bill the
+    agency twice."""
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    assert (await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")).status_code == 201
+    await _set_status(engine, agency_id, stored)
+    stripe_stub.subscription_objects = listed
+    before = _stripe_calls(stripe_stub)
+
+    resp = await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")
+    _assert_needs_attention_refusal(resp, state=None)
+
+    assert stripe_stub.subscriptions_listed == [LIST_ALL_SUBSCRIPTIONS]
+    after = _stripe_calls(stripe_stub)
+    assert after["customers_created"] == before["customers_created"]
+    assert after["sessions_created"] == before["sessions_created"]
+    assert (await _agency(engine, agency_id)).subscription_status == stored
+
+
+async def test_checkout_asks_stripe_for_every_subscription_in_one_call_then_creates_a_session(
+    client: AsyncClient, stripe_stub: _StripeStub
+) -> None:
+    """ONE list call, every status, a full page: it runs under the agency row
+    lock, where six sequential round trips held it six times as long. Nothing
+    live on it = a session."""
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    assert (await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")).status_code == 201
+    assert stripe_stub.subscriptions_listed == []  # a brand-new customer is not asked
+
+    resp = await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")
+    assert resp.status_code == 201, resp.text
+    assert stripe_stub.subscriptions_listed == [LIST_ALL_SUBSCRIPTIONS]
+    assert len(stripe_stub.sessions_created) == 2
+
+
+async def test_ended_subscriptions_at_stripe_do_not_refuse_checkout(
+    client: AsyncClient, stripe_stub: _StripeStub
+) -> None:
+    """`status: "all"` lists the ended ones too; a customer who cancelled once,
+    or whose first attempt expired, must still be able to start again."""
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    assert (await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")).status_code == 201
+    stripe_stub.subscriptions_at_stripe = {
+        "canceled": ["sub_old_001"],
+        "incomplete_expired": ["sub_old_002"],
+    }
+
+    resp = await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")
+    assert resp.status_code == 201, resp.text
+    assert stripe_stub.subscriptions_listed == [LIST_ALL_SUBSCRIPTIONS]
+    assert len(stripe_stub.sessions_created) == 2
+
+
+@pytest.mark.parametrize("needs_attention_listed_first", [True, False])
+async def test_a_paid_up_subscription_outranks_one_that_needs_attention(
+    client: AsyncClient, stripe_stub: _StripeStub, needs_attention_listed_first: bool
+) -> None:
+    """Both live at once is not a real case, but which refusal is reported must
+    not depend on the order Stripe lists them in."""
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    assert (await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")).status_code == 201
+    listed = ["past_due", "trialing"] if needs_attention_listed_first else ["trialing", "past_due"]
+    stripe_stub.subscriptions_at_stripe = {status: [f"sub_{status}"] for status in listed}
+    before = len(stripe_stub.sessions_created)
+
+    resp = await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["type"] == "/problems/subscription-already-active"
+    assert "sub_" not in resp.text
+    assert len(stripe_stub.sessions_created) == before
+
+
+async def test_a_full_page_of_subscriptions_with_none_live_fails_rather_than_creates(
+    client: AsyncClient, stripe_stub: _StripeStub
+) -> None:
+    """If Stripe says there are more than the page holds, a live subscription
+    could be on the next one. Not being able to prove there is none is not the
+    same as there being none, so the checkout fails closed, as the open-sessions
+    check does."""
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    assert (await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")).status_code == 201
+    stripe_stub.subscriptions_at_stripe = {"canceled": ["sub_old_001"]}
+    stripe_stub.subscriptions_has_more = True
+    before = _stripe_calls(stripe_stub)
+
+    with structlog.testing.capture_logs() as events:
+        resp = await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")
+    assert resp.status_code == 503, resp.text
+    assert resp.headers["content-type"].startswith("application/problem+json")
+    assert resp.json()["type"] == "/problems/service-unavailable"
+    assert resp.json()["detail"] == SUBSCRIPTION_CHECK_FAILED_DETAIL
+    assert "sub_" not in resp.text
+    # The open session was cleared first; the subscriptions were listed once;
+    # nothing was created.
+    after = _stripe_calls(stripe_stub)
+    assert after["sessions_expired"] == before["sessions_expired"] + 1
+    assert after["subscriptions_listed"] == before["subscriptions_listed"] + 1
+    assert after["customers_created"] == before["customers_created"]
+    assert after["sessions_created"] == before["sessions_created"]
+
+    # Worth a log line, because it is not a real case: the agency and customer
+    # ids, and nothing else.
+    truncated = [e for e in events if e["event"] == "billing.checkout_subscriptions_truncated"]
+    assert len(truncated) == 1, events
+    assert truncated[0]["log_level"] == "warning"
+    assert set(truncated[0]) - {"event", "log_level"} == {"agency_id", "customer_id"}
+    assert truncated[0]["agency_id"] == agency_id
+    assert truncated[0]["customer_id"] == "cus_test_001"
+    assert "@" not in json.dumps(events, default=str)
+
+
+@pytest.mark.parametrize(
+    ("at_stripe", "problem"),
+    [
+        ("active", "subscription-already-active"),
+        ("past_due", "subscription-needs-attention"),
+    ],
+)
+async def test_a_full_page_still_refuses_when_a_live_subscription_is_on_it(
+    client: AsyncClient, stripe_stub: _StripeStub, at_stripe: str, problem: str
+) -> None:
+    """A live subscription that WAS found is the answer; the full page only
+    matters when nothing live was on it."""
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    assert (await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")).status_code == 201
+    stripe_stub.subscriptions_at_stripe = {at_stripe: ["sub_elsewhere_001"]}
+    stripe_stub.subscriptions_has_more = True
+
+    with structlog.testing.capture_logs() as events:
+        resp = await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["type"] == f"/problems/{problem}"
+    assert len(stripe_stub.sessions_created) == 1
+    # The "full page" warning is for the 503 only: here the answer was found.
+    assert not [e for e in events if e["event"] == "billing.checkout_subscriptions_truncated"]
+
+
+async def test_a_stripe_failure_while_listing_subscriptions_fails_the_checkout(
+    client: AsyncClient, stripe_stub: _StripeStub
+) -> None:
+    """503 with its OWN sentence and log event, and no new session: if Stripe
+    cannot say whether a subscription is live, creating a session would risk
+    exactly the double subscription."""
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    assert (await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")).status_code == 201
+
+    stripe_stub.list_subscriptions_error = stripe.APIConnectionError("boom cus_secret")
+    with structlog.testing.capture_logs() as events:
+        resp = await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")
+    assert resp.status_code == 503, resp.text
+    assert resp.json()["type"] == "/problems/service-unavailable"
+    # Its own sentence, not the one for clearing the previous session.
+    assert resp.json()["detail"] == SUBSCRIPTION_CHECK_FAILED_DETAIL
+    assert resp.json()["detail"] != EXPIRE_FAILED_DETAIL
+    assert "boom" not in resp.text
+    # The sessions step ran first and finished; nothing was created after it.
+    assert stripe_stub.sessions_expired == ["cs_test_001"]
+    assert len(stripe_stub.sessions_created) == 1
+
+    # Logged under its own event: the error CLASS only, never its message.
+    failed = [e for e in events if e["event"] == "billing.checkout_subscription_check_failed"]
+    assert len(failed) == 1, events
+    assert failed[0]["agency_id"] == agency_id
+    assert failed[0]["error_type"] == "APIConnectionError"
+    assert set(failed[0]) - {"event", "log_level"} == {"agency_id", "error_type"}
+    assert not [e for e in events if e["event"] == "billing.checkout_expire_failed"]
+    assert "boom" not in json.dumps(events, default=str)
+
+
+async def test_checkout_clears_open_sessions_before_it_asks_about_subscriptions(
+    client: AsyncClient, stripe_stub: _StripeStub
+) -> None:
+    """Security review L2: the ORDER of the two checks.
+
+    An open session stays payable until it is expired. Asking about
+    subscriptions first left a window: the customer pays the open session after
+    we looked and before we expired it, and we then created a second session
+    beside a subscription we never saw. Expiring first closes it: a session that
+    completed earlier shows up as a subscription, and one that completes during
+    the expire makes the expire fail (503).
+    """
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    assert (await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")).status_code == 201
+    assert stripe_stub.call_log == ["customers.create", "checkout.sessions.create"]
+
+    resp = await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")
+    assert resp.status_code == 201, resp.text
+    assert stripe_stub.call_log[2:] == [
+        "checkout.sessions.list",
+        "checkout.sessions.expire",
+        "subscriptions.list",
+        "checkout.sessions.create",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("completed_as", "problem"),
+    [
+        ("active", "subscription-already-active"),
+        ("incomplete", "subscription-needs-attention"),
+    ],
+)
+async def test_a_session_paid_in_the_meantime_is_found_as_a_subscription(
+    client: AsyncClient, stripe_stub: _StripeStub, completed_as: str, problem: str
+) -> None:
+    """The customer pays the open session just as the next checkout starts. It
+    is no longer open, so there is nothing to expire, but it is a subscription
+    by the time Stripe is asked: a 409, not a second session beside it."""
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    assert (await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")).status_code == 201
+
+    def _pay_the_open_session() -> None:
+        stripe_stub.open_sessions.remove("cs_test_001")
+        stripe_stub.subscriptions_at_stripe = {completed_as: ["sub_from_cs_test_001"]}
+
+    stripe_stub.on_sessions_list = _pay_the_open_session
+
+    resp = await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["type"] == f"/problems/{problem}"
+    assert "sub_" not in resp.text
+    assert len(stripe_stub.sessions_created) == 1
+    assert stripe_stub.call_log[2:] == ["checkout.sessions.list", "subscriptions.list"]
+
+
+@pytest.mark.parametrize(
+    ("status", "live"),
+    [
+        *[(s, True) for s in ("active", "trialing", *NEEDS_ATTENTION, UNKNOWN_STATUS)],
+        *[(s, False) for s in (None, *ENDED)],
+    ],
+)
+def test_a_subscription_is_live_at_stripe_unless_there_is_none_or_it_is_over(
+    status: str | None, live: bool
+) -> None:
+    """Deny by default (security review L1): what is listed is what is OVER, so
+    a status Stripe adds later counts as live until somebody decides otherwise."""
+    assert billing_service.is_live_at_stripe(status) is live
+
+
+def test_is_active_still_counts_only_active_and_trialing() -> None:
+    """The scan allowance reads `is_active()`; neither decision 4 nor L1 moves it."""
+    assert frozenset({"active", "trialing"}) == billing_service.ACTIVE_STATUSES
+    assert frozenset(ENDED) == billing_service.TERMINAL_STATUSES
+    for state in ("active", "trialing"):
+        assert billing_service.is_active(Agency(subscription_status=state)) is True
+    for state in (*NEEDS_ATTENTION, UNKNOWN_STATUS, *ENDED, None):
+        assert billing_service.is_active(Agency(subscription_status=state)) is False
+
+
+async def test_the_checkout_route_documents_all_three_409s(client: AsyncClient) -> None:
+    """The published contract: three problem types, and `checkout-in-progress`
+    is a 409 (the route's docstring used to call it a 503)."""
+    schema = (await client.get(f"{BASE}/openapi.json")).json()
+    op = schema["paths"][f"{BASE}/agencies/{{agencyId}}/billing/checkout"]["post"]
+
+    declared = op["responses"]["409"]["description"]
+    for problem in (
+        "subscription-already-active",
+        "subscription-needs-attention",
+        "checkout-in-progress",
+    ):
+        assert f"/problems/{problem}" in declared
+    assert "application/problem+json" in op["responses"]["409"]["content"]
+
+    prose = " ".join(op["description"].split())
+    assert "409 subscription-needs-attention" in prose
+    assert "409 checkout-in-progress" in prose
+    assert "503 checkout-in-progress" not in prose
 
 
 async def test_a_refused_checkout_lists_and_expires_nothing(
@@ -578,17 +1062,28 @@ async def test_a_stripe_failure_while_expiring_fails_the_checkout(
     client: AsyncClient, stripe_stub: _StripeStub
 ) -> None:
     """503, and no new session. Carrying on would leave two payable sessions,
-    which is the exact double-subscription this step exists to prevent."""
+    which is the exact double-subscription this step exists to prevent. It is
+    also what a session completing DURING the expire looks like: Stripe refuses
+    to expire it, and the checkout fails closed."""
     me = await _sign_up(client)
     agency_id = me["agency"]["id"]
     assert (await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")).status_code == 201
 
     stripe_stub.expire_error = stripe.APIConnectionError("boom cus_secret")
-    resp = await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")
+    with structlog.testing.capture_logs() as events:
+        resp = await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")
     assert resp.status_code == 503, resp.text
     assert resp.json()["type"] == "/problems/service-unavailable"
+    # The sentence and the log event for THIS step; not the subscription check's.
+    assert resp.json()["detail"] == EXPIRE_FAILED_DETAIL
     assert "boom" not in resp.text
     assert len(stripe_stub.sessions_created) == 1
+    # It stopped there: the subscriptions were never asked about.
+    assert stripe_stub.subscriptions_listed == []
+    failed = [e for e in events if e["event"] == "billing.checkout_expire_failed"]
+    assert len(failed) == 1, events
+    assert failed[0]["error_type"] == "APIConnectionError"
+    assert not [e for e in events if e["event"] == "billing.checkout_subscription_check_failed"]
 
 
 async def test_concurrent_first_checkouts_create_one_customer(
@@ -612,9 +1107,16 @@ async def test_concurrent_first_checkouts_create_one_customer(
     assert len(stripe_stub.open_sessions) == 1
 
 
+@pytest.mark.parametrize(
+    "stored_status", ["active", "trialing", *NEEDS_ATTENTION, UNKNOWN_STATUS]
+)
 async def test_a_second_subscription_id_over_a_live_one_logs_a_warning(
-    client: AsyncClient, engine  # noqa: ANN001
+    client: AsyncClient, engine, stored_status: str  # noqa: ANN001
 ) -> None:
+    """Live, for the backstop, means live AT STRIPE: anything but no subscription
+    and the two ended statuses, the same test checkout refuses on (deny by
+    default, so an unknown status counts). A second subscription arriving over
+    any of them got past that."""
     me = await _sign_up(client, email="dupe@billing.example")
     agency_id = me["agency"]["id"]
     factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
@@ -622,7 +1124,7 @@ async def test_a_second_subscription_id_over_a_live_one_logs_a_warning(
         row = (await s.execute(select(Agency).where(Agency.id == agency_id))).scalar_one()
         row.stripe_customer_id = "cus_test_001"
         row.stripe_subscription_id = "sub_first"
-        row.subscription_status = "active"
+        row.subscription_status = stored_status
         await s.commit()
 
     payload = _event(
@@ -671,6 +1173,39 @@ async def test_the_same_subscription_id_does_not_warn(
         resp = await _deliver(client, payload)
     assert resp.status_code == 200, resp.text
     assert not [e for e in events if e.get("log_level") == "warning"], events
+
+
+@pytest.mark.parametrize("stored_status", [None, "canceled", "incomplete_expired"])
+async def test_a_second_subscription_id_over_an_ended_one_does_not_warn(
+    client: AsyncClient, engine, stored_status: str | None  # noqa: ANN001
+) -> None:
+    """A new subscription after the old one ended is a new life, not a duplicate:
+    only a status that is live at Stripe makes the arrival of a second id news."""
+    me = await _sign_up(client, email="ended@billing.example")
+    agency_id = me["agency"]["id"]
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+    async with factory() as s:
+        row = (await s.execute(select(Agency).where(Agency.id == agency_id))).scalar_one()
+        row.stripe_customer_id = "cus_test_001"
+        row.stripe_subscription_id = "sub_first"
+        row.subscription_status = stored_status
+        await s.commit()
+
+    payload = _event(
+        "checkout.session.completed",
+        {
+            "id": "cs_x",
+            "mode": "subscription",
+            "customer": "cus_test_001",
+            "subscription": "sub_second",
+            "metadata": {"agency_id": agency_id},
+        },
+    )
+    with structlog.testing.capture_logs() as events:
+        resp = await _deliver(client, payload)
+    assert resp.status_code == 200, resp.text
+    assert not [e for e in events if e.get("log_level") == "warning"], events
+    assert (await _agency(engine, agency_id)).stripe_subscription_id == "sub_second"
 
 
 async def _hold_row_lock(engine, agency_id: str, mode: str, seconds: float = 6.0):  # noqa: ANN001, ANN202
@@ -766,24 +1301,37 @@ async def test_a_first_checkout_blocked_by_a_child_insert_fails_before_stripe(
     assert stripe_stub.customers_created == []
 
 
-async def test_a_live_stripe_subscription_refuses_checkout_despite_a_null_status(
-    client: AsyncClient, engine, stripe_stub: _StripeStub  # noqa: ANN001
+@pytest.mark.parametrize("stored", [None, "canceled"])
+@pytest.mark.parametrize("at_stripe", ["active", "trialing"])
+async def test_a_live_stripe_subscription_refuses_checkout_despite_a_stale_status(
+    client: AsyncClient,
+    engine,  # noqa: ANN001
+    stripe_stub: _StripeStub,
+    stored: str | None,
+    at_stripe: str,
 ) -> None:
     """Paid, but the webhook has not landed: our row still says nothing."""
     me = await _sign_up(client)
     agency_id = me["agency"]["id"]
     assert (await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")).status_code == 201
-    stripe_stub.live_subscriptions = {"trialing": ["sub_paid_elsewhere"]}
+    await _set_status(engine, agency_id, stored)
+    stripe_stub.subscriptions_at_stripe = {at_stripe: ["sub_paid_elsewhere"]}
     before = len(stripe_stub.sessions_created)
 
     resp = await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")
     assert resp.status_code == 409, resp.text
     assert resp.json()["type"] == "/problems/subscription-already-active"
+    assert resp.json()["detail"] == (
+        "This agency already has a current subscription. "
+        "Manage it from Manage billing in Settings."
+    )
+    assert "sub_" not in resp.text
     assert len(stripe_stub.sessions_created) == before
-    assert stripe_stub.sessions_expired == []
-    assert (await _agency(engine, agency_id)).subscription_status is None
-    assert {c["status"] for c in stripe_stub.subscriptions_listed} == {"active", "trialing"}
-    assert {c["customer"] for c in stripe_stub.subscriptions_listed} == {"cus_test_001"}
+    # The open session was cleared first (it is the first call), then Stripe was
+    # asked once, for the customer's subscriptions of every status.
+    assert stripe_stub.sessions_expired == ["cs_test_001"]
+    assert stripe_stub.subscriptions_listed == [LIST_ALL_SUBSCRIPTIONS]
+    assert (await _agency(engine, agency_id)).subscription_status == stored
 
 
 async def test_more_open_sessions_than_one_page_fails_rather_than_creates(
@@ -798,38 +1346,46 @@ async def test_more_open_sessions_than_one_page_fails_rather_than_creates(
     assert resp.status_code == 503, resp.text
     assert resp.json()["type"] == "/problems/service-unavailable"
     assert len(stripe_stub.sessions_created) == 1
+    # Failing closed on the first list stops the checkout before the second.
+    assert stripe_stub.subscriptions_listed == []
 
 
+@pytest.mark.parametrize("state", ["active", *NEEDS_ATTENTION])
 async def test_a_member_gets_403_not_409_on_a_subscribed_agency(
-    client: AsyncClient, engine, stripe_stub: _StripeStub  # noqa: ANN001
+    client: AsyncClient, engine, stripe_stub: _StripeStub, state: str  # noqa: ANN001
 ) -> None:
-    """The subscription check runs after authority, so it cannot leak state."""
+    """The subscription check runs after authority, so it cannot leak state —
+    not for a paid-up agency and not for one whose subscription needs attention."""
     me = await _sign_up(client)
     agency_id = me["agency"]["id"]
-    await _set_status(engine, agency_id, "active")
+    await _set_status(engine, agency_id, state)
     await _become_member(client, engine, agency_id)
 
     resp = await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")
     assert resp.status_code == 403, resp.text
     assert resp.json()["type"] == "/problems/permission-denied"
-    assert stripe_stub.sessions_created == []
+    assert state not in resp.text
+    assert _stripe_calls(stripe_stub) == dict.fromkeys(_stripe_calls(stripe_stub), 0)
 
 
+@pytest.mark.parametrize("state", ["active", *NEEDS_ATTENTION])
 async def test_another_agencys_id_is_404_even_when_that_agency_is_subscribed(
-    client: AsyncClient, engine, stripe_stub: _StripeStub  # noqa: ANN001
+    client: AsyncClient, engine, stripe_stub: _StripeStub, state: str  # noqa: ANN001
 ) -> None:
     first = await _sign_up(client, email="a2@billing.example", agency="Agency A2")
-    await _set_status(engine, first["agency"]["id"], "active")
+    await _set_status(engine, first["agency"]["id"], state)
     await client.post(f"{BASE}/auth/logout")
     await _sign_up(client, email="b2@billing.example", agency="Agency B2")
 
     resp = await client.post(f"{BASE}/agencies/{first['agency']['id']}/billing/checkout")
     assert resp.status_code == 404, resp.text
     assert resp.json()["type"] == "/problems/not-found"
+    assert state not in resp.text
     assert stripe_stub.customers_created == []
     assert stripe_stub.sessions_created == []
     assert stripe_stub.sessions_listed == []
     assert stripe_stub.sessions_expired == []
+    assert stripe_stub.subscriptions_listed == []
 
 
 # ---------------------------------------------------------------------------
