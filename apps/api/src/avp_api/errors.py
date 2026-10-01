@@ -116,6 +116,24 @@ class PermissionDenied(ProblemError):
     title = "You do not have permission to perform this action"
 
 
+class OriginNotAllowed(ProblemError):
+    """A write from a page that is not the web app.
+
+    **403, and a type of its own** rather than `permission-denied`: the caller may
+    hold every role there is, and that is not what is refused. What is refused is
+    where the request came from — an `Origin` that is `null` or not one of
+    `CORS_ALLOW_ORIGINS`, with or without a session, or no `Origin` at all on a
+    request that carries the session cookie — so a client can tell "this page may
+    not do that" from "this person may not". Rendered by `origin_check.py`, which
+    sits outside the exception handlers and so builds the response itself,
+    through the same serializer they use.
+    """
+
+    status_code = status.HTTP_403_FORBIDDEN
+    problem_type = "origin-not-allowed"
+    title = "Origin not allowed"
+
+
 class NotFound(ProblemError):
     status_code = status.HTTP_404_NOT_FOUND
     problem_type = "not-found"

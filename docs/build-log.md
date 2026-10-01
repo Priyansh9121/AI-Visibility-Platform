@@ -21072,3 +21072,80 @@ Drift check (north-star §8): Layer 2, Measurement (the crawl and the technical 
 - Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
 - OpenAPI and `api.gen.ts` regenerate byte-identically.
 - Exit codes were read from files.
+
+# A write from a page that is not the web app is refused, signed in or not
+
+**2026-10-01, the fourteenth entry of the day; branch `pre-pilot`, item 2 of the founder's pre-pilot brief.** One item, one commit.
+
+**Render: nothing new to set. No migration, no new dependency or outbound host.** `CORS_ALLOW_ORIGINS` must name the web app's origin exactly, as CORS already required; keep it to the deployed web origin only (no localhost or preview hosts), because this check is only as tight as that list.
+
+Drift check (north-star §8): Layer 1, Delivery (sessions and the API's front door), with a Layer 0 trust concern; lifecycle phase: Activation (Epic 9), hardening before pilots.
+
+## 1. What changed
+
+- **Brief item 2:** "State-changing API requests (POST/PUT/PATCH/DELETE) that carry a session cookie must send an Origin listed in CORS_ALLOW_ORIGINS, else 403 problem (a new specific /problems type, documented). Exempt: the Stripe webhook (signature-verified) and any request with no session cookie."
+- **Widened by the founder during review (2026-10-01):** a write that sends an `Origin` not in the list is refused **with or without** the session cookie, so sign-in, sign-up, password reset, invitation accept and Google sign-up complete are covered too. A write with no `Origin` is refused only when it carries the session cookie (Stripe, `curl` and server callers send none).
+- **New `origin_check.py`:** a pure ASGI middleware, answering before any route runs.
+  - It applies to `POST`, `PUT`, `PATCH` and `DELETE`, the method upper-cased first.
+  - Session-cookie presence is read by name across every `Cookie` header, with the same parser the session dependency uses.
+  - The `Origin` must equal a configured entry exactly. This check ignores a configured trailing `/` but CORS does not, so the contract says to list origins without one; `null` and blank entries are dropped, so `Origin: null` never matches.
+  - The exemption is the exact path `{API_BASE_PATH}/billing/webhook`, nothing longer.
+- **`403 /problems/origin-not-allowed`**, in the app's usual problem shape, with nothing changed. It is registered inside `CORSMiddleware`, which stays outermost, so preflights are answered first.
+- **One log event, `security.origin_refused`:** method, the percent-encoded and redacted path, and whether an `Origin` was sent. Never the cookie or the `Origin` value.
+- **Tests send the web app's origin by default.** It is one `TEST_ORIGIN` in `conftest.py`, pinned into the test settings so a developer's environment cannot change it. The two cross-agency tests that write from a second client send it too, and still assert exactly 404.
+- **`docs/api-contracts.md`:** the rule and the problem type. Also listed are `invalid-google-ticket` and `google-sign-in-not-configured`, two existing problem types the table never had.
+- **Local note:** Swagger's "Try it out" (served locally only, never deployed) sends the API's own origin, so its writes are refused unless `http://localhost:8000` is added to the local `CORS_ALLOW_ORIGINS`.
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS**, then a re-review: PASS WITH NITS, with nothing Low or above; it confirmed the founder's rule is implemented exactly and that nothing the web app sends is newly refused.
+- **Its Medium was the brief's own exemption:** cookie-less writes were not checked. The founder chose to close it (above).
+- **Its nits are fixed:**
+  - the logged path is percent-encoded, so control characters cannot reach the log raw;
+  - `null` in the configured list is ignored;
+  - the method sweep fails if a WebSocket route is ever added;
+  - tests pin the exemption's exactness (`/billing/webhook/` and `/billing/webhookx` are refused) and a lower-case method.
+- **Checked clean:** every route sits behind the middleware (no mounted apps, WebSocket routes or other ASGI apps); path normalisation around the exemption; duplicate `Origin` and `Cookie` headers; CORS ordering; the problem shape; logs carrying no cookie, `Origin` value or token.
+
+## Found, not fixed
+
+- **The Google sign-in should bind its `state` to the browser that started it** (for example a short-lived cookie compared at the callback). It predates this entry, and the callback is a `GET`, which this check does not cover.
+- **The production web app and API are on different sites** (two `onrender.com` hosts, and `onrender.com` is a public suffix). So the session cookie can only work with `SESSION_COOKIE_SAMESITE=none`, and this check is now the main guard for signed-in writes. Browsers that block third-party cookies may not keep anyone signed in. Serving both from one registrable domain (for example `app.` and `api.` on the custom domain that email also needs) would let the cookie be `lax`. Launch checklist 3.7 is corrected in this branch's last commit. Founder.
+- **The webhook exemption is by path, for every method on it.** Only `POST` is registered there today (anything else answers 405); exempting `POST` alone would keep a future route on that path from being exempt by accident.
+- **The refusal log does not name the refused origin**, so a typo in `CORS_ALLOW_ORIGINS` would show only as refusals (and as CORS failures in the browser). An `Origin` is not a secret; logging it is optional.
+- **The refusal is logged at WARNING on every request, with no throttle.** Anyone can trigger it, but it costs one line and no Redis or database call, against the access log's line per request anyway. Revisit if an alert is keyed on WARNING.
+
+## Verified
+
+**API pytest 2109 → 2197 (+88); `api-pytest` floor raised to match.** New `tests/test_origin_check.py` (88 tests), on real routes with state read back from Postgres and Redis.
+- **Refused, with nothing changed:**
+  - a signed-in write from another origin, from `null`, from an empty `Origin` and with no `Origin`;
+  - `PUT`, `PATCH` and `DELETE` on real routes;
+  - sign-up, login, Google sign-up complete, password-reset request and confirm, and invitation accept from another origin and from `null`: no user, no session, the Google ticket unspent, no reset row, the password unchanged, the seat still invited;
+  - `/billing/webhook/` and `/billing/webhookx`;
+  - a lower-case method.
+- **Allowed:**
+  - the same writes from the web app's origin;
+  - those credential routes with no `Origin`;
+  - the Stripe webhook with a session cookie and no `Origin` (it reaches the signature check);
+  - reads, and CORS preflights.
+- **Also pinned:**
+  - an eight-row cookie-by-`Origin` table;
+  - a configured trailing `/`, and `null` and blank entries ignored;
+  - the cookie name following `SESSION_COOKIE_NAME`;
+  - the problem shape matching the app's own;
+  - CORS registered outermost;
+  - every method a route registers being read-only or checked, with no WebSocket route;
+  - the log event carrying no cookie or `Origin` value, its path percent-encoded and redacted.
+- **Negative controls**, each file restored and checked with `cmp`:
+  - the middleware unregistered fails 29 of the first 41 tests (the 12 that pass are the cases that must not be refused, and the route sweep);
+  - the cookie-only rule restored fails 23 tests;
+  - eight further single-behaviour changes each fail at least one test: a missing `Origin` refused even without a cookie, 13; the webhook exempt from the cookie rule only, 3; the raw path logged, 1; `null` kept, 1; blank kept, 1; a WebSocket route, 2; a prefix exemption, 6; no upper-casing, 1;
+  - in the first round, 15 further single-behaviour changes each failed at least one test.
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, web 1208, shared-types 53 (0 fail), design-system 846, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- OpenAPI and `api.gen.ts` regenerate byte-identically (a middleware adds no route or schema).
+- Exit codes were read from files.
