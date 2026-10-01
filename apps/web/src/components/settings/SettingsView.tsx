@@ -14,7 +14,7 @@
  * fields; `next build` rejects anything else by name.
  */
 
-import type { JSX } from 'react';
+import { useEffect, type JSX } from 'react';
 import {
   Card,
   CardBody,
@@ -23,6 +23,7 @@ import {
   PageSection,
 } from '@avp/design-system';
 import type { BillingStatus, Me, SeatList } from '@avp/shared-types';
+import { BILLING_SECTION_ID } from '@/lib/settings/sections';
 import { WorkspaceShell } from '@/components/shell/WorkspaceShell';
 import { SeatsPanel } from '@/components/settings/SeatsPanel';
 import { PasswordChangePanel } from '@/components/settings/PasswordChangePanel';
@@ -57,6 +58,25 @@ export function SettingsView({
   onChanged: () => void | Promise<void>;
 }): JSX.Element {
   const me = state.kind === 'ready' ? state.me : null;
+
+  // `/settings#billing` — the scan-limit notice's link — arrives at a page that
+  // is still loading, and the browser's own scroll to a fragment runs before the
+  // Billing section exists, so it finds nothing. Scroll once the section is
+  // there: the section is what is looked for, so a loading or failed screen
+  // scrolls nothing. Keyed on the screen's kind, so once, when it becomes
+  // ready, and not each time it re-reads.
+  //
+  // And focus goes with the view. Scrolling moves what is on screen, not where
+  // Tab starts from, so somebody who followed the link from the keyboard would
+  // tab on from the top of the page. `preventScroll`: the scroll above is the
+  // one scroll.
+  useEffect(() => {
+    if (window.location.hash === `#${BILLING_SECTION_ID}`) {
+      const section = document.getElementById(BILLING_SECTION_ID);
+      section?.scrollIntoView();
+      section?.focus({ preventScroll: true });
+    }
+  }, [state.kind]);
 
   return (
     /*
@@ -178,17 +198,31 @@ export function SettingsView({
             </PageSection>
           )}
 
-          <PageSection
-            eyebrow="Billing"
-            heading="What you pay"
-            lead={`One plan, $${PLAN_PRICE_USD} a month, 3 seats. Your first scan is free with a Google sign-in; subscribing is how you keep scanning. Reports you already have stay open either way.`}
-          >
-            <BillingPanel
-              agencyId={state.me.agency.id}
-              billing={state.billing}
-              billingError={state.billingError}
-            />
-          </PageSection>
+          {/*
+            The id is on a wrapper, not on the section: `PageSection` takes no
+            id, and a wrapper is a flex item exactly as the section was, so
+            nothing about the layout moves.
+
+            `tabIndex={-1}`: focusable by script, so arriving at the fragment
+            can put focus here, and never a tab stop of its own. The design
+            system's global `:where([tabindex]):focus-visible` rule (base.css)
+            gives it the standard focus ring, and only where the browser treats
+            the focus as keyboard focus; a mouse click inside the section draws
+            nothing.
+          */}
+          <div id={BILLING_SECTION_ID} tabIndex={-1}>
+            <PageSection
+              eyebrow="Billing"
+              heading="What you pay"
+              lead={`One plan, $${PLAN_PRICE_USD} a month, 3 seats. Your first scan is free with a Google sign-in; subscribing is how you keep scanning. Reports you already have stay open either way.`}
+            >
+              <BillingPanel
+                agencyId={state.me.agency.id}
+                billing={state.billing}
+                billingError={state.billingError}
+              />
+            </PageSection>
+          </div>
 
           <PageSection
             eyebrow="Not built yet"

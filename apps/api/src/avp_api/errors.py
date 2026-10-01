@@ -223,18 +223,39 @@ class SeatLimitReached(ProblemError):
 
 
 class SubscriptionAlreadyActive(ProblemError):
-    """Checkout refused: the agency already has a live subscription.
+    """Checkout refused: the agency already has a paid-up subscription.
 
     **409.** A second Checkout Session would create a second subscription and
-    bill the agency twice; Stripe does not stop that. "Live" is exactly
-    `services.billing.ACTIVE_STATUSES` (`active`, `trialing`). The detail points
-    at the billing portal, where the existing subscription is managed, and
-    carries no Stripe id and not the status itself.
+    bill the agency twice; Stripe does not stop that. "Paid up" is exactly
+    `services.billing.ACTIVE_STATUSES` (`active`, `trialing`). A subscription
+    that is live at Stripe but not paid up (`past_due`, `unpaid`, `paused`,
+    `incomplete`, or a status nobody has seen) answers `SubscriptionNeedsAttention`
+    instead. The detail points at the billing portal, where the existing
+    subscription is managed, and carries no Stripe id and not the status itself.
     """
 
     status_code = status.HTTP_409_CONFLICT
     problem_type = "subscription-already-active"
     title = "Subscription already active"
+
+
+class SubscriptionNeedsAttention(ProblemError):
+    """Checkout refused: the agency's subscription is live at Stripe but not paid up.
+
+    **409.** `past_due`, `unpaid`, `paused` and `incomplete` are not "active" —
+    `is_active()` and the scan allowance still count only `active` and
+    `trialing` — but Stripe still holds each of them open, and a second Checkout
+    Session would create a second subscription beside it (founder decision 4,
+    2026-10-01). "Needs attention" is every status that is neither paid up nor
+    over: it denies by default, so a status Stripe adds later is refused too
+    (`services.billing.is_live_at_stripe`). The detail points at the billing
+    portal, where the existing subscription is put right, and carries no Stripe id
+    and not the status itself.
+    """
+
+    status_code = status.HTTP_409_CONFLICT
+    problem_type = "subscription-needs-attention"
+    title = "Subscription needs attention"
 
 
 class ScanLimitReached(ProblemError):

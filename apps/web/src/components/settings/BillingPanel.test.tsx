@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 /**
  * The Settings billing section — Epic 9.15.
  *
@@ -11,11 +13,21 @@
  * degraded one: a warning tone, a lock, an "upgrade to continue". The tests
  * assert the absence of that vocabulary, because the copy is the only place it
  * could appear.
+ *
+ * The last group, "mounted", is not a static render (2026-10-01). It is the
+ * pattern SeatsPanel.test.tsx's invite tests use: the real panel in jsdom, the
+ * API module mocked at its edge. Whether Subscribe works, what a 409 leaves on
+ * screen and whether a page restored from the back/forward cache is still busy
+ * are all things a static render never receives.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { BillingPanel } from './BillingPanel';
+import type { BillingStatus, CheckoutSession, PortalSession } from '@avp/shared-types';
+import { ApiProblem } from '@/lib/api';
+import { PricingCard } from '@/components/marketing/PricingCard';
 import {
   activeEnding,
   activeSubscription,
@@ -25,10 +37,45 @@ import {
   unknownStatusSubscription,
 } from '@/lib/settings/__fixtures__/billing';
 
+const startCheckout = vi.fn<(agencyId: string) => Promise<CheckoutSession>>();
+const openBillingPortal = vi.fn<(agencyId: string) => Promise<PortalSession>>();
+
+vi.mock('@/lib/api', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/lib/api')>();
+  return {
+    ...real,
+    api: {
+      ...real.api,
+      startCheckout: (agencyId: string) => startCheckout(agencyId),
+      openBillingPortal: (agencyId: string) => openBillingPortal(agencyId),
+    },
+  };
+});
+
+// Imported after the mock so the panel sees the mocked module.
+const { BillingPanel } = await import('./BillingPanel');
+
 const render = (props: Partial<Parameters<typeof BillingPanel>[0]> = {}) =>
   renderToStaticMarkup(
     <BillingPanel agencyId="agcy_01TEST" billing={noSubscription} {...props} />,
   );
+
+// The states the shared fixtures do not carry, built from the ones they do.
+// Stripe's own names, because the column stores them verbatim.
+const trialing: BillingStatus = { ...activeSubscription, subscriptionStatus: 'trialing' };
+const unpaid: BillingStatus = { ...pastDueSubscription, subscriptionStatus: 'unpaid' };
+const paused: BillingStatus = { ...canceledSubscription, subscriptionStatus: 'paused' };
+const incomplete: BillingStatus = { ...canceledSubscription, subscriptionStatus: 'incomplete' };
+const incompleteExpired: BillingStatus = {
+  ...canceledSubscription,
+  subscriptionStatus: 'incomplete_expired',
+};
+/**
+ * No subscription, but a Stripe customer exists: somebody opened Checkout once
+ * and never finished it. The API creates the customer when it creates the
+ * session, so this is a state a real agency can be in.
+ */
+const customerNoSubscription: BillingStatus = { ...noSubscription, hasBillingAccount: true };
 
 describe('no subscription — the state every agency is in today', () => {
   it('says so without saying anything is wrong', () => {
@@ -188,6 +235,11 @@ describe('nothing here is gated', () => {
       canceledSubscription,
       pastDueSubscription,
       unknownStatusSubscription,
+      // The states decision 4 (2026-10-01) put a Subscribe on, or took one off.
+      incompleteExpired,
+      unpaid,
+      paused,
+      incomplete,
     ];
     for (const billing of states) {
       const html = render({ billing }).toLowerCase();
@@ -216,6 +268,12 @@ describe('no ad hoc styling', () => {
     expect(html).not.toMatch(/class="[^"]*\b(bg|text|border|max-w)-\[/);
     expect(html).not.toMatch(/class="[^"]*\b(slate|gray|zinc|blue|red|green)-\d{3}\b/);
   });
+
+  it('holds for the status-card-plus-plan layout a cancelled agency now gets', () => {
+    const html = render({ billing: canceledSubscription, initialError: 'x' });
+    expect(html).not.toMatch(/class="[^"]*\b(bg|text|border|max-w)-\[/);
+    expect(html).not.toMatch(/class="[^"]*\b(slate|gray|zinc|blue|red|green)-\d{3}\b/);
+  });
 });
 
 describe('cancelled, but paid to the end of the period — 2026-09-29', () => {
@@ -238,5 +296,428 @@ describe('cancelled, but paid to the end of the period — 2026-09-29', () => {
     expect(html).toContain('Renews 21 Sep 2026');
     expect(html).not.toContain('Ends ');
     expect(html).not.toContain('Cancelled —');
+  });
+});
+
+describe('Subscribe is offered exactly where the API will start a checkout — 2026-10-01', () => {
+  // Founder decision 4. The API starts a checkout for no subscription, `canceled`
+  // and `incomplete_expired`, and answers every other status with a 409. A
+  // Subscribe on a refused state is a button that can only fail; a missing one on
+  // an allowed state is a cancelled agency with no way back in. Until this date
+  // the panel offered it for "no subscription" alone.
+  const planCard = renderToStaticMarkup(<PricingCard signedIn />);
+
+  const OFFERED: Array<[string, BillingStatus, string, string]> = [
+    ['canceled', canceledSubscription, 'Canceled', 'every report you already have stays open'],
+    ['incomplete_expired', incompleteExpired, 'Expired', 'it has since expired'],
+  ];
+
+  it('the reference card is the one the no-subscription state renders', () => {
+    // Guards the assertions below it: a `planCard` that matched nothing would
+    // let every one of them pass.
+    expect(render({ billing: noSubscription })).toContain(planCard);
+  });
+
+  it.each(OFFERED)(
+    '%s keeps its status card and offers the plan beneath it',
+    (_status, billing, label, sentence) => {
+      const html = render({ billing });
+      expect(html).toContain(label);
+      expect(html).toContain(sentence);
+      expect(html).toContain('>Subscribe<');
+      // The status first, then the way back in.
+      expect(html.indexOf(sentence)).toBeLessThan(html.indexOf('>Subscribe<'));
+    },
+  );
+
+  it.each(OFFERED)('%s is offered the same plan card, so the same price', (_status, billing) => {
+    expect(render({ billing })).toContain(planCard);
+  });
+
+  it.each(OFFERED)('%s keeps Manage billing, for the invoices', (_status, billing) => {
+    expect(render({ billing })).toContain('Manage billing');
+  });
+
+  it.each(OFFERED)(
+    '%s with no Stripe customer is still offered Subscribe, and no Manage billing',
+    (_status, billing) => {
+      const html = render({ billing: { ...billing, hasBillingAccount: false } });
+      expect(html).toContain('>Subscribe<');
+      expect(html).not.toContain('Manage billing');
+    },
+  );
+
+  const REFUSED: Array<[string, BillingStatus]> = [
+    ['active', activeSubscription],
+    ['active and ending', activeEnding],
+    ['trialing', trialing],
+    ['past_due', pastDueSubscription],
+    ['unpaid', unpaid],
+    ['paused', paused],
+    ['incomplete', incomplete],
+    // Not one of the three the API starts a checkout for, so not offered one.
+    ['a status with no wording yet', unknownStatusSubscription],
+  ];
+
+  it.each(REFUSED)(
+    '%s: no Subscribe and no plan, and Manage billing instead',
+    (_status, billing) => {
+      const html = render({ billing });
+      expect(html).not.toContain('Subscribe');
+      expect(html).not.toContain('per month');
+      expect(html).toContain('Manage billing');
+    },
+  );
+});
+
+describe('incomplete — the first payment was never confirmed', () => {
+  it('says Manage billing shows what Stripe holds, and no longer that starting again is the fix', () => {
+    const html = render({ billing: incomplete });
+    expect(html).toContain('Incomplete');
+    expect(html).toContain(
+      'A subscription was started but the first payment was never confirmed. Manage billing shows what Stripe holds for it.',
+    );
+    expect(html).not.toContain('Starting again');
+    // Not "finish or cancel it": the portal is set up to cancel at the end of
+    // the period and to update cards (docs/runbook.md), and nothing here knows
+    // it can finish a first payment.
+    expect(html).not.toContain('Finish or cancel');
+  });
+});
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+describe('mounted — what a click does, 2026-10-01', () => {
+  const CHECKOUT_URL = 'https://checkout.stripe.example/c/pay/cs_test_SENTINEL';
+  const PORTAL_URL = 'https://billing.stripe.example/p/session/test_SENTINEL';
+  const CHECKOUT_PATH = '/api/v1/agencies/agcy_01TEST/billing/checkout';
+  const NOT_CONFIGURED = 'STRIPE_PRICE_ID is not configured. Add it to your .env.';
+  const NEEDS_ATTENTION =
+    'This agency already has a subscription that needs attention. Manage it from Manage billing in Settings.';
+  const ALREADY_ACTIVE =
+    'This agency already has a current subscription. Manage it from Manage billing in Settings.';
+  const IN_PROGRESS = 'A checkout for this agency is already in progress. Try again in a moment.';
+
+  const assign = vi.fn<(url: string) => void>();
+  let root: Root | null = null;
+
+  /** The panel for real, so a click reaches the API call the way a browser's would. */
+  function mount(billing: BillingStatus): HTMLDivElement {
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    root = createRoot(el);
+    act(() => root!.render(<BillingPanel agencyId="agcy_01TEST" billing={billing} />));
+    return el;
+  }
+
+  /** Let the mocked request settle and React flush what it set. */
+  const settle = () =>
+    act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+  const button = (el: HTMLElement, label: string) =>
+    [...el.querySelectorAll('button')].find((b) => b.textContent === label);
+
+  async function click(el: HTMLElement, label: string): Promise<void> {
+    const target = button(el, label);
+    expect(target, `no "${label}" button on screen`).toBeDefined();
+    act(() => target!.click());
+    await settle();
+  }
+
+  const alerts = (el: HTMLElement) => [...el.querySelectorAll('[role="alert"]')];
+
+  /** The browser showing this page: restored from its back/forward cache, or not. */
+  const pageshow = (persisted: boolean) =>
+    act(() => {
+      window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted }));
+    });
+
+  const problem = (status: number, type: string, detail: string) =>
+    new ApiProblem({ type, title: 'Problem', status, detail, instance: CHECKOUT_PATH });
+
+  beforeEach(() => {
+    startCheckout.mockReset();
+    openBillingPortal.mockReset();
+    assign.mockReset();
+    // jsdom does not navigate, and its `location` cannot be spied on in place.
+    vi.stubGlobal('location', { assign });
+  });
+
+  afterEach(() => {
+    act(() => root?.unmount());
+    root = null;
+    document.body.innerHTML = '';
+    vi.unstubAllGlobals();
+  });
+
+  describe('Subscribe', () => {
+    const FROM: Array<[string, BillingStatus]> = [
+      ['no subscription', noSubscription],
+      ['canceled', canceledSubscription],
+      ['incomplete_expired', incompleteExpired],
+    ];
+
+    it.each(FROM)(
+      '%s: starts a checkout for this agency and goes to the URL it returns',
+      async (_status, billing) => {
+        startCheckout.mockResolvedValue({ url: CHECKOUT_URL });
+        const el = mount(billing);
+        await click(el, 'Subscribe');
+        expect(startCheckout).toHaveBeenCalledTimes(1);
+        expect(startCheckout).toHaveBeenCalledWith('agcy_01TEST');
+        expect(assign).toHaveBeenCalledWith(CHECKOUT_URL);
+      },
+    );
+
+    it('says which call is opening: only the button that was clicked claims it', async () => {
+      startCheckout.mockResolvedValue({ url: CHECKOUT_URL });
+      const el = mount(canceledSubscription);
+      await click(el, 'Subscribe');
+      // The page is on its way to Stripe. Both buttons are inert; one says why.
+      expect(button(el, 'Opening checkout…')?.disabled).toBe(true);
+      expect(button(el, 'Manage billing')?.disabled).toBe(true);
+      expect(button(el, 'Opening portal…')).toBeUndefined();
+    });
+
+    it('Manage billing, beside it, opens the portal and leaves Subscribe saying Subscribe', async () => {
+      openBillingPortal.mockResolvedValue({ url: PORTAL_URL });
+      const el = mount(canceledSubscription);
+      await click(el, 'Manage billing');
+      expect(openBillingPortal).toHaveBeenCalledWith('agcy_01TEST');
+      expect(assign).toHaveBeenCalledWith(PORTAL_URL);
+      expect(button(el, 'Opening portal…')?.disabled).toBe(true);
+      expect(button(el, 'Opening checkout…')).toBeUndefined();
+      expect(startCheckout).not.toHaveBeenCalled();
+    });
+
+    it('while the portal is opening, Subscribe is disabled, not merely inert, and still says Subscribe', async () => {
+      openBillingPortal.mockReturnValue(new Promise<PortalSession>(() => {}));
+      const el = mount(canceledSubscription);
+      await click(el, 'Manage billing');
+      // A button that looks pressable and does nothing misreports itself to
+      // assistive technology; and it is not checkout that is opening.
+      expect(button(el, 'Subscribe')?.disabled).toBe(true);
+      expect(button(el, 'Opening checkout…')).toBeUndefined();
+      await click(el, 'Subscribe');
+      expect(startCheckout).not.toHaveBeenCalled();
+      expect(assign).not.toHaveBeenCalled();
+    });
+
+    it('a failed Subscribe shows beside the plan, once, and the button is live again', async () => {
+      startCheckout.mockRejectedValue(
+        problem(503, '/problems/billing-not-configured', NOT_CONFIGURED),
+      );
+      const el = mount(canceledSubscription);
+      await click(el, 'Subscribe');
+      expect(alerts(el)).toHaveLength(1);
+      expect(alerts(el)[0]!.textContent).toBe(NOT_CONFIGURED);
+      expect(alerts(el)[0]!.closest('.avp-card')!.textContent).toContain('One plan');
+      expect(button(el, 'Subscribe')?.disabled).toBe(false);
+      expect(assign).not.toHaveBeenCalled();
+    });
+
+    it('a failed Manage billing shows beside Manage billing, once, and the button is live again', async () => {
+      openBillingPortal.mockRejectedValue(new TypeError('Failed to fetch'));
+      const el = mount(canceledSubscription);
+      await click(el, 'Manage billing');
+      expect(alerts(el)).toHaveLength(1);
+      expect(alerts(el)[0]!.textContent).toBe(
+        'The billing portal could not be opened. Nothing has changed.',
+      );
+      const card = alerts(el)[0]!.closest('.avp-card')!;
+      expect(card.textContent).toContain('Canceled');
+      expect(card.textContent).not.toContain('One plan');
+      expect(button(el, 'Manage billing')?.disabled).toBe(false);
+    });
+  });
+
+  describe('a subscription refusal from checkout', () => {
+    // The API says this agency already has a subscription: one it pays for
+    // (`subscription-already-active`) or one that needs attention
+    // (`subscription-needs-attention`). Either way the page showed no
+    // subscription, or one it was offering to replace, and the sentence sends
+    // the person to Manage billing. That button has to exist.
+    it.each([
+      ['/problems/subscription-needs-attention', NEEDS_ATTENTION],
+      ['/problems/subscription-already-active', ALREADY_ACTIVE],
+    ])('%s: shows the API’s sentence and the Manage billing it points at', async (type, detail) => {
+      startCheckout.mockRejectedValue(problem(409, type, detail));
+      const el = mount(customerNoSubscription);
+      // Nothing to manage as far as this page knew...
+      expect(button(el, 'Manage billing')).toBeUndefined();
+      await click(el, 'Subscribe');
+      // ...until the API says otherwise.
+      expect(alerts(el)).toHaveLength(1);
+      expect(alerts(el)[0]!.textContent).toBe(detail);
+      expect(button(el, 'Manage billing')).toBeDefined();
+      // Below the sentence that points at it, not above it.
+      expect(
+        alerts(el)[0]!.compareDocumentPosition(button(el, 'Manage billing')!) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      // Busy resets.
+      expect(button(el, 'Subscribe')?.disabled).toBe(false);
+      expect(assign).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      // "Try again in a moment": another checkout holds the agency. It is a
+      // 409, and it says nothing about a subscription, so it points nowhere.
+      ['/problems/checkout-in-progress', IN_PROGRESS],
+      ['/problems/a-conflict-nobody-has-named-yet', 'Something else is in the way.'],
+    ])('goes by the type, not the status: a 409 of type %s shows its sentence only', async (type, detail) => {
+      startCheckout.mockRejectedValue(problem(409, type, detail));
+      const el = mount(customerNoSubscription);
+      await click(el, 'Subscribe');
+      expect(alerts(el)).toHaveLength(1);
+      expect(alerts(el)[0]!.textContent).toBe(detail);
+      expect(button(el, 'Manage billing')).toBeUndefined();
+      expect(button(el, 'Subscribe')?.disabled).toBe(false);
+    });
+
+    it('shows Manage billing even when this page predates the Stripe customer', async () => {
+      // `hasBillingAccount` is the page's snapshot. The portal reads the
+      // customer server-side, and the sentence points at the button, so it has
+      // to be there.
+      startCheckout.mockRejectedValue(
+        problem(409, '/problems/subscription-needs-attention', NEEDS_ATTENTION),
+      );
+      const el = mount(noSubscription);
+      expect(button(el, 'Manage billing')).toBeUndefined();
+      await click(el, 'Subscribe');
+      expect(alerts(el)[0]!.textContent).toBe(NEEDS_ATTENTION);
+      expect(button(el, 'Manage billing')).toBeDefined();
+      expect(button(el, 'Subscribe')?.disabled).toBe(false);
+    });
+
+    it('and for a cancelled agency whose page has no customer either', async () => {
+      startCheckout.mockRejectedValue(
+        problem(409, '/problems/subscription-already-active', ALREADY_ACTIVE),
+      );
+      const el = mount({ ...canceledSubscription, hasBillingAccount: false });
+      expect(button(el, 'Manage billing')).toBeUndefined();
+      await click(el, 'Subscribe');
+      expect(button(el, 'Manage billing')).toBeDefined();
+    });
+
+    it('opens the portal from a Manage billing that appeared with no customer on the page', async () => {
+      startCheckout.mockRejectedValue(
+        problem(409, '/problems/subscription-needs-attention', NEEDS_ATTENTION),
+      );
+      openBillingPortal.mockResolvedValue({ url: PORTAL_URL });
+      const el = mount(noSubscription);
+      await click(el, 'Subscribe');
+      await click(el, 'Manage billing');
+      expect(openBillingPortal).toHaveBeenCalledWith('agcy_01TEST');
+      expect(assign).toHaveBeenCalledWith(PORTAL_URL);
+    });
+
+    it('a 503 shows its sentence and reveals nothing', async () => {
+      startCheckout.mockRejectedValue(
+        problem(503, '/problems/billing-not-configured', NOT_CONFIGURED),
+      );
+      const el = mount(customerNoSubscription);
+      await click(el, 'Subscribe');
+      expect(alerts(el)[0]!.textContent).toBe(NOT_CONFIGURED);
+      expect(button(el, 'Manage billing')).toBeUndefined();
+      expect(button(el, 'Subscribe')?.disabled).toBe(false);
+    });
+
+    it('stays revealed once seen: a later, different failure does not take it away', async () => {
+      startCheckout
+        .mockRejectedValueOnce(problem(409, '/problems/subscription-needs-attention', NEEDS_ATTENTION))
+        .mockRejectedValueOnce(problem(503, '/problems/billing-not-configured', NOT_CONFIGURED));
+      const el = mount(customerNoSubscription);
+      await click(el, 'Subscribe');
+      await click(el, 'Subscribe');
+      expect(alerts(el)[0]!.textContent).toBe(NOT_CONFIGURED);
+      expect(button(el, 'Manage billing')).toBeDefined();
+    });
+
+    it('opens the portal from the revealed button, and its own failure replaces the 409 sentence', async () => {
+      startCheckout.mockRejectedValue(
+        problem(409, '/problems/subscription-needs-attention', NEEDS_ATTENTION),
+      );
+      openBillingPortal.mockRejectedValue(new TypeError('Failed to fetch'));
+      const el = mount(customerNoSubscription);
+      await click(el, 'Subscribe');
+      await click(el, 'Manage billing');
+      expect(openBillingPortal).toHaveBeenCalledWith('agcy_01TEST');
+      expect(alerts(el)).toHaveLength(1);
+      expect(alerts(el)[0]!.textContent).toBe(
+        'The billing portal could not be opened. Nothing has changed.',
+      );
+    });
+
+    it('in a state that already has Manage billing, shows one of it, not two', async () => {
+      // A cancelled agency whose page is stale: it re-subscribed in another tab.
+      startCheckout.mockRejectedValue(
+        problem(409, '/problems/subscription-already-active', ALREADY_ACTIVE),
+      );
+      const el = mount(canceledSubscription);
+      await click(el, 'Subscribe');
+      expect(alerts(el)).toHaveLength(1);
+      expect(alerts(el)[0]!.textContent).toBe(ALREADY_ACTIVE);
+      const manageButtons = [...el.querySelectorAll('button')].filter(
+        (b) => b.textContent === 'Manage billing',
+      );
+      expect(manageButtons).toHaveLength(1);
+      expect(button(el, 'Subscribe')?.disabled).toBe(false);
+    });
+  });
+
+  describe('back from Stripe', () => {
+    // After `location.assign` the browser may keep this page in its back/forward
+    // cache and restore it, as it was, when the person comes back — React state
+    // included. A button that said "Opening checkout…" still says it, disabled.
+    it('a restored page has its Subscribe back', async () => {
+      startCheckout.mockResolvedValue({ url: CHECKOUT_URL });
+      const el = mount(noSubscription);
+      await click(el, 'Subscribe');
+      expect(button(el, 'Opening checkout…')?.disabled).toBe(true);
+      pageshow(true);
+      expect(button(el, 'Subscribe')?.disabled).toBe(false);
+      expect(button(el, 'Opening checkout…')).toBeUndefined();
+    });
+
+    it('and its Manage billing', async () => {
+      openBillingPortal.mockResolvedValue({ url: PORTAL_URL });
+      const el = mount(activeSubscription);
+      await click(el, 'Manage billing');
+      expect(button(el, 'Opening portal…')?.disabled).toBe(true);
+      pageshow(true);
+      expect(button(el, 'Manage billing')?.disabled).toBe(false);
+      expect(button(el, 'Opening portal…')).toBeUndefined();
+    });
+
+    it('an ordinary page show does not interrupt a call in flight', async () => {
+      startCheckout.mockReturnValue(new Promise<CheckoutSession>(() => {}));
+      const el = mount(noSubscription);
+      await click(el, 'Subscribe');
+      pageshow(false);
+      expect(button(el, 'Opening checkout…')?.disabled).toBe(true);
+      pageshow(true);
+      expect(button(el, 'Subscribe')?.disabled).toBe(false);
+    });
+
+    it('stops listening when the panel unmounts', () => {
+      const add = vi.spyOn(window, 'addEventListener');
+      const remove = vi.spyOn(window, 'removeEventListener');
+      try {
+        mount(noSubscription);
+        const listener = add.mock.calls.find(([type]) => type === 'pageshow')?.[1];
+        expect(listener).toBeDefined();
+        act(() => root!.unmount());
+        root = null;
+        expect(remove).toHaveBeenCalledWith('pageshow', listener);
+      } finally {
+        add.mockRestore();
+        remove.mockRestore();
+      }
+    });
   });
 });

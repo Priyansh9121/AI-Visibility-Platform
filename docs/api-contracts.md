@@ -71,6 +71,7 @@ listed in `CORS_ALLOW_ORIGINS` — browsers reject wildcard CORS with credential
 | `/problems/email-already-registered` | 409 | Signup email in use |
 | `/problems/seat-limit-reached` | 409 | Carries `seatsUsed`, `seatLimit` |
 | `/problems/subscription-already-active` | 409 | Checkout refused: the agency's subscription is `active` or `trialing`. `detail` points at the billing portal |
+| `/problems/subscription-needs-attention` | 409 | Checkout refused: the agency has a subscription that is live at Stripe but not paid up (`past_due`, `unpaid`, `paused`, `incomplete`, or any status that is not over), so a second checkout would create a second subscription. `detail` points at the billing portal |
 | `/problems/checkout-in-progress` | 409 | Another checkout for the same agency holds its row lock for more than 3 s. Nothing was created; retry |
 | `/problems/invalid-reset-token` | 400 | Reset link unknown, expired, used, or orphaned |
 | `/problems/invalid-invitation` | 400 | Invitation unknown, expired, accepted, revoked, or orphaned |
@@ -782,33 +783,63 @@ lands on reads the database.
 **This endpoint does not subscribe anybody.** It returns a URL. The subscription
 begins when Stripe says so, over the webhook.
 
-**A live subscription refuses a new checkout.** When the agency's
-`subscriptionStatus` is `active` or `trialing` (`services.billing.ACTIVE_STATUSES`,
-the same set as `isActive`), the answer is `409 subscription-already-active`
-and no Stripe call is made: a second Checkout Session would create a second
-subscription and bill the agency twice. `detail` reads "This agency already has
-a current subscription. Manage it from Manage billing in Settings."; it carries
-no Stripe id and not the status. Every
-other state (`null`, `past_due`, `canceled`, `unpaid`, `incomplete`,
-`incomplete_expired`, `paused`) checks out as before. The check runs after auth
-and tenancy, so a member still gets `403` and another agency's id `404`; the
-`409` is only ever seen by that agency's own owner or admin.
+**A subscription that is live at Stripe refuses a new checkout** (founder
+decision 4, 2026-10-01). A second Checkout Session would create a second
+subscription beside it, so the answer is a `409` and no Stripe call is made, in
+two cases:
 
-**Starting a new checkout expires the previous one.** Before creating a session
-for an agency that already has a Stripe customer, every `open` Checkout Session
-of that customer is expired, so at most one payable session exists and two
-cannot both be paid into two subscriptions. If Stripe fails while listing or
-expiring, the checkout fails with `503 service-unavailable` and creates
+- `subscriptionStatus` is `active` or `trialing` (`services.billing.ACTIVE_STATUSES`,
+  the same set as `isActive`): `409 subscription-already-active`. `detail` reads
+  "This agency already has a current subscription. Manage it from Manage billing
+  in Settings."
+- `subscriptionStatus` is anything else that is not over: `past_due`, `unpaid`,
+  `paused`, `incomplete`, or a status this server has never seen
+  (`services.billing.is_live_at_stripe`): `409 subscription-needs-attention`,
+  title "Subscription needs attention". `detail` reads "This agency already has a
+  subscription that needs attention. Manage it from Manage billing in Settings."
+  These are not `isActive` (`isActive` and the scan allowance still count only
+  `active` and `trialing`), but Stripe still holds the subscription open.
+
+Neither `detail` carries a Stripe id or the status. Only `null`, `canceled` and
+`incomplete_expired` (no subscription, or one that is over) check out. That list
+is of what is OVER, not of what is live, on purpose: a status Stripe adds later
+refuses a checkout until somebody decides what it means, instead of letting a
+second subscription through. The check runs after auth and tenancy, so a member
+still gets `403` and another agency's id `404`; the `409` is only ever seen by
+that agency's own owner or admin.
+
+**Starting a new checkout expires the previous one, and only then asks about
+subscriptions.** Before creating a session for an agency that already has a
+Stripe customer, every `open` Checkout Session of that customer is expired, so at
+most one payable session exists and two cannot both be paid into two
+subscriptions. That comes first. Asked the other way round, a session paid after
+we looked at the subscriptions and before we expired it would become a
+subscription we never saw, and we would create a second session beside it. In
+this order a session paid earlier is a subscription by the time Stripe is asked
+(`409`), and one that completes during the expire makes the expire fail (`503`).
+If Stripe fails while listing or expiring, or more open sessions exist than one
+page (100) holds, the checkout fails with `503 service-unavailable` and creates
 nothing; retrying is safe. Concurrent checkouts for one agency serialise on the
 agency row, so two first checkouts create one Stripe customer, not two. The
 session's own lifetime (`expires_at`) is unchanged.
 
 **The subscription check also asks Stripe.** For an agency that already has a
-customer, Stripe is asked for that customer's `active` and `trialing`
-subscriptions before anything is created; any hit is the same `409
-subscription-already-active`, even when our row does not say so yet (paid, the
-webhook has not landed). If more open sessions exist than one page (100) holds,
-the answer is `503 service-unavailable` rather than creating another.
+customer, once its open sessions are cleared, Stripe is asked for that customer's
+subscriptions before anything is created: one list call, every status
+(`status=all`), up to 100. Any `active` or `trialing` subscription is `409
+subscription-already-active`; failing that, any subscription that is not over
+(every status but `canceled` and `incomplete_expired`, one with no readable
+status included) is `409
+subscription-needs-attention`, even when our row does not say so yet (paid, the
+webhook has not landed) or says `canceled`. A paid-up subscription outranks one
+that needs attention, whatever order Stripe lists them in. Ended subscriptions
+are on that list and refuse nothing. If Stripe fails while listing, the answer is
+`503 service-unavailable` and nothing is created. So it is when the list comes
+back full (more than 100 subscriptions on one customer, not a real case) with
+nothing live on it, because none can then be proved absent; a full page with a
+live subscription on it is still the `409`. The `503` `detail` says which step
+failed: clearing the previous checkout session, or checking the agency's
+existing subscriptions.
 
 **Bounded waiting.** The agency row is locked for the request, but a checkout
 waits at most 3 s for it (`lock_timeout`) and then answers `409
@@ -819,8 +850,10 @@ lock. The Stripe client used here has a 15 s timeout and one retry per call
 rather than the SDK defaults.
 
 **Errors:** `401`, `403`, `404`, `409 subscription-already-active`, `409
-checkout-in-progress`, `503
-service-unavailable` (Stripe failed while clearing the previous session), `503
+subscription-needs-attention`, `409 checkout-in-progress`, `503
+service-unavailable` (Stripe failed while clearing the previous session or
+checking the customer's subscriptions, or a full page of either left nothing
+provable), `503
 billing-not-configured` when
 `STRIPE_SECRET_KEY` or `STRIPE_PRICE_ID` is unset — `detail` names the exact
 variable, the same courtesy `provider_key()` gives every other integration.

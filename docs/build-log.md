@@ -20824,3 +20824,53 @@ contract regenerates byte-identically.
 - Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
 - OpenAPI and `api.gen.ts` regenerate byte-identically.
 - Exit codes were read from files.
+
+# Checkout is refused for every subscription still live at Stripe, and a canceled agency can subscribe again from Settings
+
+**2026-10-01, the eighth entry of the day.** One item, one commit.
+
+**Render: nothing to set.** The checkout endpoint gains a 409 problem type; `docs/api-contracts.md`, `openapi.json` and `api.gen.ts` are updated.
+
+## 1. What changed
+
+**API (`services/billing.py`, `errors.py`, `routers/billing.py`).**
+- **Founder decision 4, deny by default.** Only an agency with no subscription, or one whose subscription is `canceled` or `incomplete_expired`, may start a checkout. `active` and `trialing` keep the 409 `/problems/subscription-already-active`. Every other status answers the new 409 `/problems/subscription-needs-attention` ("This agency already has a subscription that needs attention. Manage it from Manage billing in Settings."): `past_due`, `unpaid`, `paused`, `incomplete`, and any status Stripe adds later, because each is still live at Stripe and a second checkout beside it would create a second subscription. One rule, "live at Stripe" (anything but no subscription, `canceled` or `incomplete_expired`), serves the stored-status guard, the Stripe-side check and the webhook backstop; at Stripe, a listed subscription with no readable status counts as live (fail closed). Neither detail carries a Stripe id or the status. `is_active()` and the scan allowance are unchanged: only `active` and `trialing` count as paid.
+- **The order of the Stripe calls for an agency that already has a customer.** First the open Checkout Sessions are listed and expired (the expiry itself is unchanged; it used to run second). Then ONE `subscriptions.list(status="all", limit=100)` replaces the per-status calls (one each for `active` and `trialing` before): a paid-up subscription answers already-active, any other live one needs-attention. Expiring first closes a race the review found: a session completing between the two checks now shows up as a subscription (409), and one completing during the expire fails the expire (503). One list call, rather than one per live status, keeps the time spent under the agency row lock short.
+- **Fail closed:** a full page of subscriptions with none live answers 503 with its own sentence and logs `billing.checkout_subscriptions_truncated` (agency id and customer id only); a Stripe failure while listing subscriptions answers "Could not check this agency's existing subscriptions at Stripe. Try again in a moment." and logs `billing.checkout_subscription_check_failed` (error class only), separate from the expire failure's sentence and log key.
+- **The webhook backstop** `stripe.webhook.second_subscription` now fires when a new subscription arrives over any live one, not only a paid-up one. Ids only, as before.
+- **Docs:** the route's docstring said a held checkout lock answers 503; it is a 409 `checkout-in-progress`, and the OpenAPI 409 now names all three problem types. `SubscriptionAlreadyActive`'s docstring no longer says "live" means only paid-up.
+
+**Web.**
+- **`BillingPanel.tsx` (Settings):** Subscribe (the signed-in plan card) is offered for no subscription, `canceled` and `incomplete_expired`, so a canceled agency can subscribe again; the status card stays above it and Manage billing shows when there is a Stripe customer. The other statuses, including unknown ones, show Manage billing and no Subscribe. The `incomplete` sentence said "Starting again is the fix", which checkout now refuses; it reads "A subscription was started but the first payment was never confirmed. Manage billing shows what Stripe holds for it."
+- **A refusal is matched by its problem type** (`lib/billing/subscriptionRefusal.ts`), not by the status 409, because `checkout-in-progress` is also a 409 and means "try again". After a subscription refusal Settings shows the sentence and Manage billing, even in a tab loaded before the Stripe customer existed.
+- **`ScanLimitNotice.tsx`:** a subscription refusal shows the sentence and an "Open Settings" link to `/settings#billing`, and Subscribe drops to a secondary button. With that fragment, Settings scrolls to the Billing section once it has loaded and moves keyboard focus to it (`tabIndex=-1`, `focus({ preventScroll: true })`); without it, nothing scrolls or takes focus.
+- **Back from Stripe:** both components reset their busy state on `pageshow` when the page comes back from the back/forward cache, so the buttons are not left disabled. While the portal opens, Subscribe is now truly disabled (`PricingCard` takes `disabled` apart from its busy label).
+- **`PricingCard.tsx`:** the footnote "Signing up is free. Your first scan is free with a Google sign-in. Subscribe to keep scanning." shows only on the public page; in Settings it was wrong for a returning or already-scanned agency.
+
+## 2. The reviews
+
+- **Security review (opus), API: PASS WITH NITS, then re-checked.** Its two Lows are fixed here: unknown statuses used to pass (now deny by default), and the subscription check ran before the session expiry (now after). Its three nits (the truncation log, a distinct sentence and log key for a failed subscription list, the docstring) are fixed. Checked clean: 403/404 before any 409; the row lock and `lock_timeout` before every Stripe call; paid-up outranks needs-attention whatever order Stripe lists them in; no ids or statuses in details; Stripe errors map as before; allowance unchanged.
+- **Security review, web: PASS WITH NITS.** Only `detail` is rendered from a problem; checkout and portal URLs go only to `location.assign`; rapid clicks send one request.
+- **UI review (sonnet): PASS WITH NITS, then re-checked.** Its two Mediums are fixed (refusals by type; Manage billing reachable after a refusal in a stale tab), and its Lows (a disabled Subscribe while the portal opens, a secondary Subscribe after a refusal, the `#billing` anchor, the `incomplete` sentence).
+- **Re-checks:** the security reviewer's second pass: PASS WITH NITS; its two remaining nits (a null status at Stripe, the stale docstring) are fixed here, and it judged dropping the in-flight guards safe (React re-renders between clicks, so the native `disabled` is in place; the API's row lock and expire-first order cover a back/forward restore). The UI reviewer's second pass: PASS WITH NITS; its nit (keyboard focus after the `#billing` jump) is fixed here.
+
+## Found, not fixed
+
+- **A Stripe customer replaced by hand.** Stripe is asked only about the agency's stored customer, and webhooks overwrite `stripe_customer_id`; a subscription created by hand in the dashboard on another customer could hide a live one on the old customer. Only an operator can cause it.
+- **Creating a customer, a Checkout Session or a portal session still does not catch `StripeError`** (only the pre-checks do), so those answer 500 rather than 503. Unchanged by this entry; it is on the launch checklist.
+- **`ScanLimitNotice` still offers Subscribe** to the four needs-attention statuses (they get the refusal and the link) and to members (who get 403, as before this change). `useScanAllowance` already reads `GET /billing` and could hide it.
+- **Settings still says "Your first scan is free…"** to every signed-in agency (`SettingsView.tsx:184`), and dark-theme `text-tertiary` on seated cards measures about 4.1:1. Both predate this change; the copy is the founder's call.
+- **A customer with more than 100 ended subscriptions** would be refused (503) on every checkout. Not a real case for one plan per agency; logged when it happens.
+- **`scripts/export_openapi.py` fails after writing** when given an output path outside the repo.
+
+## Verified
+
+**API pytest 1859 → 1924 (+65); web vitest 1104 → 1196 (+92); both floors raised to match.**
+- **Negative controls:** the stored-status guard removed fails the 8 refusal tests; the old allow-list form fails the 6 unknown-status tests; the old call order fails 21 tests, including the order test and both race tests; the web panel with `canceled` dropped from its allow-list fails 8; a refusal matched by status instead of type fails 2 (panel), 3 (notice) and 8 (helper); the old Manage-billing condition fails 3; a null status at Stripe answered 201 before its fix; the focus tests fail without the focus call, without `tabindex` or without the hash check. Each file was restored with `cp` and checked with `cmp`.
+
+**The rest of the bar.**
+- Workers 26, shared-types 53 (0 fail), design-system 846, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- `openapi.json` and `api.gen.ts` were regenerated for this change, and regenerating again produces the same files.
+- Exit codes were read from files.
