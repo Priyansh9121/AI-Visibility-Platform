@@ -65,8 +65,9 @@ describe('the completion page', () => {
     expect(src).not.toContain('URLSearchParams');
   });
 
-  it('peeks with the POST client and keeps the expired state for a missing ticket', () => {
+  it('peeks with the POST client; no ticket is the no-code state, a failed peek is the expired one', () => {
     expect(src).toContain('api.googlePending(');
+    expect(src).toContain("setState({ kind: 'no-code' })");
     expect(src).toContain("setState({ kind: 'expired' })");
   });
 

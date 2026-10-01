@@ -20907,3 +20907,37 @@ contract regenerates byte-identically.
 - Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
 - OpenAPI and `api.gen.ts` regenerate byte-identically.
 - Exit codes were read from files.
+
+# The Google sign-up page says when it has no code, the way the invite and reset pages do
+
+**2026-10-01, the tenth entry of the day.** One item, one commit.
+
+**Render: nothing to set.**
+
+## 1. What changed
+
+- **Founder decision 6.** `/sign-up/google` showed one "expired" message for two different cases. They are now separate:
+  - **No ticket in the address** (a reload, because the ticket is removed from the address bar once read, or a typed `/sign-up/google`): a new `no-code` state with the title "This sign-in link is not valid" and the sentence "This page no longer has the link's code (it is removed from the address bar once read). Start again from the sign-in page." That is the invite and reset pages' construction ("This invitation link is not valid" / "This reset link is not valid" and the same sentence), with the action that fits a Google sign-in instead of an email.
+  - **The pending check fails:** the expired message, unchanged ("That Google sign-in has expired" / "It works for ten minutes and once. Start again from the sign-in page."; the ticket lives 600 s, `config.py:271`).
+- **Files:** `app/sign-up/google/page.tsx` (`!found` sets `no-code`), `components/google/GoogleSignUpPanel.tsx`, its test, a new mounted route test `app/sign-up/google/googleSignUpRoute.test.tsx`, and `lib/googleTicket.test.ts` (a source check that still expected the old state).
+
+## 2. The review
+
+- **UI review (sonnet): FAIL on the first title, then fixed.** The first version said "This sign-in link has been used", which the page cannot know: the peek does not spend the ticket, so after a reload it is still unused, and a typed address never had one. It now says "…is not valid", as invite and reset do. Its Low on "sign-in code" (it could read as a code to type) is taken: the sentence now says "the link's code", word for word as invite and reset. Checked clean: design-system components only; `role="alert"` announced after mount; no heading change; "Back to sign in" keyboard-operable; the expired state unchanged.
+
+## Found, not fixed
+
+- **An API that does not answer also shows "expired"**, which the page cannot know (`page.tsx`'s catch has two identical branches; the new route test pins today's behaviour). The founder decides whether it should say the check could not be made.
+
+## Verified
+
+**Web vitest 1196 → 1203 (+7); `web-vitest` floor raised to match.**
+- **Red first:** 4 tests for the new state, then 3 for the corrected copy.
+- **Negative control:** `!found` setting `expired` again fails 3 tests; the file was restored with `cp` and checked with `cmp`.
+
+**The rest of the bar** (the run shared with the previous entry; this commit adds only web files, so its tree is exactly what that run tested).
+- Workers 26, shared-types 53 (0 fail), design-system 846, web 1203, API 1925, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- OpenAPI and `api.gen.ts` regenerate byte-identically.
+- Exit codes were read from files.
