@@ -19,6 +19,12 @@ import nextConfig from '../../next.config.mjs';
 
 const APP = fileURLToPath(new URL('.', import.meta.url));
 const NO_REFERRER = { key: 'Referrer-Policy', value: 'no-referrer' };
+/**
+ * Exactly this, never a substring match: since founder decision 3 (2026-10-01)
+ * robots.txt disallows nothing, so this header is the only thing keeping a
+ * credential-address page out of search. `googlebot: noindex` must not pass.
+ */
+const NOINDEX_NOFOLLOW = 'noindex, nofollow';
 
 /** Every page under app/ with a `[token]` segment, as a Next path pattern. */
 function tokenRoutes(dir: string = APP): string[] {
@@ -79,7 +85,7 @@ describe('pages whose address is a credential are kept out of search', () => {
     expect(headers).toContainEqual(NO_REFERRER);
     const robots = headers.filter((h) => h.key === 'X-Robots-Tag');
     expect(robots.length).toBeGreaterThan(0);
-    for (const h of robots) expect(h.value).toContain('noindex');
+    for (const h of robots) expect(h.value).toBe(NOINDEX_NOFOLLOW);
   });
 
   it('every rule that sends no-referrer also sends noindex', async () => {
@@ -87,7 +93,7 @@ describe('pages whose address is a credential are kept out of search', () => {
     const noReferrer = rules.filter((r) => r.headers.some((h) => h.key === 'Referrer-Policy' && h.value === 'no-referrer'));
     expect(noReferrer.length).toBeGreaterThan(0);
     const missing = noReferrer
-      .filter((r) => !r.headers.some((h) => h.key === 'X-Robots-Tag' && h.value.includes('noindex')))
+      .filter((r) => !r.headers.some((h) => h.key === 'X-Robots-Tag' && h.value === NOINDEX_NOFOLLOW))
       .map((r) => r.source);
     expect(missing).toEqual([]);
   });
@@ -119,6 +125,6 @@ describe('pages whose address is a credential are kept out of search', () => {
     expect(headers).toContainEqual(NO_REFERRER);
     const robots = headers.filter((h) => h.key === 'X-Robots-Tag');
     expect(robots.length).toBeGreaterThan(0);
-    for (const h of robots) expect(h.value).toContain('noindex');
+    for (const h of robots) expect(h.value).toBe(NOINDEX_NOFOLLOW);
   });
 });

@@ -20516,7 +20516,7 @@ contract regenerates byte-identically.
 
 ## Found, not fixed
 
-- **The disallow hides the noindex on those paths.** Crawlers that obey robots.txt never fetch `/share`, `/invite` or `/reset-password`, so they never see the `X-Robots-Tag: noindex` those pages send (previous entry); a legacy `/share/<token>` URL posted publicly could still be listed URL-only. Kept as the founder decided; it is on the decisions list.
+- **The disallow hides the noindex on those paths.** Crawlers that obey robots.txt never fetch `/share`, `/invite` or `/reset-password`, so they never see the `X-Robots-Tag: noindex` those pages send (previous entry); a legacy `/share/<token>` URL posted publicly could still be listed URL-only. Kept as the founder decided; it is on the decisions list. **Resolved 2026-10-01 (founder decision 3):** the disallows were removed and the `noindex, nofollow` header now does this job alone; see "robots.txt stops disallowing the token pages; their noindex header keeps them out of search".
 - **The three paths now live in two lists:** `next.config.mjs` (headers) and `robots.ts`. Nothing ties them together; a shared list would be a separate change.
 - **The rendered-text test imports `resolveRobots` from `next/dist/…`,** an internal path (as `referrerPolicy.test.ts` already does for the path matcher); a Next upgrade could move it.
 
@@ -20788,3 +20788,39 @@ contract regenerates byte-identically.
 
 - Every tracked `.claude/skills/*/SKILL.md` frontmatter parses as a mapping whose `name` equals its folder (18 of 18).
 - No test, script or workflow in `apps`, `packages`, `infra` or `.github/workflows` reads `.claude/skills`, so the bar run for the previous entry (API pytest 1859, workers 26, shared-types 53, design-system 846, web 1104, mypy 47; ruff, typechecks, lock checks and regeneration clean) covers this tree unchanged.
+
+# robots.txt stops disallowing the token pages; their noindex header keeps them out of search
+
+**2026-10-01, the seventh entry of the day.** One item, one commit.
+
+**Render: nothing to set.** After the deploy, check the served headers once (below, "Found, not fixed").
+
+## 1. What changed
+
+- **Founder decision 3.** `apps/web/src/app/robots.ts` is now `rules: [{ userAgent: '*', allow: '/' }]`: nothing is disallowed. A crawler that obeys robots.txt never fetches a disallowed page, so it never saw the `X-Robots-Tag: noindex, nofollow` that `/share`, `/invite`, `/reset-password` and their legacy `/:token` forms send, and a leaked legacy URL could still be listed URL-only. Now compliant crawlers may fetch those pages, see `noindex`, and drop them. The headers in `apps/web/next.config.mjs` are unchanged (all seven token rules, including `/sign-up/google`, send exactly `noindex, nofollow` and `Referrer-Policy: no-referrer`).
+- **`robots.test.ts`** (still 6 tests): the `*` rule allows `/` and has no disallow; the token pages and their `/abc123` forms are blocked for no agent; the rendered text has no `Disallow:` line at all. Red first: 3 of the 6 failed against the old `robots.ts`.
+- **`referrerPolicy.test.ts`** (count unchanged): the header assertions are now exact (`toBe('noindex, nofollow')`) instead of `toContain('noindex')`, because that header is now the only control; a value such as `googlebot: noindex` used to pass.
+- **The tracked skill `.claude/skills/avp-geo-seo`** told agents to disallow token routes and said `robots.ts` did not exist; `SKILL.md` and `references/technical-seo.md` now state the current rule, and its training-bot line separates AVP's own site (decided 2026-09-30: allowed) from a client's site (the owner's call).
+- The earlier entry "The web app serves a robots.txt that welcomes AI crawlers and keeps token pages out" has its found-not-fixed item marked resolved, pointing here.
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS.** It traced every token page for crawler-triggered state changes and found none: `FragmentRedirect` only calls `location.replace`; the `/share` POST on load is read-only (a plain token lookup, the report built with `persist=False`, no commit, no view count); invite and reset POST only on a submitted form; the Google `pending` peek is a plain Redis GET and the ticket is spent only on submit. Every token route form matches a header rule.
+- **Its Low on test strength is fixed here** (the exact-value assertions above).
+
+## Found, not fixed
+
+- **A crawler that runs JavaScript and ignores `X-Robots-Tag` could now read a leaked legacy `/share/<token>` report.** `location.replace` keeps the fragment, so the share page loads the report. Before this change robots.txt kept compliant crawlers out entirely. Legacy share links do not expire on their own, because re-minting keeps the same token and resets its expiry (`services/share.py:135-139`). Accepted with the founder's decision; making `/share/[token]` wait for a click would close it.
+- **The header has never been checked on a served response.** The tests read `next.config.mjs`. After the deploy, `curl -sI` each of the seven token paths on the web host and confirm `x-robots-tag: noindex, nofollow` (listed in `docs/launch-checklist.md`).
+
+## Verified
+
+**Web vitest 1104 → 1104 (tests rewritten, none added); floors unchanged.**
+- **Negative controls:** restoring the three disallows fails the same 3 robots tests; setting one header rule to `googlebot: noindex` fails 3 header tests (the `/share/:token` rule, "every rule that sends no-referrer also sends noindex", the concrete URL `/share/abc123`). Both files were restored with `cp` and checked with `cmp`.
+
+**The rest of the bar** (run before the review's test tightening and the skill edits, which touch only `referrerPolicy.test.ts` and markdown; the web suite and typecheck were re-run after them: 1104, clean).
+- API pytest 1859, workers 26, shared-types 53 (0 fail), design-system 846, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- OpenAPI and `api.gen.ts` regenerate byte-identically.
+- Exit codes were read from files.

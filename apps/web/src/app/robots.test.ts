@@ -1,6 +1,10 @@
 /**
  * /robots.txt — founder decision 2026-09-30: AI crawlers are ALLOWED, both
- * search and training. Only the credential-address pages are kept out.
+ * search and training. Founder decision 3 (2026-10-01): nothing is disallowed,
+ * not even the credential-address pages. A crawler that obeys robots.txt never
+ * fetches a disallowed page, so it never sees that page's noindex; those pages
+ * rely on their `X-Robots-Tag: noindex, nofollow` header (next.config.mjs),
+ * which a crawler can only see if it may fetch the page.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -8,7 +12,7 @@ import type { MetadataRoute } from 'next';
 import { resolveRobots } from 'next/dist/build/webpack/loaders/metadata/resolve-route-data';
 import robots from './robots';
 
-const DISALLOWED = ['/share', '/invite', '/reset-password'];
+const TOKEN_PATHS = ['/share', '/share/abc123', '/invite', '/invite/abc123', '/reset-password', '/reset-password/abc123'];
 const PUBLIC_PAGES = ['/', '/crawler', '/privacy', '/terms'];
 const AI_CRAWLERS = [
   'GPTBot',
@@ -36,18 +40,16 @@ const agents = (rule: Rule) => list(rule.userAgent);
 const blocked = (rule: Rule, path: string) => list(rule.disallow).some((d) => d !== '' && path.startsWith(d));
 
 describe('robots.txt', () => {
-  it('has a * rule that allows / and disallows exactly the three token pages', () => {
+  it('has a * rule that allows / and has no disallow', () => {
     const star = rules().find((r) => agents(r).includes('*'));
     expect(star).toBeDefined();
     expect(list(star!.allow)).toContain('/');
-    expect([...list(star!.disallow)].sort()).toEqual([...DISALLOWED].sort());
+    expect(list(star!.disallow).filter((d) => d !== '')).toEqual([]);
   });
 
-  it('covers the legacy /share/:token forms by prefix', () => {
+  it('does not block the token pages or their /:token forms for any agent, so crawlers can see their noindex', () => {
     for (const rule of rules()) {
-      for (const p of ['/share/abc123', '/invite/abc123', '/reset-password/abc123', '/share', '/invite', '/reset-password']) {
-        expect(blocked(rule, p)).toBe(true);
-      }
+      for (const p of TOKEN_PATHS) expect(blocked(rule, p)).toBe(false);
     }
   });
 
@@ -58,12 +60,12 @@ describe('robots.txt', () => {
     }
   });
 
-  it('never blocks an AI crawler; any explicit AI group allows / and repeats the disallows', () => {
+  it('never blocks an AI crawler; any explicit AI group allows / and disallows nothing', () => {
     for (const rule of rules()) {
       const ai = agents(rule).filter((a) => AI_CRAWLERS.some((c) => c.toLowerCase() === a.toLowerCase()));
       if (ai.length === 0) continue;
       expect(list(rule.allow)).toContain('/');
-      expect([...list(rule.disallow)].sort()).toEqual([...DISALLOWED].sort());
+      expect(list(rule.disallow).filter((d) => d !== '')).toEqual([]);
     }
   });
 
@@ -71,12 +73,11 @@ describe('robots.txt', () => {
     expect(robots().sitemap).toBeUndefined();
   });
 
-  it('renders as the text Next serves', () => {
+  it('renders as the text Next serves, with no Disallow line at all', () => {
     const text = resolveRobots(robots());
     expect(text).toContain('User-Agent: *');
-    expect(text).toContain('Allow: /\n');
-    for (const d of DISALLOWED) expect(text).toContain(`Disallow: ${d}\n`);
-    expect(text).not.toContain('Disallow: /\n');
+    expect(text).toContain('Allow: /');
+    expect(text).not.toMatch(/Disallow:/i);
     expect(text).not.toMatch(/Sitemap:/i);
   });
 });
