@@ -14,13 +14,18 @@ paid for sat in memory and were thrown away with the task.
 WHAT IS PINNED HERE
 -------------------
 * A deadline in the engine loop keeps the prompts that finished — written with
-  the existing `persist_result`, once, by the executor — scores them, and ends
-  PARTIAL / SCAN_DEADLINE_EXCEEDED. That scan holds an allowance slot.
-* With no ANSWER to keep (nothing finished, or everything that finished was an
-  engine error) it ends FAILED / SCAN_DEADLINE_EXCEEDED and holds none.
+  the existing `persist_result`, once, by the executor — and, when at least half
+  of the PLANNED prompts have an answered engine result (the founder's 50% rule,
+  `deadline_partial_counts`), scores them and ends PARTIAL /
+  SCAN_DEADLINE_EXCEEDED. That scan holds an allowance slot.
+* Below that line (too few prompts answered, nothing finished, or everything
+  that finished was an engine error) it ends FAILED / SCAN_DEADLINE_EXCEEDED,
+  is not scored, keeps its rows and holds no slot.
 * A deadline after the engine phase keeps every row and never re-scores a scan
   that already has a score. It runs no audit, no alerts and no fixes: fixes
-  spend money, and a deadline is the moment to stop spending it.
+  spend money, and a deadline is the moment to stop spending it. The 50% rule
+  judges this path too: below it the scan ends FAILED and holds no slot, and
+  the score the chain made before the deadline stays.
 * A scan whose lease is already gone is not this executor's to write.
 * The rows are never written twice, and a finalise that itself fails falls back
   to the plain failure — the one that costs the customer nothing.
@@ -60,7 +65,7 @@ from avp_api.models import (
     Score,
     TechnicalAudit,
 )
-from avp_api.models.engine_result import EngineResultStatus, Sentiment
+from avp_api.models.engine_result import ANSWERED_STATUSES, EngineResultStatus, Sentiment
 from avp_api.models.prompt import PromptIntent
 from avp_api.services import scan_allowance, scan_runner, scoring_runner
 from avp_api.services import scan_executor as executor_module
@@ -74,6 +79,7 @@ from avp_api.services.scan_executor import (
     SCAN_DEADLINE_EXCEEDED,
     ScanDeadlineError,
     ScanJob,
+    deadline_partial_counts,
     execute_scan,
 )
 
@@ -133,6 +139,8 @@ def _fake_engines(monkeypatch: pytest.MonkeyPatch, plan: dict[str, str]) -> Simp
     * `"late"` is `"answers"` after a short pause, so it finishes AFTER the
       prompts behind it;
     * `"errors"` returns at once with every engine in error;
+    * `"mixed"` returns at once, its first engine answering and every other in
+      error: the prompt is answered, the scan is not clean;
     * `"raises"` raises, as an adapter bug would;
     * `"times_out"` raises the builtin `TimeoutError`, as a bug of ours might —
       no clock is involved, so it is not the deadline;
@@ -170,6 +178,19 @@ def _fake_engines(monkeypatch: pytest.MonkeyPatch, plan: dict[str, str]) -> Simp
                     status=EngineResultStatus.ERROR, error_code="PROVIDER_ERROR",
                 )
                 for e in engines
+            ]
+        if what == "mixed":
+            return [
+                EngineAnswer(
+                    engine=e, engine_version="stub", prompt_text=prompt, text=ANSWER,
+                    latency_ms=10, status=EngineResultStatus.OK,
+                )
+                if i == 0
+                else EngineAnswer(
+                    engine=e, engine_version="stub", prompt_text=prompt,
+                    status=EngineResultStatus.ERROR, error_code="PROVIDER_ERROR",
+                )
+                for i, e in enumerate(engines)
             ]
         return [
             EngineAnswer(
@@ -383,6 +404,102 @@ class TestADeadlineInTheEngineLoopKeepsWhatFinished:
         # And within a prompt, the engines in the order the scan asked for them.
         assert [r.engine for r in rows[: len(job.engines)]] == list(job.engines)
 
+    async def test_just_below_half_the_planned_prompts_the_scan_fails_and_keeps_its_rows(
+        self, client: AsyncClient, session, settings, monkeypatch
+    ) -> None:  # noqa: ANN001
+        """2 of 5 planned prompts answered: below the founder's half. FAILED, no score, no slot."""
+        sid, job = await _queued_scan(client)
+        fakes = _fake_engines(monkeypatch, {
+            "done 1": "answers", "done 2": "answers",
+            "unfinished 1": "hangs", "unfinished 2": "hangs", "unfinished 3": "hangs",
+        })
+        monkeypatch.setattr(executor_module, "MAX_SCAN_DURATION", DEADLINE)
+
+        await execute_scan(job, settings=settings)
+
+        assert sorted(fakes.returned) == ["done 1", "done 2"]
+        scan = await _scan(session, sid)
+        assert scan.prompt_count == 5
+        assert scan.status is ScanStatus.FAILED
+        assert scan.error_code == SCAN_DEADLINE_EXCEEDED
+        rows = await _rows(session, EngineResult, sid)
+        assert len(rows) == 2 * len(job.engines)
+        assert scan.engine_result_count == len(rows)
+        assert await _rows(session, Score, sid) == []
+        assert await _slots_held(session, sid) == 0
+
+    async def test_exactly_half_the_planned_prompts_the_scan_counts(
+        self, client: AsyncClient, session, settings, monkeypatch
+    ) -> None:  # noqa: ANN001
+        """2 of 4 planned prompts answered: the line itself is in. PARTIAL, scored, slot held."""
+        sid, job = await _queued_scan(client)
+        fakes = _fake_engines(monkeypatch, {
+            "done 1": "answers", "done 2": "answers",
+            "unfinished 1": "hangs", "unfinished 2": "hangs",
+        })
+        monkeypatch.setattr(executor_module, "MAX_SCAN_DURATION", DEADLINE)
+
+        await execute_scan(job, settings=settings)
+
+        assert sorted(fakes.returned) == ["done 1", "done 2"]
+        scan = await _scan(session, sid)
+        assert scan.prompt_count == 4
+        assert scan.status is ScanStatus.PARTIAL
+        assert scan.error_code == SCAN_DEADLINE_EXCEEDED
+        assert len(await _rows(session, Score, sid)) == 1
+        assert await _slots_held(session, sid) == 1
+
+    async def test_a_prompt_with_one_engine_answering_is_an_answered_prompt(
+        self, client: AsyncClient, session, settings, monkeypatch
+    ) -> None:  # noqa: ANN001
+        """2 of 4 prompts each with one ok and one error result: answered, so PARTIAL."""
+        sid, job = await _queued_scan(client)
+        assert len(job.engines) >= 2, "a mixed prompt needs two engines"
+        _fake_engines(monkeypatch, {
+            "mixed 1": "mixed", "mixed 2": "mixed",
+            "unfinished 1": "hangs", "unfinished 2": "hangs",
+        })
+        monkeypatch.setattr(executor_module, "MAX_SCAN_DURATION", DEADLINE)
+
+        await execute_scan(job, settings=settings)
+
+        scan = await _scan(session, sid)
+        assert scan.status is ScanStatus.PARTIAL
+        rows = await _rows(session, EngineResult, sid)
+        assert any(r.status is EngineResultStatus.ERROR for r in rows)
+        assert len(await _rows(session, Score, sid)) == 1
+        assert await _slots_held(session, sid) == 1
+
+    async def test_a_prompt_whose_every_engine_errored_is_not_an_answered_prompt(
+        self, client: AsyncClient, session, settings, monkeypatch
+    ) -> None:  # noqa: ANN001
+        """Errored prompts add nothing: 1 answered of 4 planned is below half."""
+        sid, job = await _queued_scan(client)
+        _fake_engines(monkeypatch, {
+            "done": "answers", "broken 1": "errors", "broken 2": "errors",
+            "unfinished": "hangs",
+        })
+        monkeypatch.setattr(executor_module, "MAX_SCAN_DURATION", DEADLINE)
+
+        await execute_scan(job, settings=settings)
+
+        # 1 answered of 4 planned: below half.
+        scan = await _scan(session, sid)
+        assert scan.status is ScanStatus.FAILED
+        assert await _slots_held(session, sid) == 0
+
+
+class TestTheDeadlineRule:
+    @pytest.mark.parametrize(
+        ("answered", "planned", "counts"),
+        [(49, 100, False), (50, 100, True), (0, 10, False), (10, 10, True),
+         (1, 2, True), (1, 3, False), (5, 0, False)],
+    )
+    def test_at_least_half_the_planned_prompts_answered(
+        self, answered: int, planned: int, counts: bool
+    ) -> None:
+        assert deadline_partial_counts(answered, planned) is counts
+
 
 # ---------------------------------------------------------------------------
 # a deadline after the engine phase
@@ -430,6 +547,58 @@ class TestADeadlineAfterTheEngineLoop:
         assert len(await _rows(session, TechnicalAudit, sid)) == 1
         assert await _rows(session, ActionItem, sid) == []
         assert await _slots_held(session, sid) == 1
+
+    async def test_below_half_the_planned_prompts_it_fails_and_the_score_it_made_stays(
+        self, client: AsyncClient, session, settings, monkeypatch
+    ) -> None:  # noqa: ANN001
+        """The founder's half judges this path too: 1 of 4 planned prompts answered.
+
+        The chain scored the scan (phase 7) before the fix list hung, so a Score
+        row already exists when the deadline falls. The scan still ends FAILED /
+        SCAN_DEADLINE_EXCEEDED and holds no slot; the score is kept, because the
+        finalise deletes nothing it did not write, and the rows are kept too.
+        """
+        sid, job = await _queued_scan(client)
+        _fake_engines(monkeypatch, {
+            "answered": "answers",
+            "broken 1": "errors", "broken 2": "errors", "broken 3": "errors",
+        })
+        monkeypatch.setattr(executor_module, "MAX_SCAN_DURATION", DEADLINE)
+
+        reached: list[str] = []
+
+        async def fixes_never_return(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202, ARG001
+            reached.append("fixes")
+            await asyncio.sleep(3600)
+
+        monkeypatch.setattr(executor_module.fix_runner, "generate_for_scan", fixes_never_return)
+
+        scored: list[str] = []
+        real_score_scan = scoring_runner.score_scan
+
+        async def counting_score_scan(session_, scan, **kwargs):  # noqa: ANN001, ANN003, ANN202
+            scored.append(scan.id)
+            return await real_score_scan(session_, scan, **kwargs)
+
+        monkeypatch.setattr(scoring_runner, "score_scan", counting_score_scan)
+
+        await execute_scan(job, settings=settings)
+
+        assert reached == ["fixes"], "the deadline did not fall in the fix phase"
+        scan = await _scan(session, sid)
+        assert scan.prompt_count == 4
+        assert scan.status is ScanStatus.FAILED
+        assert scan.error_code == SCAN_DEADLINE_EXCEEDED
+        rows = await _rows(session, EngineResult, sid)
+        assert len(rows) == 4 * len(job.engines)
+        assert scan.engine_result_count == len(rows)
+        # One prompt has an answered result; the other three are all errors.
+        answered = {r.prompt_id for r in rows if r.status in ANSWERED_STATUSES}
+        assert len(answered) == 1
+        # The chain's own scoring phase ran once and its Score is still there.
+        assert scored == [sid]
+        assert len(await _rows(session, Score, sid)) == 1
+        assert await _slots_held(session, sid) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -836,7 +1005,7 @@ class TestAFinaliseThatGoesWrong:
         async def cannot_count(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202, ARG001
             raise RuntimeError("SENTINEL-database-detail")
 
-        monkeypatch.setattr(scan_runner, "count_engine_failures", cannot_count)
+        monkeypatch.setattr(scan_runner, "count_answered_prompts", cannot_count)
 
         with structlog.testing.capture_logs() as events:
             await execute_scan(job, settings=settings)
@@ -1041,3 +1210,72 @@ class TestWhichEndingsCount:
             await _seeded(session, sid, status=ScanStatus.FAILED, error_code=code)
 
         assert await _slots_held(session, sid) == 2
+
+
+# ---------------------------------------------------------------------------
+# the screens can say why — checklist 3.15
+# ---------------------------------------------------------------------------
+
+
+class TestTheScreensCanSayWhy:
+    """What the executor writes is what the report and the list return.
+
+    The seeded rows in `test_report_endpoint.py` and `test_dashboard.py` pin the
+    projection for every ending. These run the real deadline, so the code the
+    EXECUTOR stamps is the code the READS hand the web, through the routes a
+    browser uses; the web turns the pair into the sentence that says whether the
+    scan counted (`scanOutcome.ts`).
+    """
+
+    async def test_a_partial_scan_says_it_ran_out_of_time_in_its_report_and_in_the_list(
+        self, client: AsyncClient, settings, monkeypatch
+    ) -> None:  # noqa: ANN001
+        sid, job = await _queued_scan(client)
+        fakes = _fake_engines(monkeypatch, {
+            "finished 1": "answers", "finished 2": "answers", "finished 3": "answers",
+            "unfinished 1": "hangs", "unfinished 2": "hangs",
+        })
+        monkeypatch.setattr(executor_module, "MAX_SCAN_DURATION", DEADLINE)
+
+        await execute_scan(job, settings=settings)
+
+        # The precondition, so a clock too slow for DEADLINE says so by name.
+        assert sorted(fakes.returned) == ["finished 1", "finished 2", "finished 3"]
+
+        report = await client.get(f"{BASE}/scans/{sid}/report")
+        assert report.status_code == 200, report.text
+        assert report.json()["scanStatus"] == "partial"
+        assert report.json()["scanErrorCode"] == SCAN_DEADLINE_EXCEEDED
+
+        listed = {
+            entry["id"]: entry
+            for entry in (await client.get(f"{BASE}/dashboard")).json()["recentScans"]
+        }
+        assert listed[sid]["status"] == "partial"
+        assert listed[sid]["errorCode"] == SCAN_DEADLINE_EXCEEDED
+
+    async def test_a_failed_scan_with_nothing_in_it_still_has_a_report_that_says_why(
+        self, client: AsyncClient, settings, monkeypatch
+    ) -> None:  # noqa: ANN001
+        """A report IS served for a FAILED scan, and it is empty but for the cause."""
+        sid, job = await _queued_scan(client)
+        fakes = _fake_engines(monkeypatch, {"unfinished 1": "hangs", "unfinished 2": "hangs"})
+        monkeypatch.setattr(executor_module, "MAX_SCAN_DURATION", DEADLINE)
+
+        await execute_scan(job, settings=settings)
+
+        assert fakes.in_loop.is_set(), "the deadline fell before the engine loop"
+        report = await client.get(f"{BASE}/scans/{sid}/report")
+        assert report.status_code == 200, report.text
+        body = report.json()
+        assert body["scanStatus"] == "failed"
+        assert body["scanErrorCode"] == SCAN_DEADLINE_EXCEEDED
+        assert body["score"] is None
+        assert body["proof"]["engineResults"] == 0
+
+        listed = {
+            entry["id"]: entry
+            for entry in (await client.get(f"{BASE}/dashboard")).json()["recentScans"]
+        }
+        assert listed[sid]["status"] == "failed"
+        assert listed[sid]["errorCode"] == SCAN_DEADLINE_EXCEEDED

@@ -309,7 +309,7 @@ async def get_public_report_pdf(
     if scan is None:
         raise NotFound(detail="No report with that link.")
 
-    return _pdf_response(await report_service.build_report(db, scan))
+    return _pdf_response(await report_service.build_public_report(db, scan))
 
 
 @router.post("/reports/shared", response_model=ReportOut)
@@ -341,7 +341,9 @@ async def get_public_report(
     * **Same projection as the authenticated route.** `build_report` is reused
       rather than reimplemented, so the facts-only guarantee `test_facts_only.py`
       sweeps over this module covers this response too — a second assembly path
-      would be a second place for a snippet to slip in.
+      would be a second place for a snippet to slip in. One field is blanked:
+      `scanErrorCode`, which says why a scan is partial or failed and is for the
+      agency alone (`build_public_report`).
 
     **Errors:** `404` only.
     """
@@ -352,4 +354,4 @@ async def get_public_report(
         # never 401 — each of those is a bit of information about a guess.
         raise NotFound(detail="No report with that link.")
 
-    return await report_service.build_report(db, scan)
+    return await report_service.build_public_report(db, scan)

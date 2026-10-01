@@ -58,6 +58,19 @@ address in the body or the log.
 Cross-origin callers must send `credentials: 'include'`, and the origin must be
 listed in `CORS_ALLOW_ORIGINS` — browsers reject wildcard CORS with credentials.
 
+**Writes need a listed `Origin` (2026-10-01).** A `POST`, `PUT`, `PATCH` or
+`DELETE` that sends an `Origin` header must send one equal to a
+`CORS_ALLOW_ORIGINS` entry, with or without the session cookie (list each origin
+exactly, scheme and host with no trailing `/`, as CORS requires; `null` never
+matches), so sign-in, sign-up, password
+reset, invitation accept and Google sign-up complete are covered too. A write
+that carries the session cookie must send a listed `Origin`; a missing one is
+refused as well. A refusal is `403 origin-not-allowed`, answered before any route
+runs, and nothing changes. Browsers send `Origin` on these requests themselves,
+so the web app needs no change. Not checked: reads (`GET`), a write with neither
+the session cookie nor an `Origin` (a server or command-line caller), and
+`POST /billing/webhook`, which Stripe signs instead.
+
 ### Error types
 
 | `type` | Status | Meaning |
@@ -66,6 +79,7 @@ listed in `CORS_ALLOW_ORIGINS` — browsers reject wildcard CORS with credential
 | `/problems/authentication-required` | 401 | No, expired, or invalid session |
 | `/problems/invalid-credentials` | 401 | Login failed |
 | `/problems/permission-denied` | 403 | Authenticated but wrong role |
+| `/problems/origin-not-allowed` | 403 | A `POST`/`PUT`/`PATCH`/`DELETE` whose `Origin` is not in `CORS_ALLOW_ORIGINS` (`null` included), or that carries the session cookie with no `Origin` (2026-10-01). Not applied to `POST /billing/webhook` |
 | `/problems/not-found` | 404 | No such resource in the caller's agency |
 | `/problems/conflict` | 409 | Generic conflict |
 | `/problems/email-already-registered` | 409 | Signup email in use |
@@ -75,10 +89,12 @@ listed in `CORS_ALLOW_ORIGINS` — browsers reject wildcard CORS with credential
 | `/problems/checkout-in-progress` | 409 | Another checkout for the same agency holds its row lock for more than 3 s. Nothing was created; retry |
 | `/problems/invalid-reset-token` | 400 | Reset link unknown, expired, used, or orphaned |
 | `/problems/invalid-invitation` | 400 | Invitation unknown, expired, accepted, revoked, or orphaned |
+| `/problems/invalid-google-ticket` | 400 | Google sign-up ticket unknown, used or expired |
 | `/problems/rate-limited` | 429 | Too many requests |
 | `/problems/invalid-url` | 409 | Submitted URL has no public domain |
 | `/problems/invalid-webhook-signature` | 400 | Billing webhook signature missing, malformed or wrong |
 | `/problems/billing-not-configured` | 503 | A Stripe setting is unset. `detail` names the variable |
+| `/problems/google-sign-in-not-configured` | 503 | Google sign-in is not configured on this deployment |
 | `/problems/service-unavailable` | 503 | A dependency the request needs is down |
 | `/problems/scan-limit-reached` | 402 | A scan cannot start on the allowance. Carries `code` (`SCAN_LIMIT_FREE_USED`, `SCAN_LIMIT_MONTHLY`, or since 2026-09-29 `SCAN_LIMIT_VERIFY_REQUIRED` — the free scan, asked for by a user with no linked Google identity), `scansUsed`, `scanLimit`, `periodResetsAt` (monthly only) |
 
@@ -1041,6 +1057,7 @@ Each entry in `recentScans` is a `ScanSummaryOut`:
   "clientName": "Northaven Dental",
   "clientDomain": "northaven-dental.example",
   "status": "succeeded",
+  "errorCode": null,
   "compositeScore": "38.35",
   "createdAt": "2026-08-20T05:40:11Z",
   "finishedAt": "2026-08-20T05:43:02Z"
@@ -1054,6 +1071,12 @@ determinism rule 3 exists to prevent. It is `null` both when a scan is unscored
 and when scoring returned `INSUFFICIENT_DATA` — **the UI must render null as
 "—", never as 0.** An unrunnable scan must never appear to a client as a bad
 score.
+
+`errorCode` (2026-10-01) is the scan's own code, the same one
+`GET /scans/{scanId}` returns, or `null`: why a `partial` or `failed` scan ended
+that way (`SCAN_DEADLINE_EXCEEDED`, `ALL_ENGINE_CALLS_FAILED`,
+`EXECUTION_FAILED`, `EXECUTOR_LOST`, `EXECUTOR_NEVER_STARTED`). The web turns it
+into a sentence; it never shows the code.
 
 Scans are ordered newest-first by `id`. IDs are ULIDs, so that is creation
 order and the same column serves as the pagination cursor.
@@ -1143,6 +1166,8 @@ the database by `ck_clients_industry_matches_classification_status`.
 | `PROVIDER_RATE_LIMITED` / `PROVIDER_UNREACHABLE` / `PROVIDER_ERROR` | Upstream model call failed |
 | `PROVIDER_REFUSED` | Model declined to answer |
 | `PROVIDER_SCHEMA_VIOLATION` | Model answered, but its answer did not fit the classifier's schema (2026-09-11) |
+| `ROBOTS_DISALLOWED` | The site's robots.txt forbids AVPScanBot its homepage, so nothing was read (2026-09-29) |
+| `ADDRESS_NOT_PUBLIC` | The site's address, or an address the site sent the crawler to (a redirect, or something a page loads), is not on the public internet (private, loopback, link-local, carrier-grade NAT, multicast, reserved or unspecified, including those forms inside an IPv6 address), so the crawl stopped and nothing was kept (2026-10-01) |
 
 `industryConfidenceScore` is a **string-encoded decimal or `null`**
 (`NUMERIC(4,3)`), for the same reason as `compositeScore`: a JSON number is an
@@ -1518,13 +1543,17 @@ distinguishes "the process running this went away" from
 
 **A scan that hits its deadline** — the executor stops a scan still running
 2,400 seconds after it was claimed — keeps the answers that finished and ends by
-what it has, with `errorCode: "SCAN_DEADLINE_EXCEEDED"` either way. With at least
-one answer (a result that is `ok` or `answered_no_mention`) it ends `partial` and
-the scan **counts** against the allowance. The prompts that finished are stored,
-and scored if scoring completes within its own 60-second budget (a deadline
-`partial` can have no score); `engineResultCount` is the number stored (it can be
-fewer than `promptCount` × engines). With none it ends `failed` and does **not**
-count. It also ends `failed`, uncounted and with the same code, when the executor
+what it has, with `errorCode: "SCAN_DEADLINE_EXCEEDED"` either way. When at
+least half of its planned prompts (`promptCount`) have an answer — at least one
+result that is `ok` or `answered_no_mention` — it ends `partial` and the scan
+**counts** against the allowance (founder decision, 2026-10-01: 2 of 4 counts,
+2 of 5 does not). The prompts that finished are stored, and scored if scoring
+completes within its own 60-second budget (a deadline `partial` can have no
+score); `engineResultCount` is the number stored (it can be fewer than
+`promptCount` × engines). With fewer than half, or none, it ends `failed` and does
+**not** count; the results that finished are still stored, and it is not scored
+(when the deadline comes after the engine phase, a score made before it stays).
+It also ends `failed`, uncounted and with the same code, when the executor
 cannot complete this finalisation itself. A scan whose lease was already gone when
 the deadline fired — the reaper had failed it — keeps the reaper's `failed` /
 `EXECUTOR_LOST`. The audit, alerts and fix list that had not yet run do not run.
@@ -1595,12 +1624,13 @@ exactly as `timeout` is.
 failed), `failed` (all failed, with `errorCode: ALL_ENGINE_CALLS_FAILED`).
 `partial` exists so a report can say "one engine was down" rather than
 presenting a depressed mention rate as fact. `partial` is also how a scan that
-hit its deadline with at least one answer ends: it then carries
+hit its deadline with at least half of its planned prompts answered ends: it then carries
 `errorCode: "SCAN_DEADLINE_EXCEEDED"`, and its results are those of the prompts
 that finished. They can ALSO include failed engine calls (each result's `status`
 says which), so that code says the clock ran out and does not rule out an engine
-having been down. With no answer, or when the executor could not complete the
-finalisation, that scan ends `failed` with the same code. The allowance counts
+having been down. With fewer than half of its planned prompts answered, or when the
+executor could not complete the finalisation, that scan ends `failed` with the same
+code. The allowance counts
 `succeeded` and `partial` and never `failed`, whatever the `errorCode`.
 
 **`position` is the subject's rank among detected brands by first appearance.**
@@ -1702,6 +1732,8 @@ interchangeable:
 | `NO_AWARENESS_POPULATION` | The prompt set had no unprompted questions (v2) | "nothing unprompted to measure" |
 | `NO_AUTHORITY_DATA` | No cited domain in this scan has an authority tier, so there is no input to measure Citation Strength with. v2.1–v2.2: fired on every scan, because no authority source existed at all; since v3 only when the scan's citations are all unclassified | "no authority source" |
 | `NO_COMPETITOR_SET` (Citation Strength, v3) | Tiered domains were cited but no competitor set exists to normalise against — same code, same reason as Share of Voice | "no comparison was made" |
+| `CRAWL_DISALLOWED` | Technical Foundation: the site's robots.txt forbids AVPScanBot, so the audit read nothing (2026-09-29) | "Blocked by robots.txt" |
+| `CRAWL_ADDRESS_NOT_PUBLIC` | Technical Foundation: the site's address, or an address the site sent the crawler to, is not on the public internet, so the audit kept nothing (2026-10-01) | "Address not public" |
 
 An excluded dimension's weight is redistributed proportionally across the rest.
 **A null sub-score is never a zero** — a brand nobody mentioned has not been
@@ -1812,6 +1844,20 @@ number, which is why `status: "failed"` exists.
 | `partial` | Read the page, but a component had no signal (e.g. no date anywhere). Scored on what was measurable; `components` and `componentWeights` show the measured ones, and `excludedComponents` lists those left out with their reason (e.g., `content_freshness: NO_DATE_SIGNAL_AVAILABLE`). |
 | `failed` | Could not read the site. `technicalFoundation`, `components` and `componentWeights` are all empty. |
 
+A `failed` audit's `errorCode` says why. Two codes mean the crawler declined to
+read the site rather than failed to:
+
+- `ROBOTS_DISALLOWED` (2026-09-29): the site's robots.txt forbids AVPScanBot the
+  homepage. Page checks are `not_applicable` with that `detailCode`; a blanket
+  `Disallow: /` under `User-agent: *` still fails `indexable` with
+  `ROBOTS_TXT_DISALLOW`, because robots.txt itself was read.
+- `ADDRESS_NOT_PUBLIC` (2026-10-01): the site's address, an address it
+  redirected to, or an address the page asked the browser to load, is not on
+  the public internet. The crawler's own fetches (robots.txt, sitemap.xml and
+  each redirect hop) are checked before they are sent, and any request or
+  landing of the browser's that is not public ends the run. Nothing is kept,
+  so every check is `not_applicable` with that `detailCode`.
+
 **Core Web Vitals are measured and reported, but carry NO weight in the
 sub-score.** `lcpMs` and `cls` are single-cold-load **lab** measurements, not
 field data — every CWV check carries `LAB_MEASUREMENT_NOT_FIELD_DATA`. Letting a
@@ -1855,6 +1901,10 @@ Once an audit exists, `POST /scans/{scanId}/score` includes Technical Foundation
 instead of excluding it as `NOT_YET_MEASURED`, and the effective weights return
 to §6's table exactly (30/25/20/15/10). A **failed** audit leaves the dimension
 excluded — an unreadable site is not a measured zero.
+The exclusion reason is `NOT_YET_MEASURED`, except `CRAWL_DISALLOWED` for an
+audit failed with `ROBOTS_DISALLOWED` and `CRAWL_ADDRESS_NOT_PUBLIC` for one
+failed with `ADDRESS_NOT_PUBLIC`. All three give the same composite; only the
+reason differs, so `FORMULA_VERSION` did not change for either.
 
 ---
 
@@ -1879,7 +1929,7 @@ place that `tests/test_facts_only.py` can assert over.
 **Response `200`** — `ReportOut`:
 ```json
 {
-  "scanId": "scan_01J...", "scanStatus": "succeeded",
+  "scanId": "scan_01J...", "scanStatus": "succeeded", "scanErrorCode": null,
   "generatedAt": "2026-08-22T00:18:31Z", "scannedAt": "2026-08-21T05:49:24Z",
   "agency": { "id": "agcy_01J...", "name": "Acme SEO", "slug": "acme-seo" },
   "subject": { "clientId": "clnt_01J...", "name": "Help Scout",
@@ -1932,6 +1982,14 @@ place that `tests/test_facts_only.py` can assert over.
   }
 }
 ```
+
+**`scanErrorCode` (2026-10-01)** is the scan's own `errorCode`, or `null`: why a
+`partial` or `failed` scan ended that way (see the scan-level status under
+`GET /scans/{scanId}`). A report is served for a scan of any status. The
+signed-in report turns the code into a sentence and never shows the code. On the
+shared report (the link a prospect opens, and its PDF) the field is always
+`null`: the sentence speaks about the agency's own scan allowance, and the code
+is not the link holder's business.
 
 **`dimensions` is ordered heaviest-weight first.** The Luminance Ledger stacks
 the heaviest segment at the bottom and consumes this list directly, so the order

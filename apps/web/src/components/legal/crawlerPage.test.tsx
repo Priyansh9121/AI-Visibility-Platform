@@ -183,8 +183,8 @@ describe('what it fetches is what the code fetches', () => {
     const crawlSite = topLevel(crawl, 'crawl_site');
     before(crawlSite, 'home_url = await gate.resolve(start_url)', 'await _crawl(');
     const browser = topLevel(crawl, '_crawl');
-    before(browser, 'if not await gate.allows(target):', '_fetch_page(page, target, timeout_ms)');
-    before(browser, '_fetch_page(page, home_url, timeout_ms)', 'if not await gate.allows(page.url):');
+    before(browser, 'if not await gate.allows(target):', '_fetch_page(page, target, timeout_ms, guard)');
+    before(browser, '_fetch_page(page, home_url, timeout_ms, guard)', 'if not await gate.allows(page.url):');
 
     const audit = read(AUDIT);
     const auditSite = topLevel(audit, 'audit_site');

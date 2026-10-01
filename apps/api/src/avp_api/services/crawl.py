@@ -37,7 +37,9 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import async_playwright
 
 from ..config import Settings, get_settings
+from . import egress
 from .ai_crawlers import CrawlPolicy, crawl_policy
+from .egress import ADDRESS_NOT_PUBLIC, BrowserGuard, EgressRefused, EgressUnverified
 
 logger = structlog.get_logger(__name__)
 
@@ -93,6 +95,8 @@ def crawler_user_agent(settings: Settings | None = None) -> str:
 # records it as the reason; the audit stores it as its error code, and the
 # score excludes Technical Foundation as CRAWL_DISALLOWED.
 ROBOTS_DISALLOWED = "ROBOTS_DISALLOWED"
+# `ADDRESS_NOT_PUBLIC` (imported from `egress`) is its sibling: the site's
+# address, or a redirect's, is not a public one, so nothing was fetched.
 
 ROBOTS_TIMEOUT = 10.0
 # Redirects followed, for robots.txt (RFC 9309 §2.3.1.2 asks for at least
@@ -165,11 +169,24 @@ class RobotsGate:
         # A client per call rather than one held open: a crawl makes a handful
         # of these requests, and a gate that owns nothing open can be asked
         # from inside a browser session without either outliving the other.
+        # `guarded_transport` re-checks the resolved address at connection time
+        # and connects to the address it checked (`egress.py`).
         return httpx.AsyncClient(
             timeout=self._timeout,
             headers={"User-Agent": self._user_agent},
             max_redirects=MAX_REDIRECTS,
+            transport=egress.guarded_transport(),
         )
+
+    async def _egress_ok(self, url: str) -> bool:
+        """Checked before EVERY request this gate sends, on every hop.
+
+        Raises `EgressRefused` if the host is not public; False if it does not
+        resolve (the caller treats that as a request that got no answer). The
+        transport checks again underneath; this check is what a client that
+        replaces the transport still goes through.
+        """
+        return await egress.check_url(url)
 
     async def file(self, origin: str) -> RobotsFile:
         """This origin's robots.txt, fetched once and remembered."""
@@ -178,16 +195,30 @@ class RobotsGate:
         return self._files[origin]
 
     async def _fetch(self, origin: str) -> RobotsFile:
-        try:
-            async with self._client() as client:
-                response = await client.get(f"{origin}/robots.txt", follow_redirects=True)
-        except httpx.HTTPError:
-            return RobotsFile(status=None)
-        return RobotsFile(
-            status=response.status_code,
-            content_type=response.headers.get("content-type", ""),
-            body=response.text[:ROBOTS_MAX_CHARS],
-        )
+        # Redirects are followed by hand so each hop is egress-checked before
+        # it is requested. robots.txt itself is not checked against robots.txt.
+        url = f"{origin}/robots.txt"
+        async with self._client() as client:
+            for _ in range(MAX_REDIRECTS + 1):
+                if not await self._egress_ok(url):
+                    return RobotsFile(status=None)
+                try:
+                    response = await client.get(url, follow_redirects=False)
+                except (httpx.HTTPError, httpx.InvalidURL):
+                    return RobotsFile(status=None)
+                location = response.headers.get("location")
+                if not response.is_redirect or not location:
+                    return RobotsFile(
+                        status=response.status_code,
+                        content_type=response.headers.get("content-type", ""),
+                        body=response.text[:ROBOTS_MAX_CHARS],
+                    )
+                try:
+                    url = urljoin(url, location)
+                    urlsplit(url)
+                except ValueError:
+                    return RobotsFile(status=None)
+        return RobotsFile(status=None)
 
     async def policy(self, origin: str) -> CrawlPolicy:
         robots = await self.file(origin)
@@ -197,19 +228,29 @@ class RobotsGate:
         return (await self.policy(origin_of(url))).allows(path_of(url))
 
     async def follow(self, method: str, url: str) -> Followed:
-        """Request `url`, following redirects by hand and checking each hop first."""
+        """Request `url`, following redirects by hand and checking each hop first.
+
+        Each hop is checked twice before it is sent: against robots.txt, and
+        for a public address (`EgressRefused` propagates out).
+        """
         async with self._client() as client:
             for _ in range(MAX_REDIRECTS + 1):
                 if not await self.allows(url):
                     return Followed(url, None, disallowed=True)
+                if not await self._egress_ok(url):
+                    return Followed(url, None)
                 try:
                     response = await client.request(method, url, follow_redirects=False)
-                except httpx.HTTPError:
+                except (httpx.HTTPError, httpx.InvalidURL):
                     return Followed(url, None)
                 location = response.headers.get("location")
                 if not response.is_redirect or not location:
                     return Followed(url, response)
-                url = urljoin(url, location)
+                try:
+                    url = urljoin(url, location)
+                    urlsplit(url)
+                except ValueError:
+                    return Followed(url, None)
         return Followed(url, None)
 
     async def resolve(self, url: str) -> str | None:
@@ -358,23 +399,64 @@ async def crawl_site(
     user_agent = crawler_user_agent()
     gate = RobotsGate(user_agent=user_agent)
 
-    home_url = await gate.resolve(start_url)
-    if home_url is None:
-        logger.info("crawl.robots_disallowed", url=start_url)
-        return _disallowed(signals)
-
+    guard = BrowserGuard()
     try:
+        home_url = await gate.resolve(start_url)
+        if home_url is None:
+            logger.info("crawl.robots_disallowed", url=start_url)
+            return _disallowed(signals)
+
         return await _crawl(
             gate, home_url, signals,
             user_agent=user_agent, max_pages=max_pages, timeout_ms=timeout_ms,
+            guard=guard,
         )
+    except EgressRefused as exc:
+        return _address_not_public(start_url, exc)
+    except EgressUnverified:
+        return _egress_unverified(start_url)
     except PlaywrightError as exc:
+        # A request the guard aborted fails the navigation that asked for it. And a
+        # browser that fails to close while an egress outcome is on its way out
+        # replaces it with this error: the outcome stands, and nothing is kept.
+        refused = guard.refused or (
+            exc.__context__ if isinstance(exc.__context__, EgressRefused) else None
+        )
+        if refused is not None:
+            return _address_not_public(start_url, refused)
+        if guard.unverified:
+            return _egress_unverified(start_url)
         logger.warning("crawl.playwright_error", url=start_url, error=type(exc).__name__)
         return CrawlResult(
             signals=signals, text_extract="", ok=False, error_code="BROWSER_ERROR"
         )
     except TimeoutError:
         return CrawlResult(signals=signals, text_extract="", ok=False, error_code="TIMEOUT")
+
+
+def _nothing_kept(url: str) -> CrawlSignals:
+    """Signals as if nothing had been read: what a crawl that stopped on its egress guard keeps.
+
+    The refusal can arrive after a page's facts were read, and the caller stores
+    and returns whatever `signals` holds, so the result carries a fresh object.
+    """
+    return CrawlSignals(final_url=url, registrable_domain=registrable_domain(url))
+
+
+def _address_not_public(url: str, exc: EgressRefused) -> CrawlResult:
+    """The result for a site whose address, or a redirect's, is not public: nothing kept."""
+    logger.info("crawl.address_not_public", url=url, host=exc.host)
+    return CrawlResult(
+        signals=_nothing_kept(url), text_extract="", ok=False, error_code=ADDRESS_NOT_PUBLIC
+    )
+
+
+def _egress_unverified(url: str) -> CrawlResult:
+    """A connected address was never read: not a refusal, so the plain browser failure."""
+    logger.warning("crawl.egress_unverified", url=url)
+    return CrawlResult(
+        signals=_nothing_kept(url), text_extract="", ok=False, error_code="BROWSER_ERROR"
+    )
 
 
 def _disallowed(signals: CrawlSignals) -> CrawlResult:
@@ -390,18 +472,21 @@ async def _crawl(
     user_agent: str,
     max_pages: int,
     timeout_ms: int,
+    guard: BrowserGuard,
 ) -> CrawlResult:
     """The browser half of `crawl_site`, from a homepage robots.txt allows."""
     domain = signals.registrable_domain
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(
-            args=["--disable-dev-shm-usage", "--no-sandbox"]
+            args=["--disable-dev-shm-usage", "--no-sandbox", egress.WEBRTC_LAUNCH_ARG]
         )
         try:
             context = await browser.new_context(
                 user_agent=user_agent,
                 viewport={"width": 1280, "height": 900},
                 java_script_enabled=True,
+                # Blocked, so the route guard sees the page's requests.
+                service_workers="block",
             )
             # Images and fonts contribute nothing to classification and are
             # most of the bytes; blocking them roughly halves crawl time.
@@ -409,11 +494,17 @@ async def _crawl(
                 re.compile(r"\.(png|jpe?g|gif|webp|svg|ico|woff2?|ttf|mp4|webm)$"),
                 lambda route: asyncio.ensure_future(route.abort()),
             )
+            # Registered AFTER the image route: the most recent route runs
+            # first, so the guard goes first and falls back to the image
+            # block for the rest. It also blocks WebSockets and removes the
+            # page's WebRTC constructors.
+            await guard.install(context)
             page = await context.new_page()
             page.set_default_timeout(timeout_ms)
 
-            home = await _fetch_page(page, home_url, timeout_ms)
+            home = await _fetch_page(page, home_url, timeout_ms, guard)
             if home is None:
+                await guard.finish()
                 return CrawlResult(
                     signals=signals,
                     text_extract="",
@@ -424,9 +515,12 @@ async def _crawl(
             # a redirect only a browser is given, or a script's. That host's
             # robots.txt decides whether anything from it is kept.
             if not await gate.allows(page.url):
+                await guard.finish()
                 logger.info("crawl.robots_disallowed", url=page.url)
                 return _disallowed(signals)
             if home.get("blocked"):
+                # Every way out of the browser run goes through the final check.
+                await guard.finish()
                 signals.http_status = home["status"]
                 signals.final_url = page.url
                 return CrawlResult(
@@ -459,7 +553,7 @@ async def _crawl(
                     skipped += 1
                     continue
                 attempted += 1
-                sub = await _fetch_page(page, target, timeout_ms)
+                sub = await _fetch_page(page, target, timeout_ms, guard)
                 if sub is None or sub.get("blocked"):
                     continue
                 if not await gate.allows(page.url):
@@ -474,6 +568,9 @@ async def _crawl(
             if skipped:
                 logger.info("crawl.robots_skipped_pages", url=signals.final_url, skipped=skipped)
 
+            # The last check before anything read is kept: a refusal ends the
+            # crawl as one, and a connected address never read fails it closed.
+            await guard.finish()
             text = _WHITESPACE.sub(" ", "\n\n".join(extracts)).strip()[:MAX_TOTAL_CHARS]
             signals.word_count = len(text.split())
 
@@ -482,14 +579,22 @@ async def _crawl(
             await browser.close()
 
 
-async def _fetch_page(page, url: str, timeout_ms: int) -> dict | None:  # noqa: ANN001
-    """Fetch one page and pull out text plus structural signals."""
+async def _fetch_page(page, url: str, timeout_ms: int, guard: BrowserGuard) -> dict | None:  # noqa: ANN001
+    """Fetch one page and pull out text plus structural signals.
+
+    Raises `EgressRefused` if the browser was sent, or redirected, anywhere
+    that is not a public address.
+    """
     try:
         response = await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
     except PlaywrightError:
+        # An aborted request fails the navigation; say why, not "no page".
+        guard.raise_if_refused()
         return None
+    guard.raise_if_refused()
     if response is None:
         return None
+    await guard.check_landing(response, page.url)
     status = response.status
     if status >= 400:
         # Return the status rather than a bare None. A site that answers with
@@ -526,7 +631,10 @@ async def _fetch_page(page, url: str, timeout_ms: int) -> dict | None:  # noqa: 
             }"""
         )
     except PlaywrightError:
+        guard.raise_if_refused()
         return None
+    # What evaluate read is kept only if the page is still somewhere public.
+    await guard.check_landing(response, page.url)
 
     return {
         "status": status,

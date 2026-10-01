@@ -1,15 +1,18 @@
 'use client';
 
-import { useState, type FormEvent, type JSX } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type JSX } from 'react';
 import { Button, Card, CardBody, ErrorState, Reveal, TextField } from '@avp/design-system';
 import type { GooglePending } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
+import { apiWasAway } from '@/lib/apiAway';
 
 export type GoogleSignUpState =
   | { kind: 'loading' }
   | { kind: 'ask'; pending: GooglePending }
   | { kind: 'no-code' }
-  | { kind: 'expired' };
+  | { kind: 'expired' }
+  /** The API did not answer (network error, 5xx). The ticket may be fine. */
+  | { kind: 'unreachable' };
 
 /**
  * What each refusal says. Both are the same card with the same way out.
@@ -34,6 +37,11 @@ const REFUSALS = {
   },
 } as const;
 
+const UNREACHABLE = {
+  title: 'We could not reach the server',
+  detail: 'Check your connection and try again. The sign-in link works for ten minutes.',
+} as const;
+
 /**
  * The Google half of "Create your agency" — Epic 20.
  *
@@ -46,18 +54,23 @@ const REFUSALS = {
  * fetch, this owns the form. Two states are refusals, and the way out of both
  * is the front door. `no-code` is a page with no ticket to ask about, typically
  * a reload (the ticket is taken out of the address bar once read). `expired` is
- * the API refusing the ticket (unknown, already used, or past its ten minutes)
- * or not answering. Which one applies is the route's call.
+ * the API refusing the ticket (unknown, already used, or past its ten minutes).
+ * An API that does not answer, or answers 5xx, is not a refusal and is its own
+ * state, `unreachable`, whose way out is Try again. Which one applies is the
+ * route's call.
  */
 export function GoogleSignUpPanel({
   state,
   ticket,
   onSignedUp,
+  onRetry,
   animate = true,
 }: {
   state: GoogleSignUpState;
   ticket: string;
   onSignedUp: () => void;
+  /** Re-runs the ticket check. The check only peeks; it does not spend the ticket. */
+  onRetry?: () => void;
   animate?: boolean;
 }): JSX.Element {
   const [agencyName, setAgencyName] = useState('');
@@ -66,11 +79,55 @@ export function GoogleSignUpPanel({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // FOCUS, THROUGH "TRY AGAIN". Pressing it replaces the card that holds the
+  // button with the "Checking…" line, and that with whatever the peek finds, so
+  // without this every step drops focus on <body> and a keyboard or screen-reader
+  // user starts again from the top of the page. Each step hands it to what is
+  // there: the line, then the form's heading; the buttons of the cards that can
+  // follow take it as they mount (`autoFocus`). Only after a retry: a first
+  // visit has nothing to carry and takes no focus.
+  const [retried, setRetried] = useState(false);
+  const checking = useRef<HTMLParagraphElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (!retried) return;
+    if (state.kind === 'loading') checking.current?.focus();
+    else if (state.kind === 'ask') heading.current?.focus();
+  }, [retried, state.kind]);
+
   if (state.kind === 'loading') {
     return (
-      <p className="mx-auto max-w-form text-ui-sm text-text-tertiary" role="status">
+      <p
+        ref={checking}
+        tabIndex={-1}
+        className="mx-auto max-w-form text-ui-sm text-text-secondary"
+        role="status"
+      >
         Checking your Google sign-in…
       </p>
+    );
+  }
+
+  if (state.kind === 'unreachable') {
+    return (
+      <div className="mx-auto max-w-form">
+        <ErrorState
+          title={UNREACHABLE.title}
+          detail={UNREACHABLE.detail}
+          action={
+            <Button
+              variant="secondary"
+              autoFocus={retried}
+              onClick={() => {
+                setRetried(true);
+                onRetry?.();
+              }}
+            >
+              Try again
+            </Button>
+          }
+        />
+      </div>
     );
   }
 
@@ -82,7 +139,11 @@ export function GoogleSignUpPanel({
           title={title}
           detail={detail}
           action={
-            <Button variant="secondary" onClick={() => window.location.assign('/')}>
+            <Button
+              variant="secondary"
+              autoFocus={retried}
+              onClick={() => window.location.assign('/')}
+            >
               Back to sign in
             </Button>
           }
@@ -106,10 +167,13 @@ export function GoogleSignUpPanel({
         const named = err.fieldErrors();
         if (Object.keys(named).length > 0) setFieldErrors(named);
         else setError(err.problem.detail);
-      } else if (err instanceof ApiProblem) {
+      } else if (err instanceof ApiProblem && !apiWasAway(err)) {
+        // The API refused, and its own sentence says why.
         setError(err.problem.detail);
       } else {
-        setError('The API did not respond. Check that it is running on port 8000.');
+        // No answer, or a 5xx (a proxy's 502 reaches here as an ApiProblem
+        // carrying that status): nothing the API said is about this form.
+        setError('We could not reach the server. Check your connection and try again.');
       }
     } finally {
       setBusy(false);
@@ -124,7 +188,11 @@ export function GoogleSignUpPanel({
         <CardBody>
           <form onSubmit={submit} className="flex flex-col gap-5">
             <div className="flex flex-col gap-2">
-              <h1 className="font-display text-ed-xs leading-display text-text-primary">
+              <h1
+                ref={heading}
+                tabIndex={-1}
+                className="font-display text-ed-xs leading-display text-text-primary"
+              >
                 Name your agency
               </h1>
               <p className="text-ui-sm leading-prose text-text-secondary">

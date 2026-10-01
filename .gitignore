@@ -66,33 +66,21 @@ dump.rdb
 #
 # Reinstall them with `npx skills add <owner/repo@skill>`.
 #
-# The exception is the active skill set the project's workflow relies on: the
-# 14 skill folders named below (each carries its LICENSE and SOURCE.md), the
-# agents, and settings.json, plus skills-lock.json. Everything else under
-# .claude/ stays local: settings.local.json, the impeccable skill, and the
-# symlinks into .agents/. The root skills/ and .agents/ are anchored so that the
-# `skills/` rule does not also match .claude/skills/.
+# The exception is the installed skill set (2026-10-01, the founder's pre-pilot
+# brief): every folder in .claude/skills is tracked, impeccable included, each
+# with its licence file and SOURCE.md; so are the agents, settings.json and
+# skills-lock.json. Everything else under .claude/ stays local:
+# settings.local.json, worktrees, and the skills library's INDEX.md. The root
+# skills/ and .agents/ are anchored so that the `skills/` rule does not also
+# match .claude/skills/.
 /.agents/
 /skills/
 /.claude/*
 !/.claude/settings.json
 !/.claude/agents/
 !/.claude/skills/
-/.claude/skills/*
-!/.claude/skills/verification-before-completion/
-!/.claude/skills/intent-driven-development/
-!/.claude/skills/architecture-decision-records/
-!/.claude/skills/supabase-postgres-best-practices/
-!/.claude/skills/production-audit/
-!/.claude/skills/systematic-debugging/
-!/.claude/skills/test-driven-development/
-!/.claude/skills/constraint-driven-development/
-!/.claude/skills/handoff/
-!/.claude/skills/tells/
-!/.claude/skills/avp-geo-seo/
-!/.claude/skills/market-research/
-!/.claude/skills/emil-design-eng/
-!/.claude/skills/review-animations/
+# The skills library's index of audited skills: a local reference, not a skill.
+/.claude/skills/INDEX.md
 
 # Written by installed skills, not by this project.
 .impeccable/

@@ -65,10 +65,13 @@ describe('the completion page', () => {
     expect(src).not.toContain('URLSearchParams');
   });
 
-  it('peeks with the POST client; no ticket is the no-code state, a failed peek is the expired one', () => {
+  it('peeks with the POST client; no ticket is the no-code state, a failed peek is expired or unreachable', () => {
     expect(src).toContain('api.googlePending(');
     expect(src).toContain("setState({ kind: 'no-code' })");
-    expect(src).toContain("setState({ kind: 'expired' })");
+    // One rule, `apiWasAway`, which the completion form and the share bar use too
+    // (`apiAway.test.ts` pins it; `googleSignUpRoute.test.tsx` the states).
+    expect(src).toContain("kind: apiWasAway(err) ? 'unreachable' : 'expired'");
+    expect(src).toContain("import { apiWasAway } from '@/lib/apiAway'");
   });
 
   it('the helper reads location.hash and is the only place a legacy query is read', () => {

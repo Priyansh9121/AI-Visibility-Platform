@@ -97,6 +97,17 @@ describe('a non-result must not look like a result', () => {
     expect(out).toContain('FETCH_FAILED');
     expect(out).toContain('Could not read');
   });
+
+  it('unclassifiable by address says the network is not public, not that the site did not load', () => {
+    const out = render(as({ classificationStatus: 'unclassifiable', industry: null,
+      classificationReasonCode: 'ADDRESS_NOT_PUBLIC' }));
+    expect(out).toContain(
+      'The site’s address, or an address the site sent the crawler to, is on a private or reserved network, so the crawler did not read the site.',
+    );
+    expect(out).toContain('Reason: ADDRESS_NOT_PUBLIC');
+    expect(out).not.toContain('robots.txt');
+    expect(out).not.toContain('did not load');
+  });
 });
 
 describe('the screen is not a dead end', () => {

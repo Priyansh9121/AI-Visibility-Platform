@@ -1014,6 +1014,33 @@ export const crawlDisallowedReport: Report = {
 };
 
 /**
+ * The crawler's egress guard refused the site's address — nothing was read, so
+ * Technical Foundation is excluded under CRAWL_ADDRESS_NOT_PUBLIC and there are
+ * no findings (every check was not_applicable).
+ */
+export const addressNotPublicReport: Report = {
+  ...crawlDisallowedReport,
+  score: {
+    ...crawlDisallowedReport.score!,
+    excludedDimensions: { technical_foundation: 'CRAWL_ADDRESS_NOT_PUBLIC' },
+  },
+  dimensions: crawlDisallowedReport.dimensions.map((d) =>
+    d.key === 'technical_foundation'
+      ? { ...d, exclusionReason: 'CRAWL_ADDRESS_NOT_PUBLIC' }
+      : d,
+  ),
+  audit: {
+    ...crawlDisallowedReport.audit!,
+    errorCode: 'ADDRESS_NOT_PUBLIC',
+    passed: 0,
+    warned: 0,
+    failed: 0,
+    notApplicable: 17,
+    findings: [],
+  },
+};
+
+/**
  * A set that has been corrected AND re-detected — Finding 3's actual case.
  *
  * `apply_override` clears the confidence, so an overridden set alone never
@@ -1055,4 +1082,26 @@ export const unscoredReport: Report = {
   ...helpscoutReport,
   score: null,
   dimensions: [],
+};
+
+/**
+ * Ran out of time with at least half its prompts answered: it ended PARTIAL
+ * and counts. The report is the helpscout one, which is what a partial scan's
+ * report looks like — it keeps the answers that finished and scores them.
+ */
+export const partialDeadlineReport: Report = {
+  ...helpscoutReport,
+  scanStatus: 'partial',
+  scanErrorCode: 'SCAN_DEADLINE_EXCEEDED',
+};
+
+/**
+ * Every engine call failed: the scan ended FAILED, there is nothing to show,
+ * and it does not count. The API serves a report for a failed scan (it checks
+ * the agency and the id and nothing else), and it is this one.
+ */
+export const failedScanReport: Report = {
+  ...insufficientDataReport,
+  scanStatus: 'failed',
+  scanErrorCode: 'ALL_ENGINE_CALLS_FAILED',
 };

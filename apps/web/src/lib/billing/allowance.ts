@@ -18,6 +18,31 @@
 import type { BillingStatus, ProblemDetail } from '@avp/shared-types';
 import { formatDay } from '@/lib/dates';
 
+/**
+ * Whether this agency has no subscription and its free scan is gone: the
+ * reading `allowanceLabel` uses for "Free scan used". For an agency with no
+ * subscription the API reports `scanLimit` 1 and `scansUsedThisPeriod` as the
+ * count of scans ever started (`services/scan_allowance.py`). False when no
+ * gate applies (`scanLimit` null) and for any active subscription.
+ */
+export function freeScanUsed(billing: BillingStatus): boolean {
+  const { scanLimit, scansUsedThisPeriod: used } = billing;
+  if (scanLimit === null || scanLimit === undefined) return false;
+  return !billing.isActive && used >= scanLimit;
+}
+
+/**
+ * The subscription statuses a Checkout can start from: no subscription, or one
+ * that is over. Any other status is live at Stripe, and the API refuses a
+ * second Checkout for it with a 409 (`TERMINAL_STATUSES` in
+ * `services/billing.py`). Named here once.
+ */
+const CHECKOUT_STATUSES: ReadonlySet<string | null> = new Set([null, 'canceled', 'incomplete_expired']);
+
+export function canCheckout(subscriptionStatus: string | null | undefined): boolean {
+  return CHECKOUT_STATUSES.has(subscriptionStatus ?? null);
+}
+
 /** The remaining-count label beside a "scan" control, or null when no gate applies. */
 export function allowanceLabel(billing: BillingStatus): string | null {
   const { scanLimit, scansUsedThisPeriod: used, periodResetsAt } = billing;
@@ -27,7 +52,7 @@ export function allowanceLabel(billing: BillingStatus): string | null {
   // label says what pressing the button will meet.
   if (billing.freeScanRequiresGoogle) return 'Free scan needs Google sign-in';
   if (!billing.isActive) {
-    return used >= scanLimit ? 'Free scan used' : `${scanLimit} free scan`;
+    return freeScanUsed(billing) ? 'Free scan used' : `${scanLimit} free scan`;
   }
   const base = `${used} of ${scanLimit} scans this month`;
   // At the cap there is no tier above this one to offer; say when it resets.

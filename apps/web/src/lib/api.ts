@@ -463,6 +463,13 @@ export const api = {
     request<ShareLink>(`/scans/${scanId}/share`, { method: 'POST' }),
 
   /**
+   * Take the public link down — Epic 9.21. `204`, no body, idempotent. The next
+   * `shareLink` call mints a NEW token; the withdrawn one never works again.
+   */
+  withdrawShareLink: (scanId: string) =>
+    request<void>(`/scans/${scanId}/share`, { method: 'DELETE' }),
+
+  /**
    * A report by share token — the UNAUTHENTICATED read, Epic 9.8.
    *
    * Called from /share#{token} by someone with no account and no cookie. Goes

@@ -17,6 +17,7 @@ import { DashboardView, formatStamp } from './DashboardView';
 import {
   detectionOnlyDashboard,
   emptyDashboard,
+  endingsDashboard,
   failedDashboard,
   fullPageDashboard,
   insufficientDataDashboard,
@@ -29,6 +30,7 @@ import {
   unscoredQueuedDashboard,
 } from '@/lib/dashboard/__fixtures__/dashboards';
 import type { Dashboard } from '@avp/shared-types';
+import { scanOutcomeSentence } from '@/lib/scans/scanOutcome';
 
 const render = (dashboard: Dashboard, props: Partial<Parameters<typeof DashboardView>[0]> = {}) =>
   renderToStaticMarkup(
@@ -309,7 +311,27 @@ describe('the screen carries no third-party prose', () => {
   it('renders only identity, status, numbers and timestamps', () => {
     // The facts-only rule — the dashboard shows facts about scans. Nothing an
     // engine or a competitor page said may reach it.
-    const html = render(fullPageDashboard) + render(partialDashboard);
+    //
+    // ONE PLACE THE WORD "answer" BELONGS — checklist 3.15. The line under a
+    // partial scan's badge is OUR sentence from `scanOutcomeSentence` ("Some
+    // engines did not answer."). Those lines are lifted out before the sweep
+    // and checked to be nothing but the table's own sentences, so the sweep
+    // still covers everything else and the one thing it skips cannot hold
+    // anything an engine said.
+    const rendered = render(fullPageDashboard) + render(partialDashboard);
+    const OUTCOME = /<span\b[^>]*data-testid="scan-outcome"[^>]*>([^<]*)<\/span>/g;
+    const ours = new Set(
+      ['partial', 'failed'].flatMap((status) =>
+        [null, 'SCAN_DEADLINE_EXCEEDED', 'ALL_ENGINE_CALLS_FAILED', 'EXECUTION_FAILED',
+          'EXECUTOR_LOST', 'EXECUTOR_NEVER_STARTED', 'SOMETHING_NEW'].map((code) =>
+          scanOutcomeSentence(status, code)),
+      ),
+    );
+    const outcomes = [...rendered.matchAll(OUTCOME)].map((m) => m[1]);
+    expect(outcomes.length).toBeGreaterThan(0);
+    for (const text of outcomes) expect(ours.has(text ?? '')).toBe(true);
+
+    const html = rendered.replace(OUTCOME, '');
     expect(html).not.toContain('answer');
     expect(html).not.toContain('snippet');
     expect(html).not.toContain('“');
@@ -577,5 +599,122 @@ describe('the scan allowance — 2026-09-28', () => {
     expect(html).toContain('Your free scan is used');
     expect(html).toContain('>Subscribe<');
     expect(html).not.toContain('The scan could not be started');
+  });
+
+  it('passes the role to the notice: a member is asked to find the owner, with no Subscribe', () => {
+    const html = renderToStaticMarkup(
+      <DashboardView
+        dashboard={scoredDashboard}
+        agencyId="agcy_01TEST"
+        role="member"
+        scanLimit={{
+          code: 'SCAN_LIMIT_FREE_USED', detail: 'used', scansUsed: 1, scanLimit: 1,
+          periodResetsAt: null,
+        }}
+      />,
+    );
+    expect(html).toContain('Ask your agency&#x27;s owner or an admin to subscribe');
+    expect(html).not.toContain('>Subscribe<');
+  });
+});
+
+/**
+ * WHY A SCAN IS PARTIAL OR FAILED — checklist 3.15.
+ *
+ * The badge said "Partial" or "Failed" and nothing else, so an agency could not
+ * tell a scan that ran out of time (it counts) from one that failed because we
+ * restarted (it does not). The API now sends `errorCode`; the row says it in a
+ * sentence from `scanOutcomeSentence` and never prints the code.
+ */
+describe('a partial or failed scan says why, and whether it counted — checklist 3.15', () => {
+  const COUNTS = 'It counts as one of your scans.';
+  const FREE = 'It does not use up one of your scans.';
+  const OUTCOME = 'data-testid="scan-outcome"';
+  const html = render(endingsDashboard);
+  // One table row, found by the client it belongs to. The first segment is
+  // everything before the table, and the hero's client list is in it.
+  const rowFor = (name: string): string => {
+    const row = html.split('<tr').slice(1).find((r) => r.includes(name));
+    expect(row, `no row for ${name}`).toBeDefined();
+    return row!;
+  };
+
+  it('a partial scan that ran out of time says so, beside its badge', () => {
+    const row = rowFor('Out Of Time Co');
+    const sentence = `This scan ran out of time. These results use the prompts that finished. ${COUNTS}`;
+    expect(row).toContain(sentence);
+    // In the status cell, after the badge: a line under it, not a new column.
+    expect(row.indexOf('avp-badge--warn')).toBeGreaterThanOrEqual(0);
+    const between = row.slice(row.indexOf('avp-badge--warn'), row.indexOf(sentence));
+    expect(between).not.toContain('</td>');
+  });
+
+  it('a partial scan with no code says some engines did not answer', () => {
+    expect(rowFor('Some Calls Co')).toContain(
+      `Some engines did not answer. These results use the answers that came back. ${COUNTS}`,
+    );
+  });
+
+  it('a failed scan says why, and that it does not count', () => {
+    const silent = rowFor('No Answers Co');
+    expect(silent).toContain(`None of the AI engines answered, so there are no results. ${FREE}`);
+    expect(silent).toContain('avp-badge--danger');
+    expect(rowFor('Restarted Co')).toContain(
+      `This scan stopped when our server restarted. ${FREE}`,
+    );
+  });
+
+  it('says nothing on a scan that succeeded, is waiting, running or called off', () => {
+    for (const name of ['Clean Run Co', 'Waiting Co', 'Busy Co', 'Called Off Co']) {
+      const row = rowFor(name);
+      expect(row, name).not.toContain(OUTCOME);
+      expect(row, name).not.toContain('one of your scans');
+    }
+  });
+
+  it('puts a line on exactly the partial and failed rows', () => {
+    expect(html.match(/data-testid="scan-outcome"/g)).toHaveLength(4);
+    // And a dashboard with nothing partial or failed has none.
+    expect(render(scoredDashboard)).not.toContain(OUTCOME);
+    expect(render(runningDashboard)).not.toContain(OUTCOME);
+  });
+
+  it('a row from an older API, with no errorCode at all, still gets the plain sentence', () => {
+    // Deploy skew: the web can be newer than the API for a few minutes.
+    const { errorCode: _omitted, ...bare } = partialDashboard.recentScans[0]!;
+    const row = render({ ...partialDashboard, recentScans: [bare] });
+    expect(row).toContain(
+      `Some engines did not answer. These results use the answers that came back. ${COUNTS}`,
+    );
+  });
+
+  it('never prints the code', () => {
+    expect(html).not.toMatch(
+      /SCAN_DEADLINE_EXCEEDED|ALL_ENGINE_CALLS_FAILED|EXECUTION_FAILED|EXECUTOR_LOST|EXECUTOR_NEVER_STARTED/,
+    );
+  });
+
+  it('keeps "View report" on one line: the status cell now takes width from the Actions column', () => {
+    // Measured, not guessed: with the sentences in, a link free to wrap printed
+    // "View / report" on the running row at 1360px and 1600px alike, where the
+    // button beside it is at its widest. Without them it never wrapped.
+    const links = html.match(/<a\b[^>]*href="\/scans\/[^"]*\/report"[^>]*>/g) ?? [];
+    expect(links).toHaveLength(8);
+    for (const link of links) expect(link).toContain('whitespace-nowrap');
+  });
+
+  it('is a quiet line in design tokens, in secondary text because tertiary is too faint at 12px', () => {
+    // Measured on the dark seated surface: tertiary at 12px is 4.09:1, under the
+    // 4.5:1 that WCAG AA asks of body-size text. Secondary is what the report's
+    // own outcome line uses.
+    const lines = html.match(/<[a-z]+\b[^>]*data-testid="scan-outcome"[^>]*>/g) ?? [];
+    expect(lines).toHaveLength(4);
+    for (const line of lines) {
+      expect(line).toContain('text-text-secondary');
+      expect(line).not.toContain('text-text-tertiary');
+      expect(line).not.toMatch(/\b(slate|gray|zinc|blue|red|green|amber|yellow)-\d{2,3}\b/);
+      expect(line).not.toContain('dark:');
+      expect(line).not.toContain('style=');
+    }
   });
 });

@@ -31,7 +31,7 @@ from ..models import (
     Scan,
     ScanStatus,
 )
-from ..models.engine_result import Engine, EngineResultStatus
+from ..models.engine_result import ANSWERED_STATUSES, Engine, EngineResultStatus
 from . import engines as engine_service
 from . import extraction as extraction_service
 from . import prompts as prompt_service
@@ -146,6 +146,23 @@ async def count_engine_failures(session: AsyncSession, scan_id: str) -> int:
                     EngineResult.status.not_in(
                         (EngineResultStatus.OK, EngineResultStatus.ANSWERED_NO_MENTION)
                     ),
+                )
+            )
+        ).scalar_one()
+    )
+
+
+async def count_answered_prompts(session: AsyncSession, scan_id: str) -> int:
+    """Prompts with at least one answered engine result (`ANSWERED_STATUSES`).
+
+    A prompt one engine answered and another errored on is answered.
+    """
+    return int(
+        (
+            await session.execute(
+                select(func.count(func.distinct(EngineResult.prompt_id))).where(
+                    EngineResult.scan_id == scan_id,
+                    EngineResult.status.in_(ANSWERED_STATUSES),
                 )
             )
         ).scalar_one()

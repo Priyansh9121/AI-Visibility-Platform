@@ -103,3 +103,18 @@ or run suites itself when an agent can.
   from facts it is given.
 Pick the cheapest agent that fits. Stop and ask the founder when an item needs
 a product decision (a price, a limit, retention, user-visible behaviour).
+
+## Installed skills
+- Everything in `.claude/skills/` is installed and tracked in git; each folder
+  carries its licence file and a `SOURCE.md`. Claude picks a skill by its
+  `description`, so nothing needs enabling.
+- git-guardrails' rules are already in `.claude/settings.json` (the deny/ask
+  lists); do not re-apply them.
+- avp-ui-styling's rules also live in `docs/design-system.md` (the `dark:`,
+  bare `ring` and bare `border` traps).
+- The archived design skills (ui-ux-pro-max, ui-styling, design-system,
+  design-suite, brand, slides, banner-design and the two bencium skills) stay
+  out: they conflict with the design system. They are in
+  `~/Skills-archive/removed-2026-09-30/`.
+- `.claude/skills/INDEX.md` (the skills library's index) and
+  `.claude/settings.local.json` stay local and git-ignored.

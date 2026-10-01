@@ -70,6 +70,7 @@ EXCLUSION_REASON: dict[str, str] = {
     "NO_AWARENESS_POPULATION": "Nothing unprompted to measure",
     "NO_AUTHORITY_DATA": "No authority source",
     "CRAWL_DISALLOWED": "Blocked by robots.txt",
+    "CRAWL_ADDRESS_NOT_PUBLIC": "Address not public",
 }
 
 # The sentence under each label — `strings.ts`'s `EXCLUSION_REASON[code].detail`,
@@ -127,6 +128,11 @@ EXCLUSION_DETAIL: dict[str, str] = {
     "CRAWL_DISALLOWED": (
         "This site’s robots.txt asks crawlers like ours not to load its pages, so its "
         "technical foundation wasn’t measured."
+    ),
+    "CRAWL_ADDRESS_NOT_PUBLIC": (
+        "The site’s address, or an address the site sent the crawler to, is on a private or "
+        "reserved network, so the crawler did not read the site. Technical Foundation is "
+        "left out of the score."
     ),
 }
 

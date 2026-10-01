@@ -21010,3 +21010,375 @@ contract regenerates byte-identically.
 ## Verified
 
 - No test, script or workflow reads `docs/launch-checklist.md` or `docs/runbook.md` (a grep of `apps/*/tests`, `apps/web/src`, `packages/*/src` and `.github/workflows` finds only comments that mention `docs/`), so the bar run for the previous entry covers this tree: API pytest 1955, workers 26, shared-types 53, design-system 846, web 1203, mypy 47 (ceiling 50); ruff, typechecks and both lock checks clean; OpenAPI and `api.gen.ts` regenerate byte-identically.
+
+# The crawler refuses any address that is not on the public internet, on every fetch and every redirect
+
+**2026-10-01, the thirteenth entry of the day; branch `pre-pilot`, item 1 of the founder's pre-pilot brief.** One item, one commit.
+
+**Render: nothing to set. No migration. No new dependency or outbound host.**
+
+Drift check (north-star §8): Layer 2, Measurement (the crawl and the technical audit), with a Layer 0 trust concern; lifecycle phase: Activation (Epic 9), hardening before pilots.
+
+## 1. What changed
+
+- **Brief item 1:** "Every outbound fetch the crawler makes — robots.txt, sitemap, redirects, the HTTP client, and every Playwright request via route interception — resolves the host and refuses non-public addresses … Re-check on every redirect hop; pin the resolved IP for the connection where the client allows it." Before this, the crawler fetched whatever address a site's name resolved to.
+- **New `services/egress.py`.**
+  - `is_public_address` refuses private, loopback, link-local (169.254.0.0/16, fe80::/10), carrier-grade NAT (100.64.0.0/10), multicast, reserved, unspecified and documentation ranges. It also refuses every IPv6 form that carries an IPv4 address (mapped, compatible, 6to4, NAT64, Teredo). An explicit network list backs up `ipaddress.is_global`, so a change in the standard library's tables cannot open one.
+  - `resolve_public` checks the RESOLVED addresses, never the string, and refuses the host if any one of them is not public. A name that does not resolve is "no answer", not a refusal.
+  - `EgressRefused` is deliberately not an `httpx.HTTPError` or a Playwright error, so no "no answer" handler can swallow it.
+- **Three layers:**
+  1. **`RobotsGate`** checks the host before every request it sends: robots.txt, which is now followed by hand rather than by httpx, so each hop is checked; `follow()`; and so the homepage and sitemap redirects.
+  2. **Its HTTP client** uses `guarded_transport`. The connection pool's network backend resolves again at connect time and connects to the address it checked; TLS still verifies the host name. Proxies and unix sockets are refused. A test builds a real client and proves the swap, so an httpx upgrade that breaks it fails loudly.
+  3. **Both browser contexts** (the intake crawl and the technical audit) route every request through `BrowserGuard`, block service workers and WebSockets, disable WebRTC's UDP (Chromium's launch switch) and remove its constructors (an init script), and check each page's landing and the address the browser connected to. Any request or landing that is not public ends the run. If the connected-address check has not answered by the end, the run fails closed as an ordinary `BROWSER_ERROR`, keeping nothing.
+- **Outcome, handled like robots.txt (2026-09-29).** A refusal anywhere ends the run with `ADDRESS_NOT_PUBLIC` and keeps nothing:
+  - the intake crawl creates the client `unclassifiable` with that reason;
+  - the audit is stored `failed` with that error code, every check `not_applicable`;
+  - the score excludes Technical Foundation as `CRAWL_ADDRESS_NOT_PUBLIC`. That is the same composite as `NOT_YET_MEASURED` and `CRAWL_DISALLOWED`, so `FORMULA_VERSION` is unchanged; a test pins existing digests.
+  - New log events: `crawl.address_not_public`, `audit.address_not_public`, `crawl.egress_unverified`, `audit.egress_unverified` (URL or domain, and host, only) and `egress.server_addr_unparsed` (no value).
+- **Web:** the report, the client's Technical screen and the intake result say so in their own words ("Address not public"), never the robots.txt wording. The shared copy fixture `packages/shared-types/fixtures/report-copy.json` carries the new exclusion. The `/crawler` page test's two call literals follow the new `_fetch_page(…, guard)` signature; the order check it makes is unchanged.
+- **`docs/api-contracts.md`:** the two new codes, and the two robots codes from 2026-09-29 that were never listed (`ROBOTS_DISALLOWED` as a classification reason, `CRAWL_DISALLOWED` as an exclusion), plus what a failed audit's `errorCode` means for each.
+- **Tests never reach real DNS:** FakeWeb resolves every host to one fixed public address unless a test says otherwise, and an autouse fixture makes any other name lookup fail.
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS, three rounds** (the first attempt stalled at the watchdog and was re-run). Checked clean: the address policy for every class; every fetch path; the `EgressRefused` handlers; the transport swap (connects to the checked address, SNI and verification on the name, environment proxies off); route ordering and fallback; service-worker and WebSocket blocking; outcomes, digests and log lines; no exploit detail in committed text.
+- **Fixed here:** three review rounds.
+  - Round 1 (one Medium, three Lows): the page's location is checked again after its facts are read (the audit read them after a settle without re-checking); a malformed host name or `Location` header is "no answer" instead of an unhandled error; the copy no longer says the site's own address is private when the refused address was one the site sent the crawler to. Added with it: the check of the address Chromium actually connected to, WebRTC's constructors removed, and the autouse no-real-DNS fixture.
+  - Round 2 (four Lows): a refusal now returns empty results, so nothing read before it is stored or returned (before, a late refusal kept the homepage's facts); a connected-address check still unanswered at the end fails the run closed, as an ordinary `BROWSER_ERROR` with nothing kept, rather than passing; the module docstring says what remains to fix instead of claiming a control that does not exist yet; Chromium's launch switch now also disables WebRTC's UDP. Its nits (record a refusal before anything that can raise; log when Chromium reports an address that cannot be parsed) are fixed too.
+  - Round 3 (two Lows, three nits; no Medium): a failing browser close can no longer hide an unverified result and keep the page's facts; the early returns for an HTTP error status run the final check too; the comments say the WebRTC launch switch disables UDP rather than WebRTC; and committed text states only the outcome of the browser checks. One Low is recorded below.
+- **UI review (sonnet): PASS WITH NITS.** Its Low, a second sentence repeating "left out of the score", was removed; two optional Lows were left (below).
+
+## Found, not fixed
+
+- **The browser layer cannot prevent every request on its own**; it ends the run and keeps nothing when one is not public. A network-level egress control in front of the browser is what closes that; it stays on the launch checklist as a founder item, with the Chromium sandbox. (Details went to the founder directly.)
+- **A refused request for something a page loads ends the whole run**, as the brief asks: a public site that still loads a resource from a private address becomes unclassifiable. The copy now says "the site's address, or an address the site sent the crawler to". Product call if that is too strict.
+- **`ROBOTS_DISALLOWED` as a client's classification reason** still gets the intake card's generic sentence; only `ADDRESS_NOT_PUBLIC` has its own.
+- **UI review Lows left:** the intake sentence gives no next step (its neighbours give none either), and the report card shows no "Reason: …" line where the client screens do.
+- **A host with several addresses** gets the full connect timeout per address it tries.
+- **One kind of failed read in the connected-address check is treated as checked** (round 3, Low). Failing closed there risks failing real sites, and the case is unlikely in a crawl of a few pages; details went to the founder.
+
+## Verified
+
+**API pytest 1955 → 2109 (+154); web vitest 1203 → 1208 (+5); both floors raised to match.**
+- New `tests/test_egress.py` (73 tests): every refused address class (private, loopback, link-local including 169.254.169.254 and fe80::1, carrier-grade NAT, multicast, reserved, unspecified, documentation, IPv4-mapped and the other IPv4-carrying IPv6 forms) and the public ones that pass; a name resolving to a private address, or to a public and a private one; an IP literal; DNS failures and malformed names as "no answer"; the network backend connecting to the checked address with TLS on the name; a real `RobotsGate` client refusing before any connection.
+- `tests/test_robots_obeyed.py` (41 → 122 collected): a homepage redirect into a private address and into 169.254.169.254, with the private hop never requested; robots.txt and sitemap redirects into one; a start host resolving to one; a malformed `Location`; a browser subresource refused; a navigation whose redirect chain passed a private host; a page that moves to one before its facts are read; a non-public address Chromium connected to, including late; a refusal on a secondary page after the home page was read, and one at the very end, each keeping nothing (checked in the crawl result, the stored audit row, `POST /clients` and `POST /scans/{id}/audit`); a connected-address check still unanswered at the end failing the run as `BROWSER_ERROR`; a browser that fails to close while a refusal or an unverified result is on its way out; the early returns (an HTTP error status, no page, a robots.txt landing) running the final check; service workers and WebSockets blocked and both WebRTC measures in place, in both contexts; the intake result `unclassifiable` / `ADDRESS_NOT_PUBLIC`; the audit `failed` with every check `not_applicable`; the score's exclusion and unchanged digests.
+- Web: the report, the client's Technical screen and the intake result each show the new copy and never "robots.txt"; copy coverage and the shared copy fixture include the new exclusion.
+- **Negative controls**, each file restored and checked with `cmp`: the gate check made a no-op fails 11 tests; a plain transport instead of the guarded one fails 5; the audit's refusal handler removed from before the broad side-file handler fails the sitemap test; the post-`evaluate` landing check removed fails the audit's moved-page test; the connected-address listener removed fails 5; a refusal that returns the same signals object again (facts already read) fails 19, and the old code's log showed 14 AI-crawler rows and an LCP stored on a refused audit; the final settle failing open fails 4; the three nit fixes reverted fail 3; the close-failure checks reverted fail 4; the final check removed from the six early returns fails 12.
+- An autouse fixture makes any real name lookup fail; the whole API suite passed with it on.
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, shared-types 53 (0 fail), design-system 846, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- OpenAPI and `api.gen.ts` regenerate byte-identically.
+- Exit codes were read from files.
+
+# A write from a page that is not the web app is refused, signed in or not
+
+**2026-10-01, the fourteenth entry of the day; branch `pre-pilot`, item 2 of the founder's pre-pilot brief.** One item, one commit.
+
+**Render: nothing new to set. No migration, no new dependency or outbound host.** `CORS_ALLOW_ORIGINS` must name the web app's origin exactly, as CORS already required; keep it to the deployed web origin only (no localhost or preview hosts), because this check is only as tight as that list.
+
+Drift check (north-star §8): Layer 1, Delivery (sessions and the API's front door), with a Layer 0 trust concern; lifecycle phase: Activation (Epic 9), hardening before pilots.
+
+## 1. What changed
+
+- **Brief item 2:** "State-changing API requests (POST/PUT/PATCH/DELETE) that carry a session cookie must send an Origin listed in CORS_ALLOW_ORIGINS, else 403 problem (a new specific /problems type, documented). Exempt: the Stripe webhook (signature-verified) and any request with no session cookie."
+- **Widened by the founder during review (2026-10-01):** a write that sends an `Origin` not in the list is refused **with or without** the session cookie, so sign-in, sign-up, password reset, invitation accept and Google sign-up complete are covered too. A write with no `Origin` is refused only when it carries the session cookie (Stripe, `curl` and server callers send none).
+- **New `origin_check.py`:** a pure ASGI middleware, answering before any route runs.
+  - It applies to `POST`, `PUT`, `PATCH` and `DELETE`, the method upper-cased first.
+  - Session-cookie presence is read by name across every `Cookie` header, with the same parser the session dependency uses.
+  - The `Origin` must equal a configured entry exactly. This check ignores a configured trailing `/` but CORS does not, so the contract says to list origins without one; `null` and blank entries are dropped, so `Origin: null` never matches.
+  - The exemption is the exact path `{API_BASE_PATH}/billing/webhook`, nothing longer.
+- **`403 /problems/origin-not-allowed`**, in the app's usual problem shape, with nothing changed. It is registered inside `CORSMiddleware`, which stays outermost, so preflights are answered first.
+- **One log event, `security.origin_refused`:** method, the percent-encoded and redacted path, and whether an `Origin` was sent. Never the cookie or the `Origin` value.
+- **Tests send the web app's origin by default.** It is one `TEST_ORIGIN` in `conftest.py`, pinned into the test settings so a developer's environment cannot change it. The two cross-agency tests that write from a second client send it too, and still assert exactly 404.
+- **`docs/api-contracts.md`:** the rule and the problem type. Also listed are `invalid-google-ticket` and `google-sign-in-not-configured`, two existing problem types the table never had.
+- **Local note:** Swagger's "Try it out" (served locally only, never deployed) sends the API's own origin, so its writes are refused unless `http://localhost:8000` is added to the local `CORS_ALLOW_ORIGINS`.
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS**, then a re-review: PASS WITH NITS, with nothing Low or above; it confirmed the founder's rule is implemented exactly and that nothing the web app sends is newly refused.
+- **Its Medium was the brief's own exemption:** cookie-less writes were not checked. The founder chose to close it (above).
+- **Its nits are fixed:**
+  - the logged path is percent-encoded, so control characters cannot reach the log raw;
+  - `null` in the configured list is ignored;
+  - the method sweep fails if a WebSocket route is ever added;
+  - tests pin the exemption's exactness (`/billing/webhook/` and `/billing/webhookx` are refused) and a lower-case method.
+- **Checked clean:** every route sits behind the middleware (no mounted apps, WebSocket routes or other ASGI apps); path normalisation around the exemption; duplicate `Origin` and `Cookie` headers; CORS ordering; the problem shape; logs carrying no cookie, `Origin` value or token.
+
+## Found, not fixed
+
+- **The Google sign-in should bind its `state` to the browser that started it** (for example a short-lived cookie compared at the callback). It predates this entry, and the callback is a `GET`, which this check does not cover.
+- **The production web app and API are on different sites** (two `onrender.com` hosts, and `onrender.com` is a public suffix). So the session cookie can only work with `SESSION_COOKIE_SAMESITE=none`, and this check is now the main guard for signed-in writes. Browsers that block third-party cookies may not keep anyone signed in. Serving both from one registrable domain (for example `app.` and `api.` on the custom domain that email also needs) would let the cookie be `lax`. Launch checklist 3.7 is corrected in this branch's last commit. Founder.
+- **The webhook exemption is by path, for every method on it.** Only `POST` is registered there today (anything else answers 405); exempting `POST` alone would keep a future route on that path from being exempt by accident.
+- **The refusal log does not name the refused origin**, so a typo in `CORS_ALLOW_ORIGINS` would show only as refusals (and as CORS failures in the browser). An `Origin` is not a secret; logging it is optional.
+- **The refusal is logged at WARNING on every request, with no throttle.** Anyone can trigger it, but it costs one line and no Redis or database call, against the access log's line per request anyway. Revisit if an alert is keyed on WARNING.
+
+## Verified
+
+**API pytest 2109 → 2197 (+88); `api-pytest` floor raised to match.** New `tests/test_origin_check.py` (88 tests), on real routes with state read back from Postgres and Redis.
+- **Refused, with nothing changed:**
+  - a signed-in write from another origin, from `null`, from an empty `Origin` and with no `Origin`;
+  - `PUT`, `PATCH` and `DELETE` on real routes;
+  - sign-up, login, Google sign-up complete, password-reset request and confirm, and invitation accept from another origin and from `null`: no user, no session, the Google ticket unspent, no reset row, the password unchanged, the seat still invited;
+  - `/billing/webhook/` and `/billing/webhookx`;
+  - a lower-case method.
+- **Allowed:**
+  - the same writes from the web app's origin;
+  - those credential routes with no `Origin`;
+  - the Stripe webhook with a session cookie and no `Origin` (it reaches the signature check);
+  - reads, and CORS preflights.
+- **Also pinned:**
+  - an eight-row cookie-by-`Origin` table;
+  - a configured trailing `/`, and `null` and blank entries ignored;
+  - the cookie name following `SESSION_COOKIE_NAME`;
+  - the problem shape matching the app's own;
+  - CORS registered outermost;
+  - every method a route registers being read-only or checked, with no WebSocket route;
+  - the log event carrying no cookie or `Origin` value, its path percent-encoded and redacted.
+- **Negative controls**, each file restored and checked with `cmp`:
+  - the middleware unregistered fails 29 of the first 41 tests (the 12 that pass are the cases that must not be refused, and the route sweep);
+  - the cookie-only rule restored fails 23 tests;
+  - eight further single-behaviour changes each fail at least one test: a missing `Origin` refused even without a cookie, 13; the webhook exempt from the cookie rule only, 3; the raw path logged, 1; `null` kept, 1; blank kept, 1; a WebSocket route, 2; a prefix exemption, 6; no upper-casing, 1;
+  - in the first round, 15 further single-behaviour changes each failed at least one test.
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, web 1208, shared-types 53 (0 fail), design-system 846, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- OpenAPI and `api.gen.ts` regenerate byte-identically (a middleware adds no route or schema).
+- Exit codes were read from files.
+
+# A scan that runs out of time counts only when at least half of its prompts were answered
+
+**2026-10-01, the fifteenth entry of the day; branch `pre-pilot`, item 3 of the founder's pre-pilot brief.** One item, one commit.
+
+**Render: nothing to set. No migration.**
+
+Drift check (north-star §8): Layer 2, Measurement (how a scan ends), and the allowance it feeds; lifecycle phase: Activation (Epic 9), the last decision before pilots.
+
+## 1. What changed
+
+- **Founder decision D7 (2026-10-01):** "a deadline-partial counts only if at least 50% of its planned prompts have at least one answered engine result; below that it ends FAILED / SCAN_DEADLINE_EXCEEDED and does not count." The zero-answer reading and the error code as the reason were confirmed as built in decision 7 (775cdf7).
+- **`scan_runner.count_answered_prompts`:** the number of distinct prompts with at least one `OK` or `ANSWERED_NO_MENTION` result. A prompt that one engine answered and another failed on is answered.
+- **`scan_executor.deadline_partial_counts(answered, planned)`:** the rule, in integer arithmetic against `DEADLINE_PARTIAL_MIN_ANSWERED_SHARE = 1/2`. `planned` is `Scan.prompt_count`, committed before the engine loop starts. A plan that was never recorded never counts.
+- **`_finalize_after_deadline`** decides from that rule both the ending and whether to score:
+  - **at or above half:** scored if it has no score, ends `partial` / `SCAN_DEADLINE_EXCEEDED`, counts;
+  - **below:** ends `failed` / `SCAN_DEADLINE_EXCEEDED`, is not scored by the finalise, does not count, and keeps the results that finished.
+  - The log line `scan.finalized_after_deadline` now carries `answered_prompts` and `planned_prompts` (counts only).
+- **Founder decision in review (2026-10-01), option (a): the rule applies to every deadline,** including one that fires after the engine phase (during the audit, alerts or fixes). There a scan with fewer than half its prompts answered ends `failed` and uncounted, and the score made before the deadline stays on the row.
+- Docstrings and comments that still stated the old one-answer rule now state this one. `docs/api-contracts.md` says it under "A scan that hits its deadline" and in the scan-level status.
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS**, no Critical, High or Medium. Checked clean:
+  - the distinct-prompt count, scoped to the scan, with no duplicates (one row per prompt and engine, and the empty-table guard);
+  - `prompt_count` is never stale or zero when answers exist;
+  - integer rounding (3 planned need 2 answered);
+  - the allowance still decides by status alone;
+  - the conditional stamp and its fallback are unchanged;
+  - counts-only logging.
+- **Its Low was the after-the-engine-phase case above**, settled by the founder as (a). Its nits are fixed: the old rule was still stated in two comments and the contract.
+- **Not changed:** the `answered >= 1` guard inside the rule, which is redundant at one half; it is kept in case the share is ever set lower.
+
+## Found, not fixed
+
+- **A `failed` scan can carry a score** when its deadline came after scoring (option (a)). The report, the score route and the dashboard read that score without checking the status, and the dashboard's scored-scan count includes it. History, alert baselines and the answer-gap grid already leave failed scans out. The same state could already arise after a reaper failure following scoring. Product call whether a failed scan's score should be hidden.
+
+## Verified
+
+**API pytest 2197 → 2209 (+12); `api-pytest` floor raised to match.** `tests/test_scan_deadline.py` 30 → 42.
+- **The rule on its own:** 49 of 100 no; 50 of 100 yes; 0 of 10 no; 10 of 10 yes; 1 of 2 yes; 1 of 3 no; 5 answered of 0 planned no.
+- **Through the finalise:**
+  - 2 of 5 planned prompts answered: failed / `SCAN_DEADLINE_EXCEEDED`, no score row, no allowance slot, the results kept;
+  - exactly half (2 of 4): partial, scored, holding a slot;
+  - 2 of 4 prompts each answered by one engine and failed by the other: partial;
+  - 1 of 4 answered, the rest only engine errors: failed, no slot;
+  - a deadline during fix generation, after scoring, with 1 of 4 answered: failed, the one score row still there, no slot, the results kept.
+- Zero answers, and every prompt answered, keep their existing tests unchanged.
+- **One existing test changed:** the finalise-failure fallback test now breaks `count_answered_prompts` instead of `count_engine_failures`, which the finalise no longer calls.
+- **Negative control:** the decision reverted to `answered >= 1` fails the 2-of-5, the 1-of-4 and the after-scoring tests; the file was restored and checked with `cmp`.
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, web 1208, shared-types 53 (0 fail), design-system 846, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- OpenAPI and `api.gen.ts` regenerate byte-identically.
+- Exit codes were read from files.
+
+# The share bar says links expire and can be withdrawn, scans say why they are partial or failed, and three screens stop saying what is not true
+
+**2026-10-01, the sixteenth entry of the day; branch `pre-pilot`, item 4 of the founder's pre-pilot brief (launch checklist 3.8 and 3.15–3.18).** One item, one commit.
+
+**Render: nothing to set. No migration, no new dependency or outbound host.** Two response fields were added (below); OpenAPI and `api.gen.ts` were regenerated.
+
+Drift check (north-star §8): Layer 1, Delivery (the report, the dashboard, sign-up and billing screens), with one Layer 2 field read back; lifecycle phase: Activation (Epic 9), copy a pilot agency reads.
+
+## 1. What changed
+
+- **3.8, the share bar** (`ShareLinkBar.tsx`). The lead now says "Creates a link anyone can open without an account. Links expire after 30 days. Only share it with the client this report is about." (the founder's sentence; it used to say the link never expires and cannot be withdrawn).
+  - **Withdraw link** is a button with a confirm step ("Withdraw this link? Anyone who opens it will no longer see the report." with **Withdraw link** and **Keep link**).
+  - It calls the existing `DELETE /scans/{scanId}/share` through a new `api.withdrawShareLink`. It reads "Withdrawing…" while it runs, then "Link withdrawn. It no longer opens this report."
+  - On success the link leaves the page and the state entirely. "Get shareable link" then makes a new link: the withdrawal clears the token, so the old address never works again (checked in `services/share.py`).
+  - On failure the link stays. A refusal from the API shows the API's sentence; no answer or a server error shows "The link could not be withdrawn and may still open. Try again."
+  - The token appears nowhere but the existing link field.
+  - Keyboard and screen reader: the question moves focus to **Keep link**, which is described by the question; **Keep link** returns focus to the trigger; results land in status and alert regions mounted before their text.
+  - At 320 px wide the link field keeps its width, and the buttons wrap beneath.
+  - The page a dead link opens (`/share`) now says "The link may be incomplete, expired or withdrawn. Ask whoever sent it for a current one."; only that sentence changed on the token route.
+- **3.15, why a scan is partial or failed.** No payload the web read carried a scan's error code, so two read-only fields were added:
+  - `ReportOut.scanErrorCode` (the report, signed-in and shared);
+  - `ScanSummaryOut.errorCode` (the dashboard's recent scans).
+  - Both come from `scans.error_code`, our own code, from the scan row each route already loads. A statement-count test guards the dashboard list against a query per row.
+  - `lib/scans/scanOutcome.ts` turns status and code into one plain sentence, never the code itself. The cases: deadline partial or failed, every engine failed, an error of ours, a restart, never started, partial with no code, and any other code. Each says whether the scan counts as one of the agency's scans.
+  - The sentence is shown in the signed-in report's header and as a line under the dashboard's Partial / Failed badge. On the public shared report and its PDF the field is blanked to `null` and nothing is shown, because the sentence speaks about the agency's own allowance.
+  - "View report" no longer wraps.
+- **3.16, Google sign-up** (`/sign-up/google`). When the API did not answer (no response, a status of 0, or 500 and above), the page now says "We could not reach the server" with "Check your connection and try again. The sign-in link works for ten minutes." and a **Try again** button. Trying again only re-checks the ticket and does not spend it, and focus follows the check to its result. "Expired" is kept for the API's own refusal (`400 invalid-google-ticket`). The panel's submit failure, on no answer or a server error, now says "We could not reach the server. Check your connection and try again." instead of telling people to check port 8000. One rule, `lib/apiAway.ts`, decides "the API did not answer" for the page, the submit and the share bar.
+- **3.17, the free-scan sentence.** Settings' lead and the Billing panel's "No subscription" text say the first scan is free only while it is unused. Otherwise they say it is used, or nothing about it while billing is unknown. An agency whose subscription needs attention is told to fix it from Manage billing rather than to subscribe. One helper, `freeScanUsed`, decides the free scan and `allowanceLabel` uses it too; one set, `canCheckout`, decides who may check out, and the Billing panel now uses it instead of its own copy.
+- **3.18, who is offered Subscribe** (`ScanLimitNotice.tsx`). The notice now gets the agency's billing status and the user's role from `useScanStanding`. The role comes from `/auth/me`; when that call fails, a 403 on the admin-only billing read means a member.
+  - **Subscribe** appears only for an owner or admin whose subscription can be checked out again: none, `canceled` or `incomplete_expired`, the API's own set.
+  - An owner or admin whose subscription needs attention is told to fix it from Manage billing in Settings, with **Open Settings**.
+  - A member is asked to have the agency's owner or an admin subscribe. (Checkout is owner-or-admin in the API, not owner-only as the checklist said.)
+- **`docs/api-contracts.md`:** both new fields, and that a report is served for a scan of any status.
+
+## 2. The review
+
+- **Security review (opus) of the Withdraw link and the Subscribe gating: PASS WITH NITS.** Checked clean: the token never reaches a log, error text or label; the DELETE path, credentials and no retry; the confirm step cannot be skipped by a double click; tenancy (another agency's scan is a 404); the extra `/auth/me` call keeps only the role.
+  - **Fixed here:**
+    - pressing Copy while a withdrawal ran could bring the withdrawn address back on screen after it was gone;
+    - a member could be shown Subscribe when `/auth/me` failed (the API still refused them);
+    - a missing `.catch` in the allowance hook.
+  - One nit is the founder's (below).
+- **UI review (sonnet):** FAIL, then PASS WITH NITS.
+  - **Round 1 (one High, three Mediums):**
+    - at 320 px wide the link field was squeezed to nothing, so the URL could not be reached if the clipboard was refused;
+    - the dashboard's outcome line failed contrast in the dark theme;
+    - focus fell to the page when the confirm step swapped buttons, and results were not reliably announced;
+    - a server error printed "The server returned 502." instead of the agreed sentence.
+    All fixed, with its Lows: the needs-attention wording in Settings; "engines" rather than "engine calls"; "Manage billing"; danger styling for a failed withdrawal; stale comments; one checkout set; the dead-link sentence; the public `scanErrorCode`.
+  - **Round 2**, checked in a real browser (reflow from 320 to 1,100 px, contrast in both themes, the keyboard path, the live regions, the link gone after withdrawal). Fixed:
+    - its Medium: **Keep link** was not described by the question it answers;
+    - three Lows: focus after a failed withdrawal; the "Checking…" line's contrast; "30 days" now read from the constant the legal pages pin to the API's link lifetime.
+  - **Judged acceptable:** the dashboard table now wraps its dates below about 1,500 px and scrolls sideways from about 1,100–1,180 px.
+
+## Found, not fixed
+
+- **"Links expire after 30 days" counts from the last press of "Get shareable link"**, and reaching Withdraw needs that press, which resets the 30 days. Founder: reword, or offer Withdraw without making a link first (the DELETE works on a scan never shared).
+- **A failed or partial scan can be shared**, with no warning, and a failed one shares as an almost empty report. Product call.
+- **The failed-audit card prints the audit's error code**, also on the public report; and the PDF never says a scan was partial or failed. Both predate this entry.
+- **Four other screens still tell people to check port 8000** when the API does not answer: sign-up, sign-in, the intake form and the intake result. Same fix as 3.16; not in this brief.
+- **The global focus ring is about 1.7:1 on the light seated surface** (WCAG 1.4.11); it predates this entry and is the only focus signal on the borderless **Keep link**.
+- **Checklist 3.17's contrast half** (dark-theme `text-tertiary` on seated cards, about 4.1:1) is untouched.
+
+## Verified
+
+**API pytest 2209 → 2226 (+17); web vitest 1208 → 1399 (+191); both floors raised to match.**
+- **API:**
+  - the report carries `scanErrorCode` for a deadline-partial scan and `null` for a succeeded one;
+  - the public shared report and its PDF carry `null` while the signed-in report carries the code;
+  - the dashboard list carries `errorCode` per scan, with a statement count that a per-row query would break;
+  - a report is served for a failed scan;
+  - the facts-only sweep covers both new fields.
+- **Web, by fix:**
+  - share bar: the lead; the confirm step; withdrawal clearing the link; failures by kind; the Copy-during-withdrawal races; focus and live regions; the wrapping classes;
+  - scan outcome: every status-and-code case; shown in the signed-in report and the dashboard, never on the shared page;
+  - Google sign-up: unreachable versus expired, re-checking, focus;
+  - free-scan and needs-attention sentences in Settings and the Billing panel;
+  - every Subscribe branch in the scan-limit notice, including a member known only from a refused billing read;
+  - the `/share` dead-link sentence;
+  - `apiWasAway`.
+- **Changed existing tests:**
+  - `googleTicket.test.ts` pins the page's new failure expression;
+  - DashboardView's "no third-party prose" sweep sets the outcome lines aside and checks they are exactly the helper's sentences (the partial one contains the word "answer");
+  - the shared-report equality test lets `scanErrorCode` differ.
+- **Negative controls**, each file restored and checked with `cmp`:
+  - Subscribe forced on fails 11 of 48 billing tests;
+  - the report's shared-page gate removed fails 1, and the share route's flag dropped fails its gate test;
+  - a per-row dashboard query fails the statement count;
+  - the Copy race's URL check dropped fails 1;
+  - any API error read as "member" fails 4;
+  - the public blank removed fails 2.
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, shared-types 53 (0 fail), design-system 846, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- OpenAPI and `api.gen.ts` were regenerated for the two fields (and the shared-report route's description); re-running both generators changes neither file.
+- Exit codes were read from files.
+
+# Every installed skill is tracked in git, with its licence and where it came from
+
+**2026-10-02, the first entry of the day; branch `pre-pilot`, item 5 of the founder's pre-pilot brief.** Configuration and documentation only; one commit.
+
+**Render: nothing to set.** No code, test, schema or dependency changes.
+
+Drift check (north-star §8): no product layer; the agent tooling the project is built with. Lifecycle phase: none directly (it keeps the workflow that builds Activation reproducible).
+
+## 1. What changed
+
+- **Founder decisions (brief and 2026-10-01):** everything in `.claude/skills` stays installed and is tracked; restore the harmless archived skills, keep the conflicting design skills out.
+- **Stray copies archived, at the founder's choice.** The founder's copy of the 30 library skills (2026-10-01) had also landed in `.claude/agents/`, where they loaded as agent types, and inside `.agents/skills/fastapi/`. Each of the 62 entries was checked byte-identical to `~/Skills-library` and moved, not deleted, to `~/Skills-archive/stray-copies-2026-10-01/` (a README there says where each came from). `.claude/agents/` again holds only the six cost-tier agents.
+- **Restored:**
+  - `improve-animations` and `find-animation-opportunities` from `~/Skills-archive/removed-2026-09-30/project/`;
+  - `accessibility` as a real folder from its recorded symlink target, with its `skills-lock.json` entry put back exactly as recorded.
+  - Not restored, as the brief says: ui-ux-pro-max, ui-styling, design-system, design-suite, brand, slides, banner-design and the two bencium skills.
+- **Symlinks replaced by real copies:** `fastapi`, `playwright-cli` and `playwright-best-practices`. Each was identical to its target under `diff -r`; the only differences now are the `LICENSE` and `SOURCE.md` added below.
+- **Licences for the seven skills that had none.** Each gets a byte copy of the upstream licence, fetched from the repository named in `skills-lock.json` or the skill's own frontmatter, and a `SOURCE.md` recording the repository, path, the HEAD it was read at, the licence's sha256, its history, and how the installed copy compares with upstream:
+  - `fastapi` (MIT, fastapi/fastapi);
+  - `playwright-cli` (Apache-2.0, microsoft/playwright-cli);
+  - `playwright-best-practices` (MIT, currents-dev; the upstream file is `LICENSE.md`);
+  - `accessibility` (MIT, addyosmani/web-quality-skills);
+  - `impeccable` (Apache-2.0, pbakaus/impeccable, with its `NOTICE.md`; upstream moved from MIT to Apache-2.0 on 2026-01-07 and the installed version 4.0.4 post-dates it);
+  - `improve-animations` and `find-animation-opportunities` (MIT, emilkowalski/skills, the source of the installed `emil-design-eng` and `review-animations`).
+- **`.gitignore`** tracks every folder in `.claude/skills`, impeccable included, in place of the list of 14. The skills library's `INDEX.md`, `.claude/settings.local.json` and agent worktrees stay ignored.
+- **`CLAUDE.md`** has an "Installed skills" section:
+  - Claude picks a skill by its description;
+  - git-guardrails' rules are already in `.claude/settings.json`;
+  - avp-ui-styling's rules also live in `docs/design-system.md`;
+  - the archived design skills stay out because they conflict with the design system.
+- **impeccable's hooks are unchanged, and their paths resolve:** `.claude/settings.local.json` points at `.claude/skills/impeccable/scripts/hook.mjs`, and `.github/hooks/impeccable.json` at `.github/skills/impeccable/scripts/hook.mjs`. Both exist (`.github/hooks/` and `.github/skills/` stay ignored).
+
+## Found, not fixed
+
+- **`avp-geo-seo` differs from `~/Skills-library`.** The repo's tracked copy is the newer one (updated for founder decision 3 in 38af315); the library copy is stale. The other 29 library folders are byte-identical.
+- **Five of the seven newly licensed skills are earlier versions than their upstream HEAD** (each `SOURCE.md` says which files differ); `accessibility` and `playwright-best-practices` match upstream exactly. Updating them is a separate choice.
+
+## Verified
+
+- **43 skills.** Every `SKILL.md` header parses as YAML, its `name` matches its folder, and no two share a name; nothing needed fixing. Every folder has `SKILL.md`, a `LICENSE` (or `LICENSE-DECLARATION.md`) and `SOURCE.md`.
+- **`git check-ignore -v`** on each of the 43 folders and its `SKILL.md`: no rule ignores any of them. All 436 files on disk under `.claude/skills` (`INDEX.md` aside) are visible to git.
+- **Newly tracked:** 340 files in 29 folders, 4.26 MiB (impeccable is 3.3 MB of it, mostly its hook scripts). Key-shaped strings (Stripe, Anthropic, AWS, GitHub, Google, Resend, Slack, private keys, JWTs) in those files: 0.
+- **No test, script or workflow reads `.claude/`, `skills-lock.json` or `CLAUDE.md`** (a grep of the test, script, CI and workflow directories finds only two comments citing a `platform.claude.com` URL). The files already sat on disk during every bar run on this branch, so tracking them changes no result; the full bar on the branch's last tree is in the next entry.
+
+# The launch checklist says what `pre-pilot` closed and what is still open
+
+**2026-10-02, the second entry of the day; branch `pre-pilot`, item 6 of the founder's pre-pilot brief.** Documentation only; one commit.
+
+**Render: nothing to set.** Before merging this branch, the founder checks the session cookie's SameSite value (checklist 3.7) and `CORS_ALLOW_ORIGINS` (1.1b).
+
+## 1. What changed
+
+- **`docs/launch-checklist.md`:**
+  - **Status:** PR #2 and PR #3 are merged; 1.1 is marked done (its last step, 3.10, is still open). A new 1.1b covers merging `pre-pilot`: the two checks above, then sign in, add a client, run a scan, and get and withdraw a share link on the deployed app.
+  - **Closed here, each naming its commit:** 3.2's app-level half (the network-level control and the Chromium sandbox stay the founder's), 3.8, 3.15, 3.16, 3.17's copy half (its contrast half stays open), 3.18 and 3.19. The Origin check is a new row, 3.21, marked done.
+  - **3.7 corrected:** the production web app and API are on different sites, so the session cookie needs `SameSite=None`, not the `lax` the row asked the founder to confirm. The lasting fix (one registrable domain, then `lax` and a `__Host-` cookie) is in the row.
+  - **New open rows from this branch's reviews, as what to fix:**
+    - 3.21's two Origin-check details;
+    - binding the Google sign-in state to the browser (3.22);
+    - the four "port 8000" screens (3.23);
+    - sharing failed scans and a failed scan's score (3.24, founder);
+    - the share link's 30 days restarting on each press (3.25, founder);
+    - report details that predate the branch (3.26);
+    - the crawler's strictness, and one residual of the egress review (3.27).
+  - The founder's dashboard items in sections 1 and 2 are otherwise as they were.
+
+## Verified
+
+- Every commit, file, host and route the checklist names was checked against this branch's tree.
+- **The full bar on the branch's final tree** (all five commits before this one, plus this documentation; one run):
+  - API pytest 2226, workers 26, web 1399, design-system 846, shared-types 53 (0 fail), mypy 47 (ceiling 50); every count meets its floor through `assert_count.py`.
+  - ruff clean; all typechecks clean; both `uv lock --check` runs pass.
+  - The Python and JavaScript licence audits pass.
+  - OpenAPI and `api.gen.ts` regenerate with no change to the committed files.
+  - Exit codes were read from files.
+- **Over the branch:** API pytest 1955 → 2226 and web vitest 1203 → 1399; the workers, shared-types and design-system counts and the mypy count are unchanged.
