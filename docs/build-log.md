@@ -20991,3 +20991,22 @@ contract regenerates byte-identically.
 - Both `uv lock --check` runs pass; no schema change, so Alembic was not run (`scans.error_code` already allows any code on any status).
 - OpenAPI and `api.gen.ts` regenerate byte-identically.
 - Exit codes were read from files.
+
+# The launch checklist says what stands between this branch and taking money, and who does each step
+
+**2026-10-01, the twelfth entry of the day.** One item, one commit. Documentation only.
+
+**Render: nothing to set.**
+
+## 1. What changed
+
+- **New `docs/launch-checklist.md`** (Phase F of the brief), each item with who does it (the founder, or Claude after the founder's go) and the exact steps:
+  1. **Merge and deploy what is built:** PR #2, then this branch (no migration here); `STRIPE_PRICE_ID` set to the US$160 Price; the runbook's client-IP probe; the live Stripe test in test mode.
+  2. **Before charging real money:** rotate the 21st.dev key and remove `API_KEY_21ST`; Stripe business verification and the live keys; email through Resend (a custom domain first); the lawyer's review of `/privacy`, `/terms` and `/crawler`; the deletion endpoint and the data-retention decision it waits on; the per-device lockout, **deferred by founder decision 8** and recorded here with when to revisit it; removing the legacy `?ticket=` fallback one release after PR #2 is live; pilot outreach under the facts-only rule.
+  3. **Hardening found while building:** 20 rows, from this branch's reviews and the skills work (security headers, an egress control for the crawler, Supabase Data API grants, the Redis eviction policy, SQL parameters in logs, error pages, the production SameSite value, the share bar's wrong copy, the token pages' served headers, a licence-audit gap, a stale subscription read in the allowance, unmapped Stripe and Redis errors, migration transactions, the reason a scan failed or is partial, the Google sign-up page's "expired" when the API did not answer, Settings' first-scan sentence, the scan-limit notice, load-caused deadlines, and the audit's untimed `page.evaluate`).
+- **`docs/runbook.md`, "Live Stripe test":** new check (g), subscribing again after a cancellation (decision 4): cancel the test subscription immediately in the dashboard, subscribe again from Settings, and see a second, stale tab refused with the Manage billing sentence.
+- Every file, line and log-event reference in the checklist was re-checked against this branch's tree before commit.
+
+## Verified
+
+- No test, script or workflow reads `docs/launch-checklist.md` or `docs/runbook.md` (a grep of `apps/*/tests`, `apps/web/src`, `packages/*/src` and `.github/workflows` finds only comments that mention `docs/`), so the bar run for the previous entry covers this tree: API pytest 1955, workers 26, shared-types 53, design-system 846, web 1203, mypy 47 (ceiling 50); ruff, typechecks and both lock checks clean; OpenAPI and `api.gen.ts` regenerate byte-identically.
