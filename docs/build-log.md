@@ -20516,7 +20516,7 @@ contract regenerates byte-identically.
 
 ## Found, not fixed
 
-- **The disallow hides the noindex on those paths.** Crawlers that obey robots.txt never fetch `/share`, `/invite` or `/reset-password`, so they never see the `X-Robots-Tag: noindex` those pages send (previous entry); a legacy `/share/<token>` URL posted publicly could still be listed URL-only. Kept as the founder decided; it is on the decisions list.
+- **The disallow hides the noindex on those paths.** Crawlers that obey robots.txt never fetch `/share`, `/invite` or `/reset-password`, so they never see the `X-Robots-Tag: noindex` those pages send (previous entry); a legacy `/share/<token>` URL posted publicly could still be listed URL-only. Kept as the founder decided; it is on the decisions list. **Resolved 2026-10-01 (founder decision 3):** the disallows were removed and the `noindex, nofollow` header now does this job alone; see "robots.txt stops disallowing the token pages; their noindex header keeps them out of search".
 - **The three paths now live in two lists:** `next.config.mjs` (headers) and `robots.ts`. Nothing ties them together; a shared list would be a separate change.
 - **The rendered-text test imports `resolveRobots` from `next/dist/…`,** an internal path (as `referrerPolicy.test.ts` already does for the path matcher); a Next upgrade could move it.
 
@@ -20709,3 +20709,304 @@ contract regenerates byte-identically.
 - Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
 - `openapi.json` and `api.gen.ts` were regenerated for this change, and regenerating again produces the same files.
 - Exit codes were read from files.
+
+# sharp and its LGPL libvips binary leave the install; images are served unoptimised
+
+**2026-10-01, the fourth entry of the day.** One item, one commit.
+
+**Render: nothing to set.** The web build's `pnpm install` follows the new lockfile.
+
+## 1. What changed
+
+- **Founder decision 1.** `next/image` is not used anywhere in `apps/web` or `packages` (no `next/image`, `next/legacy/image`, `<Image`, `ImageResponse`, `next/og`, and no opengraph-image, icon, twitter-image or apple-icon files; the only hit is the `next/image-types/global` reference in `next-env.d.ts`). So there is no image optimiser to keep, and the founder chose to remove `sharp` rather than accept its LGPL binary.
+- **`apps/web/next.config.mjs`** sets `images: { unoptimized: true }`, with a comment giving the reason and the date.
+- **The root `package.json`** adds `"pnpm": { "ignoredOptionalDependencies": ["sharp"] }`. `sharp` is an optional dependency of `next` 15.5.23; pnpm 9.12.0 (the repo's `packageManager`, not upgraded) reads this setting and records it in the lockfile (checked read-only in its own bundle). `corepack pnpm install` reused 236 packages from the store and downloaded none.
+- **`pnpm-lock.yaml`:** 3 insertions, 294 deletions. The only addition is the `ignoredOptionalDependencies` entry; the deletions are `sharp@0.34.5` and its own tree (every `@img/sharp-*` and `@img/sharp-libvips-*`, `@img/colour`, `@emnapi/runtime`, `detect-libc@2.1.2`, `semver@7.8.5`) and `next`'s optional `sharp` edge. Nothing was upgraded or added. `node_modules/.pnpm` holds no sharp, `@img` or emnapi entry, and `corepack pnpm install --frozen-lockfile` exits 0.
+- **`infra/ci/licence-pending-decisions.json`** is now `[]` (kept as the place for future open questions). `test_js_license_audit.py` replaces the one-entry assertion with "the real file parses and may be empty" and adds "an empty pending list passes a clean tree".
+- **New `apps/web/src/nextConfig.test.ts`:** `images.unoptimized` is true, and the root `package.json` ignores the optional `sharp`. Red first: the `unoptimized` assertion failed before the config change.
+- `providers.test.ts` and `/privacy` never named sharp or libvips, so they are unchanged.
+
+## Verified
+
+**Web vitest 1102 → 1104 (+2); API pytest 1834 → 1835 (+1, one test replaced by two); floors raised to match.**
+- **The licence proof:** `corepack pnpm licenses list --json` lists no `sharp` and no `libvips`; `js_license_audit.py` on it: 233 ok, 3 REVIEW (argparse, caniuse-lite, lru-cache), 0 held, 0 blocked, exit 0.
+- **Negative control:** restoring the old pending entry makes the check exit 1 ("pending entry @img/sharp-libvips-* (LGPL-3.0-or-later) matches no package; remove it"), because a stale entry fails by design; the file was restored with `cp` and checked with `cmp`.
+
+**The rest of the bar.**
+- Workers 26, shared-types 53 (0 fail), design-system 846, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- OpenAPI and `api.gen.ts` regenerate byte-identically.
+- Exit codes were read from files.
+
+# MPL-2.0 is allowed for unmodified use, as its own licence category
+
+**2026-10-01, the fifth entry of the day.** One item, one commit.
+
+**Render: nothing to set.**
+
+## 1. What changed
+
+- **Founder decision 2.** MPL-2.0 is file-level copyleft. It is allowed when the package is used unmodified, as its own category `ALLOWED_UNMODIFIED` in `apps/api/scripts/license_audit.py`, not as a member of `ALLOWED`. Its verdict, `ok-unmodified`, passes the run but is printed apart from `ok`, so it stays visible. The comment gives the reason (the packages are used unmodified and AVP is hosted, so no modified source is distributed) and says that vendoring or patching an MPL package needs the founder.
+- **Spellings covered:** `MPL-2.0`, `MPL 2.0`, and the classifier `Mozilla Public License 2.0 (MPL 2.0)`, which is what certifi and pathspec declare (classifier only, no SPDX expression). The whole string is matched before parentheses are stripped. MPL-1.1 and any other MPL version are not covered and stay REVIEW (listed, does not fail).
+- **One verdict function.** `license_audit.py` gains `verdict_of()` (ok / ok-unmodified / REVIEW / BLOCK). `js_license_audit.py` keeps its own "undeclared" check and delegates the rest to that function, so the two audits share one implementation instead of two copies of the rule. Output columns widen to fit the new label.
+- **Behaviour change in the Python audit.** It used to BLOCK when any part of a licence string matched `BLOCKING`. It now uses the SPDX logic the JS audit already used: `A OR B` passes if either alternative passes, `A AND B` needs every part, and the ` | ` that joins several Python classifiers counts as OR. So `MIT OR GPL-3.0` is now `ok` in the Python audit (it already was in the JS audit), `MPL-2.0 OR GPL-3.0` is `ok-unmodified`, and `MPL-2.0 AND GPL-3.0`, GPL, LGPL and AGPL still BLOCK. On the real environments no verdict changed apart from certifi and pathspec.
+- **`CLAUDE.md`:** the "Dependency licences" rule names the new category.
+- **Tests:** new `apps/api/tests/test_license_audit.py` (20 tests) and 8 more in `test_js_license_audit.py`: each spelling, the OR/AND combinations above, MPL-1.1 → REVIEW, GPL/LGPL/AGPL → BLOCK, and the JS audit reading the same category. Red first: 21 failed, 21 passed before the implementation.
+
+## Found, not fixed
+
+- **`BLOCKING` misses classifier-only GPL spellings.** The regex is `\b(GPL|AGPL|LGPL|…)\b`, so `GNU General Public License v3 (GPLv3)` and `GNU Lesser General Public License v3 (LGPLv3)` do not match (there is no word boundary between `GPL` and `v3`) and would land in REVIEW, which does not fail CI, instead of BLOCK. SPDX spellings (`GPL-3.0-only`, `LGPL-3.0-or-later`) do block, and pnpm reports SPDX ids, so the gap is the Python classifier path only. No installed package declares such a classifier today. It predates this change.
+- **REVIEW rows that remain, unchanged:** `avp-api` and `avp-workers` (our own packages, UNLICENSED), `email-validator` (`The Unlicense (Unlicense)`, a classifier spelling that is not in `ALLOWED`), and on the JS side `argparse`, `caniuse-lite` and `lru-cache`.
+
+## Verified
+
+**API pytest 1835 → 1859 (+24); `api-pytest` floor raised to match.**
+- **The real audits:** API: 65 distributions, ok 61, ok-unmodified 2 (certifi, pathspec), REVIEW 2; before: ok 61, REVIEW 4. Workers: 80 distributions, ok 75, ok-unmodified 2, REVIEW 3. JS: 236 packages, ok 233, REVIEW 3, 0 held, 0 blocked. All three exit 0.
+- **Negative control:** with the old `license_audit.py` restored from a copy, the two audit test files fail 40 of 42 and the API audit puts certifi and pathspec back in REVIEW; the new file was copied back and checked with `cmp`.
+
+**The rest of the bar.**
+- Workers 26, shared-types 53 (0 fail), design-system 846, web 1104, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- OpenAPI and `api.gen.ts` regenerate byte-identically.
+- Exit codes were read from files.
+
+# The constraint-driven-development skill's description is valid YAML, so the skill loads
+
+**2026-10-01, the sixth entry of the day.** One item, one commit.
+
+**Render: nothing to set.**
+
+## 1. What changed
+
+- **`.claude/skills/constraint-driven-development/SKILL.md`** (tracked since the skills commit `610e4ea`): its `description:` value contained an unquoted `: ` ("…lower the test or lint floor: no new suppressions…"), which YAML rejects ("mapping values are not allowed here"). The value is now a double-quoted string with the same text; nothing else changed.
+- **Effect:** before the fix the skill was missing from the session's list of available skills; it appeared as soon as the header was quoted. The other 17 tracked skills and the 8 user-level skills parse.
+- **How it was found:** a PyYAML parse of every `SKILL.md` frontmatter (run with the API's own virtualenv; nothing installed), done while adapting the next library batch. The library copy in `~/Skills-library` had the same defect and was fixed the same way.
+
+## Verified
+
+- Every tracked `.claude/skills/*/SKILL.md` frontmatter parses as a mapping whose `name` equals its folder (18 of 18).
+- No test, script or workflow in `apps`, `packages`, `infra` or `.github/workflows` reads `.claude/skills`, so the bar run for the previous entry (API pytest 1859, workers 26, shared-types 53, design-system 846, web 1104, mypy 47; ruff, typechecks, lock checks and regeneration clean) covers this tree unchanged.
+
+# robots.txt stops disallowing the token pages; their noindex header keeps them out of search
+
+**2026-10-01, the seventh entry of the day.** One item, one commit.
+
+**Render: nothing to set.** After the deploy, check the served headers once (below, "Found, not fixed").
+
+## 1. What changed
+
+- **Founder decision 3.** `apps/web/src/app/robots.ts` is now `rules: [{ userAgent: '*', allow: '/' }]`: nothing is disallowed. A crawler that obeys robots.txt never fetches a disallowed page, so it never saw the `X-Robots-Tag: noindex, nofollow` that `/share`, `/invite`, `/reset-password` and their legacy `/:token` forms send, and a leaked legacy URL could still be listed URL-only. Now compliant crawlers may fetch those pages, see `noindex`, and drop them. The headers in `apps/web/next.config.mjs` are unchanged (all seven token rules, including `/sign-up/google`, send exactly `noindex, nofollow` and `Referrer-Policy: no-referrer`).
+- **`robots.test.ts`** (still 6 tests): the `*` rule allows `/` and has no disallow; the token pages and their `/abc123` forms are blocked for no agent; the rendered text has no `Disallow:` line at all. Red first: 3 of the 6 failed against the old `robots.ts`.
+- **`referrerPolicy.test.ts`** (count unchanged): the header assertions are now exact (`toBe('noindex, nofollow')`) instead of `toContain('noindex')`, because that header is now the only control; a value such as `googlebot: noindex` used to pass.
+- **The tracked skill `.claude/skills/avp-geo-seo`** told agents to disallow token routes and said `robots.ts` did not exist; `SKILL.md` and `references/technical-seo.md` now state the current rule, and its training-bot line separates AVP's own site (decided 2026-09-30: allowed) from a client's site (the owner's call).
+- The earlier entry "The web app serves a robots.txt that welcomes AI crawlers and keeps token pages out" has its found-not-fixed item marked resolved, pointing here.
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS.** It traced every token page for crawler-triggered state changes and found none: `FragmentRedirect` only calls `location.replace`; the `/share` POST on load is read-only (a plain token lookup, the report built with `persist=False`, no commit, no view count); invite and reset POST only on a submitted form; the Google `pending` peek is a plain Redis GET and the ticket is spent only on submit. Every token route form matches a header rule.
+- **Its Low on test strength is fixed here** (the exact-value assertions above).
+
+## Found, not fixed
+
+- **A crawler that runs JavaScript and ignores `X-Robots-Tag` could now read a leaked legacy `/share/<token>` report.** `location.replace` keeps the fragment, so the share page loads the report. Before this change robots.txt kept compliant crawlers out entirely. Legacy share links do not expire on their own, because re-minting keeps the same token and resets its expiry (`services/share.py:135-139`). Accepted with the founder's decision; making `/share/[token]` wait for a click would close it.
+- **The header has never been checked on a served response.** The tests read `next.config.mjs`. After the deploy, `curl -sI` each of the seven token paths on the web host and confirm `x-robots-tag: noindex, nofollow` (listed in `docs/launch-checklist.md`).
+
+## Verified
+
+**Web vitest 1104 → 1104 (tests rewritten, none added); floors unchanged.**
+- **Negative controls:** restoring the three disallows fails the same 3 robots tests; setting one header rule to `googlebot: noindex` fails 3 header tests (the `/share/:token` rule, "every rule that sends no-referrer also sends noindex", the concrete URL `/share/abc123`). Both files were restored with `cp` and checked with `cmp`.
+
+**The rest of the bar** (run before the review's test tightening and the skill edits, which touch only `referrerPolicy.test.ts` and markdown; the web suite and typecheck were re-run after them: 1104, clean).
+- API pytest 1859, workers 26, shared-types 53 (0 fail), design-system 846, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- OpenAPI and `api.gen.ts` regenerate byte-identically.
+- Exit codes were read from files.
+
+# Checkout is refused for every subscription still live at Stripe, and a canceled agency can subscribe again from Settings
+
+**2026-10-01, the eighth entry of the day.** One item, one commit.
+
+**Render: nothing to set.** The checkout endpoint gains a 409 problem type; `docs/api-contracts.md`, `openapi.json` and `api.gen.ts` are updated.
+
+## 1. What changed
+
+**API (`services/billing.py`, `errors.py`, `routers/billing.py`).**
+- **Founder decision 4, deny by default.** Only an agency with no subscription, or one whose subscription is `canceled` or `incomplete_expired`, may start a checkout. `active` and `trialing` keep the 409 `/problems/subscription-already-active`. Every other status answers the new 409 `/problems/subscription-needs-attention` ("This agency already has a subscription that needs attention. Manage it from Manage billing in Settings."): `past_due`, `unpaid`, `paused`, `incomplete`, and any status Stripe adds later, because each is still live at Stripe and a second checkout beside it would create a second subscription. One rule, "live at Stripe" (anything but no subscription, `canceled` or `incomplete_expired`), serves the stored-status guard, the Stripe-side check and the webhook backstop; at Stripe, a listed subscription with no readable status counts as live (fail closed). Neither detail carries a Stripe id or the status. `is_active()` and the scan allowance are unchanged: only `active` and `trialing` count as paid.
+- **The order of the Stripe calls for an agency that already has a customer.** First the open Checkout Sessions are listed and expired (the expiry itself is unchanged; it used to run second). Then ONE `subscriptions.list(status="all", limit=100)` replaces the per-status calls (one each for `active` and `trialing` before): a paid-up subscription answers already-active, any other live one needs-attention. Expiring first closes a race the review found: a session completing between the two checks now shows up as a subscription (409), and one completing during the expire fails the expire (503). One list call, rather than one per live status, keeps the time spent under the agency row lock short.
+- **Fail closed:** a full page of subscriptions with none live answers 503 with its own sentence and logs `billing.checkout_subscriptions_truncated` (agency id and customer id only); a Stripe failure while listing subscriptions answers "Could not check this agency's existing subscriptions at Stripe. Try again in a moment." and logs `billing.checkout_subscription_check_failed` (error class only), separate from the expire failure's sentence and log key.
+- **The webhook backstop** `stripe.webhook.second_subscription` now fires when a new subscription arrives over any live one, not only a paid-up one. Ids only, as before.
+- **Docs:** the route's docstring said a held checkout lock answers 503; it is a 409 `checkout-in-progress`, and the OpenAPI 409 now names all three problem types. `SubscriptionAlreadyActive`'s docstring no longer says "live" means only paid-up.
+
+**Web.**
+- **`BillingPanel.tsx` (Settings):** Subscribe (the signed-in plan card) is offered for no subscription, `canceled` and `incomplete_expired`, so a canceled agency can subscribe again; the status card stays above it and Manage billing shows when there is a Stripe customer. The other statuses, including unknown ones, show Manage billing and no Subscribe. The `incomplete` sentence said "Starting again is the fix", which checkout now refuses; it reads "A subscription was started but the first payment was never confirmed. Manage billing shows what Stripe holds for it."
+- **A refusal is matched by its problem type** (`lib/billing/subscriptionRefusal.ts`), not by the status 409, because `checkout-in-progress` is also a 409 and means "try again". After a subscription refusal Settings shows the sentence and Manage billing, even in a tab loaded before the Stripe customer existed.
+- **`ScanLimitNotice.tsx`:** a subscription refusal shows the sentence and an "Open Settings" link to `/settings#billing`, and Subscribe drops to a secondary button. With that fragment, Settings scrolls to the Billing section once it has loaded and moves keyboard focus to it (`tabIndex=-1`, `focus({ preventScroll: true })`); without it, nothing scrolls or takes focus.
+- **Back from Stripe:** both components reset their busy state on `pageshow` when the page comes back from the back/forward cache, so the buttons are not left disabled. While the portal opens, Subscribe is now truly disabled (`PricingCard` takes `disabled` apart from its busy label).
+- **`PricingCard.tsx`:** the footnote "Signing up is free. Your first scan is free with a Google sign-in. Subscribe to keep scanning." shows only on the public page; in Settings it was wrong for a returning or already-scanned agency.
+
+## 2. The reviews
+
+- **Security review (opus), API: PASS WITH NITS, then re-checked.** Its two Lows are fixed here: unknown statuses used to pass (now deny by default), and the subscription check ran before the session expiry (now after). Its three nits (the truncation log, a distinct sentence and log key for a failed subscription list, the docstring) are fixed. Checked clean: 403/404 before any 409; the row lock and `lock_timeout` before every Stripe call; paid-up outranks needs-attention whatever order Stripe lists them in; no ids or statuses in details; Stripe errors map as before; allowance unchanged.
+- **Security review, web: PASS WITH NITS.** Only `detail` is rendered from a problem; checkout and portal URLs go only to `location.assign`; rapid clicks send one request.
+- **UI review (sonnet): PASS WITH NITS, then re-checked.** Its two Mediums are fixed (refusals by type; Manage billing reachable after a refusal in a stale tab), and its Lows (a disabled Subscribe while the portal opens, a secondary Subscribe after a refusal, the `#billing` anchor, the `incomplete` sentence).
+- **Re-checks:** the security reviewer's second pass: PASS WITH NITS; its two remaining nits (a null status at Stripe, the stale docstring) are fixed here, and it judged dropping the in-flight guards safe (React re-renders between clicks, so the native `disabled` is in place; the API's row lock and expire-first order cover a back/forward restore). The UI reviewer's second pass: PASS WITH NITS; its nit (keyboard focus after the `#billing` jump) is fixed here.
+
+## Found, not fixed
+
+- **A Stripe customer replaced by hand.** Stripe is asked only about the agency's stored customer, and webhooks overwrite `stripe_customer_id`; a subscription created by hand in the dashboard on another customer could hide a live one on the old customer. Only an operator can cause it.
+- **Creating a customer, a Checkout Session or a portal session still does not catch `StripeError`** (only the pre-checks do), so those answer 500 rather than 503. Unchanged by this entry; it is on the launch checklist.
+- **`ScanLimitNotice` still offers Subscribe** to the four needs-attention statuses (they get the refusal and the link) and to members (who get 403, as before this change). `useScanAllowance` already reads `GET /billing` and could hide it.
+- **Settings still says "Your first scan is free…"** to every signed-in agency (`SettingsView.tsx:184`), and dark-theme `text-tertiary` on seated cards measures about 4.1:1. Both predate this change; the copy is the founder's call.
+- **A customer with more than 100 ended subscriptions** would be refused (503) on every checkout. Not a real case for one plan per agency; logged when it happens.
+- **`scripts/export_openapi.py` fails after writing** when given an output path outside the repo.
+
+## Verified
+
+**API pytest 1859 → 1924 (+65); web vitest 1104 → 1196 (+92); both floors raised to match.**
+- **Negative controls:** the stored-status guard removed fails the 8 refusal tests; the old allow-list form fails the 6 unknown-status tests; the old call order fails 21 tests, including the order test and both race tests; the web panel with `canceled` dropped from its allow-list fails 8; a refusal matched by status instead of type fails 2 (panel), 3 (notice) and 8 (helper); the old Manage-billing condition fails 3; a null status at Stripe answered 201 before its fix; the focus tests fail without the focus call, without `tabindex` or without the hash check. Each file was restored with `cp` and checked with `cmp`.
+
+**The rest of the bar.**
+- Workers 26, shared-types 53 (0 fail), design-system 846, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- `openapi.json` and `api.gen.ts` were regenerated for this change, and regenerating again produces the same files.
+- Exit codes were read from files.
+
+# A Stripe Checkout link stays payable for one hour, not a day
+
+**2026-10-01, the ninth entry of the day.** One item, one commit.
+
+**Render: nothing to set.**
+
+## 1. What changed
+
+- **Founder decision 5.** `create_checkout_session` (`services/billing.py`) passes `expires_at` = now + one hour (`CHECKOUT_LINK_LIFETIME`), in whole Unix seconds, on the only Checkout Session create call. Stripe's default is 24 hours; it accepts 30 minutes to 24 hours. A shorter link also narrows the time an older, unpaid link stays payable; the open-session expiry from the previous entry still runs first.
+- **`docs/api-contracts.md`:** the checkout section says the link expires after one hour (it said the lifetime was unchanged).
+- **`docs/runbook.md`, "Live Stripe test":** new check (f): leave a Checkout page unpaid for more than an hour and it stops accepting payment; pressing Subscribe again makes a new link that pays. It needs an agency that has not paid, because one that has gets the 409.
+- **Test:** `test_each_checkout_link_expires_an_hour_after_it_is_created` reads the clock just before and just after each request and requires `expires_at` to fall inside that bracket plus one hour, over two checkouts; no sleeps, no frozen clock. Red first: `expires_at` was absent.
+
+## 2. The review
+
+- **Security review (opus): PASS.** The clock is UTC-aware, so the server's timezone cannot shift it. The limit that matters is Stripe's 30-minute minimum, measured on Stripe's clock: one hour leaves 30 minutes of margin, used only by our clock running behind Stripe's, the rounding (under a second) and the create call's own timeout and single retry (about 30 seconds); the time is read right before the create call, after the expire and list calls. Portal sessions and the expire-first loop are unchanged.
+
+## Found, not fixed
+
+- The earlier checkout entry ("Checkout is refused while a subscription is live…") says the link keeps Stripe's 24-hour default. That was true then; this entry supersedes it.
+
+## Verified
+
+**API pytest 1924 → 1925 (+1); `api-pytest` floor raised to match.**
+- **Negative control:** without the `expires_at` line the test fails; a 24-hour value fails on the value and a float fails on the type. The file was restored with `cp` and checked with `cmp`.
+
+**The rest of the bar.** One bar run covered this entry and the next (decision 6). They touch disjoint files: this commit's API and docs are what that run tested, and its web side is the previous commit's, whose bar passed (web 1196).
+- Workers 26, shared-types 53 (0 fail), design-system 846, web 1203, API 1925, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- OpenAPI and `api.gen.ts` regenerate byte-identically.
+- Exit codes were read from files.
+
+# The Google sign-up page says when it has no code, the way the invite and reset pages do
+
+**2026-10-01, the tenth entry of the day.** One item, one commit.
+
+**Render: nothing to set.**
+
+## 1. What changed
+
+- **Founder decision 6.** `/sign-up/google` showed one "expired" message for two different cases. They are now separate:
+  - **No ticket in the address** (a reload, because the ticket is removed from the address bar once read, or a typed `/sign-up/google`): a new `no-code` state with the title "This sign-in link is not valid" and the sentence "This page no longer has the link's code (it is removed from the address bar once read). Start again from the sign-in page." That is the invite and reset pages' construction ("This invitation link is not valid" / "This reset link is not valid" and the same sentence), with the action that fits a Google sign-in instead of an email.
+  - **The pending check fails:** the expired message, unchanged ("That Google sign-in has expired" / "It works for ten minutes and once. Start again from the sign-in page."; the ticket lives 600 s, `config.py:271`).
+- **Files:** `app/sign-up/google/page.tsx` (`!found` sets `no-code`), `components/google/GoogleSignUpPanel.tsx`, its test, a new mounted route test `app/sign-up/google/googleSignUpRoute.test.tsx`, and `lib/googleTicket.test.ts` (a source check that still expected the old state).
+
+## 2. The review
+
+- **UI review (sonnet): FAIL on the first title, then fixed.** The first version said "This sign-in link has been used", which the page cannot know: the peek does not spend the ticket, so after a reload it is still unused, and a typed address never had one. It now says "…is not valid", as invite and reset do. Its Low on "sign-in code" (it could read as a code to type) is taken: the sentence now says "the link's code", word for word as invite and reset. Checked clean: design-system components only; `role="alert"` announced after mount; no heading change; "Back to sign in" keyboard-operable; the expired state unchanged.
+
+## Found, not fixed
+
+- **An API that does not answer also shows "expired"**, which the page cannot know (`page.tsx`'s catch has two identical branches; the new route test pins today's behaviour). The founder decides whether it should say the check could not be made.
+
+## Verified
+
+**Web vitest 1196 → 1203 (+7); `web-vitest` floor raised to match.**
+- **Red first:** 4 tests for the new state, then 3 for the corrected copy.
+- **Negative control:** `!found` setting `expired` again fails 3 tests; the file was restored with `cp` and checked with `cmp`.
+
+**The rest of the bar** (the run shared with the previous entry; this commit adds only web files, so its tree is exactly what that run tested).
+- Workers 26, shared-types 53 (0 fail), design-system 846, web 1203, API 1925, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- OpenAPI and `api.gen.ts` regenerate byte-identically.
+- Exit codes were read from files.
+
+# A scan that runs out of time keeps the answers it has, ends partial, and counts; restarts and our errors still never count
+
+**2026-10-01, the eleventh entry of the day.** One item, one commit.
+
+**Render: nothing to set. No migration.**
+
+## 1. What changed
+
+- **Founder decision 7:** "Scan deadline: count by cause. Add a failure reason; restarts and our errors never count. A scan that hits its deadline finalises as PARTIAL with the answers it has, and counts." The failure reason is the existing `scans.error_code` (nullable, no CHECK tying it to a status), so no column and no migration were needed; the allowance still decides by status alone and `scan_allowance.py` is unchanged.
+- **Before this, a deadline during the engine loop threw away answers already paid for.** `run_scan` gathered every prompt and held the results in memory until the whole gather ended, then wrote them in one commit; the deadline (`MAX_SCAN_DURATION`, 2,400 s) cancelled the gather, so every finished answer was lost and the scan ended FAILED / `SCAN_DEADLINE_EXCEEDED`. A deadline after the engine phase kept the answers but still ended FAILED, and FAILED never counted. Now `run_scan` records each prompt's results in an `EnginePhaseProgress` holder, owned by the executor, as the prompt finishes. Callers that pass no holder behave exactly as before.
+- **Only the clock's timeout is a deadline.** `_until_deadline` used to turn any `TimeoutError` leaving the chain into the deadline. Now it asks the timeout whether its own clock fired; any other `TimeoutError` takes the plain path, FAILED / `EXECUTION_FAILED`, which never counts. Without this, an error of ours with finished prompts would have ended partial and counted.
+- **`_finalize_after_deadline`** (a fresh session; runs only for the deadline):
+  1. renews the lease; if the row is no longer running (the reaper failed it, or something else finished it) it writes nothing and the other verdict stands;
+  2. writes the finished results from the holder only if the scan has no `EngineResult` rows yet (the loop's own commit may have landed just before the deadline), so rows are never doubled; the same `persist_result` as the loop, so facts only;
+  3. counts answered rows (`OK` or `ANSWERED_NO_MENTION`);
+  4. with at least one answer and no score yet, scores the scan within `DEADLINE_SCORING_BUDGET` (60 s; scoring reads the database only); a scoring failure is logged by class and the scan is stamped without a score;
+  5. stamps it with one `UPDATE … WHERE status = 'running'`: **partial** with `SCAN_DEADLINE_EXCEEDED` when there is at least one answer (it counts), **failed** with `SCAN_DEADLINE_EXCEEDED` when there is none (it does not count); `engine_result_count` is the number of rows actually stored;
+  6. anything that goes wrong in these steps falls back to `_mark_failed`: failed, not counted.
+  Nothing paid runs after the deadline: no audit, alerts or fix generation.
+- **By cause, unchanged:** a restart (`EXECUTOR_LOST`, `EXECUTOR_NEVER_STARTED`), our error (`EXECUTION_FAILED`) and every engine failing (`ALL_ENGINE_CALLS_FAILED`) all end failed and never count; tests now pin each code against the allowance.
+- **New log events**, ids, counts and error classes only: `scan.deadline_exceeded`, `scan.finalized_after_deadline`, `scan.deadline.scoring_failed`, `scan.deadline.finalize_failed`, `scan.deadline.lease_gone`, `scan.deadline.lease_lost_before_stamp`, `scan.deadline.vanished`.
+- **`docs/api-contracts.md`:** the failure section and the scan-level status say how a deadline ends; the stale "failed by a reaper after 15 minutes" now says what the reaper does (a running scan whose lease went unrenewed for 180 s, on the start route and the dashboard read).
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS.** Checked clean: no new endpoint and no tenant input; no duplicate result rows (the empty-table check, `uq_engine_results_prompt_engine`, and the lease renewal queuing behind the loop's lock on the scan row); the conditional stamp against the reaper; a heartbeat and a deadline cancelling together take the lease-lost path; a stray `TimeoutError` ends `EXECUTION_FAILED`; a restart ends `EXECUTOR_LOST`; the finalise ends well inside the renewed 180 s lease; scoring reads the database only; no paid call after the deadline (the gather cancels in-flight engine and sentiment calls); every new log line carries ids, counts, a status or an exception class only; rows are written through `persist_result` (facts only).
+- **Its three Lows are fixed here:** the contract now says scoring after a deadline is best-effort, that a deadline also ends failed when the finalise cannot complete (and keeps the reaper's `EXECUTOR_LOST` when the lease was already gone), and that a deadline partial can also carry engine failures; `_mark_failed` is one conditional `UPDATE … WHERE status IN ('queued', 'running')`, so the fallback can never overwrite a partial that just landed; the holder drops its in-memory results once they are stored.
+- **Its Medium is the founder's decision, not a defect against decision 7 as written** (see "Found, not fixed").
+
+## Found, not fixed
+
+- **A partial scan from a deadline is used like any other partial scan.** `alerts.COMPARABLE`, `client_history.PLOTTABLE` and `answer_gaps.GRIDDABLE` accept every partial scan, so one that stopped early with fewer prompts can become an alert baseline or a history point. The same was already true of a scan with an engine down. Product call.
+- **No screen says why a scan is partial or failed** (`errorCode` is not rendered); a scan that ran out of time reads like an engine outage. On the launch checklist.
+- **`run_scan`'s gather leaves sibling prompts running when one raises** (it predates this entry).
+- **Founder decision needed: a deadline caused by load counts.** The engine rate limits are shared across the product, and the 2,400 s budget is sized for one scan alone, so heavy load can push scans past the deadline; built as decided, such a scan counts once it has a single answer. The review's alternative is to count a deadline partial only above a minimum share of answered prompts. (The details went to the founder directly; this repository is public.)
+- **One step of the technical audit has no timeout of its own** (`services/technical_audit.py`). If it hangs, the scan runs into its deadline after the engine phase and ends partial with all its answers, which counts just as a failed audit would today, but alerts and fixes do not run for it. Bounding it is on the launch checklist.
+- **For the founder to confirm:** a scan that hits the deadline with no answer at all ends failed and does not count, since there is nothing to show for it.
+
+## Verified
+
+**API pytest 1925 → 1955 (+30); `api-pytest` floor raised to match.** New `tests/test_scan_deadline.py` (30 tests): k of n prompts finished → partial with exactly those rows, scored, holding a slot; nothing finished, or only engine errors finished → failed, no slot; a deadline after the engine phase → partial, not re-scored; the lease already gone → nothing written; no duplicate rows when the loop's commit had landed; a scoring failure → still stamped; the fallback → failed; our own `TimeoutError` → failed / `EXECUTION_FAILED`, no rows, no slot; each failure code against the allowance; a partial that lands while `_mark_failed` waits for the row is kept (a real Postgres row-lock race); the holder is empty once its results are stored. Red first: 10 of the first 20, then the 2 timeout tests, the row-lock race and the 2 holder checks.
+- **Negative controls:** routing the deadline back to `_mark_failed` fails 10 tests; ten further one-line mutations (no record per prompt, no table check, re-scoring, no lease renewal, an unconditional stamp, engine errors counted as answers, completion order, no rival map, no count, the message logged) each fail a test; the old unconditional `TimeoutError` conversion fails the 2 timeout tests; the old read-then-write `_mark_failed` fails the row-lock race; not clearing the holder fails its checks. Each file was restored with `cp` and checked with `cmp`.
+
+**The rest of the bar.**
+- Workers 26, shared-types 53 (0 fail), design-system 846, web 1203, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run (`scans.error_code` already allows any code on any status).
+- OpenAPI and `api.gen.ts` regenerate byte-identically.
+- Exit codes were read from files.
+
+# The launch checklist says what stands between this branch and taking money, and who does each step
+
+**2026-10-01, the twelfth entry of the day.** One item, one commit. Documentation only.
+
+**Render: nothing to set.**
+
+## 1. What changed
+
+- **New `docs/launch-checklist.md`** (Phase F of the brief), each item with who does it (the founder, or Claude after the founder's go) and the exact steps:
+  1. **Merge and deploy what is built:** PR #2, then this branch (no migration here); `STRIPE_PRICE_ID` set to the US$160 Price; the runbook's client-IP probe; the live Stripe test in test mode.
+  2. **Before charging real money:** rotate the 21st.dev key and remove `API_KEY_21ST`; Stripe business verification and the live keys; email through Resend (a custom domain first); the lawyer's review of `/privacy`, `/terms` and `/crawler`; the deletion endpoint and the data-retention decision it waits on; the per-device lockout, **deferred by founder decision 8** and recorded here with when to revisit it; removing the legacy `?ticket=` fallback one release after PR #2 is live; pilot outreach under the facts-only rule.
+  3. **Hardening found while building:** 20 rows, from this branch's reviews and the skills work (security headers, an egress control for the crawler, Supabase Data API grants, the Redis eviction policy, SQL parameters in logs, error pages, the production SameSite value, the share bar's wrong copy, the token pages' served headers, a licence-audit gap, a stale subscription read in the allowance, unmapped Stripe and Redis errors, migration transactions, the reason a scan failed or is partial, the Google sign-up page's "expired" when the API did not answer, Settings' first-scan sentence, the scan-limit notice, load-caused deadlines, and the audit's untimed `page.evaluate`).
+- **`docs/runbook.md`, "Live Stripe test":** new check (g), subscribing again after a cancellation (decision 4): cancel the test subscription immediately in the dashboard, subscribe again from Settings, and see a second, stale tab refused with the Manage billing sentence.
+- Every file, line and log-event reference in the checklist was re-checked against this branch's tree before commit.
+
+## Verified
+
+- No test, script or workflow reads `docs/launch-checklist.md` or `docs/runbook.md` (a grep of `apps/*/tests`, `apps/web/src`, `packages/*/src` and `.github/workflows` finds only comments that mention `docs/`), so the bar run for the previous entry covers this tree: API pytest 1955, workers 26, shared-types 53, design-system 846, web 1203, mypy 47 (ceiling 50); ruff, typechecks and both lock checks clean; OpenAPI and `api.gen.ts` regenerate byte-identically.

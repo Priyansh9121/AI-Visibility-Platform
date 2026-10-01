@@ -4,7 +4,9 @@ Reads the output of `pnpm licenses list --json` and applies the SAME policy as
 `license_audit.py` (ALLOWED, BLOCKING, NOT_COPYLEFT are imported from it by file
 path, so there is one policy). Stdlib only; runs under plain `python3`.
 
-Verdicts: ok / REVIEW (neither allowed nor blocked; listed, does not fail) /
+Verdicts: ok / ok-unmodified (MPL-2.0, see ALLOWED_UNMODIFIED in
+`license_audit.py`; does not fail, printed separately) /
+REVIEW (neither allowed nor blocked; listed, does not fail) /
 BLOCK (copyleft, source-available or undeclared; fails).
 
 SPDX: parentheses are stripped; `A OR B` passes if any alternative passes;
@@ -25,7 +27,6 @@ import argparse
 import fnmatch
 import importlib.util
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -43,6 +44,7 @@ def _load_policy():
 
 _policy = _load_policy()
 ALLOWED = _policy.ALLOWED
+ALLOWED_UNMODIFIED = _policy.ALLOWED_UNMODIFIED
 BLOCKING = _policy.BLOCKING
 NOT_COPYLEFT = _policy.NOT_COPYLEFT
 normalise = _policy.normalise
@@ -50,30 +52,11 @@ normalise = _policy.normalise
 UNDECLARED = {"", "unknown", "unlicensed"}
 
 
-def _allowed(part: str) -> bool:
-    return part in ALLOWED or part.rstrip(".") in ALLOWED
-
-
-def _blocking(part: str) -> bool:
-    return bool(BLOCKING.search(part) and not NOT_COPYLEFT.search(part))
-
-
 def verdict_of(licence: str) -> str:
     lic = (licence or "").strip()
     if lic.lower() in UNDECLARED:
         return "BLOCK"
-    text = lic.replace("(", " ").replace(")", " ")
-    # Alternatives: split on OR; each alternative is a set of AND parts.
-    alternatives = [
-        [p for p in re.split(r"\s+AND\s+", alt.strip()) if p.strip()]
-        for alt in re.split(r"\s+OR\s+|\|", text)
-        if alt.strip()
-    ]
-    if any(all(_allowed(p.strip()) for p in parts) for parts in alternatives):
-        return "ok"
-    if all(any(_blocking(p) for p in parts) for parts in alternatives):
-        return "BLOCK"
-    return "REVIEW"
+    return _policy.verdict_of(lic)
 
 
 def load_packages(path: Path) -> list[tuple[str, str, str]]:
@@ -125,16 +108,16 @@ def main(argv: list[str] | None = None) -> int:
         is_held = (name, version) in held
         counts[verdict] = counts.get(verdict, 0) + 1
         if verdict == "BLOCK" and is_held:
-            print(f"  {'PENDING':<7} {name:<{width}} {version:<12} {lic}")
+            print(f"  {'PENDING':<13} {name:<{width}} {version:<12} {lic}")
         elif verdict != "ok":
-            print(f"  {verdict:<7} {name:<{width}} {version:<12} {lic}")
+            print(f"  {verdict:<13} {name:<{width}} {version:<12} {lic}")
             if verdict == "BLOCK":
                 failures.append(f"{name}@{version} {lic}")
 
     print(f"\n{len(rows)} packages audited")
-    for verdict in ("ok", "REVIEW", "BLOCK"):
+    for verdict in ("ok", "ok-unmodified", "REVIEW", "BLOCK"):
         if verdict in counts:
-            print(f"  {verdict:<7} {counts[verdict]}")
+            print(f"  {verdict:<13} {counts[verdict]}")
     print(f"  held pending founder decision: {len(held)}")
     for line in pending_lines:
         print(line)
