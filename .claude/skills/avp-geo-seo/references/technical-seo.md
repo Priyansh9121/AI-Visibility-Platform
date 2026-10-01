@@ -3,7 +3,7 @@
 Adapted from ECC seo. Conventional practice, not from the GEO papers; it does not itself support any AI-visibility claim. Core Web Vitals thresholds are sourced below; title and description lengths are unverified heuristics.
 
 ## Crawlability and indexability
-- `app/robots.ts` allows public pages, blocks low-value and token routes. No public page unintentionally `noindex`.
+- `app/robots.ts` allows everything and disallows nothing (founder decisions 2026-09-30 and 2026-10-01, decision 3). The credential-address pages (`/share`, `/invite`, `/reset-password` and their `/:token` forms, `/sign-up/google`) are kept out of search by `X-Robots-Tag: noindex, nofollow` and `Referrer-Policy: no-referrer` from `next.config.mjs`, never by a Disallow: a disallowed page's noindex is never seen. No public page unintentionally `noindex`.
 - Public pages reachable within a shallow click depth; redirect chains of at most two hops (unverified heuristic).
 - One canonical URL form; `alternates.canonical` self-consistent and non-looping.
 - `app/sitemap.ts` lists exactly the intended public surface.
