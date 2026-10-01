@@ -1536,13 +1536,17 @@ distinguishes "the process running this went away" from
 
 **A scan that hits its deadline** — the executor stops a scan still running
 2,400 seconds after it was claimed — keeps the answers that finished and ends by
-what it has, with `errorCode: "SCAN_DEADLINE_EXCEEDED"` either way. With at least
-one answer (a result that is `ok` or `answered_no_mention`) it ends `partial` and
-the scan **counts** against the allowance. The prompts that finished are stored,
-and scored if scoring completes within its own 60-second budget (a deadline
-`partial` can have no score); `engineResultCount` is the number stored (it can be
-fewer than `promptCount` × engines). With none it ends `failed` and does **not**
-count. It also ends `failed`, uncounted and with the same code, when the executor
+what it has, with `errorCode: "SCAN_DEADLINE_EXCEEDED"` either way. When at
+least half of its planned prompts (`promptCount`) have an answer — at least one
+result that is `ok` or `answered_no_mention` — it ends `partial` and the scan
+**counts** against the allowance (founder decision, 2026-10-01: 2 of 4 counts,
+2 of 5 does not). The prompts that finished are stored, and scored if scoring
+completes within its own 60-second budget (a deadline `partial` can have no
+score); `engineResultCount` is the number stored (it can be fewer than
+`promptCount` × engines). With fewer than half, or none, it ends `failed` and does
+**not** count; the results that finished are still stored, and it is not scored
+(when the deadline comes after the engine phase, a score made before it stays).
+It also ends `failed`, uncounted and with the same code, when the executor
 cannot complete this finalisation itself. A scan whose lease was already gone when
 the deadline fired — the reaper had failed it — keeps the reaper's `failed` /
 `EXECUTOR_LOST`. The audit, alerts and fix list that had not yet run do not run.
@@ -1613,12 +1617,13 @@ exactly as `timeout` is.
 failed), `failed` (all failed, with `errorCode: ALL_ENGINE_CALLS_FAILED`).
 `partial` exists so a report can say "one engine was down" rather than
 presenting a depressed mention rate as fact. `partial` is also how a scan that
-hit its deadline with at least one answer ends: it then carries
+hit its deadline with at least half of its planned prompts answered ends: it then carries
 `errorCode: "SCAN_DEADLINE_EXCEEDED"`, and its results are those of the prompts
 that finished. They can ALSO include failed engine calls (each result's `status`
 says which), so that code says the clock ran out and does not rule out an engine
-having been down. With no answer, or when the executor could not complete the
-finalisation, that scan ends `failed` with the same code. The allowance counts
+having been down. With fewer than half of its planned prompts answered, or when the
+executor could not complete the finalisation, that scan ends `failed` with the same
+code. The allowance counts
 `succeeded` and `partial` and never `failed`, whatever the `errorCode`.
 
 **`position` is the subject's rank among detected brands by first appearance.**

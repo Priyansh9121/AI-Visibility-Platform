@@ -44,6 +44,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from fractions import Fraction
 from typing import Protocol
 
 import structlog
@@ -138,8 +139,9 @@ MAX_SCAN_DURATION = timedelta(seconds=2_400)
 #
 # So the deadline is now a CAUSE and not a verdict. `_finalize_after_deadline`
 # keeps the answers the loop had finished (`scan_runner.EnginePhaseProgress`),
-# scores them, and stamps PARTIAL when there is at least one answer, FAILED
-# when there is none. Only the deadline does this: a restart (`EXECUTOR_LOST`,
+# scores them, and stamps PARTIAL when at least half of the PLANNED prompts have
+# an answered engine result (`deadline_partial_counts`, the founder's 50% rule),
+# FAILED when fewer do. Only the deadline does this: a restart (`EXECUTOR_LOST`,
 # `EXECUTOR_NEVER_STARTED`) and an error of ours (`EXECUTION_FAILED`) end FAILED
 # and never count, which is the allowance's own rule — it reads the status and
 # never the code (`scan_allowance.COUNTED_STATUSES`).
@@ -165,8 +167,9 @@ EXECUTOR_NEVER_STARTED = "EXECUTOR_NEVER_STARTED"
 EXECUTION_FAILED = "EXECUTION_FAILED"
 # The chain was alive and renewing, and still did not finish in time. Distinct
 # from EXECUTOR_LOST (it went silent) and EXECUTION_FAILED (it raised). A CAUSE,
-# not a verdict — decision 7: it sits on a PARTIAL scan that had answers to keep
-# (which counts) and on a FAILED one that had none (which does not).
+# not a verdict — decision 7: it sits on a PARTIAL scan with answers for at least
+# half its planned prompts (which counts) and on a FAILED one with fewer (which
+# does not).
 SCAN_DEADLINE_EXCEEDED = "SCAN_DEADLINE_EXCEEDED"
 
 
@@ -460,8 +463,10 @@ async def execute_scan(job: ScanJob, *, settings: Settings) -> None:
     -------------------------------------
     A chain that outruns `MAX_SCAN_DURATION` is stopped, and what it had
     finished is kept (`_finalize_after_deadline`): PARTIAL / SCAN_DEADLINE_
-    EXCEEDED with at least one answer, which counts; FAILED with the same code
-    with none, which does not. The engine loop reports each finished prompt
+    EXCEEDED when at least half of the planned prompts have an answered engine
+    result (`deadline_partial_counts`), which counts; FAILED with the same code
+    when fewer do, which does not. The rule judges a deadline in any phase,
+    including one after the engine loop. The engine loop reports each finished prompt
     into `progress` as it goes, because it writes nothing itself until the
     whole loop is done. Every OTHER exception is an error of ours: it keeps
     `_mark_failed`'s EXECUTION_FAILED and never counts.
@@ -694,25 +699,53 @@ async def _persist_finished(
     await session.commit()
 
 
+# The founder's rule (2026-10-01): a deadline-partial counts only if at least
+# this share of the PLANNED prompts has an answered engine result.
+DEADLINE_PARTIAL_MIN_ANSWERED_SHARE = Fraction(1, 2)
+
+
+def deadline_partial_counts(answered_prompts: int, planned_prompts: int) -> bool:
+    """Whether a scan that hit its deadline ends PARTIAL (counts) rather than FAILED.
+
+    Integer arithmetic, no float. A plan that was never recorded (0 or less)
+    cannot be measured against, so it does not count even if answers exist.
+    """
+    share = DEADLINE_PARTIAL_MIN_ANSWERED_SHARE
+    return (
+        planned_prompts > 0
+        and answered_prompts >= 1
+        and answered_prompts * share.denominator >= planned_prompts * share.numerator
+    )
+
+
 async def _finalize_after_deadline(
     scan_id: str, progress: scan_runner.EnginePhaseProgress, *, settings: Settings
 ) -> None:
     """End a scan that ran out of time, keeping the answers it had — decision 7.
 
     The founder's decision (2026-10-01): "A scan that hits its deadline
-    finalises as PARTIAL with the answers it has, and counts." With no answer
-    to keep it stays FAILED and does not count. Which of the two is read from
-    the TABLE, after anything the loop had finished has been written to it:
+    finalises as PARTIAL with the answers it has, and counts." The founder then
+    set the line it must clear: at least half of the PLANNED prompts answered.
+    Which side a scan is on is read from the TABLE, after anything the loop had
+    finished has been written to it, and the same rule judges a deadline in any
+    phase, including one that falls after the engine loop (audit, score, alerts,
+    fixes):
 
-    * one answer or more (`OK` or `ANSWERED_NO_MENTION` — the predicate
-      `scan_runner.count_engine_failures` applies): the scan is scored if it has
-      no score, and ends PARTIAL / SCAN_DEADLINE_EXCEEDED. It counts.
-    * none — nothing finished, or everything that finished was an engine error:
-      FAILED / SCAN_DEADLINE_EXCEEDED. It does not.
+    * at least half of the PLANNED prompts (`Scan.prompt_count`) have an
+      answered engine result (`OK` or `ANSWERED_NO_MENTION`;
+      `scan_runner.count_answered_prompts`; the rule is `deadline_partial_counts`):
+      the scan is scored if it has no score, and ends PARTIAL /
+      SCAN_DEADLINE_EXCEEDED. It counts.
+    * fewer, or none — nothing finished, too few prompts were answered,
+      everything that finished was an engine error, or the plan was never
+      recorded: FAILED / SCAN_DEADLINE_EXCEEDED. It does not count, and this
+      function does not score it. The rows written are kept either way, and so
+      is anything the chain wrote before the deadline: a score made in phase 7
+      stays on a scan that ends FAILED here, and nothing is deleted.
 
-    No audit, no alerts and no fixes: the deadline stopped them, and fixes
-    spend money. The report renders each absence honestly, as it does for a
-    phase that failed.
+    No audit, no alerts and no fixes are run by the finalise: the deadline
+    stopped them, and fixes spend money. The report renders each absence
+    honestly, as it does for a phase that failed.
 
     THE ORDER IS THE POINT.
 
@@ -753,7 +786,11 @@ async def _finalize_after_deadline(
             if rows == 0 and progress.completed and not progress.persisted:
                 await _persist_finished(session, scan, progress)
                 rows = await _count_results(session, scan_id)
-            answered = rows - await scan_runner.count_engine_failures(session, scan_id)
+            answered = await scan_runner.count_answered_prompts(session, scan_id)
+            planned = scan.prompt_count or 0
+            # `prompt_count` 0/None with answers present means the plan was
+            # never recorded: not measurable, so FAILED and uncounted.
+            counts = deadline_partial_counts(answered, planned)
 
             # -- score it, once, if there is anything to score ---------------
             #
@@ -764,7 +801,7 @@ async def _finalize_after_deadline(
             # session — which stays usable even when the budget cancels a
             # statement mid-flight (the test pins that case). `scan_id`, not
             # `scan.id`: the rollback expires `scan`.
-            if answered >= 1 and await scoring_runner.latest_score(session, scan_id) is None:
+            if counts and await scoring_runner.latest_score(session, scan_id) is None:
                 try:
                     # DB-only work, well inside the fresh lease — see the constant.
                     async with asyncio.timeout(DEADLINE_SCORING_BUDGET.total_seconds()):
@@ -780,7 +817,7 @@ async def _finalize_after_deadline(
                     await session.rollback()
 
             # -- stamp it, if it is still ours -------------------------------
-            status = ScanStatus.PARTIAL if answered >= 1 else ScanStatus.FAILED
+            status = ScanStatus.PARTIAL if counts else ScanStatus.FAILED
             stamped = (
                 await session.execute(
                     update(Scan)
@@ -808,7 +845,8 @@ async def _finalize_after_deadline(
             scan_id=scan_id,
             status=status.value,
             results=rows,
-            answered=answered,
+            answered_prompts=answered,
+            planned_prompts=planned,
         )
     except Exception as exc:  # noqa: BLE001 - the plain failure is the safe ending
         logger.warning(
