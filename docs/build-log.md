@@ -19755,3 +19755,957 @@ byte-for-byte.
 - The report's exclusion note and its robots.txt audit section, from the
   production build's `/share` page with the API answered from the new
   fixture. The report is paper in both themes, so they were shot light.
+
+# Share, invite and reset tokens leave the URL path
+
+**2026-09-30, the first entry of the day.** One item, one commit.
+
+**Nothing to set on Render.** No migration and no new setting. The API and web
+deploy from the same push. For the minute between the two deploys, a web page
+still calling the old GET gets a 404, and a reload fixes it.
+
+## 1. What changes for a person
+
+- **Links sent from now on** read `/share#…`, `/invite#…` and `/reset-password#…`.
+  The part after `#` is never sent to any server, so it cannot reach Render's
+  request log, the API's log, or a Referer.
+- **Links already sent** (`/share/<token>` and so on) still work: the old page
+  loads, sends the browser to the `#` form with `location.replace`, and offers
+  an "Open the link" anchor, plus a `<noscript>` note for a visitor without
+  JavaScript.
+- **The share page keeps its `#…` in the address bar**, so a report can be
+  reloaded, bookmarked and forwarded. It also reacts to a pasted `#` change in
+  the same tab.
+- **Invite and reset remove it once read** (`history.replaceState(null, …)`),
+  because they are single-use secrets. A reload afterwards says: "This page no
+  longer has the link's code (it is removed from the address bar once read).
+  Open the link from your email again."
+
+## 2. The mechanism
+
+- **`apps/api/src/avp_api/services/links.py`** is now the one place link shapes
+  are built (`share_link`, `invite_link`, `reset_link`). It is used by
+  `_share_url`, the seat invitation, `reset_url` and `scripts/issue_password_reset.py`.
+- **`GET /reports/{token}` and `GET /reports/{token}.pdf` are replaced** by
+  `POST /reports/shared` and `POST /reports/shared/pdf` with the token in the
+  body.
+- **`logs.py` still redacts** any legacy `/reports/<token>` path. It now logs
+  exactly `/reports/shared` and `/reports/shared/pdf` as they are, and redacts
+  every other remainder and any query string under `/reports/`.
+- **The web reads the token** through `src/lib/fragmentToken.ts`. The first
+  render is a neutral loading state, so there is no hydration mismatch and no
+  error flash, and an empty fragment goes straight to the invalid state.
+- **The public PDF is a POST** that returns a Blob, saved through
+  `DownloadPdfButton`. It now keeps focus while busy (`aria-disabled`), has a
+  visually hidden status ("Preparing the PDF…", then "PDF downloaded"), and its
+  error is tied to the button with `aria-describedby`.
+- **`Referrer-Policy: no-referrer`** is on the three old routes and the three new ones.
+
+## 3. Reviews
+
+- **The security review found no Critical, High or Medium issue.**
+- **Its Lows were fixed:**
+  - Next's router could write the token back after a `replaceState` carrying
+    Next's own state;
+  - the log exemption was broader than the two real paths (`/reports/shared?token=…`
+    and `/reports/shared/<t>` were logged);
+  - the reload copy blamed a valid link;
+  - stale docstrings.
+- **The UI review's Mediums were fixed:** the no-JS dead end on old links, a
+  one-frame flash of the form on an empty fragment, the reload copy, and PDF
+  button focus and announcements.
+
+## Found, not fixed
+
+- **The Google sign-up ticket still rides in a query string.** `routers/auth.py`
+  redirects to `/sign-up/google?ticket=…`, and the web calls
+  `GET /auth/google/pending?ticket=…`. Both land in Render's request log. Within
+  the ticket's 10 minutes, someone reading that log could complete the sign-up
+  bound to the victim's Google account. The same fragment-plus-POST treatment
+  would close it.
+- **Path-form share links sent before this change stay alive, and are logged when
+  opened.** Re-sharing refreshes the same token's expiry, so each re-share gives
+  those old copies another 30 days. Only revoke-then-share retires them.
+- **CORS does not expose `Content-Disposition`,** so the web names the PDF with
+  its own fallback (`<slug>-ai-visibility.pdf`, the same rule the server uses).
+  The security review judged adding `expose_headers=["Content-Disposition"]`
+  negligible risk.
+- **`.avp-btn` has no `[aria-disabled]` styling,** so a busy PDF button only
+  changes its label.
+- **`apps/web` has no DOM test environment,** so the hash-change and focus
+  behaviour is pinned by source and static-markup tests, not exercised.
+- **The CI floors in `infra/ci/floors.json` were not raised.**
+
+## Verified
+
+**API 1620 → 1645 (+25).**
+- `tests/test_token_links.py`: every builder puts the token after `#` and never
+  before it, with or without a trailing slash on the base.
+- `TestTheTokenIsNotInThePath` in `test_share_link.py`:
+  - the minted URL carries the token only in the fragment;
+  - the old GETs answer 404 and GETs on the new paths 405;
+  - bad bodies answer 422 on both routes;
+  - a 512-character token is an ordinary 404;
+  - both routes send `private, no-store`, and the PDF keeps its attachment
+    header and `%PDF` bytes;
+  - the token is absent from structlog, caplog and stdout.
+- `test_logging_config.py` adds the three bypass shapes, redacted, and the two
+  exact paths, kept.
+- The other suites that used the old paths or link shapes moved to the new ones.
+
+**Web 1023 → 1052 (+29).**
+- `lib/api.publicReport.test.ts` (4): POST with the token only in the body, a
+  404 becomes `ApiProblem`, the filename comes from `Content-Disposition`, and
+  the signed-in PDF stays a GET by scan id.
+- `app/fragmentRoutes.test.tsx`:
+  - the fragment parser;
+  - a neutral server render;
+  - invite and reset clear the fragment, share does not;
+  - `replaceState(null, …)`;
+  - the hashchange listener only on share;
+  - the invalid state derived in render;
+  - `FragmentRedirect`'s `location.replace`, anchor and `<noscript>`;
+  - no web source builds `/share/${`, `/invite/${`, `/reset-password/${` or
+    `/reports/${`.
+- `DownloadPdfButton.test.tsx` (+4) covers `aria-disabled`, the status region
+  and `aria-describedby`.
+- `referrerPolicy.test.ts` covers the three fragment routes.
+
+**Negative controls.**
+- With the old lookahead put back in `logs.py`, the `?token=` and `/shared/<t>`
+  cases fail (2 failed).
+- With `publicReportPdf` put back to a token path, the web test fails.
+- Both files were restored byte-for-byte, checked with `cmp`.
+
+**The rest of the bar.**
+- Workers 13, shared-types 53, and the full design-system suite 649.
+- ruff clean; mypy 47, under its 50 ceiling.
+- All typechecks clean, and all six count gates through `assert_count.py`.
+- Both `uv lock --check` runs pass, and `alembic upgrade head` and
+  `alembic check` pass.
+- The OpenAPI contract and `api.gen.ts` were regenerated: two operations
+  swapped and descriptions updated.
+- `next build` passes from a copy: `/share`, `/invite` and `/reset-password`
+  are static, and the three `[token]` routes are thin redirects.
+- Exit codes were read from files.
+
+# Stripe webhook events are applied once and in order
+
+**2026-09-30, the second entry of the day.** One item, one commit.
+
+**One migration, and no new setting.** Revision `7c1d4e9a2b53` adds the table
+`stripe_webhook_events` and the nullable column `agencies.stripe_event_at`. The
+container runs it before serving. It sets `lock_timeout = '5s'`, so a long
+transaction on `agencies` fails the deploy instead of queueing every request.
+Deploy while Stripe shows no pending webhook retries, because the watermark
+starts empty. The runbook has a new "Live Stripe test (test mode on Render)"
+section.
+
+## 1. What it fixes
+
+Before this change, a retried or out-of-order delivery could overwrite newer
+billing state (for example, bring a cancelled agency back to active). Now:
+
+- Each handled event is applied at most once, keyed on its Stripe id, in the
+  same transaction as its change. Concurrent duplicates block on the primary key
+  and then conflict.
+- The agency row is locked `FOR UPDATE` on every lookup route (metadata
+  `agency_id`, subscription id, customer id) before the ledger insert. That both
+  serialises events for one agency and avoids a deadlock between the ledger's
+  foreign-key lock and the unique `stripe_subscription_id` update.
+- Subscription events older than the newest applied one are `stale`. Checkout
+  does not move the watermark, so the subscription event carrying the period
+  end still applies after it.
+- A same-subscription state-machine guard: a `canceled` or `incomplete_expired`
+  status is never overwritten, and `incomplete` never overwrites another status.
+  This covers same-second ties and retries.
+- Non-subscription checkouts are ignored.
+- Unmatched events are not recorded, so a Resend after linking applies.
+- An event without a numeric `created` is ignored and never sets the watermark
+  from our clock.
+- Log lines are `stripe.webhook.{applied,duplicate,stale,ignored,unmatched,rejected}`.
+  `billing.webhook_*` is renamed and found nowhere else. The logs carry the
+  event id, type and agency id, and never the payload or an email.
+
+## 2. Reviews
+
+- **The first security review found one High:** the metadata route was not
+  locked, so concurrent updated@T2 and deleted@T3 could leave a cancelled
+  agency active and move the watermark back. It also found two Mediums (the
+  deadlock, and same-second ties and retries) and five Lows. All were fixed.
+- **A re-review confirmed all fixed.** Its new Lows were also fixed: checkout
+  moving the watermark, non-subscription checkouts, and the migration's lock
+  order (it now adds the column first, taking ACCESS EXCLUSIVE once).
+
+## Found, not fixed
+
+- **Checkout does not refuse an agency that already has an active subscription.**
+  Two tabs opened before the first payment, or a new checkout while the old plan
+  runs to its end, can create a second subscription. The stored pointer then
+  follows whichever subscription's event is newest, so a `deleted` for the old
+  one can show the agency `canceled` while the new one is paid. Refusing checkout
+  while active changes what a person sees, so it is left for a decision.
+- **An operator editing a subscription's metadata in the Stripe dashboard** to
+  name a different agency than the stored customer would hit
+  `uq_agencies_stripe_customer_id` and answer 500 on every retry. None of our
+  own flows produce that.
+- **The ledger's `stale` covers both timestamp-stale and guarded events.**
+- **The ledger has no retention rule.** It gains about one row per subscription
+  change.
+- **The CI floors in `infra/ci/floors.json` were not raised.**
+
+## Verified
+
+**API 1645 → 1674 (+29).**
+- New tests in `tests/test_billing.py`:
+  - a duplicate delivery applies once;
+  - four concurrent deliveries of one id apply once;
+  - a two-session proof that the conflicting insert blocks;
+  - a two-session proof that the metadata route locks the agency row;
+  - concurrent deleted@T3 and updated@T2 on the metadata route always end
+    `canceled` with the watermark at T3 (both orderings, 6 iterations each);
+  - three first-checkout events delivered together do not deadlock, end active
+    and set the period end;
+  - an older event arriving late is stale;
+  - same-second events apply in order;
+  - a retried `created` does not regress to `incomplete`;
+  - `updated` or checkout after `deleted` does not resurrect;
+  - a new subscription id after a cancellation applies;
+  - a subscription update delivered after a newer checkout still applies and
+    sets the period end;
+  - non-subscription checkouts (payment mode, setup mode, a null subscription)
+    are ignored and cannot undo a cancellation;
+  - an unmatched event writes no row and applies when resent;
+  - an event without a numeric `created` is ignored;
+  - a handler failure rolls back the ledger row and the retry applies;
+  - the watermark only moves forward.
+  - `test_facts_only.py` now covers the ledger model.
+- **Negative controls.** Each file was restored byte-for-byte afterwards and
+  checked with `cmp`.
+  - Removing the metadata lock fails 3 of 3 metadata-route tests on all three
+    runs.
+  - Forcing the guard off fails 3 tests.
+  - Disabling the stale check fails the out-of-order test.
+  - Letting checkout advance the watermark fails 2 tests.
+- **The rest of the bar.**
+  - Workers 13, shared-types 53, design-system 649, web 1052.
+  - ruff clean; mypy 47, under its 50 ceiling.
+  - Typechecks clean, and all six count gates through `assert_count.py`.
+  - Both `uv lock --check` runs pass.
+  - `alembic upgrade head`, `check`, and a downgrade/upgrade round trip pass
+    on avp_dev.
+  - The OpenAPI contract and `api.gen.ts` are regenerated for `WebhookAck`.
+  - Exit codes were read from files.
+# A scan stranded by a restart fails after 15 minutes, and a scan holds its slot exactly while it is alive
+
+**2026-09-30, the third entry of the day.** One item, one commit.
+
+**One migration, and no new setting.** Revision `3e8a5b7c9d14` adds the nullable column `scans.submitted_at`, under `lock_timeout = '5s'`, with no backfill.
+
+## 1. What a person sees
+
+- A scan started seconds before Render restarted the API (every deploy does) used
+  to read "queued" for ever.
+- It still holds its slot and reads queued for 15 minutes after it was started.
+  After that, the next poll of the scan, the next start, or the dashboard shows
+  it `failed` with `EXECUTOR_NEVER_STARTED`.
+- It never counts against the allowance, and starting that client again makes a
+  fresh scan.
+- A scan left open by competitor detection alone is never touched, so detect now
+  and scan tomorrow still works.
+
+## 2. The mechanism
+
+- `scans.submitted_at` is stamped when a scan is handed to the executor, inside
+  the transaction that holds the allowance's `FOR UPDATE` lock, so a concurrent
+  start sees it.
+- `scan_executor.fail_never_started_scans` fails only QUEUED rows with
+  `submitted_at` older than `IN_FLIGHT_WINDOW`. It runs inside
+  `reap_stale_scans` and, scoped to one scan, in `GET /scans/{scanId}` when a
+  Python check says it is due.
+- The executor's claim now refuses a row that is already reapable.
+
+## 3. The allowance, which was wrong in three ways that this closes
+
+- An adopted detection row kept its old `created_at`, so it was not counted
+  while it ran. At the free cap, two quick starts on two detected clients both
+  began; now the second gets `402` `SCAN_LIMIT_FREE_USED`.
+- The paid monthly period dated scans by `created_at`, so a detection row opened
+  on the 30th and scanned on the 1st never counted in the new month.
+- A RUNNING scan stopped holding its slot 15 minutes in, although a legitimate
+  run can last up to 40 (`MAX_SCAN_DURATION`, with a live lease).
+- Now a scan is dated by `coalesce(submitted_at, created_at)`. QUEUED holds a
+  slot for 15 minutes from then; RUNNING holds one while its lease is live
+  (unleased script runs keep the 15-minute rule).
+
+## 4. Review
+
+The security review found no Critical or High. Its two Mediums (the monthly date
+and RUNNING by age) and one Low (a late claim of a reapable row) were fixed,
+along with a no-op UPDATE on every poll.
+
+## Found, not fixed
+
+- **A scan that hits the 40-minute deadline ends FAILED after its engine answers
+  are paid for and stored, and FAILED never counts.** `page.evaluate` in the
+  technical audit has no timeout, so a site that stalls its own page could make
+  this happen on purpose and read the engine results without using the free scan.
+  It needs an audit timeout, and a decision on whether such a scan counts.
+- **No web screen shows a failed scan's `errorCode` or `errorDetail`,** so the
+  reason for a failure is not visible to a person.
+- **The scan id excluded from the count comes from a read taken before the
+  lock.** It is not reachable in practice (it needs a lock wait of minutes);
+  re-reading after the lock would close it.
+- **The CI floors in `infra/ci/floors.json` were not raised.**
+
+## Verified
+
+**API 1674 → 1690 (+16).**
+- New tests in `test_scan_executor.py` and `test_scan_allowance.py`:
+  - a submitted QUEUED scan past the window is failed by the start POST and by
+    `GET /scans/{id}`, and a fresh scan then runs to `succeeded`;
+  - one inside the window is neither failed nor uncounted;
+  - a three-day-old detection-only row is never failed and is adopted with the
+    same id;
+  - a failed scan cannot be claimed late, and a reapable QUEUED row cannot be
+    claimed even before the reaper runs;
+  - another agency's stranded scan is a 404 and stays QUEUED;
+  - `GET` on a fresh QUEUED scan does not call the reaper;
+  - the adoption race: 202 then 402 at the free cap;
+  - a stranded submission frees its slot;
+  - a last-month detection row scanned this month counts this month;
+  - a RUNNING scan with a live lease 20 minutes in holds the slot and one with
+    an expired lease does not;
+  - an unleased RUNNING row counts at 1 minute and not at 16.
+
+**Negative controls,** each file restored byte-for-byte and checked with `cmp`:
+  - an age-only reap rule fails the detection-only test;
+  - counting by `created_at` fails the adoption test;
+  - dating the month by `created_at` fails the month test;
+  - an age-only RUNNING rule fails the live-lease test;
+  - dropping the claim guard fails the late-claim test.
+
+**The rest of the bar.**
+  - Workers 13, shared-types 53, design-system 649, web 1052.
+  - ruff clean; mypy 47, under its 50 ceiling.
+  - Typechecks clean, and all six count gates through `assert_count.py`.
+  - Both `uv lock --check` runs pass.
+  - `alembic upgrade head` and `check` pass, with a downgrade/upgrade round trip
+    on avp_dev.
+  - The OpenAPI contract regenerates byte-identically.
+  - Exit codes were read from files.
+# Login, sign-up and reset requests are rate-limited per email and per IP
+
+**2026-09-30, the fourth entry of the day.** One item, one commit.
+
+**No migration. New optional settings, all with defaults:** `LOGIN_LIMIT_PER_EMAIL`, `LOGIN_LIMIT_PER_IP`, `LOGIN_WINDOW_SECONDS`, `SIGNUP_LIMIT_PER_EMAIL`, `SIGNUP_LIMIT_PER_IP`, `SIGNUP_WINDOW_SECONDS`, `RESET_LIMIT_PER_EMAIL`, `RESET_LIMIT_PER_IP`, `RESET_WINDOW_SECONDS`, and `CLIENT_IP_HEADER` (empty). **Run the runbook's new client-IP probe after deploy.**
+
+## 1. What a person sees
+
+After too many attempts, the sign-in, sign-up and forgot-password forms show
+"Too many attempts. Try again in N minutes." Successful sign-ins do not count.
+A reset, once completed, clears the count for that address. With Redis down,
+sign-in and sign-up say the service is unavailable (they could not create a
+session anyway), and forgot-password still gives its usual reply.
+
+## 2. The mechanism
+
+- `services/rate_limit.py`: fixed-window counters in Redis, one Lua script per
+  request. The IP bucket is checked first, and a request refused by IP writes
+  no email key.
+- Keys are `rl:{action}:{kind}:` plus a 16-byte HMAC of the normalised email or
+  IP, keyed from `APP_SECRET`, so neither is stored in the clear. Every check
+  runs before argon2 or any database work.
+- Client IP is uvicorn's address by default, or the header named by
+  `CLIENT_IP_HEADER`. It is parsed with `ipaddress`: IPv4 is keyed exactly,
+  IPv6 per /64, and v4-mapped addresses as IPv4. An unparseable value, or a
+  configured header that is missing, shares one bucket and is logged without
+  its value.
+- The 429 is the existing `RateLimited` problem, now with `Retry-After`. The
+  new 503 `service-unavailable` covers login and sign-up when Redis errors.
+- Log lines are `auth.rate_limited` (action and kind only),
+  `auth.rate_limit.unavailable`, `auth.rate_limit.ip_unparsed` and
+  `auth.rate_limit.ip_header_missing`.
+- Web: the three forms show the server's detail for a 429; forgot-password no
+  longer calls it a connection error.
+
+## 3. Review
+
+- **The first security review raised one High, not confirmed:** on Render the
+  per-IP bucket may key on a client-chosen `X-Forwarded-For`. It is hardened
+  in code, and the runbook probe settles which header to trust.
+- **It also raised three Mediums** (IPv6 /128 buckets; refused requests writing
+  new email keys that could fill Key Value; a victim locked out by counted
+  attempts, with successes counted too) and two Lows (fail-open gaining nothing
+  on login and sign-up; unvalidated settings). All were fixed.
+- **This change also briefly took mypy from 47 to 48;** that was fixed without
+  an ignore.
+
+## Found, not fixed
+
+- **A person can still be kept out of password sign-in** by someone who sends
+  11 wrong passwords for their address every 15 minutes. A completed reset
+  clears the count until the next round. Existing sessions and Google sign-in
+  (which links a verified Google address) are unaffected. The full fix is a
+  per-device budget (a signed "known device" cookie), a design decision left
+  open.
+- **The per-email count shows recent activity on an address:** a limit tripping
+  early, and its `Retry-After`, show that someone else tried that address
+  recently. This comes with any per-subject counter.
+- **`CLIENT_IP_HEADER` is empty until the runbook probe is run on Render.**
+- **A re-review after the fixes** found no new defect in the code. Left open:
+  a limit keyed per (email, IP) with a looser per-email ceiling would stop
+  the lock-out above, and is a design decision; IPv6 is keyed per /64, so a
+  tunnelled /48 still yields many buckets; `POST /auth/change-password` has no
+  limit (older than this change); and the Redis pool has no
+  `socket_timeout`, so a Redis that hangs rather than refusing makes sign-in
+  hang instead of answering 503.
+- **The CI floors in `infra/ci/floors.json` were not raised.**
+
+## Verified
+
+**API 1690 → 1749 (+59).** `tests/test_auth_rate_limit.py`, 59 tests, covering:
+- the defaults;
+- for each route, the (N+1)th attempt answering 429 with `Retry-After`, per
+  email and per IP;
+- the window resetting;
+- reset 200s and 429s byte-identical for known and unknown addresses;
+- sign-up tripping before the 409;
+- IP parsing (garbage, ports, scopes, a missing configured header never
+  falling back to `X-Forwarded-For`), IPv6 /64 grouping and v4-mapped
+  addresses;
+- no new email keys once the IP bucket trips;
+- successful logins giving their attempt back, with the counter floored at 0;
+- a reset-confirm clearing the login count;
+- Redis down: 503 for login and sign-up, the usual 200 for reset;
+- settings of 0 or −1 rejected;
+- no email or IP in any key or log line.
+
+**Web 1052 → 1056 (+4):** the 429 branch of each of the three forms.
+
+**Negative controls,** each file restored byte-for-byte and checked with `cmp`:
+- bypassing the login check fails its tests;
+- removing the give-back on success fails 3 tests;
+- putting the email count before the IP check fails 3 tests.
+
+**The rest of the bar.**
+- Workers 13, shared-types 53, design-system 649.
+- ruff clean; mypy 47, under its 50 ceiling.
+- Typechecks clean, and all six count gates through `assert_count.py`.
+- Both `uv lock --check` runs pass.
+- The OpenAPI contract is regenerated (the reset route's description).
+- Exit codes were read from files.
+# A partial technical audit shows its score on the Technical screen
+
+**2026-09-30, the fifth entry of the day.** One item, one commit.
+
+**Nothing to set on Render.** No migration and no new setting; the API
+contract regenerates byte-identically.
+
+## 1. What changes
+
+- **The Technical screen showed every `partial` audit as "The site could not
+  be read",** although a partial audit read the page and is scored with one
+  component left out, usually freshness when the site gives no date. 8 of the
+  25 audits in avp_dev were partial, and all 8 were scored
+  (`docs/build-log.md:19689`).
+- **Now a partial audit shows its score, its figures and each check,** with
+  the report's own "Partial audit" badge and sentence ("Some signals were
+  unavailable, so the sub-score was computed from what could be measured.")
+  beside the heading. The two screens share the words through
+  `lib/report/strings.ts`, so they cannot drift.
+- **The excluded component sits in a card headed "Not in this score",** one
+  list item per component, with the existing "Not measured" badge and reason.
+  The explainer counts the parts it shows ("three parts" for a partial audit,
+  where it always said "four").
+- **Only a `failed` audit reads "The site could not be read".** A
+  robots-blocked failed audit keeps its own wording. This matches the report,
+  which already treated only `failed` as unreadable.
+
+## 2. The mechanism
+
+- `routers/audits.py` computes components and weights for every audit that is
+  not `failed`, from the stored row, with the same function the score was
+  built from.
+- `ClientTechnicalView.tsx` tests `status === 'failed'` instead of
+  `status !== 'ok'`.
+- The UI review found three Mediums, all fixed here: the page never said the
+  audit was partial, "four parts" contradicted a three-part chart, and the
+  "Not measured" card had no name.
+
+## Found, not fixed
+
+- **The failed-audit wording still differs between the two screens.** The
+  report names the URL and says the dimension is "left unscored"; the
+  Technical screen gives a bare reason code. It predates this change.
+- The CI floors in `infra/ci/floors.json` were not raised.
+
+## Verified
+
+**API 1749 → 1751 (+2).**
+- `test_partial_audit_returns_its_measured_components_and_weights`: a partial
+  audit has components and weights, lists `content_freshness` as excluded and
+  leaves it out of `components`, and the weighted components re-sum to
+  `technicalFoundation`.
+- `test_failed_audit_returns_no_components`.
+
+**Web 1056 → 1068 (+12).** The new `ClientTechnicalView.test.tsx`:
+- partial: never "could not be read", with its score, figures, the "Partial
+  audit" badge and sentence (equal to the report's words), "three parts" and
+  never "four parts", and the "Not in this score" card as a named list;
+- failed: the unreadable state with its reason, no figures and no badge;
+- failed with `ROBOTS_DISALLOWED`: the robots wording;
+- ok unchanged, still "four parts"; no audit.
+
+**Negative controls.** Each file was restored byte-for-byte and checked with
+`cmp`.
+- The web condition put back to `!== 'ok'` fails the 4 partial tests.
+- The API condition put back to `is OK` fails the partial-components test.
+- Removing the badge fails its test.
+
+**The rest of the bar.**
+- Workers 13, shared-types 53, and the full design-system suite 649,
+  including the off-scale scan.
+- ruff clean; mypy 47, under its 50 ceiling.
+- Typechecks clean, and all six count gates through `assert_count.py`.
+- Both `uv lock --check` runs pass.
+- The OpenAPI contract regenerates byte-identically.
+- Copy-contract tests pass; no Python copy changed.
+- Exit codes were read from files.
+
+# Housekeeping: the styleguide build leaves git, and the READMEs describe today
+
+**2026-09-30, the sixth entry of the day.** One item, one commit.
+
+**Nothing to set on Render.** No code, no migration, no setting.
+
+## 1. The styleguide build
+
+- `packages/design-system/dist-styleguide/` is Vite's output
+  (`vite.config.ts:17`).
+- Three hashed files were tracked, and each rebuild left new untracked
+  ones beside them. Nothing serves or deploys the folder; CI rebuilds it
+  to prove it builds.
+- It is now untracked (`git rm --cached`; the files stay on disk) and
+  ignored in `.gitignore`.
+
+## 2. Docs that had gone stale
+
+- **`README.md`:** the layout table's status column ("Epic 7 complete",
+  "Epic 1 complete") now says what each path is and how it runs today:
+  Render for the API (from `apps/api/Dockerfile`, which migrates then
+  starts uvicorn) and for the web app; `apps/workers` a scaffold not used
+  for scans; the Alembic head; `infra/ci`'s floors. The test line ("1496
+  tests as of Epic 9.18") now gives the 2026-09-30 counts and points at
+  the build log's last `## Verified` block and at
+  `infra/ci/floors.json`.
+- **`infra/deploy/README.md`:** no longer says there is no Dockerfile and
+  no deployment target. It says where deployment lives: Render, configured
+  in its dashboard, with no `render.yaml`, and deploys through Render's
+  git hook on push to `main`, before CI finishes.
+- **`packages/shared-types/README.md`:** "Populated in Epic 1" is replaced
+  by the two regenerate commands, and CI's diff check.
+- **`apps/web/README.md`:** said charts use Recharts, which is not a
+  dependency. Charts are the design system's own SVG components
+  (`ChartFrame`, `TrendChart`, `ShareBar` and others).
+- **`.github/workflows/deploy.yml`:** gains a comment saying Render
+  auto-deploys both services through its own git hook, so this workflow
+  deploys nothing and its `render` branch is a placeholder. No job logic
+  changed.
+
+## Found, not fixed
+
+- The README's setup text still frames the environment as "Epic 1". It is
+  stale in tone but not false, so it was left.
+- The CI floors in `infra/ci/floors.json` were not raised. They stay far
+  below the real counts (for example api 1205 against 1751), so CI would
+  not notice a suite that silently ran a quarter fewer tests.
+
+## Verified
+
+**API 1751, workers 13, shared-types 53, design-system 649, web 1068.**
+- mypy 47, under its 50 ceiling.
+- The design-system styleguide build passes and writes only into the
+  now-ignored folder; `git status` shows nothing new there.
+- `crawlerPage.test.tsx`, which lists `dist-styleguide` among ignored
+  folders, passes.
+- `deploy.yml` parses as YAML.
+- ruff clean; typechecks clean; all six count gates through
+  `assert_count.py`; both `uv lock --check` runs pass; `alembic upgrade
+  head` and `check` pass; the OpenAPI contract regenerates
+  byte-identically. Exit codes were read from files.
+
+# The project's agent skills, agents, CLAUDE.md and git guardrails are tracked in git
+
+**2026-09-30, the seventh entry of the day.** Eight skills installed, three archived, six agent files, settings rules, `.gitignore` edits, and one commit.
+
+**Render: nothing to set.**
+
+## 1. What changed
+
+- **Eight adapted skills installed** from `~/Skills-library` into `.claude/skills/`: `production-audit`, `systematic-debugging`, `test-driven-development`, `constraint-driven-development`, `handoff`, `tells`, `avp-geo-seo`, `market-research`. Each carries `LICENSE`, `SOURCE.md` (sha256 of sources) and `CHANGES.md`; `diff -r` against the library shows rc 0 for all eight. They come from the 2026-09-30 skills audit and a pilot in which each got an opus security review (all PASS WITH NITS; every finding fixed) and a risk-pattern grep.
+- **Three skills archived** (moved, not deleted) to `~/Skills-archive/removed-2026-09-30/project/`: `ui-ux-pro-max`, `improve-animations`, `find-animation-opportunities`. `accessibility` was a symlink into `.agents/skills/`; the link was removed (target left in place), recorded in `~/Skills-archive/removed-2026-09-30/project/accessibility.symlink.md`, and its entry removed from `skills-lock.json` so a reinstall does not bring it back. It duplicated the user-level AccessLint skills.
+- **Active set is now exactly 18:** verification-before-completion, intent-driven-development, architecture-decision-records, supabase-postgres-best-practices, fastapi, playwright-cli, playwright-best-practices (these three are symlinks into `.agents/skills`, recorded in `skills-lock.json`), impeccable, emil-design-eng, review-animations, plus the eight new skills.
+- **Tracked third-party skills carry upstream `LICENSE` and `SOURCE.md`:** verification-before-completion (obra/superpowers, MIT), intent-driven-development and architecture-decision-records (ECC, MIT), supabase-postgres-best-practices (supabase/agent-skills, MIT), emil-design-eng and review-animations (emilkowalski/skills, MIT). The repo is public. No `SKILL.md` was edited.
+- **`.claude/settings.json` (new, tracked) holds native permission rules:** deny push to `main` (`* main`, `*:main`, `refs/heads/main`, plain and `git -C/-c` forms), every force-push form (`--force`, `--force-with-lease`, `--force-if-includes`, `-f`, `+refspec`, `--mirror`), `--no-verify`, and `gh pr merge` (a merge lands on `main` like a push; the founder merges). Ask on every other push and destructive local git (`reset --hard`, `clean`, `branch -D`, `stash pop/drop/clear`, whole-tree checkout/restore/switch -f, `add -A/./ --all`). No prompt on commit. Twenty-seven deny rules, fifty-two ask rules. No hook. `.claude/settings.local.json` (ignored) holds read-only git allows which cannot override ask/deny.
+- **Dry push tests run live in this session:** denied with no prompt — `git push --dry-run origin HEAD:main`, `git push --dry-run origin main`, `git -C "<root>" push --dry-run origin HEAD:main`, `--force-with-lease`, leading `--force`, flag-last `--force-if-includes`, `-f`, `+launch-readiness`, `--mirror`, `git -C … --force-with-lease`. `git push --dry-run origin launch-readiness` went through the ask prompt and ran. **Negative control:** `git commit --dry-run --no-verify` denied (the `--no-verify` rule alone matches it); `git commit --dry-run` ran with no prompt.
+- **`.gitignore` anchored `.agents/` and `skills/` to the root** (the unanchored `skills/` also matched `.claude/skills/`), un-ignored `.claude/settings.json`, `.claude/agents/` and exactly 14 skill folders, and stopped ignoring `skills-lock.json`. Still ignored: `settings.local.json`, `impeccable`, the three symlinks. `git check-ignore` evidence: 120 paths not ignored (all to-be-tracked files), seven ignored.
+- **Newly tracked:** `CLAUDE.md`, `.claude/settings.json`, `.claude/agents/*.md` (six files), `skills-lock.json`, and 96 files in the 14 skill folders (105 files total). Key-shaped string scan: zero matches for every secret regex; three hits on `computedHash` sha256 digests in `skills-lock.json`.
+
+## Found, not fixed
+
+- Known gaps in git guardrails (documented in the git-guardrails library skill): a bare `git push` while on `main` (asks, not denied), quoted refspecs, bundled short flags, `bash -c`, aliases and scripts.
+
+## Verified
+
+**No code changed; all counts equal the baseline.**
+- API pytest 1751, workers 13, shared-types 53, design-system 649, web 1068, mypy 47 (ceiling 50).
+- ruff clean; typechecks clean; both `uv lock --check` runs pass; OpenAPI and `api.gen.ts` regenerate byte-identically.
+
+**Negative control:** `git commit --dry-run --no-verify` denied (the `--no-verify` rule matches); `git commit --dry-run` ran.
+
+**The rest of the bar:** all count gates through `assert_count.py` pass; `uv lock --check` clean in both `apps/api` and `apps/workers`; exit codes read from files. No schema change, so Alembic was not run.
+
+# A stock Tailwind class anywhere in apps/web or packages fails the design-system suite
+
+**2026-09-30, the eighth entry of the day.** One item, one commit.
+
+**Render: nothing to set.**
+
+## 1. What changed
+
+- **`packages/design-system/src/tailwind-preset.ts` replaces colours, spacing, fontFamily, fontSize, borderRadius and boxShadow,** so a stock class such as `bg-white text-gray-500 text-sm shadow-md` compiles to nothing. The existing guards in `packages/design-system/src/tokens/reportIsolation.test.ts` (~218-340) only caught numeric spacing suffixes, `-semantic-` colours and bad line/surface/text/on or rounded-* suffixes.
+- **The test file found 0 stock classes in the tree.** Before this change, the bar would have missed them during build and all suites.
+
+## 2. The mechanism
+
+- New `packages/design-system/src/tokens/stockClasses.ts`: a scanner that imports the preset object and reads spacing, fontSize, boxShadow, borderRadius, fontFamily and colours (nested keys and shades) from it, so a future token is allowed automatically. The only hard-coded vocabulary is Tailwind's own stock names (the palette names, white/black/transparent/current/inherit, stock text sizes, shadows, families); each is a finding unless the preset defines the same key. It flags stock colours on bg, text, border-*, ring, ring-offset, outline, fill, stroke, from/via/to, divide, placeholder, decoration, accent, caret and shadow; stock text sizes and shadows; any rounded[-side][-key] whose key is not in the preset; font-sans/font-serif; numeric spacing outside the preset scale on p/m/gap/space, w/h/min/max, inset/top/right/bottom/left, translate and basis. Arbitrary `[...]` values are skipped.
+- A small character-level tokenizer: strips //, /* */ and JSX {/* */} comments; scans ', " and template literals (with ${} bodies scanned as code); keeps line numbers; CSS is scanned only in @apply bodies. A bare word (`shadow`, `rounded`) counts as a class only when at least half the tokens in that string look like utilities, which keeps prose out.
+- New `packages/design-system/src/tokens/stockClasses.test.ts`: fixture tests (each category flagged; real preset classes and prefix-sharing utilities not flagged) plus a tree test over `apps/web/src` and every `packages/*/src` (ts, tsx, css; skips node_modules, dist, .next, dist-styleguide, tests) asserting zero findings and printing file:line:class for any.
+- One scanner false positive was found and fixed (the word `shadow` in a prose `note=` string in `packages/design-system/src/styleguide/Styleguide.tsx:381`). The two comments that mention `bg-slate-500` (tailwind-preset.ts header, ReportView.tsx:14) are not flagged.
+
+## Found, not fixed
+
+- **Known limits:** a class glued to an interpolation (`p-${x}`) is not checked; prose with many hyphenated words could in theory false-positive.
+
+## Verified
+
+**Design-system vitest 649 → 839 (+190).**
+- Red first: the 190 new tests ran against a stub scanner and 60 failed (the fixture tests: each category flagged; real preset classes and prefix-sharing utilities not flagged). With the scanner implemented, all 190 pass.
+- `infra/ci/floors.json`: `design-system-vitest` 606 → 839 (it was already 43 behind at 649).
+- Tree test asserting zero findings across all source files.
+- Negative control: `bg-white text-sm shadow-md` added to `apps/web/src/components/report/ReportView.tsx:186` → the design-system suite exited 1 (1 failed, 838 passed) naming all three at ReportView.tsx:186; the file was restored byte-for-byte with `cp` and verified with `cmp`.
+
+**The rest of the bar.**
+- API pytest 1751, workers 13, shared-types 53, web 1068, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- OpenAPI and `api.gen.ts` regenerate byte-identically.
+- Exit codes were read from files.
+
+# Token pages tell search engines not to index them
+
+**2026-09-30, the ninth entry of the day.** One item, one commit.
+
+**Render: nothing to set.**
+
+## 1. What changed
+
+- **Every token page now sends `X-Robots-Tag: noindex, nofollow` beside `Referrer-Policy: no-referrer`.** The pages are `/share`, `/invite` and `/reset-password` (fragment forms), their legacy `/share/:token`, `/invite/:token` and `/reset-password/:token` path forms, and `/sign-up/google`, which carries the Google sign-up ticket in its query. Before, a token URL posted somewhere public carried no indexing directive. Both headers come from the one route list in `apps/web/next.config.mjs`. Found by the skills-pilot security review of `avp-geo-seo`.
+- **`apps/web/src/app/referrerPolicy.test.ts`** checks that each token page (the `[token]` routes discovered on disk, their fragment parents, `/sign-up/google`) sends both headers, and that every rule sending `no-referrer` also sends `noindex`. It evaluates every `headers()` rule against concrete URLs with Next's own path matcher, so `/`, `/crawler`, `/privacy` and `/terms` provably get no `X-Robots-Tag` while `/share/abc123` and the other token URLs do. Red first: 8 of 20 tests failed before the header existed.
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS.** Its Medium is fixed: the first version of the public-pages test compared `source` strings only, so a catch-all rule such as `/((?!_next).*)` would have noindexed `/` and still passed. The test now matches concrete URLs.
+- **Its Low is recorded, not done:** the test reads `next.config.mjs` output, not a served response. No `next start` curl was run, because a build beside the founder's running `next dev` would share `.next`.
+- **What it confirmed:** Next 15.5 matches header sources strictly on the path; query strings match; the fragment never reaches the server; `/share/abc/` gets a header-less 308 to `/share/abc`, whose HTML carries both headers; there is no basePath, i18n or middleware; no other page reads a credential from the URL.
+
+## Found, not fixed
+
+- **robots.txt will hide this header on the path forms.** Once B5's robots.txt disallows `/share`, `/invite` and `/reset-password`, crawlers that obey it never fetch those pages, so they never see the `noindex`, and a legacy `/share/<token>` URL posted publicly could still be listed URL-only. The founder chose to keep those paths disallowed; this is on the decisions list.
+- **Route discovery only finds directories named `[token]`.** A future `[ticket]` route would be missed.
+
+## Verified
+
+**Web 1068 → 1087 (+19); `web-vitest` floor 818 → 1087.**
+- Negative controls: removing the `X-Robots-Tag` entry fails 8 tests naming the routes; adding a catch-all `noindex` rule fails the public-pages test naming `/`. Both restored with `cp` and checked with `cmp`.
+
+**The rest of the bar.**
+- API pytest 1751, workers 13, shared-types 53, design-system 839, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- OpenAPI and `api.gen.ts` regenerate byte-identically.
+- Exit codes were read from files.
+
+# JS and Python dependency licences are checked in CI on one policy
+
+**2026-09-30, the tenth entry of the day.** One item, one commit.
+
+**Render: nothing to set.**
+
+## 1. What changed
+
+- **Before this, no licence check ran in CI.** `CLAUDE.md` pointed at `apps/api/scripts/license_audit.py`, but that script walks only the Python environment it runs in, CI never ran it, and nothing checked JS licences. Found by the skills-pilot security review of `avp-ui-styling`.
+- **New `apps/api/scripts/js_license_audit.py`** (standard library only; plain `python3`) reads `pnpm licenses list --json` output and applies `license_audit.py`'s own `ALLOWED`, `BLOCKING`, `NOT_COPYLEFT` and `normalise`, imported by file path, so there is one policy. SPDX `OR` passes if any alternative is allowed; `AND` needs every part to pass; a missing, `UNKNOWN` or `Unlicensed` licence is undeclared and blocks, as in the Python script. Verdicts: ok, `REVIEW` (listed, exit 0), `BLOCK` (exit 1).
+- **New `infra/ci/licence-pending-decisions.json` holds open licence questions until the founder decides. It is not an allow-list.** An entry holds a finding only while that package's current verdict is `BLOCK` and both its name pattern and its exact licence string match; the held finding prints `PENDING FOUNDER DECISION: …` on every run and the run exits 0. An entry that matches nothing, or matches a package that is not blocking, fails the check, so it cannot silence anything else or go stale. One entry: `@img/sharp-libvips-*`, `LGPL-3.0-or-later`, raised 2026-09-30: "Accept the LGPL libvips binaries that sharp (an optional dependency of next) loads, or remove sharp?" Per the founder, no exception was added and `ALLOWED`/`BLOCKING` are unchanged.
+- **`.github/workflows/ci.yml`: three steps, each writing to a file and checking its own exit code.** "Python dependency licences (API environment)" in the api job after `uv sync`; "Python dependency licences (workers environment)" in the workers job (it runs `../api/scripts/license_audit.py`); "JS dependency licences" in the web job after `pnpm install --frozen-lockfile`, which writes `pnpm licenses list --json` to `$RUNNER_TEMP/js-licences.json` and then runs the script on that file.
+- **`CLAUDE.md`'s "Dependency licences" bullet** now says Python deps (API and workers environments) are checked by `license_audit.py`, JS deps by `js_license_audit.py` over `pnpm licenses list`, both in CI on one policy, and that open questions live in `infra/ci/licence-pending-decisions.json`, which is not an allow-list.
+- **New `apps/api/tests/test_js_license_audit.py` (17 tests):** MIT ok; GPL-3.0 and LGPL block; `(MIT OR GPL-3.0)` ok; `MIT AND GPL-2.0` blocks; a missing licence blocks; CC-BY-4.0 is `REVIEW` with exit 0; a pending entry holds a matching blocked package; a pending entry with a different licence string does not; a pending entry matching a non-blocking package fails; one matching nothing fails; the real pending file parses with one entry. Red first: 17 failed with the script and the file missing.
+
+## Found, not fixed
+
+- **On Linux CI the held package is `@img/sharp-libvips-linux-x64` (or `-linuxmusl-x64`).** The `@img/sharp-libvips-*` pattern covers both, but that is untested until the first CI run.
+- **The Linux `uv sync --frozen --extra dev` set may differ slightly from the local one,** so the new Python steps could flag something on the first CI run.
+- **`certifi` and `pathspec` are MPL-2.0 (weak copyleft) and only `REVIEW` under today's `BLOCKING` regex.** Whether that fits "no copyleft" is a founder question; changing `ALLOWED`/`BLOCKING` was out of scope.
+
+## Verified
+
+**API pytest 1751 → 1768 (+17); `api-pytest` floor 1205 → 1768.**
+- **Negative control:** a fake GPL-3.0 package added to a copy of the real licence list makes the check exit 1, naming it.
+- **The three licence steps, run locally as CI will run them (exit codes read from files):**
+  - API environment: 65 distributions, 61 ok, 4 `REVIEW` (`avp-api` itself UNLICENSED, `certifi` MPL 2.0, `email-validator` "The Unlicense (Unlicense)", `pathspec` MPL 2.0), 0 blocks; exit 0.
+  - Workers environment: 80 distributions, 75 ok, 5 `REVIEW` (the same four plus `avp-workers`), 0 blocks; exit 0.
+  - JS: 242 rows (one per package version), 238 ok, 3 `REVIEW` (`argparse` 2.0.1 Python-2.0, dev; `caniuse-lite` CC-BY-4.0, runtime; `lru-cache` 11.5.2 BlueOak-1.0.0, dev), 1 held (`@img/sharp-libvips-darwin-arm64@1.2.4`, LGPL-3.0-or-later), 0 unheld blocks; exit 0.
+
+**The rest of the bar.**
+- Workers 13, shared-types 53 (0 fail), design-system 839, web 1087, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- OpenAPI and `api.gen.ts` regenerate byte-identically.
+- Exit codes were read from files.
+
+# Three Tailwind traps are documented and caught by the design-system suite
+
+**2026-09-30, the eleventh entry of the day.** One item, one commit.
+
+**Render: nothing to set.**
+
+## 1. What changed
+
+- **`docs/design-system.md` has a new section, "Tailwind traps the preset cannot catch at build time"** (end of §8, before §9). Replacing the palette makes a wrong colour fail loudly; these three go the other way, because the class exists, compiles, and paints a Tailwind default the preset never touched. Found by the skills-pilot rebuild of `ui-styling` on AVP's tokens.
+  1. **`dark:` follows the OS, not the theme switch.** Neither `apps/web/tailwind.config.ts` nor the preset sets `darkMode`, so Tailwind 3.4's default `'media'` applies (`tailwindcss/stubs/config.full.js:4`), while AVP's theme is `[data-theme='dark']` (`tokens.css:288`). Rule: never write `dark:`.
+  2. **A bare `ring` paints stock blue.** Stock `ringColor.DEFAULT` is `theme('colors.blue.500', '#3b82f6')` at 0.5 opacity (`config.full.js:761-764`); the preset replaces `colors` and defines no ring colour, so the `#3b82f6` fallback wins. Rule: no ring widths; focus is `focus-visible:shadow-focus` or the global `:focus-visible` rule in `base.css`, both on `--avp-focus-ring`.
+  3. **A bare `border` draws `currentColor`.** Preflight sets `border-color: theme('borderColor.DEFAULT', currentColor)` (`preflight.css:12`), stock `borderColor.DEFAULT` falls back to `currentColor` when `colors.gray` is absent (`config.full.js:82-85`), and the preset has no `gray`. Rule: pair every border width with `border-line-hairline`, `border-line-strong` or `border-line-ink` in the same class list.
+- **`packages/design-system/src/tokens/stockClasses.ts` flags all three:** any `dark` variant on a class; a ring width (`ring`, `ring-1/2/4/8`) with no ring colour in the same class string (`ring-0`, `ring-inset`, `ring-offset-*` are not widths); a border width (`border`, `border-[trblxyse]`, `border-N`, side widths) with no border colour in the same class string (style keywords and `border-0` do not count; `border-transparent` counts as a colour). It reads "same class string" only, so a colour applied by a wrapper or a global rule is a finding to fix, not an exception.
+- **`stockClasses.test.ts`: 7 new fixture tests.** Red first: 3 failed of 197. A first green attempt failed once because `border-t` was read as a colour; the colour pattern was tightened.
+- **Current tree: 0 real hits** for all three in `apps/web/src` and `packages/*/src` (the two `dark:` matches in `ThemeControl.tsx:26,32` are object keys, not classes; every `border*` is paired with `border-line-hairline`). No source file changed.
+
+## Verified
+
+**Design-system vitest 839 → 846 (+7); `design-system-vitest` floor 839 → 846.**
+- **Negative control:** `dark:bg-surface-raised ring-2` added to `apps/web/src/components/marketing/MarketingFooter.tsx:23` → the suite exited 1 (1 failed, 845 passed), naming both classes at that line; the file was restored with `cp` and `cmp` identical.
+
+**The rest of the bar.**
+- API pytest 1768, workers 13, shared-types 53 (0 fail), web 1087, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- OpenAPI and `api.gen.ts` regenerate byte-identically.
+- Exit codes were read from files.
+
+# The web app serves a robots.txt that welcomes AI crawlers and keeps token pages out
+
+**2026-09-30, the twelfth entry of the day.** One item, one commit.
+
+**Render: nothing to set.**
+
+## 1. What changed
+
+- **Before this, nothing served `/robots.txt`** on either host: `apps/web` had no `public/` directory, no `app/robots.*`, no middleware and no rewrite, and the FastAPI app has no such route (its "robots" code is the crawler's handling of client sites).
+- **New `apps/web/src/app/robots.ts`** (Next 15 `MetadataRoute.Robots`): one rule, `userAgent: '*'`, `allow: '/'`, `disallow: ['/share', '/invite', '/reset-password']`. Founder decision 2026-09-30: AI crawlers are allowed, search and training alike, so there is no per-bot group and no public page is blocked. The disallows are prefix matches, so the legacy `/share/:token`, `/invite/:token` and `/reset-password/:token` forms are covered too. No sitemap is named, because none is served.
+- **New `apps/web/src/app/robots.test.ts` (6 tests):** the `*` rule allows `/` and disallows exactly the three pages; `/share/abc123`, `/invite/abc123` and `/reset-password/abc123` are covered by prefix; no rule blocks `/`, `/crawler`, `/privacy` or `/terms`; any explicit AI-crawler group (GPTBot, OAI-SearchBot, ChatGPT-User, ClaudeBot, Claude-SearchBot, Claude-User, PerplexityBot, Perplexity-User, Google-Extended, CCBot, Applebot-Extended) would have to allow `/` and repeat the three disallows, because robots.txt groups do not inherit from `*`; `sitemap` is absent; and the object rendered with Next's own `resolveRobots` contains `User-Agent: *`, `Allow: /` and the three `Disallow:` lines, with no bare `Disallow: /` and no `Sitemap:`. Red first: the test failed to load with `robots.ts` missing.
+
+## Found, not fixed
+
+- **The disallow hides the noindex on those paths.** Crawlers that obey robots.txt never fetch `/share`, `/invite` or `/reset-password`, so they never see the `X-Robots-Tag: noindex` those pages send (previous entry); a legacy `/share/<token>` URL posted publicly could still be listed URL-only. Kept as the founder decided; it is on the decisions list.
+- **The three paths now live in two lists:** `next.config.mjs` (headers) and `robots.ts`. Nothing ties them together; a shared list would be a separate change.
+- **The rendered-text test imports `resolveRobots` from `next/dist/…`,** an internal path (as `referrerPolicy.test.ts` already does for the path matcher); a Next upgrade could move it.
+
+## Verified
+
+**Web vitest 1087 → 1093 (+6); `web-vitest` floor 1087 → 1093.**
+- **Negative control:** adding `{ userAgent: 'GPTBot', disallow: '/' }` fails 3 tests ("blocks no public page for any agent", "never blocks an AI crawler", "renders as the text Next serves"); the file was restored with `cp` and `cmp` identical.
+
+**The rest of the bar.**
+- API pytest 1768, workers 13, shared-types 53 (0 fail), design-system 846, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- OpenAPI and `api.gen.ts` regenerate byte-identically.
+- Exit codes were read from files.
+
+# Checkout is refused while a subscription is live, and one agency can no longer end up with two
+
+**2026-09-30, the thirteenth entry of the day.** One item, one commit.
+
+**Render: nothing to set.** The Stripe timeout and retry values are constants in code.
+
+## 1. What changed
+
+- **`POST /api/v1/agencies/{agencyId}/billing/checkout` returns 409 `/problems/subscription-already-active`** when the agency's `subscription_status` is `active` or `trialing`, before any Stripe call. Every other status (none, `past_due`, `canceled`, `unpaid`, `incomplete`, `incomplete_expired`, `paused`) behaves as before. The owner/admin and tenancy checks still run first, so a non-member gets the existing 403 or 404, never a 409 that reveals subscription state. The detail says "This agency already has a current subscription. Manage it from Manage billing in Settings." and carries no Stripe id or status.
+- **The security review found two pre-existing ways one agency could end up billed twice, and both are closed here** (no product decision involved):
+  - **Two concurrent first checkouts created two Stripe customers.** `uq_agencies_stripe_customer_id` covers one column, so the second request simply overwrote the first customer id (the old docstring said otherwise). Checkout now re-reads the agency with a row lock in the request's transaction and runs the guard and `ensure_customer` on the locked row, so the second request waits and reuses the first customer. A repeat checkout takes `FOR NO KEY UPDATE`, so inserts into child tables (scans, prompt runs, alerts, clients) are not blocked; the first checkout takes the full lock because writing `stripe_customer_id` changes a key column.
+  - **An older open Checkout link stayed payable after a newer one was paid.** Before creating a session for an agency that already has a customer, checkout now asks Stripe whether that customer has an `active` or `trialing` subscription (409 if so, which also covers a paid checkout whose webhook has not landed), then lists the customer's open Checkout Sessions and expires each, so at most one link is ever payable. If the list reports `has_more`, or a Stripe error occurs while expiring, checkout returns 503 `/problems/service-unavailable` with a fixed message and creates nothing.
+- **The lock is bounded.** `SET LOCAL lock_timeout = '3s'` runs before the locked read; a held lock returns 409 `/problems/checkout-in-progress` ("A checkout for this agency is already in progress. Try again in a moment."). The Stripe client is built with a 15 s HTTP timeout and one network retry (the SDK default was 80 s and two retries), so a hung Stripe call can no longer hold the row for minutes.
+- **Webhook backstop:** when `checkout.session.completed` or `customer.subscription.created` carries a subscription id different from a live stored one, the API logs `stripe.webhook.second_subscription` (event id, agency id, both subscription ids; no email, no secret) and keeps today's behaviour. `docs/runbook.md` gains "If the logs show a second Stripe subscription".
+- **Contracts:** `docs/api-contracts.md` documents both 409 problem types, the 503, the Stripe-side check, the link expiry and the bounded wait; `openapi.json` and `api.gen.ts` are regenerated (the checkout operation declares its 409).
+
+## 2. Tests
+
+- `tests/test_billing.py` gains 23 tests: active and trialing refused with no customer or session created; all seven other statuses still create a session; 403 and 404 precede the 409 and make no Stripe call; a second checkout expires the first open link; a failed expire returns 503 and creates nothing; `has_more` returns 503; a live Stripe subscription with a null database status is refused; two concurrent first checkouts create one customer (a real `asyncio.gather` against the ASGI app); a held agency lock returns `checkout-in-progress` in under 5 s with no Stripe call; a first checkout blocked by a child insert fails before Stripe; a repeat checkout is not blocked by a child insert; the client carries the 15 s timeout and one retry; the second-subscription warning fires, contains no `@`, and a repeated id does not warn. The held-lock tests release their own lock after 6 s, so if `lock_timeout` regresses they fail in about 20 s instead of hanging the suite.
+- Red first: the active and trialing cases returned 201; later, the concurrency test caught a real double customer (`assert 2 == 1`).
+
+## 3. The review
+
+- **Security review (opus), twice: PASS WITH NITS both times.** Round one: the guard is correctly ordered and leaks nothing; it raised the two pre-existing double-billing paths above (one High, one Medium) and the nits (raw API route in the detail, a missing no-Stripe-call assertion), all fixed. Round two: the lock is correct and cannot deadlock with the webhook (both take the one agency lock first); it raised the unbounded lock (Medium) and the paid-but-unapplied window (Low), both fixed.
+
+## Found, not fixed
+
+- **Which statuses should also refuse checkout is a founder decision.** `past_due`, `unpaid`, `paused` and `incomplete` are still live Stripe subscriptions; checkout for them creates a second subscription (the Stripe-side check only looks for `active` and `trialing`). The web UI shows Subscribe only when the status is empty, so a `canceled` agency cannot resubscribe from the UI either.
+- **The webhook applies events for any subscription id.** If a duplicate is cancelled in Stripe, the agency can be marked `canceled` while the kept subscription keeps billing (the runbook step covers recovery).
+- **The Checkout link lifetime is Stripe's default (24 h);** shortening it is a founder decision.
+- **A first checkout that fails after the Stripe customer is created still leaves an orphan customer,** as before.
+- **The web does not yet show the 409 or 503 detail specially;** the only call site is `apps/web/src/lib/api.ts`.
+- **The lock is still held across the Stripe calls,** now bounded by the 15 s timeout and one retry per call.
+
+## Verified
+
+**API pytest 1768 → 1791 (+23); `api-pytest` floor 1768 → 1791.**
+- **Negative controls:** replacing the guard with `if False:` fails the active and trialing tests; removing `with_for_update()` fails the concurrency test; replacing the expire call with `pass` fails three tests; forcing the full lock on a repeat checkout fails the child-insert test; removing `SET LOCAL lock_timeout` fails both held-lock tests in about 20 s; emptying the Stripe subscription check fails the null-status test. Each file was restored with `cp` and checked with `cmp`.
+
+**The rest of the bar.**
+- Workers 13, shared-types 53 (0 fail), design-system 846, web 1093, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- `openapi.json` and `api.gen.ts` were regenerated for this change, and regenerating again produces the same files (+22/−2 against the last commit).
+- Exit codes were read from files.
+
+# Change-password is rate-limited like login
+
+**2026-10-01, the first entry of the day.** One item, one commit.
+
+**Render: nothing to set.** Three new optional settings have defaults: `CHANGE_PASSWORD_LIMIT_PER_EMAIL` (10), `CHANGE_PASSWORD_LIMIT_PER_IP` (30), `CHANGE_PASSWORD_WINDOW_SECONDS` (900).
+
+## 1. What changed
+
+- **`POST /auth/change-password` is rate-limited per account and per IP, like login,** so a stolen session cookie cannot be used to brute-force the current password. It uses the existing `rate_limit.enforce()` with a new action, `change_password`, keyed on the signed-in account's normalised email through the same HMAC as login under its own prefix (`rl:change_password:{email|ip}:*`), so no raw email is in a key or a log line. Defaults match login: 10 per account and 30 per IP per 15 minutes; values below 1 are rejected.
+- **Order:** authentication first (an unauthenticated request gets 401 and creates no rate-limit key), then `enforce()`, then Argon2 verification. A limited request (429 `/problems/rate-limited` with `Retry-After`) never verifies the password, sets no cookie and revokes no session. If Redis errors, the route fails closed with 503, as login does.
+- **A successful change gives one attempt back,** like login, after the commit (so a failed commit refunds nothing). **A completed password reset now also clears the change-password lock** (`clear_login` deletes both keys).
+- **The per-account budget is separate from login's.** A cookie holder can make at most 10 guesses here per 15 minutes in addition to login's 10; a shared budget would have let a stolen cookie lock the victim out of login. `logout-all` needs no password and revokes a stolen session. Keying by email is safe today because no route changes `users.email`; a code comment says `user.id` would be needed if one is ever added.
+- **Contracts:** `docs/api-contracts.md` documents the 429 and 503, the limits and settings, and the budget choice; `openapi.json` and `api.gen.ts` are regenerated (description text only; the route declares no `responses=`).
+
+## 2. Tests
+
+- New `tests/test_change_password_rate_limit.py` (16 tests): the per-account and per-IP limits trip with 429, `Retry-After` and the problem type, and even the right password is refused once limited; a different IP is unaffected; a success gives one attempt back; eight successes in a row never trip it; keys and logs contain no email and login's keys are untouched; an unauthenticated request creates no key; a limited request does not call `verify_password`, sets no cookie and leaves sessions working; a completed reset unlocks change-password; a Redis error gives 503 with no email in the body. Red first: every test errored at setup because the settings did not exist.
+
+## 3. The review
+
+- **Security review (opus): PASS WITH NITS, nothing Medium or above.** Fixed from it: a reset now clears the change-password lock; the give-back runs after the commit; the module docstring; the Redis-down test; the budget sentence in the contract. Its other findings are accepted and recorded below.
+
+## Found, not fixed
+
+- **A cookie holder can keep the real user from changing their password** by spending the 10 attempts every 15 minutes. The user can escape with `logout-all` (no password needed) and the lock clears within 15 minutes; locking someone's login already needs only their email, so this is no worse.
+- **The known per-IP caveat stands:** if `CLIENT_IP_HEADER` is set but the header never arrives, every request shares one IP bucket (runbook, "Confirm how Render passes the client IP").
+
+## Verified
+
+**API pytest 1791 → 1807 (+16); `api-pytest` floor 1791 → 1807.**
+- **Negative controls:** removing the `enforce()` call fails five tests (per-account trip, per-IP trip, give-one-back, keyed-on-account, no-verify/no-revoke); removing the change-password key from the reset clearing fails the reset test. Each file was restored with `cp` and checked with `cmp`.
+
+**The rest of the bar.**
+- Workers 13, shared-types 53 (0 fail), design-system 846, web 1093, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- `openapi.json` and `api.gen.ts` were regenerated for this change, and regenerating again produces the same files.
+- Exit codes were read from files.
+
+# Redis failures answer fast with a 503, and a password change or reset really ends every other session
+
+**2026-10-01, the second entry of the day.** One item, one commit.
+
+**Render: nothing to set.** New optional settings with defaults, read by the API and the workers: `REDIS_CONNECT_TIMEOUT_SECONDS` (2) and `REDIS_SOCKET_TIMEOUT_SECONDS` (2); both must be finite and greater than 0.
+
+## 1. What changed
+
+- **Redis timeouts.** The API's Redis pool now has a 2 s connect timeout, a 2 s read timeout and `health_check_interval=30` (no retries: a retried rate-limit script whose reply was lost would count twice). The API pool uses no blocking commands (no `BLPOP`, `XREAD`, pub/sub), so a read timeout cannot cut a legitimate wait. Workers: the health-check client gets both timeouts; the Celery broker gets a connect timeout only, because kombu's pub/sub listener idles on its socket by design; the result backend gets a connect timeout and keeps Celery's 120 s read default. The API never publishes Celery tasks, so it has no broker path that could stall.
+- **A Redis outage is a 503, not a 500 or a hang.** Before this, the rate limiter already failed closed with 503, but the session store had no mapping, so `/auth/me` and every authenticated route returned 500 when Redis failed. A new app-wide handler maps redis-py `ConnectionError` and `TimeoutError` to the existing 503 `/problems/service-unavailable` and logs only the class name (`redis.unavailable`). `AuthenticationError` and `AuthorizationError` (which subclass `ConnectionError` in redis-py 6.4) and any other `RedisError`, such as a Lua `ResponseError`, propagate as 500, so a real bug or a rotated Redis password does not look like an outage.
+- **Found by the security review, fixed here (all pre-existing):**
+  - **A password change or reset could leave other sessions alive.** Both committed the new password and then revoked sessions in Redis; a Redis failure there (now a fast 503) left the password changed and an attacker's session alive for up to 14 days, and the retry failed. Both now also revoke **before** the commit: if that fails, nothing changes (password unchanged, reset token not consumed, so the retry works); if the commit then fails, the user is merely signed out elsewhere. The post-commit revoke stays. The durable fix, a `users.sessions_valid_after` column checked on every request, is described in the docstrings and not built.
+  - **`revoke_all_for_user` could orphan a session.** It read the user's session set and then deleted the whole set; a session created in between kept its key but left the index, so logout-all, a password change or a reset could never reach it. It now removes only the members it read (`SREM`).
+  - **A login racing a password change could keep a session.** A login that verified the old hash just before the change committed could create its session after the final revoke. Login now re-reads the password hash after creating the session and, if it changed, revokes that session and answers 401, without refunding the rate-limit attempt.
+  - **Two concurrent confirms of one reset link both succeeded.** The token row is now locked (`FOR UPDATE`), so the second gets 400 `invalid-reset-token`.
+  - `confirm.succeeded` is now logged after the commit (user id only), so a rolled-back confirm no longer logs success.
+- **Docs:** `docs/api-contracts.md` (Sessions) describes the timeouts, the settings and the 503.
+
+## 2. Tests
+
+- New `tests/test_redis_timeouts.py`, `tests/test_password_change_revocation_order.py` and `tests/test_session_races.py`, plus new cases in `apps/workers/tests/test_celery_config.py`: the pool carries the timeouts; a local TCP server that accepts and never answers makes Redis calls fail within the bound, and login and `/auth/me` answer 503 in under 5 s with no host or email in the body or log; a refused connection answers 503; a `ResponseError` propagates; settings reject 0, negatives, NaN and infinity in both apps; a Redis failure on the revoke leaves reset and change-password unchanged and retryable; a session indexed during revoke-all stays reachable; a login across a password change keeps no session; concurrent confirms give one success. The hang tests run under a 15 s watchdog, so a missing timeout fails instead of stalling the suite. All loopback; no external host.
+- Red first for every group.
+
+## 3. The review
+
+- **Security review (opus), three rounds, each PASS WITH NITS.** Round one raised the revoke-after-commit gap (Medium, pre-existing) and four Lows (a wrong pool comment, too-broad 503 mapping, unvalidated worker timeouts, unclosed test pools); round two confirmed the new ordering and raised the orphaned-session and login races (two Mediums, pre-existing) and three Lows (reset-token lock, the `AuthenticationError` mapping, the early success log); round three checked those fixes and found them sound; its remaining notes (below) are pre-existing or latent and are recorded, not fixed.
+
+## Found, not fixed
+
+- **The durable session fix** (`users.sessions_valid_after`, checked by `current_principal`) needs a migration; the stopgaps above close the known paths.
+- **Other routes that commit and then touch Redis** (seat release, accept-invitation, Google callback and complete) were reviewed: a Redis failure there leaves the database change in place and returns 503, with no security impact (a removed seat is rejected on the next request; the others only fail to create a session).
+- **Reset-request still fails open** when Redis is down, as before; once email is on, a Redis outage lifts the per-email cap on reset emails.
+- **A rare spurious 401** is possible if a legitimate password rehash on another login lands in the re-check window; the user retries.
+- **The login re-check relies on Postgres's default READ COMMITTED.** Nothing sets an isolation level; under REPEATABLE READ the re-read would use an older snapshot. Pinning `isolation_level="READ COMMITTED"` on the engine would make that explicit.
+- **The automatic password rehash on login overwrites the hash unconditionally** (`services/auth.py`, pre-existing). If a password change commits between login's read and its flush, login writes back a hash of the old password and the change is silently undone. It only happens after an Argon2 parameter raise; the fix is a compare-and-set update (`WHERE password_hash = <old>`).
+- **`SessionStore.touch` reads then sets unconditionally,** which would resurrect a revoked session that is no longer indexed. Nothing calls it today; it should use `xx=True` if it is ever used.
+
+## Verified
+
+**API pytest 1807 → 1831 (+24); workers pytest 13 → 26 (+13); floors raised to match.**
+- **Negative controls:** removing the pool timeouts fails three timeout tests through the watchdog (no hang); moving the revokes back to after the commit fails both Redis-failure tests; reverting `SREM` to `DEL` fails the orphaned-session test; removing the login re-check fails the race test. Each file was restored with `cp` and checked with `cmp`.
+
+**The rest of the bar.**
+- Shared-types 53 (0 fail), design-system 846, web 1093, mypy 47 (ceiling 50).
+- ruff clean in both Python apps; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass (no dependency change); no schema change, so Alembic was not run.
+- OpenAPI and `api.gen.ts` regenerate byte-identically (no route signature changed).
+- Exit codes were read from files.
+
+# The Google sign-up ticket leaves the query string
+
+**2026-10-01, the third entry of the day.** One item, one commit.
+
+**Render: nothing to set.** The API and the web app deploy separately; see "Found, not fixed" for the deploy window.
+
+## 1. What changed
+
+- **The ticket rides in the URL fragment, like the share, invite and reset tokens (`d2fe29a`).** The Google callback now redirects to `/sign-up/google#ticket=…` instead of `?ticket=…`, so the ten-minute bearer ticket no longer reaches the web server's request log, browser history as a query, or a `Referer`. Google's own `code` and `state` on the callback are still stripped from the access log (`logs.py`).
+- **The peek is a POST.** `/auth/google/pending` is now `POST` with `{ "ticket": … }` in the JSON body (new `GooglePendingRequest`); `GET` answers 405, so a stale `?ticket=` reaches no handler. A query-only POST answers 422; an unknown ticket keeps the existing 400 `invalid-google-ticket`. The peek still does not consume the ticket; `POST /auth/google/complete` still consumes it once.
+- **Web:** new `apps/web/src/lib/googleTicket.ts` (`takeGoogleTicket`) reads `#ticket=`, then clears the fragment and any query with `history.replaceState`; the page holds the read in a ref so React's development double effect does not read an already-cleared address bar. `lib/api.ts` `googlePending` posts the body. For one release only, the page also accepts a legacy `?ticket=` link when there is no fragment, moves it out of the address bar at once and uses the POST; it is never sent to the API in a query. The fallback is dead ten minutes after deploy and is marked for removal in the code and in `docs/api-contracts.md`.
+- **A reload of `/sign-up/google` no longer keeps the ticket** (it is removed from the address bar once read, as on the invite and reset pages); the docstrings now say so. The page shows its existing "expired" message.
+- **Contracts:** `docs/api-contracts.md` (Google routes) documents the fragment redirect, the POST peek, the 405 and the legacy fallback; `openapi.json` and `api.gen.ts` are regenerated.
+
+## 2. Tests
+
+- API (`tests/test_google_sign_in.py`, `tests/test_logging_config.py`, `tests/test_scan_allowance.py`): the redirect has an empty query and the ticket after `#`; `GET /pending` is 405, a query-only POST 422, an unknown ticket 400; callback, peek and complete leave the ticket and the email out of every app log line (over `ASGITransport`, so uvicorn's access log is covered by the empty-query and 405 assertions and `test_logging_config.py`, not by that test); peek does not consume, complete consumes once, expiry holds.
+- Web (new `googleTicket.test.ts`, `api.googlePending.test.ts`): the helper reads the fragment first, clears the address bar, and falls back to a legacy query only without a fragment; the pending call is a POST with no `?` in its URL. The page itself is checked by source (no `location.search`), because this vitest setup has no DOM.
+- Red first: 6 API failures and 2 web failures before the code change.
+
+## 3. The review
+
+- **Security review (opus): PASS WITH NITS, nothing Medium or above.** Confirmed: uvicorn logs method, path and status only; no third-party script or prefetch runs on the page before the address bar is cleared, and the fragment never enters a `Referer`; a cross-origin JSON POST needs a CORS preflight against the allowlist; the peek returns what the old GET returned; the ticket is 256-bit and single-use. Fixed from it: the docstrings and a `next.config.mjs` comment that described the old query, and a test name that claimed more than it checked.
+
+## Found, not fixed
+
+- **Deploy window.** Render deploys the API and the web app separately. New web with the old API gets 405 on the peek; old web with the new API finds no query ticket; either way a user mid-sign-up sees "expired" and starts again. Deploying both together shortens it.
+- **The ticket is still in the callback's 302 `Location` header,** which Render's proxy sees because it terminates TLS. Whether Render's request log keeps response headers is not visible from the repo; the same was true before.
+- **The "expired" message on reload** is the page's existing copy; clearer wording ("removed from the address bar once read; start again", as on invite and reset) is a copy decision.
+- **Next's router may keep the fragment in its own state** if the page's effect runs before the router patches `history.replaceState` (unconfirmed; nothing on this page triggers a router action, and `useFragmentToken` has the same pattern). A one-time check in a real browser would settle it.
+- `/pending` and `/complete` have no rate limit; the ticket is unguessable, as for reset and invite redemption.
+
+## Verified
+
+**API pytest 1831 → 1834 (+3); web vitest 1093 → 1102 (+9); floors raised to match.**
+- **Negative controls:** putting `?ticket=` back in the redirect fails 7 API tests; making the helper read `location.search` first fails the web helper test. Each file was restored with `cp` and checked with `cmp`.
+
+**The rest of the bar.**
+- Workers 26, shared-types 53 (0 fail), design-system 846, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
+- `openapi.json` and `api.gen.ts` were regenerated for this change, and regenerating again produces the same files.
+- Exit codes were read from files.

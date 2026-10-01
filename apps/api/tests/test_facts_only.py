@@ -26,6 +26,7 @@ from avp_api.models import (
     PromptRunBrand,
     PromptRunCitation,
     PromptRunResult,
+    StripeWebhookEvent,
     TechnicalAudit,
     TechnicalAuditCheck,
 )
@@ -51,6 +52,10 @@ FACTS_ONLY_MODELS = [
     PromptRunResult,
     PromptRunBrand,
     PromptRunCitation,
+    # The Stripe webhook ledger: an event id, a type, Stripe's timestamp, an
+    # agency id and an outcome code. Not third-party prose, but it is fed by an
+    # external payload, so it is held to the same bounded-columns rule.
+    StripeWebhookEvent,
 ]
 
 # Column names that would indicate raw third-party content is being stored.

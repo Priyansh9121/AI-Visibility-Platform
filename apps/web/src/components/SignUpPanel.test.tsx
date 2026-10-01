@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 /**
  * Create an agency — Epic 9.12.
  *
@@ -7,10 +9,18 @@
  * the API's own auth tests already cover 201, 409 and 422.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { act } from 'react';
+import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { GOOGLE_SIGN_IN_URL } from '@/lib/api';
+import { ApiProblem, GOOGLE_SIGN_IN_URL } from '@/lib/api';
 import { SignUpPanel } from './SignUpPanel';
+
+const signUp = vi.fn();
+vi.mock('@/lib/api', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/lib/api')>();
+  return { ...real, api: { ...real.api, signUp: (...a: unknown[]) => signUp(...a) } };
+});
 
 const render = () =>
   renderToStaticMarkup(<SignUpPanel onSignedUp={() => {}} onSwitchToSignIn={() => {}} />);
@@ -139,5 +149,47 @@ describe('Google is beside the password, not instead of it', () => {
     expect(out).toMatch(/aria-hidden="true"><\/span>or<span/);
     expect(out).toContain('>Email<');
     expect(out).toContain('>Password<');
+  });
+});
+
+// --- 429: the server's own words, in the existing error UI -------------------
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+describe('when the server answers 429', () => {
+  it('shows its detail in the error state, not a generic or network message', async () => {
+    signUp.mockRejectedValue(
+      new ApiProblem({
+        type: '/problems/rate-limited',
+        title: 'Too many requests',
+        status: 429,
+        detail: 'Too many attempts. Try again in 15 minutes.',
+        instance: '/api/v1/auth/x',
+      }),
+    );
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const root = createRoot(el);
+    act(() => root.render(<SignUpPanel onSignedUp={() => {}} onSwitchToSignIn={() => {}} animate={false} />));
+    const type = (input: HTMLInputElement, value: string) =>
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    el.querySelectorAll<HTMLInputElement>('input').forEach((i) => type(i, i.type === 'email' ? 'a@b.example' : 'a-long-enough-value-1'));
+    act(() => {
+      el.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const text = el.textContent ?? '';
+    expect(text).toContain('Too many attempts. Try again in 15 minutes.');
+    expect(text).not.toContain('did not respond');
+    expect(text).not.toContain('did not complete');
+    expect(el.querySelector('.avp-errorstate')).not.toBeNull();
+    act(() => root.unmount());
+    document.body.innerHTML = '';
   });
 });

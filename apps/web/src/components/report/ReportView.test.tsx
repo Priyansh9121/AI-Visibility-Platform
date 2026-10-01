@@ -669,7 +669,7 @@ describe('the report never acquires the landing page motion', () => {
   });
 
   it('carries none of it in the public share view either', () => {
-    // `/share/{token}` renders the same component with `publicView`, and is the
+    // `/share` renders the same component with `publicView`, and is the
     // route a prospect actually opens.
     const html = renderToStaticMarkup(<ReportView report={helpscoutReport} publicView animate />);
     expect(html).not.toContain('avp-ledger--staggered');

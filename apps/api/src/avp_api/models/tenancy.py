@@ -150,6 +150,16 @@ class Agency(Base, TimestampMixin, SoftDeleteMixin):
         Boolean, nullable=False, default=False, server_default=text("false")
     )
 
+    # `event.created` of the newest Stripe event applied to this agency's
+    # billing state above. An event strictly older than this is stale and
+    # changes nothing (`services/billing.apply_event`); equal applies, because
+    # Stripe's clock has one-second resolution and checkout and subscription
+    # events often share a second. Written by the webhook only; NULL until the
+    # first event, so it needs no backfill.
+    stripe_event_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     # --- white-label branding (Epic 9.22) -----------------------------------
     #
     # Two columns, and the SHORTNESS of that list is the decision. §7 line 2

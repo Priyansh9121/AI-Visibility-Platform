@@ -443,7 +443,7 @@ async def test_a_share_token_holder_can_download_the_pdf(client: AsyncClient) ->
     token = (await client.post(f"{BASE}/scans/{scan_id}/share")).json()["token"]
     await client.post(f"{BASE}/auth/logout")
 
-    resp = await client.get(f"{BASE}/reports/{token}.pdf")
+    resp = await client.post(f"{BASE}/reports/shared/pdf", json={"token": token})
     assert resp.status_code == 200, resp.text
     assert resp.headers["content-type"] == "application/pdf"
     assert resp.content.startswith(b"%PDF-1.7")
@@ -458,39 +458,37 @@ async def test_the_share_pdf_is_the_same_document_as_the_authenticated_one(
 
     private = await client.get(f"{BASE}/scans/{scan_id}/report.pdf")
     await client.post(f"{BASE}/auth/logout")
-    public = await client.get(f"{BASE}/reports/{token}.pdf")
+    public = await client.post(f"{BASE}/reports/shared/pdf", json={"token": token})
 
     assert _visible_text(private.content) == _visible_text(public.content)
 
 
 @pytest.mark.parametrize(
-    "token", ["not-a-real-token", "", "a" * 300, "../../etc/passwd", "abc%2F"]
+    "token", ["not-a-real-token", "a" * 300, "../../etc/passwd", "abc%2F"]
 )
 async def test_every_bad_share_token_is_a_404(client: AsyncClient, token: str) -> None:
     """No shape pre-check, no 401, one code path — the rules Epic 9.8 set for
     the JSON route, unchanged for the PDF one."""
-    resp = await client.get(f"{BASE}/reports/{token}.pdf")
+    resp = await client.post(f"{BASE}/reports/shared/pdf", json={"token": token})
     assert resp.status_code == 404
     if resp.headers["content-type"].startswith("application/problem"):
         assert resp.json()["type"] == "/problems/not-found"
 
 
-async def test_the_pdf_route_is_not_swallowed_by_the_json_route(
+async def test_the_two_share_routes_each_serve_their_own_content_type(
     client: AsyncClient,
 ) -> None:
-    """Starlette's path converter matches `.` too.
+    """`/reports/shared` is JSON and `/reports/shared/pdf` is the file.
 
-    `/reports/{token}` will happily match `/reports/abc.pdf` with a token of
-    "abc.pdf", and routes are tried in registration order — so declared the
-    wrong way round, every PDF request silently became a JSON request for a
-    token nobody minted. Asserted here rather than left to the file's shape.
+    The token is in the body, so there is no path-converter overlap any more;
+    this pins that the two stay distinct routes.
     """
     scan_id = await _scan_for_report(client)
     token = (await client.post(f"{BASE}/scans/{scan_id}/share")).json()["token"]
     await client.post(f"{BASE}/auth/logout")
 
-    pdf = await client.get(f"{BASE}/reports/{token}.pdf")
+    pdf = await client.post(f"{BASE}/reports/shared/pdf", json={"token": token})
     assert pdf.headers["content-type"] == "application/pdf"
 
-    web = await client.get(f"{BASE}/reports/{token}")
+    web = await client.post(f"{BASE}/reports/shared", json={"token": token})
     assert web.headers["content-type"].startswith("application/json")

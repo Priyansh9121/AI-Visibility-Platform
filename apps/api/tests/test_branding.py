@@ -321,7 +321,7 @@ class TestTheReportCarriesBranding:
 
         token = (await client.post(f"{BASE}/scans/{sid}/share")).json()["token"]
         client.cookies.clear()
-        public = (await client.get(f"{BASE}/reports/{token}")).json()
+        public = (await client.post(f"{BASE}/reports/shared", json={"token": token})).json()
         assert public["agency"] == private["agency"], "the prospect sees the same branding"
 
     async def test_the_pdf_does_not_carry_the_logo_and_that_is_deliberate(

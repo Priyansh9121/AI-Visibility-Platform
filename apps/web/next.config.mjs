@@ -10,16 +10,35 @@ const nextConfig = {
   // NO REFERER FROM A PAGE WHOSE ADDRESS IS A CREDENTIAL — 2026-09-29.
   //
   // A shared report's address is its token, and so is a reset or invitation
-  // link's; a Google sign-up in progress carries its ticket in the query. From
+  // link's; a Google sign-up in progress carries its ticket in the fragment (a
+  // legacy link may still carry it in the query, and the header covers that
+  // and the page itself). From
   // these pages the browser also asks other hosts for things: the fonts, an
   // agency's logo, a cited source someone clicks. Under a lax policy — some
   // older browsers' default — each of those requests is sent the full address.
   // `no-referrer` sends nothing. The report's source links already carry
   // rel="noreferrer"; this covers every other request and any future link.
   // Nothing here needs a Referer: the API's CORS reads Origin.
+  //
+  // The same pages also send `X-Robots-Tag: noindex, nofollow`: a credential
+  // address is not for a search index. One list, so the two cannot drift.
   async headers() {
-    return ['/share/:token', '/reset-password/:token', '/invite/:token', '/sign-up/google'].map(
-      (source) => ({ source, headers: [{ key: 'Referrer-Policy', value: 'no-referrer' }] }),
+    return [
+      '/share',
+      '/invite',
+      '/reset-password',
+      '/share/:token',
+      '/reset-password/:token',
+      '/invite/:token',
+      '/sign-up/google',
+    ].map(
+      (source) => ({
+        source,
+        headers: [
+          { key: 'Referrer-Policy', value: 'no-referrer' },
+          { key: 'X-Robots-Tag', value: 'noindex, nofollow' },
+        ],
+      }),
     );
   },
 

@@ -1,4 +1,8 @@
 # ===========================================================================
+# NOTE: Render auto-deploys both services (API and web) through its own git
+# hook on push to `main`, before CI finishes. This workflow therefore deploys
+# nothing today, and its `render` branch is a placeholder.
+#
 # Deploy — gated on the CI gate, and inert until a host is chosen. Epic 18.2.
 #
 # Runs only after the `CI` workflow has SUCCEEDED on a push to `main`

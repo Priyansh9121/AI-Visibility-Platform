@@ -47,12 +47,19 @@ import {
   num,
   tally,
 } from '@/lib/client/technical';
-import { EXCLUSION_REASON, ROBOTS_DISALLOWED } from '@/lib/report/strings';
+import {
+  EXCLUSION_REASON,
+  PARTIAL_AUDIT_LABEL,
+  PARTIAL_AUDIT_NOTE,
+  ROBOTS_DISALLOWED,
+} from '@/lib/report/strings';
 
 export type TechnicalState =
   | { kind: 'loading' }
   | { kind: 'ready'; client: Client; history: ClientHistory; audit: TechnicalAudit | null }
   | { kind: 'error'; title: string; detail: string };
+
+const COUNT_WORD: Record<number, string> = { 1: 'one', 2: 'two', 3: 'three', 4: 'four' };
 
 const STATUS_TONE: Record<string, BadgeTone> = {
   pass: 'success',
@@ -119,7 +126,7 @@ export function ClientTechnicalView({
       latestReportScanId={latestScanId(history)}
       latestScore={latestComposite(history)}
       figures={
-        audit && audit.status === 'ok' ? (
+        audit && audit.status !== 'failed' ? (
           /*
             Two figures became four — Epic 9.24. The extra pair is the verdict
             tally the "Every check" section below already computes and renders
@@ -174,7 +181,10 @@ function Audited({ audit }: { audit: TechnicalAudit }): JSX.Element {
       />
     );
   }
-  if (audit.status !== 'ok') {
+  // `partial` is NOT unreadable: the page was read and scored with a component
+  // excluded (the "Not measured" card below says which and why). Only `failed`
+  // means nothing was read and nothing is scored.
+  if (audit.status === 'failed') {
     return (
       <EmptyState
         eyebrow="Technical"
@@ -196,15 +206,21 @@ function Audited({ audit }: { audit: TechnicalAudit }): JSX.Element {
       <section className="grid gap-10 lg:grid-cols-[minmax(0,26rem)_auto]">
         <div className="flex flex-col gap-4">
           <div className="flex flex-col gap-2">
-            <h2 className="max-w-headline font-display text-ed-xs leading-display tracking-display text-text-primary">
+            <h2 className="flex flex-wrap items-center gap-3 max-w-headline font-display text-ed-xs leading-display tracking-display text-text-primary">
               What the site itself contributes
+              {audit.status === 'partial' && <Badge tone="warn">{PARTIAL_AUDIT_LABEL}</Badge>}
             </h2>
             <p className="max-w-measure text-ui-base leading-prose text-text-secondary">
               Technical Foundation is one of the five scored dimensions, and it is the only
               one measured on this client&rsquo;s own site rather than on what engines said.
-              It is a weighted sum of the four parts on the right — so the lit height of that
-              column is the score.
+              It is a weighted sum of the {COUNT_WORD[dimensions.length] ?? String(dimensions.length)}{' '}
+              parts on the right — so the lit height of that column is the score.
             </p>
+            {audit.status === 'partial' && (
+              <p className="max-w-measure text-ui-base leading-prose text-text-secondary">
+                {PARTIAL_AUDIT_NOTE}
+              </p>
+            )}
           </div>
 
           <VerdictBar
@@ -218,19 +234,27 @@ function Audited({ audit }: { audit: TechnicalAudit }): JSX.Element {
           />
 
           {excluded.length > 0 && (
-            <Card elevation="seated">
+            <Card elevation="seated" role="group" aria-labelledby="technical-not-in-score">
               <CardBody>
-                {excluded.map((e) => (
-                  <div key={e.key} className="flex flex-col gap-2">
-                    <p className="flex flex-wrap items-center gap-2 text-ui-base font-medium text-text-primary">
-                      {e.label}
-                      <Badge tone="neutral">Not measured</Badge>
-                    </p>
-                    <p className="max-w-measure text-ui-sm leading-prose text-text-secondary">
-                      {e.copy}
-                    </p>
-                  </div>
-                ))}
+                <h3
+                  id="technical-not-in-score"
+                  className="mb-3 text-ui-base font-medium text-text-primary"
+                >
+                  Not in this score
+                </h3>
+                <ul className="flex flex-col gap-4">
+                  {excluded.map((e) => (
+                    <li key={e.key} className="flex flex-col gap-2">
+                      <p className="flex flex-wrap items-center gap-2 text-ui-base font-medium text-text-primary">
+                        {e.label}
+                        <Badge tone="neutral">Not measured</Badge>
+                      </p>
+                      <p className="max-w-measure text-ui-sm leading-prose text-text-secondary">
+                        {e.copy}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
               </CardBody>
             </Card>
           )}

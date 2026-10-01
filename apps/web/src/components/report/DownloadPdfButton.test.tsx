@@ -13,6 +13,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { DownloadPdfButton, slug } from './DownloadPdfButton';
 
@@ -30,6 +33,30 @@ describe('the control', () => {
 
   it('shows no error before anything is attempted', () => {
     expect(render()).not.toContain('role="alert"');
+  });
+});
+
+describe('assistive technology', () => {
+  it('keeps the button focusable while busy: aria-disabled, never disabled', () => {
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'DownloadPdfButton.tsx'), 'utf8');
+    expect(src).toContain('aria-disabled={busy ? true : undefined}');
+    expect(src).toContain('if (busy) return;');
+    expect(src).not.toMatch(/(?<!aria-)disabled=\{/);
+  });
+
+  it('has a visually hidden, empty status region at rest', () => {
+    expect(render()).toContain('<span role="status" class="sr-only"></span>');
+  });
+
+  it('announces the states in plain words', () => {
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'DownloadPdfButton.tsx'), 'utf8');
+    expect(src).toContain("busy ? 'Preparing the PDF…' : done ? 'PDF downloaded' : ''");
+  });
+
+  it('ties the error alert to the button with aria-describedby', () => {
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'DownloadPdfButton.tsx'), 'utf8');
+    expect(src).toContain('aria-describedby={error != null ? errorId : undefined}');
+    expect(src).toContain('<p id={errorId} role="alert"');
   });
 });
 

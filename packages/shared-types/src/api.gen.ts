@@ -74,7 +74,12 @@ export interface paths {
          *     **This endpoint does not subscribe anybody.** It returns a URL. The
          *     subscription begins when Stripe says it did, over the webhook below.
          *
-         *     **Errors:** `401`, `403` (member role), `404` (another agency's id), `503
+         *     **Errors:** `401`, `403` (member role), `404` (another agency's id), `409
+         *     subscription-already-active` when the agency's status is `active` or
+         *     `trialing` (checked after auth and tenancy, before any Stripe call), `503
+         *     checkout-in-progress` when another checkout holds the agency row for over
+         *     3 s, `503
+         *     service-unavailable` when Stripe fails expiring the previous open session, `503
          *     billing-not-configured` when `STRIPE_SECRET_KEY` or `STRIPE_PRICE_ID` is
          *     unset — carrying a detail that names the variable.
          */
@@ -308,7 +313,10 @@ export interface paths {
          *     **Errors:** `401 authentication-required` (no session), `401
          *     invalid-credentials` (wrong current password — no "no such user" branch
          *     exists, because the caller is authenticated), `422 validation-failed` for a
-         *     new password that fails the SIGN-UP rules or that is the current one.
+         *     new password that fails the SIGN-UP rules or that is the current one, `429
+         *     rate-limited` (10 failed attempts per account and 30 per IP per 15 minutes,
+         *     counted before the password is verified; a success gives its attempt back),
+         *     `503` (Redis down).
          */
         post: operations["change_password_api_v1_auth_change_password_post"];
         delete?: never;
@@ -336,7 +344,8 @@ export interface paths {
          *     - an existing account → the session cookie is set and the browser goes
          *       to `/dashboard`;
          *     - a new address → a ten-minute ticket is minted and the browser goes to
-         *       `/sign-up/google?ticket=…` to name the agency;
+         *       `/sign-up/google#ticket=…` (the fragment, never the query, so it is in
+         *       no request log and no Referer) to name the agency;
          *     - anything else → `/?google=error&reason=…` with one of `not-configured`,
          *       `denied`, `invalid-state`, `exchange-failed`, `email-unverified`,
          *       `account-suspended`, `email-claimed`, `invitation-expired`,
@@ -392,21 +401,22 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        get?: never;
+        put?: never;
         /**
          * Google Pending
          * @description What the completion page shows before asking for an agency name. **No auth.**
          *
-         *     Reads the ticket without consuming it, so a reload of the page is not a
-         *     second sign-in. The ticket is a bearer credential with a session token's
-         *     entropy and a reset link's lifetime; carrying it in a query string is the
-         *     same trade `/reset-password/{token}` makes, for the same reason — there
-         *     is no session yet to carry it any other way.
+         *     A POST so the ticket rides in the body: it is a bearer credential with a
+         *     session token's entropy, and a URL is logged. It is not a mutation: the
+         *     ticket is read without being consumed, so asking twice is not a second
+         *     sign-in. The web page removes the ticket from the address bar once read
+         *     (like invite and reset), so reloading that page does not bring it back and
+         *     the person starts again. `GET` with a `?ticket=` is `405`.
          *
          *     **Errors:** `400 invalid-google-ticket` for unknown, used and expired alike.
          */
-        get: operations["google_pending_api_v1_auth_google_pending_get"];
-        put?: never;
-        post?: never;
+        post: operations["google_pending_api_v1_auth_google_pending_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -614,7 +624,9 @@ export interface paths {
          *     and never reports its outcome, so a provider outage cannot become a
          *     different status code.
          *
-         *     **Errors:** none. `422` only if the body is not an email address.
+         *     **Errors:** `429` when the per-email or per-IP limit is spent. The per-email
+         *     limit trips identically for every address, so it reveals nothing about
+         *     accounts. `422` if the body is not an email address.
          */
         post: operations["request_password_reset_api_v1_auth_reset_password_request_post"];
         delete?: never;
@@ -684,6 +696,12 @@ export interface paths {
          *     which degrades delivery of the events that DO matter. The body says whether
          *     it was acted on, so a human reading `stripe listen` output can tell the
          *     difference between "handled" and "politely ignored".
+         *
+         *     **Idempotent and ordered.** Each handled event id is recorded once; a
+         *     redelivery answers `{"received": true, "handled": false, "duplicate": true}`
+         *     and applies nothing. An event older than the agency's newest applied one
+         *     answers `{"received": true, "handled": false, "stale": true}` and applies
+         *     nothing. Unmatched and unhandled events answer `handled: false` alone.
          *
          *     **Errors:** `400 invalid-webhook-signature` for a missing, malformed or
          *     wrong signature, and for a body that is not JSON. `503
@@ -1172,13 +1190,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/reports/{token}": {
+    "/api/v1/reports/shared": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
+        get?: never;
+        put?: never;
         /**
          * Get Public Report
          * @description A report, by share token. **No session required** — Epic 9.8.
@@ -1192,11 +1212,13 @@ export interface paths {
          *     * **Read-only.** There is no sibling route that mutates anything by token.
          *       A holder cannot edit the competitor set, re-run the scan, or reach any
          *       other scan — the token resolves to exactly one row.
-         *     * **`404` for every rejection, with one code path.** A malformed token, an
-         *       unknown token and a well-formed miss are indistinguishable in both status
-         *       and body. There is no shape or length pre-check, deliberately: rejecting
-         *       an implausible token faster than a plausible one is a timing oracle that
-         *       makes enumeration cheaper. Every guess pays for the same index lookup.
+         *     * **`404` for every rejection, with one code path.** An unknown, revoked or
+         *       expired token is indistinguishable in both status and body. The only
+         *       pre-check is the body's length bound (`422` for an empty or over-512
+         *       token); it says nothing about whether any token is real. Every plausible
+         *       guess pays for the same index lookup.
+         *     * **The token is in the POST body, not the path**, so it stays out of
+         *       request logs.
          *     * **No `401`, ever.** A `401` would say "this token is real, authenticate to
          *       use it", which is precisely the bit an enumerator wants.
          *     * **Same projection as the authenticated route.** `build_report` is reused
@@ -1206,22 +1228,22 @@ export interface paths {
          *
          *     **Errors:** `404` only.
          */
-        get: operations["get_public_report_api_v1_reports__token__get"];
-        put?: never;
-        post?: never;
+        post: operations["get_public_report_api_v1_reports_shared_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/reports/{token}.pdf": {
+    "/api/v1/reports/shared/pdf": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
+        get?: never;
+        put?: never;
         /**
          * Get Public Report Pdf
          * @description A report PDF, by share token. **No session required** — Epic 9.14.
@@ -1232,7 +1254,7 @@ export interface paths {
          *     offers it. Three reasons, in order of weight:
          *
          *     1. **It exposes nothing new.** The PDF carries strictly the facts
-         *        `GET /reports/{token}` already serves to the same holder, rendered
+         *        `POST /reports/shared` already serves to the same holder, rendered
          *        differently. Withholding it would not protect a single datum.
          *     2. **The send path is the point.** Epic 9.8 built this token because "the
          *        prospect a report is about has no account, and must not need one to read
@@ -1261,15 +1283,14 @@ export interface paths {
          *     a file already downloaded.
          *
          *     Every rule the JSON share route states holds here unchanged, because it is
-         *     the same lookup: read-only, one code path, `404` for every rejection with no
-         *     shape pre-check, and never a `401` — which would say "this token is real,
+         *     the same lookup: read-only, one code path, `404` for every rejection (the body's
+         *     token is bounded 1..512 by the schema, a `422` alike for real and fake
+         *     tokens, and no other shape check runs), and never a `401` — which would say "this token is real,
          *     authenticate to use it".
          *
          *     **Errors:** `404` only.
          */
-        get: operations["get_public_report_pdf_api_v1_reports__token__pdf_get"];
-        put?: never;
-        post?: never;
+        post: operations["get_public_report_pdf_api_v1_reports_shared_pdf_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2642,13 +2663,21 @@ export interface components {
          *
          *     Read by the sign-up completion page so it can show the address the
          *     account will be under and pre-fill the name. Nothing here is a credential;
-         *     the ticket in the query string is.
+         *     the ticket is.
          */
         GooglePendingOut: {
             /** Email */
             email: string;
             /** Suggestedname */
             suggestedName: string;
+        };
+        /**
+         * GooglePendingRequest
+         * @description The ticket to peek at, in a body so it never lands in a URL.
+         */
+        GooglePendingRequest: {
+            /** Ticket */
+            ticket: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -3733,6 +3762,18 @@ export interface components {
             url: string;
         };
         /**
+         * SharedReportRequest
+         * @description The body of `POST /reports/shared` and `POST /reports/shared/pdf`.
+         *
+         *     The share token travels here, not in the URL path, so it never reaches a
+         *     request log. The bounds are the same ones every other token body uses
+         *     (`ConfirmResetIn`); a real token is far shorter than 512.
+         */
+        SharedReportRequest: {
+            /** Token */
+            token: string;
+        };
+        /**
          * ShelfSlotOut
          * @description One brand standing in one ordinal slot of one answer.
          *
@@ -3907,6 +3948,24 @@ export interface components {
             /** Error Type */
             type: string;
         };
+        /**
+         * WebhookAck
+         * @description The webhook's answer to Stripe. Read by a human running `stripe listen`.
+         *
+         *     `duplicate` and `stale` are present only when true (the route drops `None`),
+         *     so an applied, ignored or unmatched event keeps the two-key body it always
+         *     had. Stripe only looks at the status code.
+         */
+        WebhookAck: {
+            /** Duplicate */
+            duplicate?: boolean | null;
+            /** Handled */
+            handled: boolean;
+            /** Received */
+            received: boolean;
+            /** Stale */
+            stale?: boolean | null;
+        };
     };
     responses: never;
     parameters: never;
@@ -3965,6 +4024,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CheckoutSessionOut"];
+                };
+            };
+            /** @description `/problems/subscription-already-active`: the agency already has an active or trialing subscription. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -4238,16 +4306,18 @@ export interface operations {
             };
         };
     };
-    google_pending_api_v1_auth_google_pending_get: {
+    google_pending_api_v1_auth_google_pending_post: {
         parameters: {
-            query: {
-                ticket: string;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GooglePendingRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -4527,9 +4597,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["WebhookAck"];
                 };
             };
             /** @description Validation Error */
@@ -5119,16 +5187,18 @@ export interface operations {
             };
         };
     };
-    get_public_report_api_v1_reports__token__get: {
+    get_public_report_api_v1_reports_shared_post: {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                token: string;
-            };
+            path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SharedReportRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -5150,16 +5220,18 @@ export interface operations {
             };
         };
     };
-    get_public_report_pdf_api_v1_reports__token__pdf_get: {
+    get_public_report_pdf_api_v1_reports_shared_pdf_post: {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                token: string;
-            };
+            path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SharedReportRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

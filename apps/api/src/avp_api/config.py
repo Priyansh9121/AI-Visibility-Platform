@@ -22,7 +22,7 @@ import logging
 from functools import lru_cache
 from typing import Annotated, Literal
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, PositiveInt, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 Environment = Literal["local", "test", "staging", "production"]
@@ -78,6 +78,14 @@ class Settings(BaseSettings):
     database_pool_size: int = 10
     database_max_overflow: int = 5
     redis_url: str = Field(default="redis://127.0.0.1:6379/0")
+    # Bounds on every Redis call, so a slow or unreachable Redis fails the
+    # request fast (a 503) instead of hanging it. Redis is same-region and
+    # answers in about a millisecond; 2 s is generous for a Lua rate-limit
+    # script or a session read, yet well inside a browser's patience. Nothing
+    # on the API pool blocks on purpose (no BLPOP, XREAD BLOCK or pub/sub), so
+    # a read timeout cannot break a legitimate wait.
+    redis_connect_timeout_seconds: float = Field(default=2.0, gt=0, allow_inf_nan=False)
+    redis_socket_timeout_seconds: float = Field(default=2.0, gt=0, allow_inf_nan=False)
 
     # --- auth --------------------------------------------------------------
     app_secret: SecretStr = Field(
@@ -96,6 +104,45 @@ class Settings(BaseSettings):
     argon2_memory_cost_kib: int = 19456
     argon2_parallelism: int = 1
 
+    # Rate limits on the three unauthenticated credential routes, per address
+    # AND per source IP, as fixed windows in Redis (services/rate_limit.py).
+    # Sign-up and reset-request count every attempt; login counts failures only
+    # (a success gives its attempt back). The check runs before any Argon2,
+    # database write or email. Per email stops one account being ground down
+    # from many IPs; per IP stops one source walking many accounts. Limits and
+    # windows must be at least 1.
+    # Login: guessing passwords is the attack, so the per-email budget is small.
+    login_limit_per_email: PositiveInt = 10
+    login_limit_per_ip: PositiveInt = 30
+    login_window_seconds: PositiveInt = 15 * 60
+    # Change-password re-verifies the current password for a signed-in caller,
+    # so it is the same guessing attack with a stolen session cookie. Same
+    # budget as login, counted on its own keys; failures only.
+    change_password_limit_per_email: PositiveInt = 10
+    change_password_limit_per_ip: PositiveInt = 30
+    change_password_window_seconds: PositiveInt = 15 * 60
+    # Sign-up creates an agency, a user and (later) a scan allowance: the abuse
+    # is minting free accounts, and probing which addresses are registered (409).
+    signup_limit_per_email: PositiveInt = 5
+    signup_limit_per_ip: PositiveInt = 10
+    signup_window_seconds: PositiveInt = 60 * 60
+    # Reset-request sends email (a cost, and a mailbox someone else owns) and
+    # must trip identically for every address, so it stays enumeration-safe.
+    reset_limit_per_email: PositiveInt = 3
+    reset_limit_per_ip: PositiveInt = 10
+    reset_window_seconds: PositiveInt = 60 * 60
+    # Which request header carries the real client IP, for the per-IP bucket.
+    # Empty (the default): use the connection's client host, which uvicorn's
+    # --proxy-headers already sets from the leftmost X-Forwarded-For entry.
+    # Render sits behind Cloudflare, which sets CF-Connecting-IP; that header is
+    # trustworthy only if every request really arrives through Cloudflare. The
+    # operator must confirm that before setting CLIENT_IP_HEADER=CF-Connecting-IP.
+    # NEVER set this to X-Forwarded-For: its first entry is client-controlled.
+    # When set, the header's whole value must be one IP (IPv6 is keyed on its
+    # /64, IPv4-mapped on the IPv4); if the header is absent or unparseable the
+    # request lands in one shared bucket, never in the connection's host.
+    client_ip_header: str = ""
+
     # --- CORS --------------------------------------------------------------
     # The web app runs on a different origin in development, and session
     # cookies require an explicit origin allow-list (credentials + wildcard is
@@ -113,7 +160,8 @@ class Settings(BaseSettings):
     # Where the WEB app is reachable from outside. The API returns a complete,
     # copyable URL from POST /scans/{id}/share rather than a bare token,
     # because the operator's next action is to paste it into an email — and a
-    # token alone forces every caller to reinvent the same string, which is
+    # token alone forces every caller to reinvent the same string (`/share#<token>`,
+    # a fragment, never a path), which is
     # how a frontend and a backend end up disagreeing about the path.
     #
     # Deliberately NOT derived from the request's Host or Origin header: those

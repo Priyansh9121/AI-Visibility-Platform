@@ -5,6 +5,7 @@ Every endpoint here is recorded in docs/api-contracts.md.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Path, Query, status
@@ -26,7 +27,7 @@ from ..services import competitors as detection
 from ..services import scan_allowance
 from ..services.engines import ENGINE_REGISTRY, configured_engines, keyed_engines
 from ..services.intake import get_client
-from ..services.scan_executor import ScanJob, reap_stale_scans
+from ..services.scan_executor import ScanJob, fail_never_started_scans, reap_stale_scans
 
 router = APIRouter(tags=["scans"])
 
@@ -211,6 +212,13 @@ async def run_scan(
 
     scan = await detection.get_or_create_scan(db, client, user_id=principal.user_id)
 
+    # Stamp the submission BEFORE the commit that releases the allowance lock,
+    # so a concurrent request's count sees this scan holding its slot from now,
+    # not from the (possibly days-old) detection row it adopted. Detection
+    # never sets this. Skipped for RUNNING: nothing is handed off.
+    if scan.status is ScanStatus.QUEUED:
+        scan.submitted_at = datetime.now(UTC)
+
     # Commit BEFORE handing off. The executor loads the scan on its own session
     # and would not find it otherwise. This commit also releases the lock.
     await db.commit()
@@ -244,6 +252,17 @@ async def get_scan(
 ) -> Any:
     """A scan with its prompt set and every engine result."""
     scan = await _load_scan(db, scan_id, principal.agency_id)
+    # Lazy single-row reap: the UI polls this endpoint, so a scan that was
+    # submitted and never claimed is failed here rather than left QUEUED until
+    # somebody starts another scan. Scoped to this (already tenant-checked) id.
+    if (
+        scan.status is ScanStatus.QUEUED
+        and scan.submitted_at is not None
+        and scan.submitted_at < datetime.now(UTC) - scan_allowance.IN_FLIGHT_WINDOW
+        and await fail_never_started_scans(db, now=datetime.now(UTC), scan_id=scan.id)
+    ):
+        await db.commit()
+        await db.refresh(scan)
     return await _detail(db, scan)
 
 

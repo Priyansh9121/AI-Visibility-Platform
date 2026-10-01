@@ -12,10 +12,16 @@ from __future__ import annotations
 
 from typing import Any
 
+import structlog
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from redis.exceptions import AuthenticationError, AuthorizationError
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
+logger = structlog.get_logger(__name__)
 
 PROBLEM_CONTENT_TYPE = "application/problem+json"
 
@@ -32,8 +38,15 @@ class ProblemError(Exception):
     problem_type: str = "internal-error"
     title: str = "Internal server error"
 
-    def __init__(self, detail: str | None = None, **extra: Any) -> None:
+    def __init__(
+        self,
+        detail: str | None = None,
+        *,
+        headers: dict[str, str] | None = None,
+        **extra: Any,
+    ) -> None:
         self.detail = detail or self.title
+        self.headers = headers or {}
         self.extra = extra
         super().__init__(self.detail)
 
@@ -120,6 +133,18 @@ class EmailAlreadyRegistered(Conflict):
     title = "That email address is already registered"
 
 
+class CheckoutInProgress(Conflict):
+    """Another checkout for this agency holds its row lock (409).
+
+    A specific type rather than the generic `conflict`, so a client can say
+    "try again in a moment" without parsing prose. Retrying is safe: nothing was
+    created at Stripe.
+    """
+
+    problem_type = "checkout-in-progress"
+    title = "Checkout already in progress"
+
+
 class InvalidWebhookSignature(ProblemError):
     """A billing webhook whose Stripe signature is missing, malformed or wrong.
 
@@ -197,6 +222,21 @@ class SeatLimitReached(ProblemError):
     title = "Seat limit reached"
 
 
+class SubscriptionAlreadyActive(ProblemError):
+    """Checkout refused: the agency already has a live subscription.
+
+    **409.** A second Checkout Session would create a second subscription and
+    bill the agency twice; Stripe does not stop that. "Live" is exactly
+    `services.billing.ACTIVE_STATUSES` (`active`, `trialing`). The detail points
+    at the billing portal, where the existing subscription is managed, and
+    carries no Stripe id and not the status itself.
+    """
+
+    status_code = status.HTTP_409_CONFLICT
+    problem_type = "subscription-already-active"
+    title = "Subscription already active"
+
+
 class ScanLimitReached(ProblemError):
     """The agency's scan allowance is spent — 2026-09-28.
 
@@ -215,6 +255,14 @@ class ScanLimitReached(ProblemError):
     title = "Scan limit reached"
 
 
+class ServiceUnavailable(ProblemError):
+    """A dependency this route cannot safely do without is down (503)."""
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    problem_type = "service-unavailable"
+    title = "Service unavailable"
+
+
 class RateLimited(ProblemError):
     status_code = status.HTTP_429_TOO_MANY_REQUESTS
     problem_type = "rate-limited"
@@ -226,6 +274,7 @@ def _problem_response(request: Request, exc: ProblemError) -> JSONResponse:
         status_code=exc.status_code,
         content=exc.to_dict(instance=request.url.path),
         media_type=PROBLEM_CONTENT_TYPE,
+        headers=exc.headers or None,
     )
 
 
@@ -235,6 +284,25 @@ def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(ProblemError)
     async def _handle_problem(request: Request, exc: ProblemError) -> JSONResponse:
         return _problem_response(request, exc)
+
+    @app.exception_handler(RedisConnectionError)
+    @app.exception_handler(RedisTimeoutError)
+    async def _handle_redis(request: Request, exc: Exception) -> JSONResponse:
+        # Redis unreachable or too slow (connect/read timeout). Other RedisError
+        # classes (a Lua bug) are NOT mapped, and neither are AuthenticationError
+        # and AuthorizationError, which subclass ConnectionError in redis-py: a
+        # rotated password is a config fault and stays a 500, not an outage.
+        if isinstance(exc, AuthenticationError | AuthorizationError):
+            raise exc
+        # Fail closed with the same 503 problem the rate limiter gives. Only
+        # the exception's class is logged; its text can carry the host.
+        logger.warning("redis.unavailable", error=type(exc).__name__)
+        return _problem_response(
+            request,
+            ServiceUnavailable(
+                detail="This is temporarily unavailable. Please try again shortly."
+            ),
+        )
 
     @app.exception_handler(RequestValidationError)
     async def _handle_validation(

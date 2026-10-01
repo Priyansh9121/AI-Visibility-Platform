@@ -4,7 +4,8 @@ Epic 9's acceptance is that a pilot agency can "generate and **send** at least
 one real prospect report." Every report surface before this one is
 cookie-authenticated and agency-scoped, so there has been no way to put a
 report in front of the person it is about. This module mints the capability
-token that `GET /api/v1/reports/{token}` reads.
+token that `POST /api/v1/reports/shared` (and `/reports/shared/pdf`) reads
+from its JSON body.
 
 **The token IS the credential.** There is no second factor and no account
 behind it; whoever holds the URL can read that one report. That is the point —
@@ -190,9 +191,12 @@ async def scan_for_share_token(session: AsyncSession, token: str) -> Scan | None
     token, an empty token, a REVOKED token and an EXPIRED one all take this
     same path and all return None, so the caller has exactly one thing to say
     (404) and no branch that could leak which kind of wrong a guess was. There
-    is deliberately no length or charset pre-check: validating the shape first
-    would answer "was that even a plausible token?" faster than it answers
-    "does it exist?", which is a timing oracle that makes enumeration cheaper.
+    is no shape check in this function: the POST body's `token` is bounded
+    1..512 characters by Pydantic before it gets here, and anything outside
+    that gets a 422 identical for a real token and a made-up one, so the bound
+    reveals nothing about which tokens exist. Within the bound, no charset or
+    length test runs ahead of the lookup, which would answer "was that even a
+    plausible token?" faster than "does it exist?" (a timing oracle).
 
     Revocation and expiry are NOT special cases of that rule — they are the
     same rule, which is why the predicate lives in this one query rather than

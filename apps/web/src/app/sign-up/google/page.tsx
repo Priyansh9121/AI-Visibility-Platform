@@ -1,22 +1,24 @@
 'use client';
 
 /**
- * /sign-up/google?ticket=… — where Google's callback sends a NEW address.
+ * /sign-up/google#ticket=… — where Google's callback sends a NEW address.
  *
  * Epic 20. The API verified the person and parked what it learned under a
- * ten-minute ticket; this page reads it (without spending it, so a reload is
- * not a second sign-in), asks for the agency's name, and posts the ticket
+ * ten-minute ticket; this page reads it (a peek that does not spend it), asks for the agency's name, and posts the ticket
  * back to create the agency. On success the session cookie is already set,
  * so it goes where sign-up goes: /welcome.
  *
- * The ticket travels in the query string, the trade `/reset-password/{token}`
- * and `/invite/{token}` make for the same reason: there is no session yet to
- * carry it any other way, and it lives ten minutes and once.
+ * The ticket travels in the URL fragment, like `/reset-password#{token}` and
+ * `/invite#{token}`: never sent to a server, so in no request log or Referer.
+ * It is read once, taken out of the address bar, and sent only in a POST body.
+ * Because it leaves the address bar, a reload of this page does not keep the
+ * sign-up alive: the person sees the expired state and starts again.
  */
 
-import { useEffect, useState, type JSX } from 'react';
+import { useEffect, useRef, useState, type JSX } from 'react';
 import { Button } from '@avp/design-system';
 import { api, ApiProblem } from '@/lib/api';
+import { takeGoogleTicket } from '@/lib/googleTicket';
 import {
   GoogleSignUpPanel,
   type GoogleSignUpState,
@@ -24,10 +26,14 @@ import {
 
 export default function GoogleSignUpRoute(): JSX.Element {
   const [ticket, setTicket] = useState('');
+  // Held in a ref: React's development double-run of effects would otherwise
+  // read the already-cleared address bar a second time and call it expired.
+  const taken = useRef<string | null>(null);
   const [state, setState] = useState<GoogleSignUpState>({ kind: 'loading' });
 
   useEffect(() => {
-    const found = new URLSearchParams(window.location.search).get('ticket') ?? '';
+    taken.current ??= takeGoogleTicket(window);
+    const found = taken.current;
     setTicket(found);
     if (!found) {
       setState({ kind: 'expired' });

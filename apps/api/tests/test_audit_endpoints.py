@@ -141,6 +141,41 @@ class TestRunAudit:
         }
         assert body["technicalFoundation"] is not None, "scored on what was measurable"
 
+    async def test_partial_audit_returns_its_measured_components_and_weights(
+        self, client: AsyncClient, session, stub_audit
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        _, sid = await _make_scan(client, session)
+        stub_audit(content_age_days=None)
+        assert (await client.post(f"{BASE}/scans/{sid}/audit")).status_code == 201
+        body = (await client.get(f"{BASE}/scans/{sid}/audit")).json()
+        assert body["status"] == "partial"
+        assert body["components"], "a partial audit was scored, so it has components"
+        assert body["componentWeights"]
+        assert body["excludedComponents"] == {
+            "content_freshness": "NO_DATE_SIGNAL_AVAILABLE"
+        }
+        # The excluded component is not drawn, and the rest re-sum to the score.
+        assert "content_freshness" not in body["components"]
+        assert set(body["componentWeights"]) == set(body["components"])
+        weights = body["componentWeights"]
+        resum = sum(
+            Decimal(weights[k]) * Decimal(v) for k, v in body["components"].items()
+        ) / Decimal("100")
+        assert resum.quantize(Decimal("0.01")) == Decimal(body["technicalFoundation"])
+
+    async def test_failed_audit_returns_no_components(
+        self, client: AsyncClient, session, stub_audit
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        _, sid = await _make_scan(client, session)
+        stub_audit(ok=False, error_code="FETCH_FAILED", http_status=None)
+        assert (await client.post(f"{BASE}/scans/{sid}/audit")).status_code == 201
+        body = (await client.get(f"{BASE}/scans/{sid}/audit")).json()
+        assert body["status"] == "failed"
+        assert not body["components"]
+        assert not body["componentWeights"]
+
     async def test_rerunning_replaces_rather_than_duplicating_checks(
         self, client: AsyncClient, session, stub_audit
     ) -> None:  # noqa: ANN001

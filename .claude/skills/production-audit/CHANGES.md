@@ -1,0 +1,20 @@
+# Changes from upstream
+- Description rewritten for AVP launch readiness, excluding code-review and security-review -> stops generic triggering (SKILL.md:3).
+- Dropped `metadata.origin` and the "maintainer-safe rewrite" preamble (SKILL.md:4-14) -> upstream-project framing.
+- Added "Hard limits": no production calls (Render, Stripe, Supabase) unless asked, read-only, presence-only secret checks, no commit; kept the ban on unpinned/remote scanners (SKILL.md:39-42) -> production side effects, secret leakage.
+- Removed "deployed URL … browser or HTTP checks" (SKILL.md:74-75) -> would touch production unasked.
+- Replaced generic evidence list and five risk lenses (SKILL.md:55-121) with an AVP file-by-file checklist (Stripe webhook + `stripe_webhook_events`, key-name checks, Alembic, health/ready, Celery, logs, crawler, facts-only, providers/`/privacy`, licence audit, Referrer-Policy, rate limits, lawyer-pending legal) -> generic stack assumptions.
+- Added the verification bar with floors/`assert_count.py`, delegation to test-runner, no piping -> upstream treats CI green vaguely (SKILL.md:198).
+- Scoring bands and caps kept (SKILL.md:122-142); caps extended with signature verification, alembic check, guard-test failures, floors.
+- Output format kept and extended with "Founder items"; report goes to chat, file only on request under docs/ (SKILL.md:144-158).
+- Removed example with generic Stripe/SQL filenames (SKILL.md:163-190) -> non-AVP paths.
+- See Also: dropped `deployment-patterns`, `e2e-testing`, `tdd-workflow`, `verification-loop` (SKILL.md:201-207) -> do not exist here; pointed to built-in and library names.
+- No hooks, installs, telemetry or allowed-tools existed in the source; none added.
+- Restored CSRF/CORS (SKILL.md:85) and prompt-injection (SKILL.md:87-88) checks, AVP-shaped (CORS allow-list, `avp_session` flags, CSRF, trusted proxy IP, limiter fail-open/closed, LLM-call injection); their earlier removal was unlogged -> lost coverage.
+- Alembic: `upgrade head`/`check` only with explicit `-x db_url=` against a throwaway DB; `avp_dev` gets `heads`/`current` only -> `env.py` reads shell `DATABASE_URL`, could migrate production (infra/db/README.md, migrations/env.py:81-88).
+- Webhook check names `verify_webhook`, router call and `test_billing.py` tests -> vague evidence.
+- Key-leak check uses `git grep -l` on tracked files -> plain grep would print keys from untracked `.env`.
+- Health path: no `render.yaml`, so Evidence missing if unnamed in repo -> avoids the Render dashboard.
+- Celery: require an actually retrying task, not config -> config alone is not evidence.
+- Verdicts per ref (`origin/main` and branch); `LOG` defined; licence audit scope noted -> false confidence.
+- Presence check now `[ -n "${VAR:+x}" ]` -> `${VAR:-}` puts the value on the command line, so xtrace would print it (SKILL.md:16).

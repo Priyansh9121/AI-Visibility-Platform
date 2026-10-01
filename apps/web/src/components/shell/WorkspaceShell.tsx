@@ -13,7 +13,7 @@
  * stub. The Clients row opens a list, and the clients screen is the first row
  * inside it.
  *
- * `/share/{token}` deliberately does NOT use this — a stranger reading a
+ * `/share` deliberately does NOT use this — a stranger reading a
  * report should not be shown the sending agency's workspace navigation.
  *
  * IT IS IN COLOUR NOW — Epic 9.24
