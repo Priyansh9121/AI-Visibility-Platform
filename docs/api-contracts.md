@@ -820,8 +820,16 @@ this order a session paid earlier is a subscription by the time Stripe is asked
 If Stripe fails while listing or expiring, or more open sessions exist than one
 page (100) holds, the checkout fails with `503 service-unavailable` and creates
 nothing; retrying is safe. Concurrent checkouts for one agency serialise on the
-agency row, so two first checkouts create one Stripe customer, not two. The
-session's own lifetime (`expires_at`) is unchanged.
+agency row, so two first checkouts create one Stripe customer, not two.
+
+**The link expires one hour after it is created** (founder decision 5,
+2026-10-01). Every Checkout Session is created with `expires_at` set to now plus
+one hour (`services.billing.CHECKOUT_LINK_LIFETIME`), where Stripe's default is 24
+hours; Stripe accepts 30 minutes to 24 hours. An unpaid Checkout page stops
+accepting payment once the hour is up and Stripe shows it as expired; pressing
+Subscribe again makes a new link. Nothing of ours records the expiry, and
+`checkout.session.expired` is not a handled event. A shorter life also narrows how
+long an older open link can be paid before the next checkout expires it, as above.
 
 **The subscription check also asks Stripe.** For an agency that already has a
 customer, once its open sessions are cleared, Stripe is asked for that customer's

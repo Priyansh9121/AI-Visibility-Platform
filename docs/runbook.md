@@ -111,6 +111,12 @@ All of this happens in Stripe's **Test mode**. Never use a live key.
    - (e) Press **Manage billing** in Settings and cancel in Stripe's portal.
      Settings then shows "Ends" and the date, and the `customer.subscription.updated`
      delivery answered handled.
+   - (f) Link expiry. This needs an agency that has not paid, so use a second
+     test agency, or do it before step 6. Press **Subscribe** in Settings and
+     leave the Stripe page unpaid. More than an hour later, open the same Stripe
+     page again: it no longer accepts payment, and Stripe shows it as expired.
+     Press **Subscribe** again in Settings: it makes a new link, and that one
+     pays.
 
 8. **Stop.** Nothing is ever switched to live mode from this runbook. Going
    live is the founder's key swap after Stripe's business verification.

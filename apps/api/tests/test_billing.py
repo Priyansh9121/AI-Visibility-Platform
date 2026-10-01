@@ -90,6 +90,11 @@ SUBSCRIPTION_CHECK_FAILED_DETAIL = (
 EXPIRE_FAILED_DETAIL = (
     "Could not clear the previous checkout session at Stripe. Try again in a moment."
 )
+# Founder decision 5 (2026-10-01): a Checkout link lives one hour. Stripe's own
+# default is 24 hours, and it accepts 30 minutes to 24 hours. Written out here
+# as seconds rather than imported from `services.billing`, for the same reason
+# as the decision-4 values above.
+CHECKOUT_LINK_SECONDS = 3600
 
 
 # ---------------------------------------------------------------------------
@@ -461,6 +466,40 @@ async def test_checkout_asks_stripe_for_a_subscription_at_the_configured_price(
     params = stripe_stub.sessions_created[0]
     assert params["mode"] == "subscription"
     assert params["line_items"] == [{"price": FAKE_PRICE_ID, "quantity": 1}]
+
+
+async def test_each_checkout_link_expires_an_hour_after_it_is_created(
+    client: AsyncClient, stripe_stub: _StripeStub
+) -> None:
+    """Founder decision 5: `expires_at` is now + 1 hour, as an int Unix timestamp.
+
+    Stripe's own default is 24 hours. Two checkouts, because pressing Subscribe
+    again expires the first link and makes a new one, and the new one must get a
+    fresh hour of its own rather than carry over the first's.
+
+    The clock is bracketed, not frozen, so the test does not care how the service
+    reads it, and nothing is slept on. `int()` floors, so the stamp lies between
+    the second before the request and the second after it, plus the hour. That is
+    exact: there is no tolerance for a value computed once at import to hide in.
+    """
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+
+    for n in range(2):
+        before = int(time.time())
+        resp = await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")
+        after = int(time.time())
+        assert resp.status_code == 201, resp.text
+
+        params = stripe_stub.sessions_created[n]
+        expires_at = params.get("expires_at")
+        # An int, not a float or a string, and absent is a failure, not a default.
+        assert type(expires_at) is int, params
+        assert before + CHECKOUT_LINK_SECONDS <= expires_at <= after + CHECKOUT_LINK_SECONDS
+
+    # The second link was a new session, with the first one cleared away.
+    assert len(stripe_stub.sessions_created) == 2
+    assert stripe_stub.sessions_expired == ["cs_test_001"]
 
 
 async def test_checkout_labels_everything_with_the_agency_id(
