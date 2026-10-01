@@ -58,6 +58,19 @@ address in the body or the log.
 Cross-origin callers must send `credentials: 'include'`, and the origin must be
 listed in `CORS_ALLOW_ORIGINS` — browsers reject wildcard CORS with credentials.
 
+**Writes need a listed `Origin` (2026-10-01).** A `POST`, `PUT`, `PATCH` or
+`DELETE` that sends an `Origin` header must send one equal to a
+`CORS_ALLOW_ORIGINS` entry, with or without the session cookie (list each origin
+exactly, scheme and host with no trailing `/`, as CORS requires; `null` never
+matches), so sign-in, sign-up, password
+reset, invitation accept and Google sign-up complete are covered too. A write
+that carries the session cookie must send a listed `Origin`; a missing one is
+refused as well. A refusal is `403 origin-not-allowed`, answered before any route
+runs, and nothing changes. Browsers send `Origin` on these requests themselves,
+so the web app needs no change. Not checked: reads (`GET`), a write with neither
+the session cookie nor an `Origin` (a server or command-line caller), and
+`POST /billing/webhook`, which Stripe signs instead.
+
 ### Error types
 
 | `type` | Status | Meaning |
@@ -66,6 +79,7 @@ listed in `CORS_ALLOW_ORIGINS` — browsers reject wildcard CORS with credential
 | `/problems/authentication-required` | 401 | No, expired, or invalid session |
 | `/problems/invalid-credentials` | 401 | Login failed |
 | `/problems/permission-denied` | 403 | Authenticated but wrong role |
+| `/problems/origin-not-allowed` | 403 | A `POST`/`PUT`/`PATCH`/`DELETE` whose `Origin` is not in `CORS_ALLOW_ORIGINS` (`null` included), or that carries the session cookie with no `Origin` (2026-10-01). Not applied to `POST /billing/webhook` |
 | `/problems/not-found` | 404 | No such resource in the caller's agency |
 | `/problems/conflict` | 409 | Generic conflict |
 | `/problems/email-already-registered` | 409 | Signup email in use |
@@ -75,10 +89,12 @@ listed in `CORS_ALLOW_ORIGINS` — browsers reject wildcard CORS with credential
 | `/problems/checkout-in-progress` | 409 | Another checkout for the same agency holds its row lock for more than 3 s. Nothing was created; retry |
 | `/problems/invalid-reset-token` | 400 | Reset link unknown, expired, used, or orphaned |
 | `/problems/invalid-invitation` | 400 | Invitation unknown, expired, accepted, revoked, or orphaned |
+| `/problems/invalid-google-ticket` | 400 | Google sign-up ticket unknown, used or expired |
 | `/problems/rate-limited` | 429 | Too many requests |
 | `/problems/invalid-url` | 409 | Submitted URL has no public domain |
 | `/problems/invalid-webhook-signature` | 400 | Billing webhook signature missing, malformed or wrong |
 | `/problems/billing-not-configured` | 503 | A Stripe setting is unset. `detail` names the variable |
+| `/problems/google-sign-in-not-configured` | 503 | Google sign-in is not configured on this deployment |
 | `/problems/service-unavailable` | 503 | A dependency the request needs is down |
 | `/problems/scan-limit-reached` | 402 | A scan cannot start on the allowance. Carries `code` (`SCAN_LIMIT_FREE_USED`, `SCAN_LIMIT_MONTHLY`, or since 2026-09-29 `SCAN_LIMIT_VERIFY_REQUIRED` — the free scan, asked for by a user with no linked Google identity), `scansUsed`, `scanLimit`, `periodResetsAt` (monthly only) |
 

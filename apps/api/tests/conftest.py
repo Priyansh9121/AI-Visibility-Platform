@@ -38,6 +38,15 @@ TEST_DATABASE_URL = os.environ.get(
 )
 TEST_REDIS_URL = os.environ.get("AVP_TEST_REDIS_URL", "redis://127.0.0.1:6379/15")
 
+# The one origin the suite's "browser" comes from. The `settings` fixture lists
+# exactly this in CORS_ALLOW_ORIGINS and the `client` fixture sends it on every
+# request, because the API refuses a write whose Origin is not a listed one, and
+# a write that carries a session cookie and names none (`avp_api/origin_check.py`)
+# — a real browser's writes name theirs, and a bare HTTP client's do not. A second
+# client built in a test that signs in and then writes must send it too:
+# `headers={"Origin": client.headers["Origin"]}`.
+TEST_ORIGIN = "http://localhost:3000"
+
 
 @pytest.fixture(scope="session")
 def settings() -> Settings:
@@ -76,6 +85,10 @@ def settings() -> Settings:
         argon2_memory_cost_kib=8,
         argon2_parallelism=1,
         default_seat_limit=3,
+        # Pinned for the same hermetic reason as the rest: a CORS_ALLOW_ORIGINS
+        # in the developer's shell would otherwise change which Origin the
+        # suite's client is allowed to send.
+        cors_allow_origins=[TEST_ORIGIN],
     )
 
 
@@ -252,7 +265,13 @@ async def client(  # noqa: ANN001
 
     transport = ASGITransport(app=app)
     async with AsyncClient(
-        transport=transport, base_url="http://testserver", follow_redirects=True
+        transport=transport,
+        base_url="http://testserver",
+        follow_redirects=True,
+        # What a browser on the web app sends with every write. Tests that need
+        # a request with another Origin, or none, build a second client; see
+        # `test_origin_check.py`.
+        headers={"Origin": TEST_ORIGIN},
     ) as ac:
         yield ac
 

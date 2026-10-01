@@ -241,7 +241,12 @@ class TestReadAudit:
         await client.post(f"{BASE}/auth/logout")
 
         transport = ASGITransport(app=client._transport.app)  # noqa: SLF001
-        async with Second(transport=transport, base_url="http://testserver") as other:
+        # The second agency's browser writes too, so it sends the web app's Origin.
+        async with Second(
+            transport=transport,
+            base_url="http://testserver",
+            headers={"Origin": client.headers["Origin"]},
+        ) as other:
             await _sign_up(other, "two@auditiso.example")
             assert (await other.get(f"{BASE}/scans/{sid}/audit")).status_code == 404
             assert (await other.post(f"{BASE}/scans/{sid}/audit")).status_code == 404

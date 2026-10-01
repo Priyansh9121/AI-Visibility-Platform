@@ -14,6 +14,7 @@ from .config import Settings, get_settings
 from .db import dispose_engine
 from .errors import register_error_handlers
 from .logs import configure_logging
+from .origin_check import OriginCheckMiddleware
 from .redis_client import close_redis
 from .routers import (
     action_items,
@@ -117,6 +118,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(dashboard.router, prefix=base)
     app.include_router(prompt_runs.router, prefix=base)
     app.include_router(alerts.router, prefix=base)
+
+    # A write must come from the web app — see `origin_check.py`. One that names
+    # an origin which is not listed is refused, session or not; one that names
+    # none is refused only if it carries the session cookie. Added BEFORE the
+    # CORS middleware, on purpose: Starlette makes the last `add_middleware` call
+    # the outermost layer, and CORS has to stay outermost. It answers a preflight
+    # (an OPTIONS, which this never checks) before anything else sees it, and
+    # whatever this returns, the refusal included, passes back out through it.
+    app.add_middleware(
+        OriginCheckMiddleware,
+        allowed_origins=settings.cors_allow_origins,
+        session_cookie_name=settings.session_cookie_name,
+        # The one write that is exempt from both rules: Stripe's webhook, which is
+        # verified by its signature instead. Exactly this path and no other.
+        exempt_paths=[f"{base}/billing/webhook"],
+    )
 
     # Session cookies are only sent cross-origin when the origin is named
     # explicitly and credentials are allowed; a wildcard is rejected by
