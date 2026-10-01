@@ -20941,3 +20941,53 @@ contract regenerates byte-identically.
 - Both `uv lock --check` runs pass; no schema change, so Alembic was not run.
 - OpenAPI and `api.gen.ts` regenerate byte-identically.
 - Exit codes were read from files.
+
+# A scan that runs out of time keeps the answers it has, ends partial, and counts; restarts and our errors still never count
+
+**2026-10-01, the eleventh entry of the day.** One item, one commit.
+
+**Render: nothing to set. No migration.**
+
+## 1. What changed
+
+- **Founder decision 7:** "Scan deadline: count by cause. Add a failure reason; restarts and our errors never count. A scan that hits its deadline finalises as PARTIAL with the answers it has, and counts." The failure reason is the existing `scans.error_code` (nullable, no CHECK tying it to a status), so no column and no migration were needed; the allowance still decides by status alone and `scan_allowance.py` is unchanged.
+- **Before this, a deadline during the engine loop threw away answers already paid for.** `run_scan` gathered every prompt and held the results in memory until the whole gather ended, then wrote them in one commit; the deadline (`MAX_SCAN_DURATION`, 2,400 s) cancelled the gather, so every finished answer was lost and the scan ended FAILED / `SCAN_DEADLINE_EXCEEDED`. A deadline after the engine phase kept the answers but still ended FAILED, and FAILED never counted. Now `run_scan` records each prompt's results in an `EnginePhaseProgress` holder, owned by the executor, as the prompt finishes. Callers that pass no holder behave exactly as before.
+- **Only the clock's timeout is a deadline.** `_until_deadline` used to turn any `TimeoutError` leaving the chain into the deadline. Now it asks the timeout whether its own clock fired; any other `TimeoutError` takes the plain path, FAILED / `EXECUTION_FAILED`, which never counts. Without this, an error of ours with finished prompts would have ended partial and counted.
+- **`_finalize_after_deadline`** (a fresh session; runs only for the deadline):
+  1. renews the lease; if the row is no longer running (the reaper failed it, or something else finished it) it writes nothing and the other verdict stands;
+  2. writes the finished results from the holder only if the scan has no `EngineResult` rows yet (the loop's own commit may have landed just before the deadline), so rows are never doubled; the same `persist_result` as the loop, so facts only;
+  3. counts answered rows (`OK` or `ANSWERED_NO_MENTION`);
+  4. with at least one answer and no score yet, scores the scan within `DEADLINE_SCORING_BUDGET` (60 s; scoring reads the database only); a scoring failure is logged by class and the scan is stamped without a score;
+  5. stamps it with one `UPDATE … WHERE status = 'running'`: **partial** with `SCAN_DEADLINE_EXCEEDED` when there is at least one answer (it counts), **failed** with `SCAN_DEADLINE_EXCEEDED` when there is none (it does not count); `engine_result_count` is the number of rows actually stored;
+  6. anything that goes wrong in these steps falls back to `_mark_failed`: failed, not counted.
+  Nothing paid runs after the deadline: no audit, alerts or fix generation.
+- **By cause, unchanged:** a restart (`EXECUTOR_LOST`, `EXECUTOR_NEVER_STARTED`), our error (`EXECUTION_FAILED`) and every engine failing (`ALL_ENGINE_CALLS_FAILED`) all end failed and never count; tests now pin each code against the allowance.
+- **New log events**, ids, counts and error classes only: `scan.deadline_exceeded`, `scan.finalized_after_deadline`, `scan.deadline.scoring_failed`, `scan.deadline.finalize_failed`, `scan.deadline.lease_gone`, `scan.deadline.lease_lost_before_stamp`, `scan.deadline.vanished`.
+- **`docs/api-contracts.md`:** the failure section and the scan-level status say how a deadline ends; the stale "failed by a reaper after 15 minutes" now says what the reaper does (a running scan whose lease went unrenewed for 180 s, on the start route and the dashboard read).
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS.** Checked clean: no new endpoint and no tenant input; no duplicate result rows (the empty-table check, `uq_engine_results_prompt_engine`, and the lease renewal queuing behind the loop's lock on the scan row); the conditional stamp against the reaper; a heartbeat and a deadline cancelling together take the lease-lost path; a stray `TimeoutError` ends `EXECUTION_FAILED`; a restart ends `EXECUTOR_LOST`; the finalise ends well inside the renewed 180 s lease; scoring reads the database only; no paid call after the deadline (the gather cancels in-flight engine and sentiment calls); every new log line carries ids, counts, a status or an exception class only; rows are written through `persist_result` (facts only).
+- **Its three Lows are fixed here:** the contract now says scoring after a deadline is best-effort, that a deadline also ends failed when the finalise cannot complete (and keeps the reaper's `EXECUTOR_LOST` when the lease was already gone), and that a deadline partial can also carry engine failures; `_mark_failed` is one conditional `UPDATE … WHERE status IN ('queued', 'running')`, so the fallback can never overwrite a partial that just landed; the holder drops its in-memory results once they are stored.
+- **Its Medium is the founder's decision, not a defect against decision 7 as written** (see "Found, not fixed").
+
+## Found, not fixed
+
+- **A partial scan from a deadline is used like any other partial scan.** `alerts.COMPARABLE`, `client_history.PLOTTABLE` and `answer_gaps.GRIDDABLE` accept every partial scan, so one that stopped early with fewer prompts can become an alert baseline or a history point. The same was already true of a scan with an engine down. Product call.
+- **No screen says why a scan is partial or failed** (`errorCode` is not rendered); a scan that ran out of time reads like an engine outage. On the launch checklist.
+- **`run_scan`'s gather leaves sibling prompts running when one raises** (it predates this entry).
+- **Founder decision needed: a deadline caused by load counts.** The engine rate limits are shared across the product, and the 2,400 s budget is sized for one scan alone, so heavy load can push scans past the deadline; built as decided, such a scan counts once it has a single answer. The review's alternative is to count a deadline partial only above a minimum share of answered prompts. (The details went to the founder directly; this repository is public.)
+- **One step of the technical audit has no timeout of its own** (`services/technical_audit.py`). If it hangs, the scan runs into its deadline after the engine phase and ends partial with all its answers, which counts just as a failed audit would today, but alerts and fixes do not run for it. Bounding it is on the launch checklist.
+- **For the founder to confirm:** a scan that hits the deadline with no answer at all ends failed and does not count, since there is nothing to show for it.
+
+## Verified
+
+**API pytest 1925 → 1955 (+30); `api-pytest` floor raised to match.** New `tests/test_scan_deadline.py` (30 tests): k of n prompts finished → partial with exactly those rows, scored, holding a slot; nothing finished, or only engine errors finished → failed, no slot; a deadline after the engine phase → partial, not re-scored; the lease already gone → nothing written; no duplicate rows when the loop's commit had landed; a scoring failure → still stamped; the fallback → failed; our own `TimeoutError` → failed / `EXECUTION_FAILED`, no rows, no slot; each failure code against the allowance; a partial that lands while `_mark_failed` waits for the row is kept (a real Postgres row-lock race); the holder is empty once its results are stored. Red first: 10 of the first 20, then the 2 timeout tests, the row-lock race and the 2 holder checks.
+- **Negative controls:** routing the deadline back to `_mark_failed` fails 10 tests; ten further one-line mutations (no record per prompt, no table check, re-scoring, no lease renewal, an unconditional stamp, engine errors counted as answers, completion order, no rival map, no count, the message logged) each fail a test; the old unconditional `TimeoutError` conversion fails the 2 timeout tests; the old read-then-write `_mark_failed` fails the row-lock race; not clearing the holder fails its checks. Each file was restored with `cp` and checked with `cmp`.
+
+**The rest of the bar.**
+- Workers 26, shared-types 53 (0 fail), design-system 846, web 1203, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; no schema change, so Alembic was not run (`scans.error_code` already allows any code on any status).
+- OpenAPI and `api.gen.ts` regenerate byte-identically.
+- Exit codes were read from files.
