@@ -21495,3 +21495,57 @@ Drift check (north-star §8): Layer 0, Trust substrate (the session cookie and t
 - The Python and JavaScript licence audits pass (`pnpm licenses list --json`); no dependency was added.
 - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# A failed audit says what happened in a sentence, the PDF says when a scan was partial or failed, and the focus ring is visible on light surfaces
+
+**2026-10-02, the fifth entry of the day; branch `pilot-fixes`, the founder's pilot-blockers follow-up (launch checklist 3.26).** One item, one commit.
+
+**Render: nothing to set. No endpoint, schema, dependency or outbound host change; no response shape changed.**
+
+Drift check (north-star §8): Layer 1, Delivery (the report on screen and in the PDF) and the design system's focus token; lifecycle phase: Activation (Epic 9), the report a pilot agency sends.
+
+## 1. What changed
+
+- **The failed-audit card** (`ReportView.tsx`, signed-in and public alike: one component) printed the technical audit's raw error code in parentheses. It now opens with one sentence per code from `auditFailureSentence` in `lib/report/strings.ts`, then the existing text without the code:
+  - `BROWSER_ERROR`: "The crawler’s browser stopped before it could read the home page." (also the code for a connection the egress guard could not verify);
+  - `FETCH_FAILED`: "The crawler asked for the home page and got no response." (the navigation returned no response);
+  - `TIMEOUT`: "The home page did not finish loading in the time the crawler allows.";
+  - `HTTP_<status>` (set only for 400 and above): "The site answered with an error (HTTP 503) when the crawler asked for its home page.", with the status the crawler saw;
+  - anything else: "The crawler could not read the home page."
+  - "Home page" is true: the audit navigates to the start URL (`technical_audit.py`). `ROBOTS_DISALLOWED` and `ADDRESS_NOT_PUBLIC` keep their own copy. The PDF never printed the code; a test now keeps it that way.
+- **The PDF says when a scan was partial or failed** (`report_pdf.py`), in one bold line on the cover under the meta line, chosen from the scan's status alone (the public PDF carries no error code) and saying nothing about the agency's scan allowance, because the PDF goes to a prospect:
+  - PARTIAL: "This scan is partial: not every planned question was answered, so these results rest on fewer answers than planned." (true of both causes: some engine calls got no answer, or the deadline came with at least half the planned prompts answered);
+  - FAILED: "This scan failed, so these results are incomplete." (true of every cause: every engine failed, an error or a restart, or a deadline with fewer than half answered). The implementer's first draft said "did not finish", which a scan whose engines all failed did; corrected before review.
+  - Every other status: no line.
+- **The focus ring** (`tokens.css`). `--avp-focus-ring` in the light theme and in `.avp-report` is now a solid 2px `oklch(0.53 0.09 200)` (beacon-600's light value) ring with the same 6px halo; it was `oklch(0.72 0.11 200 / 0.6)`, about 1.7:1 on the light seated surface (WCAG 1.4.11 asks 3:1). A literal rather than `var(--avp-beacon-600)`, because `.avp-report` redefines beacon-600. The dark theme's ring is unchanged (already 4.8–5.8:1). `docs/design-system.md` describes the new ring.
+- **A contrast test for tokens** (`packages/design-system/src/tokens/contrast.ts` and `contrast.test.ts`): it parses the real `tokens.css` (resolving `var()` within the file), converts OKLCH to sRGB, composites alpha over the surface in gamma-encoded sRGB, and computes the WCAG ratio. Two pinned measurements guard the helper itself (the old dark tertiary on dark seated, 4.09:1; the old light ring on light seated, 1.66:1). It asserts the ring at 3:1 or more against seated, raised, ground and sunken in light and dark, and against the report's three paper surfaces. Measured now: light 4.44–5.06, dark 5.09–5.78, report paper 4.48–4.99.
+
+## 2. The review
+
+- **UI review (sonnet): PASS WITH NITS.** Checked against the sources: each audit sentence against where its code is set; the PARTIAL and FAILED lines against `models/scan.py` and `scan_executor.py`; the report still paper in both themes (`reportIsolation`); 1.4.11 and 2.4.7 numerically; no test weakened (the one changed assertion, `toContain('FETCH_FAILED')`, became the sentence plus `not.toContain`).
+  - **Taken:** the stale focus-ring line in `docs/design-system.md`; the HTTP pattern tightened from `[1-5]\d\d` to `[45]\d\d`, the codes the audit can set.
+  - **Left:** on a focused primary button (filled with beacon-600 in the light theme) the new ring is the fill's colour, so it reads as a 2px growth plus the halo rather than a separate ring. It still meets 1.4.11 against the page surface; a 2px gap on primary buttons would be a look change for the founder. And `BROWSER_ERROR`'s sentence also covers an unverified connection, where the page may have loaded; the sentence is not false.
+
+## Found, not fixed
+
+- **The report's own tertiary text** (`.avp-report`'s `--avp-text-tertiary`, ink-400) measures 3.23–3.59:1 on paper, under 4.5:1. Darkening it changes the printed report's look; a founder decision.
+- **The client Technical screen** (`ClientTechnicalView.tsx`) still prints "Reason: <code>" with the raw audit code, signed in only. Outside this item, which names the report and the PDF.
+- The ring is a box-shadow, so it does not draw in forced-colours mode (unchanged).
+
+## Verified
+
+**API pytest 2241 → 2250 (+9); design-system vitest 846 → 859 (+13); web vitest 1433 → 1434 (+1); the three floors raised to match.**
+- **Web** (`ReportView.test.tsx`): the card shows the sentence for `BROWSER_ERROR`, `FETCH_FAILED`, `TIMEOUT`, `HTTP_503` and an unknown code, on the signed-in and the public view, and never the raw code (the old `toContain('FETCH_FAILED')` became the sentence plus `not.toContain`).
+- **API** (`test_report_pdf.py`): the cover line for PARTIAL and FAILED, each with and without an error code; no line for SUCCEEDED, RUNNING or CANCELLED; the public shared PDF of a PARTIAL scan carries it; a failed audit's code never appears in the PDF.
+- **Design system** (`contrast.test.ts`): the helper's two pinned measurements; the ring at 3:1 or more on four surfaces in light and dark and on the report's three paper surfaces. `reportIsolation.test.ts` still passes (the report stays paper in both themes).
+- **Negative controls:**
+  - the old light ring put back in `tokens.css` fails 7 of the 13 contrast tests (the four light surfaces and the three paper ones); restored and checked with `cmp`;
+  - the PDF line disabled fails 5 PDF tests; the code put back into the card fails 2 web tests (the implementer's runs, each restored and checked).
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, shared-types 53 (0 fail), mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; the styleguide builds; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`).
+- OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

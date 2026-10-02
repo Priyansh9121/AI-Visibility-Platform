@@ -463,6 +463,72 @@ async def test_the_share_pdf_is_the_same_document_as_the_authenticated_one(
     assert _visible_text(private.content) == _visible_text(public.content)
 
 
+PARTIAL_LINE = (
+    "This scan is partial: not every planned question was answered, so these "
+    "results rest on fewer answers than planned."
+)
+FAILED_LINE = "This scan failed, so these results are incomplete."
+
+
+def _with_status(status: str, error_code: str | None = None) -> bytes:
+    case = {**CASES["scored-with-generated-fixes"], "scanStatus": status}
+    case["scanErrorCode"] = error_code
+    return render_report_pdf(ReportOut.model_validate(case))
+
+
+@pytest.mark.parametrize("error_code", [None, "SCAN_DEADLINE_EXCEEDED"])
+def test_a_partial_scan_says_so_with_or_without_the_error_code(error_code: str | None) -> None:
+    text = _visible_text(_with_status("partial", error_code))
+    assert PARTIAL_LINE in text
+    assert FAILED_LINE not in text
+    # Nothing about the agency's allowance, and never the code: the PDF goes to a prospect.
+    assert "SCAN_DEADLINE_EXCEEDED" not in text
+    assert "your scans" not in text
+
+
+@pytest.mark.parametrize("error_code", [None, "ALL_ENGINE_CALLS_FAILED"])
+def test_a_failed_scan_says_so_with_or_without_the_error_code(error_code: str | None) -> None:
+    text = _visible_text(_with_status("failed", error_code))
+    assert FAILED_LINE in text
+    assert PARTIAL_LINE not in text
+    assert "ALL_ENGINE_CALLS_FAILED" not in text
+    assert "your scans" not in text
+
+
+@pytest.mark.parametrize("status", ["succeeded", "running", "cancelled"])
+def test_other_statuses_carry_no_partial_or_failed_line(status: str) -> None:
+    text = _visible_text(_with_status(status))
+    assert PARTIAL_LINE not in text
+    assert FAILED_LINE not in text
+
+
+def test_a_failed_audit_code_never_appears_in_the_pdf() -> None:
+    case = json.loads(json.dumps(CASES["scored-with-generated-fixes"]))
+    case["audit"] = {**(case.get("audit") or {}), "status": "failed", "errorCode": "FETCH_FAILED"}
+    report = ReportOut.model_validate(case)
+    assert "FETCH_FAILED" not in _visible_text(render_report_pdf(report))
+
+
+async def test_the_public_pdf_of_a_partial_scan_carries_the_line(
+    client: AsyncClient, session: Any
+) -> None:
+    from sqlalchemy import update
+
+    from avp_api.models.scan import Scan, ScanStatus
+
+    scan_id = await _scan_for_report(client)
+    await session.execute(
+        update(Scan).where(Scan.id == scan_id).values(status=ScanStatus.PARTIAL)
+    )
+    await session.commit()
+    token = (await client.post(f"{BASE}/scans/{scan_id}/share")).json()["token"]
+    private = await client.get(f"{BASE}/scans/{scan_id}/report.pdf")
+    await client.post(f"{BASE}/auth/logout")
+    public = await client.post(f"{BASE}/reports/shared/pdf", json={"token": token})
+    assert PARTIAL_LINE in _visible_text(private.content)
+    assert PARTIAL_LINE in _visible_text(public.content)
+
+
 @pytest.mark.parametrize(
     "token", ["not-a-real-token", "a" * 300, "../../etc/passwd", "abc%2F"]
 )

@@ -67,6 +67,20 @@ def render_report_pdf(report: ReportOut) -> bytes:
     return doc.render()
 
 
+# PARTIAL: some engine calls got no answer, or the deadline ended the scan with at
+# least half of its planned prompts answered. FAILED: every engine failed, an
+# error or a restart stopped it, or the deadline came with fewer than half
+# answered. "Not every planned question was answered" is what PARTIAL means;
+# FAILED says only that it failed, which is true of every one of those.
+_OUTCOME_LINE = {
+    "partial": (
+        "This scan is partial: not every planned question was answered, so these "
+        "results rest on fewer answers than planned."
+    ),
+    "failed": "This scan failed, so these results are incomplete.",
+}
+
+
 # ---------------------------------------------------------------------------
 # cover
 # ---------------------------------------------------------------------------
@@ -120,6 +134,11 @@ def _cover(doc: PdfDocument, data: dict[str, Any], subject_name: str) -> None:
         f"Scanned {_date(data.get('scannedAt') or data['generatedAt'])}",
     ]
     doc.text(" · ".join(m for m in meta if m), size=8.5, leading=12, grey=True)
+    # Says what the report covers when the scan did not finish cleanly. Chosen
+    # from the STATUS alone, because the public PDF carries no error code, and
+    # it says nothing about the agency's scan allowance: this goes to a prospect.
+    if (line := _OUTCOME_LINE.get(str(data.get("scanStatus")))) is not None:
+        doc.text(line, font=BOLD, size=9.5, leading=16)
     doc.rule(space_above=10, space_below=8)
 
 

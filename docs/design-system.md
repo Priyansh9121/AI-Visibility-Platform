@@ -342,9 +342,11 @@ in an export, so they may blur.
 Because the system says visibility = luminance, an emphasised element does not
 rise toward the viewer — it **illuminates**:
 
-- `--avp-focus-ring` — 2px beacon ring at 60% + 6px halo at 12%. Never an
-  outline offset, never a lift. Applied globally in `base.css` so no component
-  reimplements it.
+- `--avp-focus-ring` — a solid 2px beacon-600 ring + 6px halo at 12% in the
+  light theme and on the report (at least 3:1 against every surface, WCAG
+  1.4.11, enforced by `tokens/contrast.test.ts`); the dark theme keeps its 2px
+  ring at 70%. Never an outline offset, never a lift. Applied globally in
+  `base.css` so no component reimplements it.
 - `--avp-selected-ring` / `--avp-selected-wash` — reads as lit from within.
 - **Score reveal** — dissolves `vis-00` → true value over 600ms
   `cubic-bezier(0.22, 1, 0.36, 1)`. A count-up says "loading"; an illumination
