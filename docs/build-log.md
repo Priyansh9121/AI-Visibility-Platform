@@ -21982,3 +21982,55 @@ Drift check (north-star §8): Layer 1, Delivery (the share bar); lifecycle phase
 - The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
 - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# A failed scan has no score on the score routes, no visibility alert, and none of its generated fixes served
+
+**2026-10-02, the sixteenth entry of the day; branch `pilot-fixes-2`, the founder's brief "memory and the rest of the open decisions" (launch checklist 3.30).** One item, one commit.
+
+**Render: nothing to set. No migration, no new dependency or outbound host.** Route descriptions changed (OpenAPI and `api.gen.ts` regenerated, descriptions only). `POST /scans/{scanId}/fixes` has a new `409`.
+
+Drift check (north-star §8): Layer 1, Delivery (the score, fix, audit and alert routes, and the report: one rule across them, so one item); lifecycle phase: Activation (Epic 9), what an agency is shown about a scan that failed.
+
+## 1. What changed
+
+- **Founder decision (final):** extend 3.24's rule. The three score routes treat a FAILED scan as having no score, in the shape of an unscored scan's answer; no visibility alert is created from a FAILED scan, and one already written for a scan that later FAILED is not shown; Score rows are never deleted or re-scored (scoring-spec rule 5); the fix generator's input may keep the score, never shown, and the contract says so.
+- **Score routes** (`routers/scores.py`). `GET /scans/{scanId}/score` answers `404` "This scan failed, so it has no score." (the 404 of a scan not yet scored); `GET /scans/{scanId}/scores` answers `[]`; `POST /scans/{scanId}/score` answers `409 /problems/conflict` "This scan failed, so it cannot be scored." and writes nothing. The agency check comes first on every route, so another agency's failed scan is the same 404 as an unknown one. POST reads the scan again `FOR UPDATE` (with `populate_existing`) before its check, so a scan that fails between the route's first read and the write gets no Score row and its kept row is not refreshed. The lock covers database reads and one write, no outbound call (4–45 ms locally).
+- **Alerts.** `generate_for_scan` writes no visibility alert for a FAILED scan; tone and citation alerts are not about the score and are generated either way. The client's alert feed leaves out a visibility alert whose scan is FAILED: alerts are written in phase 7b, while the scan is still running, so one can exist before the scan ends failed. `unacknowledged` and `scansCompared` are counted from the listed alerts, so they cannot count a hidden one. Nothing deletes or changes the row; that it survives rests on generation running once per scan (phase 7b), which the comment and the contract now say.
+- **Fixes (the security review's Medium).** The fix generator's one prompt carries the composite and every dimension score, and its wording is told to refer to "this scan's actual numbers" (a stored fix has read "share of voice at 30 out of 100"), so blanking `pointsUpside` was not enough. For a FAILED scan nothing the generator wrote is served:
+  - `GET /scans/{scanId}/fixes` answers `200` with `status: "empty"` and `items: []`, the answer for a scan whose fixes were never generated;
+  - `POST /scans/{scanId}/fixes` answers `409` "This scan failed, so no fixes are written for it." with no model call, and the same `409` if the scan fails while the call runs (the rows that call wrote are kept and never served);
+  - the report's `actionItems` is `[]` (the signed-in JSON and its PDF; since 3.29 the shared report refuses a failed scan). The report then lists the audit's fixes in its own fixed wording, as for a scan with no generated fixes; gap fixes were already absent (no dimensions).
+  - The generator's input still includes the score for a scan that is running (the founder's decision); the contract says what follows if that scan then fails.
+- **Audit.** A FAILED scan's audit (`GET` and `POST /scans/{scanId}/audit`) carries no `technicalFoundation` and no `components`; `componentWeights` stays (this audit's weighting, not a score). POST reads the status again after the crawl.
+- **One helper** (`services/failed_scan.py`: `score_is_withheld`, `served_fixes`, `withhold_technical_foundation`), used by the report, the fix, audit and score routes and alert generation; a guard test fails if one of them compares the status itself, and another that the feed's SQL filter agrees with the helper for every status.
+- **No Score or Alert row is deleted, changed or re-scored**; no migration; `FORMULA_VERSION` unchanged.
+- **Test-only, found while landing:** the stand-in for "the scan ends during the call" now writes through an engine of its own. Borrowed from the suite's shared pool in the middle of a request, its connection left the pool slow to hand out the next one, and the row-lock test that ran next timed out waiting for its request (only in that order; the full suite's order hid it). After the change, 12 of 12 runs of that pair and two runs of the six files pass.
+- `docs/api-contracts.md`: the score, fixes, audit and alert routes, and the report's failed-scan paragraph (merged with 3.29's sentence on the shared report).
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS.** Checked clean: the agency check before the status check on all seven routes (another agency's failed scan is an indistinguishable 404, and no model call or crawl runs for it); none of the score routes serves a failed scan's numbers; the dashboard and the trend; the report and PDF; alerts (a baseline can never be FAILED; acknowledge echoes only the id and time; `scansTotal` and the listed counts reveal no hidden alert); no Score row deleted; facts-only; ids only in logs.
+  - **Taken:** the Medium (fixes, above); L1, the lock on POST /score and the status re-read on POST /fixes and POST /audit; L2, the reworded "never deleted"; L3, the `componentWeights` wording; L4, the helper's docstring narrowed to what it withholds; the nits (one helper for every Python check; the contract's wording on POST /fixes).
+- No UI review: nothing in `apps/web` changed.
+
+## Found, not fixed
+
+- **Per-engine figures in the report** (`proof.crossEngine.standings[]`: each engine's mention rate and sentiment) are served for a failed scan. Sentiment there is computed like the Sentiment dimension, so a weighted sum of them may rebuild the failed scan's sub-score (unconfirmed on real data). Founder: withhold them for a failed scan, or keep.
+- `POST /scans/{scanId}/score`'s docstring says re-scoring inserts a new row; under the same formula version the unique key makes it refresh the row (pre-existing wording).
+- The dashboard's SQL, the history's plottable filter and the share refusal apply 3.24's rule on their own, not through the helper (the module says so).
+
+## Verified
+
+**API pytest 2379 → 2438 (+59); floor raised to match.**
+- Score routes: 404/[]/409 on a failed scan with Score rows present, unchanged column by column; SUCCEEDED and PARTIAL contrasts; another agency's failed scan 404; the row lock (another transaction's uncommitted FAILED write held while the request waits on the lock, seen in `pg_stat_activity`, then 409 with nothing written; a scan left SUCCEEDED is scored under the same lock).
+- Alerts: none generated from a failed scan; an existing one hidden from the feed and its counts and kept in the table; tone and citation alerts unaffected; the SQL filter against the helper over all six statuses.
+- Fixes, report and audit: the stand-in model quotes the composite it is given, so stored rows really hold the score, and no failed-scan response, report or PDF contains it; POST /fixes refused with no model call; a scan that ends FAILED during POST /fixes or POST /audit is refused or blanked, one that ends PARTIAL is served.
+- **Negative control:** `served_fixes` serving a failed scan's fixes again fails 6 tests (the fix list, the scan that fails during POST, the report, the PDF, the three-route agreement, 3.24's report test); restored and checked with `cmp`. The implementer's, each restored: POST /score without the locked read fails 3; without `populate_existing`, 2; without the re-reads, the during-the-call tests; the helper withholding CANCELLED too, only the agreement case for it.
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, shared-types 53 (0 fail), design-system 875, web 1499, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; the styleguide builds; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+- OpenAPI and `api.gen.ts` regenerate with no change from the committed files (eight route descriptions changed in this item, nothing else).
+- Exit codes were read from files.

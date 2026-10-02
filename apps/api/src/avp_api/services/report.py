@@ -34,7 +34,6 @@ from ..models import (
     EngineResultStatus,
     Prompt,
     Scan,
-    ScanStatus,
     Score,
     TechnicalAudit,
 )
@@ -65,6 +64,7 @@ from ..schemas.report import (
 )
 from ..schemas.score import CompetitorScoreOut, ScoreDetailOut
 from . import divergence, scoring_runner
+from .failed_scan import score_is_withheld, served_fixes, withhold_technical_foundation
 from .scoring import ResultFacts
 
 # Heaviest dimension first. The Luminance Ledger stacks the heaviest segment at
@@ -127,8 +127,11 @@ async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:
     # A FAILED scan has no score in the report (3.24). A scan whose deadline came
     # after scoring keeps its Score row, which is neither changed nor deleted
     # here; it is simply not read. With no row, the score, the dimensions and the
-    # score-derived competitor comparison are all absent.
-    failed = scan.status is ScanStatus.FAILED
+    # score-derived competitor comparison are all absent. The fixes the generator
+    # wrote from that score are not served either (3.30): `actionItems` is empty,
+    # and the fix beat falls back to its own fixed wording, as it does for a scan
+    # with no fixes generated. The PDF renders this same `ReportOut`.
+    failed = score_is_withheld(scan)
     score_row = (
         None
         if failed
@@ -189,7 +192,7 @@ async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:
         competitor_set=_competitor_set_out(competitor_set, comparisons),
         proof=_proof(results, competitor_set, prompts),
         audit=_audit_out(audit, scored=not failed),
-        action_items=_action_items_out(action_items, scored=not failed),
+        action_items=served_fixes(scan, _action_items_out(action_items)),
     )
 
 
@@ -761,12 +764,11 @@ def _audit_out(audit: TechnicalAudit | None, *, scored: bool = True) -> ReportAu
     severity = {CheckStatus.FAIL: 0, CheckStatus.ERROR: 1, CheckStatus.WARN: 2}
     findings.sort(key=lambda f: (severity.get(f.status, 3), f.check_key))
 
-    return ReportAuditOut(
+    out = ReportAuditOut(
         status=audit.status,
         error_code=audit.error_code,
         url_audited=audit.url_audited,
-        # The Technical Foundation sub-score is a score input: a FAILED scan has none.
-        technical_foundation=audit.technical_foundation if scored else None,
+        technical_foundation=audit.technical_foundation,
         audited_at=audit.audited_at,
         passed=tally[CheckStatus.PASS],
         warned=tally[CheckStatus.WARN],
@@ -774,24 +776,26 @@ def _audit_out(audit: TechnicalAudit | None, *, scored: bool = True) -> ReportAu
         not_applicable=tally[CheckStatus.NOT_APPLICABLE],
         findings=findings,
     )
+    # The Technical Foundation sub-score is a score input: a FAILED scan has none.
+    # The same helper the audit routes use (`services/failed_scan.py`).
+    if not scored:
+        withhold_technical_foundation(out)
+    return out
 
 
-def _action_items_out(rows: list[ActionItem], *, scored: bool = True) -> list[ActionItemOut]:
+def _action_items_out(rows: list[ActionItem]) -> list[ActionItemOut]:
     """The generated fix list as the fix beat needs it.
 
     Only items still open or in progress. A fix an operator marked done or
     dismissed has left the plan, and a report that keeps listing it is telling
     a client to do work they already decided about.
 
-    `scored` is False for a FAILED scan (3.24): `points_upside` is the ledger gap
-    arithmetic over the score, so it goes with the score. The fixes stay.
+    A FAILED scan serves none of them (3.30, `failed_scan.served_fixes`): the
+    generator was handed the score and its wording can quote it. `build_report`
+    applies that to what this returns.
     """
-    out = [
+    return [
         ActionItemOut.model_validate(row)
         for row in rows
         if row.status in (ActionItemStatus.OPEN, ActionItemStatus.IN_PROGRESS)
     ]
-    if not scored:
-        for item in out:
-            item.points_upside = None
-    return out

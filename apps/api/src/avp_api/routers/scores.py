@@ -11,13 +11,22 @@ from fastapi import APIRouter, Path, status
 from sqlalchemy import select
 
 from ..deps import DbDep, PrincipalDep
-from ..errors import NotFound
+from ..errors import Conflict, NotFound
 from ..models import Scan, Score
 from ..schemas.score import CompetitorScoreOut, ScoreDetailOut, ScoreOut
 from ..services import scoring_runner
+from ..services.failed_scan import score_is_withheld
 from ..services.scoring import ScoreResult
 
 router = APIRouter(tags=["scores"])
+
+# A FAILED scan has no score that is ever shown (checklist 3.24: the dashboard and
+# the report; 3.30: these routes). The first sentence is the one the report and
+# its PDF already use. A scan whose deadline came after scoring keeps its Score
+# rows. They are neither changed nor deleted (scoring-spec.md rule 5), only not
+# read here, and nothing is computed for the scan.
+FAILED_NO_SCORE = "This scan failed, so it has no score."
+FAILED_NOT_SCORABLE = "This scan failed, so it cannot be scored."
 
 
 async def _load_scan(db: Any, scan_id: str, agency_id: str) -> Scan:
@@ -73,8 +82,39 @@ async def compute_scan_score(
     **Re-scoring INSERTS a new row** rather than overwriting. A Score is a dated
     claim under a named `formulaVersion`; overwriting would erase the history
     before/after reporting depends on.
+
+    **A FAILED scan is not scored** (3.30, extending 3.24): `409`
+    `/problems/conflict`, and no Score row is written or refreshed. A failed scan
+    has no score that is ever shown, and the rows it kept from before it failed
+    are neither changed nor deleted. The agency check comes first, so another
+    agency's failed scan is the same `404` as an unknown one. The status is read
+    under a row lock held until the score is committed, so a scan that fails
+    while this runs either fails first (`409`) or is scored first and fails
+    after. Every other status is scored as before.
+
+    **Errors:** `401`, `404` (unknown scan, or another agency's), `409` (failed
+    scan).
     """
     scan = await _load_scan(db, scan_id, principal.agency_id)
+    # The status the check below reads is the one now, not the one `_load_scan` saw: a
+    # deadline or the reaper can end the scan between the two, and a Score row written
+    # after that is a score for a failed scan. `FOR UPDATE` makes a status write wait
+    # for this transaction, and `populate_existing` overwrites the copy `_load_scan`
+    # left in the session, which a locked read otherwise returns as it was. Held from
+    # here to the commit below: database reads, one insert or update, and no outbound
+    # call (scoring is arithmetic over stored rows).
+    scan = (
+        await db.execute(
+            select(Scan)
+            .where(Scan.id == scan.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+    if score_is_withheld(scan):
+        # Before score_scan, which would compute and write, even if only to refresh
+        # the row the scan already has.
+        raise Conflict(detail=FAILED_NOT_SCORABLE)
     row, computed, _competitors = await scoring_runner.score_scan(db, scan)
     await db.commit()
     await db.refresh(row)
@@ -95,8 +135,17 @@ async def get_scan_score(
     The comparison is recomputed from persisted rows on read rather than stored
     — it is a pure function of data already in the database, and a second copy
     could fall out of step with the first.
+
+    **A FAILED scan has no score** (3.30, extending 3.24): the same `404` as a scan
+    not yet scored, with the detail "This scan failed, so it has no score.",
+    whatever rows the scan kept. They are not read, changed or deleted.
+
+    **Errors:** `401`; `404` (unknown scan, another agency's, not yet scored, or
+    failed).
     """
     scan = await _load_scan(db, scan_id, principal.agency_id)
+    if score_is_withheld(scan):
+        raise NotFound(detail=FAILED_NO_SCORE)
     row = await scoring_runner.latest_score(db, scan.id)
     if row is None:
         raise NotFound(detail="This scan has not been scored yet.")
@@ -118,7 +167,13 @@ async def list_scan_scores(
     The audit trail: which `formulaVersion` produced which composite, from which
     `inputsDigest`. Two rows sharing a digest but differing in composite mean the
     formula changed; differing digests mean the inputs did.
+
+    **A FAILED scan lists none** (3.30, extending 3.24): `[]`, the same `200` as a
+    scan not yet scored, whatever rows the scan kept. They are not read, changed
+    or deleted.
     """
     scan = await _load_scan(db, scan_id, principal.agency_id)
+    if score_is_withheld(scan):
+        return []
     rows = await scoring_runner.score_history(db, scan.id)
     return [ScoreOut.model_validate(r) for r in rows]

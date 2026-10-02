@@ -1792,8 +1792,10 @@ was named and tracked Mention Rate (Spearman 0.781, zeros excluded). A brand
 named in no awareness answer reads `0.00`, not `null`.
 
 **`status: "insufficient_data"`** with `composite: null` and
-`reasonCode: "INSUFFICIENT_DATA"` when no engine call answered. An unrunnable
-scan is never rendered as a bad score.
+`reasonCode: "INSUFFICIENT_DATA"` when no engine call answered, a scan that has
+not run yet for one. An unrunnable scan is never rendered as a bad score. A scan
+whose every engine call failed ends `failed` (`ALL_ENGINE_CALLS_FAILED`) and is
+refused, below, rather than scored as `insufficient_data`.
 
 **`inputsDigest`** is a SHA-256 over the exact EngineResult and Competitor rows
 scored. Two scores sharing a digest were computed from identical data, so a
@@ -1809,17 +1811,42 @@ only and Technical Foundation is Epic 6, so 25% of the weight has no
 per-competitor input. A composite on a different weight basis would not be
 comparable to the subject's, which is the point of a comparison.
 
-**Errors:** `401`, `404` (unknown scan, or another agency's).
+**A `failed` scan is not scored** (checklist 3.30, extending 3.24): `409
+/problems/conflict`, `detail` "This scan failed, so it cannot be scored.", and no
+Score row is written or refreshed. A failed scan has no score that is ever shown,
+and a row it kept from before it failed (a deadline that came after scoring) is
+neither changed nor deleted (scoring-spec.md rule 5). This route had no refusal
+for a scan it could not score — a scan with no answered result still gets a `201`
+with an `insufficient_data` row — so this is a new one, in the same `409` family as
+`failed-scan-not-shareable`. The agency check runs first, here and on both reads
+below: another agency's failed scan is the same `404` as an unknown one. The status
+is read under a row lock (`FOR UPDATE` on the scan) held until the score is committed,
+database reads and one insert or update with no outbound call, so a scan that fails
+while this runs either fails first (`409`) or is scored first and fails after. `partial`,
+`succeeded` and every other status are scored as before.
+
+**Errors:** `401`, `404` (unknown scan, or another agency's), `409` (failed scan).
 
 #### `GET /api/v1/scans/{scanId}/score`
 **Auth required.** The most recent stored Score, with the competitor comparison
 recomputed from persisted rows on read.
 
-**Errors:** `401`; `404` — unknown scan, or *"This scan has not been scored yet."*
+**A `failed` scan has no score** (checklist 3.30, extending 3.24): the same `404
+/problems/not-found` as a scan not yet scored, with `detail` "This scan failed, so
+it has no score." — whatever Score rows the scan kept, which are not read, changed
+or deleted. `succeeded` and `partial` scans are served as before.
+
+**Errors:** `401`; `404` — unknown scan, another agency's, *"This scan has not been
+scored yet."*, or *"This scan failed, so it has no score."*
 
 #### `GET /api/v1/scans/{scanId}/scores`
 **Auth required.** Every Score for the scan, newest first — the audit trail of
 which `formulaVersion` produced which composite from which `inputsDigest`.
+
+**A `failed` scan lists none** (checklist 3.30, extending 3.24): `200` with `[]`, the
+same answer as a scan not yet scored, whatever rows the scan kept (rows under older
+formula versions included), which are not read, changed or deleted. `succeeded` and
+`partial` scans list as before.
 
 ---
 
@@ -1872,6 +1899,22 @@ or `null` when the site could not be read. **A site we could not reach is not a
 site with a bad technical foundation** — the two must not collapse into one
 number, which is why `status: "failed"` exists.
 
+**A `failed` scan's audit carries no `technicalFoundation` and no `components`**
+(checklist 3.30, extending 3.24), on `POST` and `GET` alike: `technicalFoundation` is
+`null` and `components` is `{}`, whatever the audit measured. The sub-score is a score
+input and a failed scan shows no score; the component scores are what it is the weighted
+sum of, so they go with it (the report empties `dimensions` the same way).
+`componentWeights` stays. It is this audit's own weighting, the nominal weights with an
+unmeasured component's share redistributed (`effective_weights(components)`), which says
+how the audit was measured and is not a score. So does every fact about the site: the
+checks and their values, the booleans, the counts, the dates, the schema types and
+`excludedComponents`. The stored row keeps its values, and re-auditing a failed scan still
+refreshes it. On `POST` the scan's status is read again after the crawl, so a scan that
+fails while the audit runs is blanked too. The report blanks `audit.technicalFoundation`
+through the same helper and carries no components at all. `succeeded` and `partial` scans
+are unchanged, and the agency check comes first: another agency's failed scan is the same
+`404` as an unknown one.
+
 | `status` | Meaning |
 |---|---|
 | `ok` | Every component measurable; `components` and `componentWeights` filled. |
@@ -1901,15 +1944,16 @@ noisy measurement move a client-facing score would make the score noisy.
 crawler that never interacts cannot produce one. Real INP needs CrUX or RUM.
 
 **`components` and `componentWeights` — 2026-09-30.** Both are populated for `ok`
-and `partial` audits; `failed` audits omit both. `components` holds each
+and `partial` audits; `failed` audits omit both. (A `failed` *scan* omits `components`
+only, whatever its audit measured; see above.) `components` holds each
 component's score (0–100 decimal), calculated only from the measured signals; a
 partial audit drops the one with no signal. `componentWeights` holds the weight
 applied to each component after redistribution — when one is excluded, its weight
 is split proportionally among the rest, exactly as `Score.excludedDimensions`
 works. The weighted sum of `components` times `componentWeights` (÷100) equals
 `technicalFoundation`, and a client can draw the latter as a Luminance Ledger
-whose total lit height is the score. `excludedComponents` lists the keys not in
-`components` and the reason each was dropped (e.g., `content_freshness: NO_DATE_SIGNAL_AVAILABLE`).
+whose total lit height is the score. `excludedComponents` lists the components the
+audit could not measure and the reason each was dropped (e.g., `content_freshness: NO_DATE_SIGNAL_AVAILABLE`).
 
 **Scored components and their nominal weights inside Technical Foundation:**
 indexation 30, structured data 25, content freshness 25, schema presence 20.
@@ -1928,7 +1972,11 @@ site, so a second audit is a correction rather than a new observation.
 
 #### `GET /api/v1/scans/{scanId}/audit`
 **Auth required.** The scan's audit with checks in display order.
-`404` — unknown scan, or *"This scan has not been audited yet."*
+`404` — unknown scan, another agency's, or *"This scan has not been audited yet."*
+
+**A `failed` scan's audit carries no `technicalFoundation` and no `components`** here too
+(checklist 3.30, extending 3.24): `null` and `{}`, `componentWeights` and every other
+field as stored. See `POST` above.
 
 #### Effect on scoring
 
@@ -2108,11 +2156,14 @@ report renders all three states differently.
 **A `failed` scan's report carries no score** (checklist 3.24), even if the scan
 kept a score row: `score` is `null`, `dimensions` is `[]`, each competitor's
 `mentionRate` and `shareOfVoice` are `null`, `audit.technicalFoundation` is
-`null` and every `actionItems[].pointsUpside` is `null`. The fixes themselves
-stay. The shared report and its PDF do not serve a `failed` scan at all: its
-share link is refused like a withdrawn one (checklist 3.29, under
-`POST /api/v1/reports/shared`). The row is not changed or deleted; it is not
-read.
+`null`, and `actionItems` is `[]` (checklist 3.30: the fix generator was handed the
+score, so nothing it wrote is served; the fix beat then renders its deterministic
+derivation, as for a scan with no fixes generated). The shared report and its PDF
+do not serve a `failed` scan at all: its share link is refused like a withdrawn one
+(checklist 3.29, under `POST /api/v1/reports/shared`). No row is changed or
+deleted: the Score row is not read, and the fix rows are read and not served.
+`proof.crossEngine.standings[]` (each engine's mention rate and sentiment) is not
+withheld.
 
 **`outranksSubject`** is arithmetic over stored counts and ordinals — more
 appearances wins; on a tie, the better position wins. Not a judgement.
@@ -2457,8 +2508,24 @@ reason code, leaving any previous list intact. The report still renders its
 deterministic fix list in that case, which is a weaker list rather than a wrong
 one.
 
+**A `failed` scan has no fixes served** (checklist 3.30, extending 3.24). For a scan still
+running, the generator's input includes its score (founder's decision), and what it
+writes can quote it ("share of voice at 30 out of 100"). If the scan then fails, nothing
+it wrote is served, on any route, and the rows are kept. `POST` for a `failed` scan is
+`409 /problems/conflict`, `detail` "This scan failed, so no fixes are written for it.",
+with no model call and no row written or changed. The agency
+check comes first, so another agency's failed scan is the same `404` as an unknown one. A
+scan that fails *while the generation runs* gets the same `409` (its status is read again
+after the call); what the call wrote is kept, and not served. `succeeded`, `partial` and
+every other status are unchanged. The report serves none either: see its `actionItems`
+below.
+
 #### `GET /api/v1/scans/{scanId}/fixes`
 **Auth required.** The scan's fix list as last generated, in rank order.
+
+**A `failed` scan has no fixes served** here too (checklist 3.30, extending 3.24): `200`
+with `status: "empty"` and `items: []`, the same answer as a scan whose fixes were never
+generated, whatever rows the scan kept. They are not changed or deleted. See `POST` above.
 
 Returns an empty list with `status: "empty"` rather than `404` when nothing has
 been generated yet: "no fixes yet" is a state of a scan that exists.
@@ -2514,7 +2581,8 @@ recommendations about our own client's site, generated from our own measurements
 codes, counts and scores — and generated copy is rejected if it carries a claim
 this product cannot support or quotes one of our internal identifiers back.
 
-**Errors:** `401`, `404` (unknown scan, or another agency's).
+**Errors:** `401`, `404` (unknown scan, or another agency's). `POST` also `409` (a
+`failed` scan, as above).
 
 #### `GET /api/v1/scans/{scanId}/report` — `actionItems`
 
@@ -2523,6 +2591,12 @@ this product cannot support or quotes one of our internal identifiers back.
 plan. Empty until generation has run — the report's fix beat renders its
 deterministic derivation in that case. The report **reads** these rows; it never
 generates them, so loading a report remains a read that costs nothing.
+
+**Empty for a `failed` scan** (checklist 3.30), whatever rows it kept: the generator was
+handed the score, so nothing it wrote is served. The fix beat then renders its
+deterministic derivation, as it does when nothing has been generated, so a failed scan's
+report still lists its audit findings in the fixed wording (it has no dimensions, so no
+gap fixes). The PDF and the shared report render this same payload.
 
 
 ---
@@ -2796,6 +2870,23 @@ re-runs a scan to check something.
 ambiguous.** Most clients have one scan and can therefore never produce an
 alert; nine of eleven in `avp_dev` are in exactly that state. Reporting "0
 alerts" alone would read as an all-clear the data cannot support.
+
+**A visibility alert from a `failed` scan is left out** (checklist 3.30, extending
+3.24). A `visibility_drop` alert quotes its scan's composite ("Visibility fell
+25.0%, from 80.0 to 60.0."), and a failed scan's score is never shown. Alerts are
+written in phase 7b, while the scan is still `running`, so a scan that the deadline
+then ends `failed` can already have one: the feed does not list it, and
+`unacknowledged` and `scansCompared` do not count it (`scansCompared` is the number
+of scans that have an alert in the feed). This route does not delete or change the row,
+and no `visibility_drop` alert is created for a scan that is already `failed`. Nothing
+that runs today deletes the row either, but that rests on alert generation running once
+per scan, in phase 7b: generation deletes a scan's alerts before it rebuilds them, so a
+second generation for a scan that had since failed would delete its visibility alert and
+write no new one. The other two kinds, `sentiment_decline` and `owned_citation_lost`, are
+not about the score and are listed and counted as before; so is every alert from a
+`succeeded` or `partial` scan. `scansTotal` is unchanged: it counts the client's
+`succeeded` and `partial` scans. The web reads all of this from this one feed, so its
+Alerts page, its outstanding count and its trend markers follow the same rule.
 
 **`scannedAt` is `COALESCE(finished_at, created_at)` — the same expression
 `HistoryScanOut.scanned_at` uses, and it must be identical.** The trend charts

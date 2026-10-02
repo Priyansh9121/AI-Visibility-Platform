@@ -68,6 +68,7 @@ from ..models.client import Client
 from ..models.engine_result import EngineResult, EngineResultStatus, Sentiment
 from ..models.scan import Scan, ScanStatus
 from ..models.score import Score
+from .failed_scan import score_is_withheld
 
 logger = structlog.get_logger(__name__)
 
@@ -230,6 +231,8 @@ async def generate_for_scan(
     existing = (
         await session.execute(select(Alert).where(Alert.scan_id == scan.id))
     ).scalars().all()
+    # Every alert of the scan, a visibility alert included, even for a scan that has
+    # failed since it was written: see "visibility" below for what that rests on.
     for row in existing:
         await session.delete(row)
 
@@ -259,27 +262,44 @@ async def generate_for_scan(
         )
 
     # --- visibility ---------------------------------------------------------
-    now_score, now_version = await _composite(session, scan.id)
-    was_score, was_version = await _composite(session, baseline.id)
-    if now_score is not None and was_score is not None and now_version != was_version:
-        # A number that moved because the definition changed is a claim about
-        # us, not about the client's business — the report says so through
-        # `previousFormulaVersions`, and an alert must not say otherwise.
-        logger.info(
-            "alerts.formula_changed",
-            scan_id=scan.id,
-            baseline_id=baseline.id,
-            was=was_version,
-            now=now_version,
-        )
-    elif now_score is not None and was_score is not None and was_score > 0:
-        change = _pct(was_score, now_score)
-        if change <= -VISIBILITY_DROP_FRACTION:
-            add(
-                AlertKind.VISIBILITY_DROP,
-                f"Visibility fell {abs(change) * 100:.1f}%, "
-                f"from {was_score:.1f} to {now_score:.1f}.",
+    #
+    # A visibility alert quotes this scan's composite, and a FAILED scan has no
+    # score that is ever shown (checklist 3.30, extending 3.24; `failed_scan`), so
+    # none is written for one. Phase 7b runs while the scan is still RUNNING, before
+    # its final status is stamped, so in the chain this guards a late or repeated
+    # generation. An alert the chain wrote for a scan that then ended FAILED is left
+    # out of the feed on read (`routers/alerts.py`), and no code that runs today
+    # deletes it: generation runs once per scan, in phase 7b, and nothing calls it
+    # for a scan that has finished. "Not deleted" rests on that and on nothing else.
+    # This function deletes a scan's alerts before it rebuilds them, so a second
+    # generation for a scan that had failed since would delete the visibility alert
+    # and, by the guard below, write no other. If anything ever regenerates alerts for
+    # a finished scan, that delete must skip VISIBILITY_DROP rows while the score is
+    # withheld. Tone and citations are not about the score and are generated either way.
+    if score_is_withheld(scan):
+        logger.info("alerts.visibility_skipped", scan_id=scan.id, reason="scan failed")
+    else:
+        now_score, now_version = await _composite(session, scan.id)
+        was_score, was_version = await _composite(session, baseline.id)
+        if now_score is not None and was_score is not None and now_version != was_version:
+            # A number that moved because the definition changed is a claim about
+            # us, not about the client's business — the report says so through
+            # `previousFormulaVersions`, and an alert must not say otherwise.
+            logger.info(
+                "alerts.formula_changed",
+                scan_id=scan.id,
+                baseline_id=baseline.id,
+                was=was_version,
+                now=now_version,
             )
+        elif now_score is not None and was_score is not None and was_score > 0:
+            change = _pct(was_score, now_score)
+            if change <= -VISIBILITY_DROP_FRACTION:
+                add(
+                    AlertKind.VISIBILITY_DROP,
+                    f"Visibility fell {abs(change) * 100:.1f}%, "
+                    f"from {was_score:.1f} to {now_score:.1f}.",
+                )
 
     # --- tone ---------------------------------------------------------------
     now_tone = await _net_tone(session, scan.id)
