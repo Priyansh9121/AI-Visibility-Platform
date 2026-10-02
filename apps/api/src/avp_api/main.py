@@ -129,15 +129,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(
         OriginCheckMiddleware,
         allowed_origins=settings.cors_allow_origins,
-        session_cookie_name=settings.session_cookie_name,
+        session_cookie_name=settings.session_cookie_key,
         # The one write that is exempt from both rules: Stripe's webhook, which is
         # verified by its signature instead. Exactly this path and no other.
         exempt_paths=[f"{base}/billing/webhook"],
     )
 
-    # Session cookies are only sent cross-origin when the origin is named
-    # explicitly and credentials are allowed; a wildcard is rejected by
-    # browsers in that mode.
+    # CORS is unchanged. The web app's calls are same-origin through its own
+    # `/api/v1` proxy and no longer rely on it; the list stays explicit because
+    # credentials plus a wildcard is rejected by browsers.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_allow_origins,

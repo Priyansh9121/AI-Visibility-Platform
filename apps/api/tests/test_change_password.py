@@ -24,6 +24,8 @@ import time
 
 from httpx import ASGITransport, AsyncClient
 
+from avp_api.config import Settings
+
 BASE = "/api/v1"
 PASSWORD = "correct-horse-battery-staple"
 NEW_PASSWORD = "an-entirely-different-passphrase"
@@ -95,6 +97,7 @@ async def test_the_password_actually_changes(client: AsyncClient) -> None:
 
 async def test_the_caller_stays_signed_in_on_a_fresh_session(
     client: AsyncClient,
+    settings: Settings,
 ) -> None:
     """The stated decision, half one: this session survives.
 
@@ -104,11 +107,11 @@ async def test_the_caller_stays_signed_in_on_a_fresh_session(
     digest" is a special case in the revocation path.
     """
     await _sign_up(client)
-    before = client.cookies.get("avp_session")
+    before = client.cookies.get(settings.session_cookie_key)
 
     resp = await _change(client, PASSWORD, NEW_PASSWORD)
     assert resp.status_code == 200
-    after = resp.cookies.get("avp_session")
+    after = resp.cookies.get(settings.session_cookie_key)
 
     assert after is not None
     assert after != before, "the session token should be re-minted, not reused"
@@ -146,7 +149,9 @@ async def test_every_other_session_is_revoked(client: AsyncClient) -> None:
         assert await _live_sessions(user_id) == 1
 
 
-async def test_it_is_not_the_reset_flow_s_answer(client: AsyncClient) -> None:
+async def test_it_is_not_the_reset_flow_s_answer(
+    client: AsyncClient, settings: Settings
+) -> None:
     """The two endpoints deliberately differ, and the difference is asserted.
 
     `reset-password/confirm` clears the cookie and leaves the caller signed
@@ -159,9 +164,9 @@ async def test_it_is_not_the_reset_flow_s_answer(client: AsyncClient) -> None:
     assert resp.status_code == 200
     # A cleared cookie is a Set-Cookie with an empty value or Max-Age=0.
     set_cookie = resp.headers.get("set-cookie", "")
-    assert "avp_session=" in set_cookie
+    assert f"{settings.session_cookie_key}=" in set_cookie
     assert "Max-Age=0" not in set_cookie
-    assert 'avp_session=""' not in set_cookie
+    assert f'{settings.session_cookie_key}=""' not in set_cookie
 
 
 # ---------------------------------------------------------------------------

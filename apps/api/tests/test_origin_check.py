@@ -669,6 +669,17 @@ async def test_the_cookie_name_follows_the_setting(settings: Settings) -> None:
     assert _reached_the_route(await _login(app, cookie="avp_session=x", origin=None))
 
 
+async def test_when_secure_the_host_prefixed_cookie_is_the_session_cookie(
+    settings: Settings,
+) -> None:
+    """A deployed API names its cookie `__Host-avp_session`; that is the one that counts."""
+    app = _app(settings, session_cookie_secure=True)
+
+    _assert_refused(await _login(app, cookie="__Host-avp_session=x", origin=None), LOGIN)
+    # A bare `avp_session` is not this deployment's cookie: signed out, not refused.
+    assert _reached_the_route(await _login(app, cookie="avp_session=x", origin=None))
+
+
 # ---------------------------------------------------------------------------
 # what is never refused
 # ---------------------------------------------------------------------------
@@ -793,9 +804,11 @@ async def test_a_lowercase_method_is_checked_as_the_method_it_names(settings: Se
 # ---------------------------------------------------------------------------
 
 
-async def test_a_refusal_is_logged_with_no_cookie_and_no_origin(client: AsyncClient) -> None:
+async def test_a_refusal_is_logged_with_no_cookie_and_no_origin(
+    client: AsyncClient, settings: Settings
+) -> None:
     await _sign_up(client)
-    cookie = client.cookies.get("avp_session")
+    cookie = client.cookies.get(settings.session_cookie_key)
     assert cookie, "the session cookie the refusal must not log"
     sentinel = "https://origin-sentinel.example"
 
@@ -834,11 +847,14 @@ async def test_a_refusal_is_logged_with_no_cookie_and_no_origin(client: AsyncCli
 
 
 async def test_the_printed_refusal_carries_no_cookie_and_no_origin(
-    client: AsyncClient, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+    client: AsyncClient,
+    settings: Settings,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """The same, as it is rendered: the line structlog prints on stdout."""
     await _sign_up(client)
-    cookie = client.cookies.get("avp_session")
+    cookie = client.cookies.get(settings.session_cookie_key)
     assert cookie
     sentinel = "https://origin-sentinel.example"
     caplog.set_level("DEBUG")
@@ -935,7 +951,7 @@ def test_the_check_is_configured_from_the_settings(settings: Settings) -> None:
     kwargs = _middleware(create_app(settings), OriginCheckMiddleware).kwargs
 
     assert list(kwargs["allowed_origins"]) == settings.cors_allow_origins
-    assert kwargs["session_cookie_name"] == settings.session_cookie_name
+    assert kwargs["session_cookie_name"] == settings.session_cookie_key
 
 
 def test_every_method_a_route_registers_is_either_read_only_or_checked(

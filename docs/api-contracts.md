@@ -35,7 +35,14 @@ intent; the schema defines the shapes.
 
 ### Authentication
 
-An **httpOnly session cookie** (`avp_session`), not a bearer token.
+An **httpOnly session cookie**, not a bearer token. Deployed it is named
+`__Host-avp_session` with the default `SESSION_COOKIE_NAME` (`avp_session` on
+local http), `Secure`, `SameSite=Lax`, `Path=/`, with no `Domain`. It is
+first-party: the web app serves this API under its own origin at `/api/v1`, so
+every call the web app makes is same-origin. The one cross-site step is
+Google's redirect back to the sign-in callback, a top-level navigation, which
+is why the cookie is `Lax` and not `Strict`.
+Below, "the session cookie" means that cookie.
 
 Chosen because this is seat-based software: when an agency removes a seat, that
 person's access must end immediately. A JWT cannot be revoked without a
@@ -162,7 +169,7 @@ Password rules follow NIST SP 800-63B: 12–256 characters, no composition
 requirements. Composition rules push users toward predictable substitutions.
 A password using fewer than 5 distinct characters is rejected.
 
-**Response `201`** — body is `MeOut` (below). Sets the `avp_session` cookie.
+**Response `201`** — body is `MeOut` (below). Sets the session cookie.
 
 **Errors:** `429 rate-limited` (with `Retry-After` header in seconds; detail "Too many attempts. Try again in N minutes."; 5 per email and 10 per IP per hour, checked before the 409), `503 service-unavailable` (Redis down), `409 email-already-registered`, `422 validation-failed`.
 
@@ -173,7 +180,7 @@ A password using fewer than 5 distinct characters is rejected.
 { "email": "dana@meridiansearch.example", "password": "..." }
 ```
 
-**Response `200`** — `MeOut`. Sets the `avp_session` cookie.
+**Response `200`** — `MeOut`. Sets the session cookie.
 
 **Errors:** `429 rate-limited` (with `Retry-After` header in seconds; detail "Too many attempts. Try again in N minutes."; 10 failed attempts per email and 30 per IP per 15 minutes; successful logins are given back), `503 service-unavailable` (Redis down), `401 invalid-credentials`.
 
@@ -210,7 +217,7 @@ credential being *presented*, not set, and applying the length rule to it would
 `422` on a password that predates a rule change and leak which submitted strings
 are even eligible to be somebody's password.
 
-**Response `200`** — `MeOut`. Sets a NEW `avp_session` cookie.
+**Response `200`** — `MeOut`. Sets a NEW session cookie.
 
 **The current password is re-verified server-side even though the caller holds a
 valid session.** A session proves somebody got in once; it does not prove they
@@ -369,7 +376,7 @@ Password rules are the SIGN-UP rules, imported rather than restated — the same
 `Password` annotation `sign-up` and `reset-password/confirm` carry. A path that
 sets a first password with weaker rules than registration is the way in.
 
-**Response `200`** — `MeOut`. Sets the `avp_session` cookie.
+**Response `200`** — `MeOut`. Sets the session cookie.
 
 **`200`, not `201`:** nothing is created. The `User` row was inserted when the
 invitation was sent and has occupied a seat ever since; this fills it.

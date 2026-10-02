@@ -19,6 +19,7 @@ Rules this module enforces:
 from __future__ import annotations
 
 import logging
+import re
 from functools import lru_cache
 from typing import Annotated, Literal
 
@@ -93,10 +94,17 @@ class Settings(BaseSettings):
         description="Signing secret for CSRF tokens and invitation links.",
     )
     session_ttl_seconds: int = 60 * 60 * 24 * 14  # 14 days
+    # The browser reaches this API through the web app's own origin (the web app
+    # serves `/api/v1` itself), so the session cookie is first-party: always
+    # SameSite=Lax, never with a Domain. A stale SESSION_COOKIE_SAMESITE or
+    # SESSION_COOKIE_DOMAIN left in a deployed environment is ignored
+    # (`extra="ignore"`), not an error.
+    # This is the BASE name. The cookie is sent as `session_cookie_key`: with the
+    # `__Host-` prefix when Secure, so only this exact host can set or read it
+    # (the browser demands Secure, Path=/ and no Domain for that prefix). The
+    # prefix is added by code and never configured, hence the validator below.
     session_cookie_name: str = "avp_session"
     session_cookie_secure: bool = False  # forced True in staging/production
-    session_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
-    session_cookie_domain: str | None = None
 
     # Argon2id parameters. Defaults follow OWASP's recommended second option
     # (19 MiB, t=2, p=1), which resists GPU attack far better than bcrypt.
@@ -144,9 +152,12 @@ class Settings(BaseSettings):
     client_ip_header: str = ""
 
     # --- CORS --------------------------------------------------------------
-    # The web app runs on a different origin in development, and session
-    # cookies require an explicit origin allow-list (credentials + wildcard is
-    # rejected by browsers).
+    # The web app no longer calls this API cross-origin: it goes through its own
+    # origin, so CORS is not what lets it in. The list now matters as the Origin
+    # check's allow-list for writes (`origin_check.py`): the browser still sends
+    # the web app's origin on a same-origin POST, and the proxy passes it
+    # through. CORS itself stays as it was: an explicit list, because credentials
+    # plus a wildcard is rejected by browsers.
     # `NoDecode` is load-bearing: pydantic-settings JSON-decodes complex types
     # (list, dict) read from a dotenv file BEFORE field validators run, so a
     # plain `CORS_ALLOW_ORIGINS=http://localhost:3000` raises a parse error
@@ -315,6 +326,26 @@ class Settings(BaseSettings):
             and self.google_oauth_client_secret is not None
             and self.google_oauth_redirect_url is not None
         )
+
+    @field_validator("session_cookie_name")
+    @classmethod
+    def _plain_cookie_name(cls, value: str) -> str:
+        # A cookie-name token: nothing a Set-Cookie header would split on, and no
+        # `__` start, because `__Host-` is added by `session_cookie_key`.
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", value) or value.startswith("__"):
+            raise ValueError(
+                "SESSION_COOKIE_NAME must be letters, digits, '_' or '-' and must not "
+                "start with '__' (the __Host- prefix is added by the code)."
+            )
+        return value
+
+    @property
+    def session_cookie_key(self) -> str:
+        """The name the cookie travels under. `__Host-` needs Secure, so local
+        http development, where Secure is off, uses the bare name."""
+        if self.session_cookie_secure:
+            return f"__Host-{self.session_cookie_name}"
+        return self.session_cookie_name
 
     @field_validator("cors_allow_origins", mode="before")
     @classmethod

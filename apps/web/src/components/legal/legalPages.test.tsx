@@ -186,7 +186,7 @@ describe('the privacy page says what the code does', () => {
   });
 
   it('names the one cookie and says there are no trackers', () => {
-    expect(PRIVACY.text).toContain('avp_session keeps you signed in');
+    expect(PRIVACY.text).toContain('__Host-avp_session keeps you signed in');
     expect(PRIVACY.text).toContain('There are no analytics, advertising or tracking scripts');
   });
 

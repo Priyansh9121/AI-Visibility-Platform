@@ -23,6 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from avp_api import ids
+from avp_api.config import Settings
 from avp_api.models import Invitation, User, UserRole, UserStatus
 from avp_api.security import token_digest
 from avp_api.services import invitations as invitation_service
@@ -297,7 +298,7 @@ async def test_inviting_someone_elses_user_is_refused(client: AsyncClient) -> No
 
 
 async def test_accepting_an_invitation_signs_the_new_seat_in(
-    client: AsyncClient, engine
+    client: AsyncClient, engine, settings: Settings
 ) -> None:  # noqa: ANN001
     me = await _sign_up(client)
     agency_id = me["agency"]["id"]
@@ -317,7 +318,7 @@ async def test_accepting_an_invitation_signs_the_new_seat_in(
     assert body["agency"]["id"] == agency_id
     # The seat was already counted while pending; accepting does not move it.
     assert body["seats"] == {"used": 2, "limit": 3}
-    assert "avp_session" in resp.cookies
+    assert settings.session_cookie_key in resp.cookies
 
     # Signed in, not merely acknowledged.
     assert (await client.get(f"{BASE}/auth/me")).json()["user"]["email"] == (
@@ -426,7 +427,7 @@ async def test_accepting_applies_the_sign_up_password_rules(
 
 
 async def test_removing_a_seat_revokes_every_session_it_held(
-    client: AsyncClient, engine
+    client: AsyncClient, engine, settings: Settings
 ) -> None:  # noqa: ANN001
     """The stated decision: the seat AND the sessions, immediately.
 
@@ -440,7 +441,7 @@ async def test_removing_a_seat_revokes_every_session_it_held(
     await _invite(client, agency_id, "leaver@seats.example")
     token = await _live_token_for(engine, agency_id, "leaver@seats.example")
 
-    owner_cookie = client.cookies.get("avp_session")
+    owner_cookie = client.cookies.get(settings.session_cookie_key)
 
     # Accept, then sign in a SECOND time, so there are two sessions to kill.
     accepted = await client.post(
@@ -455,7 +456,7 @@ async def test_removing_a_seat_revokes_every_session_it_held(
     assert len(await _live_sessions(leaver_id)) == 2
 
     # Back to the owner.
-    client.cookies.set("avp_session", owner_cookie)
+    client.cookies.set(settings.session_cookie_key, owner_cookie)
 
     resp = await client.delete(f"{BASE}/users/{leaver_id}")
     assert resp.status_code == 204, resp.text
@@ -465,13 +466,13 @@ async def test_removing_a_seat_revokes_every_session_it_held(
 
 
 async def test_a_removed_seat_cannot_sign_back_in(
-    client: AsyncClient, engine
+    client: AsyncClient, engine, settings: Settings
 ) -> None:  # noqa: ANN001
     me = await _sign_up(client)
     agency_id = me["agency"]["id"]
     await _invite(client, agency_id, "gone@seats.example")
     token = await _live_token_for(engine, agency_id, "gone@seats.example")
-    owner_cookie = client.cookies.get("avp_session")
+    owner_cookie = client.cookies.get(settings.session_cookie_key)
 
     user_id = (
         await client.post(
@@ -480,7 +481,7 @@ async def test_a_removed_seat_cannot_sign_back_in(
         )
     ).json()["user"]["id"]
 
-    client.cookies.set("avp_session", owner_cookie)
+    client.cookies.set(settings.session_cookie_key, owner_cookie)
     assert (await client.delete(f"{BASE}/users/{user_id}")).status_code == 204
 
     resp = await client.post(
