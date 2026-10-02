@@ -213,3 +213,110 @@ new session. If two subscriptions still end up on one customer, the API logs
    a metadata key); Stripe sends a new `customer.subscription.updated`, which
    AVP applies as the newest event. Re-check Billing. Rehearse this in test
    mode before relying on it.
+
+## Reading the API's memory
+
+**When:** a scan ended `EXECUTOR_LOST` with no deploy at the time, Render says
+the API restarted for running out of memory, or you want to know how close it
+runs to its limit. The API runs scans in its own process and drives a real
+Chromium for two things: the technical audit of each scan, and the crawl when a
+client is added with classification on. Measured on the API image (2026-10-02):
+the idle server holds about 97 MB of its own (about 100–160 MB charged to its
+container), one heavy page's audit peaks near 490 MB, and a crawl and an audit
+running together reached about 586 MB. So one browser runs at a time per process,
+and the API writes its own memory to the log, as numbers.
+
+**Where:** the Render dashboard → the **API** service → **Logs**. Search for the
+event name. Every line below carries numbers and our own ids and names, and
+nothing else: no URL, no domain, no client name, no address.
+
+**The lines**
+
+| Event | When | Carries |
+|---|---|---|
+| `app.memory_at_start` | once, when the API starts | the five figures |
+| `scan.phase_memory` | after each phase of a scan: `competitors`, `engines`, `audit`, `scoring`, `alerts`, `fixes`, `finalized` | `scan_id`, `phase`, the five figures |
+| `browser.memory` | when a browser run ends: the browser is already closed, and the next run has not started | `kind` (`crawl` or `audit`), `scan_id` (an audit) or `client_id` (a crawl), the five figures |
+| `browser.slot_waited` | a browser run had to wait for the one before it | `kind` (the one that waited), `scan_id` or `client_id`, `waited_ms` |
+| `browser.slot_busy` | a browser run waited as long as it was allowed and was sent away without a browser | `kind` (the one sent away), `scan_id` or `client_id`, `waited_ms` |
+| `browser.close_failed` | a page or a context would not close, or the browser did not close in time | `part` (`page`, `context` or `browser`), `error` (the error's class) |
+
+The `scan_id` and `client_id` on the three `browser.*` lines about the slot are
+our own opaque ids for what the run was for: ids only, never a URL or a domain.
+Look the id up in the app, not in the log. A line from a script has neither.
+
+**The five figures** are MB (1 MB is 1,048,576 bytes), whole numbers, or `null`
+when they cannot be read:
+
+- `process_tree_rss_mb`: the API process and every process under it (the
+  browser), added up from `/proc`.
+- `cgroup_current_mb`: the memory charged to the container, page cache included.
+- `cgroup_anon_mb`: the part of it that is not cache.
+- `cgroup_peak_mb`: the highest `cgroup_current_mb` the container has reached
+  since it started. It is a running maximum, so it only rises: **a jump between
+  two lines is the peak the work between them reached, and a jump on a scan's
+  `audit` line is the audit's peak.**
+- `cgroup_limit_mb`: the container's memory limit; `null` when there is none.
+
+`null` is normal on a laptop (macOS has no `/proc` and no cgroups) and wherever
+a file is missing, such as `memory.peak` on an older kernel. A reading that fails
+is `null`; it never stops a scan, a request or the start-up.
+
+**After the first browser run of a deploy, `cgroup_current_mb` stays well above
+`cgroup_anon_mb`** — 150 to 260 MB above it on a 2 GB instance in the
+measurements. That is page cache: Chromium's own files, read from disk, which the
+kernel keeps while memory is free and drops when it is needed (under a 512 MB
+limit it fell to about 5 MB). It is not a leak, and it is not what gets a
+container killed; `cgroup_anon_mb` is. A memory graph that counts page cache
+shows the API's resting memory rising after the first scan or client of a deploy
+for this reason.
+
+**How to read it**
+
+1. `app.memory_at_start` is the baseline: what the process holds before it
+   serves anything.
+2. Follow one scan by its `scan_id`. Compare `cgroup_peak_mb` on its `engines`
+   line with its `audit` line: the difference is what the browser added.
+   `cgroup_peak_mb` close to `cgroup_limit_mb` means the container came close to
+   being killed.
+3. `browser.memory` is taken after the browser is closed, so
+   `process_tree_rss_mb` there should be back near the baseline. If it stays
+   high run after run, something is keeping memory.
+4. `browser.slot_waited` with a long `waited_ms` means a browser run queued
+   behind another. Occasional waits are the design; a client being added while a
+   scan audits waits for it. Waits that keep growing mean a run is slow or stuck.
+   A wait has a bound (60 s for a request, 300 s for a scan's audit): see 6.
+5. An audit that ends with the code `TIMEOUT` was cut by its cap: a step in the
+   browser never returned, for example a page whose script never let the read
+   finish. The cap is 244.5 s for the audit and 266 s for the crawl intake asks
+   for (arithmetic in `technical_audit.audit_run_cap_s` and
+   `crawl.crawl_run_cap_s`), and a run that is cut closes its browser and gives
+   the slot back. Launch checklist 3.20.
+6. A `browser.slot_busy` line means a run waited for the browser as long as it
+   was allowed and was sent away without one. What happens next depends on who
+   asked. A scan's audit is recorded `failed` with `BROWSER_BUSY` and the scan goes
+   on to scoring, alerts and fixes; the line carries the `scan_id`. A request
+   (adding a client with classification, reclassifying, or running an audit by
+   hand) is answered **`429 rate-limited`**, "The crawler is busy with other pages
+   right now. Try again in a minute.", with `Retry-After: 60`, and **writes
+   nothing**: no client is created, the client keeps its classification, the audit
+   already stored is kept; the line carries the `scan_id` or `client_id` it was
+   for. So `BROWSER_BUSY` is only ever stored on a scan's audit, never on a
+   client. It says nothing about the client's site, so do not read it as one. A
+   few are the design under load; a run of them means a run ahead is slow, so look
+   at the `browser.memory` lines and the `TIMEOUT` audits above.
+7. Two more 429s on those three routes have no line of their own and show in
+   Render's request log as a 429. "Your agency already has a site being read. Try
+   again in a minute." is the limit of one site read per agency at a time.
+   "The crawler is busy with other pages right now. Try again in a minute." is
+   also what a fifth agency gets while four agencies' reads are inside (four at
+   most, because each holds a database connection while it waits). A scan's own
+   audit is never counted or refused by either limit. The per-agency count, the
+   four-agency cap and the browser slot are per process AND per instance, and the
+   API runs one worker per instance: during a deploy's overlap an agency can have
+   one read on each instance.
+
+**Not in the logs:** a number for any one request, and nothing from before the
+last restart: the counters belong to the container, and a restart starts them
+again. The API image runs `tini` as PID 1, so the zombie `headless_shell`
+processes a browser run used to leave behind are reaped; they cost no memory.

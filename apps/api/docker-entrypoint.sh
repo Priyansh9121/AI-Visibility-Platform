@@ -15,4 +15,9 @@ alembic upgrade head
 
 cd /app/apps/api
 echo "entrypoint: serving on :${PORT:-8000}"
-exec uvicorn avp_api.main:app --host 0.0.0.0 --port "${PORT:-8000}" --proxy-headers --forwarded-allow-ips='*'
+# ONE worker, on purpose: scans run inside this process and the browser slot
+# (services/browser_slot.py) and the one-run-per-agency count are per process, so a
+# second worker would be a second browser and a second count. The flag is what pins
+# it: uvicorn reads WEB_CONCURRENCY only when --workers is absent, so a host that
+# sets that variable would otherwise start more of them without anyone asking.
+exec uvicorn avp_api.main:app --host 0.0.0.0 --port "${PORT:-8000}" --workers 1 --proxy-headers --forwarded-allow-ips='*'

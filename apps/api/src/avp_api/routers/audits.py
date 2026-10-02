@@ -16,6 +16,7 @@ from ..models import Client, Scan
 from ..models.technical_audit import AuditStatus
 from ..schemas.audit import TechnicalAuditOut
 from ..services import audit_runner, technical_audit
+from ..services.browser_slot import one_run_per_agency
 from ..services.failed_scan import score_is_withheld, withhold_technical_foundation
 
 router = APIRouter(tags=["audits"])
@@ -101,7 +102,17 @@ async def run_audit(
     unknown one. The scan's status is read again after the crawl, so a scan that fails
     while the audit runs is blanked too. Every other status is unchanged.
 
-    **Errors:** `401`, `404` (unknown scan, or another agency's).
+    **One site read per agency at a time, and four at once** (2026-10-02), shared with
+    `POST /clients` and `POST /clients/{clientId}/reclassify`: while the agency's other
+    read is queued or running, or four agencies' reads are, this is a `429`. Checked
+    after the scan is found, so another agency's scan is still a `404`. A read that
+    waits more than a minute for the browser is refused with a `429` too, and the audit
+    already stored for the scan is kept. A scan's own audit, part of the scan, is not
+    one of these reads and is never refused: it is recorded as `failed` with
+    `errorCode: BROWSER_BUSY` when it waits that long, and the scan goes on.
+
+    **Errors:** `401`; `404` (unknown scan, or another agency's); `429 rate-limited`
+    (with `Retry-After: 60`).
     """
     scan = await _load_scan(db, scan_id, principal.agency_id)
     client = (
@@ -110,7 +121,12 @@ async def run_audit(
     if client is None:
         raise NotFound(detail="The scan's client no longer exists.")
 
-    audit, _outcome = await audit_runner.run_audit(db, scan, client)
+    # `refuse_when_busy`: a browser that stays taken for the whole wait is a 429 and
+    # nothing is written, so the audit already stored for this scan is kept.
+    async with one_run_per_agency(principal.agency_id):
+        audit, _outcome = await audit_runner.run_audit(
+            db, scan, client, refuse_when_busy=True
+        )
     await db.commit()
 
     # The crawl took seconds, and the scan can have failed in that time (its deadline, or

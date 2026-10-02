@@ -18,6 +18,7 @@ from .. import ids
 from ..models import AiCrawlerAccess, Client, Scan, TechnicalAudit, TechnicalAuditCheck
 from ..models.technical_audit import AuditStatus, CheckStatus
 from .ai_crawlers import AccessVerdict
+from .browser_slot import BROWSER_BUSY, crawler_busy
 from .technical_audit import AuditOutcome, AuditSignals, audit_site, score_audit
 
 logger = structlog.get_logger(__name__)
@@ -79,15 +80,37 @@ def _apply(row: TechnicalAudit, signals: AuditSignals, outcome: AuditOutcome) ->
 
 
 async def run_audit(
-    session: AsyncSession, scan: Scan, client: Client
+    session: AsyncSession,
+    scan: Scan,
+    client: Client,
+    *,
+    slot_wait_s: float | None = None,
+    refuse_when_busy: bool = False,
 ) -> tuple[TechnicalAudit, AuditOutcome]:
     """Audit the client's site and persist the result for this scan.
 
     One audit per scan, refreshed on re-run. A scan is a point-in-time claim
     about a site, so a second audit of the same scan is a correction rather than
     a new observation.
+
+    `slot_wait_s` is how long the audit may wait for the process's one browser
+    (`browser_slot`) before it is recorded as failed with `BROWSER_BUSY`. None is a
+    request's bound (`POST /scans/{id}/audit`: a person waiting); the scan's own
+    phase 6 passes the longer `SCAN_AUDIT_WAIT_S`.
+
+    **What a busy browser means depends on who asked** (M1 round 3).
+    `refuse_when_busy=False`, the default and the scan's phase 6, records the failed
+    audit with `BROWSER_BUSY` and the scan goes on. `refuse_when_busy=True`, the
+    request route, writes NOTHING: it raises `RateLimited` (429, `Retry-After`;
+    `crawler_busy`) before it touches a row, so the audit already stored for this scan
+    is kept as it was, where a re-run that replaced it with a `BROWSER_BUSY` failure
+    would have erased a good audit because the crawler happened to be busy.
     """
-    signals = await audit_site(f"https://{client.domain}")
+    signals = await audit_site(
+        f"https://{client.domain}", slot_wait_s=slot_wait_s, scan_id=scan.id
+    )
+    if refuse_when_busy and signals.error_code == BROWSER_BUSY:
+        raise crawler_busy()
     outcome = score_audit(signals)
 
     row = (

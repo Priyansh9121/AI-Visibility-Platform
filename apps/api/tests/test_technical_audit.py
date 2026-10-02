@@ -290,7 +290,9 @@ class TestAToolFailureIsNotAFindingAboutTheSite:
     says about its own attempt is not.
     """
 
-    @pytest.mark.parametrize("code", ["BROWSER_ERROR", "TIMEOUT", "FETCH_FAILED"])
+    @pytest.mark.parametrize(
+        "code", ["BROWSER_ERROR", "TIMEOUT", "FETCH_FAILED", "BROWSER_BUSY"]
+    )
     def test_our_own_failure_stays_an_error(self, code: str) -> None:
         (check,) = build_checks(sig(ok=False, error_code=code))
 
@@ -308,7 +310,7 @@ class TestAToolFailureIsNotAFindingAboutTheSite:
 
     def test_technical_foundation_is_excluded_either_way(self) -> None:
         """Neither kind may silently score a client down for an unmeasured scan."""
-        for code in ("BROWSER_ERROR", "HTTP_500"):
+        for code in ("BROWSER_ERROR", "BROWSER_BUSY", "HTTP_500"):
             out = score_audit(sig(ok=False, error_code=code))
             assert out.score is None
             assert out.scored is False

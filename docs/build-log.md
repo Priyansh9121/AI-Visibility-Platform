@@ -22168,3 +22168,84 @@ Drift check (north-star §8): Layer 1, Delivery (the API's request handling, and
 - The Python licence audits pass in both environments (FastAPI MIT, as before); the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
 - OpenAPI regenerates byte-identical under FastAPI 0.117.1, and `api.gen.ts` with it: no wire change.
 - Exit codes were read from files.
+
+# One browser at a time in the API, each run capped and its wait bounded, memory logged per phase, and tini to reap Chromium
+
+**2026-10-03, the first entry of the day; branch `pilot-fixes-2`, the founder's brief "memory and the rest of the open decisions" (item M1).** One item, one commit.
+
+**Render: nothing to set.** The image changes (`tini` becomes PID 1), so the deploy rebuilds it. Uvicorn is pinned to `--workers 1`, which makes any `WEB_CONCURRENCY` setting irrelevant. Three routes gain a `429` (below). No migration, no new Python or JavaScript dependency, no new outbound host; `tini` is an Ubuntu package in the image, like Chromium's own libraries.
+
+Drift check (north-star §8): no product layer; the API's physical architecture (§4, the browser work done in the API process), with Layer 0's egress guard kept whole; lifecycle phase: Activation (Epic 9), a pilot's scans finishing on the instance they run on.
+
+## 1. What was measured
+
+- **Production, from the founder:** the API (512 MB Starter) ran out of memory at 14:45 AEST on 2026-10-02 in the phase after the engines, which is the technical audit; it had rested near 40% of its memory since the 09:47 AEST deploy; it now runs on Standard (2 GB).
+- **How:** the API's own Docker image under Colima (Linux, cgroup v2, arm64), `docker run --memory=512m` and `--memory=2g`, the app built as the server builds it, and its own `crawl_site` and `audit_site` run one after the other and both at once. A sampler read the cgroup every 0.1 s: `anon`, the process memory the OOM killer weighs, and `memory.current`, which also counts page cache the kernel can drop. The heavy page is a synthetic local page (twelve 1600×1000 images, 220 sections, four cross-site frames, a script that allocates); the light one is example.com. Nothing else was loaded.
+
+| What | Before M1 (`471a2b9`) | With M1 (this item's image) |
+|---|---|---|
+| The API server idle (its own entrypoint, warmed with 100 requests) | 97 MB process, 103–158 MB charged | 97 MB process, 103–104 MB charged |
+| Crawl of the heavy page | 290–312 MB process | 290–319 MB process |
+| Technical audit of the heavy page | 455–489 MB process | 463–492 MB process |
+| Crawl or audit of example.com | 230–248 MB process | 225–254 MB process |
+| Crawl and audit started together, 2 GB limit | 586 MB process, 669 MB charged at peak | 482–492 MB process, 579–607 MB charged (one after the other) |
+| Crawl and audit started together, 512 MB limit | the kernel killed a Chromium process (`Memory cgroup out of memory`); the audit ended `BROWSER_ERROR` | both finished, 463–476 MB process |
+| Chromium processes left after each run | two per crawl, two per audit (exited, never reaped) | none |
+
+- **Where it goes.** The browser's memory is the page's own weight: decoded images, the DOM, its script. Chromium switches (`--renderer-process-limit=1`, `--disable-site-isolation-trials`, `--disable-gpu`, `--no-zygote`) changed nothing measurable, so none was adopted, and none of them touches the request routing 3.27 relies on. Python's own peak during a run, read from its high-water mark reset before each run, is 12 MB on the first run and 0.3–0.5 MB after, so its buffers are not worth cutting.
+- **The out-of-memory.** One heavy audit is about 0.4 GB above the server. With the server near 200 MB, as it was on Render, one audit nearly fills 512 MB, and any second browser run at the same moment (a client added during a scan's audit, or two scans' audits) goes over. At 512 MB that is what the overlapped run above reproduced.
+- **The idle rise after PR #4.** Not reproduced at idle: the same image holds 97 MB of process memory at `9a6a1a7` (before PR #4), `f1b7565` (after it) and this branch. What does rise is `memory.current` after the first browser run of a deploy: it stays 150–260 MB above process memory at a 2 GB limit, page cache from Chromium's own files, which the kernel drops when it needs the memory (under 512 MB it fell to about 5 MB). A memory graph that counts page cache shows exactly that rise; and the 09:47 AEST deploy is not PR #4's merge (06:50 AEST). The new log lines carry both figures, so Render's logs can tell the two apart.
+
+## 2. What changed
+
+- **One browser per process at a time** (`services/browser_slot.py`): a semaphore of one per event loop, first come first served. The intake crawl, a scan's audit and `POST /scans/{scanId}/audit` all take it.
+- **Each run under a cap**: 244.5 s for the audit, 266 s for the intake's three-page crawl (297 s for four), the sum of every step's own ceiling, so only a step that never returns reaches it. A run cut by its cap ends `TIMEOUT` and the scan goes on. This closes launch checklist 3.20 (a step of the technical audit had no timeout of its own).
+- **The wait for the browser is bounded** (from the security review): 60 s for a request, 300 s for a scan's audit (one capped run ahead of it, 266 s at most, plus margin). A run that waits that long never launches a browser and keeps nothing (`BROWSER_BUSY`).
+  - On the three routes that start a read inside a request (`POST /clients` with classification, `POST /clients/{clientId}/reclassify`, `POST /scans/{scanId}/audit`) it writes nothing and answers `429 rate-limited`, `Retry-After: 60`, "The crawler is busy with other pages right now. Try again in a minute.": no client is created, a client keeps its classification, a scan keeps the audit it had. A busy browser would otherwise have replaced a good result with a failure that says nothing about the site (from both reviews).
+  - A scan's own audit records the failed audit as `BROWSER_BUSY` and the scan goes on.
+- **One site read per agency at a time, four agencies at once**, on those three routes (from the security review): an agency's second read while its first is queued or running is a `429` with "Your agency already has a site being read. Try again in a minute."; a fifth agency while four are inside gets the crawler-busy `429`, which says nothing about any agency. Each waiting request holds a pooled database connection for up to a minute, and four leaves eleven of the fifteen to everything else. Both are checked after the agency check (another agency's id stays a 404), a refused `POST /clients` creates nothing, and a scan's own audit is never refused or counted. The web calls only `POST /clients`, whose form shows the sentence.
+- **No Chromium outlives its run.** Page, context and browser are closed on every path (a return, a refusal, an exception, a cancellation, the cap), each close bounded. `tini` is PID 1 in the image (installed as root, before `USER pwuser`; the app still runs as `pwuser`) and reaps the `headless_shell` processes each run leaves exited; with it, none is left.
+- **Egress stays fail-closed under the cap** (from the security review): a refusal or an unverified connection is recorded on the guard before the closes and outranks the cap; an audit cut by the cap, or ending `BROWSER_ERROR`, keeps only what it read before the browser started (robots.txt, the sitemap, AI-crawler access); such a crawl keeps nothing. (`BROWSER_ERROR` used to keep page facts that never passed the final egress check, a gap older than this item; only the audit routes and the fix generator's input could see them, never the report.)
+- **Memory in the logs, numbers only** (`services/memory_stats.py`): `app.memory_at_start`; `scan.phase_memory` after each of a scan's seven phases; `browser.memory` after each run, its browser closed; `browser.slot_waited`, `browser.slot_busy`, `browser.close_failed`; the slot's lines carry our own `scan_id` or `client_id`, never a URL or a domain. Five figures in MB, or `null` where a file is missing: the process tree's resident memory from `/proc`, and the container's charged, anonymous, peak and limit from its cgroup. A reading never fails a scan or a request. `docs/runbook.md`, "Reading the API's memory", says how to read them, the page cache included.
+- **One uvicorn worker, pinned**: `exec uvicorn … --workers 1` (uvicorn reads `WEB_CONCURRENCY` only when the flag is absent), because the slot and the per-agency count are per process.
+- **Copy** (`strings.ts`): `TIMEOUT` now reads "The crawler could not finish reading the home page in the time it allows." (the cap also ends a read that never returns, not only a slow load); new `BROWSER_BUSY`: "The crawler was busy with another page and could not start on this one in time." Beside them, the report's failed-audit card and the Technical screen no longer say the site was unreachable, which is false for both: "A site the crawler could not read is not a site with a bad technical foundation…"
+- **`docs/crawl-worker-design-note.md`**: what moving the browser into a Render background worker would take (not built), with these numbers and the questions for the founder.
+- **The scan deadline**: the audit's cap and its wait take the worst-case scan from 1,685.5 s to 2,202.5 s against the 2,400 s deadline (1.42× → 1.09×). The deadline is unchanged; the test that sums it now includes the wait.
+
+## 3. Peak before → after, and the headroom on 2 GB
+
+- **Before:** the API's peak grew with every browser run open at once: 586 MB of process memory for two in the measurement, more for three, whatever the instance.
+- **After:** one browser run at a time, so the peak is one run on top of the server: about 490 MB measured (the server at 97 MB); about 0.6 GB if the server has grown to 200 MB as it had on Render.
+- **Headroom on 2 GB:** about 1.4 GB free at the worst measured moment.
+- **On Render:** the peak of a full scan on Standard is not measured yet; after this deploy each scan's `scan.phase_memory` lines carry it (its `audit` line's `cgroup_peak_mb`).
+
+## 4. The review
+
+- **Security review (opus), round 1: PASS WITH NITS, on condition that its Medium was fixed in this item.** The Medium: nothing bounded the wait for the browser, and one agency could queue any number of page reads on the three request routes, holding pooled database connections; fixed by the bounded wait and one read per agency. Also taken: L-1, a cut audit could keep page facts that had not passed the final egress check; L-2, `--workers 1` pinned and tested (the old test asserted the flag's absence, which is when the environment decides); L-3, the tests for both. Checked clean: cancellation and timeout nesting (the cap cannot swallow the deadline's or the heartbeat's cancellation), slot release on every path, close order and bounds, guard install order, robots.txt and the user agent unchanged, the log lines (kinds, numbers and ids only), the Dockerfile's user and signal path, `memory_stats`.
+- **Security re-review (opus) of round 2: PASS WITH NITS**, the Medium confirmed closed (every wait bounded on every path; a waiter that times out or is cancelled leaves the queue cleanly; the per-agency entry released on every way out, after the agency check, in the house's 429 shape). All taken: L-a, the cap of four agencies at once; L-b, a busy read on a request route writes nothing; L-c, `BROWSER_ERROR` keeps no page fact; N-1, our ids on the slot's lines; N-2, the runbook says the count is per process and per instance (a deploy's overlap can give an agency one read on each).
+- **UI review (sonnet) of the copy: PASS WITH NITS.** Both sentences are true wherever their codes are produced, and the PDF prints neither. Taken: a busy read writes nothing (the intake was left with a client the web could not read again); the wrapper copy; the agency 429's wording; the comment that says what `TIMEOUT` is. With the first, no request writes `BROWSER_BUSY` to a client, so the classification card never shows it. Left: the 429 shows on the intake form's address field; "under five minutes" claims on three screens (a scan's audit can now wait up to five minutes for the browser).
+
+## Found, not fixed
+
+- **The intake's classification card** says "We could not read this site… usually means the site did not load…" and the raw code for `TIMEOUT` and `BROWSER_ERROR`, which can blame a site for our own hang. A sentence per code, as the audit has, is a copy decision (with 3.32's other raw codes); `BROWSER_BUSY` never reaches it now.
+- **The fix generator is told a failed audit's page fields** (`fix_runner.build_facts`: "schema.org types present: none, word count 0, h1 count 0") about a site that was never read. Older than this item; pass nothing for a failed audit, as the audit route already does for its components.
+- **The intake's 429 lands on the address field** (red, `aria-invalid`) though the address is fine; and three screens say a scan takes "under five minutes", which a busy browser can now exceed.
+- **Per-process state.** The slot and the per-agency count live in the process; if the API ever runs as more than one process or instance, the count moves to Redis (the entrypoint pins one worker for this reason).
+- **A 429 here has no log line of its own** (Render's request log has it); one with the agency id is a small addition if wanted.
+- **Two wall-clock tests fail under heavy CPU load** (`test_call_bounds.py`, `test_scan_deadline.py`), seen on 2026-10-02 while several suites ran at once; they pass alone and in a clean run. Their slack wants widening.
+- **The deadline margin** (1.09×) and **the worker**: decisions for the founder.
+
+## Verified
+
+**API pytest 2454 → 2656 (+202), plus 1 test that runs only on Linux (it reads `/proc`; it runs in CI); web vitest 1531 → 1533 (+2); both floors raised to match. mypy 43 → 43 (ceiling 50).**
+- New tests: the slot (one at a time, FIFO, released on a return, a raise and a cancellation, a waiter cancelled), the cap on both fetchers, the closes on every path counted, the bounded wait and `BROWSER_BUSY` (no launch, nothing kept, the classifier's reason, the check and the score's reading), the cap overtaking an egress refusal, one read per agency over all nine pairings of the three routes, the per-phase memory lines and their keys, `memory_stats` against a fake `/proc` and cgroup, the Dockerfile (tini as PID 1, the user, `--workers 1`); round 3's: a busy read on each request route writes nothing (no client; the classification and the stored audit compared column by column), the cap of four agencies released on every way out, `BROWSER_ERROR` keeping no page fact over eight failure paths, and only our own ids on the slot's lines.
+- **Negative controls:** on this tree, a busy read allowed to write again fails 8 (the three routes, the release, the two service tests); on round 2's merged tree, the per-agency check switched off failed 21; each restored and checked with `cmp`. The implementer's, each restored: the wait unbounded fails 14 (the run still finishes, every wait held to a test deadline); the cap of four removed, 7; the live page facts put back in the audit's cap branch, 1, and in its `BROWSER_ERROR` branch, 5; the guard's record of a refusal removed, 4; our ids dropped from the slot's lines, 10; `--workers 1` dropped, 2.
+- **In the container:** the image built from this item's round 2 gave the "With M1" column above (round 3 changed what a request does when the browser stays busy, the `BROWSER_ERROR` branches and the log fields, not how a run uses memory); tini is PID 1 and uvicorn its child; no `headless_shell` left after any run.
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, shared-types 53 (0 fail), design-system 935.
+- ruff clean; all typechecks clean; the styleguide builds; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass (no dependency change); Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+- OpenAPI and `api.gen.ts` regenerate with no change from the committed files (three route descriptions changed in this item, nothing else).
+- Exit codes were read from files.

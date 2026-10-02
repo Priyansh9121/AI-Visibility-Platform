@@ -330,6 +330,11 @@ class _Page:
     async def wait_for_timeout(self, ms: int) -> None:  # noqa: ARG002
         return None
 
+    async def close(self) -> None:
+        # The fetchers close the page they opened (M1); closing the browser, which
+        # stands in for the context here too, is what `close_error` makes fail.
+        return None
+
     async def goto(self, url: str, **kwargs: Any) -> SimpleNamespace:  # noqa: ARG002
         # As Chromium does: an address with no path is its root.
         if not urlsplit(url).path:

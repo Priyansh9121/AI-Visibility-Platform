@@ -108,7 +108,8 @@ describe('a partial audit renders as the scored audit it is', () => {
 
   it('never says the site could not be read', () => {
     expect(html).not.toContain('could not be read');
-    expect(html).not.toContain('An unreachable site');
+    // The failed audit's own sentence, which says the crawler could not read the site.
+    expect(html).not.toContain('A site the crawler could not read');
   });
 
   it('shows its score and its header figures', () => {
@@ -134,6 +135,12 @@ describe('a failed audit is the only unreadable one', () => {
   it('says the site could not be read, with what happened in a sentence and no figures', () => {
     const html = render(FAILED);
     expect(html).toContain('The site could not be read');
+    // The body is true of every failure, a busy crawler and a cut run included: it says
+    // the crawler could not read the site, never that the site was unreachable.
+    expect(html).toContain(
+      'A site the crawler could not read is not a site with a bad technical foundation, so nothing here is scored. The audit records what went wrong rather than guessing.',
+    );
+    expect(html).not.toContain('An unreachable site');
     expect(html).toContain(AUDIT_FAILURE_SENTENCE.FETCH_FAILED);
     expect(html).not.toContain('FETCH_FAILED');
     expect(html).not.toContain('Reason:');
@@ -177,6 +184,7 @@ describe('a failed audit says what happened in a sentence, and never the code', 
     ['BROWSER_ERROR', AUDIT_FAILURE_SENTENCE.BROWSER_ERROR!],
     ['FETCH_FAILED', AUDIT_FAILURE_SENTENCE.FETCH_FAILED!],
     ['TIMEOUT', AUDIT_FAILURE_SENTENCE.TIMEOUT!],
+    ['BROWSER_BUSY', AUDIT_FAILURE_SENTENCE.BROWSER_BUSY!],
     ['HTTP_503', auditFailureSentence('HTTP_503')],
     ['SOMETHING_NEW', AUDIT_FAILURE_GENERIC],
   ];
@@ -190,6 +198,7 @@ describe('a failed audit says what happened in a sentence, and never the code', 
   it.each(cases)('%s: the sentence, once, and not the code', (code, sentence) => {
     const html = render({ ...FAILED, errorCode: code });
     expect(html).toContain('The site could not be read');
+    expect(html).not.toMatch(/unreachable/i);
     expect(occurrences(html, sentence)).toBe(1);
     expect(html).not.toContain(code);
     expect(html).not.toContain('Reason:');
@@ -216,6 +225,7 @@ describe('no failed state prints a machine code', () => {
     'BROWSER_ERROR',
     'FETCH_FAILED',
     'TIMEOUT',
+    'BROWSER_BUSY',
     'HTTP_503',
     'HTTP_404',
     'SOMETHING_NEW',

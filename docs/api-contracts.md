@@ -31,7 +31,11 @@ intent; the schema defines the shapes.
   and all query strings under `/reports/` redacted. No log line carries a token,
   a link that carries one, or an email address. Since 2026-09-30, share tokens
   travel in request bodies (`POST /reports/shared` and `/reports/shared/pdf`),
-  never in the path.
+  never in the path. Since 2026-10-02 the API also logs its own memory, as
+  numbers and our own ids only (`app.memory_at_start`, `scan.phase_memory`,
+  `browser.memory`, `browser.slot_waited`, `browser.slot_busy`; the three about
+  the browser carry `scan_id` or `client_id`); `docs/runbook.md`, "Reading the
+  API's memory", says what each carries.
 
 ### Authentication
 
@@ -106,7 +110,7 @@ make it `unparsed`.
 | `/problems/invalid-reset-token` | 400 | Reset link unknown, expired, used, or orphaned |
 | `/problems/invalid-invitation` | 400 | Invitation unknown, expired, accepted, revoked, or orphaned |
 | `/problems/invalid-google-ticket` | 400 | Google sign-up ticket unknown, used or expired |
-| `/problems/rate-limited` | 429 | Too many requests |
+| `/problems/rate-limited` | 429 | Too many requests. The credential routes (each says its limit) and, since 2026-10-02, the three routes that read a site in the API's one browser (`POST /clients` with classification, `POST /clients/{clientId}/reclassify`, `POST /scans/{scanId}/audit`). `Retry-After` is `60` and `detail` is one of two sentences: "Your agency already has a site being read. Try again in a minute." (this agency's other read is still queued or running) or "The crawler is busy with other pages right now. Try again in a minute." (four agencies' reads are already inside, or this read waited its whole 60 s for the browser). Nothing is written in either case |
 | `/problems/invalid-url` | 409 | Submitted URL has no public domain |
 | `/problems/invalid-webhook-signature` | 400 | Billing webhook signature missing, malformed or wrong |
 | `/problems/billing-not-configured` | 503 | A Stripe setting is unset. `detail` names the variable |
@@ -1203,6 +1207,10 @@ the database by `ck_clients_industry_matches_classification_status`.
 | `ROBOTS_DISALLOWED` | The site's robots.txt forbids AVPScanBot its homepage, so nothing was read (2026-09-29) |
 | `ADDRESS_NOT_PUBLIC` | The site's address, an address the site sent the crawler to (a redirect hop or landing of a navigation, or a robots.txt redirect), or an address Chromium reports it connected to, is not on the public internet (private, loopback, link-local, carrier-grade NAT, multicast, reserved or unspecified, including those forms inside an IPv6 address), so the crawl stopped and nothing was kept (2026-10-01) |
 
+`BROWSER_BUSY` is never a classification reason (2026-10-02): a read that cannot
+get the API's one browser is refused with a `429` (below) and the client is left as
+it was, because a site that was never read is not a site that could not be read.
+
 `industryConfidenceScore` is a **string-encoded decimal or `null`**
 (`NUMERIC(4,3)`), for the same reason as `compositeScore`: a JSON number is an
 IEEE double.
@@ -1213,11 +1221,39 @@ names. Page text is never returned (the facts-only rule); the projection in
 to `CrawlSignals` cannot silently start returning it.
 
 **Errors:** `401`, `409 invalid-url`, `409 conflict` (domain already tracked by
-this agency — carries `clientId`), `422 validation-failed`.
+this agency — carries `clientId`), `422 validation-failed`, and `429 rate-limited`
+(see below; only with `classify: true`).
 
 An unreachable site is **`201` with `classificationStatus: "unclassifiable"`**,
 not an error status. A site that will not load is a normal outcome for a tool
 pointed at an arbitrary URL.
+
+**One site read per agency at a time, and four at once (2026-10-02).** With
+`classify: true` this request reads the site in the API's one browser. An agency
+may have **one** such read queued or running at once, counted across
+`POST /clients` (with classification), `POST /clients/{clientId}/reclassify` and
+`POST /scans/{scanId}/audit` together, and only **four** agencies may at once.
+Past either limit the request is refused with **`429 rate-limited`** and
+`Retry-After: 60` before anything is created: "Your agency already has a site
+being read. Try again in a minute." for this agency's own second read, and "The
+crawler is busy with other pages right now. Try again in a minute." when four
+agencies' reads are already inside (it says nothing about any agency). Another
+agency's read is not affected below the cap, `classify: false` is not a read, and
+**a scan's own audit is not counted and is never refused** by either. Checked
+after the agency's own checks, so another agency's id is still a `404`. The counts
+are held in the API process (one process per instance: `--workers 1`) and are
+released however the read ends.
+
+**The bounds (2026-10-02).** A read waits for the browser at most **60 s**. Past
+that it is refused with the same `429` ("The crawler is busy with other pages right
+now. Try again in a minute.") and **writes nothing**: no client is created here, a
+reclassified client keeps its classification, and a hand-run audit keeps the one
+stored. No client is left `unclassifiable` for it, because a site that was never
+read is not a site that could not be read. Once it has the browser, one run is cut
+at **266 s** for the three pages intake asks for (`crawl_run_cap_s`), ending as
+`TIMEOUT` with nothing kept. A scan's own audit waits for the browser at most
+**300 s**, one capped run ahead of it and a margin, and records `BROWSER_BUSY` when
+that runs out (the scan goes on); its run is cut at **244.5 s**.
 
 #### `GET /api/v1/clients`
 **Auth required.** Cursor-paginated, newest first.
@@ -1279,6 +1315,13 @@ the same rule as `GET /clients/{clientId}` above, and for the same reason.
 **Auth required.** Re-crawls and re-classifies an existing client, returning
 `ClientDetailOut`. Needed because sites change, and because an `ambiguous`
 result is often worth retrying after an operator has looked at the site.
+
+**Errors:** `401`; `404 not-found` (unknown id, or another agency's client);
+`429 rate-limited` (2026-10-02): this agency already has a site being read, on this
+route, `POST /clients` or `POST /scans/{scanId}/audit`, or four agencies' reads are
+already inside, with `Retry-After: 60` — see `POST /clients` for the limits and the
+bounds. A read that waits more than 60 s for the browser is refused with the same
+`429`, and the client keeps the classification it had: nothing is written.
 
 
 ---
@@ -1936,6 +1979,36 @@ read the site rather than failed to:
   redirect), refused before it is sent is skipped and the run goes on; a
   skipped sitemap reads as not found.
 
+The other codes: `BROWSER_ERROR` (the browser failed, or a connection the egress
+guard could not verify), `FETCH_FAILED` (the home page returned no response),
+`TIMEOUT` and `BROWSER_BUSY` are reports about our attempt and never a finding
+about the site, while `HTTP_<status>` (the home page answered 400 or above) is the
+site's own answer. Each leaves one `site_reachable` check with the code as its
+`detailCode`, `error` for ours and `fail` for an HTTP status, and excludes
+Technical Foundation as `NOT_YET_MEASURED`.
+
+- `TIMEOUT`: one browser run is cut at **244.5 s** (`audit_run_cap_s`, the sum of
+  every step at its own limit, so only a hang reaches it; 2026-10-02). Since then it
+  also ends a read that never returns, such as the page read after the vitals wait,
+  which has no timeout of its own, and the scan goes on (launch checklist 3.20). The
+  facts robots.txt and the sitemap gave, read before the browser started, are
+  kept; nothing the page gave is, because the cap can fall before the last egress
+  check has said the page's facts may be kept.
+- `BROWSER_ERROR` (2026-10-03): kept apart from a reading like `TIMEOUT`. The
+  browser can fail after the page was read and before the last egress check said
+  what it showed may be kept (or while it closes), and what the page gave up to
+  then is not stored: only what robots.txt and the sitemap said, read before the
+  browser started, is. So **no `failed` audit carries a page reading**: its schema
+  types and flags, canonical, heading and word counts, freshness and vitals fields
+  are always their empty values, for every code above.
+- `BROWSER_BUSY` (2026-10-02): the API reads one page at a time in its one
+  browser, and another read held it for the whole wait, so no browser was started
+  for this audit. Only the audit inside a scan (phase 6) records it, after waiting
+  **300 s**; the scan goes on to scoring, alerts and fixes. The robots.txt and
+  sitemap facts, read before the wait, are kept. `POST /scans/{scanId}/audit` never
+  stores it: after **60 s** it answers `429 rate-limited` and the audit already
+  stored for the scan is kept.
+
 **Core Web Vitals are measured and reported, but carry NO weight in the
 sub-score.** `lcpMs` and `cls` are single-cold-load **lab** measurements, not
 field data — every CWV check carries `LAB_MEASUREMENT_NOT_FIELD_DATA`. Letting a
@@ -1968,7 +2041,16 @@ never read.
 One audit per scan, refreshed on re-run: a scan is a point-in-time claim about a
 site, so a second audit is a correction rather than a new observation.
 
-**Errors:** `401`, `404` (unknown scan, or another agency's).
+**One site read per agency at a time, and four at once (2026-10-02).** This route
+reads the site in the API's one browser, so it shares the agency's single place, and
+the four-agency cap, with `POST /clients` (with classification) and
+`POST /clients/{clientId}/reclassify`: past either limit this is
+`429 rate-limited` with `Retry-After: 60`. A read that waits more than 60 s for the
+browser is refused with the same `429` and writes nothing: the audit already stored
+for the scan is kept. See `POST /clients` for the limits and the bounds. The audit
+inside a scan is not one of these and is never refused.
+
+**Errors:** `401`, `404` (unknown scan, or another agency's), `429 rate-limited`.
 
 #### `GET /api/v1/scans/{scanId}/audit`
 **Auth required.** The scan's audit with checks in display order.

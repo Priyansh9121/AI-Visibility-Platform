@@ -81,15 +81,20 @@ export const ADDRESS_NOT_PUBLIC_SENTENCE =
  * One plain sentence per way the technical audit can fail, in place of the code
  * (2026-10-02). The codes are `services/technical_audit.py`'s: `BROWSER_ERROR`
  * (the browser failed, or the egress guard could not verify a connection),
- * `FETCH_FAILED` (the home page returned no response), `TIMEOUT`, and
- * `HTTP_<status>` (the home page answered 400 or above). Each says what
- * happened and nothing about why, and none blames the site. The raw code is
- * never shown; `ROBOTS_DISALLOWED` and `ADDRESS_NOT_PUBLIC` have their own copy.
+ * `FETCH_FAILED` (the home page returned no response), `TIMEOUT` (the browser run
+ * was cut at its time cap because a step never returned; a slow page load is
+ * `BROWSER_ERROR`, not this), `BROWSER_BUSY` (the crawler's one browser was reading
+ * another page for the whole wait, so a scan's audit never started; only a scan
+ * records it, a request is refused instead), and `HTTP_<status>` (the home page
+ * answered 400 or above). Each says what happened and makes no guess at why, and
+ * none blames the site. The raw code is never shown; `ROBOTS_DISALLOWED` and
+ * `ADDRESS_NOT_PUBLIC` have their own copy.
  */
 export const AUDIT_FAILURE_SENTENCE: Record<string, string> = {
   BROWSER_ERROR: 'The crawler’s browser stopped before it could read the home page.',
   FETCH_FAILED: 'The crawler asked for the home page and got no response.',
-  TIMEOUT: 'The home page did not finish loading in the time the crawler allows.',
+  TIMEOUT: 'The crawler could not finish reading the home page in the time it allows.',
+  BROWSER_BUSY: 'The crawler was busy with another page and could not start on this one in time.',
 };
 
 /** Any code this list does not know: no code, no guess at a cause. */
