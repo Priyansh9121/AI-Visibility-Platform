@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * The intake classification result — Epic 2, restructured in Epic 9.11.
  *
@@ -6,7 +7,9 @@
  * confidence must not read as a measurement.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { act } from 'react';
+import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ClassificationResult } from './ClassificationResult';
 import type { ClientDetail } from '@avp/shared-types';
@@ -160,5 +163,76 @@ describe('no ad hoc styling', () => {
     const out = render(base);
     expect(out).not.toMatch(/class="[^"]*\b(bg|text|border|max-w)-\[/);
     expect(out).not.toMatch(/class="[^"]*\b(slate|gray|zinc|blue|red|green)-\d{3}\b/);
+  });
+});
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+describe('when the API does not answer to "Run a scan", the person is told in plain words', () => {
+  const AWAY = 'We could not reach the server. Check your connection and try again.';
+
+  async function runWith(fetchImpl: (url: string) => Promise<Response>) {
+    vi.stubGlobal('fetch', vi.fn((url: string) => fetchImpl(url)));
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const root = createRoot(el);
+    act(() => root.render(<ClassificationResult client={base} onReset={() => {}} />));
+    await act(async () => {
+      for (let i = 0; i < 6; i += 1) await Promise.resolve();
+    });
+    const button = Array.from(el.querySelectorAll('button')).find((b) =>
+      (b.textContent ?? '').includes('Run a scan'),
+    )!;
+    await act(async () => {
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await act(async () => {
+      for (let i = 0; i < 6; i += 1) await Promise.resolve();
+    });
+    const text = el.textContent ?? '';
+    act(() => root.unmount());
+    document.body.innerHTML = '';
+    vi.unstubAllGlobals();
+    return text;
+  }
+  const isScan = (url: string) => url.includes('/scans');
+
+  it('a network failure shows the shared sentence and no port number', async () => {
+    const text = await runWith(() => Promise.reject(new TypeError('Failed to fetch')));
+    expect(text).toContain(AWAY);
+    expect(text).not.toContain('8000');
+    expect(text).not.toContain('did not respond');
+  });
+
+  it('a 5xx without a problem body shows the shared sentence', async () => {
+    const text = await runWith((url) =>
+      isScan(url)
+        ? Promise.resolve(new Response('<html>Bad gateway</html>', { status: 502 }))
+        : Promise.reject(new TypeError('Failed to fetch')),
+    );
+    expect(text).toContain(AWAY);
+    expect(text).not.toContain('The server returned 502');
+  });
+
+  it('a 4xx problem still shows its own detail', async () => {
+    const body = {
+      type: '/problems/not-found',
+      title: 'Not found',
+      status: 404,
+      detail: 'That client is gone.',
+      instance: '/api/v1/scans',
+    };
+    const text = await runWith((url) =>
+      isScan(url)
+        ? Promise.resolve(
+            new Response(JSON.stringify(body), {
+              status: 404,
+              headers: { 'Content-Type': 'application/problem+json' },
+            }),
+          )
+        : Promise.reject(new TypeError('Failed to fetch')),
+    );
+    expect(text).toContain('That client is gone.');
+    expect(text).not.toContain(AWAY);
   });
 });

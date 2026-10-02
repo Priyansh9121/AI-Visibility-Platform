@@ -14,7 +14,7 @@ from fastapi import APIRouter, Query, Response, status
 from sqlalchemy import func, select
 
 from ..deps import DbDep, PrincipalDep
-from ..models import Agency, Client, Scan, Score, ScoreStatus
+from ..models import Agency, Client, Scan, ScanStatus, Score, ScoreStatus
 from ..schemas.auth import AgencyOut, SeatUsageOut
 from ..schemas.dashboard import DashboardOut, ScanSummaryOut
 from ..services import seats as seat_service
@@ -76,7 +76,11 @@ async def dashboard(
         .join(Client, Client.id == Scan.client_id)
         .outerjoin(
             Score,
-            (Score.scan_id == Scan.id) & (Score.status == ScoreStatus.SCORED),
+            (Score.scan_id == Scan.id)
+            & (Score.status == ScoreStatus.SCORED)
+            # A FAILED scan has no score on the dashboard (3.24). Its Score row,
+            # if the deadline came after scoring, is kept and never shown.
+            & (Scan.status != ScanStatus.FAILED),
         )
         .where(Scan.agency_id == agency_id)
         # id is a ULID, so this is creation order without a second index.
@@ -131,7 +135,11 @@ async def dashboard(
                 select(func.count())
                 .select_from(Score)
                 .join(Scan, Scan.id == Score.scan_id)
-                .where(Scan.agency_id == agency_id, Score.status == ScoreStatus.SCORED)
+                .where(
+                    Scan.agency_id == agency_id,
+                    Score.status == ScoreStatus.SCORED,
+                    Scan.status != ScanStatus.FAILED,
+                )
             )
         ).scalar_one()
     )

@@ -5,6 +5,7 @@ import { ArrowRight, Globe } from 'lucide-react';
 import { Button, TextField } from '@avp/design-system';
 import type { ClientDetail } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
+import { apiWasAway, API_AWAY_SENTENCE } from '@/lib/apiAway';
 
 /**
  * URL intake — §5.4 step 1, and the first customer-facing screen.
@@ -60,12 +61,13 @@ export function IntakeForm({
     try {
       onClassified(await api.createClient({ url: trimmed, classify: true }));
     } catch (err) {
-      if (err instanceof ApiProblem) {
+      if (err instanceof ApiProblem && !apiWasAway(err)) {
         // The server's problem detail is written for a person to read, so it
         // is shown as-is rather than being replaced with a generic message.
         setError(err.problem.detail);
       } else {
-        setError('Could not reach the API. Is it running on port 8000?');
+        // No answer, or a 5xx: nothing the API said is about this address.
+        setError(API_AWAY_SENTENCE);
       }
       // Take the page out of "working" as well as showing the error here, or
       // the progress card stays on screen next to the failure that ended it.

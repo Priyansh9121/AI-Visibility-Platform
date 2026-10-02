@@ -59,6 +59,7 @@ from . import egress
 from .ai_crawlers import AgentAccess, evaluate_robots, unknown_access
 from .crawl import (
     ROBOTS_DISALLOWED,
+    Followed,
     RobotsGate,
     crawler_user_agent,
     normalise_url,
@@ -267,7 +268,16 @@ async def _fetch_side_files(gate: RobotsGate, base: str) -> _SideFiles:
 
     if not found.sitemap_present:
         # Checked before it is requested, like every page (2026-09-29).
-        sitemap = await gate.follow("GET", f"{base}/sitemap.xml")
+        try:
+            sitemap = await gate.follow("GET", f"{base}/sitemap.xml")
+        except EgressRefused as exc:
+            # Refused before it was sent (the address, or a redirect hop): nothing
+            # left this machine, and a sitemap that only resolves to a private
+            # network cannot be read from the public internet either, which is
+            # what the sitemap check measures. Treated as a request that got no
+            # answer (`Followed(url, None)`); the audit goes on and keeps its facts.
+            logger.info("egress.request_refused", host=exc.host)
+            sitemap = Followed(f"{base}/sitemap.xml", None)
         if sitemap.disallowed:
             found.sitemap_disallowed = True
         elif sitemap.response is not None:

@@ -5,8 +5,11 @@ whatever address an agency types in, and follow whatever a site redirects to.
 Without a check, that address could be one on our own network: a private or
 loopback address, the cloud metadata address, an internal service. So every
 outbound fetch resolves the host first and refuses any address that is not
-public. A refusal ends the crawl or audit with `ADDRESS_NOT_PUBLIC`, handled the
-way a robots.txt refusal is (`crawl.ROBOTS_DISALLOWED`).
+public. The run ends with `ADDRESS_NOT_PUBLIC`, handled the way a robots.txt
+refusal is (`crawl.ROBOTS_DISALLOWED`), when the site's own address, a
+navigation's redirect hop or landing, or robots.txt is refused, or when Chromium
+reports it connected to an address that is not public. A browser sub-resource or
+iframe, and the audit's sitemap, refused before they are sent are skipped alone.
 
 Three layers, because no one of them covers everything:
 
@@ -21,10 +24,13 @@ Three layers, because no one of them covers everything:
    `response` listener). UDP is disabled by a launch switch, and the page's
    WebRTC constructors are removed by an init script.
 
-In the browser, any request or landing that is not public ends the run, and
-nothing is kept. A network-level egress control in front of the browser, a
-founder item on the launch checklist (`docs/launch-checklist.md`), is the next
-layer.
+In the browser, the run ends, and nothing is kept, when the main frame's own
+navigation is refused, when a redirect hop or landing of a navigation is not
+public, or when Chromium reports it connected to an address that is not public.
+A sub-resource or sub-frame request refused BEFORE it is sent never left this
+machine: it is aborted on its own and the run goes on. A network-level egress
+control in front of the browser, a founder item on the launch checklist
+(`docs/launch-checklist.md`), is the next layer.
 
 `EgressRefused` is deliberately NOT an `httpx.HTTPError` or a Playwright error:
 the handlers that treat those as "no answer" must not swallow a refusal. Nor is
@@ -342,9 +348,15 @@ def guarded_transport(**kwargs: typing.Any) -> httpx.AsyncHTTPTransport:
 # UDP disabled by the launch switch; the page's WebRTC constructors removed by the
 # init script.
 WEBRTC_LAUNCH_ARG = "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"
+# SharedWorker is removed too: Playwright detaches such targets, so their requests
+# would be neither routed through `handle` nor reported to `_on_response`.
 _NO_WEBRTC = (
     "window.RTCPeerConnection = undefined; window.webkitRTCPeerConnection = undefined;"
+    " window.SharedWorker = undefined;"
 )
+
+# Distinct hosts whose refused requests are logged by name; the rest are counted.
+MAX_LOGGED_REFUSED_HOSTS = 10
 
 # How long a settle waits for response listeners still reading an address. The
 # ones between navigations give up and carry on; the FINAL one, before a run's
@@ -383,20 +395,49 @@ def _safe_host(response: typing.Any) -> str:
         return ""
 
 
+def _is_main_frame_navigation(request: typing.Any) -> bool:
+    """True if `request` is the main frame's own navigation.
+
+    Fails closed: if Playwright raises while reading the request's frame (it does
+    for some requests, e.g. one from a service worker), it is treated as the main
+    frame's navigation, so the run ends rather than carrying on.
+    """
+    try:
+        in_main_frame = request.frame.parent_frame is None  # read first: it may raise
+        return in_main_frame and bool(request.is_navigation_request())
+    except Exception:  # noqa: BLE001 - cannot tell what it is: assume the worst
+        return True
+
+
 class BrowserGuard:
     """Egress control for one Playwright context.
 
     Holds a verdict per (host, port), so a page with hundreds of subresources
-    resolves each host once, and `refused`, the first refusal seen. The crawl
-    checks `refused` after every navigation and evaluate, because an aborted
-    subresource does not fail the navigation that asked for it.
+    resolves each host once, and `refused`, the first refusal that ends the run.
+    Two things set `refused`:
+
+    - a request refused BEFORE it is sent, when it is the main frame's own
+      navigation (`handle`): the site, or a page the crawl goes to, is not
+      public, and nothing from it was read;
+    - a connected address found AFTER the fact (`_on_response`), or a redirect
+      hop of a navigation (`check_landing`): a request did reach a non-public
+      address, so the run's facts cannot be trusted.
+
+    A sub-resource or sub-frame request refused before it is sent is aborted on
+    its own and does not set `refused`: it never left this machine. The crawl
+    checks `refused` after every navigation and evaluate.
     """
 
     def __init__(self) -> None:
         self.refused: EgressRefused | None = None
-        self._verdicts: dict[tuple[str, int], EgressRefused | OSError | None] = {}
+        # A refusal is cached as (host, address) and raised fresh each time, so a
+        # host hit by hundreds of requests does not grow one traceback.
+        self._verdicts: dict[tuple[str, int], tuple[str, str] | OSError | None] = {}
         self._pending: set[asyncio.Task[typing.Any]] = set()
         self._unparsed_logged = False
+        # Hosts whose refused (not-sent) requests have been logged: once per host.
+        self._refused_hosts_logged: set[str] = set()
+        self._refused_not_logged = 0
         # Set when a FINAL settle gave up on a listener, before it raises, so a
         # handler that sees only a later error can still tell what was on its way.
         self.unverified = False
@@ -433,6 +474,33 @@ class BrowserGuard:
             if task is not None:
                 self._pending.discard(task)
 
+    async def _on_request(self, request: typing.Any) -> None:
+        """A redirect hop of any request, judged once it has been sent.
+
+        Chromium follows a redirect without routing the new request through
+        `handle`, and a hop into a private address that never answers with an
+        HTTP response (refused, reset, not HTTP) never reaches `_on_response`.
+        The hop was sent, so a refusal ends the run, as in `check_landing`. Kept
+        in `_pending`, so `settle` and `finish` wait for it like a response.
+        """
+        task = asyncio.current_task()
+        if task is not None:
+            self._pending.add(task)
+        try:
+            try:
+                is_hop = request.redirected_from is not None
+                url = request.url
+            except Exception:  # noqa: BLE001 - nothing readable to judge
+                return
+            if is_hop:
+                try:
+                    await self._check_hop(url)  # records the refusal before raising
+                except EgressRefused:
+                    return
+        finally:
+            if task is not None:
+                self._pending.discard(task)
+
     async def settle(self, *, final: bool = False) -> None:
         """Wait for response listeners still reading an address.
 
@@ -464,11 +532,17 @@ class BrowserGuard:
         never answered ends it as `EgressUnverified`.
         """
         try:
-            await self.settle(final=True)
-        except EgressUnverified:
+            try:
+                await self.settle(final=True)
+            except EgressUnverified:
+                self.raise_if_refused()
+                raise
             self.raise_if_refused()
-            raise
-        self.raise_if_refused()
+        finally:
+            if self._refused_not_logged:
+                # No hosts in it: the first ones were logged by name already.
+                logger.info("egress.request_refused_more", requests=self._refused_not_logged)
+                self._refused_not_logged = 0
 
     async def _verdict(self, host: str, port: int) -> None:
         key = (_clean_host(host), port)
@@ -476,14 +550,27 @@ class BrowserGuard:
             try:
                 await resolve_public(*key)
                 self._verdicts[key] = None
-            except (EgressRefused, OSError) as exc:
+            except EgressRefused as exc:
+                self._verdicts[key] = (exc.host, exc.address)
+            except OSError as exc:
                 self._verdicts[key] = exc
         outcome = self._verdicts[key]
+        if isinstance(outcome, tuple):
+            raise EgressRefused(*outcome)
         if outcome is not None:
             raise outcome
 
     async def handle(self, route: typing.Any) -> None:
         """Playwright route handler: refuse non-public hosts, let the rest through.
+
+        A request refused here is never sent, so nothing from a non-public
+        network can have been read. What happens next depends on what it was:
+
+        - the MAIN FRAME's navigation: recorded in `refused` and aborted, so
+          the run ends as a refusal (the site itself is not public);
+        - anything else (images, scripts, styles, fetch/XHR, fonts, a sub-frame's
+          navigation): aborted on its own, not recorded, and logged once per host
+          with the host only. The page and the crawl go on.
 
         `fallback()`, not `continue_()`: the most recently registered route
         runs first, and fallback hands the request to the next one (the crawl's
@@ -496,18 +583,33 @@ class BrowserGuard:
         try:
             await self._verdict(*target)
         except EgressRefused as exc:
-            self.refused = self.refused or exc
-            await route.abort("blockedbyclient")
+            if _is_main_frame_navigation(route.request):
+                self.refused = self.refused or exc
+                await route.abort("blockedbyclient")
+            else:
+                await route.abort("blockedbyclient")  # aborted first, then logged
+                self._log_refused_request(exc.host)
             return
         except OSError:
             await route.abort("namenotresolved")
             return
         await route.fallback()
 
+    def _log_refused_request(self, host: str) -> None:
+        """Once per host per guard, the host only: never the URL, never a query."""
+        if host in self._refused_hosts_logged:
+            return
+        if len(self._refused_hosts_logged) >= MAX_LOGGED_REFUSED_HOSTS:
+            self._refused_not_logged += 1  # counted per request, logged once at `finish`
+            return
+        self._refused_hosts_logged.add(host)
+        logger.info("egress.request_refused", host=host)
+
     async def install(self, context: typing.Any) -> None:
         """Register the guard on `context`. Call after any other route, so it runs first."""
         await context.route("**/*", self.handle)
         context.on("response", self._on_response)
+        context.on("request", self._on_request)
         await context.add_init_script(_NO_WEBRTC)
         await context.route_web_socket(re.compile(".*"), _block_web_socket)
 
@@ -518,8 +620,10 @@ class BrowserGuard:
     async def check_landing(self, response: typing.Any, page_url: str) -> None:
         """After a navigation: every hop that led here, and where it ended.
 
-        Any request or landing that is not public ends the run, and nothing is
-        kept.
+        These hops were followed by Chromium without going through `handle`, so
+        they were already sent. Any hop or landing that is not public ends the
+        run, and nothing is kept. (A sub-resource refused before it was sent does
+        not come through here: `handle` aborted it on its own.)
         """
         await self.settle()
         self.raise_if_refused()

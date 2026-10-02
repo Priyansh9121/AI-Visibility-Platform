@@ -7,11 +7,13 @@ from __future__ import annotations
 
 from httpx import AsyncClient
 
+from avp_api.config import Settings
+
 BASE = "/api/v1"
 
 
 async def test_sign_up_log_in_and_see_empty_dashboard(
-    client: AsyncClient, signup_payload: dict[str, str]
+    client: AsyncClient, signup_payload: dict[str, str], settings: Settings
 ) -> None:
     """The Epic 1 acceptance criterion, start to finish."""
     # --- sign up ---------------------------------------------------------
@@ -24,7 +26,7 @@ async def test_sign_up_log_in_and_see_empty_dashboard(
     # The first user of an agency is always the owner.
     assert body["user"]["role"] == "owner"
     assert body["seats"] == {"used": 1, "limit": 3}
-    assert "avp_session" in resp.cookies
+    assert settings.session_cookie_key in resp.cookies
 
     # --- log out, so the login step is a genuine one ---------------------
     assert (await client.post(f"{BASE}/auth/logout")).status_code == 204
@@ -138,7 +140,7 @@ async def test_logout_all_revokes_every_session(
     from httpx import AsyncClient as SecondDevice
 
     await client.post(f"{BASE}/auth/sign-up", json=signup_payload)
-    first_cookie = client.cookies.get("avp_session")
+    first_cookie = client.cookies.get(settings.session_cookie_key)
 
     # A second, independent client — a different browser/device.
     transport = ASGITransport(app=client._transport.app)  # noqa: SLF001
@@ -148,7 +150,7 @@ async def test_logout_all_revokes_every_session(
             json={"email": signup_payload["email"], "password": signup_payload["password"]},
         )
         assert resp.status_code == 200
-        second_cookie = other.cookies.get("avp_session")
+        second_cookie = other.cookies.get(settings.session_cookie_key)
         assert second_cookie != first_cookie
 
         await client.post(f"{BASE}/auth/logout-all")

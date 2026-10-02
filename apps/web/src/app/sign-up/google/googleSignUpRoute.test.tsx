@@ -43,8 +43,8 @@ const NO_CODE = {
     "This page no longer has the link's code (it is removed from the address bar once read). Start again from the sign-in page.",
 };
 const EXPIRED = {
-  title: 'That Google sign-in has expired',
-  detail: 'It works for ten minutes and once. Start again from the sign-in page.',
+  title: 'That Google sign-in can no longer be used',
+  detail: 'It works once, for ten minutes, in the browser that started it. Start again from the sign-in page.',
 };
 
 const pending: GooglePending = { email: 'dana@northlight.example', suggestedName: 'Dana Whitfield' };
@@ -53,9 +53,9 @@ const pending: GooglePending = { email: 'dana@northlight.example', suggestedName
 const refused = () =>
   new ApiProblem({
     type: '/problems/invalid-google-ticket',
-    title: 'That Google sign-in has expired',
+    title: 'That Google sign-in can no longer be used',
     status: 400,
-    detail: 'That Google sign-in has expired. Start again from the sign-in page.',
+    detail: 'That Google sign-in can no longer be used. Start again from the sign-in page.',
     instance: '/api/v1/auth/google/pending',
   });
 
@@ -185,7 +185,7 @@ describe('an API that did not answer', () => {
     open('#ticket=abc');
     const el = await mount();
     expect(refusal(el)).toEqual([UNREACHABLE.title, UNREACHABLE.detail]);
-    expect(el.textContent).not.toContain('has expired');
+    expect(el.textContent).not.toContain('can no longer be used');
   });
 
   it('Try again peeks again with the same ticket, and shows the form when the API is back', async () => {

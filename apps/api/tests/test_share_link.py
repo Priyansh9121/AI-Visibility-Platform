@@ -194,7 +194,9 @@ class TestPublicRead:
         path would be a second place for a snippet to slip in. Two fields may
         differ: `generatedAt`, a clock read, and `scanErrorCode`, which says why
         a scan is partial or failed and is for the agency alone (the next test
-        pins that it is blanked, and the signed-in report keeps it).
+        pins that it is blanked, and the signed-in report keeps it). Since 3.25
+        `shareExpiresAt`, when the agency's own link ends, is the same kind of
+        field: test_share_expiry_on_report.py pins that it is blanked here.
         """
         await _sign_up(client, "Share Agency", "share5@test.example")
         sid = await _scored_scan(client, stub_engines)
@@ -204,7 +206,9 @@ class TestPublicRead:
         client.cookies.clear()
         public = (await _shared(client, token)).json()
 
-        for differs in ("generatedAt", "scanErrorCode"):
+        assert private["shareExpiresAt"] is not None
+        assert public["shareExpiresAt"] is None
+        for differs in ("generatedAt", "scanErrorCode", "shareExpiresAt"):
             private.pop(differs)
             public.pop(differs)
         assert public == private

@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Badge, Button, Card, CardBody, ErrorState, LoadingState } from '@avp/design-system';
 import type { ClientDetail } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
+import { apiWasAway, API_AWAY_SENTENCE } from '@/lib/apiAway';
 import { ScanLimitNotice } from '@/components/billing/ScanLimitNotice';
 import { ADDRESS_NOT_PUBLIC, ADDRESS_NOT_PUBLIC_SENTENCE } from '@/lib/report/strings';
 import { type ScanLimitProblem, scanLimitProblem } from '@/lib/billing/allowance';
@@ -91,9 +92,7 @@ export function ClassificationResult({
       setScan({
         kind: 'failed',
         detail:
-          err instanceof ApiProblem
-            ? err.problem.detail
-            : 'The API did not respond. Check that it is running on port 8000.',
+          err instanceof ApiProblem && !apiWasAway(err) ? err.problem.detail : API_AWAY_SENTENCE,
       });
     }
   }

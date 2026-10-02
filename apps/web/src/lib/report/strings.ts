@@ -78,6 +78,36 @@ export const ADDRESS_NOT_PUBLIC_SENTENCE =
   'The site’s address, or an address the site sent the crawler to, is on a private or reserved network, so the crawler did not read the site.';
 
 /**
+ * One plain sentence per way the technical audit can fail, in place of the code
+ * (2026-10-02). The codes are `services/technical_audit.py`'s: `BROWSER_ERROR`
+ * (the browser failed, or the egress guard could not verify a connection),
+ * `FETCH_FAILED` (the home page returned no response), `TIMEOUT`, and
+ * `HTTP_<status>` (the home page answered 400 or above). Each says what
+ * happened and nothing about why, and none blames the site. The raw code is
+ * never shown; `ROBOTS_DISALLOWED` and `ADDRESS_NOT_PUBLIC` have their own copy.
+ */
+export const AUDIT_FAILURE_SENTENCE: Record<string, string> = {
+  BROWSER_ERROR: 'The crawler’s browser stopped before it could read the home page.',
+  FETCH_FAILED: 'The crawler asked for the home page and got no response.',
+  TIMEOUT: 'The home page did not finish loading in the time the crawler allows.',
+};
+
+/** Any code this list does not know: no code, no guess at a cause. */
+export const AUDIT_FAILURE_GENERIC = 'The crawler could not read the home page.';
+
+/** The sentence for a failed audit's `errorCode`; never contains the code. */
+export function auditFailureSentence(errorCode: string | null | undefined): string {
+  if (errorCode && Object.hasOwn(AUDIT_FAILURE_SENTENCE, errorCode)) {
+    return AUDIT_FAILURE_SENTENCE[errorCode]!;
+  }
+  const status = errorCode?.match(/^HTTP_([45]\d\d)$/)?.[1];
+  if (status) {
+    return `The site answered with an error (HTTP ${status}) when the crawler asked for its home page.`;
+  }
+  return AUDIT_FAILURE_GENERIC;
+}
+
+/**
  * How a `partial` technical audit is worded, on the report and on the client's
  * Technical screen alike: one place, so the two cannot drift.
  */
