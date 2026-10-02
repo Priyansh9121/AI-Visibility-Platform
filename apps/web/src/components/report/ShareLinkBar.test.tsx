@@ -436,11 +436,15 @@ describe('focus goes where the person is, at every step of a withdraw', () => {
     expect(document.activeElement).toBe(trigger);
   });
 
-  it('a link that has only just been made does not take focus', async () => {
+  // 3.33. Was 'a link that has only just been made does not take focus': the button that was
+  // pressed leaves the page with the link, so focus fell on <body>. It now goes to the field.
+  it('a link that has just been made takes focus on its field, text selected, and Withdraw link does not', async () => {
     const el = await withLink();
-    expect(el.contains(document.activeElement) && document.activeElement !== document.body).toBe(
-      false,
-    );
+    const field = el.querySelector<HTMLInputElement>('input[readonly]')!;
+    expect(document.activeElement).toBe(field);
+    // `onFocus` selects the link, so one copy command takes all of it.
+    expect([field.selectionStart, field.selectionEnd]).toEqual([0, LINK_URL.length]);
+    expect(document.activeElement).not.toBe(button(el, 'Withdraw link'));
   });
 
   it.each([
@@ -484,9 +488,11 @@ describe('focus goes where the person is, at every step of a withdraw', () => {
     );
   });
 
-  it('a failed withdraw does not leave focus claimed for a trigger that has not come back', async () => {
+  // 3.33. Was 'a failed withdraw does not leave focus claimed for a trigger that has not come
+  // back', which ended on <body>: a link made later took no focus. It now takes it on its field.
+  it('a failed withdraw does not leave focus claimed for the Withdraw link: a link made later takes it on its field', async () => {
     // The flag that carries focus is cleared when the question is asked again,
-    // so a link made later does not take focus when it appears.
+    // so a link made later does not hand focus to Withdraw link when it appears.
     withdrawShareLink.mockRejectedValueOnce(new TypeError('Failed to fetch'));
     withdrawShareLink.mockResolvedValueOnce(undefined);
     shareLink.mockResolvedValueOnce({ url: LINK_URL }).mockResolvedValueOnce({ url: LINK_URL });
@@ -505,8 +511,10 @@ describe('focus goes where the person is, at every step of a withdraw', () => {
       button(el, 'Get shareable link')!.click();
     });
     await settle();
-    // A link that has only just been made takes no focus.
-    expect(document.activeElement).toBe(document.body);
+    // The link just made takes focus on its field, and the Withdraw link that comes back
+    // with it does not claim it.
+    expect(document.activeElement).toBe(el.querySelector('input[readonly]'));
+    expect(document.activeElement).not.toBe(button(el, 'Withdraw link'));
   });
 
   it('asking again after Keep puts focus on Keep link again, not on the trigger', async () => {
@@ -531,7 +539,9 @@ describe('what happens is announced, because the regions were already there', ()
     withdrawShareLink.mockResolvedValue(undefined);
     const el = await withLink();
     const region = el.querySelector('[role="status"]');
-    expect(region?.textContent).toBe('');
+    // 3.33: a mint now says its own sentence here (this mock gives no end date, so no date),
+    // where this used to expect the region to be empty. The point is the same element.
+    expect(region?.textContent).toBe('Link ready.');
     await confirmWithdraw(el);
     expect(el.querySelector('[role="status"]')).toBe(region);
     expect(region?.textContent).toBe('Link withdrawn. It no longer opens this report.');

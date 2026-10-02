@@ -22078,3 +22078,53 @@ Drift check (north-star §8): Layer 5, Distribution / Action (the share link); l
 - The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
 - OpenAPI and `api.gen.ts` regenerate with no change from the committed files (two descriptions changed in this item).
 - Exit codes were read from files.
+
+# After "Get shareable link" the bar says the link is ready and focus is on it; a focused filled button keeps a gap between its fill and its ring
+
+**2026-10-02, the eighteenth entry of the day; branch `pilot-fixes-2`, the founder's brief "memory and the rest of the open decisions" (launch checklist 3.33).** One item, one commit.
+
+**Render: nothing to set. No endpoint, schema, dependency or outbound host change.**
+
+Drift check (north-star §8): Layer 5, Distribution / Action (the share bar) and Layer 1, Delivery (the design system's filled buttons). One checklist row, "two small focus details", in two parts that share no file; lifecycle phase: Activation (Epic 9), the moment an agency gets the link it will send.
+
+## 1. What changed
+
+- **Founder decision (final):** after "Get shareable link" (from a live link or not), announce "Link ready. It works until <date>." in the bar's status region and move focus to the link field; filled (primary) buttons in the light theme get a 2px surface-coloured gap between the button and the focus ring; extend the token contrast test; the report stays paper.
+- **The share bar** (`ShareLinkBar.tsx`).
+  - After a mint, the existing `role="status"` region reads "Link ready. It works until 04 Nov 2026, 09:30 UTC." (the date in the bar's own format; "Link ready." alone if the answer carries no end; nothing for a failed scan, which has no Get button). The standing "The link works until …" line is not a live region, so the date is announced once; it is on screen twice (a decision for the founder, below).
+  - Focus moves to the link field, which then selects its text. The field mounts only when a mint makes a link, so it takes focus through `autoFocus` (`TextField` takes no ref); a re-render does not pull focus back.
+  - A failed mint gives focus back to "Get shareable link" when focus was lost or is still there (someone who has moved on keeps their place), and Get is described by the mint's own failure sentence (`aria-describedby`, as the PDF button already does), so a screen reader that drops the alert when focus moves still says it. A withdraw failure beside Get is not wired to it.
+  - A mint clears the earlier "give focus back to Withdraw link" flag, which otherwise took focus ahead of the new field.
+- **Tests that pinned no focus after a mint** (`ShareLinkBar.test.tsx`): "a link that has only just been made does not take focus" → "a link that has just been made takes focus on its field, text selected, and Withdraw link does not"; "a failed withdraw does not leave focus claimed for a trigger that has not come back" → "…for the Withdraw link: a link made later takes it on its field" (its last assertion expected the page); "a withdrawn link is said in the region that was there before it was" keeps its name, its first assertion now "Link ready." where the region was empty. New: `ShareLinkBar.linkReady.test.tsx` (30 tests).
+- **The focus ring on filled buttons** (`packages/design-system`).
+  - The global ring is beacon-600, the primary's own colour, so on a focused primary it merged with the fill's edge (1.00–1.02:1; the danger fill 1.04:1). In the light theme `.avp-btn--primary` and `.avp-btn--danger` now draw `--avp-focus-ring-filled`: a 2px gap in `--avp-surface-seated`, then the same 2px ring and halo. Gap against the fill 4.88–4.99:1 (both gradient ends) and 5.20:1 (danger); ring against the gap 4.99:1; ring against every surface a button sits on 3.82:1 or more (3.90:1 or more hovered).
+  - The report's own primary buttons ("Build the proposal", the competitor list's Save) had the same fault (1.13:1). The report block declares its own version with its page colour as the gap (about 4.4:1 against the paper fill, ring 4.99:1), in either app theme, so the report stays paper. The dark theme keeps the plain ring.
+  - The rule also sets `outline: 2px solid transparent`: Tailwind's preflight, loaded after the design system, otherwise lets Firefox draw its native ring inside the gap, and in forced colours, where shadows are dropped, the outline is what shows. It wins by specificity, (0,2,0) against the global rule's and preflight's (0,1,0), not by file order.
+  - `contrast.test.ts` covers the light theme, the report and a report inside a dark app (layers, ratios, hover, the cascade, the outline); `reportIsolation.test.ts` passes. `docs/design-system.md` says where the gap comes from.
+
+## 2. The review
+
+- **UI review (sonnet): PASS WITH NITS.** Checked clean: the status region (no URL or token in it, nothing for a failed scan); `autoFocus` under React 19's StrictMode, on re-render and on a re-mint after a withdrawal; focus after a button becomes disabled in Chromium, Firefox and WebKit, which the conditional return covers; the computed ring in Chromium and Firefox on every surface and in the report inside a dark app; the ratios, hovered too; secondary, ghost and the dark theme unchanged; design-system only (no stock class, off-scale spacing, inline colour or host); the design hook's three flags in `components.css` (two width transitions and the evidence block's left border) and its gradient-text flag predate this item.
+  - **Taken:** the Medium (Get described by the failed mint's sentence); Firefox's native ring (the transparent outline); the doc's wording of where the gap comes from.
+  - **For the founder:** the date shows twice after a mint (the standing line and the status line). Not a WCAG failure. The reviewer recommends hiding the status text visually (it stays announced), the implementer agrees; kept visible here because the brief puts the message in the status region, which shows its other messages.
+
+## Found, not fixed
+
+- **Forced colours, every other control:** the global focus style is a shadow with `outline: none`, so in Windows High Contrast no non-filled control shows focus (filled buttons now do). The same transparent outline on the global rule fixes it, and Firefox's native ring on those controls with it.
+- **A focused text field draws a ring on its wrapper and a second on the input** (both themes); the share link's field now takes focus after every mint. One line on `.avp-field__input:focus-visible`, for every field.
+- **Dark theme:** the ring against the primary fill is 1.8–2.0:1 and against the danger fill about 1.0:1; against the surface it is 5.2:1 or more, so 1.4.11 holds on the outer edge (the brief left the dark theme as it is).
+- **Every primary button has a 1px rim of the gradient's other end** (it tiles into the transparent border); likely `background-origin: border-box`. Cosmetic.
+
+## Verified
+
+**Design-system vitest 875 → 935 (+60); web vitest 1501 → 1531 (+30); both floors raised to match.**
+- **Negative controls:** on this tree, the link field without `autoFocus` fails 9 tests; restored and checked with `cmp`. The implementer's, each restored: Get without `aria-describedby` fails 5; Get wired to a withdraw error fails exactly the 3 provenance tests; the filled rule without the outline fails 1, wrapped in `:where()` 4; the report's own token removed fails 15; the report gap a shade off the page colour fails only the page-colour test; a mint that keeps the stale Withdraw flag fails 2.
+- Real browsers (the implementer and the reviewer): Tab and Enter on Get leaves focus on the link with its text selected and the status reading the sentence; Firefox shows the clean gap after the outline and the native ring before it; forced colours shows an outline on a filled button.
+
+**The rest of the bar** (this tree, one run).
+- API pytest 2442, workers 26, shared-types 53 (0 fail), mypy 43 (ceiling 50).
+- ruff clean; all typechecks clean; the styleguide builds; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+- OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

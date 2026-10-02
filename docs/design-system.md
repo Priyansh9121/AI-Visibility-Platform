@@ -347,6 +347,12 @@ rise toward the viewer — it **illuminates**:
   1.4.11, enforced by `tokens/contrast.test.ts`); the dark theme keeps its 2px
   ring at 70%. Never an outline offset, never a lift. Applied globally in
   `base.css` so no component reimplements it.
+- `--avp-focus-ring-filled` — checklist 3.33: a `primary` or `danger` button sets its
+  ring off its fill with a 2px gap. In the light theme the gap is always
+  `surface-seated`, the card colour: invisible on a card, a faint lighter band on the
+  ground, sunken and void (1.06, 1.12 and 1.23:1). In the report it is the report's
+  own page colour (`paper-000`), in either app theme. The plain ring is 1.0:1 against
+  the primary fill and 1.13:1 against the paper one; dark keeps the plain ring.
 - `--avp-selected-ring` / `--avp-selected-wash` — reads as lit from within.
 - **Score reveal** — dissolves `vis-00` → true value over 600ms
   `cubic-bezier(0.22, 1, 0.36, 1)`. A count-up says "loading"; an illumination
