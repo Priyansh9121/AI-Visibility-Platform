@@ -21753,3 +21753,49 @@ Drift check (north-star §8): Layer 1, Delivery (the share link); lifecycle phas
 - The Python and JavaScript licence audits pass (`pnpm licenses list --json`).
 - OpenAPI and `api.gen.ts` were regenerated for `shareExpiresAt`; regenerating again changes neither.
 - Exit codes were read from files.
+
+# A request the crawler refuses before sending it is skipped and the crawl goes on; anything that reached a private address still ends the run
+
+**2026-10-02, the tenth entry of the day; branch `pilot-fixes`, the founder's pilot-blockers follow-up (launch checklist 3.27).** One item, one commit.
+
+**Render: nothing to set. No endpoint, schema, dependency or outbound host change.**
+
+Drift check (north-star §8): Layer 0, Trust substrate (the crawler's egress guard), feeding Layer 2's technical audit; lifecycle phase: Activation (Epic 9), a pilot agency's first scan of a real site.
+
+## 1. What changed
+
+- **Founder decision (final):** "a request refused before it is sent is aborted on its own and the crawl continues; a connected-address refusal detected after the fact still ends the run and keeps nothing." Why it is safe: a request refused before it is sent never leaves the machine, so nothing from a private network can have been read; a request that did reach a private address means the run's facts cannot be trusted.
+- **The browser** (`BrowserGuard.handle`, `services/egress.py`): a refusal is recorded (and so ends the run as `ADDRESS_NOT_PUBLIC`, keeping nothing) only for the **main frame's own navigation** — the site itself, or a page the crawl goes to. If the frame cannot be read, it fails closed and is treated as one. A page's sub-resources (images, scripts, styles, fetches, fonts) and its iframes' navigations are aborted, logged as `egress.request_refused` with the host only (the first 10 distinct hosts per run, then one `egress.request_refused_more` with a count and no hosts), and the page and the crawl go on.
+- **Unchanged, and still ending the run:** the connected-address check (Chromium reports it connected to a private address), the redirect hops and landing of a navigation, robots.txt and its redirects (the crawler cannot learn the site's rules, so it must not crawl), the site's own start address, and a final listener that never answered (`EgressUnverified`).
+- **The sitemap** (`technical_audit.py`): a `sitemap.xml` fetch or redirect hop refused before it is sent is treated as the existing network-error outcome (no sitemap read), logged by host, and the audit goes on. A sitemap that only resolves to a private network cannot be read from the public internet either, which is what the check measures; a robots.txt reached through the sitemap's redirect is skipped the same way, since it too was refused before connecting.
+- **From the security review:**
+  - **`SharedWorker` is disabled** in the guard's init script. Playwright detaches shared-worker targets, so their requests were neither routed nor reported. Confirmed in a real Chromium: without the script `new SharedWorker()` ran and its script was fetched unrouted; with it, `SharedWorker` is undefined and the constructor throws.
+  - **A sub-resource's redirect hop into a private address is now caught even when it never answers** (a refused or reset connection produces no response for the connected-address check to read): a `request` listener judges every request that has a `redirected_from`, as `check_landing` judges a navigation's hops, and `finish()` waits for it.
+  - A cached refusal is raised as a fresh exception each time (re-raising one object grew its traceback and kept frames alive across a run that now continues), and the refusal log is capped as above.
+- **Copy:** every `ADDRESS_NOT_PUBLIC` sentence (the web's `strings.ts`, `report_narrative.py`, the shared fixture) already says "the site's address, or an address the site sent the crawler to", which is still true; unchanged. `/crawler`, `/privacy` and `/terms` say nothing about this behaviour. `docs/api-contracts.md` now says what ends a run and what is skipped, and "an address Chromium reports it connected to".
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS.** The change cannot let anything that reached a private address be kept: both branches abort before anything is sent, and misclassifying the main frame could only change the reason code, not what is kept. Checked clean: main-frame detection (`location=`, meta refresh, form POST and `target=_top` count as main-frame navigations and end the run; popups end it too); the fail-closed path; sub-resource and iframe redirects with a response (caught by the connected-address check); service workers blocked, WebSockets closed, the HTTP cache off while intercepting; the sitemap change (refused before connecting, nothing read is kept); host-only logs.
+  - **Medium (pre-existing), fixed:** `SharedWorker` traffic was neither routed nor reported (above).
+  - **Medium (pre-existing), NOT fixed: a speculation-rules prerender.** A page's `<script type="speculationrules">` prerender is fetched by Chromium in a target Playwright detaches, so the request is neither routed through the guard nor reported to it (probed in a real Chromium 151: the prerender's GET reached the server and never reached `handle`; `<link rel="prefetch">` is routed; `<link rel="prerender">` is not fetched). No launch switch stops it without breaking interception: Playwright passes its own `--disable-features` list (which interception on redirects needs) and appends ours after it, so ours would replace it; `--disable-blink-features=SpeculationRules`, `Prerender2` and `SpeculationRulesPrefetchProxy` change nothing. What it allows: a crawled page can make the crawler's browser send a request to a private address; the prerendered response is not read into the page the crawl reads, but the request is sent. The network-level egress control (3.2) closes it. In the founder's report.
+  - **Lows taken:** the sub-resource redirect hop with no answer; "an address the browser actually connected to" in the contract (now "Chromium reports it connected to"); the refusal log cap; the fresh exception; tests (a main-frame navigation refused after the home page was read keeps nothing, which replaces the removed sub-resource case; a host first refused as a sub-resource and later hit by a navigation hop still ends the run; `is_navigation_request()` raising fails closed); the module docstring, the robots.txt comment, and abort before logging.
+
+## Verified
+
+**API pytest 2350 → 2367 (+17); floor raised to match.**
+- **Unit** (`test_egress.py`, with fake routes, requests and frames): a main-frame navigation refused before sending is recorded and aborted; a sub-resource, a main-frame sub-resource that is not a navigation, and a sub-frame navigation are aborted and not recorded, and logged once with the host only; reading the frame or `is_navigation_request()` raising fails closed; a public request falls through; the installed init script disables `SharedWorker`; a redirect hop into a private address is recorded from the `request` listener, a non-hop or a public hop is not, and `finish()` waits for a hop still being judged; a host first refused as a sub-resource still ends the run on a later landing; refusals are raised fresh each time; 13 refused hosts log 10 by name and one count.
+- **Whole runs** (`test_robots_obeyed.py`, crawl and audit, with a fake Chromium): a private sub-resource and a private iframe are never requested, the crawl and the audit succeed with their facts, and the log has `egress.request_refused` with the host and no URL or query; a sitemap redirecting into a private address is skipped (no sitemap read, nothing from the private host, the audit's facts kept); a main-frame navigation refused after the home page was read keeps nothing. Unchanged and still passing: the private start name, homepage redirects into private names or the metadata address, a navigation's redirect chain through a private host, a landing on a private address, the connected-address cases, robots.txt redirecting into a private address, and finish/settle/unverified.
+- **Renamed, because what they prove changed:** `…_aborted_and_ends_the_crawl` → `…_aborted_and_the_crawl_continues`, `test_a_private_subresource` → `…_is_aborted_and_the_audit_continues`, and the sitemap redirect test; two tests that used a sub-resource to prove "refused after facts were read" now use a connected-address refusal.
+- **Negative controls:**
+  - the old strict rule restored in `handle` (every refusal recorded) fails 9 tests; restored and checked with `cmp`;
+  - the main-frame check always false fails the main-frame test; the sitemap refusal raised again fails the sitemap test; the redirect-hop listener removed fails 2; one cached exception object fails 2 (the implementer's runs, each restored and checked).
+- **In a real Chromium** (a throwaway script, not committed): `SharedWorker` undefined with the guard installed and its script never fetched; the speculation-rules prerender fetched outside the guard (above).
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, shared-types 53 (0 fail), design-system 859, web 1473, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`).
+- OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

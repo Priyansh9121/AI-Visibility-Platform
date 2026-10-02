@@ -1201,7 +1201,7 @@ the database by `ck_clients_industry_matches_classification_status`.
 | `PROVIDER_REFUSED` | Model declined to answer |
 | `PROVIDER_SCHEMA_VIOLATION` | Model answered, but its answer did not fit the classifier's schema (2026-09-11) |
 | `ROBOTS_DISALLOWED` | The site's robots.txt forbids AVPScanBot its homepage, so nothing was read (2026-09-29) |
-| `ADDRESS_NOT_PUBLIC` | The site's address, or an address the site sent the crawler to (a redirect, or something a page loads), is not on the public internet (private, loopback, link-local, carrier-grade NAT, multicast, reserved or unspecified, including those forms inside an IPv6 address), so the crawl stopped and nothing was kept (2026-10-01) |
+| `ADDRESS_NOT_PUBLIC` | The site's address, an address the site sent the crawler to (a redirect hop or landing of a navigation, or a robots.txt redirect), or an address Chromium reports it connected to, is not on the public internet (private, loopback, link-local, carrier-grade NAT, multicast, reserved or unspecified, including those forms inside an IPv6 address), so the crawl stopped and nothing was kept (2026-10-01) |
 
 `industryConfidenceScore` is a **string-encoded decimal or `null`**
 (`NUMERIC(4,3)`), for the same reason as `compositeScore`: a JSON number is an
@@ -1885,12 +1885,13 @@ read the site rather than failed to:
   homepage. Page checks are `not_applicable` with that `detailCode`; a blanket
   `Disallow: /` under `User-agent: *` still fails `indexable` with
   `ROBOTS_TXT_DISALLOW`, because robots.txt itself was read.
-- `ADDRESS_NOT_PUBLIC` (2026-10-01): the site's address, an address it
-  redirected to, or an address the page asked the browser to load, is not on
-  the public internet. The crawler's own fetches (robots.txt, sitemap.xml and
-  each redirect hop) are checked before they are sent, and any request or
-  landing of the browser's that is not public ends the run. Nothing is kept,
-  so every check is `not_applicable` with that `detailCode`.
+- `ADDRESS_NOT_PUBLIC` (2026-10-01): the run ends when the site's own
+  address, a navigation's redirect hop or landing, robots.txt or its redirect,
+  or an address Chromium reports it connected to is not on the public
+  internet. Nothing is kept, so every check is `not_applicable` with that
+  `detailCode`. A page's sub-resource or iframe, and the sitemap (or its
+  redirect), refused before it is sent is skipped and the run goes on; a
+  skipped sitemap reads as not found.
 
 **Core Web Vitals are measured and reported, but carry NO weight in the
 sub-score.** `lcpMs` and `cls` are single-cold-load **lab** measurements, not
