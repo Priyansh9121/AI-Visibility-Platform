@@ -163,17 +163,21 @@ async def create_share_link(
     report at creation time and relying on the URL being unknown would make
     that decision for them. This is the moment they make it.
 
-    **`200`, not `201`, and idempotent.** Calling twice returns the same token
-    rather than minting a second live link to the same report: every extra
-    token would be a URL nobody is tracking. The second call creates nothing,
-    so it does not claim to.
+    **`200`, not `201`, and idempotent.** While the scan has a live link,
+    calling again returns that link exactly as it is: the same token and the
+    same `expiresAt`, with nothing written. Every extra token would be a URL
+    nobody is tracking, so the second call mints nothing and does not claim
+    to.
 
-    **A second call DOES push the expiry out** — Epic 9.21. Idempotence is
-    about the token's identity, not its lifetime, and the alternative reading
-    leaves no way to extend a link without changing its URL: revoke-and-mint
-    issues a new token and kills every copy already sent. Re-sharing is the
-    agency restating the decision to share, which is the signal an expiry
-    should listen to. `services/share.py` carries the argument in full.
+    **A press on a live link does not move its end** — Epic 9.21, as changed by
+    checklist 3.28 (the founder's decision). The share bar says links last 30
+    days from when they are created, and "The link works until ..." names the
+    end the link was given, so both stay true of the link already sent. Only
+    when no link is live does a press make one: a scan never shared, a
+    withdrawn link, or one that has ended. That is a NEW token with a fresh 30
+    days. An ended token is replaced, not revived, so the address that stopped
+    working stays dead on both public routes. `services/share.py` carries the
+    argument in full.
 
     **A FAILED scan cannot be shared** (3.24): `409`
     `/problems/failed-scan-not-shareable`. Its score is never shown, so there

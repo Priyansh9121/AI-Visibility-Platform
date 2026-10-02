@@ -51,6 +51,12 @@ const settle = () =>
 const button = (el: HTMLElement, label: string) =>
   [...el.querySelectorAll('button')].find((b) => b.textContent === label);
 
+/** Every "The link works until ..." line on the bar: none, or one. */
+const dateLines = (el: HTMLElement) =>
+  [...el.querySelectorAll('p')]
+    .map((p) => p.textContent ?? '')
+    .filter((text) => text.startsWith('The link works until'));
+
 function mounted(props: { scanStatus?: string | undefined; shareExpiresAt?: string | null | undefined }): HTMLDivElement {
   const el = document.createElement('div');
   document.body.appendChild(el);
@@ -114,17 +120,60 @@ describe('a link that is already live', () => {
     expect(el.textContent).toContain(LIVE_LINE);
   });
 
-  it('shows the minted date once Get shareable link is pressed', async () => {
-    shareLink.mockResolvedValue({ url: URL_, expiresAt: MINTED });
+  // This was "shows the minted date once Get shareable link is pressed": the API used to move a
+  // live link's end to 30 days from the press, so the bar showed a later date. `shareLink` is a
+  // mock here, answering as the API now does (3.28), so what the bar shows after a press is the end
+  // it already showed. It is the API's tests that pin that behaviour, not this one:
+  // test_share_link.py's TestExpiry, in test_pressing_on_a_live_link_returns_it_exactly_as_it_is
+  // (a live link comes back unchanged) and
+  // test_pressing_after_the_link_expired_makes_a_new_link_and_the_old_address_stays_dead
+  // (an ended one is replaced, with a new end).
+  it('keeps the date it had once Get shareable link is pressed, when the API returns a live link as it is', async () => {
+    shareLink.mockResolvedValue({ url: URL_, expiresAt: LIVE });
     const el = mounted({ shareExpiresAt: LIVE });
+    expect(dateLines(el)).toEqual([LIVE_LINE]);
     await act(async () => {
       button(el, 'Get shareable link')!.click();
     });
     await settle();
-    expect(el.textContent).toContain(MINTED_LINE);
-    expect(el.textContent).not.toContain(LIVE_LINE);
+    expect(shareLink).toHaveBeenCalledTimes(1);
+    // The same single line, and no other date. The person has the URL now, and Withdraw stays.
+    expect(dateLines(el)).toEqual([LIVE_LINE]);
     expect(el.querySelector<HTMLInputElement>('input[readonly]')?.value).toBe(URL_);
     expect(button(el, 'Withdraw link')).toBeDefined();
+  });
+
+  // The link ended or was replaced after the page loaded: the API then answers with a different
+  // end, and the bar says that one, not the end it was mounted with.
+  it('replaces the date with the one the API returns when it is not the end the page loaded with', async () => {
+    shareLink.mockResolvedValue({ url: URL_, expiresAt: MINTED });
+    const el = mounted({ shareExpiresAt: LIVE });
+    expect(dateLines(el)).toEqual([LIVE_LINE]);
+    await act(async () => {
+      button(el, 'Get shareable link')!.click();
+    });
+    await settle();
+    expect(dateLines(el)).toEqual([MINTED_LINE]);
+  });
+
+  it("shows the new link's own date when a press follows a withdrawal", async () => {
+    withdrawShareLink.mockResolvedValue(undefined);
+    shareLink.mockResolvedValue({ url: URL_, expiresAt: MINTED });
+    const el = mounted({ shareExpiresAt: LIVE });
+    act(() => button(el, 'Withdraw link')!.click());
+    await act(async () => {
+      button(el, 'Withdraw link')!.click();
+    });
+    await settle();
+    expect(el.textContent).toContain('Link withdrawn.');
+    expect(dateLines(el)).toEqual([]);
+    await act(async () => {
+      button(el, 'Get shareable link')!.click();
+    });
+    await settle();
+    // A new link, so the date is the one the API gave it, and the old one is not said again.
+    expect(dateLines(el)).toEqual([MINTED_LINE]);
+    expect(el.textContent).not.toContain(LIVE_LINE);
   });
 });
 
@@ -435,7 +484,10 @@ describe('review fixes', () => {
     expect(region?.textContent).toBe('This scan failed, so its report cannot be shared.');
   });
 
-  it('keeps the date line while Creating…, with Withdraw disabled', async () => {
+  // Was "keeps the date line while Creating…, with Withdraw disabled", and ended on the minted date.
+  // `shareLink` answers as the API now does for a live link (3.28): the same end, so the line is
+  // the same after it too.
+  it('keeps the date line while Creating… and after the same end comes back, with Withdraw disabled meanwhile', async () => {
     let finish!: (v: { url: string; expiresAt: string }) => void;
     shareLink.mockReturnValue(new Promise((r) => (finish = r)));
     const el = mounted({ shareExpiresAt: LIVE });
@@ -443,10 +495,10 @@ describe('review fixes', () => {
       button(el, 'Get shareable link')!.click();
     });
     expect(button(el, 'Creating…')!.disabled).toBe(true);
-    expect(el.textContent).toContain(LIVE_LINE);
+    expect(dateLines(el)).toEqual([LIVE_LINE]);
     expect(button(el, 'Withdraw link')!.disabled).toBe(true);
-    await act(async () => finish({ url: URL_, expiresAt: MINTED }));
+    await act(async () => finish({ url: URL_, expiresAt: LIVE }));
     await settle();
-    expect(el.textContent).toContain(MINTED_LINE);
+    expect(dateLines(el)).toEqual([LIVE_LINE]);
   });
 });

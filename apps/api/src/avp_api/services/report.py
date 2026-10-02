@@ -66,6 +66,7 @@ from ..schemas.score import CompetitorScoreOut, ScoreDetailOut
 from . import divergence, scoring_runner
 from .failed_scan import score_is_withheld, served_fixes, withhold_technical_foundation
 from .scoring import ResultFacts
+from .share import link_is_live
 
 # Heaviest dimension first. The Luminance Ledger stacks the heaviest segment at
 # the BOTTOM and this list feeds it directly, so the order is part of the
@@ -164,9 +165,7 @@ async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:
         scan_error_code=scan.error_code,
         share_expires_at=(
             scan.share_expires_at
-            if scan.share_token is not None
-            and scan.share_expires_at is not None
-            and scan.share_expires_at > datetime.now(UTC)
+            if link_is_live(scan.share_token, scan.share_expires_at, datetime.now(UTC))
             else None
         ),
         visibility_flags=_visibility_flags(results, prompts),

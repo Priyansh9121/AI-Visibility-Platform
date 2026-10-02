@@ -22034,3 +22034,47 @@ Drift check (north-star §8): Layer 1, Delivery (the score, fix, audit and alert
 - The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
 - OpenAPI and `api.gen.ts` regenerate with no change from the committed files (eight route descriptions changed in this item, nothing else).
 - Exit codes were read from files.
+
+# "Get shareable link" on a live link returns it as it is; only a press with no live link makes a new one, for 30 days
+
+**2026-10-02, the seventeenth entry of the day; branch `pilot-fixes-2`, the founder's brief "memory and the rest of the open decisions" (launch checklist 3.28).** One item, one commit.
+
+**Render: nothing to set. No migration, no new dependency or outbound host.** Two descriptions changed (`ShareLinkOut` and `POST /scans/{scanId}/share`; OpenAPI and `api.gen.ts` regenerated).
+
+Drift check (north-star §8): Layer 5, Distribution / Action (the share link); lifecycle phase: Activation (Epic 9), what an agency sends a prospect.
+
+## 1. What changed
+
+- **Founder decision (final):** "Get shareable link" on a live link returns it unchanged, the same token and the same end; only a press when no link is live makes a new one, for 30 days. Epic 9.21's contract text and the tests that pinned the old behaviour are updated.
+- **The mint** (`get_or_create_share_token`, `services/share.py`). Under the scan's row lock, after the agency check and 3.29's refusal of a failed scan: a live link is returned as it is and nothing is written; no token, a withdrawn link or an ended one gets a NEW token and an end 30 days from the press. An ended token is never revived, so its address stays dead. Epic 9.21 used to move a live link's end to 30 days from each press; the share bar's lead already says links work for 30 days "from when they are created", which is now exactly true. The `share.token.refreshed` log line is gone (`share.token.minted` logs the scan id only). Its return type is now `tuple[str, datetime]`, which takes mypy from 47 to 43.
+- **One statement of "live"** (from the security review): `link_is_live(token, expires_at, now)`, a token and an end strictly after now, used by the mint and by the signed-in report's `shareExpiresAt`, with comments tying it both ways to the same condition in `scan_for_share_token`'s SQL. A link whose end is exactly now is over in all three.
+- **Texts brought in line:** the route and `ShareLinkOut` descriptions; `docs/api-contracts.md` (`POST /scans/{scanId}/share`, the 9.21 notes; the paragraph from Epic 9.14 that still said a share link has no expiry and no revocation, and that branding was unbuilt, is now in the past tense with what 9.21 and 9.22 added); `revoke_share_token`'s docstring (the lock's real reason); the web's `shareLink` comment (idempotent while live; a failed scan is refused with 409 even with a live link); a model comment.
+- **Tests that pinned the old behaviour:**
+  - API: `test_re_sharing_extends_an_almost_dead_link_without_changing_its_url` → `test_pressing_after_the_link_expired_makes_a_new_link_and_the_old_address_stays_dead`; the docstring of `test_the_same_scan_returns_the_same_token_every_time` (it said a link works forever); the comment in 3.29's `test_failed_scan_hidden.py` that read "a live link's end not pushed out" now says the `409` is the guard that the failed-scan refusal comes before the live-link shortcut.
+  - Web (`ShareLinkBar.liveLink.test.tsx`): "shows the minted date once Get shareable link is pressed" → "keeps the date it had once Get shareable link is pressed, when the API returns a live link as it is"; "keeps the date line while Creating…, with Withdraw disabled" → "…while Creating… and after the same end comes back, with Withdraw disabled meanwhile".
+- **Tests added:** API `test_pressing_on_a_live_link_returns_it_exactly_as_it_is`, `test_two_presses_at_once_on_a_scan_with_no_link_make_one_link` (two `FOR UPDATE` waiters seen in `pg_stat_activity`), `test_the_press_and_the_public_lookup_draw_the_line_at_the_same_microsecond`, `test_link_is_live_needs_a_token_and_an_end_strictly_after_now`; web "shows the new link's own date when a press follows a withdrawal", "replaces the date with the one the API returns when it is not the end the page loaded with".
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS**, nothing at Medium or above. Checked clean: the order of checks under the row lock (agency, then the failed-scan refusal, then the live-link shortcut); the same "live" as the public report, to the microsecond and the time zone; the races (two presses, a press against a withdrawal, the reaper, a deadline, finalising); no path revives or re-serves an old token; token entropy and uniqueness unchanged; no token in any log; the CHECK on token and end holds on every write.
+  - **Taken:** L1, one Python statement of "live" and the boundary tests; L2, the 3.29 test comment.
+  - **Noted, outside this item, and confirmed by reading the code:** `finalize_scan` (`services/scan_runner.py`) stamps the final status after checking only its in-memory copy, so a scan the reaper marked FAILED while its chain was still alive could be stamped succeeded or partial within one 30-second heartbeat, and its kept share link (3.29) would open again. The fix is to make that write conditional on the row still being RUNNING, as the lease renewal is. New checklist row.
+- **UI review (sonnet): PASS WITH NITS.** Everything the bar says stays true in every state (no link, live at load, made in the visit, withdrawn then pressed, ended then pressed, 3.29's failed-scan states).
+  - **Taken:** the Medium, a test that a press returning a different end replaces the date on screen; titles that say "when the API returns" (the API is mocked; the API tests that pin it are named in the comment); the 409 in the `shareLink` comment.
+  - **Left:** for a link live at load, the lead says "Creates a link", the busy label "Creating…" and a failure "could not be created", though a press now only fetches it; nothing there says the end moves, and it was as inexact under 9.21 (wording, the founder's call).
+
+## Verified
+
+**API pytest 2438 → 2442 (+4); web vitest 1499 → 1501 (+2); both floors raised to match. mypy 47 → 43 (ceiling 50, unchanged).**
+- **Negative controls** (this tree, each restored and checked with `cmp`):
+  - the live-link shortcut switched off, so every press makes a new link, fails 5 (the live-link test, two presses at once, the same token every time, the boundary test, and `test_share_lock_refresh.py`'s mint after another transaction's);
+  - "live" made `>=` fails the 2 boundary tests.
+  - The implementer's: the SQL made `>=` fails the boundary test; the shortcut moved before the failed-scan refusal fails exactly the "link already live" case of 3.29's race test (200 instead of 409); the bar preferring the end it loaded with fails the new web test.
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, shared-types 53 (0 fail), design-system 875.
+- ruff clean; all typechecks clean; the styleguide builds; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+- OpenAPI and `api.gen.ts` regenerate with no change from the committed files (two descriptions changed in this item).
+- Exit codes were read from files.
