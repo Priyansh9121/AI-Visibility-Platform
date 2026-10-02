@@ -1175,23 +1175,31 @@ class TestAWaitForTheSlotIsBounded:
 
 
 class TestTheTwoBounds:
-    def test_a_request_waits_a_minute_and_a_scans_audit_five(self) -> None:
+    def test_a_request_waits_a_minute_and_a_scans_audit_two(self) -> None:
         assert browser_slot.REQUEST_WAIT_S == 60.0
-        assert browser_slot.SCAN_AUDIT_WAIT_S == 300.0
+        assert browser_slot.SCAN_AUDIT_WAIT_S == 120.0  # launch checklist 3.35; it was 300 s
 
-    def test_a_scans_wait_covers_the_longest_single_run_that_can_be_ahead_of_it(self) -> None:
-        """One capped run ahead of it, and a margin; not a second cap beside it."""
+    def test_a_scans_wait_is_shorter_than_either_run_that_a_cap_has_to_cut(self) -> None:
+        """What 120 s no longer covers: one capped run ahead (launch checklist 3.35).
+
+        At 300 s the wait was one capped run and a margin. Now a scan's audit queued behind a
+        run that has just begun to hang, until the crawl's cap (266 s) or the audit's
+        (244.5 s) cuts it, ends `BROWSER_BUSY` after its wait and the scan goes on without a
+        Technical Foundation. That holds only while the wait is under the SHORTER of the two
+        caps, and it stays a longer wait than a request's.
+        """
         pages = inspect.signature(intake.run_classification).parameters["max_pages"].default
-        longest = max(
+        shortest_cap = min(
             technical_audit.audit_run_cap_s(),
             crawl.crawl_run_cap_s(pages, crawl.DEFAULT_TIMEOUT_MS),
         )
 
         wait = browser_slot.SCAN_AUDIT_WAIT_S
-        assert longest < wait < 2 * longest
+        assert browser_slot.REQUEST_WAIT_S < wait < shortest_cap
 
     def test_a_request_gives_up_well_before_a_scan_would(self) -> None:
-        assert browser_slot.REQUEST_WAIT_S < browser_slot.SCAN_AUDIT_WAIT_S / 2
+        # At most half: the scan's bound is twice the request's (60 s and 120 s).
+        assert browser_slot.REQUEST_WAIT_S <= browser_slot.SCAN_AUDIT_WAIT_S / 2
 
 
 @pytest.fixture
@@ -1232,7 +1240,7 @@ class TestWhichBoundEachCallerAsksFor:
         )
 
         assert result.ok
-        assert waits_asked_for == [("audit", 300.0)]
+        assert waits_asked_for == [("audit", 120.0)]  # the scan's bound, not the request's 60 s
 
 
 async def run_while_the_slot_is_held(

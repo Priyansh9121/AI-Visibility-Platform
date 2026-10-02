@@ -22,8 +22,9 @@
  * getting-started checklist). The screens promised a scan inside 300 seconds, and that
  * was not true: read from the dev database on 2026-10-03, 9 of 25 finished scans took longer
  * (succeeded: median 4.7 minutes, longest 5.8; partial: median 3.9, longest 7.6), a
- * scan's audit can wait up to `SCAN_AUDIT_WAIT_S` (300 s) for the crawler's one browser
- * and then run, and a scan is allowed up to `MAX_SCAN_DURATION` (2,400 s).
+ * scan's audit could wait up to `SCAN_AUDIT_WAIT_S` for the crawler's one browser and then
+ * run (300 s when those scans ran, 120 s since launch checklist 3.35), and a scan is
+ * allowed up to `MAX_SCAN_DURATION` (2,400 s).
  *
  * No number, then: any figure here is one the next slow scan breaks. "A few minutes" is
  * what that range supports (21 of the 25 took between two and six minutes), and "usually"

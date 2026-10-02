@@ -1284,8 +1284,10 @@ homepage's redirects must finish within **60 s** in total, or it ends as `TIMEOU
 no browser started. Once it has the browser, one run is cut
 at **266 s** for the three pages intake asks for (`crawl_run_cap_s`), ending as
 `TIMEOUT` with nothing kept. A scan's own audit waits for the browser at most
-**300 s**, one capped run ahead of it and a margin, and records `BROWSER_BUSY` when
-that runs out (the scan goes on); its run is cut at **244.5 s**.
+**120 s** (it was 300 s until 2026-10-03; launch checklist 3.35): long enough for a run
+ahead that finishes, not for one that hangs until its own cap cuts it (244.5 s for an
+audit, 266 s for the crawl above). It records `BROWSER_BUSY` when that runs out, and the
+scan goes on without a Technical Foundation; its own run is cut at **244.5 s**.
 
 #### `GET /api/v1/clients`
 **Auth required.** Cursor-paginated, newest first.
@@ -2067,7 +2069,9 @@ Technical Foundation as `NOT_YET_MEASURED`.
 - `BROWSER_BUSY` (2026-10-02): the API reads one page at a time in its one
   browser, and another read held it for the whole wait, so no browser was started
   for this audit. Only the audit inside a scan (phase 6) records it, after waiting
-  **300 s**; the scan goes on to scoring, alerts and fixes. The robots.txt and
+  **120 s** (300 s until 2026-10-03: a run ahead that finishes is waited out, one that
+  hangs until its own cap is not); the scan goes on to scoring, alerts and fixes,
+  without a Technical Foundation. The robots.txt and
   sitemap facts, read before the wait, are kept. `POST /scans/{scanId}/audit` never
   stores it: after **60 s** it answers `429 rate-limited` and the audit already
   stored for the scan is kept.

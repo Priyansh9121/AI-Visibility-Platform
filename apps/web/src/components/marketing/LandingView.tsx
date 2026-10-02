@@ -174,8 +174,9 @@ export function LandingView({
                 minutes was a scan budget the product enforces. It is not:
                 nothing cuts a scan at 300 s (the deadline is
                 `MAX_SCAN_DURATION`, forty minutes), and a scan's audit can
-                wait up to `SCAN_AUDIT_WAIT_S` (300 s) for the crawler's one
-                browser before it runs. Read from the dev database on
+                wait up to `SCAN_AUDIT_WAIT_S` (120 s since launch checklist
+                3.35; it was 300 s) for the crawler's one browser before it
+                runs. Read from the dev database on
                 2026-10-03, 9 of 25 finished scans took longer than five
                 minutes (median 4.5, longest 7.6); 21 took between two and six.
                 So no figure, and "usually", which is what that range supports.
