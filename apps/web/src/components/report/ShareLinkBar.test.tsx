@@ -83,10 +83,10 @@ afterEach(() => {
 });
 
 describe('what the lead sentence promises', () => {
-  it('says the link expires after 30 days and who to share it with', () => {
+  it('says the link lasts 30 days from when it is created and who to share it with', () => {
     const el = mounted();
     expect(el.textContent).toContain(
-      'Creates a link anyone can open without an account. Links expire after 30 days. Only share it with the client this report is about.',
+      'Creates a link anyone can open without an account. Links last 30 days from when they are created. Only share it with the client this report is about.',
     );
   });
 
@@ -102,7 +102,7 @@ describe('what the lead sentence promises', () => {
     // sentence reads the same constant: change it and the sentence follows.
     expect(RETENTION.shareLinkDays).toBe(30);
     const el = mounted();
-    expect(el.textContent).toContain(`Links expire after ${counted(RETENTION.shareLinkDays, 'day')}.`);
+    expect(el.textContent).toContain(`Links last ${counted(RETENTION.shareLinkDays, 'day')} from when they are created.`);
     act(() => root?.unmount());
     root = null;
     document.body.innerHTML = '';
@@ -111,12 +111,12 @@ describe('what the lead sentence promises', () => {
     const mutable = RETENTION as { shareLinkDays: number };
     try {
       mutable.shareLinkDays = 45;
-      expect(mounted().textContent).toContain('Links expire after 45 days.');
+      expect(mounted().textContent).toContain('Links last 45 days from when they are created.');
       act(() => root?.unmount());
       root = null;
       document.body.innerHTML = '';
       mutable.shareLinkDays = 1;
-      expect(mounted().textContent).toContain('Links expire after 1 day.');
+      expect(mounted().textContent).toContain('Links last 1 day from when they are created.');
     } finally {
       mutable.shareLinkDays = held;
     }

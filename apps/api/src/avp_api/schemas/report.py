@@ -429,6 +429,10 @@ class ReportOut(ApiModel):
     # column beside it, is deliberately not projected. For the AGENCY only: null
     # on the public routes (`build_public_report`), whatever the scan ended with.
     scan_error_code: str | None = None
+    # When this scan's LIVE share link ends (token set, expiry in the future); null
+    # when none is live. Never the token or the URL. For the AGENCY only: null on
+    # the public routes (`build_public_report`), like `scan_error_code`.
+    share_expires_at: datetime | None = None
     generated_at: datetime
     scanned_at: datetime | None = None
 

@@ -21705,3 +21705,51 @@ Drift check (north-star §8): Layer 0, Trust substrate (Google sign-in); lifecyc
 - The Python and JavaScript licence audits pass (`pnpm licenses list --json`).
 - **OpenAPI and `api.gen.ts`:** the bar's check failed on the first run: the reworded docstrings of the four Google routes are their OpenAPI descriptions, and the implementer had not regenerated. Both files were regenerated (descriptions only, no shape); regenerating again changes neither, and shared-types (53, 0 fail), its typecheck and the web typecheck were re-run on them.
 - Exit codes were read from files.
+
+# Withdraw is offered whenever a report has a live link, and the share bar says when the link stops working
+
+**2026-10-02, the ninth entry of the day; branch `pilot-fixes`, the founder's pilot-blockers follow-up (launch checklist 3.25).** One item, one commit; it closes 3.24's Medium (same PR).
+
+**Render: nothing to set. No migration, no new dependency or outbound host.** One response field added (below); OpenAPI and `api.gen.ts` regenerated.
+
+Drift check (north-star §8): Layer 1, Delivery (the share link); lifecycle phase: Activation (Epic 9), a pilot agency sending, and taking back, a report.
+
+## 1. What changed
+
+- **Founder decision (final):** Withdraw is available without minting a link first, whenever the scan has a live link; the lead says links last 30 days from when they are created.
+- **API:** the signed-in report (`GET /scans/{scanId}/report`) carries `shareExpiresAt`: the live link's expiry (a token set and an expiry in the future), else null. It is always null on the public shared report and its PDF, by the same blanking `scanErrorCode` uses, and it never carries the token or the URL.
+- **The share bar** (`ShareLinkBar.tsx`, given `shareExpiresAt` by the report page):
+  - the lead: "Creates a link anyone can open without an account. Links last 30 days from when they are created. Only share it with the client this report is about." (30 from the constant the legal pages pin to the API);
+  - whenever a link is live — from the payload, or after "Get shareable link" in this visit — one line, "The link works until <date>.", and **Withdraw link** with its existing confirm step. No press of "Get shareable link" is needed first. After a mint the date is the mint's `expiresAt`; after a withdrawal the line and the button go;
+  - a failed "Get shareable link" while a link is live keeps the line and Withdraw and shows the failure beside them;
+  - a failed scan (3.24) shows its sentence and no Get button, and, if a link minted earlier is still live, the line and Withdraw too — also after a 409. This is what makes such a link reachable again.
+- `docs/api-contracts.md`: `shareExpiresAt`.
+
+## 2. The review
+
+- **UI review (sonnet):** **PASS WITH NITS**, with two Mediums, both fixed:
+  - "Get shareable link" stayed enabled while a withdrawal was in flight, so the two requests could race and the screen could show the opposite of the server: it is now disabled while a withdrawal is confirming or running;
+  - the end date was the expiry's UTC calendar day with no time, so a reader in Sydney or New York could be shown the wrong day, and "until 4 Nov" read as the end of that day: the line now uses the product's stamp, "The link works until 04 Nov 2026, 09:30 UTC.".
+  - **Lows taken:** a failed scan with a live link said it "cannot be shared" just above the link's end date; it now adds "Its existing link works until it is withdrawn or ends."; a 409 refusal is announced (the lead is an always-mounted polite live region) although the button leaves the page; the date line stays during "Creating…" (Withdraw disabled meanwhile); a non-null assertion replaced by a small `ReadyLink` component.
+  - **Left:** after "Get shareable link" from a link live in the payload, the button leaves the page and focus falls to the page with nothing announced. Moving focus to the new link field would overturn existing tests that pin "a link only just made does not take focus"; a status message would be new copy. Listed for the founder. The re-press question (below) was judged not misleading, because the end date is always shown while a link is live.
+
+## Found, not fixed
+
+- **Pressing "Get shareable link" on a live link still moves its end to 30 days from that press** (Epic 9.21: the same token, a new expiry), while the new lead says links last 30 days from when they are created. The bar shows the real end date after every press. Founder: keep it, or have a press on a live link return it unchanged.
+
+## Verified
+
+**API pytest 2344 → 2350 (+6); web vitest 1455 → 1473 (+18); both floors raised to match.**
+- **API** (`test_share_expiry_on_report.py`, new): never shared → null; a live link → the mint's `expiresAt`, with no token in the response; expired → null; after the withdrawal → null; a failed scan shared earlier still reports its live link; always null on the public report and its PDF payload. `test_share_link.py`'s byte-identical test lets the field differ and asserts the public one is null.
+- **Web** (`ShareLinkBar.liveLink.test.tsx`, new; the lead's assertions in `ShareLinkBar.test.tsx` updated): Withdraw and the end date with no mint, and Get still offered; confirm, withdraw and keep from there; the date after a mint, from a live and from a no-link start; nothing live → no Withdraw and no date; a failed Get while live keeps both and shows the failure; a failed scan with and without a live link, and a 409 while live; Get disabled during a withdrawal; the stamp format; the date line during "Creating…".
+- **Negative controls:**
+  - the public blanking removed fails 2 tests (the public payload and the byte-identical test); restored and checked with `cmp`;
+  - the bar made to ignore `shareExpiresAt` fails 7 of the 12 live-link tests (the implementer's run, restored and checked).
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, shared-types 53 (0 fail), design-system 859, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`).
+- OpenAPI and `api.gen.ts` were regenerated for `shareExpiresAt`; regenerating again changes neither.
+- Exit codes were read from files.
