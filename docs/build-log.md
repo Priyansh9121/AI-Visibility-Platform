@@ -21549,3 +21549,44 @@ Drift check (north-star §8): Layer 1, Delivery (the report on screen and in the
 - The Python and JavaScript licence audits pass (`pnpm licenses list --json`).
 - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# Only a POST to the Stripe webhook skips the Origin check, and a refused write logs the host it came from
+
+**2026-10-02, the sixth entry of the day; branch `pilot-fixes`, the founder's pilot-blockers follow-up (launch checklist 3.21).** One item, one commit.
+
+**Render: nothing to set. No endpoint, schema, dependency or outbound host change.**
+
+Drift check (north-star §8): Layer 0, Trust substrate (the Origin check and its log); lifecycle phase: Activation (Epic 9), the guard on every signed-in write a pilot agency makes.
+
+## 1. What changed
+
+- **The exemption is one method and one path** (`origin_check.py`, `main.py`). `OriginCheckMiddleware` takes `exempt` as (METHOD, path) pairs, matched exactly, and the app exempts only `("POST", "/api/v1/billing/webhook")`. A PUT, PATCH or DELETE to that path is checked like any other write: refused with `403 origin-not-allowed` when it names an unlisted origin, or carries the session cookie and no Origin. Stripe calls the API host directly with a POST, so deliveries are unaffected.
+- **The refusal log names the host, and only the host.** The founder's condition was "only if that is safe for facts-only logging". Judged safe: a DNS host name is a name, which the facts-only rule allows, and it is not a secret, token or email; but the header is chosen by whoever sends the request, so it is logged only in a strictly parsed, bounded form. `security.origin_refused` keeps `method`, the redacted `path` and `origin_present`, and gains one of:
+  - `origin_host`: the lower-cased host of a **bare** http or https origin (no userinfo, backslash, path, query or fragment), when the host is a DNS name of at most 253 characters made of letter-digit-hyphen labels. Never the scheme, port or anything else from the header;
+  - `origin_kind="ip"`: an IP literal, including the spellings a browser reads as one (a last label that is a number, such as `2130706433`, `0x7f000001` or `127.1`, and IPv6 with a zone). The address is not logged;
+  - `origin_kind="opaque"`: the literal `null`;
+  - `origin_kind="unparsed"`: anything else, including control characters, non-ASCII, a trailing dot, or a value a browser would never send.
+  - A DNS name that merely contains an address (`10-0-0-1.sslip.io`) is a name and is logged; `docs/api-contracts.md` says so.
+- `docs/api-contracts.md`: the exemption is POST only; the refusal log's fields.
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS.** Checked clean: exact (method, decoded path) matching with no root path or prefix in play (the web app's rewrite keeps `/api/v1`); percent-encoded forms decode to the path the router matches; HEAD and OPTIONS are never checked; only fixed words or `[a-z0-9.-]{1,253}` can reach the log, so no injection into the key=value output and no way for an email's `@` to survive; length is checked before the label pattern; the allow/refuse decision is unchanged.
+  - **Fixed:** IPv4 written as a single number, in hex or octal, or shortened (`http://2130706433`, `http://10.1`) passed as a host name and was logged (now `ip`); a value that is not a bare origin (`http://alice@gmail.com`, a backslash, a path) was reduced to a host Python's parser chose (now `unparsed`); the control-character and non-ASCII guard had no test (cases added); one test name no longer said what it checked (renamed).
+  - **Left, as the founder asked for the host only:** logging the scheme and whether a port was present would help an operator see why their own origin was refused (`http` against `https`, a port); both would be as safe as the host.
+  - **Noted:** real Stripe deliveries carry neither an Origin nor a cookie, so the rule would not refuse them with or without the exemption; its remaining effect is that a browser's POST to the webhook reaches the signature check and gets a 400. Removing the exemption entirely would also be safe; that is the founder's call.
+
+## Verified
+
+**API pytest 2250 → 2308 (+58); floor raised to match.**
+- PUT, PATCH and DELETE to the exact webhook path are refused with a foreign Origin, and with the session cookie and no Origin; with neither they are not refused by the Origin check (routing answers). The POST stays exempt whatever it carries, and only the exact path is exempt (both existing tests unchanged in what they assert; the kwarg test now checks `exempt == {("POST", WEBHOOK)}`).
+- The refusal log: `https://Evil.Example` → `origin_host="evil.example"`; an origin with userinfo, a port and a password → `unparsed`, and "user", "secret" and "8443" appear nowhere in the log or the printed output; IP literals in every spelling above → `ip` with no address; `null` → `opaque`; a 300-character host, an underscore, a `%`, control characters and non-ASCII → `unparsed`; no Origin → neither field. A parser table of the edge cases.
+- **Negative control:** the exemption made to ignore the method fails the three PUT/PATCH/DELETE tests; restored and checked with `cmp`.
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, shared-types 53 (0 fail), design-system 859, web 1434, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`).
+- OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
