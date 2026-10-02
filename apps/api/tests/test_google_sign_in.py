@@ -237,7 +237,7 @@ async def test_an_unverified_google_email_proves_nothing(
 
 
 async def test_a_new_address_creates_nothing_until_the_agency_is_named(
-    client: AsyncClient, google: FakeGoogleProvider, engine
+    client: AsyncClient, google: FakeGoogleProvider, engine, settings: Settings
 ) -> None:  # noqa: ANN001
     google.identities["code-1"] = identity("new@example.com", name="Dana Whitfield")
     state = await start(client)
@@ -270,7 +270,7 @@ async def test_a_new_address_creates_nothing_until_the_agency_is_named(
     assert body["user"]["signInMethods"] == ["google"]
     assert body["agency"]["name"] == "Northlight Partners"
     assert body["seats"] == {"used": 1, "limit": 3}
-    assert "avp_session" in done.cookies
+    assert settings.session_cookie_key in done.cookies
 
     me = await client.get(f"{BASE}/auth/me")
     assert me.status_code == 200
@@ -349,6 +349,30 @@ async def test_a_password_account_links_by_verified_email_and_signs_in(
         user = (await s.execute(select(User).where(User.id == user_id))).scalar_one()
         assert user.google_sub == "sub-dana"
         assert user.last_login_at is not None
+
+
+async def test_the_callback_sets_the_host_prefixed_cookie_when_secure(
+    client: AsyncClient, google: FakeGoogleProvider
+) -> None:
+    """The callback sets the session cookie on whatever host serves it: first-party
+    for the web app, `__Host-` prefixed, Lax, with no Domain."""
+    await sign_up_with_password(client, "dana@northlight.example")
+    google.identities["code-1"] = identity("dana@northlight.example", sub="sub-dana")
+    # Swap in secure settings over the ones the `google` fixture left in place.
+    app = client._transport.app  # noqa: SLF001
+    configured = app.dependency_overrides[get_settings]()
+    secure = configured.model_copy(update={"session_cookie_secure": True})
+    app.dependency_overrides[get_settings] = lambda: secure
+
+    state = await start(client)
+    resp = await callback(client, code="code-1", state=state)
+    landed(resp, "/dashboard")
+
+    header = resp.headers["set-cookie"]
+    assert header.startswith("__Host-avp_session=")
+    attrs = {part.strip().lower() for part in header.split(";")[1:]}
+    assert {"secure", "httponly", "samesite=lax", "path=/"} <= attrs
+    assert not any(a.startswith("domain") for a in attrs)
 
 
 async def test_once_linked_the_sub_wins_over_a_changed_email(

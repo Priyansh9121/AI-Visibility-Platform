@@ -40,17 +40,19 @@ import type {
 } from '@avp/shared-types';
 import { isProblemDetail } from '@avp/shared-types';
 
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000/api/v1';
+// Same-origin: the web app's next.config rewrites /api/v1 to the API, so the
+// session cookie is first-party. No environment variable chooses this.
+const API_BASE = '/api/v1';
 
 /**
  * Where "Sign in with Google" sends the browser — Epic 20.
  *
  * A NAVIGATION, not a request: the API answers with a redirect to Google,
- * and a `fetch` cannot follow a cross-site redirect into a sign-in page. So
- * the button is an anchor to this URL, and the API's own cookie rides back
- * on the callback's redirect the same way it rides on a `/auth/login`
- * response. Exported for exactly that anchor and nothing else.
+ * and a `fetch` cannot follow a redirect into a sign-in page. So the button
+ * is an anchor to this URL, the web app's own `/api/v1/auth/google/start`,
+ * which the rewrite hands to the API. The callback also comes back through
+ * the web app, so the cookie it sets lands on the web host. Exported for
+ * exactly that anchor and nothing else.
  */
 export const GOOGLE_SIGN_IN_URL = `${API_BASE}/auth/google/start`;
 
@@ -130,11 +132,11 @@ async function requestBlob(
 /**
  * Hand a blob to the browser as a download, using the server's filename.
  *
- * A plain `<a href>` to the API would be simpler and is wrong here: the API is
- * a different origin in every environment this runs in, so the download would
- * depend on the session cookie surviving a cross-origin top-level navigation —
- * which `SameSite` governs and which changes with deployment topology. Fetching
- * with credentials and clicking a blob URL works the same everywhere.
+ * Fetched with credentials and handed over as a blob URL rather than reached by
+ * a plain `<a href>`: the PDF routes are POSTs (the shared one carries its
+ * token in the body), and a fetch shows a failure as a sentence where a
+ * navigation would leave the page. The API is same-origin now (`/api/v1`), so
+ * the session cookie rides along either way.
  *
  * The object URL is revoked afterwards. Left alive it pins the whole file in
  * memory until the tab closes, and a report is not small.

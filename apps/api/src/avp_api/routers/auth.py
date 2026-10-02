@@ -58,26 +58,28 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 def _set_session_cookie(response: Response, token: str, settings: Settings) -> None:
     response.set_cookie(
-        key=settings.session_cookie_name,
+        key=settings.session_cookie_key,
         value=token,
         max_age=settings.session_ttl_seconds,
         # httpOnly: XSS cannot read this cookie. The single most valuable
         # property of the session-cookie approach over a token in localStorage.
         httponly=True,
         secure=settings.session_cookie_secure,
-        samesite=settings.session_cookie_samesite,
-        domain=settings.session_cookie_domain,
+        # First-party (the web app serves this API under its own origin), so Lax.
+        # Path=/ and no Domain are what the `__Host-` prefix requires.
+        samesite="lax",
         path="/",
     )
 
 
 def _clear_session_cookie(response: Response, settings: Settings) -> None:
+    # A browser ignores the deletion of a `__Host-` cookie unless it carries the
+    # same Secure and Path=/ as the cookie it removes.
     response.delete_cookie(
-        key=settings.session_cookie_name,
+        key=settings.session_cookie_key,
         httponly=True,
         secure=settings.session_cookie_secure,
-        samesite=settings.session_cookie_samesite,
-        domain=settings.session_cookie_domain,
+        samesite="lax",
         path="/",
     )
 
@@ -170,27 +172,33 @@ async def login(
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(
-    response: Response,
     principal: PrincipalDep,
     store: SessionStoreDep,
     settings: SettingsDep,
 ) -> Response:
     await store.revoke(principal.session_token)
-    _clear_session_cookie(response, settings)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    # Clear it on the Response that is returned: FastAPI does not merge the
+    # injected `response`'s headers into one the route builds itself, so a
+    # cookie cleared only on that one never reaches the browser.
+    done = Response(status_code=status.HTTP_204_NO_CONTENT)
+    _clear_session_cookie(done, settings)
+    return done
 
 
 @router.post("/logout-all", status_code=status.HTTP_204_NO_CONTENT)
 async def logout_everywhere(
-    response: Response,
     principal: PrincipalDep,
     store: SessionStoreDep,
     settings: SettingsDep,
 ) -> Response:
     """Revoke every session for the caller, on every device."""
     await store.revoke_all_for_user(principal.user_id)
-    _clear_session_cookie(response, settings)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    # Clear it on the Response that is returned: FastAPI does not merge the
+    # injected `response`'s headers into one the route builds itself, so a
+    # cookie cleared only on that one never reaches the browser.
+    done = Response(status_code=status.HTTP_204_NO_CONTENT)
+    _clear_session_cookie(done, settings)
+    return done
 
 
 @router.post("/change-password", response_model=MeOut)

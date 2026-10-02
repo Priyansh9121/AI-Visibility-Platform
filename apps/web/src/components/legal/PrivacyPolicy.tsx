@@ -179,7 +179,7 @@ export function PrivacyPolicy(): JSX.Element {
       <PageSection heading="Cookies and your browser">
         <Points>
           <Point term="One cookie.">
-            avp_session keeps you signed in. It is set when you sign in, cannot be read by scripts
+            __Host-avp_session keeps you signed in. It is set when you sign in, cannot be read by scripts
             on the page, and lasts {counted(RETENTION.sessionDays, 'day')} or until you sign out.
           </Point>
           <Point term="Two preferences.">

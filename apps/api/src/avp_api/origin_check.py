@@ -29,7 +29,8 @@ WHAT IS NOT CHECKED
 
 The cookie is looked for by NAME, with any value: the session is not looked up,
 so a refused request costs no Redis or Postgres call, and a stale or forged
-cookie is refused as readily as a live one. The name is `SESSION_COOKIE_NAME`.
+cookie is refused as readily as a live one. The name is `Settings.session_cookie_key`
+(`__Host-` prefixed when Secure).
 It is read with Starlette's own cookie parser, the one behind `request.cookies`
 and so behind `current_principal` — but out of every `Cookie` header rather than
 only the first, which can only refuse more, never less.

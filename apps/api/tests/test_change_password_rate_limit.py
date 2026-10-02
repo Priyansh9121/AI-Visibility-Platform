@@ -184,7 +184,7 @@ async def test_a_limited_request_neither_verifies_the_password_nor_revokes_sessi
         assert (
             await _change(client, "wrong-password", NEW_PASSWORD, ip=f"198.51.100.{i}")
         ).status_code == 401
-    cookie = client.cookies.get("avp_session")
+    cookie = client.cookies.get(settings.session_cookie_key)
     r = redis_module.get_redis(settings)
     sessions_before = sorted([k async for k in r.scan_iter("sess:*")])
     assert sessions_before
@@ -201,7 +201,7 @@ async def test_a_limited_request_neither_verifies_the_password_nor_revokes_sessi
     assert resp.status_code == 429
     assert calls == []
     assert "set-cookie" not in resp.headers
-    assert client.cookies.get("avp_session") == cookie
+    assert client.cookies.get(settings.session_cookie_key) == cookie
     assert sorted([k async for k in r.scan_iter("sess:*")]) == sessions_before
     me = await client.get(f"{BASE}/auth/me", headers={IP_HEADER: "198.51.100.99"})
     assert me.status_code == 200

@@ -21419,3 +21419,79 @@ Drift check (north-star §8): Layer 1, Delivery (sign-up, sign-in and the intake
 - The Python and JavaScript licence audits pass (`pnpm licenses list --json`).
 - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# The web app serves the API under its own origin, so the session cookie is first-party, SameSite=Lax and __Host-
+
+**2026-10-02, the fourth entry of the day; branch `pilot-fixes`, the founder's pilot-blockers follow-up (launch checklist 3.7).** One item, one commit.
+
+**Render: four settings, in order (also in the PR description).** Before merging: (1) on the **web** service set `API_PROXY_TARGET` to the API service's **internal** address (Render → API service → Connect → Internal, `http://<name>:<port>`); if Render shows no internal address, stop and say so; (2) in Google Cloud Console add `https://ai-visibility-platform-1.onrender.com/api/v1/auth/google/callback` as an authorised redirect URI, keeping the old one. After both deploys are live: (3) on the **API** service set `GOOGLE_OAUTH_REDIRECT_URL` to that same address; (4) delete `SESSION_COOKIE_SAMESITE` and `SESSION_COOKIE_DOMAIN` from the API service and `NEXT_PUBLIC_API_BASE_URL` from the web service (all three are now ignored). Everyone is signed out once, because the cookie's name changes. No migration, no new dependency or outbound host.
+
+Drift check (north-star §8): Layer 0, Trust substrate (the session cookie and the path every browser call takes), with Layer 1's web client changed to reach it; lifecycle phase: Activation (Epic 9), signing in and staying signed in.
+
+## 1. The probe the founder asked for first
+
+- **Render's Next.js runtime supports it.** The deployed web app answers with `x-powered-by: Next.js` and `x-nextjs-cache`: it is `next start` on a Node web service, which runs rewrites to an external URL (a static export would not).
+- **The browser's Origin reaches the API through it.** Next 15.5.23's rewrite proxy (`next/dist/server/lib/router-utils/proxy-request.js`) is `http-proxy` with `changeOrigin: true` and no `xfwd`. A minimal Next app on this exact version, rewriting to an echo server, passed `Origin`, `Cookie`, `X-Forwarded-For`, `CF-Connecting-IP`, the body and the query string through unchanged, and returned two `Set-Cookie` headers, a `problem+json` 403, a 204 and a 302 `Location` unchanged.
+- **In real browsers** (Playwright: Chromium, Firefox and WebKit), a same-origin `fetch` POST through the proxy carried the page's real `Origin`, including on a page whose referrer policy is `no-referrer` (the token pages'); a same-origin GET carried none, which the Origin check never needs. A `__Host-` cookie set through the proxy was stored and sent back by Chromium and Firefox on `http://localhost`; WebKit does not store a `Secure` cookie on plain http, which is why local development uses the bare name.
+- **One thing the probe found that the brief did not name: the client IP.** The per-IP rate limits read the leftmost `X-Forwarded-For` (or `CLIENT_IP_HEADER`). If the web app proxied to the API's *public* URL, a second Render/Cloudflare edge would stand in front of the API and could replace those headers with the web service's own address, putting every visitor in one bucket. Through the API's **internal** address the API receives exactly the headers the web's edge set, the same position as a direct call today. So the target must be the internal address, and the build refuses the public one.
+
+## 2. What changed
+
+- **Web** (`next.config.mjs`, `lib/api.ts`):
+  - The browser calls `/api/v1` on the web app's own origin; one rewrite hands `/api/v1/:path*` to `${API_PROXY_TARGET}/api/v1/:path*`. `NEXT_PUBLIC_API_BASE_URL` is no longer read anywhere (it is set on Render today; had the code kept reading it, the web would have kept calling the API cross-site).
+  - `API_PROXY_TARGET` is server-only and validated by `apiProxyTarget()`: http or https, an origin only (no credentials, path, query or fragment), never echoed in an error. In a production build it is required, and an `onrender.com` host is refused with a sentence pointing at the internal address. Outside production it defaults to `http://localhost:8000`. Rewrites are fixed at build time, so a change needs a rebuild (Render redeploys on an env change).
+  - `experimental.proxyTimeout` is 150 s: `POST /clients/{id}/prompt-runs` can take about 122 s, and Next's default is 30 s.
+  - "Sign in with Google" is an anchor to same-origin `/api/v1/auth/google/start`; the callback must come back through the web host too (founder step 3), because the existing-user callback sets the session cookie on its own redirect.
+- **Proxy failures stay out of the logs** (`src/instrumentation.ts`, `lib/proxyLogRedaction.ts`). Next prints `Failed to proxy <full target URL>` when the API does not answer, and warns with the request's path and query when a body passes its 10 MB clone limit. Both lines now drop the query and fragment and replace a `/reports/<token>` remainder with `/reports/…` (the two open routes `/reports/shared` and `/reports/shared/pdf` are kept, as `logs.py` does); the error argument is reduced to its code. Every other console line passes through.
+- **API** (`config.py`, `routers/auth.py`, `deps.py`, `main.py`):
+  - `session_cookie_samesite` and `session_cookie_domain` are gone; the cookie is always `SameSite=Lax`, `Path=/`, `HttpOnly`, with no `Domain`. Stale values left in an environment are ignored (`extra="ignore"`).
+  - `session_cookie_key` is `__Host-avp_session` when Secure (forced in staging and production) and the bare `avp_session` on local http; `SESSION_COOKIE_NAME` must be a plain token not starting with `__`. The session reader and the Origin check use the key.
+  - **Logout and logout-all now actually clear the cookie.** Both returned a freshly built `Response`, and FastAPI does not merge the injected response's headers into one the route builds, so the clearing `Set-Cookie` never reached the browser (the session was revoked server-side, so this was harmless until now; a browser keeping a dead `__Host-` cookie is not).
+  - CORS is unchanged. `CORS_ALLOW_ORIGINS` now matters as the Origin check's allow-list for writes: the browser still sends the web app's origin on a same-origin POST and the proxy passes it through. No value changes.
+- **Docs:** `docs/api-contracts.md` (the cookie, first-party, why Lax and not Strict); `apps/api/.env.example`; `infra/deploy/README.md` (the requirements table: `API_PROXY_TARGET`, the Google redirect URL, the cookie); `docs/runbook.md` (the client-IP probe now goes through the web host, and a 429 is checked from a second network for a shared bucket); `/privacy` names the deployed cookie, `__Host-avp_session` (a fact the page states; the sentence is otherwise unchanged).
+
+## 3. The review
+
+- **Security review (opus): PASS WITH NITS.** Checked clean: cookie set and clear, the reader and the Origin check on one key, the name validator, no way to plant a `__Host-` cookie (public suffix, no Domain), the logout fix, proxied writes passing the Origin check, no host injection or traversal beyond the API's own port, the external destination absent from the client build manifest, log redaction, the client-IP reasoning, CSRF (Lax plus the Origin check), stale env vars.
+  - **Medium, fixed:** nothing refused the API's public URL as the target, and a founder following checklist 1.3's "11th answers 429: done" would read a shared bucket as safe. A production build now refuses an `onrender.com` target (loopback is not refused, so a local `next build` against a local API still works); the runbook's probe has the second-network check, and checklist 1.3 is rewritten in this branch's checklist entry.
+  - **Medium, its own item:** login CSRF through the Google callback (the `state` is not bound to the browser) now works in every browser, since the callback's cookie is first-party. That is 3.22, the next commit on this branch, before pilots use Google sign-in.
+  - **Lows taken:** Next's body-limit warning printed the path and query (now redacted; the old build printed a planted token, the new one does not); `/privacy` named the old cookie; two stale texts (`saveBlob`'s comment, and `api-contracts.md` saying the browser never makes a cross-site call, where Google's redirect back is one).
+  - **Lows checked and dropped:** "a token page's `no-referrer` policy could make a same-origin POST send `Origin: null`": not so in Chromium, Firefox or WebKit (above). "Next's proxy appends to `X-Forwarded-For`" (the UI reviewer): it does not; there is no `xfwd`, and the echo server received the header unchanged.
+- **UI review (sonnet): PASS WITH NITS.** Nothing a user sees changed; every API URL is rooted at `/api/v1`, so it resolves from any page depth; the Google anchor keeps no `target` and no `rel`; the token-route headers are unchanged. Its one Low (the stale `saveBlob` comment) is fixed.
+
+## Found, not fixed
+
+- **The web-to-API hop on the internal address is plain http**, so passwords and session tokens cross Render's private network unencrypted; the same as Render's own edge-to-service hop.
+- **Old `avp_session` sessions stay in Redis until their 14-day TTL.** No browser can present them after the rename, and nothing revokes them; harmless.
+- **Deploy gap.** Between the API's deploy and the web's, nobody can sign in (the new Lax cookie is not stored from the old web app's cross-site calls). Between the deploy and founder step 3, Google sign-in does not complete.
+
+## Verified
+
+**API pytest 2226 → 2241 (+15); web vitest 1413 → 1433 (+20); both floors raised to match.**
+- **API** (`tests/test_session_cookie.py`, new, and additions to the auth, Origin-check and Google tests):
+  - with Secure on, login sets `__Host-avp_session` with `Secure`, `HttpOnly`, `Path=/`, `SameSite=lax` and no `Domain`; on local http it is `avp_session` without `Secure`;
+  - logout and logout-all send a clearing `Set-Cookie` carrying `Secure`, `Path=/` and `Max-Age=0`;
+  - a deployed `Settings` built with `SESSION_COOKIE_SAMESITE=none` and `SESSION_COOKIE_DOMAIN=.example.com` still gives Lax with no Domain;
+  - a `SESSION_COOKIE_NAME` starting with `__` or holding a separator is refused at boot;
+  - with Secure on, a write with no Origin carrying `__Host-avp_session` is refused, and one carrying only a bare `avp_session` is treated as signed out;
+  - the Google callback's existing-user path sets `__Host-avp_session` when Secure.
+  - Existing tests that hard-coded `avp_session` now read the name from settings; no assertion was weakened.
+- **Web** (`nextConfig.test.ts`, `proxyLogRedaction.test.ts`, `legalPages.test.tsx`):
+  - exactly one rewrite with the expected source and destination; a trailing slash and spaces normalised;
+  - a missing target refused in production, naming the variable; `localhost:8000` outside production; a path, query, fragment, credentials or another scheme refused without echoing a credential; an `onrender.com` target refused in production only (an internal `http://<name>:<port>` address and a look-alike host are accepted);
+  - the proxy timeout at least 130 s; no source file reads `NEXT_PUBLIC_API_BASE_URL`; the Google link is `/api/v1/auth/google/start`;
+  - the proxy-failure line and the body-limit warning lose their query and report tokens, the error becomes its code, other lines pass through, and installing twice wraps once;
+  - `/privacy` names `__Host-avp_session`.
+- **The real build** (a worktree copy, not the founder's checkout): `next build` without `API_PROXY_TARGET` fails with the named error, and with the API's public URL fails with the internal-address sentence; with a target it builds, a proxied POST reaches an echo API with the browser's Origin, and with the API down the logged lines carry no planted code, state or token (0 matches).
+- **Negative controls:**
+  - `secure=` removed from the cookie clear fails the logout and logout-all tests (2); restored and checked with `cmp`;
+  - the `onrender.com` refusal disabled fails its test (1); restored and checked with `cmp`;
+  - the build before the warning redaction printed a planted report token and query in Next's body-limit warning; the build after it printed `/reports/….pdf`.
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, shared-types 53 (0 fail), design-system 846, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`); no dependency was added.
+- OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
