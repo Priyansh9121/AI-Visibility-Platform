@@ -21841,3 +21841,31 @@ Drift check (north-star §8): the design system (Layer 1, Delivery, every workin
 - The Python and JavaScript licence audits pass (`pnpm licenses list --json`).
 - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# The launch checklist says what `pilot-fixes` closed, the order of the founder's steps to merge it, and what is still open
+
+**2026-10-02, the twelfth entry of the day; branch `pilot-fixes`, the founder's pilot-blockers follow-up (Finish).** Documentation only; one commit.
+
+**Render: the founder's steps for this branch are checklist 1.1c, in order** (the web service's `API_PROXY_TARGET` and the Google redirect URI before the merge; `GOOGLE_OAUTH_REDIRECT_URL` and the stale variables after it). No code, test, schema or dependency change.
+
+Drift check (north-star §8): no product layer; the launch plan. Lifecycle phase: Activation (Epic 9), what stands between the code and the first pilots.
+
+## 1. What changed
+
+- **Status line:** PRs #2, #3 and #4 are merged (`main` at `f1b7565`); this branch's PR targets `main`.
+- **1.1b** (`pre-pilot`'s merge) is marked merged; if its deployed check was not run, 1.1c's step 7 covers it.
+- **1.1c, new: merge `pilot-fixes`.** Before: copy the API's internal address (stop if Render shows none), set `API_PROXY_TARGET` on the web service, add the web host's Google callback in Google Cloud Console; merge at a quiet moment (nobody can sign in between the two deploys; everyone is signed out once). After: set `GOOGLE_OAUTH_REDIRECT_URL`, delete the three ignored variables, check sign-in, Google sign-in, the `__Host-avp_session` cookie, a scan and a share link with Withdraw in Chrome and Safari, run 1.3, remove the old redirect URI.
+- **1.3** now probes through the web host and checks a 429 from a second network, so one shared bucket is not read as safe (the 3.7 security review's Medium).
+- **Rows:** 3.7, 3.17 (both halves), 3.21–3.27 say **Done** with their commits; 3.2 records the speculation-rules prerender gap (and the shared-worker one, closed) that only the network-level control closes.
+- **New rows for the founder:** 3.28 a press of "Get shareable link" on a live link moves its end; 3.29 a link minted before a scan failed keeps serving; 3.30 a failed scan's score outside the dashboard and the report; 3.31 the report's own tertiary text under 4.5:1; 3.32 the client Technical screen's raw audit code; 3.33 two small focus details.
+
+## Verified
+
+- Every commit named in the rows is on the branch (`git log`), and each row's claim matches its build-log entry above.
+- The full bar on this tree, the branch's last (one run, exit codes read from files):
+  - API pytest 2367, workers 26, shared-types 53 (0 fail), design-system 875, web 1473; mypy 47 (ceiling 50); all six count gates through `assert_count.py` pass.
+  - ruff clean; all typechecks clean; the styleguide builds.
+  - Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database.
+  - The Python licence audit passes in both environments; `pnpm licenses list --json` audited by `js_license_audit.py`: 236 packages, 233 ok, 3 REVIEW (unchanged; none added by this branch), PASS.
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- **Over the branch:** API pytest 2226 → 2367, web vitest 1399 → 1473, design-system vitest 846 → 875; workers, shared-types and the mypy count unchanged.
