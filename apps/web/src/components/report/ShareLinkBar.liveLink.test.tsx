@@ -343,7 +343,7 @@ describe('a failed scan that was shared before it failed: what the bar asks and 
     expect(el.textContent).toContain(
       'Withdraw this link? Anyone who opens it will no longer see the report.',
     );
-    expect(el.textContent).not.toContain('removed for good');
+    expect(el.textContent).not.toContain('removed permanently');
   });
 
   it('stops offering a link made earlier in the visit for copying once the page knows the scan failed', async () => {
