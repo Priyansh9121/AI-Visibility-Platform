@@ -531,9 +531,10 @@ class TestTheDeadlineCatchesWhatALeaseCannot:
         )
         waves = math.ceil(prompts.MAX_PROMPTS / runner.PROMPT_CONCURRENCY)
         worst_case = (
-            # detection: 4 seed prompts at concurrency 3, 6 SERP queries at 3
+            # detection: 4 seed prompts at concurrency 3, 6 SERP queries at 3, each
+            # query at its ceiling: two attempts and the pause between them
             2 * cocitation.CO_CITATION_BOUND.ceiling
-            + 2 * serp.DEFAULT_TIMEOUT
+            + 2 * serp.QUERY_CEILING_S
             + prompts.GENERATOR_BOUND.ceiling
             + waves * slot
             # the audit: its side files before the browser, then its wait for the one
