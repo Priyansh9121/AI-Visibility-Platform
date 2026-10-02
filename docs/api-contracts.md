@@ -1204,8 +1204,38 @@ the database by `ck_clients_industry_matches_classification_status`.
 | `PROVIDER_RATE_LIMITED` / `PROVIDER_UNREACHABLE` / `PROVIDER_ERROR` | Upstream model call failed |
 | `PROVIDER_REFUSED` | Model declined to answer |
 | `PROVIDER_SCHEMA_VIOLATION` | Model answered, but its answer did not fit the classifier's schema (2026-09-11) |
-| `ROBOTS_DISALLOWED` | The site's robots.txt forbids AVPScanBot its homepage, so nothing was read (2026-09-29) |
+| `ROBOTS_DISALLOWED` | The site's robots.txt was read and forbids AVPScanBot its homepage, so nothing was read (2026-09-29) |
+| `ROBOTS_UNREACHABLE` | The site's robots.txt, or that of an address the site sent the crawler to, could not be read at all: no answer (a timeout, a refused connection, a name that does not resolve, a response that has not finished within 10 s), a 5xx, a 429, or redirects that never reach a file. The crawler fetches nothing without it, as for `ROBOTS_DISALLOWED`, but the site forbade nothing (2026-10-03, launch checklist 3.41) |
 | `ADDRESS_NOT_PUBLIC` | The site's address, an address the site sent the crawler to (a redirect hop or landing of a navigation, or a robots.txt redirect), or an address Chromium reports it connected to, is not on the public internet (private, loopback, link-local, carrier-grade NAT, multicast, reserved or unspecified, including those forms inside an IPv6 address), so the crawl stopped and nothing was kept (2026-10-01) |
+
+**What the crawler does with robots.txt** (`ai_crawlers.crawl_policy`, RFC 9309 §2.3.1;
+`ROBOTS_UNREACHABLE` changed the code reported, not what the crawler does): a 2xx is read
+whatever its content type, over its first 512,000 characters, and its rules for AVPScanBot
+(else `*`) decide; any other 4xx (404, 410, 403 …) means there is no file, so everything is
+allowed; a 429, a 5xx, no answer at all, or redirects that never reach a file mean the file
+cannot be read, so **nothing is fetched** and the outcome is `ROBOTS_UNREACHABLE`. Each
+request the crawler's gate makes (robots.txt, a HEAD hop of the homepage's redirects, the
+audit's sitemap) must finish within **10 s in total**, from the address check to its last
+byte, and reads no more than it needs: robots.txt is streamed and dropped at its first
+512,000 characters, a sitemap at its first 64 KiB (it is judged by whether it is XML, which
+its first characters say). A request that has not finished by then is "no answer": for
+robots.txt that is `ROBOTS_UNREACHABLE`; for a HEAD hop and the sitemap it is the failure
+they always had (the address is left as it is; no sitemap was found). Only a 2xx answer's
+body is read at all (a slow 404 is still "no file", a 5xx is its status), and only as
+text the gate can decode: plain, or gzip or deflate coded once (it asks for those two and
+no others) and inflated no further than four bytes a character of the cap, in UTF-8,
+UTF-16, UTF-32 (those two with a byte-order mark), ASCII, ISO-8859-n or Windows-125x, under
+any spelling Python knows for them (a response that names no charset is read as UTF-8).
+The charset is checked by name before a byte of the body is read, because decoding is CPU
+on the API's one event loop that no deadline can interrupt. Two codings stacked, any other
+coding (`br`, `zstd`, …), a corrupt stream, any other charset (UTF-7 or Shift_JIS as much as
+one that is not text at all), and a hop whose address is not http or https are "no answer"
+too. When a chain of redirects runs out, the last Location's robots.txt is read before it
+is handed on.
+All the reads before the browser starts, together, must finish within **60 s**
+(`PRE_BROWSER_BUDGET_S`): past that the run ends `TIMEOUT` and starts no browser. Rows
+stored before 2026-10-03 carry `ROBOTS_DISALLOWED` for the unreadable cases too; nothing
+recorded which a row was, so they are not re-labelled.
 
 `BROWSER_BUSY` is never a classification reason (2026-10-02): a read that cannot
 get the API's one browser is refused with a `429` (below) and the client is left as
@@ -1249,7 +1279,9 @@ that it is refused with the same `429` ("The crawler is busy with other pages ri
 now. Try again in a minute.") and **writes nothing**: no client is created here, a
 reclassified client keeps its classification, and a hand-run audit keeps the one
 stored. No client is left `unclassifiable` for it, because a site that was never
-read is not a site that could not be read. Once it has the browser, one run is cut
+read is not a site that could not be read. Before it asks for the browser, its reads of robots.txt and the
+homepage's redirects must finish within **60 s** in total, or it ends as `TIMEOUT` with
+no browser started. Once it has the browser, one run is cut
 at **266 s** for the three pages intake asks for (`crawl_run_cap_s`), ending as
 `TIMEOUT` with nothing kept. A scan's own audit waits for the browser at most
 **300 s**, one capped run ahead of it and a margin, and records `BROWSER_BUSY` when
@@ -1813,6 +1845,7 @@ interchangeable:
 | `NO_COMPETITOR_SET` (Citation Strength, v3) | Tiered domains were cited but no competitor set exists to normalise against — same code, same reason as Share of Voice | "no comparison was made" |
 | `CRAWL_DISALLOWED` | Technical Foundation: the site's robots.txt forbids AVPScanBot, so the audit read nothing (2026-09-29) | "Blocked by robots.txt" |
 | `CRAWL_ADDRESS_NOT_PUBLIC` | Technical Foundation: the site's address, or an address the site sent the crawler to, is not on the public internet, so the audit kept nothing (2026-10-01) | "Address not public" |
+| `CRAWL_POLICY_UNREADABLE` | Technical Foundation: the site's robots.txt could not be read at all (no answer, an error, redirects that never reach a file), so the audit read nothing; the site forbade nothing (2026-10-03) | "Could not read robots.txt" |
 
 An excluded dimension's weight is redistributed proportionally across the rest.
 **A null sub-score is never a zero** — a brand nobody mentioned has not been
@@ -1971,13 +2004,33 @@ are unchanged, and the agency check comes first: another agency's failed scan is
 | `partial` | Read the page, but a component had no signal (e.g. no date anywhere). Scored on what was measurable; `components` and `componentWeights` show the measured ones, and `excludedComponents` lists those left out with their reason (e.g., `content_freshness: NO_DATE_SIGNAL_AVAILABLE`). |
 | `failed` | Could not read the site. `technicalFoundation`, `components` and `componentWeights` are all empty. |
 
-A `failed` audit's `errorCode` says why. Two codes mean the crawler declined to
+A `failed` audit's `errorCode` says why. Three codes mean the crawler declined to
 read the site rather than failed to:
 
-- `ROBOTS_DISALLOWED` (2026-09-29): the site's robots.txt forbids AVPScanBot the
-  homepage. Page checks are `not_applicable` with that `detailCode`; a blanket
-  `Disallow: /` under `User-agent: *` still fails `indexable` with
+- `ROBOTS_DISALLOWED` (2026-09-29): the site's robots.txt was read and forbids
+  AVPScanBot the homepage. Page checks are `not_applicable` with that `detailCode`; a
+  blanket `Disallow: /` under `User-agent: *` still fails `indexable` with
   `ROBOTS_TXT_DISALLOW`, because robots.txt itself was read.
+- `ROBOTS_UNREACHABLE` (2026-10-03, launch checklist 3.41): the site's robots.txt, or
+  that of an address the site sent the crawler to (a redirect hop, or where the browser
+  landed), could not be read: no answer (a timeout, a refused connection, a name that
+  does not resolve, a response that had not finished within 10 s), a 5xx, a 429, or
+  redirects that never reach a file. The crawler fetches nothing then, exactly as for
+  `ROBOTS_DISALLOWED` (RFC 9309 §2.3.1.4; a 429 is treated like a 5xx), but the site
+  forbade nothing and the code says so. Until then these were stored as
+  `ROBOTS_DISALLOWED`. Only what was actually read is reported, so what the checks say
+  depends on whose file it was:
+  - **The site's own robots.txt could not be read.** Every check but `cwv_inp` is
+    `not_applicable` with that `detailCode`, `robots_txt_present` and `sitemap_present`
+    included, because a file that did not answer is not a missing one: nothing here is a
+    finding. The AI crawler table is `unknown` for every agent (`robotsReadable: false`).
+  - **Another host's file could not be read**, the site's own having been read (a redirect's, or
+    where the browser landed). The site's own checks are what they were: `robots_txt_present`
+    passes, or is the `NO_ROBOTS_TXT` warning when its own file was a 404; `sitemap_present`
+    passes, or is the `NO_SITEMAP_XML` warning when the sitemap it was allowed to ask for was
+    not there. They are findings, as they would be for any audit, and the report lists them.
+    The checks that needed the page are `not_applicable` with `ROBOTS_UNREACHABLE`.
+  A missing file (a 404 or any 4xx but 429) is an answer, not this: the crawl goes on.
 - `ADDRESS_NOT_PUBLIC` (2026-10-01): the run ends when the site's own
   address, a navigation's redirect hop or landing, robots.txt or its redirect,
   or an address Chromium reports it connected to is not on the public
@@ -2000,7 +2053,10 @@ Technical Foundation as `NOT_YET_MEASURED`.
   which has no timeout of its own, and the scan goes on (launch checklist 3.20). The
   facts robots.txt and the sitemap gave, read before the browser started, are
   kept; nothing the page gave is, because the cap can fall before the last egress
-  check has said the page's facts may be kept.
+  check has said the page's facts may be kept. An audit whose reads before the browser
+  (robots.txt, the sitemap, the homepage's redirects) have not finished within **60 s**
+  in total (`PRE_BROWSER_BUDGET_S`, 2026-10-03) ends `TIMEOUT` too, with no browser started;
+  it keeps the side files' facts if they had finished, and nothing otherwise.
 - `BROWSER_ERROR` (2026-10-03): kept apart from a reading like `TIMEOUT`. The
   browser can fail after the page was read and before the last egress check said
   what it showed may be kept (or while it closes), and what the page gave up to
@@ -2074,9 +2130,13 @@ instead of excluding it as `NOT_YET_MEASURED`, and the effective weights return
 to §6's table exactly (30/25/20/15/10). A **failed** audit leaves the dimension
 excluded — an unreadable site is not a measured zero.
 The exclusion reason is `NOT_YET_MEASURED`, except `CRAWL_DISALLOWED` for an
-audit failed with `ROBOTS_DISALLOWED` and `CRAWL_ADDRESS_NOT_PUBLIC` for one
-failed with `ADDRESS_NOT_PUBLIC`. All three give the same composite; only the
-reason differs, so `FORMULA_VERSION` did not change for either.
+audit failed with `ROBOTS_DISALLOWED`, `CRAWL_ADDRESS_NOT_PUBLIC` for one
+failed with `ADDRESS_NOT_PUBLIC` and `CRAWL_POLICY_UNREADABLE` for one failed with
+`ROBOTS_UNREACHABLE`. All four give the same composite, with the same dimensions
+excluded in the same cases; only the reason differs, so `FORMULA_VERSION` did not change
+for any. The reason enters `inputsDigest` when it is set (a score read as
+`CRAWL_POLICY_UNREADABLE` has its own digest), so a stored score keeps the digest and the
+reason it was computed with.
 
 ---
 

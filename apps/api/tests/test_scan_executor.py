@@ -537,10 +537,11 @@ class TestTheDeadlineCatchesWhatALeaseCannot:
             + 2 * serp.QUERY_CEILING_S
             + prompts.GENERATOR_BOUND.ceiling
             + waves * slot
-            # the audit: its side files before the browser, then its wait for the one
-            # browser at the scan's bound (M1 round 2), then the run at its cap (M1; a
+            # the audit: its reads before the browser at their one budget (3.41 round 3: each
+            # request had its own deadline and a chain of them had none), then its wait for the
+            # one browser at the scan's bound (M1 round 2), then the run at its cap (M1; a
             # hung page read used to have no ceiling at all, 3.20)
-            + technical_audit.SIDE_FETCH_TIMEOUT
+            + technical_audit.PRE_BROWSER_BUDGET_S
             + browser_slot.SCAN_AUDIT_WAIT_S
             + technical_audit.audit_run_cap_s()
             + fix_generator.FIX_BOUND.ceiling

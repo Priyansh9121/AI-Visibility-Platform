@@ -6,7 +6,13 @@ import type { ClientDetail } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
 import { apiWasAway, API_AWAY_SENTENCE } from '@/lib/apiAway';
 import { ScanLimitNotice } from '@/components/billing/ScanLimitNotice';
-import { ADDRESS_NOT_PUBLIC, ADDRESS_NOT_PUBLIC_SENTENCE } from '@/lib/report/strings';
+import {
+  ADDRESS_NOT_PUBLIC,
+  ADDRESS_NOT_PUBLIC_SENTENCE,
+  ROBOTS_UNREACHABLE,
+  ROBOTS_UNREACHABLE_ADVICE,
+  ROBOTS_UNREACHABLE_SENTENCE,
+} from '@/lib/report/strings';
 import { type ScanLimitProblem, scanLimitProblem } from '@/lib/billing/allowance';
 import { useScanStanding } from '@/lib/billing/useScanAllowance';
 
@@ -148,10 +154,19 @@ export function ClassificationResult({
               body={
                 client.classificationReasonCode === ADDRESS_NOT_PUBLIC
                   ? ADDRESS_NOT_PUBLIC_SENTENCE
-                  : `Nothing was classified. This usually means the site did not load, or the
+                  : client.classificationReasonCode === ROBOTS_UNREACHABLE
+                    ? `${ROBOTS_UNREACHABLE_SENTENCE} ${ROBOTS_UNREACHABLE_ADVICE}`
+                    : `Nothing was classified. This usually means the site did not load, or the
                     page carried no description of a business.`
               }
-              code={client.classificationReasonCode}
+              /* robots.txt could not be read (launch checklist 3.41): the sentence says
+                 what happened, so the code under it would only repeat it as a machine's
+                 word. Every other state keeps its `Reason:` line. */
+              code={
+                client.classificationReasonCode === ROBOTS_UNREACHABLE
+                  ? null
+                  : client.classificationReasonCode
+              }
             />
           )}
 

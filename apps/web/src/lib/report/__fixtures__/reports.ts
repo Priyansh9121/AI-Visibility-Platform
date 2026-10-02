@@ -1041,6 +1041,67 @@ export const addressNotPublicReport: Report = {
 };
 
 /**
+ * robots.txt could not be read at all — 2026-10-03 (launch checklist 3.41): no
+ * answer, a 5xx, a 429, redirects that never reach a file. The crawler read nothing,
+ * as when the file forbids it, but the site forbade nothing. Technical Foundation is
+ * excluded under CRAWL_POLICY_UNREADABLE, and there are no findings: every check was
+ * not_applicable, `robots_txt_present` included (an unreadable file is not a missing
+ * one, so no "publish a robots.txt").
+ */
+export const robotsUnreachableReport: Report = {
+  ...crawlDisallowedReport,
+  score: {
+    ...crawlDisallowedReport.score!,
+    excludedDimensions: { technical_foundation: 'CRAWL_POLICY_UNREADABLE' },
+  },
+  dimensions: crawlDisallowedReport.dimensions.map((d) =>
+    d.key === 'technical_foundation'
+      ? { ...d, exclusionReason: 'CRAWL_POLICY_UNREADABLE' }
+      : d,
+  ),
+  audit: {
+    ...crawlDisallowedReport.audit!,
+    errorCode: 'ROBOTS_UNREACHABLE',
+    passed: 0,
+    warned: 0,
+    failed: 0,
+    notApplicable: 17,
+    findings: [],
+  },
+};
+
+/**
+ * The mixed case, round 2 of 3.41: the site's OWN robots.txt answered 404 and its sitemap
+ * was not there, but the host a redirect (or the browser) went to did not answer, so the
+ * audit ended as unreachable. What the site's own answers said stays a finding, and the
+ * report lists it the way the refusal's card lists its own.
+ */
+export const robotsUnreachableWithFindingsReport: Report = {
+  ...robotsUnreachableReport,
+  audit: {
+    ...robotsUnreachableReport.audit!,
+    warned: 2,
+    notApplicable: 15,
+    findings: [
+      {
+        id: 'tchk_01M3ROBOTSUNREADABLEOWN404A',
+        checkKey: 'robots_txt_present',
+        status: 'warn',
+        value: null,
+        detailCode: 'NO_ROBOTS_TXT',
+      },
+      {
+        id: 'tchk_01M3ROBOTSUNREADABLEOWN404B',
+        checkKey: 'sitemap_present',
+        status: 'warn',
+        value: null,
+        detailCode: 'NO_SITEMAP_XML',
+      },
+    ],
+  },
+};
+
+/**
  * A set that has been corrected AND re-detected — Finding 3's actual case.
  *
  * `apply_override` clears the confidence, so an overridden set alone never

@@ -152,6 +152,30 @@ class TestCandidates:
         ]
         assert "gap:citation_strength" not in keys
 
+    @pytest.mark.parametrize(
+        "reason",
+        [
+            "NOT_YET_MEASURED",
+            "CRAWL_DISALLOWED",
+            "CRAWL_ADDRESS_NOT_PUBLIC",
+            "CRAWL_POLICY_UNREADABLE",
+        ],
+    )
+    def test_never_names_a_dimension_the_crawler_was_kept_from_measuring(
+        self, reason: str
+    ) -> None:
+        """A robots.txt that forbade the crawler (2026-09-29), one that could not be
+        read (launch checklist 3.41) and an address that was not public leave Technical
+        Foundation unmeasured, and an unmeasured dimension is not the client's gap."""
+        unmeasured = [dim("technical_foundation", "10", "0.00")]
+        measured = [c.key for c in build_candidates(unmeasured, [])]
+        assert measured == ["gap:technical_foundation"]  # the control: a gap that large is named
+        keys = [
+            c.key
+            for c in build_candidates(unmeasured, [], {"technical_foundation": reason})
+        ]
+        assert keys == []
+
     def test_carries_no_more_than_five(self) -> None:
         many = [(f"check_{i}", "warn", f"CODE_{i}") for i in range(20)]
         assert len(build_candidates(HELPSCOUT, many)) == fix_generator.MAX_FIXES

@@ -112,10 +112,15 @@ FORMULA_VERSION = "v5"
 # this crawler.
 # CRAWL_ADDRESS_NOT_PUBLIC: the site's address (or a redirect's) is not a public
 # one, so the crawler's egress guard refused to connect.
+# CRAWL_POLICY_UNREADABLE (2026-10-03, launch checklist 3.41): the site's robots.txt
+# could not be read (no answer, an error, redirects that never reach a file), so the
+# crawler, which obeys robots.txt, read nothing. The site did not forbid anything,
+# which is why this is not CRAWL_DISALLOWED.
 # None moves the formula: each excludes and redistributes, and the reason
 # enters the digest only when set.
 TECHNICAL_FOUNDATION_EXCLUSIONS = (
     "NOT_YET_MEASURED", "CRAWL_DISALLOWED", "CRAWL_ADDRESS_NOT_PUBLIC",
+    "CRAWL_POLICY_UNREADABLE",
 )
 
 TWO_PLACES = Decimal("0.01")
@@ -1161,6 +1166,11 @@ def compute_score(
     # dimension produces and the formula is unchanged — under its own reason.
     # Without the TECHNICAL_FOUNDATION_NOT_MEASURED flag, whose sentence ("had
     # not been audited") would be false: the audit ran, and read robots.txt.
+    #
+    # CRAWL_POLICY_UNREADABLE (2026-10-03) is the fourth way: robots.txt could not
+    # be read, so the crawler read nothing and the site said nothing. Excluded
+    # identically; the dimensions excluded, and when, are the same for every reason
+    # in `TECHNICAL_FOUNDATION_EXCLUSIONS`, so `FORMULA_VERSION` did not move.
     tf_value: Decimal | None
     if technical_foundation is None:
         tf_value = None

@@ -34,6 +34,8 @@ const EXCLUSION_CODES = [
   // TECHNICAL_FOUNDATION_EXCLUSIONS in scoring.py — 2026-09-29.
   'CRAWL_DISALLOWED',
   'CRAWL_ADDRESS_NOT_PUBLIC',
+  // 2026-10-03, launch checklist 3.41: robots.txt could not be read.
+  'CRAWL_POLICY_UNREADABLE',
 ] as const;
 
 /** `flags.append("...")` in scoring.py and citation_strength. */

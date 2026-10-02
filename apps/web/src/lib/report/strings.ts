@@ -66,6 +66,38 @@ export const DIMENSION_MEANING: Record<string, string> = {
 export const ROBOTS_DISALLOWED = 'ROBOTS_DISALLOWED';
 
 /**
+ * The same, when robots.txt could not be read at all — 2026-10-03 (launch
+ * checklist 3.41). `ROBOTS_UNREACHABLE` in the API's `services/crawl.py`, which a
+ * test reads back. No answer, a name that does not resolve, a timeout, a 5xx, a
+ * 429 or redirects that never reach a file: the crawler fetches nothing then, as
+ * for a file that forbids it, but the SITE forbade nothing, so the screens must
+ * not say it asks crawlers to stay out. Until this code every one of those cases
+ * was stored as `ROBOTS_DISALLOWED`, and older rows still are.
+ */
+export const ROBOTS_UNREACHABLE = 'ROBOTS_UNREACHABLE';
+
+/**
+ * What happened when robots.txt could not be read, in one place for the intake
+ * card and for `EXCLUSION_REASON.CRAWL_POLICY_UNREADABLE`, so they cannot word it
+ * two ways. True of every case the code covers, which is why it says "did not get
+ * a usable answer" and not "did not answer" (a 503 and a 429 are answers; so is a
+ * redirect that never ends), why it says "of this site, or of an address the site
+ * sent it to" (the file that could not be read can be a redirect's, or the one the
+ * browser landed on), and why it says nothing of what the site asks of crawlers: the
+ * file was never read. It blames nobody. Mirrored word for word in
+ * `report_narrative.EXCLUSION_DETAIL`.
+ */
+export const ROBOTS_UNREACHABLE_SENTENCE =
+  'The crawler tried to read the robots.txt of this site, or of an address the site sent it to, and did not get a usable answer. It obeys robots.txt, so without that answer it did not read the site.';
+
+/**
+ * What the person who just added the site can do about it: only the intake card says
+ * this, because only there is someone who typed the address.
+ */
+export const ROBOTS_UNREACHABLE_ADVICE =
+  'Check that the address is right and the site opens in a browser, then try again.';
+
+/**
  * The reason code when the site's address is not a public one — a client's
  * `classificationReasonCode` and a failed audit's `errorCode` alike.
  * `ADDRESS_NOT_PUBLIC` in the API's `services/egress.py`. Not a robots.txt
@@ -87,8 +119,8 @@ export const ADDRESS_NOT_PUBLIC_SENTENCE =
  * another page for the whole wait, so a scan's audit never started; only a scan
  * records it, a request is refused instead), and `HTTP_<status>` (the home page
  * answered 400 or above). Each says what happened and makes no guess at why, and
- * none blames the site. The raw code is never shown; `ROBOTS_DISALLOWED` and
- * `ADDRESS_NOT_PUBLIC` have their own copy.
+ * none blames the site. The raw code is never shown; `ROBOTS_DISALLOWED`,
+ * `ROBOTS_UNREACHABLE` and `ADDRESS_NOT_PUBLIC` have their own copy.
  */
 export const AUDIT_FAILURE_SENTENCE: Record<string, string> = {
   BROWSER_ERROR: 'The crawler’s browser stopped before it could read the home page.',
@@ -174,6 +206,13 @@ export const EXCLUSION_REASON: Record<string, { label: string; detail: string }>
     label: 'Address not public',
     detail:
       'The site’s address, or an address the site sent the crawler to, is on a private or reserved network, so the crawler did not read the site. Technical Foundation is left out of the score.',
+  },
+  // 2026-10-03 (launch checklist 3.41). robots.txt could not be read, so the
+  // crawler read nothing — and the site forbade nothing, which is why this is not
+  // CRAWL_DISALLOWED. Mirrored word for word in `report_narrative`.
+  CRAWL_POLICY_UNREADABLE: {
+    label: 'Could not read robots.txt',
+    detail: `${ROBOTS_UNREACHABLE_SENTENCE} Technical Foundation is left out of the score.`,
   },
 };
 

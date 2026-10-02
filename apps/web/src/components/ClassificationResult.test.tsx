@@ -13,6 +13,7 @@ import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ClassificationResult } from './ClassificationResult';
 import type { ClientDetail } from '@avp/shared-types';
+import { ROBOTS_UNREACHABLE_ADVICE, ROBOTS_UNREACHABLE_SENTENCE } from '@/lib/report/strings';
 
 const base = {
   id: 'clnt_01M0TESTCLIENT0000000001',
@@ -110,6 +111,68 @@ describe('a non-result must not look like a result', () => {
     expect(out).toContain('Reason: ADDRESS_NOT_PUBLIC');
     expect(out).not.toContain('robots.txt');
     expect(out).not.toContain('did not load');
+  });
+});
+
+describe('unclassifiable because robots.txt could not be read — launch checklist 3.41', () => {
+  // Until 2026-10-03 this reached the card as ROBOTS_DISALLOWED. The crawler still
+  // reads nothing; the card must say what happened and blame nobody.
+  const out = render(as({ classificationStatus: 'unclassifiable', industry: null,
+    classificationReasonCode: 'ROBOTS_UNREACHABLE' }));
+
+  it('says what happened in a sentence of its own', () => {
+    expect(out).toContain('We could not read this site.');
+    expect(out).toContain(ROBOTS_UNREACHABLE_SENTENCE);
+    expect(out).toContain(
+      'The crawler tried to read the robots.txt of this site, or of an address the site sent it to, and did not get a usable answer. It obeys robots.txt, so without that answer it did not read the site.',
+    );
+    expect(out).toContain('Could not read');
+  });
+
+  it('tells the person who typed the address what they can do, after the sentence', () => {
+    expect(out).toContain(
+      'Check that the address is right and the site opens in a browser, then try again.',
+    );
+    expect(out).toContain(`${ROBOTS_UNREACHABLE_SENTENCE} ${ROBOTS_UNREACHABLE_ADVICE}`);
+  });
+
+  it('never says the site asks crawlers to stay out, or that it did not load, and shows no code', () => {
+    for (const words of [
+      'stay out',
+      'asks crawlers',
+      'not to load',
+      'did not load',
+      'usually means',
+      'Reason:',
+      'ROBOTS_UNREACHABLE',
+    ]) {
+      expect(out, words).not.toContain(words);
+    }
+  });
+
+  it('every other reason keeps the generic sentence and its code line', () => {
+    const other = render(as({ classificationStatus: 'unclassifiable', industry: null,
+      classificationReasonCode: 'FETCH_FAILED' }));
+    expect(other).toContain('This usually means the site did not load');
+    expect(other).toContain('Reason: FETCH_FAILED');
+    expect(other).not.toContain(ROBOTS_UNREACHABLE_SENTENCE);
+  });
+
+  it('a robots.txt that really forbids the page is not given this sentence, and keeps the card it had', () => {
+    // 3.41 changed only which code an unreadable file is stored under. The wording of the
+    // generic sentence and of the code line is checklist 3.39's, and is as it was.
+    const forbidden = render(as({ classificationStatus: 'unclassifiable', industry: null,
+      classificationReasonCode: 'ROBOTS_DISALLOWED' }));
+    expect(forbidden).toContain('We could not read this site.');
+    expect(forbidden).toContain('Reason: ROBOTS_DISALLOWED');
+    expect(forbidden).not.toContain(ROBOTS_UNREACHABLE_SENTENCE);
+    expect(forbidden).not.toContain(ROBOTS_UNREACHABLE_ADVICE);
+  });
+
+  it('still offers a way onward and no scan', () => {
+    expect(out).not.toContain('Run a scan');
+    expect(out).toContain('Go to your scans');
+    expect(out).toContain('Scan another site');
   });
 });
 

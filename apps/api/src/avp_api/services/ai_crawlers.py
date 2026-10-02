@@ -428,6 +428,10 @@ class PolicyBasis(str, enum.Enum):
     RFC files it with the other 4xx ("unavailable", crawl freely), and it is
     treated instead like a 5xx, because a site asking us to slow down is not
     one to read that minute.
+
+    The crawl reports `UNREACHABLE` apart from a file that forbids the page
+    (`crawl.ROBOTS_UNREACHABLE`, not `ROBOTS_DISALLOWED`, launch checklist 3.41):
+    both fetch nothing, but only one is the site saying no.
     """
 
     # 2xx: the file was read, and its rules for us apply.
@@ -435,8 +439,10 @@ class PolicyBasis(str, enum.Enum):
     # 4xx (404, 410, 403 ...), except 429: there is no file to obey, so
     # everything is allowed.
     UNAVAILABLE = "unavailable"
-    # 5xx, 429, a timeout or no response at all: nothing may be fetched this
-    # run. The cautious reading, and the RFC's.
+    # 5xx, 429, a timeout or no response at all (a name that does not resolve, a
+    # refused connection, a response that has not finished by the request's deadline,
+    # redirects that never reach a file, a 1xx or a 3xx left over): nothing may be
+    # fetched this run. The cautious reading, and the RFC's.
     UNREACHABLE = "unreachable"
 
 
