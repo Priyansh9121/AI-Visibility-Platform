@@ -255,7 +255,11 @@
   --avp-scrim: oklch(0.185 0.026 265 / 0.4);
 
   /* --- emphasis is light, not lift ---------------------------------------- */
-  --avp-focus-ring: 0 0 0 2px oklch(0.72 0.11 200 / 0.6), 0 0 0 6px oklch(0.72 0.11 200 / 0.12);
+  /* The 2px ring is solid beacon-600 (a literal, the same value as beacon-600
+     above): WCAG 1.4.11 wants 3:1 against the surface, and the old 60% ring
+     measured about 1.7:1. Solid it is 4.4-5.1:1 on the light surfaces. The soft
+     6px halo is decoration only and stays faint. */
+  --avp-focus-ring: 0 0 0 2px oklch(0.53 0.09 200), 0 0 0 6px oklch(0.72 0.11 200 / 0.12);
   --avp-selected-ring: inset 0 0 0 1px oklch(0.53 0.09 200);
   --avp-selected-wash: oklch(0.53 0.09 200 / 0.05);
 
@@ -480,7 +484,9 @@
     0 12px 28px -8px oklch(0.185 0.026 265 / 0.18);
   --avp-scrim: oklch(0.185 0.026 265 / 0.4);
 
-  --avp-focus-ring: 0 0 0 2px oklch(0.72 0.11 200 / 0.6), 0 0 0 6px oklch(0.72 0.11 200 / 0.12);
+  /* Solid 2px ring for WCAG 1.4.11 (3:1 on paper); the old ring was about 1.7:1.
+     The literal is the :root beacon-600, so the ring is the same on every page. */
+  --avp-focus-ring: 0 0 0 2px oklch(0.53 0.09 200), 0 0 0 6px oklch(0.72 0.11 200 / 0.12);
   --avp-selected-ring: inset 0 0 0 1px oklch(0.545 0.125 200);
   --avp-selected-wash: oklch(0.545 0.125 200 / 0.04);
 }
