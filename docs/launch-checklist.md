@@ -7,10 +7,10 @@ session can do it, on a branch, with the full bar and a build-log entry, and
 only after the founder says go. Nothing here is pushed to `main` without the
 founder's OK; Render deploys `main` before CI finishes.
 
-Status on 2026-10-02: PRs #2, #3 and #4 are merged (`main` at `f1b7565`). This
-checklist was last updated on branch `pilot-fixes` (the founder's pilot-blockers
-follow-up), whose PR targets `main`. Rows that branch closed say **Done** and
-name the commit; its merge has founder steps in an order (1.1c).
+Status on 2026-10-03: PRs #2 to #5 are merged (`main` at `471a2b9`). This
+checklist was last updated on branch `pilot-fixes-2` (the founder's brief "memory
+and the rest of the open decisions"), whose PR targets `main`. Rows that branch
+closed say **Done** and name the commit; its merge steps are 1.1d.
 
 ## 1. Merge and deploy what is built
 
@@ -45,9 +45,10 @@ Kept for the record. If step 3 was not run, 1.1c's step 7 covers it.
    scan, and on its report get a share link and withdraw it. Every write is
    refused with `origin-not-allowed` if `CORS_ALLOW_ORIGINS` is wrong.
 
-### 1.1c Merge `pilot-fixes`'s PR — Founder (the order matters)
+### 1.1c Merge `pilot-fixes`'s PR — Founder — **Merged 2026-10-02** (PR #5, `main` at `471a2b9`)
 The web app now serves the API under its own origin (3.7) and Google sign-in is
-bound to the browser (3.22). No migration.
+bound to the browser (3.22). No migration. Kept for the record: steps 5 to 9 are the
+founder's to confirm if not yet done.
 
 Before merging:
 1. Render → **API** service → Connect → **Internal**: copy the internal
@@ -78,6 +79,26 @@ After both deploys are live:
    Withdraw, then withdraw it.
 8. Run 1.3 (it now goes through the web host).
 9. Google Cloud Console: remove the old API-host redirect URI.
+
+### 1.1d Merge `pilot-fixes-2`'s PR — Founder
+Nothing to set on Render and no migration. The API's image changes (`tini` becomes
+its first process), so its deploy rebuilds it.
+
+1. Merge once CI is green. The API and the web app deploy from the same push. For
+   the minutes between them, the share bar may already say that a failed scan's link
+   no longer opens while the old API still serves it (3.29); nothing else depends on
+   the order.
+2. Render → **API** service → Logs, after the deploy: one `app.memory_at_start` line
+   (the baseline), and no `UnsupportedFieldAttributeWarning` after the first requests
+   (M2).
+3. Run one scan, then search the logs for its `scan.phase_memory` lines. The `audit`
+   line's `cgroup_peak_mb` is the peak of a full scan on Standard, the number the
+   brief left as "[FILL IN]". `docs/runbook.md`, "Reading the API's memory", says how
+   to read each figure.
+4. Do not set `WEB_CONCURRENCY` on the API: the entrypoint pins one worker (the
+   browser slot is per process), so it would be ignored.
+5. On the deployed app: get a share link (the bar says "Link ready. It works until
+   …" and the link is selected); reload, press Get again: the same date (3.28).
 
 ### 1.2 `STRIPE_PRICE_ID` is the US$160 Price — Founder
 1. Stripe dashboard (Test mode until 2.2 is done) → Product catalogue → the
@@ -189,7 +210,7 @@ every one marked (sec).
 | # | What | Who | Steps |
 |---|------|-----|-------|
 | 3.1 | **Security headers.** Neither host sends HSTS, a Content-Security-Policy, `X-Content-Type-Options: nosniff` or a frame policy (only the token routes carry headers, `apps/web/next.config.mjs`; the API sets CORS only). | Claude (sec), after the founder's go | Add the headers for every web route in `next.config.mjs` (CSP in report-only mode first, because Next inlines scripts) and a small API middleware for nosniff and frame denial; tests that read the config; after deploy `curl -sI` both hosts. |
-| 3.2 | **The crawler needs an egress control.** **App-level guard done on `pre-pilot`** (`942fa26`): every fetch the crawler and the audit make refuses addresses that are not public, and a refusal ends the run as `ADDRESS_NOT_PUBLIC`. Still open: a network-level control, and the browser runs without Chromium's sandbox. Found on `pilot-fixes`: a page's speculation-rules **prerender** is fetched by Chromium outside Playwright's routing and reporting, so the guard never sees it (no launch switch stops it without breaking interception); shared workers had the same gap and are now disabled (`57c3b2c`). The network-level control closes this class. | Founder picks the egress control; Claude (sec) wires it | The network-level fix is an egress proxy that refuses non-public addresses, used by both the browser and the HTTP client. Then decide on the sandbox. The details are in the founder's reports, not here. |
+| 3.2 | **The crawler needs an egress control.** **App-level guard done on `pre-pilot`** (`942fa26`): every fetch the crawler and the audit make refuses addresses that are not public, and a refusal ends the run as `ADDRESS_NOT_PUBLIC`. Still open: a network-level control, and the browser runs without Chromium's sandbox. Found on `pilot-fixes`: a page's speculation-rules **prerender** is fetched by Chromium outside Playwright's routing and reporting, so the guard never sees it (no launch switch stops it without breaking interception); shared workers had the same gap and are now disabled (`57c3b2c`). The network-level control closes this class. Moving the browser work into a Render background worker (a design note, not built: `docs/crawl-worker-design-note.md`, with M1's numbers in 3.34) would leave only that service needing to reach arbitrary sites, so the control would apply to it alone. | Founder picks the egress control; Claude (sec) wires it | The network-level fix is an egress proxy that refuses non-public addresses, used by both the browser and the HTTP client. Then decide on the sandbox. The details are in the founder's reports, not here. |
 | 3.3 | **Confirm the Supabase Data API exposes nothing.** The app never uses it, and whether it is on with grants for `anon` / `authenticated` has not been checked. | Founder | In Supabase → SQL editor, run the two read-only queries in `~/Skills-library/supabase-ops/SKILL.md` (table grants for `anon`, `authenticated`, `PUBLIC`; `pg_default_acl`). If anything is granted, turn the Data API off (Settings → API) or remove `public` from the exposed schemas; revoking grants alone does not cover tables Alembic creates later. |
 | 3.4 | **Set the Redis eviction policy.** Under an evicting policy, the index that lets a password change or reset sign a user out everywhere can be dropped silently. | Founder | Render → the Key Value instance → set the eviction policy to `noeviction`; note whether one instance serves sessions, rate limits and the Celery broker (`REDIS_URL`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`); add a memory alert if Render offers one. |
 | 3.5 | **SQL parameters can reach the logs.** `db.py` does not set `hide_parameters=True`, and `logger.exception` / `exc_info=True` (`google.callback.failed` in `routers/auth.py`; `scan.lease.renewal_failed`, `scan.chain.phase_failed`, `scan.chain.reload_failed`, `scan.execute.failed` and `scan.execute.failed_to_record` in `services/scan_executor.py`) render SQLAlchemy errors whose text includes bound parameters, such as an email. Unconfirmed at runtime. | Claude (sec) | `hide_parameters=True` on the engine; log `error=type(exc).__name__` on identity paths; add an exception-path case to `tests/test_secrets_stay_out_of_logs.py`. |
@@ -207,7 +228,7 @@ every one marked (sec).
 | 3.17 | **Done:** the copy on `pre-pilot` (`0562bfc`); the contrast on `pilot-fixes` (`8e5ea01`): `text-tertiary` is at least 4.5:1 on every surface text sits on, at rest and under the hover wash, in both themes, held by a token contrast test. The report's own tertiary text is not covered (3.31). | — | — |
 | 3.18 | **Done on `pre-pilot`** (`0562bfc`; checkout is owner or admin, not owner-only). Was: **the scan-limit notice offered Subscribe where it could not work:** to an agency whose subscription needs attention (it then shows the refusal and a link to Billing) and to members (403). | Claude + ui-reviewer, after the founder's go | `useScanAllowance` already reads `GET /billing`; use it to show Manage billing instead, and nothing to members. |
 | 3.19 | **Done on `pre-pilot`** (`63d4c81`): the founder chose to count a deadline partial only when at least half its planned prompts were answered, applied to every deadline. Was: **decide whether a scan that runs out of time because of load should count** (decision 7 as written counts it when it has at least one answer). The engine rate limits are shared across the product, so heavy load can push scans past the 40-minute deadline. | Founder | Keep it, or have Claude count a deadline-partial only above a minimum share of answered prompts (from the security review of decision 7). |
-| 3.20 | **One step of the technical audit has no timeout of its own** (`services/technical_audit.py`). If it hangs, the scan runs into its deadline and alerts and fix generation do not run. | Claude | Bound it, so a hang becomes an ordinary failed audit phase. |
+| 3.20 | **Done on `pilot-fixes-2`** (`1b6f109`, M1): every browser run is under a cap (the audit 244.5 s, the intake's crawl 266 s), so a step that never returns ends the run as `TIMEOUT` and the scan goes on. Was: one step of the technical audit had no timeout of its own, so a hang ran into the scan's deadline and alerts and fixes did not run. | — | — |
 | 3.21 | **Done on `pilot-fixes`** (`0e4ba12`): only a POST to the Stripe webhook skips the Origin check; a refused write logs the requesting origin's host name, strictly parsed (an IP, `null` or anything malformed is logged only as a kind). Writes from another site were already refused (`0071640`). | — | — |
 | 3.22 | **Done on `pilot-fixes`** (`94378fe`): a Google sign-in, and the new-address sign-up ticket, can only be finished in the browser that started it (a `__Host-avp_google_flow` cookie compared at the callback, `pending` and `complete`). Two Google sign-ins in two tabs of one browser end with the earlier refused (fails safe). | Founder | 1.1c steps 3, 5 and 9 (the callback must be on the web host). |
 | 3.23 | **Done on `pilot-fixes`** (`8c23ac5`): sign-up, sign-in, the intake form and the intake result say "We could not reach the server. Check your connection and try again." | — | — |
@@ -215,9 +236,19 @@ every one marked (sec).
 | 3.25 | **Done on `pilot-fixes`** (`fd79b6e`): Withdraw is offered whenever a link is live, without making one first; the bar shows when the link stops working; the lead says links last 30 days from when they are created. Open decision: 3.28. | — | — |
 | 3.26 | **Done on `pilot-fixes`** (`dcfff6b`): the failed-audit card says what happened in a sentence instead of the code (signed-in and public); the PDF cover says when a scan was partial or failed; the light and report focus ring is a solid ring at least 3:1 on every surface. | — | — |
 | 3.27 | **Done on `pilot-fixes`** (`57c3b2c`): a request the crawler refuses before sending it (a page's image, script, iframe; the sitemap) is skipped and the crawl goes on; anything that reached a private address (Chromium's connected address, a navigation's redirect, a sub-resource's redirect hop) still ends the run and keeps nothing. The residual from the egress review, and the prerender gap, close with 3.2. | Founder | 3.2. |
-| 3.28 | **"Get shareable link" on a live link moves its end** to 30 days from that press (Epic 9.21: same address, new expiry), while the share bar's lead says links last 30 days from when they are created. The bar shows the real end after every press. | Founder | Keep it, or have Claude make a press on a live link return it unchanged. |
-| 3.29 | **A link minted while a scan was running keeps serving after the scan fails**, now without a score (an existing test pins it). The share bar offers Withdraw for it. | Founder | Keep it, or have Claude make the public report refuse a failed scan's link. |
-| 3.30 | **A failed scan's score is still served outside the dashboard and the report:** `GET /scans/{id}/score` and `/scores` and `POST /scans/{id}/score` (the web does not call them), a visibility alert written before the scan's final status (its text quotes the composite on the client's alerts page), and the fix generator's input (not shown). | Founder | Include them in 3.24's rule, or leave them. |
+| 3.28 | **Done on `pilot-fixes-2`** (`4ad393a`): a press of "Get shareable link" on a live link returns it as it is, the same address and end; with no live link (none, withdrawn or ended) it makes a new one for 30 days, and an ended address stays dead. The lead's "30 days from when they are created" is now exact. Was: a press moved a live link's end to 30 days from the press. | — | — |
+| 3.29 | **Done on `pilot-fixes-2`** (`5bd3cc1`, a test fixed in `55d7f94`): the public report and its PDF refuse a failed scan's link exactly as a withdrawn one; the token stays so the agency can withdraw it, and the share bar says the link no longer opens. Was: a link minted while a scan was running kept serving after it failed. | — | — |
+| 3.30 | **Done on `pilot-fixes-2`** (`d772a19`): `GET /scans/{id}/score` is a 404, `/scores` is `[]` and `POST …/score` a 409 for a failed scan; no visibility alert is made from a failed scan and one written earlier is not listed; nothing the fix generator wrote is served for a failed scan (its input still had the score, the founder's decision); its audit shows no Technical Foundation. No row deleted or re-scored. Open: 3.37. | — | — |
 | 3.31 | **The report's own tertiary text** (ink-400 on paper) measures 3.2–3.6:1, under 4.5:1. | Founder | Darken it (the printed report's look changes) or leave it. |
-| 3.32 | **The client Technical screen prints the raw audit code** ("Reason: <code>"), signed in only (`ClientTechnicalView.tsx`). | Claude + ui-reviewer | Use 3.26's `auditFailureSentence`. |
-| 3.33 | **Two small focus details.** After "Get shareable link" from a link that was live on load, the button leaves the page and focus falls to the page with nothing announced (existing tests pin that a new link does not take focus). On a focused primary button in the light theme the new focus ring is the fill's colour (it still meets 3:1 against the page). | Founder (look), then Claude + ui-reviewer | Decide a status message after a mint, and whether primary buttons get a ring gap. |
+| 3.32 | **Done on `pilot-fixes-2`** (`5189273`): the client Technical screen says what happened to a failed audit in a sentence, not the code. Open: the other raw codes, 3.39. | — | — |
+| 3.33 | **Done on `pilot-fixes-2`** (`72797ae`): after "Get shareable link" the status region says "Link ready. It works until <date>." and focus is on the link, text selected; a failed mint gives focus back to Get, described by its error. A focused primary or danger button in the light theme, and the report's, keeps a 2px gap between its fill and the ring. Open: 3.38, 3.40. | — | — |
+| 3.34 | **API memory (M1). Done on `pilot-fixes-2`** (`1b6f109`): one browser per process at a time, each run capped and its wait bounded, one site read per agency and four agencies at once on the request routes (`429`), `tini` as PID 1, and memory in the logs per phase (`docs/runbook.md`, "Reading the API's memory"). Measured in the API's image: the idle server 97 MB; a heavy page's audit about 490 MB; a crawl and an audit at once 586 MB before, about 490 MB after (at 512 MB, before, the kernel killed the audit's browser); about 1.4 GB free on 2 GB at the worst moment. The resting rise after a deploy is page cache, which the kernel drops. Moving the browser to a worker: `docs/crawl-worker-design-note.md` (not built). | Founder | 1.1d steps 2 and 3 (the peak of a full scan on Standard); decide on the worker. |
+| 3.35 | **The scan deadline's margin.** The audit's cap and its wait for the browser take the worst-case scan to 2,202.5 s of the 2,400 s deadline (1.09×; it was 1.42×). | Founder | Raise the deadline, shorten a scan audit's 300 s wait, or move the browser into a worker (3.34). |
+| 3.36 | **A scan's final status can overwrite FAILED.** `finalize_scan` (`services/scan_runner.py`) checks only its in-memory copy, so if the reaper fails a scan whose chain is still alive, the chain can stamp it succeeded or partial within one heartbeat, and its share link (3.29) opens again. Found by 3.28's security review; confirmed by reading the code. | Claude (sec) | Make the final write conditional on the row still being RUNNING, as the lease renewal is, with a test. |
+| 3.37 | **A failed scan's per-engine figures are still in its report** (`proof.crossEngine.standings[]`: each engine's mention rate and sentiment). Sentiment there is computed like the Sentiment dimension, so a weighted sum may rebuild the failed scan's sub-score (unconfirmed on real data). | Founder | Withhold them for a failed scan, or keep. |
+| 3.38 | **The share bar's wording around a press.** After a mint the date shows twice (the standing line and the status line); the UI review and the implementer suggest hiding the status text visually (it stays announced). For a link live on load, the lead says "Creates a link" and the busy label "Creating…" though a press now returns it. | Founder | Keep, or have Claude make the change. |
+| 3.39 | **Raw codes and site-blaming copy left on screen:** the intake classification card ("usually means the site did not load" and `Reason: <code>`, for `TIMEOUT`, `BROWSER_ERROR` and provider states), the per-check codes on the Technical screen (`CheckRow`), and `(<errorCode>)` on an engine result (`ClientPromptsView`); also "under five minutes" on three screens, which a busy browser can now exceed, and the intake's 429 drawn on the address field. | Founder (wording), then Claude + ui-reviewer | A sentence per code, as the audit has. |
+| 3.40 | **Focus visibility gaps found in 3.33:** in forced colours no non-filled control shows focus (a shadow with `outline: none`), and Firefox draws its own ring on them; a focused text field shows a ring inside a ring; the dark theme's ring against a primary fill is 1.8–2.0:1 (its outer edge passes); every primary button has a 1px rim of the gradient's other end. | Founder (go), then Claude + ui-reviewer | One transparent outline on the global focus rule; one line on `.avp-field__input:focus-visible`; the dark ring and the rim. |
+| 3.41 | **`ROBOTS_DISALLOWED` is stored when robots.txt could not be read at all** (no answer, a name that does not resolve, a timeout, 5xx, 429), so the screens say the site asks crawlers to stay out when it did not answer. | Founder | A distinct code (for example `ROBOTS_UNREACHABLE`), which also touches the scoring exclusion and the contract. |
+| 3.42 | **The dashboard's "Share a report" step counts dead links** (a failed scan's, an expired one), and "One live link." says otherwise; cancelled scans still mint and serve (nothing writes CANCELLED today). | Founder | Count only live links, or keep. |
+| 3.43 | **Smaller follow-ups.** The FastAPI cap (`<0.118`) also holds Starlette below 0.49: lift it, with a review, before the API serves files. The fix generator is told a failed audit's empty page fields. Two wall-clock tests (`test_call_bounds.py`, `test_scan_deadline.py`) fail under heavy CPU load. A 429 from the browser limits has no log line of its own. | Claude | Each its own small item. |

@@ -22249,3 +22249,28 @@ Drift check (north-star §8): no product layer; the API's physical architecture 
 - The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
 - OpenAPI and `api.gen.ts` regenerate with no change from the committed files (three route descriptions changed in this item, nothing else).
 - Exit codes were read from files.
+
+# The launch checklist says what `pilot-fixes-2` closed, how to merge it, and every decision still open
+
+**2026-10-03, the second entry of the day; branch `pilot-fixes-2`, the founder's brief "memory and the rest of the open decisions" (its finish).** One commit, `docs/launch-checklist.md` only.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): no product layer; the launch plan. Lifecycle phase: Activation (Epic 9), what stands between the code and the first pilots.
+
+## 1. What changed
+
+- **Status and merge steps.** The status line says PRs #2 to #5 are merged (`main` at `471a2b9`); 1.1c is marked merged (PR #5), its after-deploy steps kept for the founder to confirm; new 1.1d, how to merge this branch: nothing to set, no migration, the API image rebuilt with `tini`; after the deploy, the `app.memory_at_start` line, no alias warning, one scan's `scan.phase_memory` lines for the peak of a full scan on Standard (the number the brief left blank), `WEB_CONCURRENCY` left unset, and the share link checked.
+- **Rows closed, each with its commit:** 3.20 (`1b6f109`, M1's caps), 3.28 (`4ad393a`), 3.29 (`5bd3cc1`, its test in `55d7f94`), 3.30 (`d772a19`), 3.32 (`5189273`), 3.33 (`72797ae`); 3.2 links the worker design note.
+- **New rows:** 3.34, M1, done (`1b6f109`), with its numbers (idle 97 MB; a heavy audit about 490 MB; two runs at once 586 → about 490 MB; about 1.4 GB free on 2 GB; the resting rise is page cache) and the worker note; and the decisions and follow-ups this brief found: 3.35 the scan deadline's margin (1.09×); 3.36 `finalize_scan` can overwrite a reaper's FAILED (Claude, security); 3.37 a failed scan's per-engine figures in its report; 3.38 the share bar's wording around a press (the date twice; "Creates a link" for a live link); 3.39 raw codes and site-blaming copy on the intake card and two other screens, "under five minutes", the intake's 429 on the address field; 3.40 the focus gaps 3.33's review found (forced colours, Firefox's ring, a field's double ring, the dark theme's filled-button ring, the primary button's rim); 3.41 `ROBOTS_DISALLOWED` for an unreadable robots.txt; 3.42 the dashboard counting dead links, and cancelled scans; 3.43 smaller follow-ups (the FastAPI cap and Starlette, the fix generator's input for a failed audit, two wall-clock tests, a log line for the browser 429s).
+
+## Verified
+
+**The final bar on this tree** (the commands of `ci.yml`, run locally; this commit changes no code).
+- API pytest 2656 (1 more runs only on Linux), workers 26, shared-types 53 (0 fail), design-system 935, web 1533, mypy 43 (ceiling 50).
+- ruff clean; all typechecks clean; the styleguide builds; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database.
+- The Python licence audits pass in both environments; the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+- OpenAPI and `api.gen.ts` regenerate with no change.
+- Over the branch: API 2367 → 2656, web 1473 → 1533, design-system 875 → 935, mypy 47 → 43; workers and shared-types unchanged.
+- Exit codes were read from files.
