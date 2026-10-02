@@ -132,7 +132,11 @@ describe('what it fetches is what the code fetches', () => {
     expect(audit).toContain('if not found.sitemap_present:');
     expect(audit).toContain('await gate.follow("GET", f"{base}/sitemap.xml")');
     const runner = read(AUDIT_RUNNER);
-    expect(runner).toContain('signals = await audit_site(f"https://{client.domain}")');
+    // One call, and for the client's own domain. What follows the address (how long it may
+    // wait for the API's one browser, the scan's id for the log) is not what this page claims,
+    // and neither is how the call is wrapped across lines.
+    expect(runner).toMatch(/signals = await audit_site\(\s*f"https:\/\/\{client\.domain\}"/);
+    expect(runner.match(/await audit_site\(/g)).toHaveLength(1);
     expect(runner).toContain('row.pages_crawled = 1 if signals.ok else 0');
     expect(CRAWLER_PAGE.text).toContain(
       'It requests /robots.txt, and /sitemap.xml unless robots.txt names a sitemap',

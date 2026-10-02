@@ -262,6 +262,19 @@
      measured about 1.7:1. Solid it is 4.4-5.1:1 on the light surfaces. The soft
      6px halo is decoration only and stays faint. */
   --avp-focus-ring: 0 0 0 2px oklch(0.53 0.09 200), 0 0 0 6px oklch(0.72 0.11 200 / 0.12);
+  /* The same ring on a FILLED button (primary, danger), checklist 3.33. The plain
+     ring is beacon-600, which is the primary's own fill (1.0:1 against it) and the
+     danger fill is the same lightness (1.04:1), so the ring's inner edge is lost.
+     A 2px gap in the card surface sits between fill and ring, then the 2px ring,
+     then the halo out to 8px; ring and halo are --avp-focus-ring's own values.
+     Seated, because cards hold the forms and their actions; on the page ground,
+     sunken and void the gap is a faint lighter band (1.06, 1.12 and 1.23:1), and
+     always this one colour in the light theme. The dark theme below aliases the
+     plain ring, so nothing there moves; the report declares the same ring over a
+     paper gap of its own, which a report inside a dark app keeps. contrast.test.ts
+     holds the 3:1 of the gap against both ends of the fill and against the ring. */
+  --avp-focus-ring-filled: 0 0 0 2px var(--avp-surface-seated), 0 0 0 4px oklch(0.53 0.09 200),
+    0 0 0 8px oklch(0.72 0.11 200 / 0.12);
   --avp-selected-ring: inset 0 0 0 1px oklch(0.53 0.09 200);
   --avp-selected-wash: oklch(0.53 0.09 200 / 0.05);
 
@@ -380,6 +393,9 @@
   --avp-scrim: oklch(0.08 0.01 265 / 0.7);
 
   --avp-focus-ring: 0 0 0 2px oklch(0.8 0.13 200 / 0.7), 0 0 0 6px oklch(0.8 0.13 200 / 0.15);
+  /* Dark keeps its plain ring on a filled button (3.33 is the light theme's and
+     the report's). */
+  --avp-focus-ring-filled: var(--avp-focus-ring);
   --avp-selected-ring: inset 0 0 0 1px oklch(0.8 0.13 200);
   --avp-selected-wash: oklch(0.8 0.13 200 / 0.08);
 }
@@ -489,6 +505,14 @@
   /* Solid 2px ring for WCAG 1.4.11 (3:1 on paper); the old ring was about 1.7:1.
      The literal is the :root beacon-600, so the ring is the same on every page. */
   --avp-focus-ring: 0 0 0 2px oklch(0.53 0.09 200), 0 0 0 6px oklch(0.72 0.11 200 / 0.12);
+  /* A filled button in the report (the pitch beat's "Build the proposal", the
+     competitor editor's Save): the paper fill is flat beacon-600 and the plain
+     ring is 1.13:1 against it. The same gap goes between them, in the colour of the
+     page both buttons sit on, which is paper in either app theme: this block
+     redeclares every surface, so a report inside a dark app gets this gap and not
+     the dark theme's ring. The ring and halo are the literals above. */
+  --avp-focus-ring-filled: 0 0 0 2px var(--avp-surface-ground), 0 0 0 4px oklch(0.53 0.09 200),
+    0 0 0 8px oklch(0.72 0.11 200 / 0.12);
   --avp-selected-ring: inset 0 0 0 1px oklch(0.545 0.125 200);
   --avp-selected-wash: oklch(0.545 0.125 200 / 0.04);
 }

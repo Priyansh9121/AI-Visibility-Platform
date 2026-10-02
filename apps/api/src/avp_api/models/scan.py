@@ -122,7 +122,8 @@ class Scan(Base, TimestampMixin):
     # `share_expires_at` is the blunt one, and it is what bounds a link
     # somebody simply forgot about.
     share_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    # Set at mint time, pushed out by a re-mint, cleared by revocation. NULL is
+    # Set at mint time and not moved afterwards (a press on a live link returns
+    # it as it is, checklist 3.28), cleared by revocation. NULL is
     # NOT "never expires" — `share.scan_for_share_token` requires a live value,
     # so a token with no expiry serves nothing. That is fail-closed on purpose
     # for a credential, and the CHECK constraint below makes the state

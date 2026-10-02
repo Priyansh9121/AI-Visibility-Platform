@@ -45,7 +45,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from fractions import Fraction
-from typing import Protocol
+from typing import Literal, Protocol, get_args
 
 import structlog
 from sqlalchemy import func, or_, select, update
@@ -56,8 +56,9 @@ from ..db import get_sessionmaker
 from ..models import Client, EngineResult, Prompt, Scan, ScanStatus
 from ..models.engine_result import Engine
 from . import alerts as alerts_service
-from . import audit_runner, fix_runner, scan_runner, scoring_runner
+from . import audit_runner, fix_runner, memory_stats, scan_runner, scoring_runner
 from . import competitors as detection
+from .browser_slot import SCAN_AUDIT_WAIT_S
 from .scan_allowance import IN_FLIGHT_WINDOW
 
 logger = structlog.get_logger(__name__)
@@ -105,9 +106,12 @@ LEASE = timedelta(seconds=180)
 # that is alive, speaking, and getting nowhere: the heartbeat is its own task,
 # so an await inside the chain that never returns leaves it renewing happily
 # forever. `STALE_AFTER` did catch that, by accident, and retiring it gave the
-# case up. There is at least one such await today — `page.evaluate` in
+# case up. There was at least one such await — `page.evaluate` in
 # `technical_audit.py` takes no timeout and is outside `set_default_timeout`'s
-# reach — so this is a live gap rather than a hypothetical one.
+# reach (launch checklist 3.20). M1 (2026-10-02) caps the browser run that holds
+# it (`technical_audit.audit_run_cap_s`, and `crawl.crawl_run_cap_s`), so that
+# hang now ends as a failed audit phase, minutes in and not at this deadline. The
+# deadline stays for the next await nobody has bounded.
 #
 # THE BACKSTOP IS HERE AND NOT IN THE REAPER, deliberately. The reaper judges
 # other processes, and giving it a duration rule would put back exactly the
@@ -128,6 +132,19 @@ LEASE = timedelta(seconds=180)
 # 12 halved the slot count, so the CI gate failed the "not more than twice the
 # worst case" half of that test. A backstop twice as loose as the thing it
 # backs is not a backstop. Same 1.6x margin as before, on the new number.
+#
+# M1 (2026-10-02) put a cap on the audit's browser run, and the sum now counts the
+# audit at that cap (its side files, then `technical_audit.audit_run_cap_s`) instead
+# of one page's timeouts: about 1,900s, so 2,400s clears it by about 1.26x. The
+# number is unchanged. What the cap buys is that a hung audit step costs minutes of
+# that sum and still leaves the scan its alerts and its fixes.
+#
+# M1 round 2 bounded the audit's WAIT for the one browser (`browser_slot`), and the
+# sum counts that too, at its bound, `SCAN_AUDIT_WAIT_S` (300s) before the run itself:
+# about 2,200s, so 2,400s still clears it, now by about 1.09x. The number is still
+# unchanged, and the margin is thinner: a full wait AND a full run in one scan is the
+# pathological case. The test below adds each term, so a bound that grows without
+# this number moving fails there and not in production.
 MAX_SCAN_DURATION = timedelta(seconds=2_400)
 
 # WHAT THE DEADLINE KEEPS — decision 7, the founder, 2026-10-01
@@ -314,6 +331,29 @@ class ScanExecutor(Protocol):
     """How a queued scan gets run. One method, because that is all there is."""
 
     async def submit(self, job: ScanJob, *, settings: Settings) -> None: ...
+
+
+# The phases `_run_chain` logs the process's memory after (`scan.phase_memory`), in
+# the order it runs them. A fixed set, so a line can be found and compared by name:
+# "engines" is prompt generation and the engine loop, "finalized" the closing stamp.
+MemoryPhase = Literal["competitors", "engines", "audit", "scoring", "alerts", "fixes", "finalized"]
+MEMORY_PHASES: tuple[str, ...] = get_args(MemoryPhase)
+
+
+def _log_phase_memory(scan_id: str, phase: MemoryPhase) -> None:
+    """One `scan.phase_memory` line: the scan, the phase, and the numbers in `memory_stats`.
+
+    **This can never affect the scan.** It takes the scan's id as a plain string, so
+    it touches no ORM attribute that a rolled-back phase might have expired; it
+    catches everything, including a snapshot that raises; and it logs nothing about
+    a failure, because a memory figure is not worth a second line or a first
+    exception. `cgroup_peak_mb` is the container's running maximum, so a jump between
+    two consecutive lines is the peak the phase between them reached.
+    """
+    try:
+        logger.info("scan.phase_memory", scan_id=scan_id, phase=phase, **memory_stats.snapshot())
+    except Exception:  # noqa: BLE001 - see above
+        return
 
 
 async def _attempt(
@@ -596,6 +636,7 @@ async def _run_chain(
             session, scan, client, settings=settings
         ),
     )
+    _log_phase_memory(job.scan_id, "competitors")
 
     # -- phases 4-5: prompt generation and the engine loop -----------
     #
@@ -609,18 +650,26 @@ async def _run_chain(
         settings=settings, engines=job.engines, prompt_limit=job.prompt_limit,
         defer_terminal_status=True, progress=progress,
     )
+    _log_phase_memory(job.scan_id, "engines")
 
     # -- phase 6: the technical audit --------------------------------
+    #
+    # Its wait for the process's one browser is the scan's own, longer one: nobody is
+    # at a screen, and a run ahead of it can take minutes (`browser_slot`). A wait that
+    # still runs out is a failed audit with `BROWSER_BUSY`, and the chain goes on.
+    # It is never counted against an agency's one run on a request route.
     await _attempt(
         session, scan, client, "audit",
-        lambda: audit_runner.run_audit(session, scan, client),
+        lambda: audit_runner.run_audit(session, scan, client, slot_wait_s=SCAN_AUDIT_WAIT_S),
     )
+    _log_phase_memory(job.scan_id, "audit")
 
     # -- phase 7: scoring --------------------------------------------
     await _attempt(
         session, scan, client, "scoring",
         lambda: scoring_runner.score_scan(session, scan),
     )
+    _log_phase_memory(job.scan_id, "scoring")
 
     # -- phase 7b: alerts, AFTER scoring because they read its score --
     #
@@ -633,6 +682,7 @@ async def _run_chain(
         session, scan, client, "alerts",
         lambda: alerts_service.generate_for_scan(session, scan, client),
     )
+    _log_phase_memory(job.scan_id, "alerts")
 
     # -- phase 8: the fix list ---------------------------------------
     await _attempt(
@@ -641,12 +691,14 @@ async def _run_chain(
             session, scan, client, settings=settings
         ),
     )
+    _log_phase_memory(job.scan_id, "fixes")
 
     # Only now is the scan finished. Stamped from the persisted engine
     # results, so it says what the ENGINE phase achieved — the chained
     # phases each record their own outcome on their own rows, and a
     # failed audit is not a failed scan.
     await scan_runner.finalize_scan(session, scan)
+    _log_phase_memory(job.scan_id, "finalized")
 
 
 async def _count_results(session: AsyncSession, scan_id: str) -> int:

@@ -84,6 +84,34 @@
 .avp-btn--danger { background: var(--avp-danger); color: var(--avp-on-danger); }
 
 /*
+ * A FILLED BUTTON KEEPS ITS FOCUS RING OFF THE FILL — checklist 3.33.
+ *
+ * The global ring (base.css) is beacon-600: the primary's own colour, so on a
+ * primary it merged with the fill's edge (1.0:1), and the danger fill is the
+ * same lightness (1.04:1). `--avp-focus-ring-filled` puts a 2px gap between fill
+ * and ring: always `--avp-surface-seated` in the light theme (the card colour, a
+ * faint lighter band on the ground), and the report's own page colour inside the
+ * report in either app theme. In the dark theme the token is the plain ring, so
+ * that theme does not change.
+ *
+ * It must win over base.css, and does on specificity, not on file order: that
+ * rule is `:where(...):focus-visible`, which counts only its pseudo-class
+ * (0,1,0); this is (0,2,0). contrast.test.ts computes both.
+ *
+ * `outline: 2px solid transparent` is for two readers of the same rule. Tailwind's
+ * preflight, loaded after this sheet in the app, says `:-moz-focusring { outline: auto }`
+ * (0,1,0), and base.css's `outline: none` loses to it, so Firefox drew its own ring
+ * INSIDE the gap; this rule beats it, and the outline is transparent. And forced
+ * colours drops every box-shadow: there the transparent outline is painted in a
+ * system colour, so a filled button keeps a real focus indicator.
+ */
+.avp-btn--primary:focus-visible,
+.avp-btn--danger:focus-visible {
+  box-shadow: var(--avp-focus-ring-filled);
+  outline: 2px solid transparent;
+}
+
+/*
  * HOVER IS GATED — Epic 9.23.
  *
  * A touch device fires `:hover` on tap and then LEAVES IT STUCK until the next

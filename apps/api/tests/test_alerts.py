@@ -7,6 +7,7 @@ two, and a threshold quietly lowered until it fires on noise.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -14,15 +15,20 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
+from avp_api.deps import scan_executor
 from avp_api.models.alert import Alert, AlertKind
-from avp_api.models.engine_result import Sentiment
+from avp_api.models.engine_result import EngineResultStatus, Sentiment
 from avp_api.models.prompt import PromptIntent
-from avp_api.models.scan import Scan
+from avp_api.models.scan import Scan, ScanStatus
 from avp_api.models.score import Score
 from avp_api.services import alerts as alerts_service
-from avp_api.services import scan_runner
+from avp_api.services import scan_executor as executor_module
+from avp_api.services import scan_runner, scoring_runner
 from avp_api.services.engines import CitedSource, EngineAnswer
+from avp_api.services.failed_scan import score_is_withheld
 from avp_api.services.prompts import GeneratedPrompt
+from avp_api.services.scan_executor import SCAN_DEADLINE_EXCEEDED, ScanJob, execute_scan
+from avp_api.services.scoring import FORMULA_VERSION
 
 BASE = "/api/v1"
 
@@ -592,3 +598,340 @@ class TestScoringRanBeforeAlerts:
         src = Path(alerts_service.__file__).parent / "scan_executor.py"
         text = src.read_text()
         assert text.index('"scoring"') < text.index('"alerts"')
+
+
+async def _a_drop_between_two_scans(
+    client: AsyncClient, stub_engines, session, *, lose_citations: bool = False  # noqa: ANN001
+) -> tuple[str, str]:
+    """A client whose second scan fell from 80 to 60 against a baseline old enough to count.
+
+    `lose_citations` also takes the client's own domain out of the second scan's
+    citations: a second kind of alert on the same scan, one that is not about the
+    score. Returns the client id and the second scan's id.
+    """
+    stub_engines()
+    cid = await _client_id(client)
+    first = await _run_scan(client, cid)
+    await _age_scan(session, first, hours=alerts_service.MIN_BASELINE_HOURS + 2)
+    await _set_composite(session, first, "80.0")
+    if lose_citations:
+        stub_engines(cite_own=False)
+    second = await _run_scan(client, cid)
+    await _set_composite(session, second, "60.0")
+    return cid, second
+
+
+async def _set_status(session, scan: Scan, status: ScanStatus) -> None:  # noqa: ANN001
+    """What the executor does to a scan, seen from the side: its status, nothing else."""
+    scan.status = status
+    await session.commit()
+
+
+class TestAFailedScanHasNoVisibilityAlert:
+    """Checklist 3.30, founder decision: no visibility alert is created from a FAILED
+    scan, and one already written for a scan that later FAILED is not shown.
+
+    Alerts are written at phase 7b, BEFORE the scan's final status is stamped, so
+    the scan is still RUNNING when its alert is written and a deadline can end it
+    FAILED afterwards. A visibility alert quotes the composite ("Visibility fell
+    25.0%, from 80.0 to 60.0."), the number 3.24 stopped showing for a failed scan.
+
+    The row stays, and only the feed leaves it out: the feed does not delete it, and
+    nothing that runs today does. That rests on generation running once per scan, in
+    phase 7b (`generate_for_scan` deletes a scan's alerts before it rebuilds them), and
+    on nothing else. Sentiment and owned-citation alerts are not about the score and are
+    left as they are.
+    """
+
+    async def test_generating_for_a_failed_scan_writes_no_visibility_alert(
+        self, client: AsyncClient, stub_engines, session
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        cid, second = await _a_drop_between_two_scans(
+            client, stub_engines, session, lose_citations=True
+        )
+        scan = await session.get(Scan, second)
+        await _set_status(session, scan, ScanStatus.FAILED)
+
+        made = await alerts_service.generate_for_scan(
+            session, scan, await _load_client(session, cid)
+        )
+        await session.commit()
+
+        kinds = {a.kind for a in made}
+        assert AlertKind.VISIBILITY_DROP not in kinds
+        # The other kinds are not about the score. Not vacuous: one is written.
+        assert AlertKind.OWNED_CITATION_LOST in kinds
+        stored = (
+            await session.execute(select(Alert.kind).where(Alert.scan_id == second))
+        ).scalars().all()
+        assert AlertKind.VISIBILITY_DROP not in stored
+        assert AlertKind.OWNED_CITATION_LOST in stored
+
+    @pytest.mark.parametrize(
+        "status", [ScanStatus.RUNNING, ScanStatus.SUCCEEDED, ScanStatus.PARTIAL]
+    )
+    async def test_the_same_drop_on_a_scan_that_did_not_fail_is_still_an_alert(
+        self, client: AsyncClient, stub_engines, session, status: ScanStatus
+    ) -> None:  # noqa: ANN001
+        """RUNNING is what the scan is at phase 7b; the other two are how it ends."""
+        await _sign_up(client)
+        cid, second = await _a_drop_between_two_scans(client, stub_engines, session)
+        scan = await session.get(Scan, second)
+        await _set_status(session, scan, status)
+
+        made = await alerts_service.generate_for_scan(
+            session, scan, await _load_client(session, cid)
+        )
+
+        drops = [a for a in made if a.kind is AlertKind.VISIBILITY_DROP]
+        assert len(drops) == 1
+        assert drops[0].detail == "Visibility fell 25.0%, from 80.0 to 60.0."
+
+    async def test_a_visibility_alert_written_before_the_scan_failed_is_not_shown(
+        self, client: AsyncClient, stub_engines, session
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        cid, second = await _a_drop_between_two_scans(client, stub_engines, session)
+        scan = await session.get(Scan, second)
+        # Phase 7b: alerts are generated while the scan is still running.
+        await _set_status(session, scan, ScanStatus.RUNNING)
+        made = await alerts_service.generate_for_scan(
+            session, scan, await _load_client(session, cid)
+        )
+        await session.commit()
+        drop = next(a for a in made if a.kind is AlertKind.VISIBILITY_DROP)
+
+        # Not vacuous: the alert is in the feed, and in both counts, until the scan fails.
+        shown = (await client.get(f"{BASE}/clients/{cid}/alerts")).json()
+        assert [a["id"] for a in shown["alerts"]] == [drop.id]
+        assert shown["unacknowledged"] == 1
+        assert shown["scansCompared"] == 1
+
+        # The deadline ends the scan FAILED, after its alert was written.
+        await _set_status(session, scan, ScanStatus.FAILED)
+        resp = await client.get(f"{BASE}/clients/{cid}/alerts")
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["alerts"] == []
+        assert body["unacknowledged"] == 0
+        assert body["scansCompared"] == 0
+        # What the alert quoted is nowhere in the response.
+        assert "Visibility fell" not in resp.text
+        assert "from 80.0 to 60.0" not in resp.text
+        # Never deleted: the row is in the database exactly as it was written.
+        kept = (
+            await session.execute(
+                select(Alert.id, Alert.kind, Alert.detail).where(Alert.scan_id == second)
+            )
+        ).all()
+        assert [(r.id, r.kind, r.detail) for r in kept] == [
+            (drop.id, AlertKind.VISIBILITY_DROP, drop.detail)
+        ]
+
+    async def test_the_phase_7b_alert_of_a_scan_the_deadline_fails_is_not_shown(
+        self, client: AsyncClient, stub_engines, session, settings, monkeypatch
+    ) -> None:  # noqa: ANN001
+        """The real chain and the real deadline, not a status written by hand.
+
+        Phase 7b writes the alert while the scan is RUNNING. The fix list then
+        hangs and the deadline falls with one of four planned prompts answered:
+        below the founder's half, so the scan ends FAILED and keeps what the
+        chain wrote, its Score and its alert (`test_scan_deadline.py` pins that
+        half). The feed must not list the alert, or count it, and the score route
+        must not serve the Score it kept.
+        """
+        await _sign_up(client)
+        # Neutral tone, and an answer that cites the client: the visibility alert
+        # is the only kind the second scan can produce.
+        stub_engines(tone=Sentiment.NEUTRAL, prompts=4)
+        cid = await _client_id(client)
+        first = await _run_scan(client, cid)
+        await _age_scan(session, first, hours=alerts_service.MIN_BASELINE_HOURS + 2)
+        await _set_composite(session, first, "80.0")
+        # `_set_composite` writes the model's default version and the chain writes
+        # the current one, and an alert is never raised across two versions.
+        await _set_version(session, first, FORMULA_VERSION)
+
+        # The second scan is queued, then run by hand so that it can be given a deadline.
+        jobs: list[ScanJob] = []
+
+        class _Deferred:
+            async def submit(self, job, *, settings) -> None:  # noqa: ANN001, ARG002
+                jobs.append(job)
+
+        client._transport.app.dependency_overrides[scan_executor] = lambda: _Deferred()  # noqa: SLF001
+        second = await _run_scan(client, cid)
+
+        async def one_prompt_in_four_answers(prompt, *, engines, settings):  # noqa: ANN001, ARG001
+            if prompt != "question 0":
+                return [
+                    EngineAnswer(
+                        engine=engine,
+                        engine_version="stub",
+                        prompt_text=prompt,
+                        status=EngineResultStatus.ERROR,
+                        error_code="PROVIDER_ERROR",
+                    )
+                    for engine in engines
+                ]
+            return [
+                EngineAnswer(
+                    engine=engine,
+                    engine_version="stub",
+                    prompt_text=prompt,
+                    text="Help Scout is a good option. Zendesk is another.",
+                    citations=[
+                        CitedSource(
+                            url="https://helpscout.com/a", domain="helpscout.com", position=1
+                        )
+                    ],
+                    latency_ms=5,
+                )
+                for engine in engines
+            ]
+
+        monkeypatch.setattr(scan_runner.engine_service, "ask_all", one_prompt_in_four_answers)
+
+        # What the chain stored as this scan's composite is pinned, as `_set_composite`
+        # pins it for the other tests here: the formula is `test_scoring.py`'s business.
+        real_score_scan = scoring_runner.score_scan
+
+        async def scored_sixty(session_, scan, **kwargs):  # noqa: ANN001, ANN003, ANN202
+            result = await real_score_scan(session_, scan, **kwargs)
+            if result[0] is not None:
+                result[0].composite = Decimal("60.0")
+                await session_.flush()
+            return result
+
+        monkeypatch.setattr(scoring_runner, "score_scan", scored_sixty)
+
+        reached: list[str] = []
+
+        async def fixes_never_return(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202, ARG001
+            reached.append("fixes")
+            await asyncio.sleep(3600)
+
+        monkeypatch.setattr(executor_module.fix_runner, "generate_for_scan", fixes_never_return)
+        monkeypatch.setattr(executor_module, "MAX_SCAN_DURATION", timedelta(seconds=3))
+
+        await execute_scan(jobs[0], settings=settings)
+
+        # The preconditions, so a failure says which half did not happen.
+        assert reached == ["fixes"], "the deadline did not fall in the fix phase"
+        ended = (
+            await session.execute(select(Scan.status, Scan.error_code).where(Scan.id == second))
+        ).one()
+        assert (ended.status, ended.error_code) == (ScanStatus.FAILED, SCAN_DEADLINE_EXCEEDED)
+        written = (
+            await session.execute(
+                select(Alert.id, Alert.kind, Alert.detail).where(Alert.scan_id == second)
+            )
+        ).all()
+        assert [(r.kind, r.detail) for r in written] == [
+            (AlertKind.VISIBILITY_DROP, "Visibility fell 25.0%, from 80.0 to 60.0.")
+        ], "phase 7b did not write the visibility alert"
+
+        resp = await client.get(f"{BASE}/clients/{cid}/alerts")
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["alerts"] == []
+        assert body["unacknowledged"] == 0
+        assert body["scansCompared"] == 0
+        assert "Visibility fell" not in resp.text
+        # Nothing was deleted: the alert and the Score the chain wrote are still stored.
+        stored_alerts = (
+            await session.execute(select(Alert.id).where(Alert.scan_id == second))
+        ).scalars().all()
+        assert stored_alerts == [written[0].id]
+        stored_scores = (
+            await session.execute(select(Score.composite).where(Score.scan_id == second))
+        ).scalars().all()
+        assert stored_scores == [Decimal("60.0")]
+        # And the score route says there is no score, as the feed says there is no alert.
+        score = await client.get(f"{BASE}/scans/{second}/score")
+        assert score.status_code == 404
+        assert score.json()["detail"] == "This scan failed, so it has no score."
+
+    async def test_the_other_kinds_on_a_failed_scan_stay_in_the_feed_and_the_counts(
+        self, client: AsyncClient, stub_engines, session
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        cid, second = await _a_drop_between_two_scans(
+            client, stub_engines, session, lose_citations=True
+        )
+        scan = await session.get(Scan, second)
+        await _set_status(session, scan, ScanStatus.RUNNING)
+        made = await alerts_service.generate_for_scan(
+            session, scan, await _load_client(session, cid)
+        )
+        await session.commit()
+        # Not vacuous: the scan has a visibility alert and another kind.
+        assert {a.kind for a in made} >= {
+            AlertKind.VISIBILITY_DROP,
+            AlertKind.OWNED_CITATION_LOST,
+        }
+        others = [a for a in made if a.kind is not AlertKind.VISIBILITY_DROP]
+
+        await _set_status(session, scan, ScanStatus.FAILED)
+        body = (await client.get(f"{BASE}/clients/{cid}/alerts")).json()
+
+        assert sorted(a["id"] for a in body["alerts"]) == sorted(a.id for a in others)
+        assert all(a["kind"] != "visibility_drop" for a in body["alerts"])
+        assert body["unacknowledged"] == len(others)
+        # The scan still has an alert in the feed, so it still counts as compared.
+        assert body["scansCompared"] == 1
+        stored = (
+            await session.execute(select(Alert.id).where(Alert.scan_id == second))
+        ).scalars().all()
+        assert len(stored) == len(made)
+
+    @pytest.mark.parametrize("ending", [ScanStatus.SUCCEEDED, ScanStatus.PARTIAL])
+    async def test_a_visibility_alert_on_a_scan_that_did_not_fail_is_still_shown(
+        self, client: AsyncClient, stub_engines, session, ending: ScanStatus
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        cid, second = await _a_drop_between_two_scans(client, stub_engines, session)
+        scan = await session.get(Scan, second)
+        await _set_status(session, scan, ScanStatus.RUNNING)
+        made = await alerts_service.generate_for_scan(
+            session, scan, await _load_client(session, cid)
+        )
+        await session.commit()
+        drop = next(a for a in made if a.kind is AlertKind.VISIBILITY_DROP)
+
+        await _set_status(session, scan, ending)
+        body = (await client.get(f"{BASE}/clients/{cid}/alerts")).json()
+
+        assert [a["id"] for a in body["alerts"]] == [drop.id]
+        assert body["alerts"][0]["detail"] == "Visibility fell 25.0%, from 80.0 to 60.0."
+        assert body["unacknowledged"] == 1
+        assert body["scansCompared"] == 1
+
+    @pytest.mark.parametrize("status", list(ScanStatus), ids=lambda status: status.value)
+    async def test_the_feeds_sql_filter_agrees_with_score_is_withheld_for_every_status(
+        self, client: AsyncClient, stub_engines, session, status: ScanStatus
+    ) -> None:  # noqa: ANN001
+        """`routers/alerts.py` filters in SQL what `failed_scan.score_is_withheld` decides.
+
+        The feed cannot call the Python function, since it filters rows in the query, so the
+        two are held together here for every status there is: a status that one of them
+        withholds and the other does not fails this, whatever it is called.
+        """
+        await _sign_up(client)
+        cid, second = await _a_drop_between_two_scans(client, stub_engines, session)
+        scan = await session.get(Scan, second)
+        await _set_status(session, scan, ScanStatus.RUNNING)
+        made = await alerts_service.generate_for_scan(
+            session, scan, await _load_client(session, cid)
+        )
+        await session.commit()
+        drop = next(a for a in made if a.kind is AlertKind.VISIBILITY_DROP)
+
+        await _set_status(session, scan, status)
+        body = (await client.get(f"{BASE}/clients/{cid}/alerts")).json()
+
+        listed = drop.id in [a["id"] for a in body["alerts"]]
+        assert listed is not score_is_withheld(scan)

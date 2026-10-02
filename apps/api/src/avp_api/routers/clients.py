@@ -5,6 +5,7 @@ Every endpoint here is recorded in docs/api-contracts.md.
 
 from __future__ import annotations
 
+from contextlib import AbstractAsyncContextManager, nullcontext
 from typing import Any
 
 from fastapi import APIRouter, Path, Query, status
@@ -26,6 +27,7 @@ from ..services import answer_gaps as answer_gaps_service
 from ..services import client_history as history_service
 from ..services import crawler_access as crawler_access_service
 from ..services import intake as intake_service
+from ..services.browser_slot import one_run_per_agency
 from ..services.crawl import CrawlResult
 
 router = APIRouter(prefix="/clients", tags=["clients"])
@@ -70,16 +72,38 @@ async def create_client(
     seconds, so one round trip is both sufficient and simpler than polling.
 
     Set `classify: false` to create the record without spending an LLM call.
-    """
-    client = await intake_service.create_client_from_url(
-        db, agency_id=principal.agency_id, raw_url=payload.url, name=payload.name
-    )
 
+    **One site read per agency at a time, and four at once** (2026-10-02). With
+    classification on, this request reads the site in the API's one browser. An agency
+    may have one such read queued or running at once, counted here, on
+    `POST /clients/{clientId}/reclassify` and on `POST /scans/{scanId}/audit` together,
+    and only four agencies at once. Past either limit the request is refused before
+    anything is created. A read that waits more than a minute for the browser is
+    refused the same way, and writes nothing: no client is created.
+
+    **Errors:** `429 rate-limited` (with `Retry-After: 60`): "Your agency already has a
+    site being read. Try again in a minute." or "The crawler is busy with other pages
+    right now. Try again in a minute."; `409 invalid-url`; `409 conflict`;
+    `422 validation-failed`.
+    """
+    # With classification on, this request starts a browser run, and an agency has one
+    # at a time, among at most four agencies (`one_run_per_agency`). Taken FIRST, so a
+    # refused request has created nothing. Held for the browser's part only: the commit
+    # below is the database's. A read that never got the browser raises out of
+    # `run_classification` (a 429, nothing written) before that commit, so the session
+    # rolls back the client row this request flushed: nothing here commits earlier.
+    read: AbstractAsyncContextManager[None] = (
+        one_run_per_agency(principal.agency_id) if payload.classify else nullcontext()
+    )
     crawl: CrawlResult | None = None
-    if payload.classify:
-        client, crawl = await intake_service.run_classification(
-            db, client, settings=settings
+    async with read:
+        client = await intake_service.create_client_from_url(
+            db, agency_id=principal.agency_id, raw_url=payload.url, name=payload.name
         )
+        if payload.classify:
+            client, crawl = await intake_service.run_classification(
+                db, client, settings=settings
+            )
 
     await db.commit()
     await db.refresh(client)
@@ -239,11 +263,21 @@ async def reclassify_client(
 
     Needed because a site changes, and because an AMBIGUOUS result is often
     worth retrying after the operator has looked at the site themselves.
+
+    **One site read per agency at a time, and four at once** (2026-10-02), shared with
+    `POST /clients` and `POST /scans/{scanId}/audit`: while the agency's other read is
+    queued or running, or four agencies' reads are, this is a `429`. Checked after the
+    client is found, so another agency's client is still a `404`. A read that waits
+    more than a minute for the browser is refused with a `429` too, and the client
+    keeps the classification it had.
+
+    **Errors:** `404 not-found`; `429 rate-limited` (with `Retry-After: 60`).
     """
     client = await intake_service.get_client(
         db, agency_id=principal.agency_id, client_id=client_id
     )
-    client, crawl = await intake_service.run_classification(db, client, settings=settings)
+    async with one_run_per_agency(principal.agency_id):
+        client, crawl = await intake_service.run_classification(db, client, settings=settings)
     await db.commit()
     await db.refresh(client)
 

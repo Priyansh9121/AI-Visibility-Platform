@@ -163,21 +163,30 @@ async def create_share_link(
     report at creation time and relying on the URL being unknown would make
     that decision for them. This is the moment they make it.
 
-    **`200`, not `201`, and idempotent.** Calling twice returns the same token
-    rather than minting a second live link to the same report: every extra
-    token would be a URL nobody is tracking. The second call creates nothing,
-    so it does not claim to.
+    **`200`, not `201`, and idempotent.** While the scan has a live link,
+    calling again returns that link exactly as it is: the same token and the
+    same `expiresAt`, with nothing written. Every extra token would be a URL
+    nobody is tracking, so the second call mints nothing and does not claim
+    to.
 
-    **A second call DOES push the expiry out** — Epic 9.21. Idempotence is
-    about the token's identity, not its lifetime, and the alternative reading
-    leaves no way to extend a link without changing its URL: revoke-and-mint
-    issues a new token and kills every copy already sent. Re-sharing is the
-    agency restating the decision to share, which is the signal an expiry
-    should listen to. `services/share.py` carries the argument in full.
+    **A press on a live link does not move its end** — Epic 9.21, as changed by
+    checklist 3.28 (the founder's decision). The share bar says links last 30
+    days from when they are created, and "The link works until ..." names the
+    end the link was given, so both stay true of the link already sent. Only
+    when no link is live does a press make one: a scan never shared, a
+    withdrawn link, or one that has ended. That is a NEW token with a fresh 30
+    days. An ended token is replaced, not revived, so the address that stopped
+    working stays dead on both public routes. `services/share.py` carries the
+    argument in full.
 
     **A FAILED scan cannot be shared** (3.24): `409`
     `/problems/failed-scan-not-shareable`. Its score is never shown, so there
-    is no report to send. PARTIAL and every other status are unchanged.
+    is no report to send. PARTIAL and every other status are unchanged. The
+    status is read again under the row lock, so a scan that fails while this
+    request is in flight is refused the same way and nothing is written. A link
+    minted before the scan failed stays on the row, so it can still be
+    withdrawn, but it no longer opens the report (3.29): the public routes
+    refuse it like a withdrawn one.
 
     **Errors:** `401`, `404` (unknown scan, or another agency's), `409`
     (failed scan).
@@ -190,7 +199,7 @@ async def create_share_link(
     if scan is None:
         raise NotFound(detail="No scan with that identifier.")
     if scan.status is ScanStatus.FAILED:
-        raise FailedScanNotShareable(detail="This scan failed, so its report cannot be shared.")
+        raise FailedScanNotShareable(detail=share_service.FAILED_SCAN_NOT_SHAREABLE_DETAIL)
 
     token, expires_at = await share_service.get_or_create_share_token(db, scan)
     # Commit before returning the URL. The operator's next action is to paste
@@ -297,7 +306,9 @@ async def get_public_report_pdf(
 
     **A revoked or expired link stops serving files immediately**, on the same
     lookup as the JSON route: `scan_for_share_token` returns nothing and this
-    route 404s like any other miss. What revocation cannot do is recall a copy
+    route 404s like any other miss. So does a link whose scan FAILED (3.29): the
+    token is kept for the agency to withdraw, but it opens nothing. What
+    revocation cannot do is recall a copy
     already on someone's disk, and nothing can — the alternative would be
     serving a watermarked or phone-home document, which is a different product
     with different privacy properties. So the residual gap is real, bounded,
@@ -337,10 +348,10 @@ async def get_public_report(
       A holder cannot edit the competitor set, re-run the scan, or reach any
       other scan — the token resolves to exactly one row.
     * **`404` for every rejection, with one code path.** An unknown, revoked or
-      expired token is indistinguishable in both status and body. The only
-      pre-check is the body's length bound (`422` for an empty or over-512
-      token); it says nothing about whether any token is real. Every plausible
-      guess pays for the same index lookup.
+      expired token, and one whose scan FAILED (3.29), is indistinguishable in
+      both status and body. The only pre-check is the body's length bound (`422`
+      for an empty or over-512 token); it says nothing about whether any token
+      is real. Every plausible guess pays for the same index lookup.
     * **The token is in the POST body, not the path**, so it stays out of
       request logs.
     * **No `401`, ever.** A `401` would say "this token is real, authenticate to

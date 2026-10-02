@@ -12,7 +12,8 @@ from decimal import Decimal
 import pytest
 from httpx import AsyncClient
 
-from avp_api.models.engine_result import Engine, EngineResultStatus, Sentiment
+from avp_api.deps import scan_executor
+from avp_api.models.engine_result import Engine, Sentiment
 from avp_api.models.prompt import PromptIntent
 from avp_api.services import scan_runner
 from avp_api.services.engines import CitedSource, EngineAnswer
@@ -305,32 +306,34 @@ class TestReadScore:
 
 class TestInsufficientData:
     async def test_a_scan_with_no_answered_results_scores_null(
-        self, client: AsyncClient, monkeypatch
-    ) -> None:  # noqa: ANN001
-        """An unrunnable scan must never render as a bad score."""
+        self, client: AsyncClient
+    ) -> None:
+        """An unrunnable scan must never render as a bad score.
+
+        This scan has run nothing, so no engine call answered. It used to be a
+        scan whose every engine call failed, but that scan ends FAILED, and a
+        FAILED scan has no score (checklist 3.30): `test_failed_scan_score_routes.py`
+        pins what these routes say about it, a 409 that writes nothing.
+        """
         await _sign_up(client)
         cid = (await client.post(
             f"{BASE}/clients", json={"url": "helpscout.com", "classify": False}
         )).json()["id"]
 
-        generated = [GeneratedPrompt(text="q", intent=PromptIntent.AWARENESS)]
+        class _Idle:
+            """An executor that never runs the scan, so it stays queued."""
 
-        async def fake_generate(**kwargs):  # noqa: ANN003, ARG001
-            return generated, "stub"
+            async def submit(self, job, *, settings) -> None:  # noqa: ANN001, ARG002
+                return None
 
-        async def all_fail(prompt, *, engines, settings):  # noqa: ANN001, ARG001
-            return [
-                EngineAnswer(engine=e, engine_version="stub", prompt_text=prompt,
-                             status=EngineResultStatus.TIMEOUT, error_code="TIMEOUT")
-                for e in engines
-            ]
-
-        monkeypatch.setattr(scan_runner.prompt_service, "generate_prompts", fake_generate)
-        monkeypatch.setattr(scan_runner.engine_service, "ask_all", all_fail)
-
+        client._transport.app.dependency_overrides[scan_executor] = lambda: _Idle()  # noqa: SLF001
         sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
-        body = (await client.post(f"{BASE}/scans/{sid}/score")).json()
+        assert (await client.get(f"{BASE}/scans/{sid}")).json()["status"] == "queued"
 
+        resp = await client.post(f"{BASE}/scans/{sid}/score")
+        body = resp.json()
+
+        assert resp.status_code == 201, resp.text
         assert body["status"] == "insufficient_data"
         assert body["composite"] is None
         assert body["reasonCode"] == "INSUFFICIENT_DATA"

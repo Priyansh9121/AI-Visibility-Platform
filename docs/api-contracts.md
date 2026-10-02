@@ -31,7 +31,11 @@ intent; the schema defines the shapes.
   and all query strings under `/reports/` redacted. No log line carries a token,
   a link that carries one, or an email address. Since 2026-09-30, share tokens
   travel in request bodies (`POST /reports/shared` and `/reports/shared/pdf`),
-  never in the path.
+  never in the path. Since 2026-10-02 the API also logs its own memory, as
+  numbers and our own ids only (`app.memory_at_start`, `scan.phase_memory`,
+  `browser.memory`, `browser.slot_waited`, `browser.slot_busy`; the three about
+  the browser carry `scan_id` or `client_id`); `docs/runbook.md`, "Reading the
+  API's memory", says what each carries.
 
 ### Authentication
 
@@ -106,7 +110,7 @@ make it `unparsed`.
 | `/problems/invalid-reset-token` | 400 | Reset link unknown, expired, used, or orphaned |
 | `/problems/invalid-invitation` | 400 | Invitation unknown, expired, accepted, revoked, or orphaned |
 | `/problems/invalid-google-ticket` | 400 | Google sign-up ticket unknown, used or expired |
-| `/problems/rate-limited` | 429 | Too many requests |
+| `/problems/rate-limited` | 429 | Too many requests. The credential routes (each says its limit) and, since 2026-10-02, the three routes that read a site in the API's one browser (`POST /clients` with classification, `POST /clients/{clientId}/reclassify`, `POST /scans/{scanId}/audit`). `Retry-After` is `60` and `detail` is one of two sentences: "Your agency already has a site being read. Try again in a minute." (this agency's other read is still queued or running) or "The crawler is busy with other pages right now. Try again in a minute." (four agencies' reads are already inside, or this read waited its whole 60 s for the browser). Nothing is written in either case |
 | `/problems/invalid-url` | 409 | Submitted URL has no public domain |
 | `/problems/invalid-webhook-signature` | 400 | Billing webhook signature missing, malformed or wrong |
 | `/problems/billing-not-configured` | 503 | A Stripe setting is unset. `detail` names the variable |
@@ -1203,6 +1207,10 @@ the database by `ck_clients_industry_matches_classification_status`.
 | `ROBOTS_DISALLOWED` | The site's robots.txt forbids AVPScanBot its homepage, so nothing was read (2026-09-29) |
 | `ADDRESS_NOT_PUBLIC` | The site's address, an address the site sent the crawler to (a redirect hop or landing of a navigation, or a robots.txt redirect), or an address Chromium reports it connected to, is not on the public internet (private, loopback, link-local, carrier-grade NAT, multicast, reserved or unspecified, including those forms inside an IPv6 address), so the crawl stopped and nothing was kept (2026-10-01) |
 
+`BROWSER_BUSY` is never a classification reason (2026-10-02): a read that cannot
+get the API's one browser is refused with a `429` (below) and the client is left as
+it was, because a site that was never read is not a site that could not be read.
+
 `industryConfidenceScore` is a **string-encoded decimal or `null`**
 (`NUMERIC(4,3)`), for the same reason as `compositeScore`: a JSON number is an
 IEEE double.
@@ -1213,11 +1221,39 @@ names. Page text is never returned (the facts-only rule); the projection in
 to `CrawlSignals` cannot silently start returning it.
 
 **Errors:** `401`, `409 invalid-url`, `409 conflict` (domain already tracked by
-this agency — carries `clientId`), `422 validation-failed`.
+this agency — carries `clientId`), `422 validation-failed`, and `429 rate-limited`
+(see below; only with `classify: true`).
 
 An unreachable site is **`201` with `classificationStatus: "unclassifiable"`**,
 not an error status. A site that will not load is a normal outcome for a tool
 pointed at an arbitrary URL.
+
+**One site read per agency at a time, and four at once (2026-10-02).** With
+`classify: true` this request reads the site in the API's one browser. An agency
+may have **one** such read queued or running at once, counted across
+`POST /clients` (with classification), `POST /clients/{clientId}/reclassify` and
+`POST /scans/{scanId}/audit` together, and only **four** agencies may at once.
+Past either limit the request is refused with **`429 rate-limited`** and
+`Retry-After: 60` before anything is created: "Your agency already has a site
+being read. Try again in a minute." for this agency's own second read, and "The
+crawler is busy with other pages right now. Try again in a minute." when four
+agencies' reads are already inside (it says nothing about any agency). Another
+agency's read is not affected below the cap, `classify: false` is not a read, and
+**a scan's own audit is not counted and is never refused** by either. Checked
+after the agency's own checks, so another agency's id is still a `404`. The counts
+are held in the API process (one process per instance: `--workers 1`) and are
+released however the read ends.
+
+**The bounds (2026-10-02).** A read waits for the browser at most **60 s**. Past
+that it is refused with the same `429` ("The crawler is busy with other pages right
+now. Try again in a minute.") and **writes nothing**: no client is created here, a
+reclassified client keeps its classification, and a hand-run audit keeps the one
+stored. No client is left `unclassifiable` for it, because a site that was never
+read is not a site that could not be read. Once it has the browser, one run is cut
+at **266 s** for the three pages intake asks for (`crawl_run_cap_s`), ending as
+`TIMEOUT` with nothing kept. A scan's own audit waits for the browser at most
+**300 s**, one capped run ahead of it and a margin, and records `BROWSER_BUSY` when
+that runs out (the scan goes on); its run is cut at **244.5 s**.
 
 #### `GET /api/v1/clients`
 **Auth required.** Cursor-paginated, newest first.
@@ -1279,6 +1315,13 @@ the same rule as `GET /clients/{clientId}` above, and for the same reason.
 **Auth required.** Re-crawls and re-classifies an existing client, returning
 `ClientDetailOut`. Needed because sites change, and because an `ambiguous`
 result is often worth retrying after an operator has looked at the site.
+
+**Errors:** `401`; `404 not-found` (unknown id, or another agency's client);
+`429 rate-limited` (2026-10-02): this agency already has a site being read, on this
+route, `POST /clients` or `POST /scans/{scanId}/audit`, or four agencies' reads are
+already inside, with `Retry-After: 60` — see `POST /clients` for the limits and the
+bounds. A read that waits more than 60 s for the browser is refused with the same
+`429`, and the client keeps the classification it had: nothing is written.
 
 
 ---
@@ -1792,8 +1835,10 @@ was named and tracked Mention Rate (Spearman 0.781, zeros excluded). A brand
 named in no awareness answer reads `0.00`, not `null`.
 
 **`status: "insufficient_data"`** with `composite: null` and
-`reasonCode: "INSUFFICIENT_DATA"` when no engine call answered. An unrunnable
-scan is never rendered as a bad score.
+`reasonCode: "INSUFFICIENT_DATA"` when no engine call answered, a scan that has
+not run yet for one. An unrunnable scan is never rendered as a bad score. A scan
+whose every engine call failed ends `failed` (`ALL_ENGINE_CALLS_FAILED`) and is
+refused, below, rather than scored as `insufficient_data`.
 
 **`inputsDigest`** is a SHA-256 over the exact EngineResult and Competitor rows
 scored. Two scores sharing a digest were computed from identical data, so a
@@ -1809,17 +1854,42 @@ only and Technical Foundation is Epic 6, so 25% of the weight has no
 per-competitor input. A composite on a different weight basis would not be
 comparable to the subject's, which is the point of a comparison.
 
-**Errors:** `401`, `404` (unknown scan, or another agency's).
+**A `failed` scan is not scored** (checklist 3.30, extending 3.24): `409
+/problems/conflict`, `detail` "This scan failed, so it cannot be scored.", and no
+Score row is written or refreshed. A failed scan has no score that is ever shown,
+and a row it kept from before it failed (a deadline that came after scoring) is
+neither changed nor deleted (scoring-spec.md rule 5). This route had no refusal
+for a scan it could not score — a scan with no answered result still gets a `201`
+with an `insufficient_data` row — so this is a new one, in the same `409` family as
+`failed-scan-not-shareable`. The agency check runs first, here and on both reads
+below: another agency's failed scan is the same `404` as an unknown one. The status
+is read under a row lock (`FOR UPDATE` on the scan) held until the score is committed,
+database reads and one insert or update with no outbound call, so a scan that fails
+while this runs either fails first (`409`) or is scored first and fails after. `partial`,
+`succeeded` and every other status are scored as before.
+
+**Errors:** `401`, `404` (unknown scan, or another agency's), `409` (failed scan).
 
 #### `GET /api/v1/scans/{scanId}/score`
 **Auth required.** The most recent stored Score, with the competitor comparison
 recomputed from persisted rows on read.
 
-**Errors:** `401`; `404` — unknown scan, or *"This scan has not been scored yet."*
+**A `failed` scan has no score** (checklist 3.30, extending 3.24): the same `404
+/problems/not-found` as a scan not yet scored, with `detail` "This scan failed, so
+it has no score." — whatever Score rows the scan kept, which are not read, changed
+or deleted. `succeeded` and `partial` scans are served as before.
+
+**Errors:** `401`; `404` — unknown scan, another agency's, *"This scan has not been
+scored yet."*, or *"This scan failed, so it has no score."*
 
 #### `GET /api/v1/scans/{scanId}/scores`
 **Auth required.** Every Score for the scan, newest first — the audit trail of
 which `formulaVersion` produced which composite from which `inputsDigest`.
+
+**A `failed` scan lists none** (checklist 3.30, extending 3.24): `200` with `[]`, the
+same answer as a scan not yet scored, whatever rows the scan kept (rows under older
+formula versions included), which are not read, changed or deleted. `succeeded` and
+`partial` scans list as before.
 
 ---
 
@@ -1872,6 +1942,22 @@ or `null` when the site could not be read. **A site we could not reach is not a
 site with a bad technical foundation** — the two must not collapse into one
 number, which is why `status: "failed"` exists.
 
+**A `failed` scan's audit carries no `technicalFoundation` and no `components`**
+(checklist 3.30, extending 3.24), on `POST` and `GET` alike: `technicalFoundation` is
+`null` and `components` is `{}`, whatever the audit measured. The sub-score is a score
+input and a failed scan shows no score; the component scores are what it is the weighted
+sum of, so they go with it (the report empties `dimensions` the same way).
+`componentWeights` stays. It is this audit's own weighting, the nominal weights with an
+unmeasured component's share redistributed (`effective_weights(components)`), which says
+how the audit was measured and is not a score. So does every fact about the site: the
+checks and their values, the booleans, the counts, the dates, the schema types and
+`excludedComponents`. The stored row keeps its values, and re-auditing a failed scan still
+refreshes it. On `POST` the scan's status is read again after the crawl, so a scan that
+fails while the audit runs is blanked too. The report blanks `audit.technicalFoundation`
+through the same helper and carries no components at all. `succeeded` and `partial` scans
+are unchanged, and the agency check comes first: another agency's failed scan is the same
+`404` as an unknown one.
+
 | `status` | Meaning |
 |---|---|
 | `ok` | Every component measurable; `components` and `componentWeights` filled. |
@@ -1893,6 +1979,36 @@ read the site rather than failed to:
   redirect), refused before it is sent is skipped and the run goes on; a
   skipped sitemap reads as not found.
 
+The other codes: `BROWSER_ERROR` (the browser failed, or a connection the egress
+guard could not verify), `FETCH_FAILED` (the home page returned no response),
+`TIMEOUT` and `BROWSER_BUSY` are reports about our attempt and never a finding
+about the site, while `HTTP_<status>` (the home page answered 400 or above) is the
+site's own answer. Each leaves one `site_reachable` check with the code as its
+`detailCode`, `error` for ours and `fail` for an HTTP status, and excludes
+Technical Foundation as `NOT_YET_MEASURED`.
+
+- `TIMEOUT`: one browser run is cut at **244.5 s** (`audit_run_cap_s`, the sum of
+  every step at its own limit, so only a hang reaches it; 2026-10-02). Since then it
+  also ends a read that never returns, such as the page read after the vitals wait,
+  which has no timeout of its own, and the scan goes on (launch checklist 3.20). The
+  facts robots.txt and the sitemap gave, read before the browser started, are
+  kept; nothing the page gave is, because the cap can fall before the last egress
+  check has said the page's facts may be kept.
+- `BROWSER_ERROR` (2026-10-03): kept apart from a reading like `TIMEOUT`. The
+  browser can fail after the page was read and before the last egress check said
+  what it showed may be kept (or while it closes), and what the page gave up to
+  then is not stored: only what robots.txt and the sitemap said, read before the
+  browser started, is. So **no `failed` audit carries a page reading**: its schema
+  types and flags, canonical, heading and word counts, freshness and vitals fields
+  are always their empty values, for every code above.
+- `BROWSER_BUSY` (2026-10-02): the API reads one page at a time in its one
+  browser, and another read held it for the whole wait, so no browser was started
+  for this audit. Only the audit inside a scan (phase 6) records it, after waiting
+  **300 s**; the scan goes on to scoring, alerts and fixes. The robots.txt and
+  sitemap facts, read before the wait, are kept. `POST /scans/{scanId}/audit` never
+  stores it: after **60 s** it answers `429 rate-limited` and the audit already
+  stored for the scan is kept.
+
 **Core Web Vitals are measured and reported, but carry NO weight in the
 sub-score.** `lcpMs` and `cls` are single-cold-load **lab** measurements, not
 field data — every CWV check carries `LAB_MEASUREMENT_NOT_FIELD_DATA`. Letting a
@@ -1901,15 +2017,16 @@ noisy measurement move a client-facing score would make the score noisy.
 crawler that never interacts cannot produce one. Real INP needs CrUX or RUM.
 
 **`components` and `componentWeights` — 2026-09-30.** Both are populated for `ok`
-and `partial` audits; `failed` audits omit both. `components` holds each
+and `partial` audits; `failed` audits omit both. (A `failed` *scan* omits `components`
+only, whatever its audit measured; see above.) `components` holds each
 component's score (0–100 decimal), calculated only from the measured signals; a
 partial audit drops the one with no signal. `componentWeights` holds the weight
 applied to each component after redistribution — when one is excluded, its weight
 is split proportionally among the rest, exactly as `Score.excludedDimensions`
 works. The weighted sum of `components` times `componentWeights` (÷100) equals
 `technicalFoundation`, and a client can draw the latter as a Luminance Ledger
-whose total lit height is the score. `excludedComponents` lists the keys not in
-`components` and the reason each was dropped (e.g., `content_freshness: NO_DATE_SIGNAL_AVAILABLE`).
+whose total lit height is the score. `excludedComponents` lists the components the
+audit could not measure and the reason each was dropped (e.g., `content_freshness: NO_DATE_SIGNAL_AVAILABLE`).
 
 **Scored components and their nominal weights inside Technical Foundation:**
 indexation 30, structured data 25, content freshness 25, schema presence 20.
@@ -1924,11 +2041,24 @@ never read.
 One audit per scan, refreshed on re-run: a scan is a point-in-time claim about a
 site, so a second audit is a correction rather than a new observation.
 
-**Errors:** `401`, `404` (unknown scan, or another agency's).
+**One site read per agency at a time, and four at once (2026-10-02).** This route
+reads the site in the API's one browser, so it shares the agency's single place, and
+the four-agency cap, with `POST /clients` (with classification) and
+`POST /clients/{clientId}/reclassify`: past either limit this is
+`429 rate-limited` with `Retry-After: 60`. A read that waits more than 60 s for the
+browser is refused with the same `429` and writes nothing: the audit already stored
+for the scan is kept. See `POST /clients` for the limits and the bounds. The audit
+inside a scan is not one of these and is never refused.
+
+**Errors:** `401`, `404` (unknown scan, or another agency's), `429 rate-limited`.
 
 #### `GET /api/v1/scans/{scanId}/audit`
 **Auth required.** The scan's audit with checks in display order.
-`404` — unknown scan, or *"This scan has not been audited yet."*
+`404` — unknown scan, another agency's, or *"This scan has not been audited yet."*
+
+**A `failed` scan's audit carries no `technicalFoundation` and no `components`** here too
+(checklist 3.30, extending 3.24): `null` and `{}`, `componentWeights` and every other
+field as stored. See `POST` above.
 
 #### Effect on scoring
 
@@ -2020,7 +2150,8 @@ place that `tests/test_facts_only.py` can assert over.
 
 **`scanErrorCode` (2026-10-01)** is the scan's own `errorCode`, or `null`: why a
 `partial` or `failed` scan ended that way (see the scan-level status under
-`GET /scans/{scanId}`). A report is served for a scan of any status. The
+`GET /scans/{scanId}`). The signed-in report is served for a scan of any status
+(the shared one for any but `failed`, checklist 3.29). The
 signed-in report turns the code into a sentence and never shows the code. On the
 shared report (the link a prospect opens, and its PDF) the field is always
 `null`: the sentence speaks about the agency's own scan allowance, and the code
@@ -2030,7 +2161,10 @@ is not the link holder's business.
 link ends, or `null`: the token is set and its expiry is in the future. Never the
 token or the URL. It lets the report page offer "Withdraw link" without minting
 one first. `null` for a scan never shared, a withdrawn link and an expired one,
-and always `null` on the shared report and its PDF, like `scanErrorCode`.
+and always `null` on the shared report and its PDF, like `scanErrorCode`. A
+`failed` scan's token still counts (checklist 3.29): that link no longer opens
+the report, but the token stays so the agency can withdraw it, and this field is
+how the page knows to offer that.
 
 **`dimensions` is ordered heaviest-weight first.** The Luminance Ledger stacks
 the heaviest segment at the bottom and consumes this list directly, so the order
@@ -2104,9 +2238,14 @@ report renders all three states differently.
 **A `failed` scan's report carries no score** (checklist 3.24), even if the scan
 kept a score row: `score` is `null`, `dimensions` is `[]`, each competitor's
 `mentionRate` and `shareOfVoice` are `null`, `audit.technicalFoundation` is
-`null` and every `actionItems[].pointsUpside` is `null`. The fixes themselves
-stay. The same holds on the shared report and its PDF. The row is not changed or
-deleted; it is not read.
+`null`, and `actionItems` is `[]` (checklist 3.30: the fix generator was handed the
+score, so nothing it wrote is served; the fix beat then renders its deterministic
+derivation, as for a scan with no fixes generated). The shared report and its PDF
+do not serve a `failed` scan at all: its share link is refused like a withdrawn one
+(checklist 3.29, under `POST /api/v1/reports/shared`). No row is changed or
+deleted: the Score row is not read, and the fix rows are read and not served.
+`proof.crossEngine.standings[]` (each engine's mention rate and sentiment) is not
+withheld.
 
 **`outranksSubject`** is arithmetic over stored counts and ordinals — more
 appearances wins; on a tie, the better position wins. Not a judgement.
@@ -2204,7 +2343,8 @@ accepted that when the cost was zero — links had no expiry and no revocation, 
 the file gave away nothing the link did not already give away permanently — and
 marked this "the route to revisit when revocation ships". **Epic 9.21 shipped it,
 and this is that revisit.** A revoked or expired link stops serving files
-immediately, on the same lookup as the JSON route. What revocation cannot do is
+immediately, on the same lookup as the JSON route, and so does a link whose scan
+`failed` (checklist 3.29, below). What revocation cannot do is
 recall a copy already on someone's disk, and nothing can. That residual gap is
 real, bounded and named: **revocation governs the link from the moment it is
 invoked, never a file already downloaded.**
@@ -2214,10 +2354,11 @@ lookup: read-only, one code path, `404` for every rejection with no shape
 pre-check, and never a `401`.** The token travels in the body so it never appears
 in a request log.
 
-**Errors:** `404 not-found` for an unknown, revoked or expired token — one reply
-for all three, and the problem's `instance` is `/api/v1/reports/shared`, so no
-token is echoed. `422 validation-failed` for a missing, empty, non-string or
-over-512-character token; this reply is the same for a real and a fake token.
+**Errors:** `404 not-found` for an unknown, revoked or expired token, or one whose
+scan `failed` — one reply for all four, and the problem's `instance` is
+`/api/v1/reports/shared/pdf`, so no token is echoed. `422 validation-failed` for a
+missing, empty, non-string or over-512-character token; this reply is the same
+for a real and a fake token.
 
 #### `POST /api/v1/scans/{scanId}/share`
 **Auth required.** Mints (or returns) the scan's public share token. `200`.
@@ -2226,14 +2367,16 @@ over-512-character token; this reply is the same for a real and a fake token.
 measurement until an agency decides otherwise; minting a token for every scan
 and relying on the URL being unknown would make that decision for them.
 
-**`200`, not `201`, and idempotent.** Calling twice returns the *same* token
-rather than a second live link to the same report: every extra token would be a
-URL nobody is tracking. The second call creates nothing, so it does not claim
-to. Serialised with `SELECT … FOR UPDATE`: two
-concurrent calls would otherwise generate two different tokens and issue two
-UPDATEs against the same row, and the loser would walk away holding a URL that
-404s. There is no unique violation to catch in that race, so the lock is
-load-bearing rather than defensive.
+**`200`, not `201`, and idempotent.** While the scan has a live link, calling
+again returns that link exactly as it is: the *same* token, the same URL and the
+same `expiresAt`, and nothing is written. Every extra token would be a URL
+nobody is tracking, so the second call mints nothing and does not claim to.
+Serialised with `SELECT … FOR UPDATE`: two
+concurrent calls on a scan with no link would otherwise generate two different
+tokens and issue two UPDATEs against the same row, and the loser would walk away
+holding a URL that 404s. There is no unique violation to catch in that race, so
+the lock is load-bearing rather than defensive. The loser reads the winner's
+link off the locked row and returns it as it is.
 
 **Response `200`** — `ShareLinkOut`:
 ```json
@@ -2245,15 +2388,32 @@ load-bearing rather than defensive.
 }
 ```
 
-**A second call pushes `expiresAt` out — Epic 9.21.** Idempotence is about the
-token's identity, not its lifetime. The alternative reading leaves no way to
-extend a link without changing its URL, because the only other route is
-revoke-and-mint, which issues a new token and kills every copy already sent —
-so an agency re-sharing on day 29 would have to break the link they are
-re-sending. Re-sharing is the agency restating the decision to share, which is
-exactly the signal an expiry should listen to.
+**A press on a live link does not move its end — Epic 9.21, changed by
+checklist 3.28 (founder decision).** A link is *live* when its token is set and
+its `expiresAt` is in the future. A press on a live link returns it exactly as it
+is: the same token and the same `expiresAt`, with nothing written. Epic 9.21 first
+had a second call push `expiresAt` out to 30 days from that press, and bring an
+ended token back to life; it no longer does either. The share bar says links
+last 30 days from when they are created and shows "The link works until …" for
+the end the link was given, so a press that moved the end would have made both
+untrue of the link already sent, and silently: pressing "Get shareable link" is
+also how the signed-in report gets the URL back, because the report carries
+`shareExpiresAt` and never the token.
 
-**Links live 30 days** (`share.SHARE_TTL`). It must outlive the conversation it
+A press makes a link only when none is live, and what it makes is **new**:
+
+| The scan's link | A press returns |
+|---|---|
+| live | the same token and `expiresAt`; nothing written |
+| never made, or withdrawn | a new token, `expiresAt` 30 days from the press |
+| ended (`expiresAt` in the past) | a new token, `expiresAt` 30 days from the press; the ended token is replaced, so its address stays dead on both public routes |
+
+A link's end is never moved in place. A link that has ended is replaced by
+pressing again; a live one that has to be replaced sooner is withdrawn first,
+and withdrawing ends the address that was sent. A scan that `failed` is refused
+before any of this (`409`, below).
+
+**Links live 30 days** (`share.SHARE_TTL`), from when they are made. It must outlive the conversation it
 was sent for — a report is read, forwarded, and put in front of a budget holder
 over days to a couple of weeks — and must not outlive the data, since a month on
 a re-scan would show different numbers and the link would be making a stale
@@ -2265,7 +2425,9 @@ or `Origin` header. Those are attacker-controlled, and a share link built from a
 spoofed Host is a phishing URL carrying a real token. Configuration, not
 reflection.
 
-**A `failed` scan cannot be shared** (checklist 3.24): `409 /problems/failed-scan-not-shareable`, and no token is minted. A failed scan has no score on the dashboard or the report. `partial` and every other status mint as before.
+**A `failed` scan cannot be shared** (checklist 3.24): `409 /problems/failed-scan-not-shareable`, and no token is minted. A failed scan has no score on the dashboard or the report. `partial` and every other status mint as before. The status is read again under the row lock, so a scan that fails while the request is in flight gets the same `409` and nothing is written: no token minted, and a live link's end not moved.
+
+**A link minted before the scan failed no longer opens its report** (checklist 3.29, founder decision): both public routes refuse it like a withdrawn one (see `POST /api/v1/reports/shared`). The token is not cleared. `DELETE .../share` still takes it down, and the signed-in report's `shareExpiresAt` still reports it, so the screen can offer that.
 
 **Errors:** `401`, `404` (unknown scan, or another agency's), `409` (failed scan).
 
@@ -2394,6 +2556,17 @@ their own kind of wrong. A missing `share_expires_at` is **not** "never
 expires": the comparison is strict, so a token that somehow reached the table
 without one serves nothing. Fail-closed, for a credential.
 
+**A `failed` scan's token 404s the same way** — checklist 3.29, founder decision.
+A failed scan's score is never shown, so there is no report to send, and a link
+minted while the scan was still running used to keep serving it without a score.
+It is now refused like a withdrawn one: the same status, the same `type`, the
+same `detail` ("No report with that link."), on this route and on
+`POST /reports/shared/pdf`, because the status test is one more condition in
+`share.scan_for_share_token`'s query rather than a check in either route. The
+token is **not** cleared: the agency's own report still carries `shareExpiresAt`
+for it, and `DELETE /scans/{scanId}/share` still takes it down. Every other
+status (`partial` included) is served as before.
+
 **`404` for every rejection, on one code path.** A malformed token, an unknown
 token and a well-formed miss are indistinguishable in both status and body.
 There is deliberately no shape or length pre-check: rejecting an implausible
@@ -2404,10 +2577,11 @@ cheaper. **Never `401`** — that would confirm the token is real.
 the competitor set, re-run the scan, or reach any other scan; the token resolves
 to exactly one row.
 
-**Errors:** `404 not-found` for an unknown, revoked or expired token — one reply
-for all three, and the problem's `instance` is `/api/v1/reports/shared`, so no
-token is echoed. `422 validation-failed` for a missing, empty, non-string or
-over-512-character token; this reply is the same for a real and a fake token.
+**Errors:** `404 not-found` for an unknown, revoked or expired token, or one whose
+scan `failed` — one reply for all four, and the problem's `instance` is
+`/api/v1/reports/shared`, so no token is echoed. `422 validation-failed` for a
+missing, empty, non-string or over-512-character token; this reply is the same
+for a real and a fake token.
 
 
 ### Action list (generated fixes) — Epic 8
@@ -2435,8 +2609,24 @@ reason code, leaving any previous list intact. The report still renders its
 deterministic fix list in that case, which is a weaker list rather than a wrong
 one.
 
+**A `failed` scan has no fixes served** (checklist 3.30, extending 3.24). For a scan still
+running, the generator's input includes its score (founder's decision), and what it
+writes can quote it ("share of voice at 30 out of 100"). If the scan then fails, nothing
+it wrote is served, on any route, and the rows are kept. `POST` for a `failed` scan is
+`409 /problems/conflict`, `detail` "This scan failed, so no fixes are written for it.",
+with no model call and no row written or changed. The agency
+check comes first, so another agency's failed scan is the same `404` as an unknown one. A
+scan that fails *while the generation runs* gets the same `409` (its status is read again
+after the call); what the call wrote is kept, and not served. `succeeded`, `partial` and
+every other status are unchanged. The report serves none either: see its `actionItems`
+below.
+
 #### `GET /api/v1/scans/{scanId}/fixes`
 **Auth required.** The scan's fix list as last generated, in rank order.
+
+**A `failed` scan has no fixes served** here too (checklist 3.30, extending 3.24): `200`
+with `status: "empty"` and `items: []`, the same answer as a scan whose fixes were never
+generated, whatever rows the scan kept. They are not changed or deleted. See `POST` above.
 
 Returns an empty list with `status: "empty"` rather than `404` when nothing has
 been generated yet: "no fixes yet" is a state of a scan that exists.
@@ -2492,7 +2682,8 @@ recommendations about our own client's site, generated from our own measurements
 codes, counts and scores — and generated copy is rejected if it carries a claim
 this product cannot support or quotes one of our internal identifiers back.
 
-**Errors:** `401`, `404` (unknown scan, or another agency's).
+**Errors:** `401`, `404` (unknown scan, or another agency's). `POST` also `409` (a
+`failed` scan, as above).
 
 #### `GET /api/v1/scans/{scanId}/report` — `actionItems`
 
@@ -2501,6 +2692,12 @@ this product cannot support or quotes one of our internal identifiers back.
 plan. Empty until generation has run — the report's fix beat renders its
 deterministic derivation in that case. The report **reads** these rows; it never
 generates them, so loading a report remains a read that costs nothing.
+
+**Empty for a `failed` scan** (checklist 3.30), whatever rows it kept: the generator was
+handed the score, so nothing it wrote is served. The fix beat then renders its
+deterministic derivation, as it does when nothing has been generated, so a failed scan's
+report still lists its audit findings in the fixed wording (it has no dimensions, so no
+gap fixes). The PDF and the shared report render this same payload.
 
 
 ---
@@ -2775,6 +2972,23 @@ ambiguous.** Most clients have one scan and can therefore never produce an
 alert; nine of eleven in `avp_dev` are in exactly that state. Reporting "0
 alerts" alone would read as an all-clear the data cannot support.
 
+**A visibility alert from a `failed` scan is left out** (checklist 3.30, extending
+3.24). A `visibility_drop` alert quotes its scan's composite ("Visibility fell
+25.0%, from 80.0 to 60.0."), and a failed scan's score is never shown. Alerts are
+written in phase 7b, while the scan is still `running`, so a scan that the deadline
+then ends `failed` can already have one: the feed does not list it, and
+`unacknowledged` and `scansCompared` do not count it (`scansCompared` is the number
+of scans that have an alert in the feed). This route does not delete or change the row,
+and no `visibility_drop` alert is created for a scan that is already `failed`. Nothing
+that runs today deletes the row either, but that rests on alert generation running once
+per scan, in phase 7b: generation deletes a scan's alerts before it rebuilds them, so a
+second generation for a scan that had since failed would delete its visibility alert and
+write no new one. The other two kinds, `sentiment_decline` and `owned_citation_lost`, are
+not about the score and are listed and counted as before; so is every alert from a
+`succeeded` or `partial` scan. `scansTotal` is unchanged: it counts the client's
+`succeeded` and `partial` scans. The web reads all of this from this one feed, so its
+Alerts page, its outstanding count and its trend markers follow the same rule.
+
 **`scannedAt` is `COALESCE(finished_at, created_at)` — the same expression
 `HistoryScanOut.scanned_at` uses, and it must be identical.** The trend charts
 annotate a point by matching this against the point's `stamp`, and that stamp IS
@@ -2957,11 +3171,12 @@ address, and a 30-day TTL for the link nobody remembers sending. Neither reaches
 a copy already downloaded, which is stated on both PDF routes.
 
 **PDF export shipped in Epic 9.14** — see `GET /scans/{scanId}/report.pdf` and
-`POST /reports/shared/pdf` above. Branding remains unbuilt, and the send path is
-still not "finished": a share link has no expiry and no revocation (recorded
-above), and white-labelling is name-and-slug only, so a report sent today —
-web or PDF — carries the agency's name but not its logo or colours. See
-`build-log.md` Epic 9.0 for the slice order and Epic 9.8 for what the link
+`POST /reports/shared/pdf` above. Branding was then unbuilt, and the send path
+not yet "finished": a share link had no expiry and no revocation (both shipped
+in Epic 9.21), and white-labelling was name-and-slug only, so a report sent
+then — web or PDF — carried the agency's name but not its logo or colours
+(Epic 9.22 added a logo and one chrome accent; a custom domain is deferred).
+See `build-log.md` Epic 9.0 for the slice order and Epic 9.8 for what the link
 deliberately does not do.
 
 **The two seat rows left this table in Epic 9.14** — see *Agencies (seat

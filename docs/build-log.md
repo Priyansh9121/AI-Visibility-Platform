@@ -21869,3 +21869,408 @@ Drift check (north-star §8): no product layer; the launch plan. Lifecycle phase
   - The Python licence audit passes in both environments; `pnpm licenses list --json` audited by `js_license_audit.py`: 236 packages, 233 ok, 3 REVIEW (unchanged; none added by this branch), PASS.
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - **Over the branch:** API pytest 2226 → 2367, web vitest 1399 → 1473, design-system vitest 846 → 875; workers, shared-types and the mypy count unchanged.
+
+# The client Technical screen says what happened to a failed audit in a sentence, not the code
+
+**2026-10-02, the thirteenth entry of the day; branch `pilot-fixes-2`, the founder's brief "memory and the rest of the open decisions" (launch checklist 3.32).** One item, one commit.
+
+**Render: nothing to set. No endpoint, schema, dependency or outbound host change.**
+
+Drift check (north-star §8): Layer 1, Delivery (the signed-in client Technical screen); lifecycle phase: Activation (Epic 9), an agency reading why a site could not be audited.
+
+## 1. What changed
+
+- **Failed-audit states only** (`ClientTechnicalView.tsx`). The generic failed audit printed `Reason: <code>` (for example `Reason: FETCH_FAILED`) in the EmptyState's note. It now shows the same sentence the report's failed-audit card shows since 3.26, from `auditFailureSentence`: "The crawler’s browser stopped before it could read the home page." (`BROWSER_ERROR`), "The crawler asked for the home page and got no response." (`FETCH_FAILED`), "The home page did not finish loading in the time the crawler allows." (`TIMEOUT`), "The site answered with an error (HTTP 503) when the crawler asked for its home page." (`HTTP_<status>`), and "The crawler could not read the home page." for any other code or none (it used to show no note when there was no code; the report already shows the generic sentence).
+- `ROBOTS_DISALLOWED` and `ADDRESS_NOT_PUBLIC` keep their own title and body and lose their `Reason: CODE` note: the body already says why and what follows, so the note could only repeat it. No note element renders there at all.
+- Text only, in existing EmptyState props; no class, token, layout or library change.
+
+## 2. The review
+
+- **UI review (sonnet): PASS WITH NITS.** Checked: each sentence against where its code is set in `technical_audit.py`; nothing invented; the note slot is the quiet tertiary sans line (13 px), which a sentence suits; tertiary on the ground is asserted at 4.5:1 or more; no test removed or weakened.
+  - **Taken:** a pin that the two dedicated states render no note element at all (EmptyState draws an empty paragraph and its gap for any note that is not null).
+  - **Left, and reported to the founder:** the reviewer's High predates this item. `ROBOTS_DISALLOWED` is also stored when robots.txt could not be read at all (no answer, a name that will not resolve, a timeout, 5xx, 429 or a redirect loop: `CrawlPolicy.allows` is false for each), so the screen and the report then say "This site asks crawlers like ours to stay out" for a site that did not answer. Telling the cases apart needs a distinct API code (for example `ROBOTS_UNREACHABLE`) and touches the scoring exclusion and the contract: a founder decision. Also left: a page still slow on the audit's fallback load is caught as `BROWSER_ERROR`, so `TIMEOUT` is close to unreachable (an upstream change to stored codes); on HTTP and unknown codes the body's "An unreachable site…" sits above a more specific note (the same pairing as the report card).
+
+## Found, not fixed
+
+- **Other raw codes on screen**, the same rule in principle, each its own item: the per-check detail codes on ok and partial audits on this screen (`CheckRow`, a deliberate reference-code slot; `FIX_FOR_DETAIL_CODE` words 16 of them, the four lab and field codes have no wording); `Reason: <code>` on the intake classification card (`ClassificationResult.tsx`, a wider code set including provider states whose wording is a product decision); `(<errorCode>)` on an engine result in `ClientPromptsView.tsx`.
+
+## Verified
+
+**Web vitest 1473 → 1490 (+17); floor raised to match.**
+- `ClientTechnicalView.test.tsx` (13 → 30 tests): every failed state shows its sentence exactly once and never the code (`BROWSER_ERROR`, `FETCH_FAILED`, `TIMEOUT`, `HTTP_503`, `HTTP_404`, an unknown code, no code); the two dedicated states keep their copy, show no code, no `Reason:` and no note element; a guard that no failed state renders a code-shaped string (upper case with underscores), over nine `errorCode` values including null, with a self-test that the pattern matches the codes it guards against. The two assertions that pinned `Reason: FETCH_FAILED` and `Reason: ADDRESS_NOT_PUBLIC` now assert the sentence and `not.toContain` the code.
+- **Negative control:** `Reason: ${audit.errorCode}` put back on the generic state fails 13 of the 30 tests; restored and checked with `cmp`. (The implementer ran six more, each restored: the robots or address-not-public `Reason:` back, the robots note repeating its body, the code appended to the sentence, another code as the robots note, no note when there is no code.)
+
+**The rest of the bar** (this tree, one run).
+- API pytest 2367, workers 26, shared-types 53 (0 fail), design-system 875, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; the styleguide builds; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`).
+- OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# A share link stops opening the report once its scan has failed, like a withdrawn link
+
+**2026-10-02, the fourteenth entry of the day; branch `pilot-fixes-2`, the founder's brief "memory and the rest of the open decisions" (launch checklist 3.29).** One item, one commit.
+
+**Render: nothing to set. No migration, no new dependency or outbound host.** Route descriptions changed (OpenAPI and `api.gen.ts` regenerated, descriptions only). Deploy the API before or with the web app: the share bar's new sentence is true once the API refuses the link.
+
+Drift check (north-star §8): Layer 1, Delivery (the public shared report and the share bar); lifecycle phase: Activation (Epic 9), what a prospect can open.
+
+## 1. What changed
+
+- **Founder decision (final):** the public report (JSON, page and PDF) refuses a share link whose scan is FAILED, the same way it treats a withdrawn or expired link; the token is not deleted, so the agency can still withdraw it.
+- **One place decides** (`scan_for_share_token`, `services/share.py`): `Scan.status != FAILED` sits in the same WHERE as the token and its expiry, and both public routes (`POST /reports/shared`, `POST /reports/shared/pdf`) use that lookup and nothing else. A failed scan's link therefore gets exactly what an unknown, withdrawn or expired one gets: `404 /problems/not-found`, "No report with that link.", the same headers, the same `/share` page ("This report link is not available…"). It costs what an expired token costs (the index finds the row; the rest of the predicate drops it).
+- **The token stays on the row.** The signed-in report still carries `shareExpiresAt` for it, and `DELETE /scans/{scanId}/share` still withdraws it.
+- **Minting re-checks under the lock** (from the security review). `get_or_create_share_token` reads the status again after its `FOR UPDATE` re-select and raises the route's own `409 failed-scan-not-shareable` for a FAILED scan before writing anything, so a scan that fails between the route's check and the lock gets no link and no pushed expiry. Both refusals use one sentence constant.
+- **The share bar tells the truth about a failed scan's link** (`ShareLinkBar.tsx`):
+  - lead: "This scan failed, so its report cannot be shared. Its existing link no longer opens the report." (it said the link works until it is withdrawn or ends); no "The link works until …" line; no Get button; the URL field and Copy are hidden too (also when the page learns of the failure after a mint in the same visit);
+  - Withdraw stays, with its confirm step: "Withdraw this link? It will be removed permanently." (the other scans keep "…Anyone who opens it will no longer see the report.");
+  - a failed withdrawal says "The link could not be withdrawn. Try again." (the other scans keep "…and may still open…", which is false here).
+- **Tests that pinned "keeps serving", inverted and renamed:** `test_an_already_shared_scan_that_then_fails_serves_without_a_score` → `…_is_refused_like_a_withdrawn_link`; the reaper test in `test_share_link.py` → `test_a_scan_reaped_while_it_is_shared_keeps_its_token_and_its_link_stops_opening`; three share-bar test titles. `docs/api-contracts.md`: the public routes, the mint's re-check, and the PDF route's problem `instance`.
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS.** Checked clean: every public read path goes through the one lookup (the old `GET /reports/{token}` routes are gone, `/share/[token]` only moves the token into the fragment); the refusal is indistinguishable from an unknown token in status, type, detail, `instance` and headers; a request in flight when the scan fails can only return what was already public; FAILED is terminal, so the kept token never comes back; both public 200s are `Cache-Control: private, no-store` POST responses; tenancy; facts-only.
+  - **Taken:** the mint's re-check under the lock (L1); full header and body comparisons against a withdrawn and a never-issued token on both routes (L2); the docstring's cost claim; the PDF route's `instance` in the contract.
+- **UI review (sonnet): FAIL (narrow), then PASS WITH NITS.** Round 1 found two strings this item made false on a failed scan: the failed-withdrawal alert ("may still open") and the confirm question ("no longer see the report"); both fixed, with the copy field hidden for a failed scan. Round 2 confirmed every failed-scan state (live token, after Keep link, after a failed and a successful withdrawal, a 409, a status change after a mint) and took one Low: "It is removed for good." read as already done; now "It will be removed permanently."
+
+## Found, not fixed
+
+- **The dashboard's "Share a report" step counts a failed scan's dead link** (`shared_scan_count` counts `share_token IS NOT NULL`, and the getting-started card says "One live link."); expired links already count the same way by design. Founder: exclude dead links from that count, or keep it.
+- **Only FAILED is refused.** Cancelled scans still mint and serve (nothing writes CANCELLED today); a test pins that, so a future cancel feature will meet it.
+
+## Verified
+
+**API pytest 2367 → 2379 (+12); web vitest 1490 → 1499 (+9); both floors raised to match.**
+- API: both public routes 404 a failed scan's token exactly as a withdrawn and a never-issued one (status, problem body, `instance`, headers minus date and request id); only FAILED is refused (parametrised over all six statuses, 200 JSON and `%PDF` for the other five); the token stays on the row, the signed-in report keeps `shareExpiresAt`, and the agency can withdraw it; the reaper case; the lookup itself returns nothing for FAILED; a scan that fails between the route's read and the lock gets 409 with nothing written (first link and live link), and the service refuses a stale object.
+- Web: the failed-scan lead, no end date, no Get button, no URL field or Copy; Withdraw and its confirm step; the failed-withdrawal alert by failure shape (502, 500, no answer) with focus back on Withdraw; contrast cases that a scan which did not fail keeps its old sentences.
+- **Negative controls:**
+  - the lookup's FAILED condition removed fails 5 API tests; restored and checked with `cmp`;
+  - the re-check under the lock removed fails the 3 race and stale-object cases; the share bar put back to its pre-fix state fails 5 web tests (the implementer's runs, each restored and checked).
+
+**The rest of the bar** (this tree; the web suite and typecheck were run again after the last wording change).
+- Workers 26, shared-types 53 (0 fail), design-system 875, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`).
+- OpenAPI and `api.gen.ts` regenerate with no change from the committed files (descriptions of three routes changed in this item).
+- Exit codes were read from files.
+
+# A share-bar test checks the wording the failed-scan confirm question now uses
+
+**2026-10-02, the fifteenth entry of the day; branch `pilot-fixes-2`, a follow-up to the fourteenth (launch checklist 3.29).** One test line, one commit.
+
+**Render: nothing to set. Test only.**
+
+Drift check (north-star §8): Layer 1, Delivery (the share bar); lifecycle phase: Activation (Epic 9), what an agency is asked before a link is withdrawn.
+
+## 1. What changed
+
+- 3.29's UI review changed the failed-scan confirm question from "It is removed for good." to "It will be removed permanently." The contrast test that a scan which did not fail is never asked it ("and a scan that did not fail keeps the question it had", `ShareLinkBar.liveLink.test.tsx`) still asserted `not.toContain('removed for good')`, words that are no longer anywhere, so it could not fail. It now asserts `not.toContain('removed permanently')`.
+- Found by 3.28's implementer. Its own commit: the fix belongs to 3.29, which had already landed.
+
+## Verified
+
+**Web vitest 1499 → 1499 (no test added or removed).**
+- **Negative control:** the failed-scan sentence added to the question the other scans get fails this test (1 of the file's 27); restored and checked with `cmp`.
+
+**The rest of the bar** (this tree).
+- API pytest: the first run had one failure, a wall-clock test (`test_call_bounds.py`, `test_the_whole_call_is_bounded_even_when_every_attempt_hangs[classify]`: 1.66 s against a 1.0 s allowance) while four other suites ran on the same machine. Its file passed on its own (28 tests), and a full re-run passed: 2379 (floor 2379).
+- Workers 26, shared-types 53 (0 fail), design-system 875, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; the styleguide builds; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+- OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# A failed scan has no score on the score routes, no visibility alert, and none of its generated fixes served
+
+**2026-10-02, the sixteenth entry of the day; branch `pilot-fixes-2`, the founder's brief "memory and the rest of the open decisions" (launch checklist 3.30).** One item, one commit.
+
+**Render: nothing to set. No migration, no new dependency or outbound host.** Route descriptions changed (OpenAPI and `api.gen.ts` regenerated, descriptions only). `POST /scans/{scanId}/fixes` has a new `409`.
+
+Drift check (north-star §8): Layer 1, Delivery (the score, fix, audit and alert routes, and the report: one rule across them, so one item); lifecycle phase: Activation (Epic 9), what an agency is shown about a scan that failed.
+
+## 1. What changed
+
+- **Founder decision (final):** extend 3.24's rule. The three score routes treat a FAILED scan as having no score, in the shape of an unscored scan's answer; no visibility alert is created from a FAILED scan, and one already written for a scan that later FAILED is not shown; Score rows are never deleted or re-scored (scoring-spec rule 5); the fix generator's input may keep the score, never shown, and the contract says so.
+- **Score routes** (`routers/scores.py`). `GET /scans/{scanId}/score` answers `404` "This scan failed, so it has no score." (the 404 of a scan not yet scored); `GET /scans/{scanId}/scores` answers `[]`; `POST /scans/{scanId}/score` answers `409 /problems/conflict` "This scan failed, so it cannot be scored." and writes nothing. The agency check comes first on every route, so another agency's failed scan is the same 404 as an unknown one. POST reads the scan again `FOR UPDATE` (with `populate_existing`) before its check, so a scan that fails between the route's first read and the write gets no Score row and its kept row is not refreshed. The lock covers database reads and one write, no outbound call (4–45 ms locally).
+- **Alerts.** `generate_for_scan` writes no visibility alert for a FAILED scan; tone and citation alerts are not about the score and are generated either way. The client's alert feed leaves out a visibility alert whose scan is FAILED: alerts are written in phase 7b, while the scan is still running, so one can exist before the scan ends failed. `unacknowledged` and `scansCompared` are counted from the listed alerts, so they cannot count a hidden one. Nothing deletes or changes the row; that it survives rests on generation running once per scan (phase 7b), which the comment and the contract now say.
+- **Fixes (the security review's Medium).** The fix generator's one prompt carries the composite and every dimension score, and its wording is told to refer to "this scan's actual numbers" (a stored fix has read "share of voice at 30 out of 100"), so blanking `pointsUpside` was not enough. For a FAILED scan nothing the generator wrote is served:
+  - `GET /scans/{scanId}/fixes` answers `200` with `status: "empty"` and `items: []`, the answer for a scan whose fixes were never generated;
+  - `POST /scans/{scanId}/fixes` answers `409` "This scan failed, so no fixes are written for it." with no model call, and the same `409` if the scan fails while the call runs (the rows that call wrote are kept and never served);
+  - the report's `actionItems` is `[]` (the signed-in JSON and its PDF; since 3.29 the shared report refuses a failed scan). The report then lists the audit's fixes in its own fixed wording, as for a scan with no generated fixes; gap fixes were already absent (no dimensions).
+  - The generator's input still includes the score for a scan that is running (the founder's decision); the contract says what follows if that scan then fails.
+- **Audit.** A FAILED scan's audit (`GET` and `POST /scans/{scanId}/audit`) carries no `technicalFoundation` and no `components`; `componentWeights` stays (this audit's weighting, not a score). POST reads the status again after the crawl.
+- **One helper** (`services/failed_scan.py`: `score_is_withheld`, `served_fixes`, `withhold_technical_foundation`), used by the report, the fix, audit and score routes and alert generation; a guard test fails if one of them compares the status itself, and another that the feed's SQL filter agrees with the helper for every status.
+- **No Score or Alert row is deleted, changed or re-scored**; no migration; `FORMULA_VERSION` unchanged.
+- **Test-only, found while landing:** the stand-in for "the scan ends during the call" now writes through an engine of its own. Borrowed from the suite's shared pool in the middle of a request, its connection left the pool slow to hand out the next one, and the row-lock test that ran next timed out waiting for its request (only in that order; the full suite's order hid it). After the change, 12 of 12 runs of that pair and two runs of the six files pass.
+- `docs/api-contracts.md`: the score, fixes, audit and alert routes, and the report's failed-scan paragraph (merged with 3.29's sentence on the shared report).
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS.** Checked clean: the agency check before the status check on all seven routes (another agency's failed scan is an indistinguishable 404, and no model call or crawl runs for it); none of the score routes serves a failed scan's numbers; the dashboard and the trend; the report and PDF; alerts (a baseline can never be FAILED; acknowledge echoes only the id and time; `scansTotal` and the listed counts reveal no hidden alert); no Score row deleted; facts-only; ids only in logs.
+  - **Taken:** the Medium (fixes, above); L1, the lock on POST /score and the status re-read on POST /fixes and POST /audit; L2, the reworded "never deleted"; L3, the `componentWeights` wording; L4, the helper's docstring narrowed to what it withholds; the nits (one helper for every Python check; the contract's wording on POST /fixes).
+- No UI review: nothing in `apps/web` changed.
+
+## Found, not fixed
+
+- **Per-engine figures in the report** (`proof.crossEngine.standings[]`: each engine's mention rate and sentiment) are served for a failed scan. Sentiment there is computed like the Sentiment dimension, so a weighted sum of them may rebuild the failed scan's sub-score (unconfirmed on real data). Founder: withhold them for a failed scan, or keep.
+- `POST /scans/{scanId}/score`'s docstring says re-scoring inserts a new row; under the same formula version the unique key makes it refresh the row (pre-existing wording).
+- The dashboard's SQL, the history's plottable filter and the share refusal apply 3.24's rule on their own, not through the helper (the module says so).
+
+## Verified
+
+**API pytest 2379 → 2438 (+59); floor raised to match.**
+- Score routes: 404/[]/409 on a failed scan with Score rows present, unchanged column by column; SUCCEEDED and PARTIAL contrasts; another agency's failed scan 404; the row lock (another transaction's uncommitted FAILED write held while the request waits on the lock, seen in `pg_stat_activity`, then 409 with nothing written; a scan left SUCCEEDED is scored under the same lock).
+- Alerts: none generated from a failed scan; an existing one hidden from the feed and its counts and kept in the table; tone and citation alerts unaffected; the SQL filter against the helper over all six statuses.
+- Fixes, report and audit: the stand-in model quotes the composite it is given, so stored rows really hold the score, and no failed-scan response, report or PDF contains it; POST /fixes refused with no model call; a scan that ends FAILED during POST /fixes or POST /audit is refused or blanked, one that ends PARTIAL is served.
+- **Negative control:** `served_fixes` serving a failed scan's fixes again fails 6 tests (the fix list, the scan that fails during POST, the report, the PDF, the three-route agreement, 3.24's report test); restored and checked with `cmp`. The implementer's, each restored: POST /score without the locked read fails 3; without `populate_existing`, 2; without the re-reads, the during-the-call tests; the helper withholding CANCELLED too, only the agreement case for it.
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, shared-types 53 (0 fail), design-system 875, web 1499, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; the styleguide builds; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+- OpenAPI and `api.gen.ts` regenerate with no change from the committed files (eight route descriptions changed in this item, nothing else).
+- Exit codes were read from files.
+
+# "Get shareable link" on a live link returns it as it is; only a press with no live link makes a new one, for 30 days
+
+**2026-10-02, the seventeenth entry of the day; branch `pilot-fixes-2`, the founder's brief "memory and the rest of the open decisions" (launch checklist 3.28).** One item, one commit.
+
+**Render: nothing to set. No migration, no new dependency or outbound host.** Two descriptions changed (`ShareLinkOut` and `POST /scans/{scanId}/share`; OpenAPI and `api.gen.ts` regenerated).
+
+Drift check (north-star §8): Layer 5, Distribution / Action (the share link); lifecycle phase: Activation (Epic 9), what an agency sends a prospect.
+
+## 1. What changed
+
+- **Founder decision (final):** "Get shareable link" on a live link returns it unchanged, the same token and the same end; only a press when no link is live makes a new one, for 30 days. Epic 9.21's contract text and the tests that pinned the old behaviour are updated.
+- **The mint** (`get_or_create_share_token`, `services/share.py`). Under the scan's row lock, after the agency check and 3.29's refusal of a failed scan: a live link is returned as it is and nothing is written; no token, a withdrawn link or an ended one gets a NEW token and an end 30 days from the press. An ended token is never revived, so its address stays dead. Epic 9.21 used to move a live link's end to 30 days from each press; the share bar's lead already says links work for 30 days "from when they are created", which is now exactly true. The `share.token.refreshed` log line is gone (`share.token.minted` logs the scan id only). Its return type is now `tuple[str, datetime]`, which takes mypy from 47 to 43.
+- **One statement of "live"** (from the security review): `link_is_live(token, expires_at, now)`, a token and an end strictly after now, used by the mint and by the signed-in report's `shareExpiresAt`, with comments tying it both ways to the same condition in `scan_for_share_token`'s SQL. A link whose end is exactly now is over in all three.
+- **Texts brought in line:** the route and `ShareLinkOut` descriptions; `docs/api-contracts.md` (`POST /scans/{scanId}/share`, the 9.21 notes; the paragraph from Epic 9.14 that still said a share link has no expiry and no revocation, and that branding was unbuilt, is now in the past tense with what 9.21 and 9.22 added); `revoke_share_token`'s docstring (the lock's real reason); the web's `shareLink` comment (idempotent while live; a failed scan is refused with 409 even with a live link); a model comment.
+- **Tests that pinned the old behaviour:**
+  - API: `test_re_sharing_extends_an_almost_dead_link_without_changing_its_url` → `test_pressing_after_the_link_expired_makes_a_new_link_and_the_old_address_stays_dead`; the docstring of `test_the_same_scan_returns_the_same_token_every_time` (it said a link works forever); the comment in 3.29's `test_failed_scan_hidden.py` that read "a live link's end not pushed out" now says the `409` is the guard that the failed-scan refusal comes before the live-link shortcut.
+  - Web (`ShareLinkBar.liveLink.test.tsx`): "shows the minted date once Get shareable link is pressed" → "keeps the date it had once Get shareable link is pressed, when the API returns a live link as it is"; "keeps the date line while Creating…, with Withdraw disabled" → "…while Creating… and after the same end comes back, with Withdraw disabled meanwhile".
+- **Tests added:** API `test_pressing_on_a_live_link_returns_it_exactly_as_it_is`, `test_two_presses_at_once_on_a_scan_with_no_link_make_one_link` (two `FOR UPDATE` waiters seen in `pg_stat_activity`), `test_the_press_and_the_public_lookup_draw_the_line_at_the_same_microsecond`, `test_link_is_live_needs_a_token_and_an_end_strictly_after_now`; web "shows the new link's own date when a press follows a withdrawal", "replaces the date with the one the API returns when it is not the end the page loaded with".
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS**, nothing at Medium or above. Checked clean: the order of checks under the row lock (agency, then the failed-scan refusal, then the live-link shortcut); the same "live" as the public report, to the microsecond and the time zone; the races (two presses, a press against a withdrawal, the reaper, a deadline, finalising); no path revives or re-serves an old token; token entropy and uniqueness unchanged; no token in any log; the CHECK on token and end holds on every write.
+  - **Taken:** L1, one Python statement of "live" and the boundary tests; L2, the 3.29 test comment.
+  - **Noted, outside this item, and confirmed by reading the code:** `finalize_scan` (`services/scan_runner.py`) stamps the final status after checking only its in-memory copy, so a scan the reaper marked FAILED while its chain was still alive could be stamped succeeded or partial within one 30-second heartbeat, and its kept share link (3.29) would open again. The fix is to make that write conditional on the row still being RUNNING, as the lease renewal is. New checklist row.
+- **UI review (sonnet): PASS WITH NITS.** Everything the bar says stays true in every state (no link, live at load, made in the visit, withdrawn then pressed, ended then pressed, 3.29's failed-scan states).
+  - **Taken:** the Medium, a test that a press returning a different end replaces the date on screen; titles that say "when the API returns" (the API is mocked; the API tests that pin it are named in the comment); the 409 in the `shareLink` comment.
+  - **Left:** for a link live at load, the lead says "Creates a link", the busy label "Creating…" and a failure "could not be created", though a press now only fetches it; nothing there says the end moves, and it was as inexact under 9.21 (wording, the founder's call).
+
+## Verified
+
+**API pytest 2438 → 2442 (+4); web vitest 1499 → 1501 (+2); both floors raised to match. mypy 47 → 43 (ceiling 50, unchanged).**
+- **Negative controls** (this tree, each restored and checked with `cmp`):
+  - the live-link shortcut switched off, so every press makes a new link, fails 5 (the live-link test, two presses at once, the same token every time, the boundary test, and `test_share_lock_refresh.py`'s mint after another transaction's);
+  - "live" made `>=` fails the 2 boundary tests.
+  - The implementer's: the SQL made `>=` fails the boundary test; the shortcut moved before the failed-scan refusal fails exactly the "link already live" case of 3.29's race test (200 instead of 409); the bar preferring the end it loaded with fails the new web test.
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, shared-types 53 (0 fail), design-system 875.
+- ruff clean; all typechecks clean; the styleguide builds; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+- OpenAPI and `api.gen.ts` regenerate with no change from the committed files (two descriptions changed in this item).
+- Exit codes were read from files.
+
+# After "Get shareable link" the bar says the link is ready and focus is on it; a focused filled button keeps a gap between its fill and its ring
+
+**2026-10-02, the eighteenth entry of the day; branch `pilot-fixes-2`, the founder's brief "memory and the rest of the open decisions" (launch checklist 3.33).** One item, one commit.
+
+**Render: nothing to set. No endpoint, schema, dependency or outbound host change.**
+
+Drift check (north-star §8): Layer 5, Distribution / Action (the share bar) and Layer 1, Delivery (the design system's filled buttons). One checklist row, "two small focus details", in two parts that share no file; lifecycle phase: Activation (Epic 9), the moment an agency gets the link it will send.
+
+## 1. What changed
+
+- **Founder decision (final):** after "Get shareable link" (from a live link or not), announce "Link ready. It works until <date>." in the bar's status region and move focus to the link field; filled (primary) buttons in the light theme get a 2px surface-coloured gap between the button and the focus ring; extend the token contrast test; the report stays paper.
+- **The share bar** (`ShareLinkBar.tsx`).
+  - After a mint, the existing `role="status"` region reads "Link ready. It works until 04 Nov 2026, 09:30 UTC." (the date in the bar's own format; "Link ready." alone if the answer carries no end; nothing for a failed scan, which has no Get button). The standing "The link works until …" line is not a live region, so the date is announced once; it is on screen twice (a decision for the founder, below).
+  - Focus moves to the link field, which then selects its text. The field mounts only when a mint makes a link, so it takes focus through `autoFocus` (`TextField` takes no ref); a re-render does not pull focus back.
+  - A failed mint gives focus back to "Get shareable link" when focus was lost or is still there (someone who has moved on keeps their place), and Get is described by the mint's own failure sentence (`aria-describedby`, as the PDF button already does), so a screen reader that drops the alert when focus moves still says it. A withdraw failure beside Get is not wired to it.
+  - A mint clears the earlier "give focus back to Withdraw link" flag, which otherwise took focus ahead of the new field.
+- **Tests that pinned no focus after a mint** (`ShareLinkBar.test.tsx`): "a link that has only just been made does not take focus" → "a link that has just been made takes focus on its field, text selected, and Withdraw link does not"; "a failed withdraw does not leave focus claimed for a trigger that has not come back" → "…for the Withdraw link: a link made later takes it on its field" (its last assertion expected the page); "a withdrawn link is said in the region that was there before it was" keeps its name, its first assertion now "Link ready." where the region was empty. New: `ShareLinkBar.linkReady.test.tsx` (30 tests).
+- **The focus ring on filled buttons** (`packages/design-system`).
+  - The global ring is beacon-600, the primary's own colour, so on a focused primary it merged with the fill's edge (1.00–1.02:1; the danger fill 1.04:1). In the light theme `.avp-btn--primary` and `.avp-btn--danger` now draw `--avp-focus-ring-filled`: a 2px gap in `--avp-surface-seated`, then the same 2px ring and halo. Gap against the fill 4.88–4.99:1 (both gradient ends) and 5.20:1 (danger); ring against the gap 4.99:1; ring against every surface a button sits on 3.82:1 or more (3.90:1 or more hovered).
+  - The report's own primary buttons ("Build the proposal", the competitor list's Save) had the same fault (1.13:1). The report block declares its own version with its page colour as the gap (about 4.4:1 against the paper fill, ring 4.99:1), in either app theme, so the report stays paper. The dark theme keeps the plain ring.
+  - The rule also sets `outline: 2px solid transparent`: Tailwind's preflight, loaded after the design system, otherwise lets Firefox draw its native ring inside the gap, and in forced colours, where shadows are dropped, the outline is what shows. It wins by specificity, (0,2,0) against the global rule's and preflight's (0,1,0), not by file order.
+  - `contrast.test.ts` covers the light theme, the report and a report inside a dark app (layers, ratios, hover, the cascade, the outline); `reportIsolation.test.ts` passes. `docs/design-system.md` says where the gap comes from.
+
+## 2. The review
+
+- **UI review (sonnet): PASS WITH NITS.** Checked clean: the status region (no URL or token in it, nothing for a failed scan); `autoFocus` under React 19's StrictMode, on re-render and on a re-mint after a withdrawal; focus after a button becomes disabled in Chromium, Firefox and WebKit, which the conditional return covers; the computed ring in Chromium and Firefox on every surface and in the report inside a dark app; the ratios, hovered too; secondary, ghost and the dark theme unchanged; design-system only (no stock class, off-scale spacing, inline colour or host); the design hook's three flags in `components.css` (two width transitions and the evidence block's left border) and its gradient-text flag predate this item.
+  - **Taken:** the Medium (Get described by the failed mint's sentence); Firefox's native ring (the transparent outline); the doc's wording of where the gap comes from.
+  - **For the founder:** the date shows twice after a mint (the standing line and the status line). Not a WCAG failure. The reviewer recommends hiding the status text visually (it stays announced), the implementer agrees; kept visible here because the brief puts the message in the status region, which shows its other messages.
+
+## Found, not fixed
+
+- **Forced colours, every other control:** the global focus style is a shadow with `outline: none`, so in Windows High Contrast no non-filled control shows focus (filled buttons now do). The same transparent outline on the global rule fixes it, and Firefox's native ring on those controls with it.
+- **A focused text field draws a ring on its wrapper and a second on the input** (both themes); the share link's field now takes focus after every mint. One line on `.avp-field__input:focus-visible`, for every field.
+- **Dark theme:** the ring against the primary fill is 1.8–2.0:1 and against the danger fill about 1.0:1; against the surface it is 5.2:1 or more, so 1.4.11 holds on the outer edge (the brief left the dark theme as it is).
+- **Every primary button has a 1px rim of the gradient's other end** (it tiles into the transparent border); likely `background-origin: border-box`. Cosmetic.
+
+## Verified
+
+**Design-system vitest 875 → 935 (+60); web vitest 1501 → 1531 (+30); both floors raised to match.**
+- **Negative controls:** on this tree, the link field without `autoFocus` fails 9 tests; restored and checked with `cmp`. The implementer's, each restored: Get without `aria-describedby` fails 5; Get wired to a withdraw error fails exactly the 3 provenance tests; the filled rule without the outline fails 1, wrapped in `:where()` 4; the report's own token removed fails 15; the report gap a shade off the page colour fails only the page-colour test; a mint that keeps the stale Withdraw flag fails 2.
+- Real browsers (the implementer and the reviewer): Tab and Enter on Get leaves focus on the link with its text selected and the status reading the sentence; Firefox shows the clean gap after the outline and the native ring before it; forced colours shows an outline on a filled button.
+
+**The rest of the bar** (this tree, one run).
+- API pytest 2442, workers 26, shared-types 53 (0 fail), mypy 43 (ceiling 50).
+- ruff clean; all typechecks clean; the styleguide builds; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+- OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# The API serves its JSON bodies without Pydantic's alias warning: FastAPI 0.117.1, the wire unchanged
+
+**2026-10-02, the nineteenth entry of the day; branch `pilot-fixes-2`, the founder's brief "memory and the rest of the open decisions" (item M2).** One item, one commit.
+
+**Render: nothing to set. A dependency version changes (FastAPI 0.116.2 → 0.117.1, MIT, no new package, host or licence); no migration; the API's OpenAPI document is byte-identical.**
+
+Drift check (north-star §8): Layer 1, Delivery (the API's request handling, and its logs); lifecycle phase: Activation (Epic 9), a deploy whose logs say only what happened.
+
+## 1. What changed
+
+- **The symptom.** Render's API logs carried an `UnsupportedFieldAttributeWarning` for each body field on the first request to each route: "The 'alias' attribute with value 'engines' has no effect …", and the same for `accentColor`, `agencyName`, `classify`, `competitors`, `currentPassword`, `email`, `fullName`, `logoUrl`, `name`, `newPassword`, `password`, `prompt`, `promptLimit`, `role`, `ticket`, `token` and `url`.
+- **Is the alias ignored on the wire? No.** `ApiModel` gives every field a camelCase alias (`alias_generator=to_camel`), and a JSON body is validated through the whole model, so every alias works; the tests below send camelCase and read it back. The warning came from FastAPI 0.116.2 doing work it did not need: on the first request to a JSON-body route, `request_body_to_args` called `get_cached_model_fields`, which wraps each field of the body model in a `TypeAdapter(Annotated[annotation, field_info])` of its own. Those adapters serve form bodies only, and Pydantic warns, correctly, that an alias on a field inside `Annotated` has no effect there. FastAPI 0.117.0 builds them only for form data (fastapi/fastapi#13694). A minimal app with the same model base shows it: FastAPI 0.116.2 answers 200 having read `fullName`, with 9 alias warnings; 0.117.0, 0.117.1 and 0.118.0 answer the same with none.
+- **The fix, the smallest that keeps the wire identical:** `fastapi>=0.117.1,<0.118` in `apps/api/pyproject.toml` (was `>=0.115,<0.117`), both `uv.lock` files re-locked (FastAPI only; Starlette stays 0.48.0). A comment at the pin says why the cap stays (below).
+- **The suite no longer ignores it; it fails on it.** The `filterwarnings` entry that ignored the alias warning is gone, replaced by `error::pydantic.warnings.UnsupportedFieldAttributeWarning`, so any test whose request raises it fails (from the security review).
+- **Tests** (`tests/test_no_alias_warnings.py`, 12): a fresh interpreter imports the app and builds its OpenAPI schema with no such warning (what a deploy does at start); building the app raises none; every JSON-body route is walked through FastAPI's own `request_body_to_args` with its cache cleared first (it is warm by the time the file runs, which would hide a regression), and the walk is checked not to be vacuous; every camelCase alias is the live key of its field on every body route; no route takes a form or file body (the only path that still builds per-field adapters); and over HTTP, sign-up takes its names in camelCase, a bound on a camelCase field is enforced and reported by that name, and a scan starts with `promptLimit` and `engines` while out-of-range values are a 422 that starts nothing.
+- **No wire change:** OpenAPI regenerates byte-identical, so `api.gen.ts` does not change.
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS.** Every path this app uses behaves the same from 0.116.2 to 0.117.1, except the change wanted (JSON bodies no longer build per-field adapters); the dependency cache, `db_session` (one per request, shared by `current_principal` and the handler), the rate limiter and the background executor are unchanged.
+  - **Taken:** L1, the error filter above (a direct-call test alone would let the warning come back through another function).
+  - **L2, recorded at the pin:** FastAPI below 0.118 also holds Starlette below 0.49, which matters only once the API serves files; the API has no file-serving route today. The cap stays: 0.118 runs the teardown of `yield` dependencies after the response is sent, which would move `db_session`'s rollback and close relative to the scan executor's background task, and 0.119 restructures `fastapi._compat`, which this test imports. Lifting it needs its own review.
+
+## Found, not fixed
+
+- **The FastAPI cap** must be lifted, with its own review, before any route serves files (`FileResponse`, `StaticFiles`): the Starlette fixes for file serving are above the version this cap allows.
+
+## Verified
+
+**API pytest 2442 → 2454 (+12); floor raised to match.**
+- **The tests fail before the fix (the negative control):** with FastAPI 0.116.2 put back into the environment, 8 of the 12 fail (the body-route walk, the alias keys, and the camelCase tests, which make real requests), and so do 11 of `test_auth_flow.py`'s 12, through the new error filter. The import test passes on 0.116.2 as well: the warning was never at start-up, only on each body route's first request. FastAPI 0.117.1 restored with `uv sync --frozen`.
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, shared-types 53 (0 fail), design-system 935, web 1531, mypy 43 (ceiling 50). No alias warning anywhere in the API run's output.
+- ruff clean; all typechecks clean; the styleguide builds; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass (the pin's comment does not change the locks); Alembic upgrade and check pass on an empty database (no schema change).
+- The Python licence audits pass in both environments (FastAPI MIT, as before); the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+- OpenAPI regenerates byte-identical under FastAPI 0.117.1, and `api.gen.ts` with it: no wire change.
+- Exit codes were read from files.
+
+# One browser at a time in the API, each run capped and its wait bounded, memory logged per phase, and tini to reap Chromium
+
+**2026-10-03, the first entry of the day; branch `pilot-fixes-2`, the founder's brief "memory and the rest of the open decisions" (item M1).** One item, one commit.
+
+**Render: nothing to set.** The image changes (`tini` becomes PID 1), so the deploy rebuilds it. Uvicorn is pinned to `--workers 1`, which makes any `WEB_CONCURRENCY` setting irrelevant. Three routes gain a `429` (below). No migration, no new Python or JavaScript dependency, no new outbound host; `tini` is an Ubuntu package in the image, like Chromium's own libraries.
+
+Drift check (north-star §8): no product layer; the API's physical architecture (§4, the browser work done in the API process), with Layer 0's egress guard kept whole; lifecycle phase: Activation (Epic 9), a pilot's scans finishing on the instance they run on.
+
+## 1. What was measured
+
+- **Production, from the founder:** the API (512 MB Starter) ran out of memory at 14:45 AEST on 2026-10-02 in the phase after the engines, which is the technical audit; it had rested near 40% of its memory since the 09:47 AEST deploy; it now runs on Standard (2 GB).
+- **How:** the API's own Docker image under Colima (Linux, cgroup v2, arm64), `docker run --memory=512m` and `--memory=2g`, the app built as the server builds it, and its own `crawl_site` and `audit_site` run one after the other and both at once. A sampler read the cgroup every 0.1 s: `anon`, the process memory the OOM killer weighs, and `memory.current`, which also counts page cache the kernel can drop. The heavy page is a synthetic local page (twelve 1600×1000 images, 220 sections, four cross-site frames, a script that allocates); the light one is example.com. Nothing else was loaded.
+
+| What | Before M1 (`471a2b9`) | With M1 (this item's image) |
+|---|---|---|
+| The API server idle (its own entrypoint, warmed with 100 requests) | 97 MB process, 103–158 MB charged | 97 MB process, 103–104 MB charged |
+| Crawl of the heavy page | 290–312 MB process | 290–319 MB process |
+| Technical audit of the heavy page | 455–489 MB process | 463–492 MB process |
+| Crawl or audit of example.com | 230–248 MB process | 225–254 MB process |
+| Crawl and audit started together, 2 GB limit | 586 MB process, 669 MB charged at peak | 482–492 MB process, 579–607 MB charged (one after the other) |
+| Crawl and audit started together, 512 MB limit | the kernel killed a Chromium process (`Memory cgroup out of memory`); the audit ended `BROWSER_ERROR` | both finished, 463–476 MB process |
+| Chromium processes left after each run | two per crawl, two per audit (exited, never reaped) | none |
+
+- **Where it goes.** The browser's memory is the page's own weight: decoded images, the DOM, its script. Chromium switches (`--renderer-process-limit=1`, `--disable-site-isolation-trials`, `--disable-gpu`, `--no-zygote`) changed nothing measurable, so none was adopted, and none of them touches the request routing 3.27 relies on. Python's own peak during a run, read from its high-water mark reset before each run, is 12 MB on the first run and 0.3–0.5 MB after, so its buffers are not worth cutting.
+- **The out-of-memory.** One heavy audit is about 0.4 GB above the server. With the server near 200 MB, as it was on Render, one audit nearly fills 512 MB, and any second browser run at the same moment (a client added during a scan's audit, or two scans' audits) goes over. At 512 MB that is what the overlapped run above reproduced.
+- **The idle rise after PR #4.** Not reproduced at idle: the same image holds 97 MB of process memory at `9a6a1a7` (before PR #4), `f1b7565` (after it) and this branch. What does rise is `memory.current` after the first browser run of a deploy: it stays 150–260 MB above process memory at a 2 GB limit, page cache from Chromium's own files, which the kernel drops when it needs the memory (under 512 MB it fell to about 5 MB). A memory graph that counts page cache shows exactly that rise; and the 09:47 AEST deploy is not PR #4's merge (06:50 AEST). The new log lines carry both figures, so Render's logs can tell the two apart.
+
+## 2. What changed
+
+- **One browser per process at a time** (`services/browser_slot.py`): a semaphore of one per event loop, first come first served. The intake crawl, a scan's audit and `POST /scans/{scanId}/audit` all take it.
+- **Each run under a cap**: 244.5 s for the audit, 266 s for the intake's three-page crawl (297 s for four), the sum of every step's own ceiling, so only a step that never returns reaches it. A run cut by its cap ends `TIMEOUT` and the scan goes on. This closes launch checklist 3.20 (a step of the technical audit had no timeout of its own).
+- **The wait for the browser is bounded** (from the security review): 60 s for a request, 300 s for a scan's audit (one capped run ahead of it, 266 s at most, plus margin). A run that waits that long never launches a browser and keeps nothing (`BROWSER_BUSY`).
+  - On the three routes that start a read inside a request (`POST /clients` with classification, `POST /clients/{clientId}/reclassify`, `POST /scans/{scanId}/audit`) it writes nothing and answers `429 rate-limited`, `Retry-After: 60`, "The crawler is busy with other pages right now. Try again in a minute.": no client is created, a client keeps its classification, a scan keeps the audit it had. A busy browser would otherwise have replaced a good result with a failure that says nothing about the site (from both reviews).
+  - A scan's own audit records the failed audit as `BROWSER_BUSY` and the scan goes on.
+- **One site read per agency at a time, four agencies at once**, on those three routes (from the security review): an agency's second read while its first is queued or running is a `429` with "Your agency already has a site being read. Try again in a minute."; a fifth agency while four are inside gets the crawler-busy `429`, which says nothing about any agency. Each waiting request holds a pooled database connection for up to a minute, and four leaves eleven of the fifteen to everything else. Both are checked after the agency check (another agency's id stays a 404), a refused `POST /clients` creates nothing, and a scan's own audit is never refused or counted. The web calls only `POST /clients`, whose form shows the sentence.
+- **No Chromium outlives its run.** Page, context and browser are closed on every path (a return, a refusal, an exception, a cancellation, the cap), each close bounded. `tini` is PID 1 in the image (installed as root, before `USER pwuser`; the app still runs as `pwuser`) and reaps the `headless_shell` processes each run leaves exited; with it, none is left.
+- **Egress stays fail-closed under the cap** (from the security review): a refusal or an unverified connection is recorded on the guard before the closes and outranks the cap; an audit cut by the cap, or ending `BROWSER_ERROR`, keeps only what it read before the browser started (robots.txt, the sitemap, AI-crawler access); such a crawl keeps nothing. (`BROWSER_ERROR` used to keep page facts that never passed the final egress check, a gap older than this item; only the audit routes and the fix generator's input could see them, never the report.)
+- **Memory in the logs, numbers only** (`services/memory_stats.py`): `app.memory_at_start`; `scan.phase_memory` after each of a scan's seven phases; `browser.memory` after each run, its browser closed; `browser.slot_waited`, `browser.slot_busy`, `browser.close_failed`; the slot's lines carry our own `scan_id` or `client_id`, never a URL or a domain. Five figures in MB, or `null` where a file is missing: the process tree's resident memory from `/proc`, and the container's charged, anonymous, peak and limit from its cgroup. A reading never fails a scan or a request. `docs/runbook.md`, "Reading the API's memory", says how to read them, the page cache included.
+- **One uvicorn worker, pinned**: `exec uvicorn … --workers 1` (uvicorn reads `WEB_CONCURRENCY` only when the flag is absent), because the slot and the per-agency count are per process.
+- **Copy** (`strings.ts`): `TIMEOUT` now reads "The crawler could not finish reading the home page in the time it allows." (the cap also ends a read that never returns, not only a slow load); new `BROWSER_BUSY`: "The crawler was busy with another page and could not start on this one in time." Beside them, the report's failed-audit card and the Technical screen no longer say the site was unreachable, which is false for both: "A site the crawler could not read is not a site with a bad technical foundation…"
+- **`docs/crawl-worker-design-note.md`**: what moving the browser into a Render background worker would take (not built), with these numbers and the questions for the founder.
+- **The scan deadline**: the audit's cap and its wait take the worst-case scan from 1,685.5 s to 2,202.5 s against the 2,400 s deadline (1.42× → 1.09×). The deadline is unchanged; the test that sums it now includes the wait.
+
+## 3. Peak before → after, and the headroom on 2 GB
+
+- **Before:** the API's peak grew with every browser run open at once: 586 MB of process memory for two in the measurement, more for three, whatever the instance.
+- **After:** one browser run at a time, so the peak is one run on top of the server: about 490 MB measured (the server at 97 MB); about 0.6 GB if the server has grown to 200 MB as it had on Render.
+- **Headroom on 2 GB:** about 1.4 GB free at the worst measured moment.
+- **On Render:** the peak of a full scan on Standard is not measured yet; after this deploy each scan's `scan.phase_memory` lines carry it (its `audit` line's `cgroup_peak_mb`).
+
+## 4. The review
+
+- **Security review (opus), round 1: PASS WITH NITS, on condition that its Medium was fixed in this item.** The Medium: nothing bounded the wait for the browser, and one agency could queue any number of page reads on the three request routes, holding pooled database connections; fixed by the bounded wait and one read per agency. Also taken: L-1, a cut audit could keep page facts that had not passed the final egress check; L-2, `--workers 1` pinned and tested (the old test asserted the flag's absence, which is when the environment decides); L-3, the tests for both. Checked clean: cancellation and timeout nesting (the cap cannot swallow the deadline's or the heartbeat's cancellation), slot release on every path, close order and bounds, guard install order, robots.txt and the user agent unchanged, the log lines (kinds, numbers and ids only), the Dockerfile's user and signal path, `memory_stats`.
+- **Security re-review (opus) of round 2: PASS WITH NITS**, the Medium confirmed closed (every wait bounded on every path; a waiter that times out or is cancelled leaves the queue cleanly; the per-agency entry released on every way out, after the agency check, in the house's 429 shape). All taken: L-a, the cap of four agencies at once; L-b, a busy read on a request route writes nothing; L-c, `BROWSER_ERROR` keeps no page fact; N-1, our ids on the slot's lines; N-2, the runbook says the count is per process and per instance (a deploy's overlap can give an agency one read on each).
+- **UI review (sonnet) of the copy: PASS WITH NITS.** Both sentences are true wherever their codes are produced, and the PDF prints neither. Taken: a busy read writes nothing (the intake was left with a client the web could not read again); the wrapper copy; the agency 429's wording; the comment that says what `TIMEOUT` is. With the first, no request writes `BROWSER_BUSY` to a client, so the classification card never shows it. Left: the 429 shows on the intake form's address field; "under five minutes" claims on three screens (a scan's audit can now wait up to five minutes for the browser).
+
+## Found, not fixed
+
+- **The intake's classification card** says "We could not read this site… usually means the site did not load…" and the raw code for `TIMEOUT` and `BROWSER_ERROR`, which can blame a site for our own hang. A sentence per code, as the audit has, is a copy decision (with 3.32's other raw codes); `BROWSER_BUSY` never reaches it now.
+- **The fix generator is told a failed audit's page fields** (`fix_runner.build_facts`: "schema.org types present: none, word count 0, h1 count 0") about a site that was never read. Older than this item; pass nothing for a failed audit, as the audit route already does for its components.
+- **The intake's 429 lands on the address field** (red, `aria-invalid`) though the address is fine; and three screens say a scan takes "under five minutes", which a busy browser can now exceed.
+- **Per-process state.** The slot and the per-agency count live in the process; if the API ever runs as more than one process or instance, the count moves to Redis (the entrypoint pins one worker for this reason).
+- **A 429 here has no log line of its own** (Render's request log has it); one with the agency id is a small addition if wanted.
+- **Two wall-clock tests fail under heavy CPU load** (`test_call_bounds.py`, `test_scan_deadline.py`), seen on 2026-10-02 while several suites ran at once; they pass alone and in a clean run. Their slack wants widening.
+- **The deadline margin** (1.09×) and **the worker**: decisions for the founder.
+
+## Verified
+
+**API pytest 2454 → 2656 (+202), plus 1 test that runs only on Linux (it reads `/proc`; it runs in CI); web vitest 1531 → 1533 (+2); both floors raised to match. mypy 43 → 43 (ceiling 50).**
+- New tests: the slot (one at a time, FIFO, released on a return, a raise and a cancellation, a waiter cancelled), the cap on both fetchers, the closes on every path counted, the bounded wait and `BROWSER_BUSY` (no launch, nothing kept, the classifier's reason, the check and the score's reading), the cap overtaking an egress refusal, one read per agency over all nine pairings of the three routes, the per-phase memory lines and their keys, `memory_stats` against a fake `/proc` and cgroup, the Dockerfile (tini as PID 1, the user, `--workers 1`); round 3's: a busy read on each request route writes nothing (no client; the classification and the stored audit compared column by column), the cap of four agencies released on every way out, `BROWSER_ERROR` keeping no page fact over eight failure paths, and only our own ids on the slot's lines.
+- **Negative controls:** on this tree, a busy read allowed to write again fails 8 (the three routes, the release, the two service tests); on round 2's merged tree, the per-agency check switched off failed 21; each restored and checked with `cmp`. The implementer's, each restored: the wait unbounded fails 14 (the run still finishes, every wait held to a test deadline); the cap of four removed, 7; the live page facts put back in the audit's cap branch, 1, and in its `BROWSER_ERROR` branch, 5; the guard's record of a refusal removed, 4; our ids dropped from the slot's lines, 10; `--workers 1` dropped, 2.
+- **In the container:** the image built from this item's round 2 gave the "With M1" column above (round 3 changed what a request does when the browser stays busy, the `BROWSER_ERROR` branches and the log fields, not how a run uses memory); tini is PID 1 and uvicorn its child; no `headless_shell` left after any run.
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, shared-types 53 (0 fail), design-system 935.
+- ruff clean; all typechecks clean; the styleguide builds; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass (no dependency change); Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+- OpenAPI and `api.gen.ts` regenerate with no change from the committed files (three route descriptions changed in this item, nothing else).
+- Exit codes were read from files.
+
+# The launch checklist says what `pilot-fixes-2` closed, how to merge it, and every decision still open
+
+**2026-10-03, the second entry of the day; branch `pilot-fixes-2`, the founder's brief "memory and the rest of the open decisions" (its finish).** One commit, `docs/launch-checklist.md` only.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): no product layer; the launch plan. Lifecycle phase: Activation (Epic 9), what stands between the code and the first pilots.
+
+## 1. What changed
+
+- **Status and merge steps.** The status line says PRs #2 to #5 are merged (`main` at `471a2b9`); 1.1c is marked merged (PR #5), its after-deploy steps kept for the founder to confirm; new 1.1d, how to merge this branch: nothing to set, no migration, the API image rebuilt with `tini`; after the deploy, the `app.memory_at_start` line, no alias warning, one scan's `scan.phase_memory` lines for the peak of a full scan on Standard (the number the brief left blank), `WEB_CONCURRENCY` left unset, and the share link checked.
+- **Rows closed, each with its commit:** 3.20 (`1b6f109`, M1's caps), 3.28 (`4ad393a`), 3.29 (`5bd3cc1`, its test in `55d7f94`), 3.30 (`d772a19`), 3.32 (`5189273`), 3.33 (`72797ae`); 3.2 links the worker design note.
+- **New rows:** 3.34, M1, done (`1b6f109`), with its numbers (idle 97 MB; a heavy audit about 490 MB; two runs at once 586 → about 490 MB; about 1.4 GB free on 2 GB; the resting rise is page cache) and the worker note; and the decisions and follow-ups this brief found: 3.35 the scan deadline's margin (1.09×); 3.36 `finalize_scan` can overwrite a reaper's FAILED (Claude, security); 3.37 a failed scan's per-engine figures in its report; 3.38 the share bar's wording around a press (the date twice; "Creates a link" for a live link); 3.39 raw codes and site-blaming copy on the intake card and two other screens, "under five minutes", the intake's 429 on the address field; 3.40 the focus gaps 3.33's review found (forced colours, Firefox's ring, a field's double ring, the dark theme's filled-button ring, the primary button's rim); 3.41 `ROBOTS_DISALLOWED` for an unreadable robots.txt; 3.42 the dashboard counting dead links, and cancelled scans; 3.43 smaller follow-ups (the FastAPI cap and Starlette, the fix generator's input for a failed audit, two wall-clock tests, a log line for the browser 429s).
+
+## Verified
+
+**The final bar on this tree** (the commands of `ci.yml`, run locally; this commit changes no code).
+- API pytest 2656 (1 more runs only on Linux), workers 26, shared-types 53 (0 fail), design-system 935, web 1533, mypy 43 (ceiling 50).
+- ruff clean; all typechecks clean; the styleguide builds; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database.
+- The Python licence audits pass in both environments; the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+- OpenAPI and `api.gen.ts` regenerate with no change.
+- Over the branch: API 2367 → 2656, web 1473 → 1533, design-system 875 → 935, mypy 47 → 43; workers and shared-types unchanged.
+- Exit codes were read from files.
