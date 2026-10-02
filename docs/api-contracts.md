@@ -76,7 +76,15 @@ refused as well. A refusal is `403 origin-not-allowed`, answered before any rout
 runs, and nothing changes. Browsers send `Origin` on these requests themselves,
 so the web app needs no change. Not checked: reads (`GET`), a write with neither
 the session cookie nor an `Origin` (a server or command-line caller), and
-`POST /billing/webhook`, which Stripe signs instead.
+`POST /billing/webhook` (that method and path only; a `PUT`, `PATCH` or `DELETE`
+there is checked like any write), which Stripe signs instead. The refusal's log
+line (`security.origin_refused`) carries the method, a redacted path,
+`origin_present` and, when an `Origin` was sent, either `origin_host` (the
+lower-cased DNS host name only) or `origin_kind` (`ip`, `opaque` or `unparsed`);
+never the full header, a port, userinfo or an IP literal (a DNS name that
+contains an address, such as `10-0-0-1.sslip.io`, is still a name and is logged).
+Only a bare origin is read as a host; userinfo, a path, a query or a fragment
+make it `unparsed`.
 
 ### Error types
 
@@ -86,7 +94,7 @@ the session cookie nor an `Origin` (a server or command-line caller), and
 | `/problems/authentication-required` | 401 | No, expired, or invalid session |
 | `/problems/invalid-credentials` | 401 | Login failed |
 | `/problems/permission-denied` | 403 | Authenticated but wrong role |
-| `/problems/origin-not-allowed` | 403 | A `POST`/`PUT`/`PATCH`/`DELETE` whose `Origin` is not in `CORS_ALLOW_ORIGINS` (`null` included), or that carries the session cookie with no `Origin` (2026-10-01). Not applied to `POST /billing/webhook` |
+| `/problems/origin-not-allowed` | 403 | A `POST`/`PUT`/`PATCH`/`DELETE` whose `Origin` is not in `CORS_ALLOW_ORIGINS` (`null` included), or that carries the session cookie with no `Origin` (2026-10-01). Not applied to `POST /billing/webhook` (POST only) |
 | `/problems/not-found` | 404 | No such resource in the caller's agency |
 | `/problems/conflict` | 409 | Generic conflict |
 | `/problems/email-already-registered` | 409 | Signup email in use |

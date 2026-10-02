@@ -22,7 +22,9 @@ WHAT IS NOT CHECKED
 -------------------
 - A write with no `Origin` and no session cookie: Stripe, curl, a server-side
   caller. Nothing about it is a browser's, and there is no session to ride on.
-- The Stripe webhook, whatever it carries. It is verified by its signature.
+- `POST` to the Stripe webhook, whatever it carries. It is verified by its signature.
+  Only that method and that exact path: a PUT, PATCH or DELETE to the same path is
+  checked like any other write.
 - GET, HEAD and OPTIONS. A preflight is the CORS middleware's to answer.
 - A `websocket` scope. There is no websocket route; `tests/test_origin_check.py`
   fails if one is ever registered, so this cannot become a way around the check.
@@ -49,8 +51,10 @@ Registered in `main.py` BEFORE the CORS middleware, which keeps CORS outermost.
 
 from __future__ import annotations
 
+import ipaddress
+import re
 from collections.abc import Iterable
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import structlog
 from starlette.datastructures import Headers
@@ -80,6 +84,70 @@ def _can_be_listed(origin: str) -> bool:
     return origin != "" and origin.lower() != "null"
 
 
+_DNS_LABEL = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?")
+
+
+# A host whose last label is a number is an IPv4 address to a browser, however
+# it is spelled (`2130706433`, `0x7f000001`, `127.1`).
+_NUMERIC_LABEL = re.compile(r"[0-9]+|0x[0-9a-f]*")
+
+
+def _is_dns_name(host: str) -> bool:
+    return len(host) <= 253 and all(_DNS_LABEL.fullmatch(label) for label in host.split("."))
+
+
+def origin_log_fields(origin: str | None) -> dict[str, str]:
+    """What of a refused `Origin` header may be logged, and nothing more.
+
+    The header is the requester's to write, so it is never logged as sent. What
+    comes out is one of:
+
+    - `{}` for no header (the caller logs `origin_present` on its own);
+    - `{"origin_host": <name>}` for an http(s) origin whose host is a DNS name:
+      lower-cased, at most 253 characters, labels of 1-63 of a-z, 0-9 and `-`
+      that neither start nor end with `-`. A name is not a secret, a token or an
+      email. Only a bare origin (scheme, host, optional port) is read: userinfo,
+      a backslash, a path, a query or a fragment make it `unparsed`. Never the
+      scheme or port. A name that merely contains an address
+      (`10-0-0-1.sslip.io`) is still a name and is logged;
+    - `{"origin_kind": "ip"}` for an IP-literal host, in any spelling a browser
+      reads as one: dotted quad, IPv6, or a host whose last label is a number
+      (`2130706433`, `0x7f000001`, `127.1`). The address is never logged: it can
+      identify a person or a private network;
+    - `{"origin_kind": "opaque"}` for the literal `null`;
+    - `{"origin_kind": "unparsed"}` for anything else. No value.
+    """
+    if origin is None:
+        return {}
+    if origin == "null":
+        return {"origin_kind": "opaque"}
+    unparsed = {"origin_kind": "unparsed"}
+    # Anything that is not printable ASCII-without-spaces is not an origin, and
+    # urlsplit would quietly drop a tab or newline from inside it.
+    if not origin.isascii() or not origin.isprintable() or " " in origin:
+        return unparsed
+    if any(c in origin for c in "@\\?#"):
+        return unparsed
+    try:
+        parts = urlsplit(origin)
+        host = parts.hostname
+    except ValueError:
+        return unparsed
+    if parts.scheme.lower() not in ("http", "https") or not host or parts.path:
+        return unparsed
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        return {"origin_kind": "ip"}
+    if _NUMERIC_LABEL.fullmatch(host.rsplit(".", 1)[-1]):
+        return {"origin_kind": "ip"}
+    if "[" in parts.netloc or not _is_dns_name(host):
+        return unparsed
+    return {"origin_host": host}
+
+
 class OriginCheckMiddleware:
     def __init__(
         self,
@@ -87,7 +155,7 @@ class OriginCheckMiddleware:
         *,
         allowed_origins: Iterable[str],
         session_cookie_name: str,
-        exempt_paths: Iterable[str] = (),
+        exempt: Iterable[tuple[str, str]] = (),
     ) -> None:
         self.app = app
         # An empty list, or one with nothing usable in it, refuses every write
@@ -96,13 +164,15 @@ class OriginCheckMiddleware:
             origin for origin in map(_normalise, allowed_origins) if _can_be_listed(origin)
         )
         self.session_cookie_name = session_cookie_name
-        self.exempt_paths = frozenset(exempt_paths)
+        # (METHOD, path) pairs, each matched exactly: the webhook is exempt for
+        # POST alone.
+        self.exempt = frozenset((method.upper(), path) for method, path in exempt)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "http" and self._is_a_write(scope):
             origin = Headers(scope=scope).get("origin")
             if self._is_refused(scope, origin):
-                await self._refuse(scope, receive, send, origin_present=origin is not None)
+                await self._refuse(scope, receive, send, origin=origin)
                 return
         await self.app(scope, receive, send)
 
@@ -110,10 +180,8 @@ class OriginCheckMiddleware:
         # Upper-cased: HTTP methods are case-sensitive and Starlette's router
         # matches them as written (a lowercase `post` gets a 405), but uvicorn's
         # h11 parser passes one through, and the check must not hinge on that.
-        return (
-            scope["method"].upper() in STATE_CHANGING_METHODS
-            and scope["path"] not in self.exempt_paths
-        )
+        method = scope["method"].upper()
+        return method in STATE_CHANGING_METHODS and (method, scope["path"]) not in self.exempt
 
     def _is_refused(self, scope: Scope, origin: str | None) -> bool:
         if origin is not None:
@@ -131,10 +199,11 @@ class OriginCheckMiddleware:
         )
 
     async def _refuse(
-        self, scope: Scope, receive: Receive, send: Send, *, origin_present: bool
+        self, scope: Scope, receive: Receive, send: Send, *, origin: str | None
     ) -> None:
-        # What happened — not the cookie, and not the Origin value, only whether
-        # there was an Origin at all. The path is percent-encoded the way uvicorn's
+        # What happened — not the cookie, and not the Origin value as sent: whether
+        # there was an Origin, and `origin_log_fields`' bounded reading of it (a
+        # DNS host name, or only its kind). The path is percent-encoded the way uvicorn's
         # access log encodes it (`scope["path"]` is DECODED, so an escape, a NUL
         # or a newline sent as `%1B`, `%00` or `%0A` would otherwise reach the log
         # raw) and then goes through that log's own redaction.
@@ -142,7 +211,8 @@ class OriginCheckMiddleware:
             "security.origin_refused",
             method=scope["method"].upper(),
             path=redact_path(quote(scope["path"])),
-            origin_present=origin_present,
+            origin_present=origin is not None,
+            **origin_log_fields(origin),
         )
         response = _problem_response(
             Request(scope), OriginNotAllowed(detail=REFUSAL_DETAIL)
