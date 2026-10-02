@@ -21382,3 +21382,40 @@ Drift check (north-star §8): no product layer; the agent tooling the project is
   - OpenAPI and `api.gen.ts` regenerate with no change to the committed files.
   - Exit codes were read from files.
 - **Over the branch:** API pytest 1955 → 2226 and web vitest 1203 → 1399; the workers, shared-types and design-system counts and the mypy count are unchanged.
+
+# Four screens stop telling customers to check port 8000 when the server does not answer
+
+**2026-10-02, the third entry of the day; branch `pilot-fixes`, the founder's pilot-blockers follow-up (launch checklist 3.23).** One item, one commit.
+
+**Render: nothing to set. No endpoint, schema, dependency or outbound host change.**
+
+Drift check (north-star §8): Layer 1, Delivery (sign-up, sign-in and the intake screens); lifecycle phase: Activation (Epic 9), the first screens a pilot agency sees.
+
+## 1. What changed
+
+- **The sentence.** When the API did not answer, sign-up, sign-in, the intake form and the intake result said "The API did not respond. Check that it is running on port 8000." (or "Could not reach the API. Is it running on port 8000?"), a developer's instruction. They now say the sentence the Google sign-up page has used since `pre-pilot`: "We could not reach the server. Check your connection and try again."
+  - It lives once, as `API_AWAY_SENTENCE` in `lib/apiAway.ts`, beside `apiWasAway`; the Google sign-up panel's submit failure now uses the constant instead of its own copy of the text.
+  - The rule is `apiWasAway(err)`: no answer, no status, or a 5xx. Every specific branch is unchanged (401/422 on sign-in, 409/422 on sign-up, 429 on both, the scan limit on the intake result), and any other refusal from the API still shows the API's own sentence.
+  - The 5xx problem bodies these four calls can return (a 503 `service-unavailable` from the fail-closed rate limiter, a bare 500) say nothing the shared sentence does not, so a 5xx shows the shared sentence on all four screens.
+- **No casts.** Each screen checks `err instanceof ApiProblem && !apiWasAway(err)` before reading the problem's detail, so a later change to `apiWasAway` cannot become a TypeError inside a catch (UI review nit, taken).
+
+## 2. The review
+
+- **UI review (sonnet): PASS WITH NITS.** Clean: the error is announced exactly as before on each screen (same `ErrorState`, failed state or `setError` plus `onFailed`); branch order keeps the specific 4xx details; no style, token, dependency or host change; no test deleted, skipped or weakened; the grep guard is real.
+  - **Taken:** the casts, above.
+  - **Left:** the reviewer noted that "Check your connection" is a little misleading when our own server answered with a 5xx. The founder's go-ahead names this sentence, and it already ships on the Google page; kept for consistency.
+
+## Verified
+
+**Web vitest 1399 → 1413 (+14); floor raised to match.**
+- Per screen (sign-up, sign-in, intake form, intake result): a network failure (a rejected `fetch`) shows the shared sentence and no port number; a 5xx with no problem body shows the shared sentence; a 4xx problem still shows its own detail.
+- `apiAway.test.ts` pins the sentence, and a grep test fails if any non-test source file under `apps/web/src` mentions "port 8000".
+- **Negative control:** the old sentence put back in `SignInPanel.tsx` fails 3 tests (the grep guard and two sign-in cases); the file was restored and checked with `cmp`.
+
+**The rest of the bar** (this tree, one run).
+- API pytest 2226, workers 26, shared-types 53 (0 fail), design-system 846, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database.
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`).
+- OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
