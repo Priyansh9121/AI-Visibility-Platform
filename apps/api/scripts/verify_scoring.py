@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # no
 
 from avp_api import ids  # noqa: E402
 from avp_api.config import Settings  # noqa: E402
+from avp_api.logs import configure_logging  # noqa: E402
 from avp_api.models import Agency, Client, Scan  # noqa: E402
 from avp_api.models.client import ClassificationStatus, ClientKind  # noqa: E402
 from avp_api.services import audit_runner, scan_runner, scoring_runner  # noqa: E402
@@ -51,6 +52,9 @@ async def main() -> int:
     args = parser.parse_args()
 
     settings = Settings()
+    # Before any call to SerpApi: pins httpx and the SDKs quiet, so that no log line,
+    # whatever the shell exports (ANTHROPIC_LOG, say), prints the SerpApi key's URL.
+    configure_logging(settings)
     url = os.environ.get("DATABASE_URL", str(settings.database_url))
     engine = create_async_engine(url)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)

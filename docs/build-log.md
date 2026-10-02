@@ -22335,3 +22335,52 @@ The replaced step itself: 16.6 → 14.8 ms. Scoring was never the main cost: loa
 - The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
 - OpenAPI and `api.gen.ts` regenerate with no change from the committed files (one route description changed in this item).
 - Exit codes were read from files.
+
+# A competitor search that hangs is tried once more on a new connection inside a real deadline, a failure says what kind it was, and no logger can print the search key
+
+**2026-10-03, the fourth entry of the day; branch `pilot-fixes-3`, the founder's brief "honest reports and the remaining pilot decisions" (item R2).** One item, one commit.
+
+**Render: nothing to set. No endpoint, schema, dependency or outbound host change.** New log events `serp.retried` (info) and `serp.attempts_failed` (warning). `ANTHROPIC_LOG` no longer changes what the API logs (below).
+
+Drift check (north-star §8): Layer 2, Measurement (competitor detection's search signal), and Layer 0, Trust (no secret in a log); lifecycle phase: Activation (Epic 9), a scan whose competitor set the report stands on.
+
+## 1. What the investigation found
+
+- **The founder's production fact:** a full scan on Standard logged `competitors.serp_failed error_code=SERP_TIMEOUT` for its search queries; detection then had only the co-citation signal and returned 5 competitors at confidence 0.000 (`weak_signal`), and scoring flagged `WEAK_COMPETITOR_SET` and excluded Citation Strength.
+- **The call** (`services/serp.py`): SerpApi's Google engine, `num=10`, `hl=en`, `gl=us`; a 25 s httpx timeout (per network step: connect, read, write, pool), no retry; `search_many` runs a detection's queries 3 at a time. `build_queries` makes 3 brand-anchored queries and up to 3 industry-seeded ones, so a detection sends 3 to 6.
+- **The account:** SerpApi's Free Plan, 250 searches a month shared with production (233 left before the measurement, 209 after).
+- **Measured** on 2026-10-03 from this Mac with the API's own `serp.search`: 4 real businesses (Help Scout, Allbirds, Blue Bottle Coffee, Mailchimp), the 6 queries `build_queries` makes for each, 3 at a time as production runs them; 24 searches, all billed (none served from SerpApi's cache), the timeout raised to 90 s for the measurement only. All 24 answered: minimum 1.03 s, median 1.54 s, p90 2.53 s, p95 2.54 s, maximum 6.93 s; none over 10 s; a business's 6 queries took 3.2 to 9.0 s in all.
+- **So:** our 25 s timeout is not too short and 3 at once is not too many. A provider that answers in about 1.5 s does not take 25 s on several queries at once unless connections hung or SerpApi, or the path to it from Render, was briefly down. The old code could not say which: one error code for both.
+
+## 2. What changed
+
+- **Each attempt** has a real 10 s deadline (`asyncio.timeout` around the whole attempt) over httpx step timeouts of 5 s to connect and 9 s for each read, write and pool wait. The step timeouts sit under the deadline so a connection that goes silent is named by its step; only a response that trickles, or several slow steps together, reach the deadline (kind `total`). 10 s is about 1.4× the slowest search measured and 4× its p95.
+- **One retry**, after a 1 s pause, on a new client and so a new connection, for a transport failure (every timeout, `total` included, a refused or reset connection, a name that does not resolve). An HTTP answer is never retried (401, 429, 5xx, bad JSON, an `error` payload, an undecodable body), and neither is a cancellation from the scan's own deadline. The final codes are unchanged (`SERP_TIMEOUT`, `SERP_UNREACHABLE`).
+- **The bound is now a ceiling:** 10 + 1 + 10 = 21 s per query (it was 25 s per step, and a trickling answer had no limit), so a detection's two waves of 3 take at most 42 s (it was 50, or unbounded), the synchronous `POST /clients/{clientId}/competitors/detect` is bounded the same way, and the scan's derived worst case falls from 2,202.5 s to 2,194.5 s.
+- **What a failure says:** `serp.attempts_failed` (`attempts`, `elapsed_ms`, `kinds`: one per attempt, `connect`, `read`, `write`, `pool`, `total` or the exception's class name) when every attempt failed; `serp.retried` (`attempts`, `kinds`, `elapsed_ms`) when a retry rescued the query, so searches spent on retries are visible. Never the exception's message, the request, the URL or the parameters: the URL carries the API key. The comments say that a read failure may already have been processed, and billed, by SerpApi; only a failure to connect certainly was not.
+- **No logger can print the key or a prompt** (`logs.py`, `QUIET_LOGGERS`): `configure_logging` pins the `httpx`, `httpcore` and `anthropic` loggers to WARNING on the loggers themselves. httpx writes every request's full URL at INFO, and SerpApi's carries `api_key`; the Anthropic SDK raises its loggers when `ANTHROPIC_LOG` is set and at DEBUG prints each request's options, prompt text included (client-site content, an engine's answer). Nothing enabled those levels before, so this was latent; the pins are applied last in the real import order, so `ANTHROPIC_LOG` now changes nothing in the API. The three scripts that reach SerpApi for real (`verify_competitors.py`, `verify_e2e.py`, `verify_scoring.py`) now configure logging before their first await, since their output gets pasted into this log.
+
+## 3. The review
+
+- **Security review (opus): PASS WITH NITS.** Checked clean: the key never reaches the failure line, a result, `redacted()`, an error code or a response; httpx exception text carries no URL here (no `raise_for_status`, no followed redirects); tracebacks are plain; the uvicorn access log shows only incoming paths; the retry's connection verifies TLS over https only; 401, 429, 5xx, bad JSON, an `error` payload, an undecodable body and a cancellation are not retried; the pins hide only the SDK's INFO "Retrying request" line and its DEBUG lines, while its warnings and auth failures still surface.
+  - **Taken:** L1, the scripts configure logging; L2, the per-step timeout replaced by a per-attempt deadline, so 21 s is a real ceiling; L3, the rescued retry is logged and the billing comment corrected; L4, the import-order test now imports only the app (a lazy SDK import would be caught) and the no-key tests also refuse any event carrying `exc_info`.
+  - **For the founder:** whether to retry only failures to connect, which never reach SerpApi and so are never billed. Kept: retry read failures too, because the kind that failed in production is not known yet; the next failure's `kinds` will say.
+
+## Found, not fixed
+
+- **`POST /clients/{clientId}/competitors/detect`** runs a fresh detection on every call with no allowance check or rate limit: 6 searches from the shared 250 a month each time, up to 12 with retries.
+- **A retry after a read failure may be billed twice:** at most one extra search per query, 6 per detection.
+- **`SERPAPI_KEY_MISSING` cannot happen:** with no key set, `Settings.provider_key` raises before `search` reaches that branch, so a missing key fails the phase instead of degrading it.
+- **18 other scripts do not call `configure_logging`** (most `verify_*` scripts, `tune_prompt`, `measure_citation_overlap`, `seed_dev`); none sends a key in a URL, but with `ANTHROPIC_LOG=debug` in a shell they would print prompt text.
+- **The founder's log** showed two `serp_failed` lines; a detection sends 3 to 6 queries, so either only some timed out or the view showed two of them. The new lines will say.
+
+## Verified
+
+**API pytest API_BEFORE → API_AFTER (+API_DELTA); floor raised to match.**
+- `tests/test_serp_search.py` (93): the bound is the measured one and every step's timeout sits under the deadline; a hung request is tried once more (eight failure types); when every attempt fails, the code, the attempts and the kinds; an answer is not retried; a rescued retry is logged with numbers and kinds only; an attempt is cut at its deadline and retried, and an outer cancellation is not; the key reaches no log line, no result and no `exc_info` (a sentinel key over every failure type); `search_many` still runs 3 at once; and five against real local sockets (a hung connection rescued by a second, both hanging, a refused port, a response trickling a byte every 30 ms cut at the deadline, a trickling first connection rescued).
+- `tests/test_secrets_stay_out_of_logs.py` (+18): httpx does write the URL when left alone (the premise); with logging configured as the app does it, at INFO or DEBUG in either order, no record names the key; the pins are on the loggers themselves; the SDK raising its loggers does not survive `configure_logging`; a fresh process with `ANTHROPIC_LOG=info` importing only the app ends with all three at WARNING; every script that reaches SerpApi configures logging before it awaits anything.
+- **Negative controls:** on this tree, no retry (one attempt) fails 62 of the 93; restored and checked with `cmp`. The implementer's, each restored: the attempt deadline removed, 4; the rescued-retry line removed, 20; `exc_info` in the failure line, 10; the key's parameters in the failure line, 9; the pins removed, 8; `anthropic` left unpinned, 4; a script's `configure_logging` removed, made conditional, or moved after its first await, each fails.
+
+**The rest of the bar** (this tree, one run).
+- REST_OF_BAR
+- Exit codes were read from files.
