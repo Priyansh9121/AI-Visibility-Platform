@@ -765,6 +765,19 @@ export interface paths {
          *     seconds, so one round trip is both sufficient and simpler than polling.
          *
          *     Set `classify: false` to create the record without spending an LLM call.
+         *
+         *     **One site read per agency at a time, and four at once** (2026-10-02). With
+         *     classification on, this request reads the site in the API's one browser. An agency
+         *     may have one such read queued or running at once, counted here, on
+         *     `POST /clients/{clientId}/reclassify` and on `POST /scans/{scanId}/audit` together,
+         *     and only four agencies at once. Past either limit the request is refused before
+         *     anything is created. A read that waits more than a minute for the browser is
+         *     refused the same way, and writes nothing: no client is created.
+         *
+         *     **Errors:** `429 rate-limited` (with `Retry-After: 60`): "Your agency already has a
+         *     site being read. Try again in a minute." or "The crawler is busy with other pages
+         *     right now. Try again in a minute."; `409 invalid-url`; `409 conflict`;
+         *     `422 validation-failed`.
          */
         post: operations["create_client_api_v1_clients_post"];
         delete?: never;
@@ -858,6 +871,14 @@ export interface paths {
          *     ambiguous on its own: most clients have one scan and can never have an
          *     alert. Reporting only "0 alerts" would read as an all-clear the data cannot
          *     support.
+         *
+         *     **A visibility alert from a FAILED scan is left out** (3.30, extending
+         *     3.24). It quotes that scan's composite, and a failed scan has no score that
+         *     is ever shown. Alerts are written before the scan's final status is stamped,
+         *     so a scan that then ends failed can already have one. This route does not
+         *     delete or change the row; the feed does not list it, `unacknowledged` and
+         *     `scansCompared` do not count it, and nothing quotes it. The other kinds are
+         *     not about the score and are listed as before.
          *
          *     Scoped to the caller's agency by `get_client`, which 404s rather than 403s
          *     on another agency's id.
@@ -1040,6 +1061,15 @@ export interface paths {
          *
          *     Needed because a site changes, and because an AMBIGUOUS result is often
          *     worth retrying after the operator has looked at the site themselves.
+         *
+         *     **One site read per agency at a time, and four at once** (2026-10-02), shared with
+         *     `POST /clients` and `POST /scans/{scanId}/audit`: while the agency's other read is
+         *     queued or running, or four agencies' reads are, this is a `429`. Checked after the
+         *     client is found, so another agency's client is still a `404`. A read that waits
+         *     more than a minute for the browser is refused with a `429` too, and the client
+         *     keeps the classification it had.
+         *
+         *     **Errors:** `404 not-found`; `429 rate-limited` (with `Retry-After: 60`).
          */
         post: operations["reclassify_client_api_v1_clients__clientId__reclassify_post"];
         delete?: never;
@@ -1238,10 +1268,10 @@ export interface paths {
          *       A holder cannot edit the competitor set, re-run the scan, or reach any
          *       other scan — the token resolves to exactly one row.
          *     * **`404` for every rejection, with one code path.** An unknown, revoked or
-         *       expired token is indistinguishable in both status and body. The only
-         *       pre-check is the body's length bound (`422` for an empty or over-512
-         *       token); it says nothing about whether any token is real. Every plausible
-         *       guess pays for the same index lookup.
+         *       expired token, and one whose scan FAILED (3.29), is indistinguishable in
+         *       both status and body. The only pre-check is the body's length bound (`422`
+         *       for an empty or over-512 token); it says nothing about whether any token
+         *       is real. Every plausible guess pays for the same index lookup.
          *     * **The token is in the POST body, not the path**, so it stays out of
          *       request logs.
          *     * **No `401`, ever.** A `401` would say "this token is real, authenticate to
@@ -1302,7 +1332,9 @@ export interface paths {
          *
          *     **A revoked or expired link stops serving files immediately**, on the same
          *     lookup as the JSON route: `scan_for_share_token` returns nothing and this
-         *     route 404s like any other miss. What revocation cannot do is recall a copy
+         *     route 404s like any other miss. So does a link whose scan FAILED (3.29): the
+         *     token is kept for the agency to withdraw, but it opens nothing. What
+         *     revocation cannot do is recall a copy
          *     already on someone's disk, and nothing can — the alternative would be
          *     serving a watermarked or phone-home document, which is a different product
          *     with different privacy properties. So the residual gap is real, bounded,
@@ -1354,6 +1386,14 @@ export interface paths {
         /**
          * Get Audit
          * @description The scan's technical audit, with every check in display order.
+         *
+         *     **A FAILED scan's audit carries no `technicalFoundation` and no `components`**
+         *     (3.30, extending 3.24), as on `POST`: `null` and `{}`, with `componentWeights` (this
+         *     audit's own weighting, with an unmeasured component's share redistributed) and every
+         *     fact about the site returned as before, the stored row not changed, and every other
+         *     status unchanged.
+         *
+         *     **Errors:** `401`, `404` (unknown scan, another agency's, or not yet audited).
          */
         get: operations["get_audit_api_v1_scans__scanId__audit_get"];
         put?: never;
@@ -1370,6 +1410,28 @@ export interface paths {
          *     One audit per scan, refreshed on re-run: a scan is a point-in-time claim
          *     about a site, so a second audit of the same scan is a correction rather than
          *     a new observation.
+         *
+         *     **A FAILED scan's audit carries no `technicalFoundation` and no `components`**
+         *     (3.30, extending 3.24): the sub-score is a score input and a failed scan shows no
+         *     score, and the component scores add up to it, so `technicalFoundation` is `null` and
+         *     `components` is `{}`. `componentWeights` (this audit's own weighting, with an
+         *     unmeasured component's share redistributed) and every fact about the site (the
+         *     checks, the signals) are returned as before, and the stored row keeps its values.
+         *     The agency check comes first, so another agency's failed scan is the same `404` as an
+         *     unknown one. The scan's status is read again after the crawl, so a scan that fails
+         *     while the audit runs is blanked too. Every other status is unchanged.
+         *
+         *     **One site read per agency at a time, and four at once** (2026-10-02), shared with
+         *     `POST /clients` and `POST /clients/{clientId}/reclassify`: while the agency's other
+         *     read is queued or running, or four agencies' reads are, this is a `429`. Checked
+         *     after the scan is found, so another agency's scan is still a `404`. A read that
+         *     waits more than a minute for the browser is refused with a `429` too, and the audit
+         *     already stored for the scan is kept. A scan's own audit, part of the scan, is not
+         *     one of these reads and is never refused: it is recorded as `failed` with
+         *     `errorCode: BROWSER_BUSY` when it waits that long, and the scan goes on.
+         *
+         *     **Errors:** `401`; `404` (unknown scan, or another agency's); `429 rate-limited`
+         *     (with `Retry-After: 60`).
          */
         post: operations["run_audit_api_v1_scans__scanId__audit_post"];
         delete?: never;
@@ -1392,6 +1454,14 @@ export interface paths {
          *     Returns an empty list with `status: "empty"` rather than 404 when nothing
          *     has been generated yet: "no fixes yet" is a state of a scan that exists,
          *     and the report renders its deterministic list in that case.
+         *
+         *     **A FAILED scan has no fixes served** (3.30, extending 3.24): the same `200` with
+         *     `status: "empty"` and `items: []` as a scan whose fixes were never generated,
+         *     whatever rows the scan kept. The generator's input includes a running scan's score
+         *     (founder's decision), so if the scan then fails nothing it wrote is served, on any
+         *     route. The rows are kept, not changed or deleted. Every other status is unchanged.
+         *
+         *     **Errors:** `401`, `404` (unknown scan, or another agency's).
          */
         get: operations["get_fixes_api_v1_scans__scanId__fixes_get"];
         put?: never;
@@ -1412,6 +1482,18 @@ export interface paths {
          *
          *     A provider failure writes nothing and returns `status: "failed"` with a
          *     reason code. The report still renders its deterministic fix list.
+         *
+         *     **A FAILED scan has no fixes served** (3.30, extending 3.24). For a scan still
+         *     running, the generator's input includes its score (founder's decision), and what it
+         *     writes can quote it. If the scan then fails, nothing it wrote is served, on any
+         *     route, and the rows are kept. So `POST` for a failed scan is `409`
+         *     `/problems/conflict`, "This scan failed, so no fixes are written for it.", with no
+         *     model call and no row written or changed. The agency check comes first, so another
+         *     agency's failed scan is the same `404` as an unknown one. A scan that fails while the
+         *     generation runs gets the same `409`: what the call wrote is kept, and not served.
+         *     Every other status is unchanged.
+         *
+         *     **Errors:** `401`, `404` (unknown scan, or another agency's), `409` (failed scan).
          */
         post: operations["generate_fixes_api_v1_scans__scanId__fixes_post"];
         delete?: never;
@@ -1552,6 +1634,13 @@ export interface paths {
          *     The comparison is recomputed from persisted rows on read rather than stored
          *     — it is a pure function of data already in the database, and a second copy
          *     could fall out of step with the first.
+         *
+         *     **A FAILED scan has no score** (3.30, extending 3.24): the same `404` as a scan
+         *     not yet scored, with the detail "This scan failed, so it has no score.",
+         *     whatever rows the scan kept. They are not read, changed or deleted.
+         *
+         *     **Errors:** `401`; `404` (unknown scan, another agency's, not yet scored, or
+         *     failed).
          */
         get: operations["get_scan_score_api_v1_scans__scanId__score_get"];
         put?: never;
@@ -1567,6 +1656,18 @@ export interface paths {
          *     **Re-scoring INSERTS a new row** rather than overwriting. A Score is a dated
          *     claim under a named `formulaVersion`; overwriting would erase the history
          *     before/after reporting depends on.
+         *
+         *     **A FAILED scan is not scored** (3.30, extending 3.24): `409`
+         *     `/problems/conflict`, and no Score row is written or refreshed. A failed scan
+         *     has no score that is ever shown, and the rows it kept from before it failed
+         *     are neither changed nor deleted. The agency check comes first, so another
+         *     agency's failed scan is the same `404` as an unknown one. The status is read
+         *     under a row lock held until the score is committed, so a scan that fails
+         *     while this runs either fails first (`409`) or is scored first and fails
+         *     after. Every other status is scored as before.
+         *
+         *     **Errors:** `401`, `404` (unknown scan, or another agency's), `409` (failed
+         *     scan).
          */
         post: operations["compute_scan_score_api_v1_scans__scanId__score_post"];
         delete?: never;
@@ -1589,6 +1690,10 @@ export interface paths {
          *     The audit trail: which `formulaVersion` produced which composite, from which
          *     `inputsDigest`. Two rows sharing a digest but differing in composite mean the
          *     formula changed; differing digests mean the inputs did.
+         *
+         *     **A FAILED scan lists none** (3.30, extending 3.24): `[]`, the same `200` as a
+         *     scan not yet scored, whatever rows the scan kept. They are not read, changed
+         *     or deleted.
          */
         get: operations["list_scan_scores_api_v1_scans__scanId__scores_get"];
         put?: never;
@@ -1617,21 +1722,30 @@ export interface paths {
          *     report at creation time and relying on the URL being unknown would make
          *     that decision for them. This is the moment they make it.
          *
-         *     **`200`, not `201`, and idempotent.** Calling twice returns the same token
-         *     rather than minting a second live link to the same report: every extra
-         *     token would be a URL nobody is tracking. The second call creates nothing,
-         *     so it does not claim to.
+         *     **`200`, not `201`, and idempotent.** While the scan has a live link,
+         *     calling again returns that link exactly as it is: the same token and the
+         *     same `expiresAt`, with nothing written. Every extra token would be a URL
+         *     nobody is tracking, so the second call mints nothing and does not claim
+         *     to.
          *
-         *     **A second call DOES push the expiry out** — Epic 9.21. Idempotence is
-         *     about the token's identity, not its lifetime, and the alternative reading
-         *     leaves no way to extend a link without changing its URL: revoke-and-mint
-         *     issues a new token and kills every copy already sent. Re-sharing is the
-         *     agency restating the decision to share, which is the signal an expiry
-         *     should listen to. `services/share.py` carries the argument in full.
+         *     **A press on a live link does not move its end** — Epic 9.21, as changed by
+         *     checklist 3.28 (the founder's decision). The share bar says links last 30
+         *     days from when they are created, and "The link works until ..." names the
+         *     end the link was given, so both stay true of the link already sent. Only
+         *     when no link is live does a press make one: a scan never shared, a
+         *     withdrawn link, or one that has ended. That is a NEW token with a fresh 30
+         *     days. An ended token is replaced, not revived, so the address that stopped
+         *     working stays dead on both public routes. `services/share.py` carries the
+         *     argument in full.
          *
          *     **A FAILED scan cannot be shared** (3.24): `409`
          *     `/problems/failed-scan-not-shareable`. Its score is never shown, so there
-         *     is no report to send. PARTIAL and every other status are unchanged.
+         *     is no report to send. PARTIAL and every other status are unchanged. The
+         *     status is read again under the row lock, so a scan that fails while this
+         *     request is in flight is refused the same way and nothing is written. A link
+         *     minted before the scan failed stays on the row, so it can still be
+         *     withdrawn, but it no longer opens the report (3.29): the public routes
+         *     refuse it like a withdrawn one.
          *
          *     **Errors:** `401`, `404` (unknown scan, or another agency's), `409`
          *     (failed scan).
@@ -3783,8 +3897,10 @@ export interface components {
          *
          *     `expiresAt` is returned because the operator is about to paste this URL
          *     into an email and the one thing they cannot see from the URL is when it
-         *     stops working — Epic 9.21. A re-mint pushes it out, so the value is also
-         *     how a caller confirms a refresh actually happened.
+         *     stops working — Epic 9.21. It is the end the link was given when it was
+         *     made: a press on a live link returns the same value, and only a press when
+         *     no link is live (never shared, withdrawn, or ended) makes a new link with a
+         *     fresh 30 days (checklist 3.28).
          */
         ShareLinkOut: {
             /**

@@ -186,6 +186,15 @@ describe('degraded data renders as degraded, never as bad', () => {
     expect(html).toContain('is not a site with a bad technical foundation');
     expect(html).not.toContain('FETCH_FAILED');
     expect(html).toContain(AUDIT_FAILURE_SENTENCE.FETCH_FAILED);
+    // The words around the sentence are true of every failure, a busy crawler and a cut
+    // run included: the crawl did not complete and nothing was measured, which is not
+    // the same as the site being out of reach.
+    expect(html).toContain('did not complete, so nothing was measured from the page.');
+    expect(html).toContain(
+      'A site the crawler could not read is not a site with a bad technical foundation — the dimension is left unscored rather than scored zero.',
+    );
+    expect(html).not.toContain('A site we could not reach');
+    expect(html).not.toContain('no structural signals were collected');
   });
 
   it('says one plain sentence per failure code, and never the code, signed in or public', () => {
@@ -197,17 +206,21 @@ describe('degraded data renders as degraded, never as bad', () => {
       ['BROWSER_ERROR', AUDIT_FAILURE_SENTENCE.BROWSER_ERROR!],
       ['FETCH_FAILED', AUDIT_FAILURE_SENTENCE.FETCH_FAILED!],
       ['TIMEOUT', AUDIT_FAILURE_SENTENCE.TIMEOUT!],
+      ['BROWSER_BUSY', AUDIT_FAILURE_SENTENCE.BROWSER_BUSY!],
       ['HTTP_503', auditFailureSentence('HTTP_503')],
       ['SOMETHING_NEW', auditFailureSentence('SOMETHING_NEW')],
     ];
-    expect(cases[3]![1]).toContain('HTTP 503');
-    expect(cases[4]![1]).toBe(AUDIT_FAILURE_GENERIC);
+    expect(new Set(cases.map(([, sentence]) => sentence)).size).toBe(cases.length);
+    expect(cases[4]![1]).toContain('HTTP 503');
+    expect(cases[5]![1]).toBe(AUDIT_FAILURE_GENERIC);
     for (const [code, sentence] of cases) {
       for (const html of [
         render(withCode(code)),
         renderToStaticMarkup(<ReportView report={withCode(code)} publicView animate={false} />),
       ]) {
         expect(html, code).toContain(sentence);
+        expect(html, code).toContain('did not complete, so nothing was measured from the page.');
+        expect(html, code).not.toContain('A site we could not reach');
         expect(html, code).not.toContain(code);
         expect(html, code).not.toContain('(HTTP_');
       }

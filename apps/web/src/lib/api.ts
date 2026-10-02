@@ -457,9 +457,13 @@ export const api = {
   /**
    * Mint (or fetch) the public share link for a scan's report — Epic 9.8.
    *
-   * Idempotent: asking twice returns the same URL rather than a second live
-   * link to the same report, because there is no revocation and every extra
-   * token would be a URL nobody is tracking.
+   * Idempotent while a link is live: asking again returns the same URL and the
+   * same `expiresAt` rather than a second live link to the same report, because
+   * every extra token would be a URL nobody is tracking, and a press does not
+   * move a live link's end (checklist 3.28). Once the link has been withdrawn
+   * or has ended, the next call makes a NEW token with a fresh 30 days. A failed
+   * scan is refused with a 409 `/problems/failed-scan-not-shareable`, even when a
+   * link is live.
    */
   shareLink: (scanId: string) =>
     request<ShareLink>(`/scans/${scanId}/share`, { method: 'POST' }),

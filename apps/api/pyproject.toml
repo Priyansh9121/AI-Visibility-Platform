@@ -10,7 +10,12 @@ license = { text = "UNLICENSED" }
 # (see apps/api/scripts/license_audit.py); its output is recorded in
 # docs/build-log.md for each epic that adds packages.
 dependencies = [
-    "fastapi>=0.115,<0.117",        # MIT
+    # >=0.117.1: 0.116 wrapped every JSON body field in its own TypeAdapter and Pydantic
+    # warned on each alias (tests/test_no_alias_warnings.py). <0.118: 0.118 moves the
+    # teardown of yield dependencies (db_session) after the response, so lifting it
+    # needs its own review; the cap also holds starlette <0.49, so lift it before the
+    # API serves files (FileResponse, StaticFiles).
+    "fastapi>=0.117.1,<0.118",      # MIT
     "uvicorn[standard]>=0.32,<0.35", # BSD-3-Clause
     "pydantic>=2.9,<3",             # MIT
     "pydantic-settings>=2.6,<3",    # MIT
@@ -65,11 +70,9 @@ markers = [
 filterwarnings = [
     # Our own deprecation warnings are errors — they are ours to fix.
     "error::DeprecationWarning:avp_api.*",
-    # FastAPI builds a TypeAdapter for each request body; combined with our
-    # `alias_generator=to_camel` it re-attaches Field(alias=...) to an
-    # Annotated alias and Pydantic warns. Internal to those two libraries, not
-    # a defect here — the camelCase contract is asserted in test_auth_flow.py.
-    "ignore:The .(alias|validation_alias|serialization_alias). attribute:UserWarning",
+    # An alias Pydantic says "has no effect" is an error, wherever it is raised
+    # (FastAPI 0.116 raised it on each body route's first request; fixed in 0.117).
+    "error::pydantic.warnings.UnsupportedFieldAttributeWarning",
 ]
 
 [tool.ruff]

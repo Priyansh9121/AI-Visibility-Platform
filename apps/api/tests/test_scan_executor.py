@@ -511,6 +511,7 @@ class TestTheDeadlineCatchesWhatALeaseCannot:
         import math
 
         from avp_api.services import (
+            browser_slot,
             cocitation,
             engines,
             extraction,
@@ -535,9 +536,12 @@ class TestTheDeadlineCatchesWhatALeaseCannot:
             + 2 * serp.DEFAULT_TIMEOUT
             + prompts.GENERATOR_BOUND.ceiling
             + waves * slot
-            + technical_audit.PAGE_TIMEOUT_MS / 1000
+            # the audit: its side files before the browser, then its wait for the one
+            # browser at the scan's bound (M1 round 2), then the run at its cap (M1; a
+            # hung page read used to have no ceiling at all, 3.20)
             + technical_audit.SIDE_FETCH_TIMEOUT
-            + technical_audit.SETTLE_MS / 1000
+            + browser_slot.SCAN_AUDIT_WAIT_S
+            + technical_audit.audit_run_cap_s()
             + fix_generator.FIX_BOUND.ceiling
         )
 

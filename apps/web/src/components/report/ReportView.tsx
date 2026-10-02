@@ -1122,9 +1122,9 @@ function AuditEvidence({ report }: { report: Report }) {
           </p>
           <p className="mt-2 text-ui-sm leading-prose text-text-secondary">
             {auditFailureSentence(audit.errorCode)} The crawl of{' '}
-            {audit.urlAudited ?? 'the site'} did not complete, so no structural signals were
-            collected. A site we could not reach is not a site with a bad technical foundation —
-            the dimension is left unscored rather than scored zero.
+            {audit.urlAudited ?? 'the site'} did not complete, so nothing was measured from the
+            page. A site the crawler could not read is not a site with a bad technical
+            foundation — the dimension is left unscored rather than scored zero.
           </p>
         </CardBody>
       </Card>

@@ -77,8 +77,10 @@ class ShareLinkOut(ApiModel):
 
     `expiresAt` is returned because the operator is about to paste this URL
     into an email and the one thing they cannot see from the URL is when it
-    stops working — Epic 9.21. A re-mint pushes it out, so the value is also
-    how a caller confirms a refresh actually happened.
+    stops working — Epic 9.21. It is the end the link was given when it was
+    made: a press on a live link returns the same value, and only a press when
+    no link is live (never shared, withdrawn, or ended) makes a new link with a
+    fresh 30 days (checklist 3.28).
     """
 
     scan_id: str

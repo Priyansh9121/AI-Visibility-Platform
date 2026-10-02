@@ -23,6 +23,7 @@ from .. import ids
 from ..config import Settings, get_settings
 from ..errors import Conflict, NotFound
 from ..models import ClassificationStatus, Client, ClientKind
+from .browser_slot import BROWSER_BUSY, crawler_busy
 from .classify import ClassificationOutcome, classify
 from .crawl import CrawlResult, crawl_site, normalise_url, registrable_domain
 
@@ -148,10 +149,22 @@ async def run_classification(
     Returns the crawl result alongside the client so the caller can surface
     crawl FACTS (pages fetched, schema types) without this function having to
     persist them — Epic 6's technical audit owns that table.
+
+    **A crawl that never got the browser is refused, not recorded** (M1 round 3).
+    When another run held the process's one browser for the whole wait
+    (`BROWSER_BUSY`), the site was never read, so there is nothing to classify and
+    nothing to write: this raises `RateLimited` (429, `Retry-After`; `crawler_busy`)
+    BEFORE `classify` or `apply_outcome`, and the client is left exactly as it was
+    (for a new client the caller's session rolls back its row, since nothing here
+    commits). Recording it would leave a client `unclassifiable`, or replace a good
+    classification, because the crawler happened to be busy, which says nothing about
+    the client's site. So no client can carry `BROWSER_BUSY` as its reason.
     """
     settings = settings or get_settings()
 
-    crawl = await crawl_site(f"https://{client.domain}", max_pages=max_pages)
+    crawl = await crawl_site(f"https://{client.domain}", max_pages=max_pages, client_id=client.id)
+    if crawl.error_code == BROWSER_BUSY:
+        raise crawler_busy()
     outcome = await classify(crawl, settings=settings)
     apply_outcome(client, outcome)
     await session.flush()

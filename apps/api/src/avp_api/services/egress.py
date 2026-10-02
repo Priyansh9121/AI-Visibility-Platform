@@ -617,6 +617,22 @@ class BrowserGuard:
         if self.refused is not None:
             raise self.refused
 
+    def record_outcome(self, exc: EgressRefused | EgressUnverified) -> None:
+        """Keep an egress outcome the run raised that the guard did not record itself.
+
+        The robots gate raises `EgressRefused` on its own (`RobotsGate._egress_ok`), and
+        the guard never sees it. A run calls this from an `except` clause on the way out
+        of its body, BEFORE its closes begin, so that a time cap that falls during them
+        finds the outcome in `refused` / `unverified` and does not lose it with the
+        exception that carried it. (The exception chain is not a way to find it: a
+        cancellation that arrives after a close has awaited is no longer linked to the
+        error it interrupted, and the browser's close always awaits.)
+        """
+        if isinstance(exc, EgressRefused):
+            self.refused = self.refused or exc
+        else:
+            self.unverified = True
+
     async def check_landing(self, response: typing.Any, page_url: str) -> None:
         """After a navigation: every hop that led here, and where it ended.
 
