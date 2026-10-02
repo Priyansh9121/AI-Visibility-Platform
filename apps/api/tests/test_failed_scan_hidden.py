@@ -395,11 +395,13 @@ class TestTheScoreIsNotShown:
         assert body["scanStatus"] == "failed"
         assert body["score"] is None
         assert body["dimensions"] == []
-        # Score-derived numbers go with it: the sub-score and the recoverable points.
+        # Score-derived numbers go with it: the sub-score. So do the fixes the generator
+        # wrote from the score (3.30; `test_failed_scan_fixes_and_audit.py`): the list is
+        # empty, not the same fixes with their points blanked, and the fix beat words
+        # itself from its own copy.
         assert body["audit"] is not None
         assert body["audit"]["technicalFoundation"] is None
-        assert len(body["actionItems"]) == len(before_items)
-        assert all(i["pointsUpside"] is None for i in body["actionItems"])
+        assert body["actionItems"] == []
         for rival in body["competitorSet"]["competitors"]:
             assert rival["mentionRate"] is None
             assert rival["shareOfVoice"] is None

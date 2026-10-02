@@ -859,6 +859,14 @@ export interface paths {
          *     alert. Reporting only "0 alerts" would read as an all-clear the data cannot
          *     support.
          *
+         *     **A visibility alert from a FAILED scan is left out** (3.30, extending
+         *     3.24). It quotes that scan's composite, and a failed scan has no score that
+         *     is ever shown. Alerts are written before the scan's final status is stamped,
+         *     so a scan that then ends failed can already have one. This route does not
+         *     delete or change the row; the feed does not list it, `unacknowledged` and
+         *     `scansCompared` do not count it, and nothing quotes it. The other kinds are
+         *     not about the score and are listed as before.
+         *
          *     Scoped to the caller's agency by `get_client`, which 404s rather than 403s
          *     on another agency's id.
          */
@@ -1356,6 +1364,14 @@ export interface paths {
         /**
          * Get Audit
          * @description The scan's technical audit, with every check in display order.
+         *
+         *     **A FAILED scan's audit carries no `technicalFoundation` and no `components`**
+         *     (3.30, extending 3.24), as on `POST`: `null` and `{}`, with `componentWeights` (this
+         *     audit's own weighting, with an unmeasured component's share redistributed) and every
+         *     fact about the site returned as before, the stored row not changed, and every other
+         *     status unchanged.
+         *
+         *     **Errors:** `401`, `404` (unknown scan, another agency's, or not yet audited).
          */
         get: operations["get_audit_api_v1_scans__scanId__audit_get"];
         put?: never;
@@ -1372,6 +1388,18 @@ export interface paths {
          *     One audit per scan, refreshed on re-run: a scan is a point-in-time claim
          *     about a site, so a second audit of the same scan is a correction rather than
          *     a new observation.
+         *
+         *     **A FAILED scan's audit carries no `technicalFoundation` and no `components`**
+         *     (3.30, extending 3.24): the sub-score is a score input and a failed scan shows no
+         *     score, and the component scores add up to it, so `technicalFoundation` is `null` and
+         *     `components` is `{}`. `componentWeights` (this audit's own weighting, with an
+         *     unmeasured component's share redistributed) and every fact about the site (the
+         *     checks, the signals) are returned as before, and the stored row keeps its values.
+         *     The agency check comes first, so another agency's failed scan is the same `404` as an
+         *     unknown one. The scan's status is read again after the crawl, so a scan that fails
+         *     while the audit runs is blanked too. Every other status is unchanged.
+         *
+         *     **Errors:** `401`, `404` (unknown scan, or another agency's).
          */
         post: operations["run_audit_api_v1_scans__scanId__audit_post"];
         delete?: never;
@@ -1394,6 +1422,14 @@ export interface paths {
          *     Returns an empty list with `status: "empty"` rather than 404 when nothing
          *     has been generated yet: "no fixes yet" is a state of a scan that exists,
          *     and the report renders its deterministic list in that case.
+         *
+         *     **A FAILED scan has no fixes served** (3.30, extending 3.24): the same `200` with
+         *     `status: "empty"` and `items: []` as a scan whose fixes were never generated,
+         *     whatever rows the scan kept. The generator's input includes a running scan's score
+         *     (founder's decision), so if the scan then fails nothing it wrote is served, on any
+         *     route. The rows are kept, not changed or deleted. Every other status is unchanged.
+         *
+         *     **Errors:** `401`, `404` (unknown scan, or another agency's).
          */
         get: operations["get_fixes_api_v1_scans__scanId__fixes_get"];
         put?: never;
@@ -1414,6 +1450,18 @@ export interface paths {
          *
          *     A provider failure writes nothing and returns `status: "failed"` with a
          *     reason code. The report still renders its deterministic fix list.
+         *
+         *     **A FAILED scan has no fixes served** (3.30, extending 3.24). For a scan still
+         *     running, the generator's input includes its score (founder's decision), and what it
+         *     writes can quote it. If the scan then fails, nothing it wrote is served, on any
+         *     route, and the rows are kept. So `POST` for a failed scan is `409`
+         *     `/problems/conflict`, "This scan failed, so no fixes are written for it.", with no
+         *     model call and no row written or changed. The agency check comes first, so another
+         *     agency's failed scan is the same `404` as an unknown one. A scan that fails while the
+         *     generation runs gets the same `409`: what the call wrote is kept, and not served.
+         *     Every other status is unchanged.
+         *
+         *     **Errors:** `401`, `404` (unknown scan, or another agency's), `409` (failed scan).
          */
         post: operations["generate_fixes_api_v1_scans__scanId__fixes_post"];
         delete?: never;
@@ -1554,6 +1602,13 @@ export interface paths {
          *     The comparison is recomputed from persisted rows on read rather than stored
          *     — it is a pure function of data already in the database, and a second copy
          *     could fall out of step with the first.
+         *
+         *     **A FAILED scan has no score** (3.30, extending 3.24): the same `404` as a scan
+         *     not yet scored, with the detail "This scan failed, so it has no score.",
+         *     whatever rows the scan kept. They are not read, changed or deleted.
+         *
+         *     **Errors:** `401`; `404` (unknown scan, another agency's, not yet scored, or
+         *     failed).
          */
         get: operations["get_scan_score_api_v1_scans__scanId__score_get"];
         put?: never;
@@ -1569,6 +1624,18 @@ export interface paths {
          *     **Re-scoring INSERTS a new row** rather than overwriting. A Score is a dated
          *     claim under a named `formulaVersion`; overwriting would erase the history
          *     before/after reporting depends on.
+         *
+         *     **A FAILED scan is not scored** (3.30, extending 3.24): `409`
+         *     `/problems/conflict`, and no Score row is written or refreshed. A failed scan
+         *     has no score that is ever shown, and the rows it kept from before it failed
+         *     are neither changed nor deleted. The agency check comes first, so another
+         *     agency's failed scan is the same `404` as an unknown one. The status is read
+         *     under a row lock held until the score is committed, so a scan that fails
+         *     while this runs either fails first (`409`) or is scored first and fails
+         *     after. Every other status is scored as before.
+         *
+         *     **Errors:** `401`, `404` (unknown scan, or another agency's), `409` (failed
+         *     scan).
          */
         post: operations["compute_scan_score_api_v1_scans__scanId__score_post"];
         delete?: never;
@@ -1591,6 +1658,10 @@ export interface paths {
          *     The audit trail: which `formulaVersion` produced which composite, from which
          *     `inputsDigest`. Two rows sharing a digest but differing in composite mean the
          *     formula changed; differing digests mean the inputs did.
+         *
+         *     **A FAILED scan lists none** (3.30, extending 3.24): `[]`, the same `200` as a
+         *     scan not yet scored, whatever rows the scan kept. They are not read, changed
+         *     or deleted.
          */
         get: operations["list_scan_scores_api_v1_scans__scanId__scores_get"];
         put?: never;

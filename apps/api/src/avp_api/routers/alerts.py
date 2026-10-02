@@ -9,11 +9,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Path, status
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import aliased
 
 from ..deps import DbDep, PrincipalDep
-from ..models.alert import Alert
+from ..models.alert import Alert, AlertKind
 from ..models.scan import Scan, ScanStatus
 from ..schemas.alert import AcknowledgeAlertOut, AlertFeedOut, AlertOut
 from ..services import intake as intake_service
@@ -45,6 +45,14 @@ async def list_client_alerts(
     alert. Reporting only "0 alerts" would read as an all-clear the data cannot
     support.
 
+    **A visibility alert from a FAILED scan is left out** (3.30, extending
+    3.24). It quotes that scan's composite, and a failed scan has no score that
+    is ever shown. Alerts are written before the scan's final status is stamped,
+    so a scan that then ends failed can already have one. This route does not
+    delete or change the row; the feed does not list it, `unacknowledged` and
+    `scansCompared` do not count it, and nothing quotes it. The other kinds are
+    not about the score and are listed as before.
+
     Scoped to the caller's agency by `get_client`, which 404s rather than 403s
     on another agency's id.
     """
@@ -75,7 +83,18 @@ async def list_client_alerts(
             select(Alert, stamp, baseline_stamp)
             .join(triggered, triggered.id == Alert.scan_id)
             .join(baseline, baseline.id == Alert.baseline_scan_id)
-            .where(Alert.client_id == client.id)
+            .where(
+                Alert.client_id == client.id,
+                # A visibility alert quotes its scan's composite, and a FAILED scan
+                # has no score that is ever shown (3.30). Left out here. This is
+                # `failed_scan.score_is_withheld(scan)` written as SQL, because it
+                # filters rows in the query: the two must change together, and
+                # `test_alerts.py` holds this filter to that function for every status.
+                or_(
+                    Alert.kind != AlertKind.VISIBILITY_DROP,
+                    triggered.status != ScanStatus.FAILED,
+                ),
+            )
             .order_by(Alert.id.desc())
         )
     ).all()
@@ -106,13 +125,9 @@ async def list_client_alerts(
 
     # How many of this client's scans could have produced an alert at all. The
     # figure that separates "nothing changed" from "nothing was comparable".
-    compared = (
-        await db.execute(
-            select(func.count(func.distinct(Alert.scan_id))).where(
-                Alert.client_id == client.id
-            )
-        )
-    ).scalar_one()
+    # Counted from the alerts listed above (3.30), so it cannot count one the
+    # feed leaves out.
+    compared = len({a.scan_id for a in alerts})
 
     return AlertFeedOut(
         client_id=client.id,
@@ -159,6 +174,3 @@ async def acknowledge_alert(
         await db.commit()
 
     return AcknowledgeAlertOut(id=alert.id, acknowledged_at=alert.acknowledged_at)
-
-
-__all__ = ["router", "ScanStatus"]

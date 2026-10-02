@@ -6478,7 +6478,7 @@
     },
     "/api/v1/clients/{clientId}/alerts": {
       "get": {
-        "description": "This client's alerts, newest first.\n\n**Newest first**, unlike `GET /clients/{id}/history`. That one is a trend\nand a trend reads left to right from its earliest point; this is a LOG an\noperator checks, and the thing they are looking for is the most recent\nentry. `prompt-runs` orders itself the same way for the same reason.\n\n**Reads only.** Alerts are generated once at the end of a scan (see\n`services/alerts.py`), never recomputed here \u2014 an alert that re-derived on\nevery request could appear and disappear between two page loads of the same\ndata, and an acknowledgement would have nothing stable to attach to.\n\n`scansTotal` and `scansCompared` are returned because an empty feed is\nambiguous on its own: most clients have one scan and can never have an\nalert. Reporting only \"0 alerts\" would read as an all-clear the data cannot\nsupport.\n\nScoped to the caller's agency by `get_client`, which 404s rather than 403s\non another agency's id.",
+        "description": "This client's alerts, newest first.\n\n**Newest first**, unlike `GET /clients/{id}/history`. That one is a trend\nand a trend reads left to right from its earliest point; this is a LOG an\noperator checks, and the thing they are looking for is the most recent\nentry. `prompt-runs` orders itself the same way for the same reason.\n\n**Reads only.** Alerts are generated once at the end of a scan (see\n`services/alerts.py`), never recomputed here \u2014 an alert that re-derived on\nevery request could appear and disappear between two page loads of the same\ndata, and an acknowledgement would have nothing stable to attach to.\n\n`scansTotal` and `scansCompared` are returned because an empty feed is\nambiguous on its own: most clients have one scan and can never have an\nalert. Reporting only \"0 alerts\" would read as an all-clear the data cannot\nsupport.\n\n**A visibility alert from a FAILED scan is left out** (3.30, extending\n3.24). It quotes that scan's composite, and a failed scan has no score that\nis ever shown. Alerts are written before the scan's final status is stamped,\nso a scan that then ends failed can already have one. This route does not\ndelete or change the row; the feed does not list it, `unacknowledged` and\n`scansCompared` do not count it, and nothing quotes it. The other kinds are\nnot about the score and are listed as before.\n\nScoped to the caller's agency by `get_client`, which 404s rather than 403s\non another agency's id.",
         "operationId": "list_client_alerts_api_v1_clients__clientId__alerts_get",
         "parameters": [
           {
@@ -7254,7 +7254,7 @@
     },
     "/api/v1/scans/{scanId}/audit": {
       "get": {
-        "description": "The scan's technical audit, with every check in display order.",
+        "description": "The scan's technical audit, with every check in display order.\n\n**A FAILED scan's audit carries no `technicalFoundation` and no `components`**\n(3.30, extending 3.24), as on `POST`: `null` and `{}`, with `componentWeights` (this\naudit's own weighting, with an unmeasured component's share redistributed) and every\nfact about the site returned as before, the stored row not changed, and every other\nstatus unchanged.\n\n**Errors:** `401`, `404` (unknown scan, another agency's, or not yet audited).",
         "operationId": "get_audit_api_v1_scans__scanId__audit_get",
         "parameters": [
           {
@@ -7295,7 +7295,7 @@
         ]
       },
       "post": {
-        "description": "Crawl the client's site and record structural signals plus per-check verdicts.\n\nMakes **no model or search calls** \u2014 this is a page load plus two side\nfetches (robots.txt, sitemap.xml). Cost is bandwidth and a few seconds.\n\nOnce an audit exists, re-scoring the scan includes Technical Foundation\ninstead of excluding it as `NOT_YET_MEASURED`.\n\nOne audit per scan, refreshed on re-run: a scan is a point-in-time claim\nabout a site, so a second audit of the same scan is a correction rather than\na new observation.",
+        "description": "Crawl the client's site and record structural signals plus per-check verdicts.\n\nMakes **no model or search calls** \u2014 this is a page load plus two side\nfetches (robots.txt, sitemap.xml). Cost is bandwidth and a few seconds.\n\nOnce an audit exists, re-scoring the scan includes Technical Foundation\ninstead of excluding it as `NOT_YET_MEASURED`.\n\nOne audit per scan, refreshed on re-run: a scan is a point-in-time claim\nabout a site, so a second audit of the same scan is a correction rather than\na new observation.\n\n**A FAILED scan's audit carries no `technicalFoundation` and no `components`**\n(3.30, extending 3.24): the sub-score is a score input and a failed scan shows no\nscore, and the component scores add up to it, so `technicalFoundation` is `null` and\n`components` is `{}`. `componentWeights` (this audit's own weighting, with an\nunmeasured component's share redistributed) and every fact about the site (the\nchecks, the signals) are returned as before, and the stored row keeps its values.\nThe agency check comes first, so another agency's failed scan is the same `404` as an\nunknown one. The scan's status is read again after the crawl, so a scan that fails\nwhile the audit runs is blanked too. Every other status is unchanged.\n\n**Errors:** `401`, `404` (unknown scan, or another agency's).",
         "operationId": "run_audit_api_v1_scans__scanId__audit_post",
         "parameters": [
           {
@@ -7338,7 +7338,7 @@
     },
     "/api/v1/scans/{scanId}/fixes": {
       "get": {
-        "description": "The scan's fix list as last generated, in rank order.\n\nReturns an empty list with `status: \"empty\"` rather than 404 when nothing\nhas been generated yet: \"no fixes yet\" is a state of a scan that exists,\nand the report renders its deterministic list in that case.",
+        "description": "The scan's fix list as last generated, in rank order.\n\nReturns an empty list with `status: \"empty\"` rather than 404 when nothing\nhas been generated yet: \"no fixes yet\" is a state of a scan that exists,\nand the report renders its deterministic list in that case.\n\n**A FAILED scan has no fixes served** (3.30, extending 3.24): the same `200` with\n`status: \"empty\"` and `items: []` as a scan whose fixes were never generated,\nwhatever rows the scan kept. The generator's input includes a running scan's score\n(founder's decision), so if the scan then fails nothing it wrote is served, on any\nroute. The rows are kept, not changed or deleted. Every other status is unchanged.\n\n**Errors:** `401`, `404` (unknown scan, or another agency's).",
         "operationId": "get_fixes_api_v1_scans__scanId__fixes_get",
         "parameters": [
           {
@@ -7379,7 +7379,7 @@
         ]
       },
       "post": {
-        "description": "Generate the scan's prioritised fix list.\n\nMakes **one model call**. The candidates \u2014 which dimension gaps are worth a\nline, which audit findings warrant a fix, and in what order \u2014 are decided\nbefore the call by the same rules Epic 7 already applies on the client. The\nmodel words them and judges priority and effort; it cannot add a\nrecommendation the measurement did not produce.\n\nOne row per candidate per scan, refreshed on re-run. A regenerated list is a\nbetter statement of the same measurement, not a second measurement \u2014 but\n`status` is the operator's, so it survives regeneration, and a candidate\nthat has been worked is kept even once it stops being measured.\n\nA provider failure writes nothing and returns `status: \"failed\"` with a\nreason code. The report still renders its deterministic fix list.",
+        "description": "Generate the scan's prioritised fix list.\n\nMakes **one model call**. The candidates \u2014 which dimension gaps are worth a\nline, which audit findings warrant a fix, and in what order \u2014 are decided\nbefore the call by the same rules Epic 7 already applies on the client. The\nmodel words them and judges priority and effort; it cannot add a\nrecommendation the measurement did not produce.\n\nOne row per candidate per scan, refreshed on re-run. A regenerated list is a\nbetter statement of the same measurement, not a second measurement \u2014 but\n`status` is the operator's, so it survives regeneration, and a candidate\nthat has been worked is kept even once it stops being measured.\n\nA provider failure writes nothing and returns `status: \"failed\"` with a\nreason code. The report still renders its deterministic fix list.\n\n**A FAILED scan has no fixes served** (3.30, extending 3.24). For a scan still\nrunning, the generator's input includes its score (founder's decision), and what it\nwrites can quote it. If the scan then fails, nothing it wrote is served, on any\nroute, and the rows are kept. So `POST` for a failed scan is `409`\n`/problems/conflict`, \"This scan failed, so no fixes are written for it.\", with no\nmodel call and no row written or changed. The agency check comes first, so another\nagency's failed scan is the same `404` as an unknown one. A scan that fails while the\ngeneration runs gets the same `409`: what the call wrote is kept, and not served.\nEvery other status is unchanged.\n\n**Errors:** `401`, `404` (unknown scan, or another agency's), `409` (failed scan).",
         "operationId": "generate_fixes_api_v1_scans__scanId__fixes_post",
         "parameters": [
           {
@@ -7618,7 +7618,7 @@
     },
     "/api/v1/scans/{scanId}/score": {
       "get": {
-        "description": "The most recent stored Score for a scan, with the competitor comparison.\n\nThe comparison is recomputed from persisted rows on read rather than stored\n\u2014 it is a pure function of data already in the database, and a second copy\ncould fall out of step with the first.",
+        "description": "The most recent stored Score for a scan, with the competitor comparison.\n\nThe comparison is recomputed from persisted rows on read rather than stored\n\u2014 it is a pure function of data already in the database, and a second copy\ncould fall out of step with the first.\n\n**A FAILED scan has no score** (3.30, extending 3.24): the same `404` as a scan\nnot yet scored, with the detail \"This scan failed, so it has no score.\",\nwhatever rows the scan kept. They are not read, changed or deleted.\n\n**Errors:** `401`; `404` (unknown scan, another agency's, not yet scored, or\nfailed).",
         "operationId": "get_scan_score_api_v1_scans__scanId__score_get",
         "parameters": [
           {
@@ -7659,7 +7659,7 @@
         ]
       },
       "post": {
-        "description": "Compute and store the AI Visibility Score for a scan.\n\n**Makes no provider calls and costs nothing** \u2014 scoring is pure arithmetic\nover rows Epic 4 already persisted. Sentiment is read from storage, never\nre-classified (scoring-spec.md rule 4), which is what makes re-scoring\nreproducible.\n\n**Re-scoring INSERTS a new row** rather than overwriting. A Score is a dated\nclaim under a named `formulaVersion`; overwriting would erase the history\nbefore/after reporting depends on.",
+        "description": "Compute and store the AI Visibility Score for a scan.\n\n**Makes no provider calls and costs nothing** \u2014 scoring is pure arithmetic\nover rows Epic 4 already persisted. Sentiment is read from storage, never\nre-classified (scoring-spec.md rule 4), which is what makes re-scoring\nreproducible.\n\n**Re-scoring INSERTS a new row** rather than overwriting. A Score is a dated\nclaim under a named `formulaVersion`; overwriting would erase the history\nbefore/after reporting depends on.\n\n**A FAILED scan is not scored** (3.30, extending 3.24): `409`\n`/problems/conflict`, and no Score row is written or refreshed. A failed scan\nhas no score that is ever shown, and the rows it kept from before it failed\nare neither changed nor deleted. The agency check comes first, so another\nagency's failed scan is the same `404` as an unknown one. The status is read\nunder a row lock held until the score is committed, so a scan that fails\nwhile this runs either fails first (`409`) or is scored first and fails\nafter. Every other status is scored as before.\n\n**Errors:** `401`, `404` (unknown scan, or another agency's), `409` (failed\nscan).",
         "operationId": "compute_scan_score_api_v1_scans__scanId__score_post",
         "parameters": [
           {
@@ -7702,7 +7702,7 @@
     },
     "/api/v1/scans/{scanId}/scores": {
       "get": {
-        "description": "Every Score computed for a scan, newest first.\n\nThe audit trail: which `formulaVersion` produced which composite, from which\n`inputsDigest`. Two rows sharing a digest but differing in composite mean the\nformula changed; differing digests mean the inputs did.",
+        "description": "Every Score computed for a scan, newest first.\n\nThe audit trail: which `formulaVersion` produced which composite, from which\n`inputsDigest`. Two rows sharing a digest but differing in composite mean the\nformula changed; differing digests mean the inputs did.\n\n**A FAILED scan lists none** (3.30, extending 3.24): `[]`, the same `200` as a\nscan not yet scored, whatever rows the scan kept. They are not read, changed\nor deleted.",
         "operationId": "list_scan_scores_api_v1_scans__scanId__scores_get",
         "parameters": [
           {
