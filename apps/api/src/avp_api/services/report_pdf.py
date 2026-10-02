@@ -166,7 +166,9 @@ def _score_beat(
         # scoring-spec.md: an unrunnable scan must not appear to a client as a
         # bad score, and the two reasons it can be unscored are different facts.
         doc.text("Not scored", font=BOLD, size=30, leading=36)
-        if story.status == "insufficient_data":
+        if story.status == "failed":
+            doc.text("This scan failed, so it has no score.", size=10, space_after=4)
+        elif story.status == "insufficient_data":
             doc.text(
                 "There was not enough data to compute a score for this scan — no engine "
                 "returned an answer to measure. This is a scan that did not complete, "

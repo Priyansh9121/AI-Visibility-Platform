@@ -134,7 +134,7 @@ export default function ReportPageRoute({
         as a slot — a slot would put it inside the rendered page.
       */}
       <div className="mx-auto max-w-report">
-        <ShareLinkBar scanId={scanId} />
+        <ShareLinkBar scanId={scanId} scanStatus={view.report.scanStatus} />
         <div className="mt-4 mb-6">
           <DownloadPdfButton
             scanId={scanId}

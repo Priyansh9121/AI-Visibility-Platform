@@ -192,3 +192,28 @@ def test_headings_are_claims_not_category_labels() -> None:
     assert narrative.gap_heading(unscored) == (
         "No gap can be measured until there is a score."
     )
+
+
+def test_a_failed_scan_has_no_composite_even_if_a_score_is_present() -> None:
+    """3.24: the status wins over a score that leaked into the payload."""
+    case = json.loads(json.dumps(CASES["scored-no-generated-fixes"]))
+    assert case["score"] is not None
+    case["scanStatus"] = "failed"
+
+    failed = narrative.derive_narrative(case)
+
+    assert failed.status == "failed"
+    assert failed.composite is None
+    assert failed.potential_composite is None
+    assert narrative.score_heading(failed, "Help Scout") == (
+        "Help Scout has no score: this scan failed."
+    )
+
+
+def test_other_statuses_keep_their_headings() -> None:
+    case = json.loads(json.dumps(CASES["unscored"]))
+    for status in ("succeeded", "partial", "cancelled"):
+        case["scanStatus"] = status
+        assert narrative.score_heading(narrative.derive_narrative(case), "Help Scout") == (
+            "Help Scout has not been scored yet."
+        )

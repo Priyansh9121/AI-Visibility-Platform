@@ -21590,3 +21590,63 @@ Drift check (north-star §8): Layer 0, Trust substrate (the Origin check and its
 - The Python and JavaScript licence audits pass (`pnpm licenses list --json`).
 - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# A failed scan cannot be shared, and its score is never shown or counted on the dashboard or the report
+
+**2026-10-02, the seventh entry of the day; branch `pilot-fixes`, the founder's pilot-blockers follow-up (launch checklist 3.24).** One item, one commit. **It ships with the next commit (3.25) in the same PR:** on its own, a link already live on a failed scan could not be withdrawn from the screen (the security review's Medium, below).
+
+**Render: nothing to set. No migration, no new dependency or outbound host.** One new problem type and changed values (not shapes) for failed scans; OpenAPI and `api.gen.ts` were regenerated (route descriptions only).
+
+Drift check (north-star §8): Layer 1, Delivery (the share link, the report, the dashboard) reading Layer 2's scores; lifecycle phase: Activation (Epic 9), what a pilot agency sends and sees.
+
+## 1. What changed
+
+- **Founder decision (final):** failed scans cannot be shared; a failed scan's score is never shown or counted on the dashboard or the report; partial scans stay shareable. A scan whose deadline came after scoring is FAILED and keeps its Score row; scoring-spec rule 5 holds: no Score row is changed, deleted or re-scored, and `FORMULA_VERSION` is untouched. This is about what is shown and counted.
+- **Sharing.** `POST /scans/{scanId}/share` for a FAILED scan answers `409 /problems/failed-scan-not-shareable`, "This scan failed, so its report cannot be shared.", after the agency-scoped lookup (another agency's failed scan is still the same 404 as an unknown id). Every other status is unchanged. The web's share bar, given the scan's status, shows that sentence in place of the "Get shareable link" button, and the API's sentence if the 409 ever comes back.
+- **A link minted while the scan was running that later ends FAILED keeps serving** (an existing test pins it), now without a score: the founder's decision in this brief is about minting. Turning those links off is a decision for the founder (below).
+- **The score is not shown or counted:**
+  - dashboard (`routers/dashboard.py`): a FAILED scan's composite is null in the recent scans (in the join, so the row still lists) and it is not in `scoredScanCount`. The portfolio median, the sidebar's client list and the getting-started step read those fields, so they follow; `ScoreCell` also draws no score for a failed scan.
+  - report (`services/report.py`): for a FAILED scan the score row is not read, so `score` is null, `dimensions` empty and the competitors' rates null; `audit.technicalFoundation` and every action item's `pointsUpside` (both derived from the score) are null too. The signed-in report, the public shared report and both PDFs come from it.
+  - wording: the "has run but has not been scored… not computed yet" prose, untrue for a failed scan, becomes "This scan failed, so it has no score." on the web report and in the PDF, with the heading "<Client> has no score: this scan failed." Every other status's copy is unchanged.
+  - Already right before this: the client trend (`client_history.py`) plots only SUCCEEDED and PARTIAL scans, and alerts never take a failed scan as a baseline.
+- **Share link locking** (`services/share.py`, from the security review): the mint and the withdrawal re-select the scan `FOR UPDATE` but without `populate_existing`, so SQLAlchemy could hand back the copy loaded before the lock, and two simultaneous mints could each create a token (one URL then dead). Both selects now refresh the row, as `billing.py` already does.
+- `docs/api-contracts.md`: the problem type, the share route's errors, `scoredScanCount` and `compositeScore`, and what a failed scan's report leaves out.
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS provided 3.24 ships with 3.25.** Checked clean: tenancy on the four share and report routes and the dashboard queries; a mint racing a scan's failure (the same as a link minted while running; the score is hidden at read time); score history untouched; facts-only; the 409's sentence; the web's handling of it.
+  - **Medium, closed by 3.25:** a link live on a failed scan was reachable only through "Get shareable link", which now refuses a failed scan, so it could not be withdrawn from the screen. 3.25 shows Withdraw for any live link without minting; same PR.
+  - **Lows taken:** `pointsUpside` and `audit.technicalFoundation` still carried score-derived numbers (nulled); test gaps (another agency's failed scan is a 404, the competitor rates are non-null before the scan fails so the check is not vacuous, the public PDF of a scan that failed after sharing is checked for content); comments that claimed the narrative fallback hid more than the composite (reworded: the API blanks the score, and the guard covers the headline and composite); the contract notes; the share lock refresh above.
+- **UI review (sonnet):** **PASS WITH NITS**, with two Mediums, both fixed:
+  - the gap section of a failed report still said "Once this scan produces engine results that can be scored, this section names…", untrue for a failed scan: it now says "This scan failed, so no gap was measured.";
+  - the portfolio median and the sidebar's latest scores read `compositeScore` with no status check (correct only because the API nulls it): one helper, `shownComposite`, now guards the row meter, the median, the sidebar and the getting-started step.
+  - **Lows taken:** a failed scan derives no dimensions as well as no composite (so a leaked payload draws no gap beat or dimension table); after the 409 the bar shows the failed-scan state instead of leaving a button that always fails.
+  - **Left:** the heading and the first line both say the scan failed and has no score; harmless.
+
+## Found, not fixed
+
+- **Outside the dashboard and the report, a failed scan's score is still served:** `GET /scans/{id}/score` and `/scores`, `POST /scans/{id}/score` (the web does not call them); a visibility alert written at phase 7b, before the scan's final status, keeps the failed scan's composite in its text on the client alerts page; fix generation still reads the composite (not shown). Founder: include them, or leave them.
+- **A link minted before a scan failed keeps serving** the report without a score; withdrawing it is possible from 3.25. Founder: should the public report refuse a failed scan's link instead?
+- **The fix list's wording** comes from a model given the score and the dimension scores; nothing stops it repeating a number in a failed scan's action items (unconfirmed).
+
+## Verified
+
+**API pytest 2308 → 2323 (+15); web vitest 1434 → 1454 (+20); both floors raised to match.**
+- **API** (`test_failed_scan_hidden.py`, new; `test_share_lock_refresh.py`, new; additions to the PDF and narrative tests):
+  - minting for a FAILED scan answers the new problem type; PARTIAL still mints; another agency's failed scan is a 404 `not-found`, not the 409;
+  - the dashboard: a FAILED scan with a Score row has no composite and is not counted;
+  - the report: before the scan is marked FAILED the fixture has a score, dimensions, a Technical Foundation value, some `pointsUpside` and a competitor's mention rate (so the check is not vacuous); after, all are null or empty, the action items are all still there, and the Score row is unchanged;
+  - a scan shared and then failed: the public report and the public PDF serve it with the failed sentence and heading and no "/ 100";
+  - the share lock: the scan loaded in the session, another transaction commits a token, then the mint returns that token and the withdrawal clears it.
+- **Web:** the share bar's failed state (sentence, no button) and its 409; the dashboard row, median, sidebar and getting-started step ignore a failed scan's 72.00 beside a succeeded 40 (the median reads 40); the report's score and gap beats for a failed scan, with or without a leaked payload, and the unscored scan's copy unchanged.
+- **Negative controls:**
+  - the share route's FAILED guard removed fails the refusal test; restored and checked with `cmp`;
+  - the FAILED checks swapped for CANCELLED in the dashboard, the report and the share route fail 4 tests; `scored` forced true in the report builder fails the report test; `populate_existing` removed fails both lock tests; `shownComposite` made to return the composite fails the median and sidebar test (the implementer's runs, each restored and checked).
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, shared-types 53 (0 fail), design-system 859, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`).
+- OpenAPI and `api.gen.ts` were regenerated (route descriptions); regenerating again changes neither.
+- Exit codes were read from files.

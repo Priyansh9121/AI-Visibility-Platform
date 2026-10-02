@@ -128,7 +128,14 @@ async def get_or_create_share_token(session: AsyncSession, scan: Scan) -> str:
     expiry should listen to.
     """
     locked = (
-        await session.execute(select(Scan).where(Scan.id == scan.id).with_for_update())
+        await session.execute(
+            select(Scan)
+            .where(Scan.id == scan.id)
+            .with_for_update()
+            # Overwrite the identity-mapped copy loaded before the lock: without
+            # this the locked read can return a stale `share_token`.
+            .execution_options(populate_existing=True)
+        )
     ).scalar_one()
 
     expires_at = datetime.now(UTC) + SHARE_TTL
@@ -171,7 +178,14 @@ async def revoke_share_token(session: AsyncSession, scan: Scan) -> bool:
     the route that serves one.
     """
     locked = (
-        await session.execute(select(Scan).where(Scan.id == scan.id).with_for_update())
+        await session.execute(
+            select(Scan)
+            .where(Scan.id == scan.id)
+            .with_for_update()
+            # Overwrite the identity-mapped copy loaded before the lock: without
+            # this the locked read can return a stale `share_token`.
+            .execution_options(populate_existing=True)
+        )
     ).scalar_one()
 
     if locked.share_token is None:

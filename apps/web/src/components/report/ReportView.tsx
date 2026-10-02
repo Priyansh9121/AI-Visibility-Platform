@@ -423,6 +423,7 @@ function ScoreBeat({
         }
       >
         <Prose>
+          {narrative.status === 'failed' && <p>This scan failed, so it has no score.</p>}
           {narrative.status === 'not_scored' && (
             <p>
               This scan has run but has not been scored. The engine results below are real; the
@@ -598,11 +599,15 @@ function GapBeat({
     return (
       <Beat id="gap" heading="No gap can be measured until there is a score.">
         <Prose>
+          {narrative.status === 'failed' ? (
+            <p>This scan failed, so no gap was measured.</p>
+          ) : (
           <p>
             The biggest gap is the dimension with the most recoverable points, which needs
             sub-scores to compute. Once this scan produces engine results that can be scored, this
             section names the single dimension worth attacking first.
           </p>
+          )}
         </Prose>
       </Beat>
     );

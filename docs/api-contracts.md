@@ -97,6 +97,7 @@ make it `unparsed`.
 | `/problems/origin-not-allowed` | 403 | A `POST`/`PUT`/`PATCH`/`DELETE` whose `Origin` is not in `CORS_ALLOW_ORIGINS` (`null` included), or that carries the session cookie with no `Origin` (2026-10-01). Not applied to `POST /billing/webhook` (POST only) |
 | `/problems/not-found` | 404 | No such resource in the caller's agency |
 | `/problems/conflict` | 409 | Generic conflict |
+| `/problems/failed-scan-not-shareable` | 409 | `POST /scans/{scanId}/share` for a scan whose status is `failed`. `detail` is "This scan failed, so its report cannot be shared." (2026-10-02, checklist 3.24) |
 | `/problems/email-already-registered` | 409 | Signup email in use |
 | `/problems/seat-limit-reached` | 409 | Carries `seatsUsed`, `seatLimit` |
 | `/problems/subscription-already-active` | 409 | Checkout refused: the agency's subscription is `active` or `trialing`. `detail` points at the billing portal |
@@ -1044,7 +1045,9 @@ getting-started checklist rather than the server storing per-step flags:
 - `scoredScanCount` — scans of this agency with a `SCORED` score. Counted
   over the whole history, not the `recentScans` page, so a scored scan that
   has scrolled off the page still counts. `INSUFFICIENT_DATA` is not a score
-  and is not counted.
+  and is not counted. **A `failed` scan is not counted**, even if it kept a score
+  row (a deadline that came after scoring): its score is never shown or counted
+  (checklist 3.24).
 - `sharedScanCount` — scans with a live share link (`share_token IS NOT
   NULL`). Minting sets it, revocation clears it, expiry does not: the count
   describes the account as it is, not a history of links that once existed.
@@ -1085,7 +1088,8 @@ reintroduce binary-float error on the wire, which `docs/scoring-spec.md`
 determinism rule 3 exists to prevent. It is `null` both when a scan is unscored
 and when scoring returned `INSUFFICIENT_DATA` — **the UI must render null as
 "—", never as 0.** An unrunnable scan must never appear to a client as a bad
-score.
+score. **It is also `null` for every `failed` scan**, whatever score row the scan
+kept (checklist 3.24).
 
 `errorCode` (2026-10-01) is the scan's own code, the same one
 `GET /scans/{scanId}` returns, or `null`: why a `partial` or `failed` scan ended
@@ -2075,6 +2079,13 @@ ran".** That is distinct from a score whose `status` is `insufficient_data`,
 which means "ran, and could not be scored". Both are distinct from zero. A
 report renders all three states differently.
 
+**A `failed` scan's report carries no score** (checklist 3.24), even if the scan
+kept a score row: `score` is `null`, `dimensions` is `[]`, each competitor's
+`mentionRate` and `shareOfVoice` are `null`, `audit.technicalFoundation` is
+`null` and every `actionItems[].pointsUpside` is `null`. The fixes themselves
+stay. The same holds on the shared report and its PDF. The row is not changed or
+deleted; it is not read.
+
 **`outranksSubject`** is arithmetic over stored counts and ordinals — more
 appearances wins; on a tie, the better position wins. Not a judgement.
 
@@ -2232,7 +2243,9 @@ or `Origin` header. Those are attacker-controlled, and a share link built from a
 spoofed Host is a phishing URL carrying a real token. Configuration, not
 reflection.
 
-**Errors:** `401`, `404` (unknown scan, or another agency's).
+**A `failed` scan cannot be shared** (checklist 3.24): `409 /problems/failed-scan-not-shareable`, and no token is minted. A failed scan has no score on the dashboard or the report. `partial` and every other status mint as before.
+
+**Errors:** `401`, `404` (unknown scan, or another agency's), `409` (failed scan).
 
 **`proof.crossEngine` — where the engines disagree (Epic 9.23).** Present on
 every report. Carries `standings` (each engine's own mention rate and

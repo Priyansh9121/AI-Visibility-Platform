@@ -34,6 +34,7 @@ from ..models import (
     EngineResultStatus,
     Prompt,
     Scan,
+    ScanStatus,
     Score,
     TechnicalAudit,
 )
@@ -123,7 +124,16 @@ async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:
     client = (await session.execute(select(Client).where(Client.id == scan.client_id))).scalar_one()
     agency = (await session.execute(select(Agency).where(Agency.id == scan.agency_id))).scalar_one()
 
-    score_row = await scoring_runner.latest_score(session, scan.id)
+    # A FAILED scan has no score in the report (3.24). A scan whose deadline came
+    # after scoring keeps its Score row, which is neither changed nor deleted
+    # here; it is simply not read. With no row, the score, the dimensions and the
+    # score-derived competitor comparison are all absent.
+    failed = scan.status is ScanStatus.FAILED
+    score_row = (
+        None
+        if failed
+        else await scoring_runner.latest_score(session, scan.id)
+    )
     competitor_set = await _load_competitor_set(session, scan.id)
     audit = await _load_audit(session, scan.id)
     results = await _load_results(session, scan.id)
@@ -171,8 +181,8 @@ async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:
         dimensions=_dimensions(score_row),
         competitor_set=_competitor_set_out(competitor_set, comparisons),
         proof=_proof(results, competitor_set, prompts),
-        audit=_audit_out(audit),
-        action_items=_action_items_out(action_items),
+        audit=_audit_out(audit, scored=not failed),
+        action_items=_action_items_out(action_items, scored=not failed),
     )
 
 
@@ -725,7 +735,7 @@ def _outranks(entry: dict[str, Any], subject_appearances: int, subject_best: int
     return position < subject_best
 
 
-def _audit_out(audit: TechnicalAudit | None) -> ReportAuditOut | None:
+def _audit_out(audit: TechnicalAudit | None, *, scored: bool = True) -> ReportAuditOut | None:
     if audit is None:
         return None
 
@@ -746,7 +756,8 @@ def _audit_out(audit: TechnicalAudit | None) -> ReportAuditOut | None:
         status=audit.status,
         error_code=audit.error_code,
         url_audited=audit.url_audited,
-        technical_foundation=audit.technical_foundation,
+        # The Technical Foundation sub-score is a score input: a FAILED scan has none.
+        technical_foundation=audit.technical_foundation if scored else None,
         audited_at=audit.audited_at,
         passed=tally[CheckStatus.PASS],
         warned=tally[CheckStatus.WARN],
@@ -756,15 +767,22 @@ def _audit_out(audit: TechnicalAudit | None) -> ReportAuditOut | None:
     )
 
 
-def _action_items_out(rows: list[ActionItem]) -> list[ActionItemOut]:
+def _action_items_out(rows: list[ActionItem], *, scored: bool = True) -> list[ActionItemOut]:
     """The generated fix list as the fix beat needs it.
 
     Only items still open or in progress. A fix an operator marked done or
     dismissed has left the plan, and a report that keeps listing it is telling
     a client to do work they already decided about.
+
+    `scored` is False for a FAILED scan (3.24): `points_upside` is the ledger gap
+    arithmetic over the score, so it goes with the score. The fixes stay.
     """
-    return [
+    out = [
         ActionItemOut.model_validate(row)
         for row in rows
         if row.status in (ActionItemStatus.OPEN, ActionItemStatus.IN_PROGRESS)
     ]
+    if not scored:
+        for item in out:
+            item.points_upside = None
+    return out
