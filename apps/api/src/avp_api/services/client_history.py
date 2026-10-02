@@ -28,9 +28,13 @@ per domain is an aggregation over them.
 *Rankings* has no stored column at all. `CompetitorComparison` is **derived on
 read** by design — `scoring_runner.score_scan`'s docstring: "a pure function of
 rows already persisted, so storing it would create a second copy that can fall
-out of step with the first." So this module calls the same
-`scoring_runner.score_scan(persist=False)` the report calls, and cannot disagree
-with the report for the same scan. It adds no data and computes no new figure.
+out of step with the first." So this module calls
+`scoring_runner.score_scan(persist=False)`, whose comparison is the one the
+report reads through `scoring_runner.compare_on_read` (`test_reads_are_reads.py`
+holds the two equal), and cannot disagree with the report for the same scan. It
+adds no data and computes no new figure. It calls `score_scan` rather than
+`compare_on_read` because the trend also reads the subject's share of voice as
+recomputed now, which `compare_on_read` does not return.
 
 This collects nothing. Every row it reads was written by a scan that already
 ran, and nothing here writes.
@@ -171,8 +175,10 @@ async def build_history(
 
     out: list[HistoryScanOut] = []
     for scan in plottable:
-        # The SAME call the report makes, so a figure here can never disagree
-        # with the same figure on the report for the same scan.
+        # The comparison the report reads (`compare_on_read`, held equal by a
+        # test), so a figure here can never disagree with the same figure on the
+        # report for the same scan. Nothing is persisted, so nothing is logged
+        # as a scoring.
         _row, computed, comparisons = await scoring_runner.score_scan(
             session, scan, persist=False
         )

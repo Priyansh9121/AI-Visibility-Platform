@@ -42,14 +42,16 @@ from ..models.prompt import PromptIntent
 from ..models.score import ScoreStatus
 from ..models.technical_audit import AuditStatus
 from .crawl import ROBOTS_DISALLOWED
-from .domain_authority import load_domain_authority
+from .domain_authority import CURATED_ONLY, load_domain_authority
 from .egress import ADDRESS_NOT_PUBLIC
 from .scoring import (
     CompetitorComparison,
     CompetitorFacts,
     Dimension,
+    ReadComparison,
     ResultFacts,
     ScoreResult,
+    comparison_from_facts,
     compute_score,
 )
 
@@ -217,6 +219,17 @@ async def score_scan(
     the per-competitor comparison. The comparison is **derived on read** rather
     than stored: it is a pure function of rows already persisted, so storing it
     would create a second copy that can fall out of step with the first.
+
+    **A report does not call this to read a score.** `build_report` and
+    `GET /scans/{id}/score` take the comparison from `compare_on_read`, which
+    builds no Score. Callers that still pass `persist=False` are
+    `client_history` (it also reads the subject's recomputed share of voice),
+    the `scripts/` measurements and one test.
+
+    **`scoring.completed` says a Score was written, so it is logged only when
+    `persist` is true.** It used to be logged for `persist=False` as well, so
+    each time a finished scan's report was opened the logs read as the scan
+    being scored again (the same `inputs_digest`, `status=scored`).
     """
     results = await load_result_facts(session, scan.id)
     competitors, competitor_set = await load_competitor_facts(session, scan.id)
@@ -269,18 +282,70 @@ async def score_scan(
         _apply(row, computed)
         await session.flush()
 
-    logger.info(
-        "scoring.completed",
-        scan_id=scan.id,
-        status=computed.status,
-        composite=str(computed.composite),
-        excluded=sorted(computed.excluded_dimensions),
-        flags=computed.degradation_flags,
-        inputs_digest=computed.inputs_digest[:16],
-        results=len(results),
-        competitors=len(competitors),
-    )
+        logger.info(
+            "scoring.completed",
+            scan_id=scan.id,
+            status=computed.status,
+            composite=str(computed.composite),
+            excluded=sorted(computed.excluded_dimensions),
+            flags=computed.degradation_flags,
+            inputs_digest=computed.inputs_digest[:16],
+            results=len(results),
+            competitors=len(competitors),
+        )
     return row, computed, computed.competitors
+
+
+async def compare_on_read(
+    session: AsyncSession, scan: Scan, score: Score
+) -> ReadComparison:
+    """What a report shows beside a stored Score that the row does not hold — read only.
+
+    The subject's mean position and the per-rival comparison, derived from the
+    scan's persisted rows. **Nothing is written and no Score is built**: no
+    composite, no sub-scores, no inputs digest, no Technical Foundation read,
+    and nothing logged at info (`scoring.completed` is for a Score that was
+    written, and opening a report is not that). `build_report` and
+    `GET /scans/{id}/score` call it where they used to call
+    `score_scan(persist=False)`; `test_reads_are_reads.py` holds the figures
+    equal to that call's.
+
+    **What it loads, and what it leaves alone.** The scan's results and its
+    competitor set, by the loaders `score_scan` uses, so the facts are the
+    same facts. The platform-wide tier aggregate (`load_domain_authority`, one
+    statement and the largest single one) only when the set has rivals, since
+    tiers are read only to score a rival's Citation Strength. Never the audit:
+    Technical Foundation is a sub-score input and the comparison has none.
+
+    **`score` is the row the caller is about to show, and its status decides
+    the first thing.** An `insufficient_data` row has no comparison, as before,
+    so nothing is loaded for it. `compute_score` made the same call from the
+    facts and the audit; the stored status is that call, already made.
+
+    **Which moment the rivals' figures belong to — read this before comparing
+    them with the row.** They are computed now, by the current formula, with
+    today's platform tiers; the row is as it was when it was scored, under its
+    own `formula_version`, with the tiers of that day and the competitor set of
+    that day. For a scan scored under the current formula, with nothing the
+    comparison reads changed since (the platform's tiers, a set an operator
+    corrected), they agree. A row stored under an earlier version (rule 5 keeps
+    those and the report shows the latest) or scored before one of those moved
+    is shown beside rival figures from a different definition or a different
+    day. That is how the comparison has always been derived; this function does
+    not change it.
+    """
+    if score.status is ScoreStatus.INSUFFICIENT_DATA:
+        return ReadComparison()
+
+    results = await load_result_facts(session, scan.id)
+    competitors, competitor_set = await load_competitor_facts(session, scan.id)
+    authority = await load_domain_authority(session) if competitors else CURATED_ONLY
+    return comparison_from_facts(
+        results,
+        competitors,
+        competitor_set_status=competitor_set.status if competitor_set else None,
+        authority=authority,
+    )
 
 
 def _apply(row: Score, computed: ScoreResult) -> None:

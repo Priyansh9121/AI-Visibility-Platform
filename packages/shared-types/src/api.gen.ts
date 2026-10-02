@@ -1631,9 +1631,10 @@ export interface paths {
          * Get Scan Score
          * @description The most recent stored Score for a scan, with the competitor comparison.
          *
-         *     The comparison is recomputed from persisted rows on read rather than stored
-         *     — it is a pure function of data already in the database, and a second copy
-         *     could fall out of step with the first.
+         *     The comparison and the subject's average position are derived from
+         *     persisted rows on read rather than stored — they are a pure function of data
+         *     already in the database, and a second copy could fall out of step with the
+         *     first. Reading a score computes no score and writes nothing.
          *
          *     **A FAILED scan has no score** (3.30, extending 3.24): the same `404` as a scan
          *     not yet scored, with the detail "This scan failed, so it has no score.",
