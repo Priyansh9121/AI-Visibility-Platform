@@ -474,6 +474,13 @@ async def execute_scan(job: ScanJob, *, settings: Settings) -> None:
     The claim comes before competitor detection, not just before the loop,
     because detection is the first phase that spends money.
 
+    **What an executor may FAIL depends on whether it holds the claim**
+    (`holds_claim` below, set once its claim has committed). One whose claim
+    matched nothing is not running the scan, and the scan in the table may be
+    another executor's live one: if one of its own database calls then raises,
+    `_mark_failed` may fail it only while it is still QUEUED. Only an executor
+    whose claim has committed may fail a RUNNING scan.
+
     THE LEASE — built 2026-09-08
     ----------------------------
     The claim stamps `lease_expires_at`; a heartbeat on its own session pushes
@@ -523,6 +530,9 @@ async def execute_scan(job: ScanJob, *, settings: Settings) -> None:
     # by the deadline's finalise — the one caller that learns of the loop's
     # results from somewhere other than `run_scan`'s return.
     progress = scan_runner.EnginePhaseProgress()
+    # Whether THIS executor's claim has committed. Read only by the handler below, to tell
+    # `_mark_failed` what the executor may fail; see "THE CLAIM" above.
+    holds_claim = False
     try:
         async with factory() as session:
             scan = await session.get(Scan, job.scan_id)
@@ -569,6 +579,10 @@ async def execute_scan(job: ScanJob, *, settings: Settings) -> None:
                 )
             ).scalar_one_or_none()
             await session.commit()
+            # Ours, and durable, once the UPDATE matched and this commit has returned. Set
+            # before the refresh below, which can raise: an executor whose claim has
+            # committed owns a RUNNING scan, however soon after it fails.
+            holds_claim = claimed is not None
             await session.refresh(scan)
             if claimed is None:
                 # RUNNING, and not ours. Somebody else's executor has it, and
@@ -611,7 +625,7 @@ async def execute_scan(job: ScanJob, *, settings: Settings) -> None:
         await _finalize_after_deadline(job.scan_id, progress, settings=settings)
     except Exception as exc:  # noqa: BLE001 - recorded on the row, never re-raised
         logger.exception("scan.execute.failed", scan_id=job.scan_id)
-        await _mark_failed(job.scan_id, exc, settings=settings)
+        await _mark_failed(job.scan_id, exc, claimed=holds_claim, settings=settings)
 
 
 async def _run_chain(
@@ -644,6 +658,23 @@ async def _run_chain(
         ),
     )
     _log_phase_memory(job.scan_id, "competitors")
+
+    # -- the scan must still be RUNNING before the loop --------------
+    #
+    # `_attempt` refreshes the scan after a failed phase, so when the reaper has already
+    # failed it and the phase above then raised, this copy reads FAILED. `run_scan` assigns
+    # RUNNING to its scan, and the ORM would write that over the reaper's verdict: the
+    # heartbeat's next renewal then matches again, and `finalize_scan` stamps SUCCEEDED or
+    # PARTIAL on a scan that had been failed. A copy that does not say RUNNING means somebody
+    # has ended the scan, so stop here and write nothing. A copy that does say RUNNING cannot
+    # be told from a live scan until the next heartbeat; `run_scan` writes no status for it
+    # (the ORM writes only what changed), and `finalize_scan`'s condition on the row is what
+    # holds then. Launch checklist 3.36.
+    if scan.status is not ScanStatus.RUNNING:
+        logger.warning(
+            "scan.chain.stopped_not_running", scan_id=scan.id, status=scan.status.value
+        )
+        return
 
     # -- phases 4-5: prompt generation and the engine loop -----------
     #
@@ -911,10 +942,13 @@ async def _finalize_after_deadline(
         logger.warning(
             "scan.deadline.finalize_failed", scan_id=scan_id, error=type(exc).__name__
         )
-        await _mark_failed(scan_id, ScanDeadlineError(), settings=settings)
+        # A deadline can only follow a claim: it is raised inside `run_under_lease`.
+        await _mark_failed(scan_id, ScanDeadlineError(), claimed=True, settings=settings)
 
 
-async def _mark_failed(scan_id: str, exc: Exception, *, settings: Settings) -> None:
+async def _mark_failed(
+    scan_id: str, exc: Exception, *, claimed: bool, settings: Settings
+) -> None:
     """Record a crashed scan, on a session that is definitely usable.
 
     A **fresh** session, not the one that raised. Postgres aborts a transaction
@@ -937,16 +971,29 @@ async def _mark_failed(scan_id: str, exc: Exception, *, settings: Settings) -> N
     PARTIAL with FAILED. `WHERE status IN ('queued', 'running')` is checked
     again once the row is free, so it matches nothing instead. The same rule as
     the old guard (`scan.status in TERMINAL`), without its window.
+
+    **WHAT IT MAY FAIL DEPENDS ON `claimed`** — launch checklist 3.36, the
+    security review's second Low. This runs for any exception in
+    `execute_scan`, including one in an executor whose claim matched nothing
+    because another executor holds the scan (two POSTs can adopt one QUEUED
+    scan). `status IN ('queued', 'running')` would then match that other
+    executor's LIVE scan, and nothing overwrites a failure any more
+    (`finalize_scan` is conditional too). So an executor whose claim has
+    committed fails a QUEUED or RUNNING scan, as before; one that has not
+    claimed fails it only while it is still QUEUED, which nobody holds. It
+    does not skip the write: left QUEUED the scan would be counted against the
+    allowance until the never-started reap took it a quarter of an hour later.
+    A RUNNING scan is somebody's, and only the reaper may take it back.
     """
+    # What this executor may fail: what it has claimed, or, without a claim, only a scan
+    # nobody holds.
+    may_fail = (ScanStatus.QUEUED, ScanStatus.RUNNING) if claimed else (ScanStatus.QUEUED,)
     factory = get_sessionmaker(settings)
     try:
         async with factory() as session:
             await session.execute(
                 update(Scan)
-                .where(
-                    Scan.id == scan_id,
-                    Scan.status.in_((ScanStatus.QUEUED, ScanStatus.RUNNING)),
-                )
+                .where(Scan.id == scan_id, Scan.status.in_(may_fail))
                 .values(
                     status=ScanStatus.FAILED,
                     error_code=(
