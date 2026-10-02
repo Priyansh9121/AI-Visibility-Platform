@@ -1,3 +1,55 @@
+const LOCAL_API_TARGET = 'http://localhost:8000';
+
+/**
+ * Where the rewrite below sends /api/v1: the API's origin, from the server-only
+ * env var API_PROXY_TARGET. Pure, so the config can use it and tests can call it.
+ * Messages name the variable and the fault, never the value (it may carry a
+ * credential if someone pastes one).
+ *
+ * @param {Record<string, string | undefined>} env
+ * @returns {string} an origin: scheme, host and optional port
+ */
+export function apiProxyTarget(env) {
+  const raw = (env.API_PROXY_TARGET ?? '').trim();
+  if (raw === '') {
+    if (env.NODE_ENV === 'production') {
+      throw new Error(
+        "API_PROXY_TARGET must be set to the API's address (on Render: the API service's internal address)",
+      );
+    }
+    return LOCAL_API_TARGET;
+  }
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error('API_PROXY_TARGET is not a valid URL');
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error('API_PROXY_TARGET must use http or https');
+  }
+  if (url.username !== '' || url.password !== '') {
+    throw new Error('API_PROXY_TARGET must not contain a username or password');
+  }
+  if (url.search !== '' || url.hash !== '') {
+    throw new Error('API_PROXY_TARGET must not contain a query or fragment');
+  }
+  if (url.pathname !== '/' && url.pathname !== '') {
+    throw new Error('API_PROXY_TARGET must not contain a path, only the address');
+  }
+  // A public Render URL works, and quietly breaks the per-IP rate limits: the
+  // request crosses Render's and Cloudflare's edge a second time, the client-IP
+  // headers become the web service's own address, and every visitor shares one
+  // bucket. Only the internal address keeps them as the web's edge set them.
+  const host = url.hostname.toLowerCase();
+  if (env.NODE_ENV === 'production' && (host === 'onrender.com' || host.endsWith('.onrender.com'))) {
+    throw new Error(
+      "API_PROXY_TARGET must be the API service's internal address (Render: API service, Connect, Internal), not its public onrender.com URL",
+    );
+  }
+  return url.origin;
+}
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
@@ -46,6 +98,34 @@ const nextConfig = {
         ],
       }),
     );
+  },
+
+  // THE API IS SAME-ORIGIN — 2026-10-02.
+  //
+  // The web app and the API are different sites on Render, so a session cookie
+  // set by the API was third-party and browsers drop those. The browser now
+  // calls /api/v1 on the web app's own origin and this rewrite hands it to the
+  // API, so the cookie is first-party (SameSite=Lax, `__Host-` prefix). The
+  // Google callback comes back through here too, so its cookie lands on the web
+  // host.
+  //
+  // Point API_PROXY_TARGET (server-only, never NEXT_PUBLIC_) at the API's Render
+  // INTERNAL address. Then no second Render or Cloudflare edge sits in front of
+  // the API, and the client-IP headers its per-IP rate limits read arrive
+  // exactly as the web's edge set them.
+  //
+  // Rewrites are fixed at build time: changing API_PROXY_TARGET needs a rebuild
+  // (Render redeploys on an env change). Read inside rewrites(), not at import,
+  // so importing this file in a test never throws.
+  async rewrites() {
+    const target = apiProxyTarget(process.env);
+    return [{ source: '/api/v1/:path*', destination: `${target}/api/v1/:path*` }];
+  },
+
+  experimental: {
+    // The slowest synchronous API call, POST /clients/{id}/prompt-runs, can take
+    // about 122 s. Next's default proxy timeout is 30 s.
+    proxyTimeout: 150_000,
   },
 
   webpack(config) {

@@ -126,7 +126,7 @@ async def test_login_and_me_answer_503_when_redis_is_silent(
     )
     app = client._transport.app  # type: ignore[attr-defined]  # noqa: SLF001
     app.dependency_overrides[redis_client] = lambda: redis_module.get_redis(low)
-    client.cookies.set(settings.session_cookie_name, "some-session-token")
+    client.cookies.set(settings.session_cookie_key, "some-session-token")
     with structlog.testing.capture_logs() as logs:
         for method, path, body in (
             ("POST", "/auth/login", {"email": "slow@redis.example", "password": "x" * 12}),
@@ -153,7 +153,7 @@ async def test_me_answers_503_when_redis_refuses_connections(
     )
     app = client._transport.app  # type: ignore[attr-defined]  # noqa: SLF001
     app.dependency_overrides[redis_client] = lambda: redis_module.get_redis(low)
-    client.cookies.set(settings.session_cookie_name, "some-session-token")
+    client.cookies.set(settings.session_cookie_key, "some-session-token")
     resp = await _watched(client.get(f"{BASE}/auth/me"))
     assert resp.status_code == 503, resp.text
     assert resp.json()["type"] == "/problems/service-unavailable"
@@ -171,6 +171,6 @@ async def test_only_unreachable_redis_is_a_503_other_redis_errors_stay_500s(
         raise ResponseError("ERR some server-side text")
 
     monkeypatch.setattr(SessionStore, "get", _boom)
-    client.cookies.set(settings.session_cookie_name, "some-session-token")
+    client.cookies.set(settings.session_cookie_key, "some-session-token")
     with pytest.raises(ResponseError):
         await client.get(f"{BASE}/auth/me")

@@ -56,6 +56,7 @@ import {
   PARTIAL_AUDIT_NOTE,
   POSITION_COPY,
   ADDRESS_NOT_PUBLIC,
+  auditFailureSentence,
   ROBOTS_DISALLOWED,
   VISIBILITY_FLAG,
   checkLabel,
@@ -422,6 +423,7 @@ function ScoreBeat({
         }
       >
         <Prose>
+          {narrative.status === 'failed' && <p>This scan failed, so it has no score.</p>}
           {narrative.status === 'not_scored' && (
             <p>
               This scan has run but has not been scored. The engine results below are real; the
@@ -597,11 +599,15 @@ function GapBeat({
     return (
       <Beat id="gap" heading="No gap can be measured until there is a score.">
         <Prose>
+          {narrative.status === 'failed' ? (
+            <p>This scan failed, so no gap was measured.</p>
+          ) : (
           <p>
             The biggest gap is the dimension with the most recoverable points, which needs
             sub-scores to compute. Once this scan produces engine results that can be scored, this
             section names the single dimension worth attacking first.
           </p>
+          )}
         </Prose>
       </Beat>
     );
@@ -1115,8 +1121,8 @@ function AuditEvidence({ report }: { report: Report }) {
             <Badge tone="warn">Audit failed</Badge>
           </p>
           <p className="mt-2 text-ui-sm leading-prose text-text-secondary">
-            The crawl of {audit.urlAudited ?? 'the site'} did not complete
-            {audit.errorCode ? ` (${audit.errorCode})` : ''}, so no structural signals were
+            {auditFailureSentence(audit.errorCode)} The crawl of{' '}
+            {audit.urlAudited ?? 'the site'} did not complete, so no structural signals were
             collected. A site we could not reach is not a site with a bad technical foundation —
             the dimension is left unscored rather than scored zero.
           </p>

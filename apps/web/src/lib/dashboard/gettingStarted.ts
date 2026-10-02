@@ -33,6 +33,7 @@
  * Framework-free, so it is tested with plain objects.
  */
 
+import { shownComposite } from './shownComposite';
 import type { Dashboard } from '@avp/shared-types';
 
 export type GettingStartedKey = 'client' | 'scan' | 'score' | 'teammate' | 'share';
@@ -85,7 +86,7 @@ export function deriveGettingStarted(dashboard: Dashboard): GettingStarted {
   } = dashboard;
 
   const running = recentScans.some((s) => s.status === 'running' || s.status === 'queued');
-  const latestScored = recentScans.find((s) => s.compositeScore != null);
+  const latestScored = recentScans.find((s) => shownComposite(s) != null);
   const freeSeats = Math.max(0, seats.limit - seats.used);
 
   const client: GettingStartedStep = {

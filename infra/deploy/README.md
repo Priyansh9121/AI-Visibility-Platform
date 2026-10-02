@@ -42,8 +42,10 @@ These are decided and must hold wherever this is deployed:
 | Requirement | Why |
 |---|---|
 | `APP_SECRET` must not be the dev placeholder | The app refuses to boot in `staging`/`production` otherwise (`config.py`) |
-| `SESSION_COOKIE_SECURE=true` | Forced automatically when `ENVIRONMENT` is `staging`/`production`. A session cookie over plaintext HTTP is a stolen session |
-| `CORS_ALLOW_ORIGINS` must name real origins | Session cookies require explicit origins; browsers reject wildcard-with-credentials |
+| `SESSION_COOKIE_SECURE=true` | Forced automatically when `ENVIRONMENT` is `staging`/`production`. A session cookie over plaintext HTTP is a stolen session. With it the cookie is `__Host-avp_session`, SameSite=Lax, Path=/, no Domain (`SESSION_COOKIE_SAMESITE` and `SESSION_COOKIE_DOMAIN` no longer exist and are ignored if set) |
+| Web service: `API_PROXY_TARGET` = the API service's **internal** address | The web app serves the API at its own `/api/v1` (a Next.js rewrite), so the session cookie is first-party. The internal address keeps a second Render/Cloudflare edge out of the path, so the client-IP headers the per-IP rate limits read arrive as the web's edge set them. `next build` fails without it |
+| API service: `GOOGLE_OAUTH_REDIRECT_URL` = the **web** host's `/api/v1/auth/google/callback` | The callback sets the session cookie on whatever host serves it; it must be the web host. The same address must be an authorised redirect URI in Google Cloud Console |
+| `CORS_ALLOW_ORIGINS` must name real origins | It is the Origin check's allow-list for writes (the web app's origin, exactly). CORS itself no longer carries the web app's calls, which are same-origin |
 | Redis `/0`, `/1`, `/2` must be the same instance or three coordinated ones | Sessions, Celery broker, Celery results. Separated so flushing a wedged queue does not sign every user out |
 | Migrations run before the API starts | `cd infra/db && alembic upgrade head` |
 | No synchronous Postgres driver is available | `psycopg2`/`psycopg3` are LGPL-3.0 and excluded by the dependency-licensing rule. Everything uses asyncpg, including Alembic |

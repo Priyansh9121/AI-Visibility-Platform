@@ -237,7 +237,7 @@ async def test_an_unverified_google_email_proves_nothing(
 
 
 async def test_a_new_address_creates_nothing_until_the_agency_is_named(
-    client: AsyncClient, google: FakeGoogleProvider, engine
+    client: AsyncClient, google: FakeGoogleProvider, engine, settings: Settings
 ) -> None:  # noqa: ANN001
     google.identities["code-1"] = identity("new@example.com", name="Dana Whitfield")
     state = await start(client)
@@ -270,7 +270,7 @@ async def test_a_new_address_creates_nothing_until_the_agency_is_named(
     assert body["user"]["signInMethods"] == ["google"]
     assert body["agency"]["name"] == "Northlight Partners"
     assert body["seats"] == {"used": 1, "limit": 3}
-    assert "avp_session" in done.cookies
+    assert settings.session_cookie_key in done.cookies
 
     me = await client.get(f"{BASE}/auth/me")
     assert me.status_code == 200
@@ -349,6 +349,36 @@ async def test_a_password_account_links_by_verified_email_and_signs_in(
         user = (await s.execute(select(User).where(User.id == user_id))).scalar_one()
         assert user.google_sub == "sub-dana"
         assert user.last_login_at is not None
+
+
+async def test_the_callback_sets_the_host_prefixed_cookie_when_secure(
+    client: AsyncClient, google: FakeGoogleProvider
+) -> None:
+    """The callback sets the session cookie on whatever host serves it: first-party
+    for the web app, `__Host-` prefixed, Lax, with no Domain."""
+    await sign_up_with_password(client, "dana@northlight.example")
+    google.identities["code-1"] = identity("dana@northlight.example", sub="sub-dana")
+    # Swap in secure settings over the ones the `google` fixture left in place.
+    app = client._transport.app  # noqa: SLF001
+    configured = app.dependency_overrides[get_settings]()
+    secure = configured.model_copy(update={"session_cookie_secure": True})
+    app.dependency_overrides[get_settings] = lambda: secure
+
+    # A Secure cookie is not sent back over this test's http, so the browser's
+    # flow cookie is carried by hand (its own name, `__Host-` prefixed, is
+    # asserted in the flow-cookie tests below).
+    started = await client.get(f"{BASE}/auth/google/start", follow_redirects=False)
+    state = parse_qs(urlparse(started.headers["location"]).query)["state"][0]
+    (flow_header,) = [h for h in started.headers.get_list("set-cookie") if "google_flow" in h]
+    client.cookies.set("__Host-avp_google_flow", flow_header.split(";")[0].split("=", 1)[1])
+    resp = await callback(client, code="code-1", state=state)
+    landed(resp, "/dashboard")
+
+    (header,) = [h for h in resp.headers.get_list("set-cookie") if "avp_session" in h]
+    assert header.startswith("__Host-avp_session=")
+    attrs = {part.strip().lower() for part in header.split(";")[1:]}
+    assert {"secure", "httponly", "samesite=lax", "path=/"} <= attrs
+    assert not any(a.startswith("domain") for a in attrs)
 
 
 async def test_once_linked_the_sub_wins_over_a_changed_email(
@@ -680,3 +710,417 @@ async def test_the_ticket_reaches_no_app_log_line(
     everything = json.dumps(events, default=str) + capsys.readouterr().out + caplog.text
     assert ticket not in everything
     assert "logcheck@example.com" not in everything
+
+
+# --- the flow cookie: the state is bound to the browser that started it ------
+#
+# Without it, someone could start a flow in their own browser and get a
+# victim's browser to finish it (login CSRF); the callback is a GET, which the
+# Origin check does not cover. 2026-10-02, launch-checklist 3.22.
+
+FLOW_COOKIE = "avp_google_flow"
+
+
+def set_cookie_headers(resp) -> list[str]:  # noqa: ANN001
+    return resp.headers.get_list("set-cookie")
+
+
+def flow_cookie_header(resp) -> str:  # noqa: ANN001
+    (header,) = [h for h in set_cookie_headers(resp) if h.startswith(f"{FLOW_COOKIE}=")]
+    return header
+
+
+def assert_flow_cookie_cleared(resp) -> None:  # noqa: ANN001
+    header = flow_cookie_header(resp)
+    attrs = {part.strip().lower() for part in header.split(";")[1:]}
+    assert header.startswith(f'{FLOW_COOKIE}="";') or header.startswith(f"{FLOW_COOKIE}=;")
+    assert "max-age=0" in attrs
+    assert "path=/" in attrs
+
+
+async def start_with_cookie(client: AsyncClient) -> tuple[str, str]:
+    """Press the button. Returns (state, the flow cookie's value)."""
+    client.cookies.delete(FLOW_COOKIE)
+    resp = await client.get(f"{BASE}/auth/google/start", follow_redirects=False)
+    assert resp.status_code == 302, resp.text
+    state = parse_qs(urlparse(resp.headers["location"]).query)["state"][0]
+    return state, client.cookies[FLOW_COOKIE]
+
+
+def use_cookie(client: AsyncClient, value: str | None) -> None:
+    """Make the next callback arrive carrying exactly this flow cookie (or none)."""
+    client.cookies.delete(FLOW_COOKIE)
+    if value is not None:
+        client.cookies.set(FLOW_COOKIE, value)
+
+
+async def test_start_sets_the_flow_cookie(
+    client: AsyncClient, google: FakeGoogleProvider, settings: Settings
+) -> None:
+    resp = await client.get(f"{BASE}/auth/google/start", follow_redirects=False)
+    header = flow_cookie_header(resp)
+    attrs = {part.strip().lower() for part in header.split(";")[1:]}
+    assert {"httponly", "samesite=lax", "path=/"} <= attrs
+    assert f"max-age={settings.google_sign_in_ttl_seconds + 60}" in attrs
+    assert "secure" not in attrs  # local http
+    assert not any(a.startswith("domain") for a in attrs)
+    value = header.split(";")[0].split("=", 1)[1]
+    assert len(value) >= 40
+    # The value is the browser's secret: it is not in the URL sent to Google.
+    assert value not in resp.headers["location"]
+
+
+async def test_start_flow_cookie_is_host_prefixed_and_secure_when_secure(
+    client: AsyncClient, google: FakeGoogleProvider
+) -> None:
+    app = client._transport.app  # noqa: SLF001
+    configured = app.dependency_overrides[get_settings]()
+    secure = configured.model_copy(update={"session_cookie_secure": True})
+    app.dependency_overrides[get_settings] = lambda: secure
+
+    resp = await client.get(f"{BASE}/auth/google/start", follow_redirects=False)
+    (header,) = [h for h in set_cookie_headers(resp) if "avp_google_flow" in h]
+    assert header.startswith("__Host-avp_google_flow=")
+    attrs = {part.strip().lower() for part in header.split(";")[1:]}
+    assert {"secure", "httponly", "samesite=lax", "path=/"} <= attrs
+    assert f"max-age={secure.google_sign_in_ttl_seconds + 60}" in attrs
+    assert not any(a.startswith("domain") for a in attrs)
+
+
+async def test_the_cookie_that_started_the_flow_finishes_it_and_is_cleared(
+    client: AsyncClient, google: FakeGoogleProvider
+) -> None:
+    # A brand-new address: the ticket path.
+    google.identities["code-new"] = identity("new-person@example.com", sub="sub-new")
+    state, _ = await start_with_cookie(client)
+    resp = await callback(client, code="code-new", state=state)
+    landed_ticket(resp)
+    # The ticket is bound to this browser, so the cookie is kept (renewed)
+    # for /pending and /complete, and cleared there.
+    assert not any(
+        h.startswith(f"{FLOW_COOKIE}=") and "Max-Age=0" in h for h in set_cookie_headers(resp)
+    )
+
+    # An existing account: the session path, with the session cookie alongside.
+    await sign_up_with_password(client, "dana@northlight.example")
+    google.identities["code-1"] = identity("dana@northlight.example", sub="sub-dana")
+    state, _ = await start_with_cookie(client)
+    resp = await callback(client, code="code-1", state=state)
+    landed(resp, "/dashboard")
+    assert_flow_cookie_cleared(resp)
+    assert any(h.startswith("avp_session=") for h in set_cookie_headers(resp))
+    assert (await client.get(f"{BASE}/auth/me")).status_code == 200
+
+
+async def test_another_browsers_flow_cookie_is_browser_mismatch(
+    client: AsyncClient, google: FakeGoogleProvider
+) -> None:
+    await sign_up_with_password(client, "dana@northlight.example")
+    google.identities["code-1"] = identity("dana@northlight.example", sub="sub-dana")
+    state, mine = await start_with_cookie(client)
+    _, theirs = await start_with_cookie(client)
+    assert mine != theirs
+    use_cookie(client, theirs)
+
+    resp = await callback(client, code="code-1", state=state)
+    assert landed(resp, "/") == {"google": ["error"], "reason": ["browser-mismatch"]}
+    assert not any(h.startswith("avp_session=") for h in set_cookie_headers(resp))
+    assert_flow_cookie_cleared(resp)
+    assert google.exchanges == [], "no code may be exchanged for the wrong browser"
+    assert (await client.get(f"{BASE}/auth/me")).status_code == 401
+
+    # The state was taken before it was compared: the right cookie cannot retry it.
+    use_cookie(client, mine)
+    retry = await callback(client, code="code-1", state=state)
+    assert landed(retry, "/")["reason"] == ["invalid-state"]
+    assert google.exchanges == []
+
+
+async def test_a_missing_flow_cookie_is_browser_mismatch(
+    client: AsyncClient, google: FakeGoogleProvider
+) -> None:
+    import structlog
+
+    google.identities["code-1"] = identity()
+    state, mine = await start_with_cookie(client)
+    use_cookie(client, None)
+    with structlog.testing.capture_logs() as events:
+        resp = await callback(client, code="code-1", state=state)
+    assert landed(resp, "/")["reason"] == ["browser-mismatch"]
+    assert_flow_cookie_cleared(resp)
+    assert google.exchanges == []
+    (event,) = [e for e in events if e["event"] == "google.callback.browser_mismatch"]
+    assert event["cause"] == "missing"
+    use_cookie(client, mine)
+    assert landed(await callback(client, code="code-1", state=state), "/")["reason"] == [
+        "invalid-state"
+    ]
+
+
+async def test_a_different_cookie_is_logged_as_different(
+    client: AsyncClient, google: FakeGoogleProvider
+) -> None:
+    import json
+
+    import structlog
+
+    google.identities["code-1"] = identity()
+    state, mine = await start_with_cookie(client)
+    use_cookie(client, "somebody-elses-binding-value-0123456789abcdef")
+    with structlog.testing.capture_logs() as events:
+        resp = await callback(client, code="code-1", state=state)
+    assert landed(resp, "/")["reason"] == ["browser-mismatch"]
+    (event,) = [e for e in events if e["event"] == "google.callback.browser_mismatch"]
+    assert event["cause"] == "different"
+    blob = json.dumps(events, default=str)
+    assert mine not in blob and "somebody-elses-binding-value" not in blob
+
+
+async def test_a_replayed_callback_is_invalid_state_and_signs_in_nobody_twice(
+    client: AsyncClient, google: FakeGoogleProvider
+) -> None:
+    await sign_up_with_password(client, "dana@northlight.example")
+    google.identities["code-1"] = identity("dana@northlight.example", sub="sub-dana")
+    state, mine = await start_with_cookie(client)
+    landed(await callback(client, code="code-1", state=state), "/dashboard")
+    assert len(google.exchanges) == 1
+    await client.post(f"{BASE}/auth/logout")
+
+    # Same state, and the right cookie again (the first reply cleared it).
+    use_cookie(client, mine)
+    again = await callback(client, code="code-1", state=state)
+    assert landed(again, "/")["reason"] == ["invalid-state"]
+    assert not any(h.startswith("avp_session=") for h in set_cookie_headers(again))
+    assert_flow_cookie_cleared(again)
+    assert len(google.exchanges) == 1
+    assert (await client.get(f"{BASE}/auth/me")).status_code == 401
+
+
+async def test_an_expired_state_is_invalid_state_even_with_the_right_cookie(
+    client: AsyncClient, google: FakeGoogleProvider
+) -> None:
+    import asyncio
+
+    app = client._transport.app  # noqa: SLF001
+    short = app.dependency_overrides[get_settings]().model_copy(
+        update={"google_sign_in_ttl_seconds": 1}
+    )
+    app.dependency_overrides[get_settings] = lambda: short
+    google.identities["code-1"] = identity()
+    state, _ = await start_with_cookie(client)
+    await asyncio.sleep(1.2)
+    # The cookie outlives the Redis record by 60 s, so this reads as expired.
+    assert FLOW_COOKIE in client.cookies
+    resp = await callback(client, code="code-1", state=state)
+    assert landed(resp, "/")["reason"] == ["invalid-state"]
+    assert_flow_cookie_cleared(resp)
+    assert google.exchanges == []
+
+
+async def test_a_flow_parked_before_the_deploy_has_no_binding_and_fails_closed(
+    client: AsyncClient, google: FakeGoogleProvider, settings: Settings
+) -> None:
+    import json
+
+    import structlog
+
+    from avp_api import redis_client as redis_module
+    from avp_api.security import token_digest
+    from avp_api.services.google_oauth import STATE_PREFIX
+
+    google.identities["code-1"] = identity()
+    state, _ = await start_with_cookie(client)
+    redis = redis_module.get_redis(settings)
+    key = f"{STATE_PREFIX}{token_digest(state)}"
+    d = json.loads(await redis.get(key))
+    assert d.pop("binding_digest")  # the record carries a digest of the cookie, not the cookie
+    await redis.set(key, json.dumps(d), ex=60)
+
+    with structlog.testing.capture_logs() as events:
+        resp = await callback(client, code="code-1", state=state)
+    assert landed(resp, "/")["reason"] == ["browser-mismatch"]
+    (event,) = [e for e in events if e["event"] == "google.callback.browser_mismatch"]
+    assert event["cause"] == "unbound"
+    assert google.exchanges == []
+
+
+async def test_access_denied_clears_the_flow_cookie_too(
+    client: AsyncClient, google: FakeGoogleProvider
+) -> None:
+    state, _ = await start_with_cookie(client)
+    resp = await callback(client, code=None, state=state, error="access_denied")
+    assert landed(resp, "/")["reason"] == ["denied"]
+    assert_flow_cookie_cleared(resp)
+
+
+async def test_the_bad_state_and_unconfigured_paths_clear_the_flow_cookie_too(
+    client: AsyncClient, google: FakeGoogleProvider
+) -> None:
+    await start_with_cookie(client)
+    resp = await callback(client, code="code-1", state="forged")
+    assert landed(resp, "/")["reason"] == ["invalid-state"]
+    assert_flow_cookie_cleared(resp)
+    resp = await callback(client, code="code-1", state=None)
+    assert landed(resp, "/")["reason"] == ["invalid-state"]
+    assert_flow_cookie_cleared(resp)
+
+
+async def test_the_unconfigured_callback_clears_the_flow_cookie(client: AsyncClient) -> None:
+    resp = await callback(client, code="code-1", state="x")
+    assert landed(resp, "/")["reason"] == ["not-configured"]
+    assert_flow_cookie_cleared(resp)
+
+
+async def test_the_binding_value_reaches_no_log_line_and_no_failure_url(
+    client: AsyncClient, google: FakeGoogleProvider, capsys, caplog  # noqa: ANN001
+) -> None:
+    import json
+
+    import structlog
+
+    caplog.set_level("DEBUG")
+    google.identities["code-1"] = identity("logcheck@example.com")
+    forged = "forged-binding-value-" + "x" * 22
+    with structlog.testing.capture_logs() as events:
+        state, first = await start_with_cookie(client)
+        use_cookie(client, forged)
+        bad = await callback(client, code="code-1", state=state)
+        state, second = await start_with_cookie(client)
+        good = await callback(client, code="code-1", state=state)
+    landed_ticket(good)
+    everything = json.dumps(events, default=str) + capsys.readouterr().out + caplog.text
+    for value in (first, second, forged):
+        assert value not in everything
+        assert value not in bad.headers["location"] and value not in good.headers["location"]
+
+
+async def test_the_clearing_header_in_secure_mode_names_the_host_cookie(
+    client: AsyncClient, google: FakeGoogleProvider
+) -> None:
+    app = client._transport.app  # noqa: SLF001
+    configured = app.dependency_overrides[get_settings]()
+    secure = configured.model_copy(update={"session_cookie_secure": True})
+    app.dependency_overrides[get_settings] = lambda: secure
+    resp = await callback(client, code=None, state="forged")
+    (header,) = [h for h in set_cookie_headers(resp) if "avp_google_flow" in h]
+    assert header.startswith("__Host-avp_google_flow=")
+    attrs = {part.strip().lower() for part in header.split(";")[1:]}
+    assert {"secure", "path=/", "max-age=0"} <= attrs
+
+
+async def test_the_unavailable_path_clears_the_flow_cookie_too(
+    client: AsyncClient, google: FakeGoogleProvider, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from avp_api.services import google_oauth
+
+    state, _ = await start_with_cookie(client)
+
+    async def broken(self, key):  # noqa: ANN001, ANN202, ARG001
+        raise ConnectionError("redis is away")
+
+    monkeypatch.setattr(google_oauth.GoogleFlowStore, "_take", broken)
+    resp = await callback(client, code="code-1", state=state)
+    assert landed(resp, "/")["reason"] == ["unavailable"]
+    assert_flow_cookie_cleared(resp)
+
+
+# --- the new-address ticket is bound to the same browser ----------------------
+
+
+async def new_address_ticket(client: AsyncClient, google: FakeGoogleProvider):  # noqa: ANN201
+    """Returns (ticket, the flow cookie value, the callback response)."""
+    google.identities["code-new"] = identity("new-person@example.com", sub="sub-new")
+    state, mine = await start_with_cookie(client)
+    resp = await callback(client, code="code-new", state=state)
+    return landed_ticket(resp), mine, resp
+
+
+async def no_user_for(engine, email: str) -> bool:  # noqa: ANN001
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+    async with factory() as s:
+        return (await s.execute(select(User).where(User.email == email))).first() is None
+
+
+async def complete(client: AsyncClient, ticket: str):  # noqa: ANN201
+    return await client.post(
+        f"{BASE}/auth/google/complete",
+        json={"ticket": ticket, "agencyName": "Bound Agency", "fullName": "New Person"},
+    )
+
+
+async def test_the_new_address_callback_keeps_the_flow_cookie_for_the_ticket(
+    client: AsyncClient, google: FakeGoogleProvider, settings: Settings
+) -> None:
+    _, mine, resp = await new_address_ticket(client, google)
+    header = flow_cookie_header(resp)
+    assert header.split(";")[0] == f"{FLOW_COOKIE}={mine}"
+    attrs = {part.strip().lower() for part in header.split(";")[1:]}
+    assert {"httponly", "samesite=lax", "path=/"} <= attrs
+    assert f"max-age={settings.google_sign_in_ttl_seconds + 60}" in attrs
+
+
+@pytest.mark.parametrize("who", ["nobody", "another-browser"])
+async def test_a_ticket_is_not_redeemable_from_another_browser(
+    client: AsyncClient, google: FakeGoogleProvider, engine, who: str  # noqa: ANN001
+) -> None:
+    import structlog
+
+    ticket, mine, _ = await new_address_ticket(client, google)
+    use_cookie(client, None if who == "nobody" else "another-browsers-binding-" + "y" * 20)
+
+    with structlog.testing.capture_logs() as events:
+        pending = await peek(client, ticket)
+        done = await complete(client, ticket)
+    assert pending.status_code == 400, pending.text
+    assert pending.json()["type"].endswith("/invalid-google-ticket")
+    assert done.status_code == 400, done.text
+    assert done.json()["type"].endswith("/invalid-google-ticket")
+    assert FLOW_COOKIE in "".join(done.headers.get_list("set-cookie"))
+    assert_flow_cookie_cleared(done)
+    assert await no_user_for(engine, "new-person@example.com")
+    assert (await client.get(f"{BASE}/auth/me")).status_code == 401
+    causes = [e["cause"] for e in events if e["event"] == "google.ticket.browser_mismatch"]
+    expected = "missing" if who == "nobody" else "different"
+    assert causes == [expected, expected]
+    assert mine not in str(events)
+
+
+async def test_a_refused_read_does_not_spend_the_ticket(
+    client: AsyncClient, google: FakeGoogleProvider
+) -> None:
+    ticket, mine, _ = await new_address_ticket(client, google)
+    use_cookie(client, None)
+    assert (await peek(client, ticket)).status_code == 400
+    use_cookie(client, mine)
+    assert (await peek(client, ticket)).status_code == 200
+
+
+async def test_the_same_browser_completes_and_the_flow_cookie_is_cleared(
+    client: AsyncClient, google: FakeGoogleProvider
+) -> None:
+    ticket, _, _ = await new_address_ticket(client, google)
+    assert (await peek(client, ticket)).status_code == 200
+    done = await complete(client, ticket)
+    assert done.status_code == 201, done.text
+    assert_flow_cookie_cleared(done)
+    assert (await client.get(f"{BASE}/auth/me")).status_code == 200
+
+
+async def test_a_ticket_parked_without_a_binding_fails_closed(
+    client: AsyncClient, google: FakeGoogleProvider, settings: Settings, engine  # noqa: ANN001
+) -> None:
+    import json
+
+    from avp_api import redis_client as redis_module
+    from avp_api.security import token_digest
+    from avp_api.services.google_oauth import TICKET_PREFIX
+
+    ticket, _, _ = await new_address_ticket(client, google)
+    redis = redis_module.get_redis(settings)
+    key = f"{TICKET_PREFIX}{token_digest(ticket)}"
+    d = json.loads(await redis.get(key))
+    assert d.pop("binding_digest")
+    await redis.set(key, json.dumps(d), ex=60)
+    assert (await peek(client, ticket)).status_code == 400
+    assert (await complete(client, ticket)).status_code == 400
+    assert await no_user_for(engine, "new-person@example.com")

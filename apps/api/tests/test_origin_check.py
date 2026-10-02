@@ -29,7 +29,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -107,12 +107,15 @@ async def _page(client: AsyncClient, origin: str | None) -> AsyncIterator[AsyncC
 
 
 @asynccontextmanager
-async def _visitor(client: AsyncClient, origin: str | None) -> AsyncIterator[AsyncClient]:
-    """A browser with no session: no cookies at all, and `origin` (or none)."""
+async def _visitor(
+    client: AsyncClient, origin: str | None, cookies: dict[str, str] | None = None
+) -> AsyncIterator[AsyncClient]:
+    """A browser with no session: no cookies but `cookies`, and `origin` (or none)."""
     async with AsyncClient(
         transport=ASGITransport(app=client._transport.app),  # noqa: SLF001
         base_url="http://testserver",
         headers={} if origin is None else {"Origin": origin},
+        cookies=cookies,
     ) as visitor:
         yield visitor
 
@@ -325,6 +328,9 @@ class Scenario:
     body: dict[str, Any]
     ok: int  # what the route answers a good request with
     changed: Callable[[], Awaitable[bool]]  # whether the write took effect
+    # Cookies the visiting browser brings besides a session (there is none): the
+    # Google ticket is bound to the browser that signed in, by its flow cookie.
+    cookies: dict[str, str] = field(default_factory=dict)
 
 
 async def _sign_up_route(client: AsyncClient, engine, settings: Settings) -> Scenario:  # noqa: ANN001
@@ -356,7 +362,8 @@ async def _google_complete_route(client: AsyncClient, engine, settings: Settings
         GoogleIdentity(
             sub="google-sub-origin", email=EMAIL, email_verified=True, name="Some One",
             nonce="not-used-by-completion",
-        )
+        ),
+        token_digest("origin-check-browser-binding"),
     )
 
     async def changed() -> bool:
@@ -364,7 +371,8 @@ async def _google_complete_route(client: AsyncClient, engine, settings: Settings
         return await _user(engine, EMAIL) is not None or await store.peek_ticket(ticket) is None
 
     body = {"ticket": ticket, "agencyName": "Origin Check Agency", "fullName": "Some One"}
-    return Scenario(f"{BASE}/auth/google/complete", body, 201, changed)
+    flow = {settings.google_flow_cookie_key: "origin-check-browser-binding"}
+    return Scenario(f"{BASE}/auth/google/complete", body, 201, changed, flow)
 
 
 async def _reset_request_route(client: AsyncClient, engine, settings: Settings) -> Scenario:  # noqa: ANN001
@@ -473,7 +481,7 @@ async def test_the_credential_routes_refuse_another_origin_with_no_session_at_al
     if origin == WEB:
         origin = settings.cors_allow_origins[0]
 
-    async with _visitor(client, origin) as visitor:
+    async with _visitor(client, origin, scenario.cookies) as visitor:
         resp = await visitor.post(scenario.path, json=scenario.body)
 
     if works:
@@ -669,6 +677,17 @@ async def test_the_cookie_name_follows_the_setting(settings: Settings) -> None:
     assert _reached_the_route(await _login(app, cookie="avp_session=x", origin=None))
 
 
+async def test_when_secure_the_host_prefixed_cookie_is_the_session_cookie(
+    settings: Settings,
+) -> None:
+    """A deployed API names its cookie `__Host-avp_session`; that is the one that counts."""
+    app = _app(settings, session_cookie_secure=True)
+
+    _assert_refused(await _login(app, cookie="__Host-avp_session=x", origin=None), LOGIN)
+    # A bare `avp_session` is not this deployment's cookie: signed out, not refused.
+    assert _reached_the_route(await _login(app, cookie="avp_session=x", origin=None))
+
+
 # ---------------------------------------------------------------------------
 # what is never refused
 # ---------------------------------------------------------------------------
@@ -793,9 +812,11 @@ async def test_a_lowercase_method_is_checked_as_the_method_it_names(settings: Se
 # ---------------------------------------------------------------------------
 
 
-async def test_a_refusal_is_logged_with_no_cookie_and_no_origin(client: AsyncClient) -> None:
+async def test_a_refusal_is_logged_with_no_cookie_and_no_origin(
+    client: AsyncClient, settings: Settings
+) -> None:
     await _sign_up(client)
-    cookie = client.cookies.get("avp_session")
+    cookie = client.cookies.get(settings.session_cookie_key)
     assert cookie, "the session cookie the refusal must not log"
     sentinel = "https://origin-sentinel.example"
 
@@ -814,6 +835,7 @@ async def test_a_refusal_is_logged_with_no_cookie_and_no_origin(client: AsyncCli
             "method": "POST",
             "path": f"{BASE}/clients",
             "origin_present": True,
+            "origin_host": "origin-sentinel.example",
         },
         {
             "event": "security.origin_refused",
@@ -826,6 +848,7 @@ async def test_a_refusal_is_logged_with_no_cookie_and_no_origin(client: AsyncCli
             "method": "POST",
             "path": LOGIN,
             "origin_present": True,
+            "origin_host": "origin-sentinel.example",
         },
     ]
     everything = json.dumps(events, default=str)
@@ -833,12 +856,15 @@ async def test_a_refusal_is_logged_with_no_cookie_and_no_origin(client: AsyncCli
     assert sentinel not in everything
 
 
-async def test_the_printed_refusal_carries_no_cookie_and_no_origin(
-    client: AsyncClient, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+async def test_the_printed_refusal_carries_no_cookie_and_not_the_origin_as_sent(
+    client: AsyncClient,
+    settings: Settings,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """The same, as it is rendered: the line structlog prints on stdout."""
     await _sign_up(client)
-    cookie = client.cookies.get("avp_session")
+    cookie = client.cookies.get(settings.session_cookie_key)
     assert cookie
     sentinel = "https://origin-sentinel.example"
     caplog.set_level("DEBUG")
@@ -935,7 +961,7 @@ def test_the_check_is_configured_from_the_settings(settings: Settings) -> None:
     kwargs = _middleware(create_app(settings), OriginCheckMiddleware).kwargs
 
     assert list(kwargs["allowed_origins"]) == settings.cors_allow_origins
-    assert kwargs["session_cookie_name"] == settings.session_cookie_name
+    assert kwargs["session_cookie_name"] == settings.session_cookie_key
 
 
 def test_every_method_a_route_registers_is_either_read_only_or_checked(
@@ -973,16 +999,173 @@ def test_the_websocket_sweep_would_notice_one(settings: Settings) -> None:
     assert _websocket_paths(app) == [f"{BASE}/ws"]
 
 
-def test_the_one_exempt_path_is_the_stripe_webhook_route(settings: Settings) -> None:
+def test_the_one_exemption_is_the_post_to_the_stripe_webhook_route(settings: Settings) -> None:
     from avp_api.origin_check import OriginCheckMiddleware
 
     app = create_app(settings)
-    exempt = set(_middleware(app, OriginCheckMiddleware).kwargs["exempt_paths"])
+    exempt = set(_middleware(app, OriginCheckMiddleware).kwargs["exempt"])
     post_routes = {
         route.path
         for route in app.routes
         if "POST" in (getattr(route, "methods", None) or ())
     }
 
-    assert exempt == {WEBHOOK}
-    assert exempt <= post_routes, "the exemption names a route that does not exist"
+    assert exempt == {("POST", WEBHOOK)}
+    assert {path for _, path in exempt} <= post_routes, (
+        "the exemption names a route that does not exist"
+    )
+
+
+# ---------------------------------------------------------------------------
+# the exemption is for POST only (3.21)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("method", ["PUT", "PATCH", "DELETE"])
+async def test_another_method_to_the_webhook_path_is_checked_like_any_write(
+    client: AsyncClient, settings: Settings, method: str
+) -> None:
+    await _sign_up(client)
+
+    async with _page(client, FOREIGN) as page:  # signed in, foreign origin
+        _assert_refused(await page.request(method, WEBHOOK), WEBHOOK)
+    async with _visitor(client, FOREIGN) as visitor:  # no session, foreign origin
+        _assert_refused(await visitor.request(method, WEBHOOK), WEBHOOK)
+
+    async with _page(client, None) as page:  # session cookie, no Origin
+        _assert_refused(await page.request(method, WEBHOOK), WEBHOOK)
+
+    async with _visitor(client, None) as visitor:  # no Origin, no cookie: not ours to refuse
+        resp = await visitor.request(method, WEBHOOK)
+    assert resp.json().get("type") != REFUSED_TYPE, resp.text
+    assert resp.status_code == 405
+
+
+# ---------------------------------------------------------------------------
+# the refused origin's host in the log (3.21)
+# ---------------------------------------------------------------------------
+
+
+async def _refusal_for(client: AsyncClient, origin: str) -> tuple[dict[str, Any], str]:
+    with structlog.testing.capture_logs() as events:
+        async with _visitor(client, origin) as visitor:
+            resp = await visitor.post(LOGIN, json={})
+    assert resp.status_code == 403
+    [refusal] = [e for e in events if e["event"] == "security.origin_refused"]
+    return refusal, json.dumps(events, default=str)
+
+
+async def test_the_refused_origins_host_is_logged_lowercased(client: AsyncClient) -> None:
+    refusal, _ = await _refusal_for(client, "https://Evil.Example")
+    assert refusal["origin_host"] == "evil.example"
+    assert refusal["origin_present"] is True
+    assert "origin_kind" not in refusal
+
+
+async def test_an_origin_with_userinfo_is_logged_as_unparsed_and_nothing_of_it(
+    client: AsyncClient, capsys: pytest.CaptureFixture[str]
+) -> None:
+    origin = "http://user:secret@evil.example:8443"
+    refusal, everything = await _refusal_for(client, origin)
+    assert refusal["origin_kind"] == "unparsed"
+    assert "origin_host" not in refusal
+    # And as printed, outside `capture_logs`.
+    capsys.readouterr()
+    async with _visitor(client, origin) as visitor:
+        await visitor.post(LOGIN, json={})
+    printed = capsys.readouterr().out
+    assert "security.origin_refused" in printed and "unparsed" in printed
+    for text in (everything, printed):
+        for banned in ("user", "secret", "8443"):
+            assert banned not in text
+
+
+@pytest.mark.parametrize(
+    ("origin", "kind", "address"),
+    [
+        ("http://203.0.113.9", "ip", "203.0.113.9"),
+        ("https://[2001:db8::1]:8443", "ip", "2001:db8"),
+        ("null", "opaque", None),
+        ("https://" + "a" * 300 + ".example", "unparsed", "aaaaaaaa"),
+        ("https://bad_host.example", "unparsed", "bad_host"),
+        ("https://evil%2eexample", "unparsed", "evil%2e"),
+        ("ftp://evil.example", "unparsed", "evil.example"),
+        ("not an origin", "unparsed", "not an origin"),
+    ],
+)
+async def test_an_origin_that_is_not_a_plain_dns_name_logs_only_its_kind(
+    client: AsyncClient, origin: str, kind: str, address: str | None
+) -> None:
+    refusal, everything = await _refusal_for(client, origin)
+    assert refusal["origin_kind"] == kind
+    assert "origin_host" not in refusal
+    if address is not None:
+        assert address not in everything
+
+
+async def test_no_origin_logs_neither_field(client: AsyncClient) -> None:
+    await _sign_up(client)
+    with structlog.testing.capture_logs() as events:
+        async with _page(client, None) as page:
+            await page.post(f"{BASE}/clients", json=NEW_CLIENT)
+    [refusal] = [e for e in events if e["event"] == "security.origin_refused"]
+    assert refusal["origin_present"] is False
+    assert "origin_host" not in refusal and "origin_kind" not in refusal
+
+
+_HOST_253 = ".".join(["a" * 63] * 3 + ["b" * 61])  # exactly 253 characters
+
+
+@pytest.mark.parametrize(
+    ("origin", "expected"),
+    [
+        (None, {}),
+        ("https://evil.example", {"origin_host": "evil.example"}),
+        ("HTTP://EVIL.Example", {"origin_host": "evil.example"}),
+        ("https://evil.example/path?q=1#f", {"origin_kind": "unparsed"}),
+        ("https://evil.example/", {"origin_kind": "unparsed"}),
+        ("https://evil.example?", {"origin_kind": "unparsed"}),
+        ("https://evil.example#", {"origin_kind": "unparsed"}),
+        ("https://evil.example\\@good.example", {"origin_kind": "unparsed"}),
+        ("http://user:secret@evil.example:8443", {"origin_kind": "unparsed"}),
+        ("https://evil.example:8443", {"origin_host": "evil.example"}),
+        ("https://ev\til.example", {"origin_kind": "unparsed"}),
+        ("https://evil.example\r\n", {"origin_kind": "unparsed"}),
+        ("\x00https://evil.example", {"origin_kind": "unparsed"}),
+        ("https://\xe9vil.example", {"origin_kind": "unparsed"}),
+        ("http://[fe80::1%25eth0]", {"origin_kind": "ip"}),
+        ("http://2130706433", {"origin_kind": "ip"}),
+        ("http://0x7f000001", {"origin_kind": "ip"}),
+        ("http://0177.0.0.1", {"origin_kind": "ip"}),
+        ("http://127.1", {"origin_kind": "ip"}),
+        ("http://10.1", {"origin_kind": "ip"}),
+        ("http://0", {"origin_kind": "ip"}),
+        ("http://4294967296", {"origin_kind": "ip"}),
+        ("https://1e100.net", {"origin_host": "1e100.net"}),
+        ("https://10-0-0-1.sslip.io", {"origin_host": "10-0-0-1.sslip.io"}),
+        ("https://a-b.c1.example.", {"origin_kind": "unparsed"}),
+        ("https://localhost", {"origin_host": "localhost"}),
+        ("https://xn--bcher-kva.example", {"origin_host": "xn--bcher-kva.example"}),
+        ("https://" + _HOST_253, {"origin_host": _HOST_253}),
+        ("https://" + ".".join(["a" * 63] * 3 + ["b" * 62]), {"origin_kind": "unparsed"}),
+        ("https://" + "a" * 64 + ".example", {"origin_kind": "unparsed"}),
+        ("https://-evil.example", {"origin_kind": "unparsed"}),
+        ("https://evil-.example", {"origin_kind": "unparsed"}),
+        ("https://evil..example", {"origin_kind": "unparsed"}),
+        ("https://", {"origin_kind": "unparsed"}),
+        ("", {"origin_kind": "unparsed"}),
+        ("https://bücher.example", {"origin_kind": "unparsed"}),
+        ("https://evil.example:notaport", {"origin_host": "evil.example"}),
+        ("https://127.0.0.1", {"origin_kind": "ip"}),
+        ("http://[::1]", {"origin_kind": "ip"}),
+        ("https://[::ffff:10.0.0.1]:1", {"origin_kind": "ip"}),
+        ("null", {"origin_kind": "opaque"}),
+        ("NULL", {"origin_kind": "unparsed"}),
+        ("chrome-extension://abcdef", {"origin_kind": "unparsed"}),
+        ("https://[bad", {"origin_kind": "unparsed"}),
+    ],
+)
+def test_the_origin_log_fields_parser(origin: str | None, expected: dict[str, str]) -> None:
+    from avp_api.origin_check import origin_log_fields
+
+    assert origin_log_fields(origin) == expected

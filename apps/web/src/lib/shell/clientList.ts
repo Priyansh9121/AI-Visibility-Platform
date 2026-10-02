@@ -23,6 +23,7 @@
  * brief, and until it exists this derivation says exactly what it knows.
  */
 
+import { shownComposite } from '@/lib/dashboard/shownComposite';
 import type { Client, Dashboard } from '@avp/shared-types';
 
 export interface SidebarClient {
@@ -58,7 +59,7 @@ export function latestScores(dashboard: Pick<Dashboard, 'recentScans'>): Map<str
   for (const scan of scans) {
     const have = out.get(scan.clientId);
     if (typeof have === 'number') continue; // already found the newest scored scan
-    const composite = num(scan.compositeScore);
+    const composite = num(shownComposite(scan));
     out.set(scan.clientId, composite);
   }
   return out;

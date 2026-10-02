@@ -21382,3 +21382,490 @@ Drift check (north-star §8): no product layer; the agent tooling the project is
   - OpenAPI and `api.gen.ts` regenerate with no change to the committed files.
   - Exit codes were read from files.
 - **Over the branch:** API pytest 1955 → 2226 and web vitest 1203 → 1399; the workers, shared-types and design-system counts and the mypy count are unchanged.
+
+# Four screens stop telling customers to check port 8000 when the server does not answer
+
+**2026-10-02, the third entry of the day; branch `pilot-fixes`, the founder's pilot-blockers follow-up (launch checklist 3.23).** One item, one commit.
+
+**Render: nothing to set. No endpoint, schema, dependency or outbound host change.**
+
+Drift check (north-star §8): Layer 1, Delivery (sign-up, sign-in and the intake screens); lifecycle phase: Activation (Epic 9), the first screens a pilot agency sees.
+
+## 1. What changed
+
+- **The sentence.** When the API did not answer, sign-up, sign-in, the intake form and the intake result said "The API did not respond. Check that it is running on port 8000." (or "Could not reach the API. Is it running on port 8000?"), a developer's instruction. They now say the sentence the Google sign-up page has used since `pre-pilot`: "We could not reach the server. Check your connection and try again."
+  - It lives once, as `API_AWAY_SENTENCE` in `lib/apiAway.ts`, beside `apiWasAway`; the Google sign-up panel's submit failure now uses the constant instead of its own copy of the text.
+  - The rule is `apiWasAway(err)`: no answer, no status, or a 5xx. Every specific branch is unchanged (401/422 on sign-in, 409/422 on sign-up, 429 on both, the scan limit on the intake result), and any other refusal from the API still shows the API's own sentence.
+  - The 5xx problem bodies these four calls can return (a 503 `service-unavailable` from the fail-closed rate limiter, a bare 500) say nothing the shared sentence does not, so a 5xx shows the shared sentence on all four screens.
+- **No casts.** Each screen checks `err instanceof ApiProblem && !apiWasAway(err)` before reading the problem's detail, so a later change to `apiWasAway` cannot become a TypeError inside a catch (UI review nit, taken).
+
+## 2. The review
+
+- **UI review (sonnet): PASS WITH NITS.** Clean: the error is announced exactly as before on each screen (same `ErrorState`, failed state or `setError` plus `onFailed`); branch order keeps the specific 4xx details; no style, token, dependency or host change; no test deleted, skipped or weakened; the grep guard is real.
+  - **Taken:** the casts, above.
+  - **Left:** the reviewer noted that "Check your connection" is a little misleading when our own server answered with a 5xx. The founder's go-ahead names this sentence, and it already ships on the Google page; kept for consistency.
+
+## Verified
+
+**Web vitest 1399 → 1413 (+14); floor raised to match.**
+- Per screen (sign-up, sign-in, intake form, intake result): a network failure (a rejected `fetch`) shows the shared sentence and no port number; a 5xx with no problem body shows the shared sentence; a 4xx problem still shows its own detail.
+- `apiAway.test.ts` pins the sentence, and a grep test fails if any non-test source file under `apps/web/src` mentions "port 8000".
+- **Negative control:** the old sentence put back in `SignInPanel.tsx` fails 3 tests (the grep guard and two sign-in cases); the file was restored and checked with `cmp`.
+
+**The rest of the bar** (this tree, one run).
+- API pytest 2226, workers 26, shared-types 53 (0 fail), design-system 846, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database.
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`).
+- OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# The web app serves the API under its own origin, so the session cookie is first-party, SameSite=Lax and __Host-
+
+**2026-10-02, the fourth entry of the day; branch `pilot-fixes`, the founder's pilot-blockers follow-up (launch checklist 3.7).** One item, one commit.
+
+**Render: four settings, in order (also in the PR description).** Before merging: (1) on the **web** service set `API_PROXY_TARGET` to the API service's **internal** address (Render → API service → Connect → Internal, `http://<name>:<port>`); if Render shows no internal address, stop and say so; (2) in Google Cloud Console add `https://ai-visibility-platform-1.onrender.com/api/v1/auth/google/callback` as an authorised redirect URI, keeping the old one. After both deploys are live: (3) on the **API** service set `GOOGLE_OAUTH_REDIRECT_URL` to that same address; (4) delete `SESSION_COOKIE_SAMESITE` and `SESSION_COOKIE_DOMAIN` from the API service and `NEXT_PUBLIC_API_BASE_URL` from the web service (all three are now ignored). Everyone is signed out once, because the cookie's name changes. No migration, no new dependency or outbound host.
+
+Drift check (north-star §8): Layer 0, Trust substrate (the session cookie and the path every browser call takes), with Layer 1's web client changed to reach it; lifecycle phase: Activation (Epic 9), signing in and staying signed in.
+
+## 1. The probe the founder asked for first
+
+- **Render's Next.js runtime supports it.** The deployed web app answers with `x-powered-by: Next.js` and `x-nextjs-cache`: it is `next start` on a Node web service, which runs rewrites to an external URL (a static export would not).
+- **The browser's Origin reaches the API through it.** Next 15.5.23's rewrite proxy (`next/dist/server/lib/router-utils/proxy-request.js`) is `http-proxy` with `changeOrigin: true` and no `xfwd`. A minimal Next app on this exact version, rewriting to an echo server, passed `Origin`, `Cookie`, `X-Forwarded-For`, `CF-Connecting-IP`, the body and the query string through unchanged, and returned two `Set-Cookie` headers, a `problem+json` 403, a 204 and a 302 `Location` unchanged.
+- **In real browsers** (Playwright: Chromium, Firefox and WebKit), a same-origin `fetch` POST through the proxy carried the page's real `Origin`, including on a page whose referrer policy is `no-referrer` (the token pages'); a same-origin GET carried none, which the Origin check never needs. A `__Host-` cookie set through the proxy was stored and sent back by Chromium and Firefox on `http://localhost`; WebKit does not store a `Secure` cookie on plain http, which is why local development uses the bare name.
+- **One thing the probe found that the brief did not name: the client IP.** The per-IP rate limits read the leftmost `X-Forwarded-For` (or `CLIENT_IP_HEADER`). If the web app proxied to the API's *public* URL, a second Render/Cloudflare edge would stand in front of the API and could replace those headers with the web service's own address, putting every visitor in one bucket. Through the API's **internal** address the API receives exactly the headers the web's edge set, the same position as a direct call today. So the target must be the internal address, and the build refuses the public one.
+
+## 2. What changed
+
+- **Web** (`next.config.mjs`, `lib/api.ts`):
+  - The browser calls `/api/v1` on the web app's own origin; one rewrite hands `/api/v1/:path*` to `${API_PROXY_TARGET}/api/v1/:path*`. `NEXT_PUBLIC_API_BASE_URL` is no longer read anywhere (it is set on Render today; had the code kept reading it, the web would have kept calling the API cross-site).
+  - `API_PROXY_TARGET` is server-only and validated by `apiProxyTarget()`: http or https, an origin only (no credentials, path, query or fragment), never echoed in an error. In a production build it is required, and an `onrender.com` host is refused with a sentence pointing at the internal address. Outside production it defaults to `http://localhost:8000`. Rewrites are fixed at build time, so a change needs a rebuild (Render redeploys on an env change).
+  - `experimental.proxyTimeout` is 150 s: `POST /clients/{id}/prompt-runs` can take about 122 s, and Next's default is 30 s.
+  - "Sign in with Google" is an anchor to same-origin `/api/v1/auth/google/start`; the callback must come back through the web host too (founder step 3), because the existing-user callback sets the session cookie on its own redirect.
+- **Proxy failures stay out of the logs** (`src/instrumentation.ts`, `lib/proxyLogRedaction.ts`). Next prints `Failed to proxy <full target URL>` when the API does not answer, and warns with the request's path and query when a body passes its 10 MB clone limit. Both lines now drop the query and fragment and replace a `/reports/<token>` remainder with `/reports/…` (the two open routes `/reports/shared` and `/reports/shared/pdf` are kept, as `logs.py` does); the error argument is reduced to its code. Every other console line passes through.
+- **API** (`config.py`, `routers/auth.py`, `deps.py`, `main.py`):
+  - `session_cookie_samesite` and `session_cookie_domain` are gone; the cookie is always `SameSite=Lax`, `Path=/`, `HttpOnly`, with no `Domain`. Stale values left in an environment are ignored (`extra="ignore"`).
+  - `session_cookie_key` is `__Host-avp_session` when Secure (forced in staging and production) and the bare `avp_session` on local http; `SESSION_COOKIE_NAME` must be a plain token not starting with `__`. The session reader and the Origin check use the key.
+  - **Logout and logout-all now actually clear the cookie.** Both returned a freshly built `Response`, and FastAPI does not merge the injected response's headers into one the route builds, so the clearing `Set-Cookie` never reached the browser (the session was revoked server-side, so this was harmless until now; a browser keeping a dead `__Host-` cookie is not).
+  - CORS is unchanged. `CORS_ALLOW_ORIGINS` now matters as the Origin check's allow-list for writes: the browser still sends the web app's origin on a same-origin POST and the proxy passes it through. No value changes.
+- **Docs:** `docs/api-contracts.md` (the cookie, first-party, why Lax and not Strict); `apps/api/.env.example`; `infra/deploy/README.md` (the requirements table: `API_PROXY_TARGET`, the Google redirect URL, the cookie); `docs/runbook.md` (the client-IP probe now goes through the web host, and a 429 is checked from a second network for a shared bucket); `/privacy` names the deployed cookie, `__Host-avp_session` (a fact the page states; the sentence is otherwise unchanged).
+
+## 3. The review
+
+- **Security review (opus): PASS WITH NITS.** Checked clean: cookie set and clear, the reader and the Origin check on one key, the name validator, no way to plant a `__Host-` cookie (public suffix, no Domain), the logout fix, proxied writes passing the Origin check, no host injection or traversal beyond the API's own port, the external destination absent from the client build manifest, log redaction, the client-IP reasoning, CSRF (Lax plus the Origin check), stale env vars.
+  - **Medium, fixed:** nothing refused the API's public URL as the target, and a founder following checklist 1.3's "11th answers 429: done" would read a shared bucket as safe. A production build now refuses an `onrender.com` target (loopback is not refused, so a local `next build` against a local API still works); the runbook's probe has the second-network check, and checklist 1.3 is rewritten in this branch's checklist entry.
+  - **Medium, its own item:** login CSRF through the Google callback (the `state` is not bound to the browser) now works in every browser, since the callback's cookie is first-party. That is 3.22, the next commit on this branch, before pilots use Google sign-in.
+  - **Lows taken:** Next's body-limit warning printed the path and query (now redacted; the old build printed a planted token, the new one does not); `/privacy` named the old cookie; two stale texts (`saveBlob`'s comment, and `api-contracts.md` saying the browser never makes a cross-site call, where Google's redirect back is one).
+  - **Lows checked and dropped:** "a token page's `no-referrer` policy could make a same-origin POST send `Origin: null`": not so in Chromium, Firefox or WebKit (above). "Next's proxy appends to `X-Forwarded-For`" (the UI reviewer): it does not; there is no `xfwd`, and the echo server received the header unchanged.
+- **UI review (sonnet): PASS WITH NITS.** Nothing a user sees changed; every API URL is rooted at `/api/v1`, so it resolves from any page depth; the Google anchor keeps no `target` and no `rel`; the token-route headers are unchanged. Its one Low (the stale `saveBlob` comment) is fixed.
+
+## Found, not fixed
+
+- **The web-to-API hop on the internal address is plain http**, so passwords and session tokens cross Render's private network unencrypted; the same as Render's own edge-to-service hop.
+- **Old `avp_session` sessions stay in Redis until their 14-day TTL.** No browser can present them after the rename, and nothing revokes them; harmless.
+- **Deploy gap.** Between the API's deploy and the web's, nobody can sign in (the new Lax cookie is not stored from the old web app's cross-site calls). Between the deploy and founder step 3, Google sign-in does not complete.
+
+## Verified
+
+**API pytest 2226 → 2241 (+15); web vitest 1413 → 1433 (+20); both floors raised to match.**
+- **API** (`tests/test_session_cookie.py`, new, and additions to the auth, Origin-check and Google tests):
+  - with Secure on, login sets `__Host-avp_session` with `Secure`, `HttpOnly`, `Path=/`, `SameSite=lax` and no `Domain`; on local http it is `avp_session` without `Secure`;
+  - logout and logout-all send a clearing `Set-Cookie` carrying `Secure`, `Path=/` and `Max-Age=0`;
+  - a deployed `Settings` built with `SESSION_COOKIE_SAMESITE=none` and `SESSION_COOKIE_DOMAIN=.example.com` still gives Lax with no Domain;
+  - a `SESSION_COOKIE_NAME` starting with `__` or holding a separator is refused at boot;
+  - with Secure on, a write with no Origin carrying `__Host-avp_session` is refused, and one carrying only a bare `avp_session` is treated as signed out;
+  - the Google callback's existing-user path sets `__Host-avp_session` when Secure.
+  - Existing tests that hard-coded `avp_session` now read the name from settings; no assertion was weakened.
+- **Web** (`nextConfig.test.ts`, `proxyLogRedaction.test.ts`, `legalPages.test.tsx`):
+  - exactly one rewrite with the expected source and destination; a trailing slash and spaces normalised;
+  - a missing target refused in production, naming the variable; `localhost:8000` outside production; a path, query, fragment, credentials or another scheme refused without echoing a credential; an `onrender.com` target refused in production only (an internal `http://<name>:<port>` address and a look-alike host are accepted);
+  - the proxy timeout at least 130 s; no source file reads `NEXT_PUBLIC_API_BASE_URL`; the Google link is `/api/v1/auth/google/start`;
+  - the proxy-failure line and the body-limit warning lose their query and report tokens, the error becomes its code, other lines pass through, and installing twice wraps once;
+  - `/privacy` names `__Host-avp_session`.
+- **The real build** (a worktree copy, not the founder's checkout): `next build` without `API_PROXY_TARGET` fails with the named error, and with the API's public URL fails with the internal-address sentence; with a target it builds, a proxied POST reaches an echo API with the browser's Origin, and with the API down the logged lines carry no planted code, state or token (0 matches).
+- **Negative controls:**
+  - `secure=` removed from the cookie clear fails the logout and logout-all tests (2); restored and checked with `cmp`;
+  - the `onrender.com` refusal disabled fails its test (1); restored and checked with `cmp`;
+  - the build before the warning redaction printed a planted report token and query in Next's body-limit warning; the build after it printed `/reports/….pdf`.
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, shared-types 53 (0 fail), design-system 846, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`); no dependency was added.
+- OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# A failed audit says what happened in a sentence, the PDF says when a scan was partial or failed, and the focus ring is visible on light surfaces
+
+**2026-10-02, the fifth entry of the day; branch `pilot-fixes`, the founder's pilot-blockers follow-up (launch checklist 3.26).** One item, one commit.
+
+**Render: nothing to set. No endpoint, schema, dependency or outbound host change; no response shape changed.**
+
+Drift check (north-star §8): Layer 1, Delivery (the report on screen and in the PDF) and the design system's focus token; lifecycle phase: Activation (Epic 9), the report a pilot agency sends.
+
+## 1. What changed
+
+- **The failed-audit card** (`ReportView.tsx`, signed-in and public alike: one component) printed the technical audit's raw error code in parentheses. It now opens with one sentence per code from `auditFailureSentence` in `lib/report/strings.ts`, then the existing text without the code:
+  - `BROWSER_ERROR`: "The crawler’s browser stopped before it could read the home page." (also the code for a connection the egress guard could not verify);
+  - `FETCH_FAILED`: "The crawler asked for the home page and got no response." (the navigation returned no response);
+  - `TIMEOUT`: "The home page did not finish loading in the time the crawler allows.";
+  - `HTTP_<status>` (set only for 400 and above): "The site answered with an error (HTTP 503) when the crawler asked for its home page.", with the status the crawler saw;
+  - anything else: "The crawler could not read the home page."
+  - "Home page" is true: the audit navigates to the start URL (`technical_audit.py`). `ROBOTS_DISALLOWED` and `ADDRESS_NOT_PUBLIC` keep their own copy. The PDF never printed the code; a test now keeps it that way.
+- **The PDF says when a scan was partial or failed** (`report_pdf.py`), in one bold line on the cover under the meta line, chosen from the scan's status alone (the public PDF carries no error code) and saying nothing about the agency's scan allowance, because the PDF goes to a prospect:
+  - PARTIAL: "This scan is partial: not every planned question was answered, so these results rest on fewer answers than planned." (true of both causes: some engine calls got no answer, or the deadline came with at least half the planned prompts answered);
+  - FAILED: "This scan failed, so these results are incomplete." (true of every cause: every engine failed, an error or a restart, or a deadline with fewer than half answered). The implementer's first draft said "did not finish", which a scan whose engines all failed did; corrected before review.
+  - Every other status: no line.
+- **The focus ring** (`tokens.css`). `--avp-focus-ring` in the light theme and in `.avp-report` is now a solid 2px `oklch(0.53 0.09 200)` (beacon-600's light value) ring with the same 6px halo; it was `oklch(0.72 0.11 200 / 0.6)`, about 1.7:1 on the light seated surface (WCAG 1.4.11 asks 3:1). A literal rather than `var(--avp-beacon-600)`, because `.avp-report` redefines beacon-600. The dark theme's ring is unchanged (already 4.8–5.8:1). `docs/design-system.md` describes the new ring.
+- **A contrast test for tokens** (`packages/design-system/src/tokens/contrast.ts` and `contrast.test.ts`): it parses the real `tokens.css` (resolving `var()` within the file), converts OKLCH to sRGB, composites alpha over the surface in gamma-encoded sRGB, and computes the WCAG ratio. Two pinned measurements guard the helper itself (the old dark tertiary on dark seated, 4.09:1; the old light ring on light seated, 1.66:1). It asserts the ring at 3:1 or more against seated, raised, ground and sunken in light and dark, and against the report's three paper surfaces. Measured now: light 4.44–5.06, dark 5.09–5.78, report paper 4.48–4.99.
+
+## 2. The review
+
+- **UI review (sonnet): PASS WITH NITS.** Checked against the sources: each audit sentence against where its code is set; the PARTIAL and FAILED lines against `models/scan.py` and `scan_executor.py`; the report still paper in both themes (`reportIsolation`); 1.4.11 and 2.4.7 numerically; no test weakened (the one changed assertion, `toContain('FETCH_FAILED')`, became the sentence plus `not.toContain`).
+  - **Taken:** the stale focus-ring line in `docs/design-system.md`; the HTTP pattern tightened from `[1-5]\d\d` to `[45]\d\d`, the codes the audit can set.
+  - **Left:** on a focused primary button (filled with beacon-600 in the light theme) the new ring is the fill's colour, so it reads as a 2px growth plus the halo rather than a separate ring. It still meets 1.4.11 against the page surface; a 2px gap on primary buttons would be a look change for the founder. And `BROWSER_ERROR`'s sentence also covers an unverified connection, where the page may have loaded; the sentence is not false.
+
+## Found, not fixed
+
+- **The report's own tertiary text** (`.avp-report`'s `--avp-text-tertiary`, ink-400) measures 3.23–3.59:1 on paper, under 4.5:1. Darkening it changes the printed report's look; a founder decision.
+- **The client Technical screen** (`ClientTechnicalView.tsx`) still prints "Reason: <code>" with the raw audit code, signed in only. Outside this item, which names the report and the PDF.
+- The ring is a box-shadow, so it does not draw in forced-colours mode (unchanged).
+
+## Verified
+
+**API pytest 2241 → 2250 (+9); design-system vitest 846 → 859 (+13); web vitest 1433 → 1434 (+1); the three floors raised to match.**
+- **Web** (`ReportView.test.tsx`): the card shows the sentence for `BROWSER_ERROR`, `FETCH_FAILED`, `TIMEOUT`, `HTTP_503` and an unknown code, on the signed-in and the public view, and never the raw code (the old `toContain('FETCH_FAILED')` became the sentence plus `not.toContain`).
+- **API** (`test_report_pdf.py`): the cover line for PARTIAL and FAILED, each with and without an error code; no line for SUCCEEDED, RUNNING or CANCELLED; the public shared PDF of a PARTIAL scan carries it; a failed audit's code never appears in the PDF.
+- **Design system** (`contrast.test.ts`): the helper's two pinned measurements; the ring at 3:1 or more on four surfaces in light and dark and on the report's three paper surfaces. `reportIsolation.test.ts` still passes (the report stays paper in both themes).
+- **Negative controls:**
+  - the old light ring put back in `tokens.css` fails 7 of the 13 contrast tests (the four light surfaces and the three paper ones); restored and checked with `cmp`;
+  - the PDF line disabled fails 5 PDF tests; the code put back into the card fails 2 web tests (the implementer's runs, each restored and checked).
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, shared-types 53 (0 fail), mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; the styleguide builds; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`).
+- OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# Only a POST to the Stripe webhook skips the Origin check, and a refused write logs the host it came from
+
+**2026-10-02, the sixth entry of the day; branch `pilot-fixes`, the founder's pilot-blockers follow-up (launch checklist 3.21).** One item, one commit.
+
+**Render: nothing to set. No endpoint, schema, dependency or outbound host change.**
+
+Drift check (north-star §8): Layer 0, Trust substrate (the Origin check and its log); lifecycle phase: Activation (Epic 9), the guard on every signed-in write a pilot agency makes.
+
+## 1. What changed
+
+- **The exemption is one method and one path** (`origin_check.py`, `main.py`). `OriginCheckMiddleware` takes `exempt` as (METHOD, path) pairs, matched exactly, and the app exempts only `("POST", "/api/v1/billing/webhook")`. A PUT, PATCH or DELETE to that path is checked like any other write: refused with `403 origin-not-allowed` when it names an unlisted origin, or carries the session cookie and no Origin. Stripe calls the API host directly with a POST, so deliveries are unaffected.
+- **The refusal log names the host, and only the host.** The founder's condition was "only if that is safe for facts-only logging". Judged safe: a DNS host name is a name, which the facts-only rule allows, and it is not a secret, token or email; but the header is chosen by whoever sends the request, so it is logged only in a strictly parsed, bounded form. `security.origin_refused` keeps `method`, the redacted `path` and `origin_present`, and gains one of:
+  - `origin_host`: the lower-cased host of a **bare** http or https origin (no userinfo, backslash, path, query or fragment), when the host is a DNS name of at most 253 characters made of letter-digit-hyphen labels. Never the scheme, port or anything else from the header;
+  - `origin_kind="ip"`: an IP literal, including the spellings a browser reads as one (a last label that is a number, such as `2130706433`, `0x7f000001` or `127.1`, and IPv6 with a zone). The address is not logged;
+  - `origin_kind="opaque"`: the literal `null`;
+  - `origin_kind="unparsed"`: anything else, including control characters, non-ASCII, a trailing dot, or a value a browser would never send.
+  - A DNS name that merely contains an address (`10-0-0-1.sslip.io`) is a name and is logged; `docs/api-contracts.md` says so.
+- `docs/api-contracts.md`: the exemption is POST only; the refusal log's fields.
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS.** Checked clean: exact (method, decoded path) matching with no root path or prefix in play (the web app's rewrite keeps `/api/v1`); percent-encoded forms decode to the path the router matches; HEAD and OPTIONS are never checked; only fixed words or `[a-z0-9.-]{1,253}` can reach the log, so no injection into the key=value output and no way for an email's `@` to survive; length is checked before the label pattern; the allow/refuse decision is unchanged.
+  - **Fixed:** IPv4 written as a single number, in hex or octal, or shortened (`http://2130706433`, `http://10.1`) passed as a host name and was logged (now `ip`); a value that is not a bare origin (`http://alice@gmail.com`, a backslash, a path) was reduced to a host Python's parser chose (now `unparsed`); the control-character and non-ASCII guard had no test (cases added); one test name no longer said what it checked (renamed).
+  - **Left, as the founder asked for the host only:** logging the scheme and whether a port was present would help an operator see why their own origin was refused (`http` against `https`, a port); both would be as safe as the host.
+  - **Noted:** real Stripe deliveries carry neither an Origin nor a cookie, so the rule would not refuse them with or without the exemption; its remaining effect is that a browser's POST to the webhook reaches the signature check and gets a 400. Removing the exemption entirely would also be safe; that is the founder's call.
+
+## Verified
+
+**API pytest 2250 → 2308 (+58); floor raised to match.**
+- PUT, PATCH and DELETE to the exact webhook path are refused with a foreign Origin, and with the session cookie and no Origin; with neither they are not refused by the Origin check (routing answers). The POST stays exempt whatever it carries, and only the exact path is exempt (both existing tests unchanged in what they assert; the kwarg test now checks `exempt == {("POST", WEBHOOK)}`).
+- The refusal log: `https://Evil.Example` → `origin_host="evil.example"`; an origin with userinfo, a port and a password → `unparsed`, and "user", "secret" and "8443" appear nowhere in the log or the printed output; IP literals in every spelling above → `ip` with no address; `null` → `opaque`; a 300-character host, an underscore, a `%`, control characters and non-ASCII → `unparsed`; no Origin → neither field. A parser table of the edge cases.
+- **Negative control:** the exemption made to ignore the method fails the three PUT/PATCH/DELETE tests; restored and checked with `cmp`.
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, shared-types 53 (0 fail), design-system 859, web 1434, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`).
+- OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# A failed scan cannot be shared, and its score is never shown or counted on the dashboard or the report
+
+**2026-10-02, the seventh entry of the day; branch `pilot-fixes`, the founder's pilot-blockers follow-up (launch checklist 3.24).** One item, one commit. **It ships with the next commit (3.25) in the same PR:** on its own, a link already live on a failed scan could not be withdrawn from the screen (the security review's Medium, below).
+
+**Render: nothing to set. No migration, no new dependency or outbound host.** One new problem type and changed values (not shapes) for failed scans; OpenAPI and `api.gen.ts` were regenerated (route descriptions only).
+
+Drift check (north-star §8): Layer 1, Delivery (the share link, the report, the dashboard) reading Layer 2's scores; lifecycle phase: Activation (Epic 9), what a pilot agency sends and sees.
+
+## 1. What changed
+
+- **Founder decision (final):** failed scans cannot be shared; a failed scan's score is never shown or counted on the dashboard or the report; partial scans stay shareable. A scan whose deadline came after scoring is FAILED and keeps its Score row; scoring-spec rule 5 holds: no Score row is changed, deleted or re-scored, and `FORMULA_VERSION` is untouched. This is about what is shown and counted.
+- **Sharing.** `POST /scans/{scanId}/share` for a FAILED scan answers `409 /problems/failed-scan-not-shareable`, "This scan failed, so its report cannot be shared.", after the agency-scoped lookup (another agency's failed scan is still the same 404 as an unknown id). Every other status is unchanged. The web's share bar, given the scan's status, shows that sentence in place of the "Get shareable link" button, and the API's sentence if the 409 ever comes back.
+- **A link minted while the scan was running that later ends FAILED keeps serving** (an existing test pins it), now without a score: the founder's decision in this brief is about minting. Turning those links off is a decision for the founder (below).
+- **The score is not shown or counted:**
+  - dashboard (`routers/dashboard.py`): a FAILED scan's composite is null in the recent scans (in the join, so the row still lists) and it is not in `scoredScanCount`. The portfolio median, the sidebar's client list and the getting-started step read those fields, so they follow; `ScoreCell` also draws no score for a failed scan.
+  - report (`services/report.py`): for a FAILED scan the score row is not read, so `score` is null, `dimensions` empty and the competitors' rates null; `audit.technicalFoundation` and every action item's `pointsUpside` (both derived from the score) are null too. The signed-in report, the public shared report and both PDFs come from it.
+  - wording: the "has run but has not been scored… not computed yet" prose, untrue for a failed scan, becomes "This scan failed, so it has no score." on the web report and in the PDF, with the heading "<Client> has no score: this scan failed." Every other status's copy is unchanged.
+  - Already right before this: the client trend (`client_history.py`) plots only SUCCEEDED and PARTIAL scans, and alerts never take a failed scan as a baseline.
+- **Share link locking** (`services/share.py`, from the security review): the mint and the withdrawal re-select the scan `FOR UPDATE` but without `populate_existing`, so SQLAlchemy could hand back the copy loaded before the lock, and two simultaneous mints could each create a token (one URL then dead). Both selects now refresh the row, as `billing.py` already does.
+- `docs/api-contracts.md`: the problem type, the share route's errors, `scoredScanCount` and `compositeScore`, and what a failed scan's report leaves out.
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS provided 3.24 ships with 3.25.** Checked clean: tenancy on the four share and report routes and the dashboard queries; a mint racing a scan's failure (the same as a link minted while running; the score is hidden at read time); score history untouched; facts-only; the 409's sentence; the web's handling of it.
+  - **Medium, closed by 3.25:** a link live on a failed scan was reachable only through "Get shareable link", which now refuses a failed scan, so it could not be withdrawn from the screen. 3.25 shows Withdraw for any live link without minting; same PR.
+  - **Lows taken:** `pointsUpside` and `audit.technicalFoundation` still carried score-derived numbers (nulled); test gaps (another agency's failed scan is a 404, the competitor rates are non-null before the scan fails so the check is not vacuous, the public PDF of a scan that failed after sharing is checked for content); comments that claimed the narrative fallback hid more than the composite (reworded: the API blanks the score, and the guard covers the headline and composite); the contract notes; the share lock refresh above.
+- **UI review (sonnet):** **PASS WITH NITS**, with two Mediums, both fixed:
+  - the gap section of a failed report still said "Once this scan produces engine results that can be scored, this section names…", untrue for a failed scan: it now says "This scan failed, so no gap was measured.";
+  - the portfolio median and the sidebar's latest scores read `compositeScore` with no status check (correct only because the API nulls it): one helper, `shownComposite`, now guards the row meter, the median, the sidebar and the getting-started step.
+  - **Lows taken:** a failed scan derives no dimensions as well as no composite (so a leaked payload draws no gap beat or dimension table); after the 409 the bar shows the failed-scan state instead of leaving a button that always fails.
+  - **Left:** the heading and the first line both say the scan failed and has no score; harmless.
+
+## Found, not fixed
+
+- **Outside the dashboard and the report, a failed scan's score is still served:** `GET /scans/{id}/score` and `/scores`, `POST /scans/{id}/score` (the web does not call them); a visibility alert written at phase 7b, before the scan's final status, keeps the failed scan's composite in its text on the client alerts page; fix generation still reads the composite (not shown). Founder: include them, or leave them.
+- **A link minted before a scan failed keeps serving** the report without a score; withdrawing it is possible from 3.25. Founder: should the public report refuse a failed scan's link instead?
+- **The fix list's wording** comes from a model given the score and the dimension scores; nothing stops it repeating a number in a failed scan's action items (unconfirmed).
+
+## Verified
+
+**API pytest 2308 → 2323 (+15); web vitest 1434 → 1454 (+20); both floors raised to match.**
+- **API** (`test_failed_scan_hidden.py`, new; `test_share_lock_refresh.py`, new; additions to the PDF and narrative tests):
+  - minting for a FAILED scan answers the new problem type; PARTIAL still mints; another agency's failed scan is a 404 `not-found`, not the 409;
+  - the dashboard: a FAILED scan with a Score row has no composite and is not counted;
+  - the report: before the scan is marked FAILED the fixture has a score, dimensions, a Technical Foundation value, some `pointsUpside` and a competitor's mention rate (so the check is not vacuous); after, all are null or empty, the action items are all still there, and the Score row is unchanged;
+  - a scan shared and then failed: the public report and the public PDF serve it with the failed sentence and heading and no "/ 100";
+  - the share lock: the scan loaded in the session, another transaction commits a token, then the mint returns that token and the withdrawal clears it.
+- **Web:** the share bar's failed state (sentence, no button) and its 409; the dashboard row, median, sidebar and getting-started step ignore a failed scan's 72.00 beside a succeeded 40 (the median reads 40); the report's score and gap beats for a failed scan, with or without a leaked payload, and the unscored scan's copy unchanged.
+- **Negative controls:**
+  - the share route's FAILED guard removed fails the refusal test; restored and checked with `cmp`;
+  - the FAILED checks swapped for CANCELLED in the dashboard, the report and the share route fail 4 tests; `scored` forced true in the report builder fails the report test; `populate_existing` removed fails both lock tests; `shownComposite` made to return the composite fails the median and sidebar test (the implementer's runs, each restored and checked).
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, shared-types 53 (0 fail), design-system 859, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`).
+- OpenAPI and `api.gen.ts` were regenerated (route descriptions); regenerating again changes neither.
+- Exit codes were read from files.
+
+# A Google sign-in can only be finished in the browser that started it
+
+**2026-10-02, the eighth entry of the day; branch `pilot-fixes`, the founder's pilot-blockers follow-up (launch checklist 3.22).** One item, one commit.
+
+**Render: nothing new to set**, but it depends on 3.7's founder step 3: the Google callback must be on the **web** host (`GOOGLE_OAUTH_REDIRECT_URL`), the host the sign-in starts on, or every Google sign-in ends "could not be matched to this browser". A Google sign-in in progress at the moment of the deploy fails once (its record has no binding) and is started again. No migration, no new dependency or outbound host; no OpenAPI change.
+
+Drift check (north-star §8): Layer 0, Trust substrate (Google sign-in); lifecycle phase: Activation (Epic 9), a pilot agency signing up and signing in.
+
+## 1. What changed
+
+- **Founder decision (final):** bind the Google sign-in state to the browser that started it: a short-lived cookie, compared at the callback, single use. Why: the `state` was parked in Redis but tied to nothing in the browser, and the callback is a GET, which the Origin check does not cover. Someone could start a sign-in in their own browser, finish Google with their own account, stop before the callback, and get a victim to open the callback address: the victim would be signed in to the attacker's agency and type their clients into it. 3.7 made this work in every browser (the callback's cookie is first-party now), so the two ship together.
+- **Start** (`GET /auth/google/start`): a random binding (`token_urlsafe(32)`) is minted; its digest is parked in the Redis state record beside the nonce and the PKCE verifier; the binding itself goes to the browser as `__Host-avp_google_flow` (`avp_google_flow` on local http): HttpOnly, Secure when deployed, SameSite=Lax (it must ride on the top-level GET back from Google), Path=/, no Domain, Max-Age = the sign-in's 10 minutes + 60 s, so the state always expires first and an expired sign-in reads as expired.
+- **Callback:** the state is taken first (GET and DELETE in one transaction: single use, whatever happens next). Then the cookie's digest is compared with the parked one (`hmac.compare_digest`). Missing, different, or a record parked before this deploy → `/?google=error&reason=browser-mismatch`, logged as `google.callback.browser_mismatch` with only `cause` (`missing`, `different`, `unbound`); nothing is exchanged with Google, no user is looked up, no session or ticket is made. Every callback answer clears the cookie on the response actually returned, except the new-address redirect, which keeps it for the next step.
+- **The sign-up ticket is bound too** (from the security review): an attacker could otherwise finish Google with a new address and send the victim `/sign-up/google#ticket=…`, so the victim would create an agency owned by the attacker's Google identity. The ticket record carries the same binding digest; `POST /auth/google/pending` and `/complete` require the cookie (a refusal is the existing `400 invalid-google-ticket`, does not spend the ticket on the read, and creates nothing); `/complete` clears the cookie.
+- **Copy:**
+  - the new reason on `/`: "That Google sign-in could not be matched to this browser. Start it again from this page." (signed in: "…, so nothing was linked. Continue with Google again and choose <address>.");
+  - the refused-ticket state on `/sign-up/google` said "That Google sign-in has expired", untrue for a ticket opened in another browser: it now says "That Google sign-in can no longer be used" / "It works once, for ten minutes, in the browser that started it. Start again from the sign-in page.", and the API's problem title and detail say "can no longer be used";
+  - `/privacy` said "One cookie."; it now says "Two cookies." and names `__Host-avp_google_flow` (set only while a Google sign-in is in progress, unreadable by scripts, at most 11 minutes, from the pinned retention constant). A fact the code now makes true; the page is otherwise unchanged and still awaits the lawyer.
+- `docs/api-contracts.md`: the cookie on start, the comparison on the callback, `browser-mismatch`, the ticket binding, and that two Google sign-ins in two tabs of one browser end with the earlier one refused (the second start replaces the cookie; it fails safe).
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS. The login CSRF is closed:** the attacker's state is bound to a value only the attacker's browser ever held, and the callback stops before the exchange, the user lookup, the ticket and the session. Checked clean: the order of checks; the comparison; the binding's secrecy (256 bits, only its digest in Redis, not in any URL, Referer or log); the cookie's attributes and its clearing on every path, including exceptions; double callbacks; fixation (a `__Host-` cookie cannot be planted from a sibling host, and onrender.com is a public suffix; local http is dev-only); pre-deploy records failing closed; the signed-in "link Google" path, which uses the same callback.
+  - **Low, taken:** the sign-up ticket (above).
+  - **Nits taken:** four comments that said the state is "never compared to a cookie"; tests for the Secure clearing header, the exception path's clearing, and a log test that reassigned its variable before asserting.
+  - **Nits left:** two tabs fail together (documented, fails safe); a boot check that the redirect URL's host equals the web app's would refuse to boot between the merge and 3.7's founder step 3, so it is a founder step instead. "Two Set-Cookie headers through the rewrite" was already probed for 3.7: both arrive.
+- **UI review (sonnet):** **PASS WITH NITS**, nothing to change: each sentence is true wherever it is shown (a valid ticket only ever works in its own browser, so "in the browser that started it" holds for every refusal); "ten minutes" and "11 minutes" match the setting and the cookie's Max-Age; the refused state renders through the same path as before. Left: `/privacy` says when the flow cookie is set, not when it is removed ("at most 11 minutes" stays true); the mismatch sentence does not mention blocked cookies, the likeliest real cause of `missing` (new copy, not taken).
+
+## Verified
+
+**API pytest 2323 → 2344 (+21); web vitest 1454 → 1455 (+1); both floors raised to match.**
+- **API** (`test_google_sign_in.py`):
+  - start sets the flow cookie (HttpOnly, SameSite=lax, Path=/, no Domain, Max-Age = TTL + 60), named `__Host-avp_google_flow` with `Secure` when Secure is on;
+  - the existing-user and new-address paths still complete when the cookie comes back, and the cookie is cleared (or kept for the ticket);
+  - **mismatch** with another browser's real flow cookie: `browser-mismatch`, no session, no exchange with Google, and the state is spent (a retry with the right cookie gets `invalid-state`);
+  - **missing** cookie: the same, logged with `cause=missing`;
+  - **replay**: a successful callback replayed with the same state and cookie gets `invalid-state`, one exchange in all;
+  - **expiry**: a 1-second TTL elapses and the right cookie still gets `invalid-state`; a record parked without a binding gets `browser-mismatch`, `cause=unbound`;
+  - the cookie is cleared on `access_denied`, a bad or missing state, the not-configured path and the exception path, and the Secure clearing header carries `Secure` and `Path=/`;
+  - the ticket: `pending` and `complete` from a browser without the cookie, or with another browser's, are refused, create nothing and (on the read) do not spend the ticket; an unbound ticket fails closed; the same browser completes;
+  - the binding never appears in a log line or a redirect URL.
+  - `test_origin_check.py`'s Google-completion scenario now issues a bound ticket and carries the cookie, as a real browser would.
+- **Web:** `browser-mismatch` in both sentence maps; the refused-ticket state's new words on the panel and the route (and never on the unreachable state); `/privacy` names both cookies and "at most 11 minutes".
+- **Negative controls:**
+  - the callback's comparison made to pass fails the two mismatch tests (`missing` and `unbound` are caught by earlier branches); restored and checked with `cmp`;
+  - the comparison removed from the callback fails 4 tests, and from `pending` and `complete` 4 more (the implementer's runs, each restored and checked).
+
+**The rest of the bar** (this tree).
+- Workers 26, shared-types 53 (0 fail), design-system 859, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`).
+- **OpenAPI and `api.gen.ts`:** the bar's check failed on the first run: the reworded docstrings of the four Google routes are their OpenAPI descriptions, and the implementer had not regenerated. Both files were regenerated (descriptions only, no shape); regenerating again changes neither, and shared-types (53, 0 fail), its typecheck and the web typecheck were re-run on them.
+- Exit codes were read from files.
+
+# Withdraw is offered whenever a report has a live link, and the share bar says when the link stops working
+
+**2026-10-02, the ninth entry of the day; branch `pilot-fixes`, the founder's pilot-blockers follow-up (launch checklist 3.25).** One item, one commit; it closes 3.24's Medium (same PR).
+
+**Render: nothing to set. No migration, no new dependency or outbound host.** One response field added (below); OpenAPI and `api.gen.ts` regenerated.
+
+Drift check (north-star §8): Layer 1, Delivery (the share link); lifecycle phase: Activation (Epic 9), a pilot agency sending, and taking back, a report.
+
+## 1. What changed
+
+- **Founder decision (final):** Withdraw is available without minting a link first, whenever the scan has a live link; the lead says links last 30 days from when they are created.
+- **API:** the signed-in report (`GET /scans/{scanId}/report`) carries `shareExpiresAt`: the live link's expiry (a token set and an expiry in the future), else null. It is always null on the public shared report and its PDF, by the same blanking `scanErrorCode` uses, and it never carries the token or the URL.
+- **The share bar** (`ShareLinkBar.tsx`, given `shareExpiresAt` by the report page):
+  - the lead: "Creates a link anyone can open without an account. Links last 30 days from when they are created. Only share it with the client this report is about." (30 from the constant the legal pages pin to the API);
+  - whenever a link is live — from the payload, or after "Get shareable link" in this visit — one line, "The link works until <date>.", and **Withdraw link** with its existing confirm step. No press of "Get shareable link" is needed first. After a mint the date is the mint's `expiresAt`; after a withdrawal the line and the button go;
+  - a failed "Get shareable link" while a link is live keeps the line and Withdraw and shows the failure beside them;
+  - a failed scan (3.24) shows its sentence and no Get button, and, if a link minted earlier is still live, the line and Withdraw too — also after a 409. This is what makes such a link reachable again.
+- `docs/api-contracts.md`: `shareExpiresAt`.
+
+## 2. The review
+
+- **UI review (sonnet):** **PASS WITH NITS**, with two Mediums, both fixed:
+  - "Get shareable link" stayed enabled while a withdrawal was in flight, so the two requests could race and the screen could show the opposite of the server: it is now disabled while a withdrawal is confirming or running;
+  - the end date was the expiry's UTC calendar day with no time, so a reader in Sydney or New York could be shown the wrong day, and "until 4 Nov" read as the end of that day: the line now uses the product's stamp, "The link works until 04 Nov 2026, 09:30 UTC.".
+  - **Lows taken:** a failed scan with a live link said it "cannot be shared" just above the link's end date; it now adds "Its existing link works until it is withdrawn or ends."; a 409 refusal is announced (the lead is an always-mounted polite live region) although the button leaves the page; the date line stays during "Creating…" (Withdraw disabled meanwhile); a non-null assertion replaced by a small `ReadyLink` component.
+  - **Left:** after "Get shareable link" from a link live in the payload, the button leaves the page and focus falls to the page with nothing announced. Moving focus to the new link field would overturn existing tests that pin "a link only just made does not take focus"; a status message would be new copy. Listed for the founder. The re-press question (below) was judged not misleading, because the end date is always shown while a link is live.
+
+## Found, not fixed
+
+- **Pressing "Get shareable link" on a live link still moves its end to 30 days from that press** (Epic 9.21: the same token, a new expiry), while the new lead says links last 30 days from when they are created. The bar shows the real end date after every press. Founder: keep it, or have a press on a live link return it unchanged.
+
+## Verified
+
+**API pytest 2344 → 2350 (+6); web vitest 1455 → 1473 (+18); both floors raised to match.**
+- **API** (`test_share_expiry_on_report.py`, new): never shared → null; a live link → the mint's `expiresAt`, with no token in the response; expired → null; after the withdrawal → null; a failed scan shared earlier still reports its live link; always null on the public report and its PDF payload. `test_share_link.py`'s byte-identical test lets the field differ and asserts the public one is null.
+- **Web** (`ShareLinkBar.liveLink.test.tsx`, new; the lead's assertions in `ShareLinkBar.test.tsx` updated): Withdraw and the end date with no mint, and Get still offered; confirm, withdraw and keep from there; the date after a mint, from a live and from a no-link start; nothing live → no Withdraw and no date; a failed Get while live keeps both and shows the failure; a failed scan with and without a live link, and a 409 while live; Get disabled during a withdrawal; the stamp format; the date line during "Creating…".
+- **Negative controls:**
+  - the public blanking removed fails 2 tests (the public payload and the byte-identical test); restored and checked with `cmp`;
+  - the bar made to ignore `shareExpiresAt` fails 7 of the 12 live-link tests (the implementer's run, restored and checked).
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, shared-types 53 (0 fail), design-system 859, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`).
+- OpenAPI and `api.gen.ts` were regenerated for `shareExpiresAt`; regenerating again changes neither.
+- Exit codes were read from files.
+
+# A request the crawler refuses before sending it is skipped and the crawl goes on; anything that reached a private address still ends the run
+
+**2026-10-02, the tenth entry of the day; branch `pilot-fixes`, the founder's pilot-blockers follow-up (launch checklist 3.27).** One item, one commit.
+
+**Render: nothing to set. No endpoint, schema, dependency or outbound host change.**
+
+Drift check (north-star §8): Layer 0, Trust substrate (the crawler's egress guard), feeding Layer 2's technical audit; lifecycle phase: Activation (Epic 9), a pilot agency's first scan of a real site.
+
+## 1. What changed
+
+- **Founder decision (final):** "a request refused before it is sent is aborted on its own and the crawl continues; a connected-address refusal detected after the fact still ends the run and keeps nothing." Why it is safe: a request refused before it is sent never leaves the machine, so nothing from a private network can have been read; a request that did reach a private address means the run's facts cannot be trusted.
+- **The browser** (`BrowserGuard.handle`, `services/egress.py`): a refusal is recorded (and so ends the run as `ADDRESS_NOT_PUBLIC`, keeping nothing) only for the **main frame's own navigation** — the site itself, or a page the crawl goes to. If the frame cannot be read, it fails closed and is treated as one. A page's sub-resources (images, scripts, styles, fetches, fonts) and its iframes' navigations are aborted, logged as `egress.request_refused` with the host only (the first 10 distinct hosts per run, then one `egress.request_refused_more` with a count and no hosts), and the page and the crawl go on.
+- **Unchanged, and still ending the run:** the connected-address check (Chromium reports it connected to a private address), the redirect hops and landing of a navigation, robots.txt and its redirects (the crawler cannot learn the site's rules, so it must not crawl), the site's own start address, and a final listener that never answered (`EgressUnverified`).
+- **The sitemap** (`technical_audit.py`): a `sitemap.xml` fetch or redirect hop refused before it is sent is treated as the existing network-error outcome (no sitemap read), logged by host, and the audit goes on. A sitemap that only resolves to a private network cannot be read from the public internet either, which is what the check measures; a robots.txt reached through the sitemap's redirect is skipped the same way, since it too was refused before connecting.
+- **From the security review:**
+  - **`SharedWorker` is disabled** in the guard's init script. Playwright detaches shared-worker targets, so their requests were neither routed nor reported. Confirmed in a real Chromium: without the script `new SharedWorker()` ran and its script was fetched unrouted; with it, `SharedWorker` is undefined and the constructor throws.
+  - **A sub-resource's redirect hop into a private address is now caught even when it never answers** (a refused or reset connection produces no response for the connected-address check to read): a `request` listener judges every request that has a `redirected_from`, as `check_landing` judges a navigation's hops, and `finish()` waits for it.
+  - A cached refusal is raised as a fresh exception each time (re-raising one object grew its traceback and kept frames alive across a run that now continues), and the refusal log is capped as above.
+- **Copy:** every `ADDRESS_NOT_PUBLIC` sentence (the web's `strings.ts`, `report_narrative.py`, the shared fixture) already says "the site's address, or an address the site sent the crawler to", which is still true; unchanged. `/crawler`, `/privacy` and `/terms` say nothing about this behaviour. `docs/api-contracts.md` now says what ends a run and what is skipped, and "an address Chromium reports it connected to".
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS.** The change cannot let anything that reached a private address be kept: both branches abort before anything is sent, and misclassifying the main frame could only change the reason code, not what is kept. Checked clean: main-frame detection (`location=`, meta refresh, form POST and `target=_top` count as main-frame navigations and end the run; popups end it too); the fail-closed path; sub-resource and iframe redirects with a response (caught by the connected-address check); service workers blocked, WebSockets closed, the HTTP cache off while intercepting; the sitemap change (refused before connecting, nothing read is kept); host-only logs.
+  - **Medium (pre-existing), fixed:** `SharedWorker` traffic was neither routed nor reported (above).
+  - **Medium (pre-existing), NOT fixed: a speculation-rules prerender.** A page's `<script type="speculationrules">` prerender is fetched by Chromium in a target Playwright detaches, so the request is neither routed through the guard nor reported to it (probed in a real Chromium 151: the prerender's GET reached the server and never reached `handle`; `<link rel="prefetch">` is routed; `<link rel="prerender">` is not fetched). No launch switch stops it without breaking interception: Playwright passes its own `--disable-features` list (which interception on redirects needs) and appends ours after it, so ours would replace it; `--disable-blink-features=SpeculationRules`, `Prerender2` and `SpeculationRulesPrefetchProxy` change nothing. What it allows: a crawled page can make the crawler's browser send a request to a private address; the prerendered response is not read into the page the crawl reads, but the request is sent. The network-level egress control (3.2) closes it. In the founder's report.
+  - **Lows taken:** the sub-resource redirect hop with no answer; "an address the browser actually connected to" in the contract (now "Chromium reports it connected to"); the refusal log cap; the fresh exception; tests (a main-frame navigation refused after the home page was read keeps nothing, which replaces the removed sub-resource case; a host first refused as a sub-resource and later hit by a navigation hop still ends the run; `is_navigation_request()` raising fails closed); the module docstring, the robots.txt comment, and abort before logging.
+
+## Verified
+
+**API pytest 2350 → 2367 (+17); floor raised to match.**
+- **Unit** (`test_egress.py`, with fake routes, requests and frames): a main-frame navigation refused before sending is recorded and aborted; a sub-resource, a main-frame sub-resource that is not a navigation, and a sub-frame navigation are aborted and not recorded, and logged once with the host only; reading the frame or `is_navigation_request()` raising fails closed; a public request falls through; the installed init script disables `SharedWorker`; a redirect hop into a private address is recorded from the `request` listener, a non-hop or a public hop is not, and `finish()` waits for a hop still being judged; a host first refused as a sub-resource still ends the run on a later landing; refusals are raised fresh each time; 13 refused hosts log 10 by name and one count.
+- **Whole runs** (`test_robots_obeyed.py`, crawl and audit, with a fake Chromium): a private sub-resource and a private iframe are never requested, the crawl and the audit succeed with their facts, and the log has `egress.request_refused` with the host and no URL or query; a sitemap redirecting into a private address is skipped (no sitemap read, nothing from the private host, the audit's facts kept); a main-frame navigation refused after the home page was read keeps nothing. Unchanged and still passing: the private start name, homepage redirects into private names or the metadata address, a navigation's redirect chain through a private host, a landing on a private address, the connected-address cases, robots.txt redirecting into a private address, and finish/settle/unverified.
+- **Renamed, because what they prove changed:** `…_aborted_and_ends_the_crawl` → `…_aborted_and_the_crawl_continues`, `test_a_private_subresource` → `…_is_aborted_and_the_audit_continues`, and the sitemap redirect test; two tests that used a sub-resource to prove "refused after facts were read" now use a connected-address refusal.
+- **Negative controls:**
+  - the old strict rule restored in `handle` (every refusal recorded) fails 9 tests; restored and checked with `cmp`;
+  - the main-frame check always false fails the main-frame test; the sitemap refusal raised again fails the sitemap test; the redirect-hop listener removed fails 2; one cached exception object fails 2 (the implementer's runs, each restored and checked).
+- **In a real Chromium** (a throwaway script, not committed): `SharedWorker` undefined with the guard installed and its script never fetched; the speculation-rules prerender fetched outside the guard (above).
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, shared-types 53 (0 fail), design-system 859, web 1473, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`).
+- OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# Tertiary text reaches 4.5:1 on every surface it sits on, at rest and under the hover wash, in both themes
+
+**2026-10-02, the eleventh entry of the day; branch `pilot-fixes`, the founder's pilot-blockers follow-up (launch checklist 3.17, the contrast half).** One item, one commit.
+
+**Render: nothing to set. Design-system tokens only; no endpoint, schema, dependency or outbound host change.**
+
+Drift check (north-star §8): the design system (Layer 1, Delivery, every working screen); lifecycle phase: Activation (Epic 9), the screens a pilot agency works in.
+
+## 1. What changed
+
+- **Dark `--avp-text-tertiary`** `oklch(0.58 0.012 75)` → `oklch(0.66 0.012 75)`. It measured 4.09:1 on seated cards (the checklist's "about 4.1"), 3.73 on raised and 4.42 on the ground.
+- **Light `--avp-text-tertiary`** `oklch(0.56 0.014 75)` → `oklch(0.515 0.014 75)`. Not in the checklist row, found while measuring: it was 4.33:1 on the page ground and 4.09 on sunken. The comment above it claimed "4.6:1 on the ground"; it now states what is true.
+- **Under the hover wash** (`--avp-surface-hover`, 3% black in light and 4% white in dark, on table rows, gap-grid rows and nav items) the first values chosen (0.53 light, 0.65 dark) still dipped to 4.34 and 4.41; the UI review caught it, and the values above clear it.
+- Now (seated / raised / ground / sunken, at rest then hovered): light 5.55 / 5.64 / 5.24 / 4.94, hovered 5.20 / 5.28 / 4.91 / 4.63; dark 5.63 / 5.14 / 6.09 / 6.36, hovered 5.08 / 4.59 / 5.59 / 5.92. Tertiary stays the dimmer step: light secondary is 6.73:1 on seated, dark secondary 7.06.
+- `src/tokens/color.ts` mirrors both values (the token-parity test reads it).
+- `contrast.test.ts` (added with 3.26) asserts tertiary at 4.5:1 or more on the four surfaces, at rest and with the hover wash composited over each, in both themes. Void (fills only: meter tracks, dots, checkbox fill) and desk (the report frame's backdrop) carry no text and are left out on purpose, with a comment.
+- The report's own tertiary (`.avp-report`, ink-400) is unchanged (below).
+
+## 2. The review
+
+- **UI review (sonnet): PASS WITH NITS**, with one Medium, taken: the hover wash (above). Checked: the hierarchy still reads in both themes; placeholders (which use tertiary, and which WCAG does not exempt) now measure 5.2 light and 5.4 dark; disabled controls use opacity and are unaffected; the gap-grid's tertiary-tinted fill and the neutral verdict segment change slightly and stay above 3:1 as non-text; `reportIsolation` and token parity pass.
+
+## Found, not fixed
+
+- **The report's tertiary text** (ink-400 on paper) measures 3.59:1 on paper-000, 3.42 on paper-050 and 3.23 on paper-100, under 4.5:1. Darkening it changes the printed report's look; a founder decision.
+- Light tertiary against light secondary is a smaller step than before (5.55 against 6.73 on seated, and a different hue); a design note, not a defect.
+
+## Verified
+
+**Design-system vitest 859 → 875 (+16); floor raised to match.**
+- `contrast.test.ts`: tertiary at 4.5:1 or more on seated, raised, ground and sunken in the light and dark themes (8), and on each with the hover wash composited over it (8). Before the change the resting cases failed 5 (dark seated, raised and ground; light ground and sunken) and the hover cases 2 more at the first values chosen (light hovered sunken, dark hovered raised).
+- The token-parity test (`tokens.test.ts`, TS against CSS) and `reportIsolation` pass.
+- **Negative control:** the old dark value (`oklch(0.58 0.012 75)`) put back in `tokens.css` fails 7 of the 29 contrast tests; restored and checked with `cmp`.
+
+**The rest of the bar** (this tree, one run).
+- API 2367, workers 26, shared-types 53 (0 fail), web 1473, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; the styleguide builds; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`).
+- OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# The launch checklist says what `pilot-fixes` closed, the order of the founder's steps to merge it, and what is still open
+
+**2026-10-02, the twelfth entry of the day; branch `pilot-fixes`, the founder's pilot-blockers follow-up (Finish).** Documentation only; one commit.
+
+**Render: the founder's steps for this branch are checklist 1.1c, in order** (the web service's `API_PROXY_TARGET` and the Google redirect URI before the merge; `GOOGLE_OAUTH_REDIRECT_URL` and the stale variables after it). No code, test, schema or dependency change.
+
+Drift check (north-star §8): no product layer; the launch plan. Lifecycle phase: Activation (Epic 9), what stands between the code and the first pilots.
+
+## 1. What changed
+
+- **Status line:** PRs #2, #3 and #4 are merged (`main` at `f1b7565`); this branch's PR targets `main`.
+- **1.1b** (`pre-pilot`'s merge) is marked merged; if its deployed check was not run, 1.1c's step 7 covers it.
+- **1.1c, new: merge `pilot-fixes`.** Before: copy the API's internal address (stop if Render shows none), set `API_PROXY_TARGET` on the web service, add the web host's Google callback in Google Cloud Console; merge at a quiet moment (nobody can sign in between the two deploys; everyone is signed out once). After: set `GOOGLE_OAUTH_REDIRECT_URL`, delete the three ignored variables, check sign-in, Google sign-in, the `__Host-avp_session` cookie, a scan and a share link with Withdraw in Chrome and Safari, run 1.3, remove the old redirect URI.
+- **1.3** now probes through the web host and checks a 429 from a second network, so one shared bucket is not read as safe (the 3.7 security review's Medium).
+- **Rows:** 3.7, 3.17 (both halves), 3.21–3.27 say **Done** with their commits; 3.2 records the speculation-rules prerender gap (and the shared-worker one, closed) that only the network-level control closes.
+- **New rows for the founder:** 3.28 a press of "Get shareable link" on a live link moves its end; 3.29 a link minted before a scan failed keeps serving; 3.30 a failed scan's score outside the dashboard and the report; 3.31 the report's own tertiary text under 4.5:1; 3.32 the client Technical screen's raw audit code; 3.33 two small focus details.
+
+## Verified
+
+- Every commit named in the rows is on the branch (`git log`), and each row's claim matches its build-log entry above.
+- The full bar on this tree, the branch's last (one run, exit codes read from files):
+  - API pytest 2367, workers 26, shared-types 53 (0 fail), design-system 875, web 1473; mypy 47 (ceiling 50); all six count gates through `assert_count.py` pass.
+  - ruff clean; all typechecks clean; the styleguide builds.
+  - Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database.
+  - The Python licence audit passes in both environments; `pnpm licenses list --json` audited by `js_license_audit.py`: 236 packages, 233 ok, 3 REVIEW (unchanged; none added by this branch), PASS.
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- **Over the branch:** API pytest 2226 → 2367, web vitest 1399 → 1473, design-system vitest 846 → 875; workers, shared-types and the mypy count unchanged.

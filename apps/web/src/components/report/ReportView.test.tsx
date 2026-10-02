@@ -15,7 +15,13 @@ import { BEAT_SEQUENCE } from '@avp/design-system';
 import { ReportView } from './ReportView';
 import type { Report } from '@avp/shared-types';
 import { deriveNarrative } from '@/lib/report/derive';
-import { EXCLUSION_REASON, checkLabel } from '@/lib/report/strings';
+import {
+  AUDIT_FAILURE_GENERIC,
+  AUDIT_FAILURE_SENTENCE,
+  EXCLUSION_REASON,
+  auditFailureSentence,
+  checkLabel,
+} from '@/lib/report/strings';
 import {
   addressNotPublicReport,
   crawlDisallowedReport,
@@ -178,7 +184,34 @@ describe('degraded data renders as degraded, never as bad', () => {
     const html = render(failedAuditReport);
     expect(html).toContain('The site could not be read');
     expect(html).toContain('is not a site with a bad technical foundation');
-    expect(html).toContain('FETCH_FAILED');
+    expect(html).not.toContain('FETCH_FAILED');
+    expect(html).toContain(AUDIT_FAILURE_SENTENCE.FETCH_FAILED);
+  });
+
+  it('says one plain sentence per failure code, and never the code, signed in or public', () => {
+    const withCode = (errorCode: string): Report => ({
+      ...failedAuditReport,
+      audit: { ...failedAuditReport.audit!, errorCode },
+    });
+    const cases: [string, string][] = [
+      ['BROWSER_ERROR', AUDIT_FAILURE_SENTENCE.BROWSER_ERROR!],
+      ['FETCH_FAILED', AUDIT_FAILURE_SENTENCE.FETCH_FAILED!],
+      ['TIMEOUT', AUDIT_FAILURE_SENTENCE.TIMEOUT!],
+      ['HTTP_503', auditFailureSentence('HTTP_503')],
+      ['SOMETHING_NEW', auditFailureSentence('SOMETHING_NEW')],
+    ];
+    expect(cases[3]![1]).toContain('HTTP 503');
+    expect(cases[4]![1]).toBe(AUDIT_FAILURE_GENERIC);
+    for (const [code, sentence] of cases) {
+      for (const html of [
+        render(withCode(code)),
+        renderToStaticMarkup(<ReportView report={withCode(code)} publicView animate={false} />),
+      ]) {
+        expect(html, code).toContain(sentence);
+        expect(html, code).not.toContain(code);
+        expect(html, code).not.toContain('(HTTP_');
+      }
+    }
   });
 
   it('a missing audit says the check has not run', () => {

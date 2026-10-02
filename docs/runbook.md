@@ -138,11 +138,15 @@ leftmost `X-Forwarded-For` entry. If Render appends to a client-sent
 `X-Forwarded-For` instead of replacing it, anyone can pick their own bucket.
 The per-email limits hold either way.
 
+Since branch `pilot-fixes` the browser reaches the API through the web app
+(`/api/v1` on the web host, a Next.js rewrite to `API_PROXY_TARGET`), so the
+probe goes to the **web** host: that is the path every real request takes.
+
 1. **Why.** Spoof-safe per-IP rate limiting requires that the server trusts
    a proxy header Render adds, not one a client controls.
 
 2. **Probe the default.** From one machine, send 11 `POST
-   https://ai-visibility-platform-5gk4.onrender.com/api/v1/auth/reset-password/request`
+   https://ai-visibility-platform-1.onrender.com/api/v1/auth/reset-password/request`
    requests, each with a different made-up email address (for example
    `probe1@example.com` … `probe11@example.com`) and a different header
    `X-Forwarded-For: 198.51.100.N`. Use:
@@ -152,15 +156,20 @@ The per-email limits hold either way.
      -H 'Content-Type: application/json' \
      -H 'X-Forwarded-For: 198.51.100.N' \
      --data '{"email":"probeN@example.com"}' \
-     https://ai-visibility-platform-5gk4.onrender.com/api/v1/auth/reset-password/request
+     https://ai-visibility-platform-1.onrender.com/api/v1/auth/reset-password/request
    ```
 
    Replace N each time (1 through 11). Email is off in production, so nothing
    is sent.
 
 3. **Read the result.**
-   - If the 11th answers **429**, Render replaces the header, and the default
-     is safe: stop here.
+   - If the 11th answers **429**, send one more request from a **different
+     network** (a phone hotspot, say) without the header override. It must
+     answer **200**: then Render replaces the header and the default is safe;
+     stop here. A **429** means every request shares one bucket: on the web
+     service, check that `API_PROXY_TARGET` is the API's internal address
+     (Render → API service → Connect → Internal), not its public URL, and
+     probe again after the redeploy.
    - If it answers **200**, the header can be spoofed; go on.
 
 4. **Switch to Cloudflare's header.** On the Render API service, open

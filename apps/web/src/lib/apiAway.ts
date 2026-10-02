@@ -19,3 +19,11 @@ import { ApiProblem } from '@/lib/api';
 export function apiWasAway(err: unknown): boolean {
   return !(err instanceof ApiProblem) || !err.status || err.status >= 500;
 }
+
+/**
+ * What a form says when `apiWasAway` is true: the one sentence, so no screen
+ * retypes it or puts a developer's instruction in its place. Submitting again
+ * is the way to try again.
+ */
+export const API_AWAY_SENTENCE =
+  'We could not reach the server. Check your connection and try again.';

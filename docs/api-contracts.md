@@ -35,7 +35,14 @@ intent; the schema defines the shapes.
 
 ### Authentication
 
-An **httpOnly session cookie** (`avp_session`), not a bearer token.
+An **httpOnly session cookie**, not a bearer token. Deployed it is named
+`__Host-avp_session` with the default `SESSION_COOKIE_NAME` (`avp_session` on
+local http), `Secure`, `SameSite=Lax`, `Path=/`, with no `Domain`. It is
+first-party: the web app serves this API under its own origin at `/api/v1`, so
+every call the web app makes is same-origin. The one cross-site step is
+Google's redirect back to the sign-in callback, a top-level navigation, which
+is why the cookie is `Lax` and not `Strict`.
+Below, "the session cookie" means that cookie.
 
 Chosen because this is seat-based software: when an agency removes a seat, that
 person's access must end immediately. A JWT cannot be revoked without a
@@ -69,7 +76,15 @@ refused as well. A refusal is `403 origin-not-allowed`, answered before any rout
 runs, and nothing changes. Browsers send `Origin` on these requests themselves,
 so the web app needs no change. Not checked: reads (`GET`), a write with neither
 the session cookie nor an `Origin` (a server or command-line caller), and
-`POST /billing/webhook`, which Stripe signs instead.
+`POST /billing/webhook` (that method and path only; a `PUT`, `PATCH` or `DELETE`
+there is checked like any write), which Stripe signs instead. The refusal's log
+line (`security.origin_refused`) carries the method, a redacted path,
+`origin_present` and, when an `Origin` was sent, either `origin_host` (the
+lower-cased DNS host name only) or `origin_kind` (`ip`, `opaque` or `unparsed`);
+never the full header, a port, userinfo or an IP literal (a DNS name that
+contains an address, such as `10-0-0-1.sslip.io`, is still a name and is logged).
+Only a bare origin is read as a host; userinfo, a path, a query or a fragment
+make it `unparsed`.
 
 ### Error types
 
@@ -79,9 +94,10 @@ the session cookie nor an `Origin` (a server or command-line caller), and
 | `/problems/authentication-required` | 401 | No, expired, or invalid session |
 | `/problems/invalid-credentials` | 401 | Login failed |
 | `/problems/permission-denied` | 403 | Authenticated but wrong role |
-| `/problems/origin-not-allowed` | 403 | A `POST`/`PUT`/`PATCH`/`DELETE` whose `Origin` is not in `CORS_ALLOW_ORIGINS` (`null` included), or that carries the session cookie with no `Origin` (2026-10-01). Not applied to `POST /billing/webhook` |
+| `/problems/origin-not-allowed` | 403 | A `POST`/`PUT`/`PATCH`/`DELETE` whose `Origin` is not in `CORS_ALLOW_ORIGINS` (`null` included), or that carries the session cookie with no `Origin` (2026-10-01). Not applied to `POST /billing/webhook` (POST only) |
 | `/problems/not-found` | 404 | No such resource in the caller's agency |
 | `/problems/conflict` | 409 | Generic conflict |
+| `/problems/failed-scan-not-shareable` | 409 | `POST /scans/{scanId}/share` for a scan whose status is `failed`. `detail` is "This scan failed, so its report cannot be shared." (2026-10-02, checklist 3.24) |
 | `/problems/email-already-registered` | 409 | Signup email in use |
 | `/problems/seat-limit-reached` | 409 | Carries `seatsUsed`, `seatLimit` |
 | `/problems/subscription-already-active` | 409 | Checkout refused: the agency's subscription is `active` or `trialing`. `detail` points at the billing portal |
@@ -162,7 +178,7 @@ Password rules follow NIST SP 800-63B: 12–256 characters, no composition
 requirements. Composition rules push users toward predictable substitutions.
 A password using fewer than 5 distinct characters is rejected.
 
-**Response `201`** — body is `MeOut` (below). Sets the `avp_session` cookie.
+**Response `201`** — body is `MeOut` (below). Sets the session cookie.
 
 **Errors:** `429 rate-limited` (with `Retry-After` header in seconds; detail "Too many attempts. Try again in N minutes."; 5 per email and 10 per IP per hour, checked before the 409), `503 service-unavailable` (Redis down), `409 email-already-registered`, `422 validation-failed`.
 
@@ -173,7 +189,7 @@ A password using fewer than 5 distinct characters is rejected.
 { "email": "dana@meridiansearch.example", "password": "..." }
 ```
 
-**Response `200`** — `MeOut`. Sets the `avp_session` cookie.
+**Response `200`** — `MeOut`. Sets the session cookie.
 
 **Errors:** `429 rate-limited` (with `Retry-After` header in seconds; detail "Too many attempts. Try again in N minutes."; 10 failed attempts per email and 30 per IP per 15 minutes; successful logins are given back), `503 service-unavailable` (Redis down), `401 invalid-credentials`.
 
@@ -210,7 +226,7 @@ credential being *presented*, not set, and applying the length rule to it would
 `422` on a password that predates a rule change and leak which submitted strings
 are even eligible to be somebody's password.
 
-**Response `200`** — `MeOut`. Sets a NEW `avp_session` cookie.
+**Response `200`** — `MeOut`. Sets a NEW session cookie.
 
 **The current password is re-verified server-side even though the caller holds a
 valid session.** A session proves somebody got in once; it does not prove they
@@ -369,7 +385,7 @@ Password rules are the SIGN-UP rules, imported rather than restated — the same
 `Password` annotation `sign-up` and `reset-password/confirm` carry. A path that
 sets a first password with weaker rules than registration is the way in.
 
-**Response `200`** — `MeOut`. Sets the `avp_session` cookie.
+**Response `200`** — `MeOut`. Sets the session cookie.
 
 **`200`, not `201`:** nothing is created. The `User` row was inserted when the
 invitation was sent and has occupied a seat ever since; this fills it.
@@ -450,7 +466,11 @@ new address creates nothing until the agency is named.
 ##### `GET /api/v1/auth/google/start`
 A browser navigation. **`302`** to Google's authorization endpoint carrying
 `state`, `nonce`, `code_challenge` (S256), `scope=openid email profile`,
-`prompt=select_account`. **Errors:** `503 google-sign-in-not-configured`.
+`prompt=select_account`. The response also sets the **flow cookie**
+(`__Host-avp_google_flow` when the session cookie is Secure, else
+`avp_google_flow`): a random value bound to the parked state, `HttpOnly`,
+`SameSite=Lax`, `Path=/`, no `Domain`, `Max-Age` = sign-in TTL + 60 s (600 + 60).
+**Errors:** `503 google-sign-in-not-configured`.
 
 ##### `GET /api/v1/auth/google/callback?code&state` (or `error`)
 Where Google returns the browser. **Always `302`**, never a problem
@@ -462,7 +482,12 @@ document — a person, not a script, is standing here:
 | new address | `{PUBLIC_WEB_BASE_URL}/sign-up/google#ticket=…` (ten minutes, single use; in the fragment, never the query) |
 | anything else | `{PUBLIC_WEB_BASE_URL}/?google=error&reason=…` |
 
-`reason` is one of `denied`, `invalid-state`, `exchange-failed`,
+The callback consumes the state (single use), then compares the flow cookie
+with the digest parked at `/start`; a missing cookie, a flow parked without a
+digest, or a different browser's cookie is `browser-mismatch` and no code is
+exchanged. Every callback response clears the flow cookie.
+
+`reason` is one of `denied`, `invalid-state`, `browser-mismatch`, `exchange-failed`,
 `email-unverified`, `account-suspended`, `email-claimed`,
 `invitation-expired`, `account-unavailable`, `not-configured`, or
 `unavailable` (something under the route — Redis, Postgres, the session
@@ -482,8 +507,11 @@ _Note 2026-10-01:_ the legacy `?ticket=` fallback in
 **Request:** `{ "ticket": "…" }` (was `GET ?ticket=…` until 2026-10-01; a `GET`
 is now `405`, so the ticket is never in a URL).
 **Response `200`** — `GooglePendingOut`: `{ "email": "…", "suggestedName": "…" }`.
-Read-only; the ticket is not spent. **Errors:** `400 invalid-google-ticket`
-for unknown, used and expired alike.
+Read-only; the ticket is not spent. The ticket is bound to the browser that
+signed in: the callback's new-address redirect keeps the flow cookie (renewed,
+Max-Age = TTL + 60) and the ticket record carries its digest, so the cookie
+must come with this call. **Errors:** `400 invalid-google-ticket` for unknown,
+used, expired, and a missing or another browser's flow cookie alike.
 
 ##### `POST /api/v1/auth/google/complete`
 **Request:** `{ "ticket": "…", "agencyName": "…", "fullName": "…" }` —
@@ -491,8 +519,11 @@ the two things `sign-up` asks that Google cannot answer. No email (the
 ticket's), no password.
 
 **Response `201`** — `MeOut`, with the session cookie set. The agency and
-its OWNER are created, `signInMethods: ["google"]`. The ticket is consumed.
-**Errors:** `400 invalid-google-ticket`, `409 email-already-registered`,
+its OWNER are created, `signInMethods: ["google"]`. The ticket is consumed
+first, then the flow cookie must match it (else `400`, nothing created). Every
+response, success or refusal, clears the flow cookie. Two Google sign-ins in
+two tabs of one browser share one flow cookie, so the earlier one is refused
+(`browser-mismatch`); accepted, it fails safe. **Errors:** `400 invalid-google-ticket`, `409 email-already-registered`,
 `422 validation-failed`.
 
 ---
@@ -1029,7 +1060,9 @@ getting-started checklist rather than the server storing per-step flags:
 - `scoredScanCount` — scans of this agency with a `SCORED` score. Counted
   over the whole history, not the `recentScans` page, so a scored scan that
   has scrolled off the page still counts. `INSUFFICIENT_DATA` is not a score
-  and is not counted.
+  and is not counted. **A `failed` scan is not counted**, even if it kept a score
+  row (a deadline that came after scoring): its score is never shown or counted
+  (checklist 3.24).
 - `sharedScanCount` — scans with a live share link (`share_token IS NOT
   NULL`). Minting sets it, revocation clears it, expiry does not: the count
   describes the account as it is, not a history of links that once existed.
@@ -1070,7 +1103,8 @@ reintroduce binary-float error on the wire, which `docs/scoring-spec.md`
 determinism rule 3 exists to prevent. It is `null` both when a scan is unscored
 and when scoring returned `INSUFFICIENT_DATA` — **the UI must render null as
 "—", never as 0.** An unrunnable scan must never appear to a client as a bad
-score.
+score. **It is also `null` for every `failed` scan**, whatever score row the scan
+kept (checklist 3.24).
 
 `errorCode` (2026-10-01) is the scan's own code, the same one
 `GET /scans/{scanId}` returns, or `null`: why a `partial` or `failed` scan ended
@@ -1167,7 +1201,7 @@ the database by `ck_clients_industry_matches_classification_status`.
 | `PROVIDER_REFUSED` | Model declined to answer |
 | `PROVIDER_SCHEMA_VIOLATION` | Model answered, but its answer did not fit the classifier's schema (2026-09-11) |
 | `ROBOTS_DISALLOWED` | The site's robots.txt forbids AVPScanBot its homepage, so nothing was read (2026-09-29) |
-| `ADDRESS_NOT_PUBLIC` | The site's address, or an address the site sent the crawler to (a redirect, or something a page loads), is not on the public internet (private, loopback, link-local, carrier-grade NAT, multicast, reserved or unspecified, including those forms inside an IPv6 address), so the crawl stopped and nothing was kept (2026-10-01) |
+| `ADDRESS_NOT_PUBLIC` | The site's address, an address the site sent the crawler to (a redirect hop or landing of a navigation, or a robots.txt redirect), or an address Chromium reports it connected to, is not on the public internet (private, loopback, link-local, carrier-grade NAT, multicast, reserved or unspecified, including those forms inside an IPv6 address), so the crawl stopped and nothing was kept (2026-10-01) |
 
 `industryConfidenceScore` is a **string-encoded decimal or `null`**
 (`NUMERIC(4,3)`), for the same reason as `compositeScore`: a JSON number is an
@@ -1851,12 +1885,13 @@ read the site rather than failed to:
   homepage. Page checks are `not_applicable` with that `detailCode`; a blanket
   `Disallow: /` under `User-agent: *` still fails `indexable` with
   `ROBOTS_TXT_DISALLOW`, because robots.txt itself was read.
-- `ADDRESS_NOT_PUBLIC` (2026-10-01): the site's address, an address it
-  redirected to, or an address the page asked the browser to load, is not on
-  the public internet. The crawler's own fetches (robots.txt, sitemap.xml and
-  each redirect hop) are checked before they are sent, and any request or
-  landing of the browser's that is not public ends the run. Nothing is kept,
-  so every check is `not_applicable` with that `detailCode`.
+- `ADDRESS_NOT_PUBLIC` (2026-10-01): the run ends when the site's own
+  address, a navigation's redirect hop or landing, robots.txt or its redirect,
+  or an address Chromium reports it connected to is not on the public
+  internet. Nothing is kept, so every check is `not_applicable` with that
+  `detailCode`. A page's sub-resource or iframe, and the sitemap (or its
+  redirect), refused before it is sent is skipped and the run goes on; a
+  skipped sitemap reads as not found.
 
 **Core Web Vitals are measured and reported, but carry NO weight in the
 sub-score.** `lcpMs` and `cls` are single-cold-load **lab** measurements, not
@@ -1991,6 +2026,12 @@ shared report (the link a prospect opens, and its PDF) the field is always
 `null`: the sentence speaks about the agency's own scan allowance, and the code
 is not the link holder's business.
 
+**`shareExpiresAt` (2026-10-02, checklist 3.25)** is when this scan's *live* share
+link ends, or `null`: the token is set and its expiry is in the future. Never the
+token or the URL. It lets the report page offer "Withdraw link" without minting
+one first. `null` for a scan never shared, a withdrawn link and an expired one,
+and always `null` on the shared report and its PDF, like `scanErrorCode`.
+
 **`dimensions` is ordered heaviest-weight first.** The Luminance Ledger stacks
 the heaviest segment at the bottom and consumes this list directly, so the order
 is part of the visualisation's contract, not a display preference.
@@ -2059,6 +2100,13 @@ had no absent answer either until this epic added two.
 ran".** That is distinct from a score whose `status` is `insufficient_data`,
 which means "ran, and could not be scored". Both are distinct from zero. A
 report renders all three states differently.
+
+**A `failed` scan's report carries no score** (checklist 3.24), even if the scan
+kept a score row: `score` is `null`, `dimensions` is `[]`, each competitor's
+`mentionRate` and `shareOfVoice` are `null`, `audit.technicalFoundation` is
+`null` and every `actionItems[].pointsUpside` is `null`. The fixes themselves
+stay. The same holds on the shared report and its PDF. The row is not changed or
+deleted; it is not read.
 
 **`outranksSubject`** is arithmetic over stored counts and ordinals — more
 appearances wins; on a tie, the better position wins. Not a judgement.
@@ -2217,7 +2265,9 @@ or `Origin` header. Those are attacker-controlled, and a share link built from a
 spoofed Host is a phishing URL carrying a real token. Configuration, not
 reflection.
 
-**Errors:** `401`, `404` (unknown scan, or another agency's).
+**A `failed` scan cannot be shared** (checklist 3.24): `409 /problems/failed-scan-not-shareable`, and no token is minted. A failed scan has no score on the dashboard or the report. `partial` and every other status mint as before.
+
+**Errors:** `401`, `404` (unknown scan, or another agency's), `409` (failed scan).
 
 **`proof.crossEngine` — where the engines disagree (Epic 9.23).** Present on
 every report. Carries `standings` (each engine's own mention rate and

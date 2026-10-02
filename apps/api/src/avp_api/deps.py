@@ -112,7 +112,7 @@ async def current_principal(
     a suspended user or a soft-deleted agency loses access on their next
     request, not whenever a token expires.
     """
-    token = request.cookies.get(settings.session_cookie_name)
+    token = request.cookies.get(settings.session_cookie_key)
     if not token:
         raise AuthenticationRequired(detail="No session cookie was supplied.")
 

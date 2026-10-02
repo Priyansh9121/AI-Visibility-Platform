@@ -11,6 +11,7 @@ import {
   TextField,
 } from '@avp/design-system';
 import { api, ApiProblem, GOOGLE_SIGN_IN_URL } from '@/lib/api';
+import { apiWasAway, API_AWAY_SENTENCE } from '@/lib/apiAway';
 
 /**
  * Create an agency — Epic 9.12.
@@ -93,10 +94,11 @@ export function SignUpPanel({
       } else if (err instanceof ApiProblem && err.status === 429) {
         // Too many attempts: the server's own words, with the wait in them.
         setError(err.problem.detail);
-      } else if (err instanceof ApiProblem) {
+      } else if (err instanceof ApiProblem && !apiWasAway(err)) {
         setError(err.problem.detail);
       } else {
-        setError('The API did not respond. Check that it is running on port 8000.');
+        // No answer, or a 5xx: nothing the API said is about this form.
+        setError(API_AWAY_SENTENCE);
       }
     } finally {
       setBusy(false);

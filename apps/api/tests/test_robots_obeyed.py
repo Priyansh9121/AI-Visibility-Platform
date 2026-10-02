@@ -158,6 +158,7 @@ class FakeChromium:
         self, pages: dict[str, dict[str, Any]] | None = None,
         landings: dict[str, str] | None = None,
         subresources: dict[str, list[str]] | None = None,
+        iframes: dict[str, list[str]] | None = None,
         chains: dict[str, list[str]] | None = None,
         drifts: dict[str, str] | None = None,
         server_addrs: dict[str, Any] | None = None,
@@ -168,6 +169,7 @@ class FakeChromium:
         self.pages = pages or {}
         self.landings = landings or {}
         self.subresources = subresources or {}
+        self.iframes = iframes or {}
         self.chains = chains or {}
         # url -> the address the page is at once `evaluate` has run.
         self.drifts = drifts or {}
@@ -192,13 +194,17 @@ class FakeChromium:
     def __call__(self) -> _Playwright:
         return _Playwright(self)
 
-    async def request(self, url: str) -> bool:
-        """One request through the routes. True if it reached the network."""
+    async def request(self, url: str, kind: str = "main") -> bool:
+        """One request through the routes. True if it reached the network.
+
+        `kind` is what Playwright's request would say: "main" is the main frame's
+        navigation, "iframe" a sub-frame's navigation, "resource" anything else.
+        """
         matching = [
             handler for pattern, handler in reversed(self.routes) if _matches(pattern, url)
         ]
         before = len(self.loaded)
-        await _Route(self, url, matching).fallback()
+        await _Route(self, url, matching, kind).fallback()
         return len(self.loaded) > before
 
 
@@ -235,9 +241,15 @@ def _matches(pattern: Any, url: str) -> bool:
 
 
 class _Route:
-    def __init__(self, web: FakeChromium, url: str, handlers: list[Any]) -> None:
+    def __init__(
+        self, web: FakeChromium, url: str, handlers: list[Any], kind: str = "main"
+    ) -> None:
         self.web = web
-        self.request = SimpleNamespace(url=url)
+        main_frame = SimpleNamespace(parent_frame=None)
+        frame = SimpleNamespace(parent_frame=main_frame) if kind == "iframe" else main_frame
+        self.request = SimpleNamespace(
+            url=url, frame=frame, is_navigation_request=lambda: kind in ("main", "iframe")
+        )
         self._handlers = handlers
 
     async def abort(self, reason: str | None = None) -> None:
@@ -329,8 +341,11 @@ class _Page:
         self.url = self.web.landings.get(url, url)
         await self.web.respond(self.url)
         for resource in self.web.subresources.get(self.url, []):
-            if await self.web.request(resource):
+            if await self.web.request(resource, "resource"):
                 await self.web.respond(resource)
+        for frame_url in self.web.iframes.get(self.url, []):
+            if await self.web.request(frame_url, "iframe"):
+                await self.web.respond(frame_url)
         request = _Request(self.url)
         for hop in self.web.chains.get(self.url, []):
             # nearest hop first: each is the one before the request so far
@@ -866,22 +881,50 @@ class TestACrawlThatIsRefused:
         assert result.error_code == "ROBOTS_DISALLOWED"  # no robots.txt answer, as before
         assert robots_web.requests == []
 
-    async def test_a_subresource_to_a_private_address_is_aborted_and_ends_the_crawl(
+    async def test_a_subresource_to_a_private_address_is_aborted_and_the_crawl_continues(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from structlog.testing import capture_logs
+
+        robots_web.resolve_to("internal.test", "10.0.0.5")
+        chromium = FakeChromium(
+            pages={f"{SITE}/": page()},
+            subresources={
+                f"{SITE}/": [f"{INTERNAL}/api.json?token=abc", f"{INTERNAL}/b.js", f"{SITE}/app.js"]
+            },
+        )
+        monkeypatch.setattr(crawl, "async_playwright", chromium)
+
+        with capture_logs() as logs:
+            result = await crawl.crawl_site("prospect-site.com")
+
+        assert result.ok and result.error_code is None
+        assert result.signals.pages_fetched == 1 and result.signals.word_count > 0
+        assert (f"{INTERNAL}/api.json?token=abc", "blockedbyclient") in chromium.aborted
+        assert f"{INTERNAL}/api.json?token=abc" not in chromium.loaded
+        assert f"{INTERNAL}/b.js" not in chromium.loaded
+        assert f"{SITE}/app.js" in chromium.loaded  # the rest of the page still loads
+        # Logged once per host, with the host and nothing else: no URL, no query.
+        events = [e for e in logs if e["event"] == "egress.request_refused"]
+        assert len(events) == 1
+        assert set(events[0]) == {"event", "log_level", "host"}
+        assert events[0]["host"] == "internal.test" and events[0]["log_level"] == "info"
+        assert "token=abc" not in str(logs) and "/api.json" not in str(logs)
+
+    async def test_an_iframe_to_a_private_address_is_aborted_and_the_crawl_continues(
         self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         robots_web.resolve_to("internal.test", "10.0.0.5")
         chromium = FakeChromium(
-            pages={f"{SITE}/": page()},
-            subresources={f"{SITE}/": [f"{INTERNAL}/api.json", f"{SITE}/app.js"]},
+            pages={f"{SITE}/": page()}, iframes={f"{SITE}/": [f"{INTERNAL}/frame"]}
         )
         monkeypatch.setattr(crawl, "async_playwright", chromium)
 
         result = await crawl.crawl_site("prospect-site.com")
 
-        assert _refused(result)
-        assert (f"{INTERNAL}/api.json", "blockedbyclient") in chromium.aborted
-        assert f"{INTERNAL}/api.json" not in chromium.loaded
-        assert result.text_extract == ""
+        assert result.ok and result.signals.pages_fetched == 1
+        assert (f"{INTERNAL}/frame", "blockedbyclient") in chromium.aborted
+        assert f"{INTERNAL}/frame" not in chromium.loaded
 
     async def test_a_public_subresource_continues_and_images_are_still_blocked(
         self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
@@ -1045,26 +1088,61 @@ class TestAnAuditThatIsRefused:
         self._assert_nothing_read(signals)
         assert chromium.launches == 0
 
-    async def test_a_sitemap_redirect_into_a_private_address(
+    async def test_a_sitemap_redirect_into_a_private_address_is_skipped_and_the_audit_continues(
         self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        robots_web.serve(f"{SITE}/sitemap.xml", status=301, headers={"location": METADATA})
-        chromium = FakeChromium()
-        signals = await self._audit(monkeypatch, chromium)
-        self._assert_nothing_read(signals)
-        assert chromium.launches == 0
+        from structlog.testing import capture_logs
 
-    async def test_a_private_subresource(
+        robots_web.resolve_to("internal.test", "10.0.0.5")
+        robots_web.serve(
+            f"{SITE}/sitemap.xml", status=301, headers={"location": f"{INTERNAL}/s.xml?k=1"}
+        )
+        chromium = FakeChromium(pages={f"{SITE}/": rich_page()})
+        with capture_logs() as logs:
+            signals = await self._audit(monkeypatch, chromium)
+        # Treated as a sitemap that got no answer: not found, not disallowed, audit kept.
+        assert signals.ok and signals.error_code is None
+        assert signals.has_sitemap is False and signals.sitemap_disallowed is False
+        assert signals.schema_types == ["Organization"] and signals.word_count == 640
+        assert not [u for u in robots_web.fetched() if "internal.test" in u]
+        events = [e for e in logs if e["event"] == "egress.request_refused"]
+        assert [(e["host"], set(e)) for e in events] == [
+            ("internal.test", {"event", "log_level", "host"})
+        ]
+        assert "k=1" not in str(logs)
+
+    async def test_a_private_subresource_is_aborted_and_the_audit_continues(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from structlog.testing import capture_logs
+
+        robots_web.resolve_to("internal.test", "10.0.0.5")
+        chromium = FakeChromium(
+            pages={f"{SITE}/": rich_page()},
+            subresources={f"{SITE}/": [f"{INTERNAL}/x.js?k=1", f"{SITE}/app.js"]},
+        )
+        with capture_logs() as logs:
+            signals = await self._audit(monkeypatch, chromium)
+        assert signals.ok and signals.error_code is None
+        assert signals.schema_types == ["Organization"] and signals.word_count == 640
+        assert (f"{INTERNAL}/x.js?k=1", "blockedbyclient") in chromium.aborted
+        assert f"{INTERNAL}/x.js?k=1" not in chromium.loaded
+        events = [e for e in logs if e["event"] == "egress.request_refused"]
+        assert [(e["host"], set(e)) for e in events] == [
+            ("internal.test", {"event", "log_level", "host"})
+        ]
+        assert "k=1" not in str(logs)
+
+    async def test_an_iframe_to_a_private_address_is_aborted_and_the_audit_continues(
         self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         robots_web.resolve_to("internal.test", "10.0.0.5")
         chromium = FakeChromium(
-            pages={f"{SITE}/": page()},
-            subresources={f"{SITE}/": [f"{INTERNAL}/x.js"]},
+            pages={f"{SITE}/": rich_page()}, iframes={f"{SITE}/": [f"{INTERNAL}/frame"]}
         )
         signals = await self._audit(monkeypatch, chromium)
-        self._assert_nothing_read(signals)
-        assert (f"{INTERNAL}/x.js", "blockedbyclient") in chromium.aborted
+        assert signals.ok and signals.word_count == 640
+        assert (f"{INTERNAL}/frame", "blockedbyclient") in chromium.aborted
 
     async def test_a_public_subresource_and_an_image_still_load_in_the_audit(
         self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
@@ -1319,7 +1397,7 @@ class TestARefusalKeepsNothingAlreadyRead:
     there were facts to keep, so "nothing kept" is not true of an empty page.
     """
 
-    @pytest.mark.parametrize("how", ["subresource", "connected_address", "redirect_chain"])
+    @pytest.mark.parametrize("how", ["connected_address", "redirect_chain"])
     async def test_a_secondary_page_refused_after_the_home_page_was_read(
         self, robots_web: Any, monkeypatch: pytest.MonkeyPatch, how: str
     ) -> None:
@@ -1331,7 +1409,6 @@ class TestARefusalKeepsNothingAlreadyRead:
         assert clean.signals.word_count > 0 and clean.signals.has_title and clean.titles
 
         extra: dict[str, Any] = {
-            "subresource": {"subresources": {f"{SITE}/about": [f"{INTERNAL}/x.js"]}},
             "connected_address": {"server_addrs": {f"{SITE}/about": PRIVATE_ADDR}},
             "redirect_chain": {"chains": {f"{SITE}/about": [f"{INTERNAL}/hop"]}},
         }[how]
@@ -1341,6 +1418,36 @@ class TestARefusalKeepsNothingAlreadyRead:
         result = await crawl.crawl_site("prospect-site.com")
 
         assert chromium.navigations == [f"{SITE}/", f"{SITE}/about"]  # home was read first
+        assert _refused(result)
+        assert result.signals.urls_fetched == [] and result.signals.pages_fetched == 0
+
+    async def test_a_main_frame_navigation_refused_after_the_home_page_was_read(
+        self, robots_web: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The second navigation's host is refused when the route handler asks (as if
+        # it now resolved to a private address): the main frame's own navigation, so
+        # the run ends, and the home page's facts are not kept.
+        routed: list[str] = []
+
+        class Flipping(crawl.BrowserGuard):
+            async def handle(self, route: Any) -> None:
+                routed.append(route.request.url)
+                self.flip = len(routed) >= 2
+                await super().handle(route)
+
+            async def _verdict(self, host: str, port: int) -> None:
+                if getattr(self, "flip", False):
+                    raise crawl.EgressRefused(host, "10.0.0.5")
+                await super()._verdict(host, port)
+
+        monkeypatch.setattr(crawl, "BrowserGuard", Flipping)
+        chromium = _site_with_about()
+        monkeypatch.setattr(crawl, "async_playwright", chromium)
+
+        result = await crawl.crawl_site("prospect-site.com")
+
+        assert chromium.navigations == [f"{SITE}/", f"{SITE}/about"]  # home was read first
+        assert (f"{SITE}/about", "blockedbyclient") in chromium.aborted
         assert _refused(result)
         assert result.signals.urls_fetched == [] and result.signals.pages_fetched == 0
 
@@ -1657,7 +1764,7 @@ class TestTheClientIsStillCreated:
         self, client: AsyncClient, robots_web: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         robots_web.resolve_to("internal.test", "10.0.0.5")
-        chromium = _site_with_about(subresources={f"{SITE}/about": [f"{INTERNAL}/x.js"]})
+        chromium = _site_with_about(server_addrs={f"{SITE}/about": PRIVATE_ADDR})
         monkeypatch.setattr(crawl, "async_playwright", chromium)
         await _sign_up(client, "egress2@test.example")
 

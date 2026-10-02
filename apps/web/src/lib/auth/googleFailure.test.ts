@@ -18,6 +18,7 @@ import {
 const API_REASONS = [
   'denied',
   'invalid-state',
+  'browser-mismatch',
   'exchange-failed',
   'email-unverified',
   'account-suspended',
@@ -105,6 +106,18 @@ describe('for somebody still signed in — 2026-09-29', () => {
     expect(sentence).toContain(`Continue with Google again and choose ${ADDRESS}.`);
     expect(sentence).not.toBe(GOOGLE_REASONS['email-claimed']);
     expect(googleFailureFromSearch('?google=error&reason=email-claimed', ADDRESS)).toBe(sentence);
+  });
+
+  it('browser-mismatch: one sentence signed out, and a linking sentence signed in', () => {
+    expect(googleReasonSentence('browser-mismatch')).toBe(
+      'That Google sign-in could not be matched to this browser. Start it again from this page.',
+    );
+    expect(googleReasonSentence('browser-mismatch', ADDRESS)).toBe(
+      `That Google sign-in could not be matched to this browser, so nothing was linked. Continue with Google again and choose ${ADDRESS}.`,
+    );
+    expect(googleFailureFromSearch('?google=error&reason=browser-mismatch')).toBe(
+      GOOGLE_REASONS['browser-mismatch'],
+    );
   });
 
   it("the refusals about somebody else's account share the way out and are still told apart", () => {

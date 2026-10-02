@@ -136,7 +136,7 @@ async def test_a_redis_credential_error_is_a_500_not_an_outage(
         raise exc("credentials")
 
     monkeypatch.setattr(SessionStore, "get", _boom)
-    client.cookies.set(settings.session_cookie_name, "some-session-token")
+    client.cookies.set(settings.session_cookie_key, "some-session-token")
     with pytest.raises(exc):
         await client.get(f"{BASE}/auth/me")
 
