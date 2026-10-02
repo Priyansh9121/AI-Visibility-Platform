@@ -71,6 +71,7 @@ EXCLUSION_REASON: dict[str, str] = {
     "NO_AUTHORITY_DATA": "No authority source",
     "CRAWL_DISALLOWED": "Blocked by robots.txt",
     "CRAWL_ADDRESS_NOT_PUBLIC": "Address not public",
+    "CRAWL_POLICY_UNREADABLE": "Could not read robots.txt",
 }
 
 # The sentence under each label — `strings.ts`'s `EXCLUSION_REASON[code].detail`,
@@ -133,6 +134,17 @@ EXCLUSION_DETAIL: dict[str, str] = {
         "The site’s address, or an address the site sent the crawler to, is on a private or "
         "reserved network, so the crawler did not read the site. Technical Foundation is "
         "left out of the score."
+    ),
+    # 2026-10-03 (launch checklist 3.41). True for every way a robots.txt cannot be
+    # read (no answer, an error, redirects that never reach a file) and for whichever
+    # host's it was (the site's, a redirect's, where the browser landed), so it says
+    # "did not get a usable answer" and not "did not answer", and "of this site, or of
+    # an address the site sent it to"; and it says nothing of what the site asks of
+    # crawlers: it was never read.
+    "CRAWL_POLICY_UNREADABLE": (
+        "The crawler tried to read the robots.txt of this site, or of an address the site "
+        "sent it to, and did not get a usable answer. It obeys robots.txt, so without that "
+        "answer it did not read the site. Technical Foundation is left out of the score."
     ),
 }
 

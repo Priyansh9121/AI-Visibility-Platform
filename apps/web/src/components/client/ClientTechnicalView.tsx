@@ -53,6 +53,7 @@ import {
   PARTIAL_AUDIT_NOTE,
   ADDRESS_NOT_PUBLIC,
   ROBOTS_DISALLOWED,
+  ROBOTS_UNREACHABLE,
   auditFailureSentence,
 } from '@/lib/report/strings';
 
@@ -186,6 +187,20 @@ function Audited({ audit }: { audit: TechnicalAudit }): JSX.Element {
         eyebrow="Technical"
         title="This site asks crawlers like ours to stay out"
         body={`${EXCLUSION_REASON.CRAWL_DISALLOWED!.detail} This crawler obeys robots.txt, so nothing here is scored. What the file says to AI crawlers is on the Crawler screen.`}
+      />
+    );
+  }
+  // robots.txt could not be read at all — 2026-10-03 (launch checklist 3.41). The
+  // crawler read nothing, as for a file that forbids it, but the site forbade
+  // nothing, so it is not worded as a refusal; nor as a failed crawl, since the page
+  // was never asked for. The title says what happened and the body is the sentence
+  // the report shows. No note: the body already says it, and there is no code to show.
+  if (audit.status === 'failed' && audit.errorCode === ROBOTS_UNREACHABLE) {
+    return (
+      <EmptyState
+        eyebrow="Technical"
+        title={EXCLUSION_REASON.CRAWL_POLICY_UNREADABLE!.label}
+        body={EXCLUSION_REASON.CRAWL_POLICY_UNREADABLE!.detail}
       />
     );
   }

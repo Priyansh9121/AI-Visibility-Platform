@@ -41,7 +41,7 @@ from ..models import (
 from ..models.prompt import PromptIntent
 from ..models.score import ScoreStatus
 from ..models.technical_audit import AuditStatus
-from .crawl import ROBOTS_DISALLOWED
+from .crawl import ROBOTS_DISALLOWED, ROBOTS_UNREACHABLE
 from .domain_authority import CURATED_ONLY, load_domain_authority
 from .egress import ADDRESS_NOT_PUBLIC
 from .scoring import (
@@ -189,7 +189,11 @@ async def load_technical_foundation(
     for an audit that robots.txt kept off the page: CRAWL_DISALLOWED
     (2026-09-29). Stored as a failed audit with `ROBOTS_DISALLOWED`, it is
     excluded like any failed one — its reason is the only difference. So is an
-    audit the egress guard refused (`ADDRESS_NOT_PUBLIC`): CRAWL_ADDRESS_NOT_PUBLIC.
+    audit the egress guard refused (`ADDRESS_NOT_PUBLIC`): CRAWL_ADDRESS_NOT_PUBLIC. And
+    an audit whose robots.txt could not be read (`ROBOTS_UNREACHABLE`, launch checklist
+    3.41): CRAWL_POLICY_UNREADABLE, not CRAWL_DISALLOWED, because the site forbade nothing.
+    Every one of them returns None for the value, so the same dimension is excluded in the
+    same cases; only the recorded reason differs.
     """
     audit = (
         await session.execute(
@@ -206,6 +210,8 @@ async def load_technical_foundation(
             return None, "CRAWL_DISALLOWED"
         if audit.error_code == ADDRESS_NOT_PUBLIC:
             return None, "CRAWL_ADDRESS_NOT_PUBLIC"
+        if audit.error_code == ROBOTS_UNREACHABLE:
+            return None, "CRAWL_POLICY_UNREADABLE"
         return None, None
     return audit.technical_foundation, None
 

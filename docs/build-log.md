@@ -22388,3 +22388,60 @@ Drift check (north-star §8): Layer 2, Measurement (competitor detection's searc
 - The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
 - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# A robots.txt that could not be read is no longer reported as one that keeps crawlers out, and the gate reads robots files within a size and a time it can afford
+
+**2026-10-03, the fifth entry of the day; branch `pilot-fixes-3`, the founder's brief "honest reports and the remaining pilot decisions" (launch checklist 3.41).** One item, one commit.
+
+**Render: nothing to set. No migration, dependency or outbound host.** New outcome code `ROBOTS_UNREACHABLE` (audit `errorCode`, classification reason, check `detailCode`) and exclusion reason `CRAWL_POLICY_UNREADABLE`; `FORMULA_VERSION` stays v5. New log events `crawl.robots_unreachable` and `audit.robots_unreachable` (the same fields as their `*_disallowed` siblings).
+
+Drift check (north-star §8): Layer 0, Trust (the product says only what is true about a site, and the crawler stays honest and bounded) through Layer 2's audit outcome, shown on Layer 1's report, Technical screen and intake card; lifecycle phase: Activation (Epic 9), a pilot's first scans of real sites. One defect's whole vertical, so one item.
+
+## 1. What changed
+
+- **Founder decision (final):** a robots.txt that could not be read gets its own outcome, distinct from one that disallows us; the crawl behaviour follows the existing policy (honest crawling first); every user-facing sentence must be true; the scoring exclusion code matches; `FORMULA_VERSION` unchanged unless the exclusion set changes.
+- **What was wrong:** the policy already told the two apart (`ai_crawlers.crawl_policy`: an unreadable file is `UNREACHABLE` and `CrawlPolicy.allows` says no to every path), but `crawl.py` and `technical_audit.py` stored every refusal as `ROBOTS_DISALLOWED`, so the report, the Technical screen and the intake card told an agency, and a prospect reading a shared report, that the site asks crawlers to stay out when it had not answered.
+- **Unchanged behaviour:** an unreadable robots.txt still means nothing is fetched (RFC 9309 §2.3.1.4; a 429 is treated as a 5xx). A 404, 410, 403 or other 4xx is still "no file, crawl freely".
+
+| robots.txt | the crawler | stored code, before → after |
+|---|---|---|
+| read, rules forbid the page | nothing fetched | `ROBOTS_DISALLOWED` → unchanged |
+| 404 / 410 / 403 / other 4xx but 429 | reads the site | none |
+| 429, any 5xx, no answer (timeout, refused, a name that does not resolve), a redirect loop, a 1xx or a 3xx with no Location, a body that cannot be decoded, a compression it does not undo | nothing fetched | `ROBOTS_DISALLOWED` → `ROBOTS_UNREACHABLE` |
+
+- **The codes:** `ROBOTS_UNREACHABLE` for the audit's failed status, the intake's classification reason and the checks; Technical Foundation excluded as `CRAWL_POLICY_UNREADABLE`. The excluded set (which dimension, in which cases) is identical, so `FORMULA_VERSION` stays v5; the reason enters the inputs digest only when set, so existing digests are unchanged and stored rows are untouched.
+- **The copy, one sentence everywhere:** "The crawler tried to read the robots.txt of this site, or of an address the site sent it to, and did not get a usable answer. It obeys robots.txt, so without that answer it did not read the site." The exclusion's label is "Could not read robots.txt" and its detail adds "Technical Foundation is left out of the score." The report card ("The site was not read", a neutral badge) lists any findings that do exist, as the disallowed card does; the Technical screen has its own state; the intake card adds "Check that the address is right and the site opens in a browser, then try again."; the PDF uses the same label and detail. No raw code on any of them.
+- **A related untruth removed:** an unreadable file used to leave `robots_txt_present` as a `NO_ROBOTS_TXT` warning, so the fix list told the client to "Publish a robots.txt" for a file that may exist. It is `not_applicable` now; only the site's OWN unreadable file does that, and a real 404 still warns.
+- **The gate reads what it can afford** (from the security reviews; the old reads loaded whole bodies with no overall deadline while holding an agency's read slot and a database connection):
+  - each robots.txt, redirect hop and sitemap request is one exchange under a 10 s total deadline, the address check included (`ROBOTS_REQUEST_DEADLINE_S`, `SIDE_FETCH_DEADLINE_S`); the run caps did not move, because their robots term already counted 6 × 10 s;
+  - bodies are streamed and stop at the cap (512,000 characters for robots.txt, 64 KiB for a sitemap, whose first characters decide "is it XML"); only a 2xx answer's body is read;
+  - a compressed body is undone through one zlib stream in bounded steps, so a small download can never inflate past the cap (a 64 MB gzip expansion stays under 12 MB); stacked or unsupported codings and a corrupt stream are "no answer"; the gate asks only for gzip and deflate;
+  - a body is decoded only in a text charset on a short list (utf-8, utf-16 and utf-32 and their byte orders, ascii, iso-8859-*, windows-125x), checked by name before a byte is read; any other is "no answer". Some codecs Python knows cost CPU that grows faster than the input (punycode: 2.4 s for 2 MB; utf-7 in small pieces: 3.2 s), on the API's one event loop, where no deadline can interrupt them;
+  - one budget for all of the gate's work before the browser starts, `PRE_BROWSER_BUDGET_S = 60` (one worst-case chain of six requests at their deadline); it used to have no total at all, about 780 s for a hostile chain of slow hosts; a spent budget ends the run `TIMEOUT` with no browser started;
+  - only http and https hops are made; the last address when redirects run out is checked against its robots.txt before it is handed on; the landing URL is read once.
+- `docs/api-contracts.md`: the codes, the exclusion, what the crawler does per robots.txt status, the deadlines, caps and budget.
+
+## 2. The review
+
+- **UI review (sonnet): PASS WITH NITS.** The sentence is true for every case that produces the code (it keeps a 404 out by "usable"); neutral badge right; design-system only. Taken: the sentence's clearer wording, the intake's advice, the title row's wrap.
+- **Security review (opus), round 1: PASS WITH NITS**, nothing introduced at Medium. Checked clean: no new fetch on any path, egress precedence, the logs, the exclusion set and digests. Taken: the landing URL read once; `unread` from the site's own file, not the final code (a site with no robots.txt of its own keeps that finding); the sentence's scope; a test that the code is read from the cached fetch; and the pre-existing availability Medium (whole bodies, no deadline).
+- **Re-review of round 2: PASS WITH NITS, conditional** on compressed bodies (expanded before the cap). Taken: the bounded inflate, the pre-browser budget, decoding errors as no answer, the last location checked, the scheme refused, 2xx bodies only, two more tests.
+- **Confirmation of round 3: PASS WITH NITS.** Round 3's claims hold: no call inflates past the cap and no unbounded body read remains; the budget cannot be swallowed or leave a browser started; the egress order and `EgressRefused` precedence are kept; pinning `Accept-Encoding` changes nothing on the wire today. Its one Medium, older than this item and narrowed by round 3, was the decoder accepting any charset Python knows; taken in round 4 (the allow-list above).
+
+## Found, not fixed
+
+- **Stored rows keep `ROBOTS_DISALLOWED`** for files that were really unreadable before today, so their reports and Technical screens still say the site asks crawlers to stay out. Nothing recorded which they were; failed audits' AI-crawler tables (all unknown when the site's own file was unreadable) would identify the own-host cases. Founder: relabel those, or accept.
+- **A budget that runs out inside the side fetches** keeps none of what they had read (they hand facts over only on return); the audit then records them as not measured.
+- **The `/crawler` page** does not state the 10 s and 60 s limits (legal copy).
+- **Content type vs obeyed rules:** a real `Disallow: /` served as `application/octet-stream` is obeyed but reported as no robots.txt.
+- **The Technical screen** shows the failed state but not the findings that exist for the mixed case (the report lists them).
+- **A robots.txt or sitemap in a legacy non-Latin charset** (Shift_JIS, EUC-JP, GBK, Big5, EUC-KR, KOI8-R, DOS or Mac code pages) is now "no answer", so such a site is not read. Those decoders measured linear and cheap (4–11 ms for 2 MB); allowing them is one line if pilots need them.
+
+## Verified
+
+**API pytest 2791 → 3009 (+218); web vitest 1533 → 1557 (+24); both floors raised to match.**
+- API (+218, mostly `test_robots_obeyed.py`): eleven unreadable arrangements, each for the intake crawl and the audit (connect and read timeouts, refused, a name that does not resolve, 500, 502, 503, 429, a redirect loop, a redirect to a non-URL, a 304) end `ROBOTS_UNREACHABLE` with no browser and no page; a real disallow stays `ROBOTS_DISALLOWED`; 404/410/403 still crawl; the gate's code per case; the four exclusion reasons give equal composites under v5 with the pinned digests; a missing own robots.txt stays a finding when the landing host's cannot be read; a robots.txt that never finishes ends by its deadline; a 10 MB robots.txt is read to the cap; a gzip bomb inflates to the cap and no further; stacked and unsupported codings, corrupt streams and non-text charsets are no answer, and a sitemap with one keeps the side facts; a chain of slow hosts ends by the pre-browser budget as `TIMEOUT`, and the budget is not swallowed; the last location is asked about before it is handed on; non-http hops are not requested or looked up; a slow 404 still crawls; an address check slower than the deadline sends nothing; a connect-time egress refusal propagates through the exchange; `refusal_code` sends nothing of its own; a page whose URL moves between reads cannot name another origin; a body in a charset off the list (23 codecs, punycode and utf-7 among them) is no answer with not one byte read, every listed family under its alias spellings is read as it says, a body that is not read may name any charset.
+- Web (+24): the report card, the Technical screen and the intake card for the new code, never "stay out" and never a raw code; the card's findings in the mixed case; the intake advice; the PDF and the shared copy fixture.
+- **Negative controls:** on this tree, the gate reporting every refusal as `ROBOTS_DISALLOWED` fails 69 of `test_robots_obeyed.py` (before round 4); the charset allow-list bypassed fails 33 of its 88 cases; each restored and checked with `cmp`. The implementer's, each restored: an unreadable file reported as missing, 13; the exclusion reason removed, 3; the web screens treating the new code as the old, 6; the deadline removed, 8; `unread` from the final code, 1; inflating without a bound, 2; the coding refusal removed, 10; no budget in the crawl, 1, in the audit, 3; bodies read whatever the status, 2; decoding errors escaping, 6; the last location unchecked, 4; the scheme check removed, 11.
+- **The rest of the bar** (this tree, one run): workers 26, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50); ruff clean; all typechecks clean; the styleguide builds; all six count gates through `assert_count.py` pass; both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change); the Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged); OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

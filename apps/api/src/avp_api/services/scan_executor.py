@@ -145,6 +145,13 @@ LEASE = timedelta(seconds=180)
 # unchanged, and the margin is thinner: a full wait AND a full run in one scan is the
 # pathological case. The test below adds each term, so a bound that grows without
 # this number moving fails there and not in production.
+#
+# Launch checklist 3.41 (round 3) bounded the audit's reads BEFORE the browser, which the
+# sum had counted as one request's timeout (10s): robots.txt, the sitemap and the
+# homepage's redirects, a request each under its own deadline, are now all under
+# `crawl.PRE_BROWSER_BUDGET_S` (60s) together, and the sum counts that. About 2,250s, so
+# 2,400s still clears it, now by about 1.065x (2,202.5s before, 1.09x). The number is
+# still unchanged, and the margin is thinner again: 3.35 is the founder's.
 MAX_SCAN_DURATION = timedelta(seconds=2_400)
 
 # WHAT THE DEADLINE KEEPS — decision 7, the founder, 2026-10-01

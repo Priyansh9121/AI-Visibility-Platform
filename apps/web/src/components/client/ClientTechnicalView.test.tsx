@@ -17,6 +17,8 @@ import {
   EXCLUSION_REASON,
   PARTIAL_AUDIT_LABEL,
   PARTIAL_AUDIT_NOTE,
+  ROBOTS_UNREACHABLE_ADVICE,
+  ROBOTS_UNREACHABLE_SENTENCE,
   auditFailureSentence,
 } from '@/lib/report/strings';
 import { clientsMe, identifiedClient } from '@/lib/clients/__fixtures__/clients';
@@ -163,6 +165,45 @@ describe('a failed audit is the only unreadable one', () => {
   });
 });
 
+describe('a site whose robots.txt could not be read — launch checklist 3.41', () => {
+  // Until 2026-10-03 this was stored as ROBOTS_DISALLOWED, and this screen said "This
+  // site asks crawlers like ours to stay out" of a site that never answered.
+  const html = render({ ...FAILED, errorCode: 'ROBOTS_UNREACHABLE' });
+
+  it('says what happened, once, in the words the report uses', () => {
+    expect(html).toContain(EXCLUSION_REASON.CRAWL_POLICY_UNREADABLE!.label);
+    expect(html).toContain(ROBOTS_UNREACHABLE_SENTENCE);
+    expect(occurrences(html, EXCLUSION_REASON.CRAWL_POLICY_UNREADABLE!.detail)).toBe(1);
+  });
+
+  it('never says the site asks crawlers to stay out, never blames it, never prints the code', () => {
+    for (const words of [
+      'stay out',
+      'asks crawlers',
+      'not to load its pages',
+      'Blocked by robots.txt',
+      'The site could not be read',
+      'Reason:',
+      'ROBOTS_UNREACHABLE',
+      'CRAWL_POLICY_UNREADABLE',
+      'ROBOTS_DISALLOWED',
+    ]) {
+      expect(html, words).not.toContain(words);
+    }
+    expect(html).not.toContain('Pages crawled');
+    // Title and body are the whole of it: no note element at all.
+    expect(html).not.toContain('avp-empty__note');
+    // The advice is the intake card's: nobody here has just typed an address.
+    expect(html).not.toContain(ROBOTS_UNREACHABLE_ADVICE);
+  });
+
+  it('leaves the real refusal’s words to the file that forbids the page', () => {
+    const refusal = render({ ...FAILED, errorCode: 'ROBOTS_DISALLOWED' });
+    expect(refusal).toContain('asks crawlers like ours to stay out');
+    expect(refusal).not.toContain(ROBOTS_UNREACHABLE_SENTENCE);
+  });
+});
+
 describe('a site whose address is not public', () => {
   it('says the crawler did not read it, never mentions robots.txt, and never prints the code', () => {
     const html = render({ ...FAILED, errorCode: 'ADDRESS_NOT_PUBLIC' });
@@ -221,6 +262,7 @@ describe('no failed state prints a machine code', () => {
   const MACHINE_CODE = /\b[A-Z]{3,}_[A-Z0-9_]+\b/;
   const codes: (string | null)[] = [
     'ROBOTS_DISALLOWED',
+    'ROBOTS_UNREACHABLE',
     'ADDRESS_NOT_PUBLIC',
     'BROWSER_ERROR',
     'FETCH_FAILED',
