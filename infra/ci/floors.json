@@ -4,7 +4,7 @@
     "api-pytest": 2367,
     "workers-pytest": 26,
     "shared-types-node-test": 53,
-    "design-system-vitest": 859,
+    "design-system-vitest": 875,
     "web-vitest": 1473
   },
   "ceilings": {

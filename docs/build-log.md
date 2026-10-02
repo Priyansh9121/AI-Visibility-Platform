@@ -21799,3 +21799,45 @@ Drift check (north-star §8): Layer 0, Trust substrate (the crawler's egress gua
 - The Python and JavaScript licence audits pass (`pnpm licenses list --json`).
 - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# Tertiary text reaches 4.5:1 on every surface it sits on, at rest and under the hover wash, in both themes
+
+**2026-10-02, the eleventh entry of the day; branch `pilot-fixes`, the founder's pilot-blockers follow-up (launch checklist 3.17, the contrast half).** One item, one commit.
+
+**Render: nothing to set. Design-system tokens only; no endpoint, schema, dependency or outbound host change.**
+
+Drift check (north-star §8): the design system (Layer 1, Delivery, every working screen); lifecycle phase: Activation (Epic 9), the screens a pilot agency works in.
+
+## 1. What changed
+
+- **Dark `--avp-text-tertiary`** `oklch(0.58 0.012 75)` → `oklch(0.66 0.012 75)`. It measured 4.09:1 on seated cards (the checklist's "about 4.1"), 3.73 on raised and 4.42 on the ground.
+- **Light `--avp-text-tertiary`** `oklch(0.56 0.014 75)` → `oklch(0.515 0.014 75)`. Not in the checklist row, found while measuring: it was 4.33:1 on the page ground and 4.09 on sunken. The comment above it claimed "4.6:1 on the ground"; it now states what is true.
+- **Under the hover wash** (`--avp-surface-hover`, 3% black in light and 4% white in dark, on table rows, gap-grid rows and nav items) the first values chosen (0.53 light, 0.65 dark) still dipped to 4.34 and 4.41; the UI review caught it, and the values above clear it.
+- Now (seated / raised / ground / sunken, at rest then hovered): light 5.55 / 5.64 / 5.24 / 4.94, hovered 5.20 / 5.28 / 4.91 / 4.63; dark 5.63 / 5.14 / 6.09 / 6.36, hovered 5.08 / 4.59 / 5.59 / 5.92. Tertiary stays the dimmer step: light secondary is 6.73:1 on seated, dark secondary 7.06.
+- `src/tokens/color.ts` mirrors both values (the token-parity test reads it).
+- `contrast.test.ts` (added with 3.26) asserts tertiary at 4.5:1 or more on the four surfaces, at rest and with the hover wash composited over each, in both themes. Void (fills only: meter tracks, dots, checkbox fill) and desk (the report frame's backdrop) carry no text and are left out on purpose, with a comment.
+- The report's own tertiary (`.avp-report`, ink-400) is unchanged (below).
+
+## 2. The review
+
+- **UI review (sonnet): PASS WITH NITS**, with one Medium, taken: the hover wash (above). Checked: the hierarchy still reads in both themes; placeholders (which use tertiary, and which WCAG does not exempt) now measure 5.2 light and 5.4 dark; disabled controls use opacity and are unaffected; the gap-grid's tertiary-tinted fill and the neutral verdict segment change slightly and stay above 3:1 as non-text; `reportIsolation` and token parity pass.
+
+## Found, not fixed
+
+- **The report's tertiary text** (ink-400 on paper) measures 3.59:1 on paper-000, 3.42 on paper-050 and 3.23 on paper-100, under 4.5:1. Darkening it changes the printed report's look; a founder decision.
+- Light tertiary against light secondary is a smaller step than before (5.55 against 6.73 on seated, and a different hue); a design note, not a defect.
+
+## Verified
+
+**Design-system vitest 859 → 875 (+16); floor raised to match.**
+- `contrast.test.ts`: tertiary at 4.5:1 or more on seated, raised, ground and sunken in the light and dark themes (8), and on each with the hover wash composited over it (8). Before the change the resting cases failed 5 (dark seated, raised and ground; light ground and sunken) and the hover cases 2 more at the first values chosen (light hovered sunken, dark hovered raised).
+- The token-parity test (`tokens.test.ts`, TS against CSS) and `reportIsolation` pass.
+- **Negative control:** the old dark value (`oklch(0.58 0.012 75)`) put back in `tokens.css` fails 7 of the 29 contrast tests; restored and checked with `cmp`.
+
+**The rest of the bar** (this tree, one run).
+- API 2367, workers 26, shared-types 53 (0 fail), web 1473, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; the styleguide builds; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`).
+- OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

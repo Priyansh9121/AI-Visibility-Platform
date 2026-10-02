@@ -67,6 +67,40 @@ describe('contrast helper is pinned to known measurements', () => {
   });
 });
 
+/*
+ * Deliberately not covered, because no text sits on them: surface-void (meter
+ * tracks, verdict dots and chart fills only, in components.css and apps/web)
+ * and surface-desk (the report frame's backdrop).
+ */
+describe('text-tertiary is at least 4.5:1 on every surface text sits on (WCAG 1.4.3)', () => {
+  const surfaces = ['--avp-surface-seated', '--avp-surface-raised', '--avp-surface-ground', '--avp-surface-sunken'];
+
+  for (const s of surfaces) {
+    it(`light ${s}`, () => {
+      expect(textRatio(light, '--avp-text-tertiary', s)).toBeGreaterThanOrEqual(4.5);
+    });
+    it(`dark ${s}`, () => {
+      expect(textRatio(darkScope, '--avp-text-tertiary', s)).toBeGreaterThanOrEqual(4.5);
+    });
+  }
+
+  // Table rows, gap-grid rows and nav items sit under the hover wash.
+  const hovered = (scope: Map<string, string>, s: string): Rgb => {
+    const bg = surface(scope, s);
+    return composite(colour(scope, '--avp-surface-hover'), bg);
+  };
+  for (const s of surfaces) {
+    it(`light ${s} under the hover wash`, () => {
+      expect(contrastRatio(surface(light, '--avp-text-tertiary'), hovered(light, s))).toBeGreaterThanOrEqual(4.5);
+    });
+    it(`dark ${s} under the hover wash`, () => {
+      expect(contrastRatio(surface(darkScope, '--avp-text-tertiary'), hovered(darkScope, s))).toBeGreaterThanOrEqual(
+        4.5,
+      );
+    });
+  }
+});
+
 describe('focus ring is at least 3:1 against its surface (WCAG 1.4.11)', () => {
   const surfaces = ['--avp-surface-seated', '--avp-surface-raised', '--avp-surface-ground', '--avp-surface-sunken'];
 
