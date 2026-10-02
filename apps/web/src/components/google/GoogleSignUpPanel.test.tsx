@@ -31,15 +31,19 @@ describe('GoogleSignUpPanel', () => {
     expect(html).toContain('We could not reach the server');
     expect(html).toContain('Check your connection and try again. The sign-in link works for ten minutes.');
     expect(html).toContain('Try again');
-    expect(html).not.toContain('has expired');
+    expect(html).not.toContain('can no longer be used');
   });
 
-  it('an expired ticket says so and offers the way back', () => {
+  it('a refused ticket says it can no longer be used, why, and offers the way back', () => {
     const html = renderToStaticMarkup(
       <GoogleSignUpPanel state={{ kind: 'expired' }} ticket="" onSignedUp={() => {}} animate={false} />,
     );
-    expect(html).toContain('That Google sign-in has expired');
-    expect(html).toContain('It works for ten minutes and once. Start again from the sign-in page.');
+    // Not "expired": since 3.22 a ticket opened in another browser is refused too.
+    expect(html).toContain('That Google sign-in can no longer be used');
+    expect(html).toContain(
+      'It works once, for ten minutes, in the browser that started it. Start again from the sign-in page.',
+    );
+    expect(html).not.toContain('has expired');
     expect(html).toContain('Back to sign in');
     expect(html).not.toContain('Agency name');
     // The API refused this ticket; the page did not lose it. Not the no-code words.
@@ -59,7 +63,7 @@ describe('GoogleSignUpPanel', () => {
     expect(html).toContain('Back to sign in');
     expect(html).not.toContain('Agency name');
     // Nothing was refused and nothing timed out, so it does not talk about ten minutes.
-    expect(html).not.toContain('has expired');
+    expect(html).not.toContain('can no longer be used');
     expect(html).not.toContain('ten minutes');
   });
 

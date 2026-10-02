@@ -29,7 +29,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -107,12 +107,15 @@ async def _page(client: AsyncClient, origin: str | None) -> AsyncIterator[AsyncC
 
 
 @asynccontextmanager
-async def _visitor(client: AsyncClient, origin: str | None) -> AsyncIterator[AsyncClient]:
-    """A browser with no session: no cookies at all, and `origin` (or none)."""
+async def _visitor(
+    client: AsyncClient, origin: str | None, cookies: dict[str, str] | None = None
+) -> AsyncIterator[AsyncClient]:
+    """A browser with no session: no cookies but `cookies`, and `origin` (or none)."""
     async with AsyncClient(
         transport=ASGITransport(app=client._transport.app),  # noqa: SLF001
         base_url="http://testserver",
         headers={} if origin is None else {"Origin": origin},
+        cookies=cookies,
     ) as visitor:
         yield visitor
 
@@ -325,6 +328,9 @@ class Scenario:
     body: dict[str, Any]
     ok: int  # what the route answers a good request with
     changed: Callable[[], Awaitable[bool]]  # whether the write took effect
+    # Cookies the visiting browser brings besides a session (there is none): the
+    # Google ticket is bound to the browser that signed in, by its flow cookie.
+    cookies: dict[str, str] = field(default_factory=dict)
 
 
 async def _sign_up_route(client: AsyncClient, engine, settings: Settings) -> Scenario:  # noqa: ANN001
@@ -356,7 +362,8 @@ async def _google_complete_route(client: AsyncClient, engine, settings: Settings
         GoogleIdentity(
             sub="google-sub-origin", email=EMAIL, email_verified=True, name="Some One",
             nonce="not-used-by-completion",
-        )
+        ),
+        token_digest("origin-check-browser-binding"),
     )
 
     async def changed() -> bool:
@@ -364,7 +371,8 @@ async def _google_complete_route(client: AsyncClient, engine, settings: Settings
         return await _user(engine, EMAIL) is not None or await store.peek_ticket(ticket) is None
 
     body = {"ticket": ticket, "agencyName": "Origin Check Agency", "fullName": "Some One"}
-    return Scenario(f"{BASE}/auth/google/complete", body, 201, changed)
+    flow = {settings.google_flow_cookie_key: "origin-check-browser-binding"}
+    return Scenario(f"{BASE}/auth/google/complete", body, 201, changed, flow)
 
 
 async def _reset_request_route(client: AsyncClient, engine, settings: Settings) -> Scenario:  # noqa: ANN001
@@ -473,7 +481,7 @@ async def test_the_credential_routes_refuse_another_origin_with_no_session_at_al
     if origin == WEB:
         origin = settings.cors_allow_origins[0]
 
-    async with _visitor(client, origin) as visitor:
+    async with _visitor(client, origin, scenario.cookies) as visitor:
         resp = await visitor.post(scenario.path, json=scenario.body)
 
     if works:

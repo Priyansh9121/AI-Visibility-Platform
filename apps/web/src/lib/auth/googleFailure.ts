@@ -22,6 +22,8 @@ export const GOOGLE_REASONS: Record<string, string> = {
   denied: 'Google sign-in was cancelled. Nothing changed.',
   'invalid-state':
     'That Google sign-in had expired or was already used. Start it again from this page.',
+  'browser-mismatch':
+    'That Google sign-in could not be matched to this browser. Start it again from this page.',
   'exchange-failed': 'Google did not confirm the sign-in. Try again in a moment.',
   'email-unverified':
     'Google has not verified that email address, so it cannot be used to sign in here.',
@@ -60,6 +62,8 @@ export const GOOGLE_REASONS: Record<string, string> = {
 export const GOOGLE_REASONS_SIGNED_IN: Record<string, (address: string) => string> = {
   'invalid-state': (address) =>
     `That Google sign-in had expired or was already used, so nothing was linked. Continue with Google again and choose ${address}.`,
+  'browser-mismatch': (address) =>
+    `That Google sign-in could not be matched to this browser, so nothing was linked. Continue with Google again and choose ${address}.`,
   'email-unverified': (address) =>
     `Google has not verified the address on the Google account you chose, so nothing was linked. Continue with Google again and choose ${address}.`,
   'account-suspended': (address) =>

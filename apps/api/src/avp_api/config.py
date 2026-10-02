@@ -347,6 +347,14 @@ class Settings(BaseSettings):
             return f"__Host-{self.session_cookie_name}"
         return self.session_cookie_name
 
+    @property
+    def google_flow_cookie_key(self) -> str:
+        """The cookie that binds a Google sign-in to the browser that started
+        it. Named like the session cookie: `__Host-` when Secure."""
+        if self.session_cookie_secure:
+            return "__Host-avp_google_flow"
+        return "avp_google_flow"
+
     @field_validator("cors_allow_origins", mode="before")
     @classmethod
     def _split_origins(cls, value: object) -> object:

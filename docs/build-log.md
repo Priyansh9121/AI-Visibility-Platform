@@ -21650,3 +21650,58 @@ Drift check (north-star §8): Layer 1, Delivery (the share link, the report, the
 - The Python and JavaScript licence audits pass (`pnpm licenses list --json`).
 - OpenAPI and `api.gen.ts` were regenerated (route descriptions); regenerating again changes neither.
 - Exit codes were read from files.
+
+# A Google sign-in can only be finished in the browser that started it
+
+**2026-10-02, the eighth entry of the day; branch `pilot-fixes`, the founder's pilot-blockers follow-up (launch checklist 3.22).** One item, one commit.
+
+**Render: nothing new to set**, but it depends on 3.7's founder step 3: the Google callback must be on the **web** host (`GOOGLE_OAUTH_REDIRECT_URL`), the host the sign-in starts on, or every Google sign-in ends "could not be matched to this browser". A Google sign-in in progress at the moment of the deploy fails once (its record has no binding) and is started again. No migration, no new dependency or outbound host; no OpenAPI change.
+
+Drift check (north-star §8): Layer 0, Trust substrate (Google sign-in); lifecycle phase: Activation (Epic 9), a pilot agency signing up and signing in.
+
+## 1. What changed
+
+- **Founder decision (final):** bind the Google sign-in state to the browser that started it: a short-lived cookie, compared at the callback, single use. Why: the `state` was parked in Redis but tied to nothing in the browser, and the callback is a GET, which the Origin check does not cover. Someone could start a sign-in in their own browser, finish Google with their own account, stop before the callback, and get a victim to open the callback address: the victim would be signed in to the attacker's agency and type their clients into it. 3.7 made this work in every browser (the callback's cookie is first-party now), so the two ship together.
+- **Start** (`GET /auth/google/start`): a random binding (`token_urlsafe(32)`) is minted; its digest is parked in the Redis state record beside the nonce and the PKCE verifier; the binding itself goes to the browser as `__Host-avp_google_flow` (`avp_google_flow` on local http): HttpOnly, Secure when deployed, SameSite=Lax (it must ride on the top-level GET back from Google), Path=/, no Domain, Max-Age = the sign-in's 10 minutes + 60 s, so the state always expires first and an expired sign-in reads as expired.
+- **Callback:** the state is taken first (GET and DELETE in one transaction: single use, whatever happens next). Then the cookie's digest is compared with the parked one (`hmac.compare_digest`). Missing, different, or a record parked before this deploy → `/?google=error&reason=browser-mismatch`, logged as `google.callback.browser_mismatch` with only `cause` (`missing`, `different`, `unbound`); nothing is exchanged with Google, no user is looked up, no session or ticket is made. Every callback answer clears the cookie on the response actually returned, except the new-address redirect, which keeps it for the next step.
+- **The sign-up ticket is bound too** (from the security review): an attacker could otherwise finish Google with a new address and send the victim `/sign-up/google#ticket=…`, so the victim would create an agency owned by the attacker's Google identity. The ticket record carries the same binding digest; `POST /auth/google/pending` and `/complete` require the cookie (a refusal is the existing `400 invalid-google-ticket`, does not spend the ticket on the read, and creates nothing); `/complete` clears the cookie.
+- **Copy:**
+  - the new reason on `/`: "That Google sign-in could not be matched to this browser. Start it again from this page." (signed in: "…, so nothing was linked. Continue with Google again and choose <address>.");
+  - the refused-ticket state on `/sign-up/google` said "That Google sign-in has expired", untrue for a ticket opened in another browser: it now says "That Google sign-in can no longer be used" / "It works once, for ten minutes, in the browser that started it. Start again from the sign-in page.", and the API's problem title and detail say "can no longer be used";
+  - `/privacy` said "One cookie."; it now says "Two cookies." and names `__Host-avp_google_flow` (set only while a Google sign-in is in progress, unreadable by scripts, at most 11 minutes, from the pinned retention constant). A fact the code now makes true; the page is otherwise unchanged and still awaits the lawyer.
+- `docs/api-contracts.md`: the cookie on start, the comparison on the callback, `browser-mismatch`, the ticket binding, and that two Google sign-ins in two tabs of one browser end with the earlier one refused (the second start replaces the cookie; it fails safe).
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS. The login CSRF is closed:** the attacker's state is bound to a value only the attacker's browser ever held, and the callback stops before the exchange, the user lookup, the ticket and the session. Checked clean: the order of checks; the comparison; the binding's secrecy (256 bits, only its digest in Redis, not in any URL, Referer or log); the cookie's attributes and its clearing on every path, including exceptions; double callbacks; fixation (a `__Host-` cookie cannot be planted from a sibling host, and onrender.com is a public suffix; local http is dev-only); pre-deploy records failing closed; the signed-in "link Google" path, which uses the same callback.
+  - **Low, taken:** the sign-up ticket (above).
+  - **Nits taken:** four comments that said the state is "never compared to a cookie"; tests for the Secure clearing header, the exception path's clearing, and a log test that reassigned its variable before asserting.
+  - **Nits left:** two tabs fail together (documented, fails safe); a boot check that the redirect URL's host equals the web app's would refuse to boot between the merge and 3.7's founder step 3, so it is a founder step instead. "Two Set-Cookie headers through the rewrite" was already probed for 3.7: both arrive.
+- **UI review (sonnet):** **PASS WITH NITS**, nothing to change: each sentence is true wherever it is shown (a valid ticket only ever works in its own browser, so "in the browser that started it" holds for every refusal); "ten minutes" and "11 minutes" match the setting and the cookie's Max-Age; the refused state renders through the same path as before. Left: `/privacy` says when the flow cookie is set, not when it is removed ("at most 11 minutes" stays true); the mismatch sentence does not mention blocked cookies, the likeliest real cause of `missing` (new copy, not taken).
+
+## Verified
+
+**API pytest 2323 → 2344 (+21); web vitest 1454 → 1455 (+1); both floors raised to match.**
+- **API** (`test_google_sign_in.py`):
+  - start sets the flow cookie (HttpOnly, SameSite=lax, Path=/, no Domain, Max-Age = TTL + 60), named `__Host-avp_google_flow` with `Secure` when Secure is on;
+  - the existing-user and new-address paths still complete when the cookie comes back, and the cookie is cleared (or kept for the ticket);
+  - **mismatch** with another browser's real flow cookie: `browser-mismatch`, no session, no exchange with Google, and the state is spent (a retry with the right cookie gets `invalid-state`);
+  - **missing** cookie: the same, logged with `cause=missing`;
+  - **replay**: a successful callback replayed with the same state and cookie gets `invalid-state`, one exchange in all;
+  - **expiry**: a 1-second TTL elapses and the right cookie still gets `invalid-state`; a record parked without a binding gets `browser-mismatch`, `cause=unbound`;
+  - the cookie is cleared on `access_denied`, a bad or missing state, the not-configured path and the exception path, and the Secure clearing header carries `Secure` and `Path=/`;
+  - the ticket: `pending` and `complete` from a browser without the cookie, or with another browser's, are refused, create nothing and (on the read) do not spend the ticket; an unbound ticket fails closed; the same browser completes;
+  - the binding never appears in a log line or a redirect URL.
+  - `test_origin_check.py`'s Google-completion scenario now issues a bound ticket and carries the cookie, as a real browser would.
+- **Web:** `browser-mismatch` in both sentence maps; the refused-ticket state's new words on the panel and the route (and never on the unreachable state); `/privacy` names both cookies and "at most 11 minutes".
+- **Negative controls:**
+  - the callback's comparison made to pass fails the two mismatch tests (`missing` and `unbound` are caught by earlier branches); restored and checked with `cmp`;
+  - the comparison removed from the callback fails 4 tests, and from `pending` and `complete` 4 more (the implementer's runs, each restored and checked).
+
+**The rest of the bar** (this tree).
+- Workers 26, shared-types 53 (0 fail), design-system 859, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`).
+- **OpenAPI and `api.gen.ts`:** the bar's check failed on the first run: the reworded docstrings of the four Google routes are their OpenAPI descriptions, and the implementer had not regenerated. Both files were regenerated (descriptions only, no shape); regenerating again changes neither, and shared-types (53, 0 fail), its typecheck and the web typecheck were re-run on them.
+- Exit codes were read from files.

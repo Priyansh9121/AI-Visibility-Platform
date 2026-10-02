@@ -356,7 +356,8 @@ export interface paths {
          * @description Where Google sends the browser back. **No auth.** Always a 302.
          *
          *     In order: the state must be one this process minted and not yet used;
-         *     the code is exchanged and the ID token verified (signature, audience,
+         *     the flow cookie must be the one `/start` set in this browser (else
+         *     `browser-mismatch`); the code is exchanged and the ID token verified (signature, audience,
          *     issuer, expiry); the token's nonce must be the state's; then the
          *     linking policy decides. Three destinations:
          *
@@ -366,7 +367,7 @@ export interface paths {
          *       `/sign-up/google#ticket=…` (the fragment, never the query, so it is in
          *       no request log and no Referer) to name the agency;
          *     - anything else → `/?google=error&reason=…` with one of `not-configured`,
-         *       `denied`, `invalid-state`, `exchange-failed`, `email-unverified`,
+         *       `denied`, `invalid-state`, `browser-mismatch`, `exchange-failed`, `email-unverified`,
          *       `account-suspended`, `email-claimed`, `invitation-expired`,
          *       `account-unavailable`, or `unavailable` when something this route
          *       depends on — Redis, Postgres, the session store — failed underneath it
@@ -433,7 +434,11 @@ export interface paths {
          *     (like invite and reset), so reloading that page does not bring it back and
          *     the person starts again. `GET` with a `?ticket=` is `405`.
          *
-         *     **Errors:** `400 invalid-google-ticket` for unknown, used and expired alike.
+         *     The ticket is bound to the browser that signed in: the flow cookie must
+         *     come with it.
+         *
+         *     **Errors:** `400 invalid-google-ticket` for unknown, used, expired and
+         *     another browser's alike.
          */
         post: operations["google_pending_api_v1_auth_google_pending_post"];
         delete?: never;
@@ -455,8 +460,9 @@ export interface paths {
          *
          *     Mints a `state`, a `nonce` and a PKCE verifier, parks them in Redis for
          *     ten minutes, and redirects to Google's authorization endpoint with the
-         *     state, the nonce and the S256 challenge. The state is the CSRF guard for
-         *     the callback — looked up server-side, never compared to a cookie.
+         *     state, the nonce and the S256 challenge. The state is looked up
+         *     server-side; the flow cookie set here, whose digest is parked with it,
+         *     ties it to this browser and is compared at the callback.
          *
          *     **Errors:** `503 google-sign-in-not-configured` when the deployment has
          *     no OAuth client. The web app shows the button regardless; this is what

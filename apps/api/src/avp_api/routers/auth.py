@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hmac
 from typing import Any
 
 import structlog
@@ -26,6 +27,8 @@ from ..errors import (
     InvalidGoogleTicket,
     InvalidInvitation,
     InvalidResetToken,
+    ProblemError,
+    _problem_response,
 )
 from ..models import Agency, User
 from ..schemas.auth import (
@@ -44,6 +47,7 @@ from ..schemas.auth import (
     SignUpRequest,
     UserOut,
 )
+from ..security import token_digest
 from ..services import auth as auth_service
 from ..services import email as email_service
 from ..services import google_oauth, rate_limit
@@ -511,6 +515,55 @@ def _google_failure(settings: Settings, reason: str) -> RedirectResponse:
     return RedirectResponse(f"{base}/?google=error&reason={reason}", status_code=302)
 
 
+_TICKET_REFUSAL = "That Google sign-in can no longer be used. Start again from the sign-in page."
+
+
+def _ticket_bound_to(cookie: str | None, binding_digest: str | None) -> bool:
+    """Is this the browser the ticket was issued to? Logs the cause, never a value."""
+    if cookie is None:
+        cause = "missing"
+    elif binding_digest is None:
+        cause = "unbound"
+    elif not hmac.compare_digest(token_digest(cookie), binding_digest):
+        cause = "different"
+    else:
+        return True
+    logger.warning("google.ticket.browser_mismatch", cause=cause)
+    return False
+
+
+def _sets_flow_cookie(response: Response, settings: Settings) -> bool:
+    prefix = f"{settings.google_flow_cookie_key}="
+    return any(h.startswith(prefix) for h in response.headers.getlist("set-cookie"))
+
+
+def _set_google_flow_cookie(response: Response, binding: str, settings: Settings) -> None:
+    response.set_cookie(
+        key=settings.google_flow_cookie_key,
+        value=binding,
+        # The Redis state expires first, so an expired flow reads as expired,
+        # not as a mismatch.
+        max_age=settings.google_sign_in_ttl_seconds + 60,
+        httponly=True,
+        secure=settings.session_cookie_secure,
+        # Lax: it must ride on the top-level GET back from accounts.google.com.
+        samesite="lax",
+        path="/",
+    )
+
+
+def _clear_google_flow_cookie(response: Response, settings: Settings) -> None:
+    # Same Secure and Path=/ as the cookie it removes, or a browser ignores a
+    # `__Host-` deletion.
+    response.delete_cookie(
+        key=settings.google_flow_cookie_key,
+        httponly=True,
+        secure=settings.session_cookie_secure,
+        samesite="lax",
+        path="/",
+    )
+
+
 @router.get("/google/start", status_code=status.HTTP_302_FOUND, response_class=RedirectResponse)
 async def google_start(
     settings: SettingsDep, flow: GoogleFlowStoreDep, google: GoogleProviderDep
@@ -519,8 +572,9 @@ async def google_start(
 
     Mints a `state`, a `nonce` and a PKCE verifier, parks them in Redis for
     ten minutes, and redirects to Google's authorization endpoint with the
-    state, the nonce and the S256 challenge. The state is the CSRF guard for
-    the callback — looked up server-side, never compared to a cookie.
+    state, the nonce and the S256 challenge. The state is looked up
+    server-side; the flow cookie set here, whose digest is parked with it,
+    ties it to this browser and is compared at the callback.
 
     **Errors:** `503 google-sign-in-not-configured` when the deployment has
     no OAuth client. The web app shows the button regardless; this is what
@@ -534,17 +588,20 @@ async def google_start(
                 "Sign in with your email and password instead."
             )
         )
-    state, nonce, challenge = await flow.begin()
-    return RedirectResponse(
+    state, nonce, challenge, binding = await flow.begin()
+    redirect = RedirectResponse(
         google.authorization_url(state=state, nonce=nonce, code_challenge=challenge),
         status_code=status.HTTP_302_FOUND,
     )
+    _set_google_flow_cookie(redirect, binding, settings)
+    return redirect
 
 
 @router.get(
     "/google/callback", status_code=status.HTTP_302_FOUND, response_class=RedirectResponse
 )
 async def google_callback(
+    request: Request,
     response: Response,
     db: DbDep,
     store: SessionStoreDep,
@@ -558,7 +615,8 @@ async def google_callback(
     """Where Google sends the browser back. **No auth.** Always a 302.
 
     In order: the state must be one this process minted and not yet used;
-    the code is exchanged and the ID token verified (signature, audience,
+    the flow cookie must be the one `/start` set in this browser (else
+    `browser-mismatch`); the code is exchanged and the ID token verified (signature, audience,
     issuer, expiry); the token's nonce must be the state's; then the
     linking policy decides. Three destinations:
 
@@ -568,7 +626,7 @@ async def google_callback(
       `/sign-up/google#ticket=…` (the fragment, never the query, so it is in
       no request log and no Referer) to name the agency;
     - anything else → `/?google=error&reason=…` with one of `not-configured`,
-      `denied`, `invalid-state`, `exchange-failed`, `email-unverified`,
+      `denied`, `invalid-state`, `browser-mismatch`, `exchange-failed`, `email-unverified`,
       `account-suspended`, `email-claimed`, `invitation-expired`,
       `account-unavailable`, or `unavailable` when something this route
       depends on — Redis, Postgres, the session store — failed underneath it
@@ -578,19 +636,36 @@ async def google_callback(
     **Errors:** none as status codes. A person arriving here is not a script
     and gets a page, not a problem document.
     """
+    # Every answer from here clears the flow cookie, on the response actually
+    # returned (headers set on the injected `response` are not merged into one
+    # the route builds itself).
+    result: RedirectResponse
     if not settings.google_sign_in_configured:
-        return _google_failure(settings, "not-configured")
-    if state is None:
-        return _google_failure(settings, "invalid-state")
-    try:
-        return await _google_callback(
-            response, db, store, settings, flow, google, state=state, code=code, error=error
-        )
-    except Exception:  # noqa: BLE001 - a person is standing here, not a script
-        logger.exception("google.callback.failed")
-        with contextlib.suppress(Exception):  # the connection may be what failed
-            await db.rollback()
-        return _google_failure(settings, "unavailable")
+        result = _google_failure(settings, "not-configured")
+    elif state is None:
+        result = _google_failure(settings, "invalid-state")
+    else:
+        try:
+            result = await _google_callback(
+                response,
+                db,
+                store,
+                settings,
+                flow,
+                google,
+                state=state,
+                code=code,
+                error=error,
+                flow_cookie=request.cookies.get(settings.google_flow_cookie_key),
+            )
+        except Exception:  # noqa: BLE001 - a person is standing here, not a script
+            logger.exception("google.callback.failed")
+            with contextlib.suppress(Exception):  # the connection may be what failed
+                await db.rollback()
+            result = _google_failure(settings, "unavailable")
+    if not _sets_flow_cookie(result, settings):
+        _clear_google_flow_cookie(result, settings)
+    return result
 
 
 async def _google_callback(
@@ -604,11 +679,24 @@ async def _google_callback(
     state: str,
     code: str | None,
     error: str | None,
+    flow_cookie: str | None,
 ) -> RedirectResponse:
     """The callback proper; `google_callback` wraps it so nothing escapes as a 500."""
     parked = await flow.consume_state(state)
     if parked is None:
         return _google_failure(settings, "invalid-state")
+    # The state is spent; now it must have been started by THIS browser. A
+    # record parked before the binding existed fails closed.
+    cause: str | None = None
+    if flow_cookie is None:
+        cause = "missing"
+    elif parked.binding_digest is None:
+        cause = "unbound"
+    elif not hmac.compare_digest(token_digest(flow_cookie), parked.binding_digest):
+        cause = "different"
+    if cause is not None:
+        logger.warning("google.callback.browser_mismatch", cause=cause)
+        return _google_failure(settings, "browser-mismatch")
     if error is not None or code is None:
         # `access_denied` is the person pressing Cancel on Google's screen.
         return _google_failure(settings, "denied")
@@ -628,10 +716,15 @@ async def _google_callback(
 
     base = settings.public_web_base_url.rstrip("/")
     if user is None:
-        ticket = await flow.issue_ticket(identity)
+        ticket = await flow.issue_ticket(identity, parked.binding_digest)
         # A fragment is never sent to a server: the ticket stays out of the web
         # host's request log, browser history as a query, and every Referer.
-        return RedirectResponse(f"{base}/sign-up/google#ticket={ticket}", status_code=302)
+        to_sign_up = RedirectResponse(f"{base}/sign-up/google#ticket={ticket}", status_code=302)
+        # The ticket is bound to this browser: keep the flow cookie (renewed)
+        # for the completion calls, which clear it.
+        assert flow_cookie is not None  # the binding was compared above
+        _set_google_flow_cookie(to_sign_up, flow_cookie, settings)
+        return to_sign_up
 
     await db.commit()
     token, _ = await store.create(user_id=user.id, agency_id=user.agency_id)
@@ -641,7 +734,9 @@ async def _google_callback(
 
 
 @router.post("/google/pending", response_model=GooglePendingOut)
-async def google_pending(payload: GooglePendingRequest, flow: GoogleFlowStoreDep) -> Any:
+async def google_pending(
+    payload: GooglePendingRequest, request: Request, settings: SettingsDep, flow: GoogleFlowStoreDep
+) -> Any:
     """What the completion page shows before asking for an agency name. **No auth.**
 
     A POST so the ticket rides in the body: it is a bearer credential with a
@@ -651,14 +746,18 @@ async def google_pending(payload: GooglePendingRequest, flow: GoogleFlowStoreDep
     (like invite and reset), so reloading that page does not bring it back and
     the person starts again. `GET` with a `?ticket=` is `405`.
 
-    **Errors:** `400 invalid-google-ticket` for unknown, used and expired alike.
+    The ticket is bound to the browser that signed in: the flow cookie must
+    come with it.
+
+    **Errors:** `400 invalid-google-ticket` for unknown, used, expired and
+    another browser's alike.
     """
-    ticket = payload.ticket
-    identity = await flow.peek_ticket(ticket)
-    if identity is None:
-        raise InvalidGoogleTicket(
-            detail="That Google sign-in has expired. Start again from the sign-in page."
-        )
+    peeked = await flow.peek_ticket(payload.ticket)
+    if peeked is None or not _ticket_bound_to(
+        request.cookies.get(settings.google_flow_cookie_key), peeked[1]
+    ):
+        raise InvalidGoogleTicket(detail=_TICKET_REFUSAL)
+    identity = peeked[0]
     return GooglePendingOut(email=identity.email, suggested_name=identity.name)
 
 
@@ -667,6 +766,7 @@ async def google_pending(payload: GooglePendingRequest, flow: GoogleFlowStoreDep
 )
 async def google_complete(
     payload: CompleteGoogleSignUpRequest,
+    request: Request,
     response: Response,
     db: DbDep,
     store: SessionStoreDep,
@@ -683,24 +783,34 @@ async def google_complete(
     (the address was registered in the minutes since the ticket was minted),
     `422`.
     """
-    identity = await flow.consume_ticket(payload.ticket)
-    if identity is None:
-        raise InvalidGoogleTicket(
-            detail="That Google sign-in has expired. Start again from the sign-in page."
+    # The ticket is spent first, as ever; then it must be this browser's. A
+    # refusal is built here as a problem document so the flow cookie can be
+    # cleared on the response actually sent.
+    try:
+        consumed = await flow.consume_ticket(payload.ticket)
+        if consumed is None or not _ticket_bound_to(
+            request.cookies.get(settings.google_flow_cookie_key), consumed[1]
+        ):
+            raise InvalidGoogleTicket(detail=_TICKET_REFUSAL)
+        agency, user = await google_oauth.complete_sign_up(
+            db,
+            consumed[0],
+            agency_name=payload.agency_name,
+            full_name=payload.full_name,
+            settings=settings,
         )
-    agency, user = await google_oauth.complete_sign_up(
-        db,
-        identity,
-        agency_name=payload.agency_name,
-        full_name=payload.full_name,
-        settings=settings,
-    )
-    await db.commit()
+        await db.commit()
+    except ProblemError as problem:
+        await db.rollback()
+        refused = _problem_response(request, problem)
+        _clear_google_flow_cookie(refused, settings)
+        return refused
     await db.refresh(agency)
     await db.refresh(user)
 
     token, _ = await store.create(user_id=user.id, agency_id=agency.id)
     _set_session_cookie(response, token, settings)
+    _clear_google_flow_cookie(response, settings)
 
     used, limit = await seat_service.seat_usage(db, agency.id)
     return MeOut(

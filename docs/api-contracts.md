@@ -466,7 +466,11 @@ new address creates nothing until the agency is named.
 ##### `GET /api/v1/auth/google/start`
 A browser navigation. **`302`** to Google's authorization endpoint carrying
 `state`, `nonce`, `code_challenge` (S256), `scope=openid email profile`,
-`prompt=select_account`. **Errors:** `503 google-sign-in-not-configured`.
+`prompt=select_account`. The response also sets the **flow cookie**
+(`__Host-avp_google_flow` when the session cookie is Secure, else
+`avp_google_flow`): a random value bound to the parked state, `HttpOnly`,
+`SameSite=Lax`, `Path=/`, no `Domain`, `Max-Age` = sign-in TTL + 60 s (600 + 60).
+**Errors:** `503 google-sign-in-not-configured`.
 
 ##### `GET /api/v1/auth/google/callback?code&state` (or `error`)
 Where Google returns the browser. **Always `302`**, never a problem
@@ -478,7 +482,12 @@ document — a person, not a script, is standing here:
 | new address | `{PUBLIC_WEB_BASE_URL}/sign-up/google#ticket=…` (ten minutes, single use; in the fragment, never the query) |
 | anything else | `{PUBLIC_WEB_BASE_URL}/?google=error&reason=…` |
 
-`reason` is one of `denied`, `invalid-state`, `exchange-failed`,
+The callback consumes the state (single use), then compares the flow cookie
+with the digest parked at `/start`; a missing cookie, a flow parked without a
+digest, or a different browser's cookie is `browser-mismatch` and no code is
+exchanged. Every callback response clears the flow cookie.
+
+`reason` is one of `denied`, `invalid-state`, `browser-mismatch`, `exchange-failed`,
 `email-unverified`, `account-suspended`, `email-claimed`,
 `invitation-expired`, `account-unavailable`, `not-configured`, or
 `unavailable` (something under the route — Redis, Postgres, the session
@@ -498,8 +507,11 @@ _Note 2026-10-01:_ the legacy `?ticket=` fallback in
 **Request:** `{ "ticket": "…" }` (was `GET ?ticket=…` until 2026-10-01; a `GET`
 is now `405`, so the ticket is never in a URL).
 **Response `200`** — `GooglePendingOut`: `{ "email": "…", "suggestedName": "…" }`.
-Read-only; the ticket is not spent. **Errors:** `400 invalid-google-ticket`
-for unknown, used and expired alike.
+Read-only; the ticket is not spent. The ticket is bound to the browser that
+signed in: the callback's new-address redirect keeps the flow cookie (renewed,
+Max-Age = TTL + 60) and the ticket record carries its digest, so the cookie
+must come with this call. **Errors:** `400 invalid-google-ticket` for unknown,
+used, expired, and a missing or another browser's flow cookie alike.
 
 ##### `POST /api/v1/auth/google/complete`
 **Request:** `{ "ticket": "…", "agencyName": "…", "fullName": "…" }` —
@@ -507,8 +519,11 @@ the two things `sign-up` asks that Google cannot answer. No email (the
 ticket's), no password.
 
 **Response `201`** — `MeOut`, with the session cookie set. The agency and
-its OWNER are created, `signInMethods: ["google"]`. The ticket is consumed.
-**Errors:** `400 invalid-google-ticket`, `409 email-already-registered`,
+its OWNER are created, `signInMethods: ["google"]`. The ticket is consumed
+first, then the flow cookie must match it (else `400`, nothing created). Every
+response, success or refusal, clears the flow cookie. Two Google sign-ins in
+two tabs of one browser share one flow cookie, so the earlier one is refused
+(`browser-mismatch`); accepted, it fails safe. **Errors:** `400 invalid-google-ticket`, `409 email-already-registered`,
 `422 validation-failed`.
 
 ---
