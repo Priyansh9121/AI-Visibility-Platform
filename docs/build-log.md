@@ -21907,3 +21907,51 @@ Drift check (north-star §8): Layer 1, Delivery (the signed-in client Technical 
 - The Python and JavaScript licence audits pass (`pnpm licenses list --json`).
 - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# A share link stops opening the report once its scan has failed, like a withdrawn link
+
+**2026-10-02, the fourteenth entry of the day; branch `pilot-fixes-2`, the founder's brief "memory and the rest of the open decisions" (launch checklist 3.29).** One item, one commit.
+
+**Render: nothing to set. No migration, no new dependency or outbound host.** Route descriptions changed (OpenAPI and `api.gen.ts` regenerated, descriptions only). Deploy the API before or with the web app: the share bar's new sentence is true once the API refuses the link.
+
+Drift check (north-star §8): Layer 1, Delivery (the public shared report and the share bar); lifecycle phase: Activation (Epic 9), what a prospect can open.
+
+## 1. What changed
+
+- **Founder decision (final):** the public report (JSON, page and PDF) refuses a share link whose scan is FAILED, the same way it treats a withdrawn or expired link; the token is not deleted, so the agency can still withdraw it.
+- **One place decides** (`scan_for_share_token`, `services/share.py`): `Scan.status != FAILED` sits in the same WHERE as the token and its expiry, and both public routes (`POST /reports/shared`, `POST /reports/shared/pdf`) use that lookup and nothing else. A failed scan's link therefore gets exactly what an unknown, withdrawn or expired one gets: `404 /problems/not-found`, "No report with that link.", the same headers, the same `/share` page ("This report link is not available…"). It costs what an expired token costs (the index finds the row; the rest of the predicate drops it).
+- **The token stays on the row.** The signed-in report still carries `shareExpiresAt` for it, and `DELETE /scans/{scanId}/share` still withdraws it.
+- **Minting re-checks under the lock** (from the security review). `get_or_create_share_token` reads the status again after its `FOR UPDATE` re-select and raises the route's own `409 failed-scan-not-shareable` for a FAILED scan before writing anything, so a scan that fails between the route's check and the lock gets no link and no pushed expiry. Both refusals use one sentence constant.
+- **The share bar tells the truth about a failed scan's link** (`ShareLinkBar.tsx`):
+  - lead: "This scan failed, so its report cannot be shared. Its existing link no longer opens the report." (it said the link works until it is withdrawn or ends); no "The link works until …" line; no Get button; the URL field and Copy are hidden too (also when the page learns of the failure after a mint in the same visit);
+  - Withdraw stays, with its confirm step: "Withdraw this link? It will be removed permanently." (the other scans keep "…Anyone who opens it will no longer see the report.");
+  - a failed withdrawal says "The link could not be withdrawn. Try again." (the other scans keep "…and may still open…", which is false here).
+- **Tests that pinned "keeps serving", inverted and renamed:** `test_an_already_shared_scan_that_then_fails_serves_without_a_score` → `…_is_refused_like_a_withdrawn_link`; the reaper test in `test_share_link.py` → `test_a_scan_reaped_while_it_is_shared_keeps_its_token_and_its_link_stops_opening`; three share-bar test titles. `docs/api-contracts.md`: the public routes, the mint's re-check, and the PDF route's problem `instance`.
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS.** Checked clean: every public read path goes through the one lookup (the old `GET /reports/{token}` routes are gone, `/share/[token]` only moves the token into the fragment); the refusal is indistinguishable from an unknown token in status, type, detail, `instance` and headers; a request in flight when the scan fails can only return what was already public; FAILED is terminal, so the kept token never comes back; both public 200s are `Cache-Control: private, no-store` POST responses; tenancy; facts-only.
+  - **Taken:** the mint's re-check under the lock (L1); full header and body comparisons against a withdrawn and a never-issued token on both routes (L2); the docstring's cost claim; the PDF route's `instance` in the contract.
+- **UI review (sonnet): FAIL (narrow), then PASS WITH NITS.** Round 1 found two strings this item made false on a failed scan: the failed-withdrawal alert ("may still open") and the confirm question ("no longer see the report"); both fixed, with the copy field hidden for a failed scan. Round 2 confirmed every failed-scan state (live token, after Keep link, after a failed and a successful withdrawal, a 409, a status change after a mint) and took one Low: "It is removed for good." read as already done; now "It will be removed permanently."
+
+## Found, not fixed
+
+- **The dashboard's "Share a report" step counts a failed scan's dead link** (`shared_scan_count` counts `share_token IS NOT NULL`, and the getting-started card says "One live link."); expired links already count the same way by design. Founder: exclude dead links from that count, or keep it.
+- **Only FAILED is refused.** Cancelled scans still mint and serve (nothing writes CANCELLED today); a test pins that, so a future cancel feature will meet it.
+
+## Verified
+
+**API pytest 2367 → 2379 (+12); web vitest 1490 → 1499 (+9); both floors raised to match.**
+- API: both public routes 404 a failed scan's token exactly as a withdrawn and a never-issued one (status, problem body, `instance`, headers minus date and request id); only FAILED is refused (parametrised over all six statuses, 200 JSON and `%PDF` for the other five); the token stays on the row, the signed-in report keeps `shareExpiresAt`, and the agency can withdraw it; the reaper case; the lookup itself returns nothing for FAILED; a scan that fails between the route's read and the lock gets 409 with nothing written (first link and live link), and the service refuses a stale object.
+- Web: the failed-scan lead, no end date, no Get button, no URL field or Copy; Withdraw and its confirm step; the failed-withdrawal alert by failure shape (502, 500, no answer) with focus back on Withdraw; contrast cases that a scan which did not fail keeps its old sentences.
+- **Negative controls:**
+  - the lookup's FAILED condition removed fails 5 API tests; restored and checked with `cmp`;
+  - the re-check under the lock removed fails the 3 race and stale-object cases; the share bar put back to its pre-fix state fails 5 web tests (the implementer's runs, each restored and checked).
+
+**The rest of the bar** (this tree; the web suite and typecheck were run again after the last wording change).
+- Workers 26, shared-types 53 (0 fail), design-system 875, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`).
+- OpenAPI and `api.gen.ts` regenerate with no change from the committed files (descriptions of three routes changed in this item).
+- Exit codes were read from files.

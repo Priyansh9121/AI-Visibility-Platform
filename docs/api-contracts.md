@@ -2020,7 +2020,8 @@ place that `tests/test_facts_only.py` can assert over.
 
 **`scanErrorCode` (2026-10-01)** is the scan's own `errorCode`, or `null`: why a
 `partial` or `failed` scan ended that way (see the scan-level status under
-`GET /scans/{scanId}`). A report is served for a scan of any status. The
+`GET /scans/{scanId}`). The signed-in report is served for a scan of any status
+(the shared one for any but `failed`, checklist 3.29). The
 signed-in report turns the code into a sentence and never shows the code. On the
 shared report (the link a prospect opens, and its PDF) the field is always
 `null`: the sentence speaks about the agency's own scan allowance, and the code
@@ -2030,7 +2031,10 @@ is not the link holder's business.
 link ends, or `null`: the token is set and its expiry is in the future. Never the
 token or the URL. It lets the report page offer "Withdraw link" without minting
 one first. `null` for a scan never shared, a withdrawn link and an expired one,
-and always `null` on the shared report and its PDF, like `scanErrorCode`.
+and always `null` on the shared report and its PDF, like `scanErrorCode`. A
+`failed` scan's token still counts (checklist 3.29): that link no longer opens
+the report, but the token stays so the agency can withdraw it, and this field is
+how the page knows to offer that.
 
 **`dimensions` is ordered heaviest-weight first.** The Luminance Ledger stacks
 the heaviest segment at the bottom and consumes this list directly, so the order
@@ -2105,8 +2109,10 @@ report renders all three states differently.
 kept a score row: `score` is `null`, `dimensions` is `[]`, each competitor's
 `mentionRate` and `shareOfVoice` are `null`, `audit.technicalFoundation` is
 `null` and every `actionItems[].pointsUpside` is `null`. The fixes themselves
-stay. The same holds on the shared report and its PDF. The row is not changed or
-deleted; it is not read.
+stay. The shared report and its PDF do not serve a `failed` scan at all: its
+share link is refused like a withdrawn one (checklist 3.29, under
+`POST /api/v1/reports/shared`). The row is not changed or deleted; it is not
+read.
 
 **`outranksSubject`** is arithmetic over stored counts and ordinals — more
 appearances wins; on a tie, the better position wins. Not a judgement.
@@ -2204,7 +2210,8 @@ accepted that when the cost was zero — links had no expiry and no revocation, 
 the file gave away nothing the link did not already give away permanently — and
 marked this "the route to revisit when revocation ships". **Epic 9.21 shipped it,
 and this is that revisit.** A revoked or expired link stops serving files
-immediately, on the same lookup as the JSON route. What revocation cannot do is
+immediately, on the same lookup as the JSON route, and so does a link whose scan
+`failed` (checklist 3.29, below). What revocation cannot do is
 recall a copy already on someone's disk, and nothing can. That residual gap is
 real, bounded and named: **revocation governs the link from the moment it is
 invoked, never a file already downloaded.**
@@ -2214,10 +2221,11 @@ lookup: read-only, one code path, `404` for every rejection with no shape
 pre-check, and never a `401`.** The token travels in the body so it never appears
 in a request log.
 
-**Errors:** `404 not-found` for an unknown, revoked or expired token — one reply
-for all three, and the problem's `instance` is `/api/v1/reports/shared`, so no
-token is echoed. `422 validation-failed` for a missing, empty, non-string or
-over-512-character token; this reply is the same for a real and a fake token.
+**Errors:** `404 not-found` for an unknown, revoked or expired token, or one whose
+scan `failed` — one reply for all four, and the problem's `instance` is
+`/api/v1/reports/shared/pdf`, so no token is echoed. `422 validation-failed` for a
+missing, empty, non-string or over-512-character token; this reply is the same
+for a real and a fake token.
 
 #### `POST /api/v1/scans/{scanId}/share`
 **Auth required.** Mints (or returns) the scan's public share token. `200`.
@@ -2265,7 +2273,9 @@ or `Origin` header. Those are attacker-controlled, and a share link built from a
 spoofed Host is a phishing URL carrying a real token. Configuration, not
 reflection.
 
-**A `failed` scan cannot be shared** (checklist 3.24): `409 /problems/failed-scan-not-shareable`, and no token is minted. A failed scan has no score on the dashboard or the report. `partial` and every other status mint as before.
+**A `failed` scan cannot be shared** (checklist 3.24): `409 /problems/failed-scan-not-shareable`, and no token is minted. A failed scan has no score on the dashboard or the report. `partial` and every other status mint as before. The status is read again under the row lock, so a scan that fails while the request is in flight gets the same `409` and nothing is written: no token minted, and a live link's end not moved.
+
+**A link minted before the scan failed no longer opens its report** (checklist 3.29, founder decision): both public routes refuse it like a withdrawn one (see `POST /api/v1/reports/shared`). The token is not cleared. `DELETE .../share` still takes it down, and the signed-in report's `shareExpiresAt` still reports it, so the screen can offer that.
 
 **Errors:** `401`, `404` (unknown scan, or another agency's), `409` (failed scan).
 
@@ -2394,6 +2404,17 @@ their own kind of wrong. A missing `share_expires_at` is **not** "never
 expires": the comparison is strict, so a token that somehow reached the table
 without one serves nothing. Fail-closed, for a credential.
 
+**A `failed` scan's token 404s the same way** — checklist 3.29, founder decision.
+A failed scan's score is never shown, so there is no report to send, and a link
+minted while the scan was still running used to keep serving it without a score.
+It is now refused like a withdrawn one: the same status, the same `type`, the
+same `detail` ("No report with that link."), on this route and on
+`POST /reports/shared/pdf`, because the status test is one more condition in
+`share.scan_for_share_token`'s query rather than a check in either route. The
+token is **not** cleared: the agency's own report still carries `shareExpiresAt`
+for it, and `DELETE /scans/{scanId}/share` still takes it down. Every other
+status (`partial` included) is served as before.
+
 **`404` for every rejection, on one code path.** A malformed token, an unknown
 token and a well-formed miss are indistinguishable in both status and body.
 There is deliberately no shape or length pre-check: rejecting an implausible
@@ -2404,10 +2425,11 @@ cheaper. **Never `401`** — that would confirm the token is real.
 the competitor set, re-run the scan, or reach any other scan; the token resolves
 to exactly one row.
 
-**Errors:** `404 not-found` for an unknown, revoked or expired token — one reply
-for all three, and the problem's `instance` is `/api/v1/reports/shared`, so no
-token is echoed. `422 validation-failed` for a missing, empty, non-string or
-over-512-character token; this reply is the same for a real and a fake token.
+**Errors:** `404 not-found` for an unknown, revoked or expired token, or one whose
+scan `failed` — one reply for all four, and the problem's `instance` is
+`/api/v1/reports/shared`, so no token is echoed. `422 validation-failed` for a
+missing, empty, non-string or over-512-character token; this reply is the same
+for a real and a fake token.
 
 
 ### Action list (generated fixes) — Epic 8

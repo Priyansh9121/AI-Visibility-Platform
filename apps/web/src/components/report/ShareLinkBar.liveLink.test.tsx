@@ -35,6 +35,10 @@ const LIVE_LINE = 'The link works until 04 Nov 2026, 09:30 UTC.';
 const MINTED = '2026-11-20T10:00:00Z';
 const MINTED_LINE = 'The link works until 20 Nov 2026, 10:00 UTC.';
 const URL_ = 'https://app.example/share#TOKENSENTINEL0123456789';
+// A failed scan's link no longer opens the report (3.29), so neither the end date nor
+// "works" may be said of it. The lead says so after the sentence that says the scan failed.
+const FAILED_LEAD = 'This scan failed, so its report cannot be shared.';
+const DEAD_LINK = 'Its existing link no longer opens the report.';
 let root: Root | null = null;
 
 const settle = () =>
@@ -170,8 +174,8 @@ describe('a failed Get shareable link while a link is live', () => {
 });
 
 describe('a 409 refusal while a link is live', () => {
-  it('shows the failed-scan sentence, drops Get, and keeps the date line and Withdraw', async () => {
-    const detail = 'This scan failed, so its report cannot be shared.';
+  it('shows the failed-scan sentence and that the link no longer opens, drops Get and the date line, and keeps Withdraw', async () => {
+    const detail = FAILED_LEAD;
     shareLink.mockRejectedValue(
       new ApiProblem({
         type: '/problems/failed-scan-not-shareable',
@@ -182,13 +186,16 @@ describe('a 409 refusal while a link is live', () => {
       }),
     );
     const el = mounted({ scanStatus: 'partial', shareExpiresAt: LIVE });
+    // Not vacuous: before the refusal the page is a live link's, with its date.
+    expect(el.textContent).toContain(LIVE_LINE);
     await act(async () => {
       button(el, 'Get shareable link')!.click();
     });
     await settle();
     expect(el.textContent).toContain(detail);
+    expect(el.textContent).toContain(DEAD_LINK);
     expect(button(el, 'Get shareable link')).toBeUndefined();
-    expect(el.textContent).toContain(LIVE_LINE);
+    expect(el.textContent).not.toContain('The link works until');
     expect(button(el, 'Withdraw link')).toBeDefined();
   });
 });
@@ -219,17 +226,148 @@ describe('nothing live', () => {
 });
 
 describe('a failed scan that was shared before it failed', () => {
-  it('says it cannot be shared, with no Get button, and still offers Withdraw and the date', () => {
+  it('says it cannot be shared and its link no longer opens, with no Get button and no end date, and still offers Withdraw', () => {
     const el = mounted({ scanStatus: 'failed', shareExpiresAt: LIVE });
-    expect(el.textContent).toContain('This scan failed, so its report cannot be shared.');
+    expect(el.textContent).toContain(FAILED_LEAD);
+    expect(el.textContent).toContain(DEAD_LINK);
     expect(button(el, 'Get shareable link')).toBeUndefined();
-    expect(el.textContent).toContain(LIVE_LINE);
+    // The link does not open the report, so a date it "works until" would be untrue.
+    expect(el.textContent).not.toContain('The link works until');
+    expect(el.textContent).not.toContain(LIVE_LINE);
     expect(button(el, 'Withdraw link')).toBeDefined();
+  });
+
+  it('withdraws from there: confirm, then the link is gone and the failed-scan sentence stays', async () => {
+    withdrawShareLink.mockResolvedValue(undefined);
+    const el = mounted({ scanStatus: 'failed', shareExpiresAt: LIVE });
+    act(() => button(el, 'Withdraw link')!.click());
+    expect(el.textContent).toContain('Withdraw this link?');
+    expect(withdrawShareLink).not.toHaveBeenCalled();
+    // The same focus step as any live link: the safe answer first.
+    expect(document.activeElement).toBe(button(el, 'Keep link'));
+    await act(async () => {
+      button(el, 'Withdraw link')!.click();
+    });
+    await settle();
+    expect(withdrawShareLink).toHaveBeenCalledWith('scan_01');
+    expect(el.querySelector('[role="status"]')?.textContent).toBe(
+      'Link withdrawn. It no longer opens this report.',
+    );
+    expect(button(el, 'Withdraw link')).toBeUndefined();
+    expect(button(el, 'Get shareable link')).toBeUndefined();
+    // With nothing left to withdraw the lead is the failed-scan sentence alone.
+    expect(el.querySelector('[data-testid="share-lead"]')?.textContent).toBe(FAILED_LEAD);
+  });
+
+  it('keeping the link brings Withdraw back, still without the date', () => {
+    const el = mounted({ scanStatus: 'failed', shareExpiresAt: LIVE });
+    act(() => button(el, 'Withdraw link')!.click());
+    act(() => button(el, 'Keep link')!.click());
+    expect(withdrawShareLink).not.toHaveBeenCalled();
+    expect(button(el, 'Withdraw link')).toBeDefined();
+    expect(el.textContent).not.toContain('The link works until');
+    expect(el.textContent).toContain(DEAD_LINK);
   });
 
   it('with no live link it has no Withdraw either', () => {
     const el = mounted({ scanStatus: 'failed', shareExpiresAt: null });
     expect(el.querySelectorAll('button')).toHaveLength(0);
+  });
+});
+
+// The 3.29 review. A failed scan's link opens nothing whatever the agency does, so no
+// sentence on the bar may talk as if it might: not the question before Withdraw, not the
+// failure of a Withdraw, and no field to copy a link from.
+describe('a failed scan that was shared before it failed: what the bar asks and offers', () => {
+  const MAY_STILL_OPEN = 'The link could not be withdrawn and may still open. Try again.';
+  const NOT_WITHDRAWN = 'The link could not be withdrawn. Try again.';
+  const problem = (status: number) =>
+    new ApiProblem({
+      type: '/problems/unknown',
+      title: 'Request failed',
+      status,
+      detail: `The server returned ${status}.`,
+      instance: '/api/v1/scans/scan_01/share',
+    });
+
+  async function confirmWithdraw(el: HTMLElement) {
+    act(() => button(el, 'Withdraw link')!.click());
+    await act(async () => {
+      button(el, 'Withdraw link')!.click();
+    });
+    await settle();
+  }
+
+  it.each([
+    ['a 502 from a proxy', problem(502)],
+    ['a 500', problem(500)],
+    ['no answer at all', new TypeError('Failed to fetch')],
+  ])(
+    'after %s it says only that the link could not be withdrawn, and puts focus back on Withdraw',
+    async (_what, failure) => {
+      withdrawShareLink.mockRejectedValue(failure);
+      const el = mounted({ scanStatus: 'failed', shareExpiresAt: LIVE });
+      await confirmWithdraw(el);
+      // Not vacuous: the request went out and failed.
+      expect(withdrawShareLink).toHaveBeenCalledWith('scan_01');
+      expect(el.querySelector('[role="alert"]')?.textContent).toBe(NOT_WITHDRAWN);
+      expect(el.textContent).not.toContain('may still open');
+      expect(el.textContent).not.toContain('The server returned');
+      // Still there to try again, and focus is on it rather than on <body>.
+      const trigger = button(el, 'Withdraw link');
+      expect(trigger).toBeDefined();
+      expect(document.activeElement).toBe(trigger);
+    },
+  );
+
+  it('and a scan that did not fail still says the link may still open', async () => {
+    withdrawShareLink.mockRejectedValue(new TypeError('Failed to fetch'));
+    const el = mounted({ scanStatus: 'partial', shareExpiresAt: LIVE });
+    await confirmWithdraw(el);
+    expect(el.querySelector('[role="alert"]')?.textContent).toBe(MAY_STILL_OPEN);
+  });
+
+  it("asks that a failed scan's link will be removed permanently, and does not say anyone will no longer see a report", () => {
+    const el = mounted({ scanStatus: 'failed', shareExpiresAt: LIVE });
+    act(() => button(el, 'Withdraw link')!.click());
+    expect(el.textContent).toContain('Withdraw this link? It will be removed permanently.');
+    expect(el.textContent).not.toContain('no longer see');
+    // The buttons are the ones every link has.
+    expect(button(el, 'Withdraw link')).toBeDefined();
+    expect(button(el, 'Keep link')).toBeDefined();
+  });
+
+  it('and a scan that did not fail keeps the question it had', () => {
+    const el = mounted({ scanStatus: 'partial', shareExpiresAt: LIVE });
+    act(() => button(el, 'Withdraw link')!.click());
+    expect(el.textContent).toContain(
+      'Withdraw this link? Anyone who opens it will no longer see the report.',
+    );
+    expect(el.textContent).not.toContain('removed for good');
+  });
+
+  it('stops offering a link made earlier in the visit for copying once the page knows the scan failed', async () => {
+    shareLink.mockResolvedValue({ url: URL_, expiresAt: MINTED });
+    const el = mounted({ scanStatus: 'partial' });
+    await act(async () => {
+      button(el, 'Get shareable link')!.click();
+    });
+    await settle();
+    // Not vacuous: a link just made is offered, with its field and Copy.
+    expect(el.querySelector<HTMLInputElement>('input[readonly]')?.value).toBe(URL_);
+    expect(button(el, 'Copy')).toBeDefined();
+
+    // The report is read again and says the scan failed: the same bar gets the new status.
+    act(() =>
+      root!.render(<ShareLinkBar scanId="scan_01" scanStatus="failed" shareExpiresAt={undefined} />),
+    );
+    expect(el.querySelector('input')).toBeNull();
+    expect(button(el, 'Copy')).toBeUndefined();
+    expect(el.textContent).not.toContain('The link works until');
+    expect(button(el, 'Withdraw link')).toBeDefined();
+    expect(el.querySelector('[data-testid="share-lead"]')?.textContent).toBe(
+      `${FAILED_LEAD} ${DEAD_LINK}`,
+    );
   });
 });
 
@@ -263,10 +401,14 @@ describe('review fixes', () => {
     expect(el.textContent).toContain('The link works until 04 Nov 2026, 09:30 UTC.');
   });
 
-  it('on a failed scan with a live link, says the existing link still works', () => {
+  it('on a failed scan with a live link, says the existing link no longer opens the report', () => {
     const el = mounted({ scanStatus: 'failed', shareExpiresAt: LIVE });
-    expect(el.textContent).toContain('This scan failed, so its report cannot be shared.');
-    expect(el.textContent).toContain('Its existing link works until it is withdrawn or ends.');
+    expect(el.querySelector('[data-testid="share-lead"]')?.textContent).toBe(
+      `${FAILED_LEAD} ${DEAD_LINK}`,
+    );
+    // The two claims 3.24 and 3.25 made of a link that has since stopped opening anything.
+    expect(el.textContent).not.toContain('works until');
+    expect(el.textContent).not.toContain('Its existing link works');
     const bare = mounted({ scanStatus: 'failed', shareExpiresAt: null });
     expect(bare.textContent).not.toContain('Its existing link');
   });
