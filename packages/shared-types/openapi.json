@@ -1958,7 +1958,7 @@
         "type": "object"
       },
       "CrossEngineOut": {
-        "description": "Where the engines agree and where they do not \u2014 Epic 9.23, Layer 3.\n\n**`agreementRate` is null when nothing was comparable, and that is not\n100%.** A scan where only one engine answered agrees with itself trivially;\nreporting it as perfect consensus would make the strongest available claim\nfrom the weakest available evidence. `comparablePrompts` is the denominator\nevery figure here is honest about.",
+        "description": "Where the engines agree and where they do not \u2014 Epic 9.23, Layer 3.\n\n**`agreementRate` is null when nothing was comparable, and that is not\n100%.** A scan where only one engine answered agrees with itself trivially;\nreporting it as perfect consensus would make the strongest available claim\nfrom the weakest available evidence. `comparablePrompts` is the denominator\nevery figure here is honest about.\n\n**`standings` is `[]` for a scan whose status is `failed`** (checklist 3.37,\nextending 3.24 and 3.30). A standing's mention rate and sentiment are\ncomputed by the scoring functions, and the sentiments add up to the\nSentiment sub-score, which a failed scan does not show. `splits`,\n`comparablePrompts` and `agreementRate` are facts about which engines named\nthe subject and are served as for any other status.",
         "properties": {
           "agreementRate": {
             "anyOf": [

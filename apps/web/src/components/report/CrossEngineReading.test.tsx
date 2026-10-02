@@ -146,6 +146,59 @@ describe('it refuses to report silence as consensus', () => {
   });
 });
 
+describe('it draws no reading of the engines for a scan that failed', () => {
+  // Checklist 3.37. A FAILED scan has no score, and each engine's mention rate and sentiment are
+  // built by the score's own functions, so the API sends `standings: []` for it. It still sends
+  // `splits`, `comparablePrompts` and `agreementRate`, which are facts about which engines named
+  // the subject. The section keys on the standings, so it draws nothing. A change that drew it
+  // "when there are splits" would show a reading with no figures under it, and the note beneath
+  // it that points at "the score above" on a report that has no score.
+  const failed: Report = {
+    ...divergentReport,
+    scanStatus: 'failed',
+    score: null,
+    dimensions: [],
+    actionItems: [],
+    proof: {
+      ...divergentReport.proof,
+      crossEngine: { ...divergentReport.proof.crossEngine, standings: [] },
+    },
+  };
+
+  it('is sent with splits, a comparable count and an agreement rate, and no standings', () => {
+    const cross = failed.proof.crossEngine;
+    expect(cross.standings).toEqual([]);
+    expect(cross.splits.length).toBeGreaterThan(0);
+    expect(cross.comparablePrompts).toBeGreaterThan(0);
+    expect(cross.agreementRate).not.toBeNull();
+  });
+
+  it.each([false, true])('draws no cross-engine section (public=%s)', (publicView) => {
+    const html = renderToStaticMarkup(
+      <ReportView report={failed} animate={false} publicView={publicView} />,
+    );
+
+    expect(html).not.toContain('Where the engines disagree');
+    expect(html).not.toContain('comparable questions');
+    expect(html).not.toContain('agreement across');
+    expect(html).not.toMatch(/sentiment \d/);
+    // The two notes that point at a score this report does not have.
+    expect(html).not.toContain('are not the Mention Rate in the score above');
+    expect(html).not.toContain('Mention Rate is left out of the score above');
+    // It is still the failed report, and still shows the counts it can honestly show.
+    expect(html).toContain('This scan failed, so it has no score.');
+    expect(html).toContain('What each engine returned');
+  });
+
+  it('draws the section for the same payload once it has standings', () => {
+    // So the absence above is the rule at work and not a section that never draws.
+    const html = render({ ...failed, proof: divergentReport.proof });
+
+    expect(html).toContain('Where the engines disagree');
+    expect(html).toContain('On 3 of 4 comparable questions');
+  });
+});
+
 describe('the two mention-rate populations are labelled, not reconciled', () => {
   // Scoring v2 scoped the composite's Mention Rate to unprompted questions and
   // deliberately left the cross-engine standings counting the whole prompt set.

@@ -2668,6 +2668,13 @@ export interface components {
          *     reporting it as perfect consensus would make the strongest available claim
          *     from the weakest available evidence. `comparablePrompts` is the denominator
          *     every figure here is honest about.
+         *
+         *     **`standings` is `[]` for a scan whose status is `failed`** (checklist 3.37,
+         *     extending 3.24 and 3.30). A standing's mention rate and sentiment are
+         *     computed by the scoring functions, and the sentiments add up to the
+         *     Sentiment sub-score, which a failed scan does not show. `splits`,
+         *     `comparablePrompts` and `agreementRate` are facts about which engines named
+         *     the subject and are served as for any other status.
          */
         CrossEngineOut: {
             /** Agreementrate */

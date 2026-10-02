@@ -64,7 +64,12 @@ from ..schemas.report import (
 )
 from ..schemas.score import CompetitorScoreOut, ScoreDetailOut
 from . import divergence, scoring_runner
-from .failed_scan import score_is_withheld, served_fixes, withhold_technical_foundation
+from .failed_scan import (
+    score_is_withheld,
+    served_fixes,
+    withhold_score_like_proof,
+    withhold_technical_foundation,
+)
 from .scoring import ReadComparison, ResultFacts
 from .share import link_is_live
 
@@ -131,7 +136,9 @@ async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:
     # score-derived competitor comparison are all absent. The fixes the generator
     # wrote from that score are not served either (3.30): `actionItems` is empty,
     # and the fix beat falls back to its own fixed wording, as it does for a scan
-    # with no fixes generated. The PDF renders this same `ReportOut`.
+    # with no fixes generated. The per-engine standings in the proof beat are built
+    # by the Mention Rate and Sentiment functions, so they are emptied too (3.37,
+    # below). The PDF renders this same `ReportOut`.
     failed = score_is_withheld(scan)
     score_row = (
         None
@@ -160,6 +167,13 @@ async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:
         previous_versions = await scoring_runner.prior_formula_versions(
             session, scan.id, score_row.formula_version
         )
+
+    proof = _proof(results, competitor_set, prompts)
+    if failed:
+        # The standings are computed by the same functions as two score dimensions, and
+        # the sentiment ones add up to the Sentiment sub-score this scan does not show
+        # (`failed_scan.withhold_score_like_proof`). The rows they read are not touched.
+        withhold_score_like_proof(proof)
 
     return ReportOut(
         scan_id=scan.id,
@@ -193,7 +207,7 @@ async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:
         competitor_set=_competitor_set_out(
             competitor_set, computed.competitors if computed is not None else []
         ),
-        proof=_proof(results, competitor_set, prompts),
+        proof=proof,
         audit=_audit_out(audit, scored=not failed),
         action_items=served_fixes(scan, _action_items_out(action_items)),
     )

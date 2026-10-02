@@ -1759,6 +1759,15 @@ position 1 of 1 for every mention, because there is nothing else to detect.
 scan submitted more than 15 minutes ago, it fails that one scan with
 `EXECUTOR_NEVER_STARTED` and returns it as `failed`.
 
+**A `failed` scan is served as stored** (checklist 3.37 review). Its score is withheld
+(checklist 3.24 and 3.30), and withheld means not computed and not shown. It does not
+mean it cannot be derived from what the scan stored: this route returns the prompt set
+(each prompt's `intent`) and every engine result (`status`, `mentioned`, `position`,
+`sentiment`, `brandMentions`, `citations`), which are all the inputs Mention Rate, Share of
+Voice and Sentiment are computed from. `GET /scans/{scanId}/results` and
+`GET /scans/{scanId}/prompts` return the same rows. None of the three applies the
+failed-scan rule today; whether they should is the founder's decision and is open.
+
 #### `GET /api/v1/scans/{scanId}/results`
 **Auth required.** Cursor-paginated engine results, ascending by id.
 Separate from the scan detail because a full scan is 60+ rows with nested
@@ -1766,9 +1775,15 @@ mentions and citations.
 
 **Query:** `limit` (1–200, default 25), `cursor`.
 
+**A `failed` scan's results are served as stored**, `sentiment` and `mentioned` on each
+included: see `GET /api/v1/scans/{scanId}`.
+
 #### `GET /api/v1/scans/{scanId}/prompts`
 **Auth required.** The generated prompt set, ordered by `position`.
 `404` if the scan has no prompt set yet.
+
+**A `failed` scan's prompt set is served as stored**, each prompt's `intent` included:
+see `GET /api/v1/scans/{scanId}`.
 
 #### `GET /api/v1/clients/{clientId}/scans`
 **Auth required.** A client's scans, newest first. Cursor-paginated.
@@ -2000,6 +2015,12 @@ through the same helper and carries no components at all. `succeeded` and `parti
 are unchanged, and the agency check comes first: another agency's failed scan is the same
 `404` as an unknown one.
 
+**Withheld here means not computed and not shown.** The facts about the site come back,
+and the sub-score is computed from nine of them (`isIndexable`, `hasSitemap`,
+`canonicalPresent`, `schemaTypes`, the four `has…Schema` flags and `contentAgeDays`), so
+it can be worked out from this response (checklist 3.37 review). Whether the audit
+routes should withhold more is the founder's decision and is open.
+
 | `status` | Meaning |
 |---|---|
 | `ok` | Every component measurable; `components` and `componentWeights` filled. |
@@ -2125,7 +2146,8 @@ inside a scan is not one of these and is never refused.
 
 **A `failed` scan's audit carries no `technicalFoundation` and no `components`** here too
 (checklist 3.30, extending 3.24): `null` and `{}`, `componentWeights` and every other
-field as stored. See `POST` above.
+field as stored. See `POST` above, including what "withheld" does not mean: the nine
+facts the sub-score is computed from are returned.
 
 #### Effect on scoring
 
@@ -2318,12 +2340,33 @@ kept a score row: `score` is `null`, `dimensions` is `[]`, each competitor's
 `mentionRate` and `shareOfVoice` are `null`, `audit.technicalFoundation` is
 `null`, and `actionItems` is `[]` (checklist 3.30: the fix generator was handed the
 score, so nothing it wrote is served; the fix beat then renders its deterministic
-derivation, as for a scan with no fixes generated). The shared report and its PDF
-do not serve a `failed` scan at all: its share link is refused like a withdrawn one
-(checklist 3.29, under `POST /api/v1/reports/shared`). No row is changed or
-deleted: the Score row is not read, and the fix rows are read and not served.
-`proof.crossEngine.standings[]` (each engine's mention rate and sentiment) is not
-withheld.
+derivation, as for a scan with no fixes generated). `proof.crossEngine.standings`
+is `[]` too (checklist 3.37): each standing is one engine's mention rate and
+sentiment, computed by the same functions as two score dimensions, and the
+sentiments add up to the Sentiment sub-score the scan does not show. The web draws
+no cross-engine section for an empty list, as for a scan with no answers.
+`splits`, `comparablePrompts` and `agreementRate` stay, with every other count,
+boolean, domain and position in `proof`, because they are facts about what was
+measured; `proof.engineCoverage` still gives each engine's answers and answers
+naming the subject. The shared report and its PDF do not serve a `failed` scan at
+all: its share link is refused like a withdrawn one (checklist 3.29, under
+`POST /api/v1/reports/shared`). No row is changed or deleted: the Score row is not
+read, the fix rows are read and not served, and the answers the standings were
+computed from are read as they always were. Every other status serves `standings`
+as before.
+
+**"Withheld" here means not computed and not shown. It does not mean "cannot be derived
+from what the scan stored"** (checklist 3.37 review). A failed scan's stored rows are
+unchanged and its own routes serve them as stored: `GET /api/v1/scans/{scanId}` (the
+prompt set with each prompt's `intent`, and every engine result), `.../results`,
+`.../prompts` and `.../audit` return every input Mention Rate, Share of Voice, Sentiment
+and Technical Foundation are computed from. Whether those routes should withhold anything
+for a failed scan is the founder's decision and is open.
+
+**`visibilityFlags` is served as for any status.** `NAMED_ONLY_WHEN_PROMPTED` is kept as a
+finding about where the mentions came from, and on a failed scan it says that the Mention
+Rate the scan does not show was 0 (no question that left out the subject's name produced
+a mention, while one that included it did).
 
 **`outranksSubject`** is arithmetic over stored counts and ordinals — more
 appearances wins; on a tie, the better position wins. Not a judgement.
@@ -2514,7 +2557,9 @@ every report. Carries `standings` (each engine's own mention rate and
 sentiment, computed by `scoring.mention_rate` and `scoring.sentiment_score` on
 that engine's slice — not recomputed, so the per-engine figures cannot drift
 from the composite), `splits` (prompts one engine answered naming the subject
-and another answered without it), `comparablePrompts`, and `agreementRate`.
+and another answered without it), `comparablePrompts`, and `agreementRate`. For a
+`failed` scan `standings` is `[]` (checklist 3.37; see the report's failed-scan note
+above) and the rest is served as for any status.
 
 Two rules the shape enforces. **Only engines that ANSWERED appear on either
 side of a split** — a rate-limited or timed-out call is missing data, not

@@ -22650,3 +22650,45 @@ Drift check (north-star §8): Layer 2, Measurement (a scan's technical audit and
   - The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts` regenerate with no diff against this tree, which carries the new route description.
 - Exit codes were read from files.
+
+# A failed scan's report no longer carries the per-engine figures that rebuilt its Sentiment sub-score
+
+**2026-10-03, the ninth entry of the day; branch `pilot-fixes-3`, the founder's brief "honest reports and the remaining pilot decisions" (launch checklist 3.37).** One item, one commit.
+
+**Render: nothing to set. No migration, dependency or outbound host.** One schema description changed (`CrossEngineOut`; OpenAPI and `api.gen.ts` regenerated, descriptions only).
+
+Drift check (north-star §8): Layer 1, Delivery (the report and its PDF) and Layer 3, Insight (the cross-engine reading); lifecycle phase: Activation (Epic 9), a report an agency sends.
+
+## 1. What changed
+
+- **Founder decision (final):** `proof.crossEngine.standings[]`, and anything else score-like the report still carries, is withheld for a FAILED scan, through `services/failed_scan.py`.
+- **Inventory first:** every number a failed scan's `ReportOut` carries was classified with its source. Already withheld by 3.24/3.30: the score, its dimensions and weights, the fixes and their points, Technical Foundation, the competitor comparison. Score-like and served until now: each standing's `mentionRate` (the Mention Rate function on one engine's answers) and `sentiment` (the Sentiment dimension's own function and population: on a test fixture, the standings' sentiments weighted by their mention counts gave 54.5464 against the stored, withheld 54.55). Facts, kept: answer, citation and mention counts per engine and in total, cited domains, observed positions, the prompt shelf, the audit's check tallies and measured values, the detection step's own numbers.
+- **Withheld:** `withhold_score_like_proof` empties `proof.crossEngine.standings` for a failed scan (`build_report` calls it when `score_is_withheld`). An empty list is the shape the web already draws as "no section"; nulls inside each entry would have changed the contract and left a section whose note speaks of "the score above" on a report with no score. Kept beside it: `splits`, `comparablePrompts`, `agreementRate`, `engineCoverage`. The PDF never drew `crossEngine`. The shared report already refuses a failed scan (3.29).
+- **A standing guard:** a test walks every number-typed path reachable from `ReportOut` (into models, lists, tuples, sets, dicts, unions; an untyped container must be classified; a shape it cannot read fails it) and fails on any path not classified as withheld or a served fact; a failed scan's payload carries no value at a withheld path, and its served facts equal a succeeded scan's built from the same rows.
+- **`withhold_technical_foundation`** now empties `components` on whatever audit carries them, not only the audit route's (from the security review).
+- `docs/api-contracts.md` and `failed_scan.py` say what "withheld" means (not computed and not shown, not "cannot be derived"), and name what the signed-in scan routes still serve for a failed scan (below).
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS.** Checked clean: with the standings gone, nothing in the report JSON or PDF rebuilds a withheld sub-score or the composite (the per-engine mention rate equals coverage counts kept as facts, which are not the awareness-only Mention Rate); tenancy unchanged; no row read differently or written; the empty list renders nothing false.
+  - **Taken:** the docs naming what other routes serve (its Medium, which is outside the report and is the founder's decision, below); the visibility flag named in the contract; the guard descending into every shape; `components` emptied whatever the class; a web test that a failed report draws no cross-engine section.
+
+## Found, not fixed
+
+- **For the founder (the review's Medium):** the signed-in `GET /scans/{scanId}`, `/results` and `/prompts` serve, for a failed scan, every input of Mention Rate, Share of Voice and Sentiment (each prompt's intent; each answer's status, mention flag, sentiment label, brand mentions, citations), and `GET /scans/{scanId}/audit` every fact Technical Foundation is computed from, so those sub-scores can be worked out from them. No web screen calls the scan routes. Options: keep them as facts (now stated), or withhold the per-answer sentiment labels for a failed scan (which closes Sentiment only).
+- **`NAMED_ONLY_WHEN_PROMPTED`** is kept as a finding; on a failed scan it says the withheld Mention Rate was 0 (now in the contract).
+
+## Verified
+
+**API pytest 3035 → 3056 (+21); web vitest 1693 → 1697 (+4); both floors raised to match.**
+- `tests/test_failed_scan_standings.py` (18): a failed scan's standings are empty and every fact beside them is served; failed is the only status whose standings are withheld (every status, the same rows); a succeeded and a partial scan keep them; the public builder withholds them too; the PDF is handed no standings and prints no Sentiment figure; the stored rows are unchanged column by column; the standings rebuild the sub-score until the scan fails and then nothing does; every number in the report is classified; the guard reads every shape and fails on one it cannot read; a dict-typed Decimal added to the report is caught. `test_failed_scan_fixes_and_audit.py` (+3): the Technical Foundation helper blanks the sub-score and any components, whatever the class. `CrossEngineReading.test.tsx` (+4): a failed payload with splits and an agreement rate and no standings draws no cross-engine section, signed in or public, and the same payload with standings does.
+- **Negative controls:** on this tree, the helper made a no-op fails 8 of the 47 in the two failed-scan files; restored and checked with `cmp`; the implementer's, each restored: the helper a no-op, 8 fail; a fact over-withheld, 3; the guard blind to dicts lets a dict-typed Decimal slip (and fails once it descends); the old class-bound helper, 1; the web section drawing on splits, 2.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 26, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass.
+  - Alembic upgrade and check pass on an empty database (no schema change).
+  - The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no diff against this tree, which carries the new `CrossEngineOut` description.
+- Exit codes were read from files.

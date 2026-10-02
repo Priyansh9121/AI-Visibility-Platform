@@ -45,6 +45,7 @@ from typing import Any
 import anthropic
 import pytest
 from httpx import AsyncClient
+from pydantic import Field
 from sqlalchemy import select
 from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -55,13 +56,17 @@ from avp_api.models import ActionItem, Scan, ScanStatus, TechnicalAudit
 from avp_api.models.action_item import Effort, Priority
 from avp_api.models.engine_result import Engine, Sentiment
 from avp_api.models.prompt import PromptIntent
+from avp_api.models.technical_audit import AuditStatus
 from avp_api.routers import action_items as action_items_router
 from avp_api.routers import audits as audits_router
 from avp_api.routers import scores as scores_router
+from avp_api.schemas.audit import TechnicalAuditOut
+from avp_api.schemas.report import ReportAuditOut
 from avp_api.services import alerts as alerts_service
 from avp_api.services import audit_runner, scan_runner
 from avp_api.services import report as report_service
 from avp_api.services.engines import CitedSource, EngineAnswer
+from avp_api.services.failed_scan import withhold_technical_foundation
 from avp_api.services.fix_generator import GeneratedFix, GeneratedFixSet
 from avp_api.services.prompts import GeneratedPrompt
 from avp_api.services.scan_executor import SCAN_DEADLINE_EXCEEDED
@@ -663,6 +668,98 @@ class TestTheReportAndTheseRoutesAgree:
             "audit components": False,
             "report components": False,
         }
+
+
+class _ReportAuditThatCarriesComponents(ReportAuditOut):
+    """What the report's audit would be if it gained the component scores."""
+
+    components: dict[str, Decimal] = Field(default_factory=dict)
+
+
+def _technical_audit_out() -> TechnicalAuditOut:
+    now = datetime.now(UTC)
+    return TechnicalAuditOut(
+        id="aud_1",
+        scan_id="scan_1",
+        url_audited="https://example.test",
+        status=AuditStatus.OK,
+        pages_crawled=1,
+        technical_foundation=Decimal("72.50"),
+        components={"indexation": Decimal("100.00"), "content_freshness": Decimal("40.00")},
+        component_weights={"indexation": Decimal("60.00"), "content_freshness": Decimal("40.00")},
+        has_organization_schema=True,
+        has_localbusiness_schema=False,
+        has_faq_schema=False,
+        has_product_schema=False,
+        is_indexable=True,
+        robots_allows_crawl=True,
+        has_sitemap=True,
+        canonical_present=True,
+        h1_count=1,
+        word_count=900,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _report_audit_out() -> ReportAuditOut:
+    return ReportAuditOut(
+        status=AuditStatus.OK,
+        technical_foundation=Decimal("72.50"),
+        passed=10,
+        warned=2,
+        failed=1,
+        not_applicable=1,
+        findings=[],
+    )
+
+
+def _report_audit_that_carries_components() -> _ReportAuditThatCarriesComponents:
+    return _ReportAuditThatCarriesComponents(
+        status=AuditStatus.OK,
+        technical_foundation=Decimal("72.50"),
+        components={"indexation": Decimal("100.00"), "content_freshness": Decimal("40.00")},
+        passed=10,
+        warned=2,
+        failed=1,
+        not_applicable=1,
+        findings=[],
+    )
+
+
+class TestTheTechnicalFoundationHelperIsNotTiedToOneClass:
+    """`withhold_technical_foundation` empties the components on whatever carries them.
+
+    It used to look for `TechnicalAuditOut` by class, so a report audit that gained a
+    `components` field would have kept the component scores, which add up to the sub-score, for
+    a FAILED scan. It looks for the field. The report's audit carries none today, and the helper
+    leaves it alone.
+    """
+
+    @pytest.mark.parametrize(
+        "make",
+        [_technical_audit_out, _report_audit_out, _report_audit_that_carries_components],
+        ids=["TechnicalAuditOut", "ReportAuditOut", "a ReportAuditOut that carries components"],
+    )
+    def test_the_sub_score_and_any_components_are_blanked_and_nothing_else(
+        self, make: Callable[[], ReportAuditOut | TechnicalAuditOut]
+    ) -> None:
+        audit = make()
+        before = audit.model_dump()
+        # Not vacuous: there is a sub-score, and where the class carries components, some.
+        assert before["technical_foundation"] == Decimal("72.50")
+        carries_components = "components" in before
+        assert bool(before.get("components")) is carries_components
+
+        withhold_technical_foundation(audit)
+
+        after = audit.model_dump()
+        assert after["technical_foundation"] is None
+        expected = {**before, "technical_foundation": None}
+        if carries_components:
+            expected["components"] = {}
+        # Every other field is as it was: the weights and every fact about the site stay.
+        assert after == expected
 
 
 class TestTenancyComesFirst:
