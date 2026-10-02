@@ -22376,11 +22376,15 @@ Drift check (north-star §8): Layer 2, Measurement (competitor detection's searc
 
 ## Verified
 
-**API pytest API_BEFORE → API_AFTER (+API_DELTA); floor raised to match.**
+**API pytest 2680 → 2791 (+111); floor raised to match.**
 - `tests/test_serp_search.py` (93): the bound is the measured one and every step's timeout sits under the deadline; a hung request is tried once more (eight failure types); when every attempt fails, the code, the attempts and the kinds; an answer is not retried; a rescued retry is logged with numbers and kinds only; an attempt is cut at its deadline and retried, and an outer cancellation is not; the key reaches no log line, no result and no `exc_info` (a sentinel key over every failure type); `search_many` still runs 3 at once; and five against real local sockets (a hung connection rescued by a second, both hanging, a refused port, a response trickling a byte every 30 ms cut at the deadline, a trickling first connection rescued).
 - `tests/test_secrets_stay_out_of_logs.py` (+18): httpx does write the URL when left alone (the premise); with logging configured as the app does it, at INFO or DEBUG in either order, no record names the key; the pins are on the loggers themselves; the SDK raising its loggers does not survive `configure_logging`; a fresh process with `ANTHROPIC_LOG=info` importing only the app ends with all three at WARNING; every script that reaches SerpApi configures logging before it awaits anything.
 - **Negative controls:** on this tree, no retry (one attempt) fails 62 of the 93; restored and checked with `cmp`. The implementer's, each restored: the attempt deadline removed, 4; the rescued-retry line removed, 20; `exc_info` in the failure line, 10; the key's parameters in the failure line, 9; the pins removed, 8; `anthropic` left unpinned, 4; a script's `configure_logging` removed, made conditional, or moved after its first await, each fails.
 
 **The rest of the bar** (this tree, one run).
-- REST_OF_BAR
+- Workers 26, shared-types 53 (0 fail), design-system 935, web 1533, mypy 43 (ceiling 50).
+- ruff clean; all typechecks clean; the styleguide builds; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+- OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
