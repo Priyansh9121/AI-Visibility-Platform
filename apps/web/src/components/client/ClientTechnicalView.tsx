@@ -53,6 +53,7 @@ import {
   PARTIAL_AUDIT_NOTE,
   ADDRESS_NOT_PUBLIC,
   ROBOTS_DISALLOWED,
+  auditFailureSentence,
 } from '@/lib/report/strings';
 
 export type TechnicalState =
@@ -169,41 +170,49 @@ export function ClientTechnicalView({
 /* ============================== body =============================== */
 
 function Audited({ audit }: { audit: TechnicalAudit }): JSX.Element {
+  // No failed state on this screen prints the audit's code — 2026-10-02
+  // (launch checklist 3.32). The code is a machine's word for what happened;
+  // the reader gets a sentence, or, where the body already is one, nothing
+  // under it.
+
   // robots.txt kept the crawler off the page — 2026-09-29. The site chose
   // that; it is not a site we failed to reach, so it is not worded as one.
-  // What its robots.txt says to AI crawlers is on the Crawler screen.
+  // What its robots.txt says to AI crawlers is on the Crawler screen. The body
+  // says why, what follows and where to look, so there is no note: a second
+  // line would only say it again.
   if (audit.status === 'failed' && audit.errorCode === ROBOTS_DISALLOWED) {
     return (
       <EmptyState
         eyebrow="Technical"
         title="This site asks crawlers like ours to stay out"
         body={`${EXCLUSION_REASON.CRAWL_DISALLOWED!.detail} This crawler obeys robots.txt, so nothing here is scored. What the file says to AI crawlers is on the Crawler screen.`}
-        note={`Reason: ${ROBOTS_DISALLOWED}`}
       />
     );
   }
   // The egress guard refused the site's address. Not robots.txt's doing, so
-  // none of the robots wording applies.
+  // none of the robots wording applies. Title and body are the whole of it.
   if (audit.status === 'failed' && audit.errorCode === ADDRESS_NOT_PUBLIC) {
     return (
       <EmptyState
         eyebrow="Technical"
         title={EXCLUSION_REASON.CRAWL_ADDRESS_NOT_PUBLIC!.label}
         body={EXCLUSION_REASON.CRAWL_ADDRESS_NOT_PUBLIC!.detail}
-        note={`Reason: ${ADDRESS_NOT_PUBLIC}`}
       />
     );
   }
   // `partial` is NOT unreadable: the page was read and scored with a component
   // excluded (the "Not measured" card below says which and why). Only `failed`
-  // means nothing was read and nothing is scored.
+  // means nothing was read and nothing is scored. What happened is the same
+  // sentence the report's failed-audit card shows (`auditFailureSentence`), so
+  // the two screens cannot word one failure two ways; a failed audit that
+  // carries no code gets the generic sentence there too.
   if (audit.status === 'failed') {
     return (
       <EmptyState
         eyebrow="Technical"
         title="The site could not be read"
         body="An unreachable site is not a site with a bad technical foundation, so nothing here is scored. The audit records what went wrong rather than guessing."
-        note={audit.errorCode ? `Reason: ${audit.errorCode}` : undefined}
+        note={auditFailureSentence(audit.errorCode)}
       />
     );
   }
