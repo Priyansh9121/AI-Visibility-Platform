@@ -209,7 +209,7 @@ export const dark = {
     primary: [0.965, 0.006, 75],
     body: [0.88, 0.008, 75],
     secondary: [0.72, 0.01, 75],
-    tertiary: [0.58, 0.012, 75],
+    tertiary: [0.66, 0.012, 75],
   },
   line: {
     hairline: [0.275, 0.014, 265],
@@ -269,7 +269,7 @@ export const light = {
     primary: [0.185, 0.026, 265],
     body: [0.285, 0.022, 265],
     secondary: [0.47, 0.018, 265],
-    tertiary: [0.56, 0.014, 75],
+    tertiary: [0.515, 0.014, 75],
   },
   line: {
     hairline: [0.91, 0.01, 75],
