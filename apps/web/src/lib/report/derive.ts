@@ -110,7 +110,7 @@ export interface DerivedFix {
 export interface DerivedNarrative {
   /** Null when there is no scoreable data. Never zero in that case. */
   composite: number | null;
-  status: 'scored' | 'insufficient_data' | 'not_scored';
+  status: 'scored' | 'insufficient_data' | 'not_scored' | 'failed';
   /** Included dimensions, heaviest first, ready for the Luminance Ledger. */
   dimensions: LedgerDimension[];
   /** Dimensions left out of the score, with the reason kept distinct. */
@@ -172,8 +172,10 @@ export function toLedgerDimensions(dimensions: readonly ReportDimension[]): Ledg
 
 /** Derive the whole narrative from one report payload. */
 export function deriveNarrative(report: Report): DerivedNarrative {
-  const dimensions = toLedgerDimensions(report.dimensions ?? []);
-  const exclusions = (report.dimensions ?? [])
+  // A FAILED scan has no dimensions on screen (3.24), even if a payload carried some.
+  const rawDimensions = report.scanStatus === 'failed' ? [] : (report.dimensions ?? []);
+  const dimensions = toLedgerDimensions(rawDimensions);
+  const exclusions = rawDimensions
     .filter((d) => !d.included)
     .map((d) => ({
       key: d.key,
@@ -185,12 +187,17 @@ export function deriveNarrative(report: Report): DerivedNarrative {
   // The same call that draws the chart. One gap arithmetic, not two.
   const layout = layoutLedger(dimensions);
 
+  // A FAILED scan's narrative has status 'failed' and no composite (3.24), even if a
+  // payload still carried a score. That is all this guards: the score, dimensions
+  // and the notes under them are blanked by the API (`build_report`), not here.
   const status: DerivedNarrative['status'] =
-    report.score === null || report.score === undefined
-      ? 'not_scored'
-      : report.score.status === 'insufficient_data'
-        ? 'insufficient_data'
-        : 'scored';
+    report.scanStatus === 'failed'
+      ? 'failed'
+      : report.score === null || report.score === undefined
+        ? 'not_scored'
+        : report.score.status === 'insufficient_data'
+          ? 'insufficient_data'
+          : 'scored';
 
   // The STORED composite is authoritative, never the recomputed one.
   // scoring-spec.md rule 2 fixes rounding once, at storage; recomputing for
@@ -431,6 +438,9 @@ export function aheadOnDimensions(report: Report): DerivedNarrative['aheadOnDime
  * the number, so the heading cannot contradict the chart under it.
  */
 export function scoreHeading(narrative: DerivedNarrative, subjectName: string): string {
+  if (narrative.status === 'failed') {
+    return `${subjectName} has no score: this scan failed.`;
+  }
   if (narrative.status === 'not_scored') {
     return `${subjectName} has not been scored yet.`;
   }

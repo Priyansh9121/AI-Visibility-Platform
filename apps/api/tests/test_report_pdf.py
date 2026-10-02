@@ -558,3 +558,22 @@ async def test_the_two_share_routes_each_serve_their_own_content_type(
 
     web = await client.post(f"{BASE}/reports/shared", json={"token": token})
     assert web.headers["content-type"].startswith("application/json")
+
+
+def _failed_case() -> dict[str, Any]:
+    case = json.loads(json.dumps(CASES["scored-no-generated-fixes"]))
+    case["scanStatus"] = "failed"
+    case["score"] = None
+    case["dimensions"] = []
+    return case
+
+
+def test_a_failed_scans_report_says_it_has_no_score() -> None:
+    """3.24: a failed scan's score is never shown. The sentence is the founder's."""
+    text = _visible_text(render_report_pdf(ReportOut.model_validate(_failed_case())))
+    assert "Help Scout has no score: this scan failed." in text
+    assert "This scan failed, so it has no score." in text
+    assert "Not scored" in text
+    assert "/ 100" not in text
+    # Not the "run but not scored yet" prose, which is untrue of a failed scan.
+    assert "composite is simply not computed yet" not in text

@@ -28,7 +28,7 @@
 
 import { useId, useState } from 'react';
 import { Button, Card, CardBody, TextField } from '@avp/design-system';
-import { api } from '@/lib/api';
+import { ApiProblem, api } from '@/lib/api';
 import { apiWasAway } from '@/lib/apiAway';
 import { RETENTION, counted } from '@/lib/legal/retention';
 
@@ -39,9 +39,12 @@ type State =
   | { kind: 'working' }
   | { kind: 'ready'; url: string; copied: boolean; withdraw: Withdraw; error: string | null }
   | { kind: 'withdrawn' }
-  | { kind: 'failed' };
+  | { kind: 'failed'; detail: string | null };
 
-export function ShareLinkBar({ scanId }: { scanId: string }) {
+/** Said in place of the button for a scan that failed (3.24); the API refuses it too. */
+const FAILED_SCAN_SENTENCE = 'This scan failed, so its report cannot be shared.';
+
+export function ShareLinkBar({ scanId, scanStatus }: { scanId: string; scanStatus?: string | undefined }) {
   const [state, setState] = useState<State>({ kind: 'idle' });
   // The question the Withdraw button answers, so the button can be described by it.
   const questionId = useId();
@@ -58,8 +61,15 @@ export function ShareLinkBar({ scanId }: { scanId: string }) {
     try {
       const link = await api.shareLink(scanId);
       setState({ kind: 'ready', url: link.url, copied: false, withdraw: 'idle', error: null });
-    } catch {
-      setState({ kind: 'failed' });
+    } catch (e) {
+      // The API's own sentence when it refuses a failed scan (409).
+      setState({
+        kind: 'failed',
+        detail:
+          e instanceof ApiProblem && e.type === '/problems/failed-scan-not-shareable'
+            ? e.message
+            : null,
+      });
     }
   }
 
@@ -105,6 +115,22 @@ export function ShareLinkBar({ scanId }: { scanId: string }) {
       // worth interrupting anyone over — it just means they copy it by hand.
       mark(false);
     }
+  }
+
+  // The API's refusal (409) turns the bar into the same state, so the button does
+  // not stay enabled for a scan the server says cannot be shared.
+  const refusal = state.kind === 'failed' ? state.detail : null;
+  if (scanStatus === 'failed' || refusal !== null) {
+    return (
+      <Card elevation="seated">
+        <CardBody>
+          <p className="text-ui-md font-medium text-text-primary">Send this report</p>
+          <p className="mt-1 text-ui-sm leading-prose text-text-secondary">
+            {refusal ?? FAILED_SCAN_SENTENCE}
+          </p>
+        </CardBody>
+      </Card>
+    );
   }
 
   return (
@@ -229,7 +255,7 @@ export function ShareLinkBar({ scanId }: { scanId: string }) {
           )}
           {state.kind === 'failed' && (
             <p className="mt-3 max-w-measure text-ui-sm leading-prose text-danger">
-              The link could not be created. Try again.
+              {state.detail ?? 'The link could not be created. Try again.'}
             </p>
           )}
         </div>

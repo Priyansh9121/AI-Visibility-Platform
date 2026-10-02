@@ -146,6 +146,17 @@ class Conflict(ProblemError):
     title = "Conflicting request"
 
 
+class FailedScanNotShareable(Conflict):
+    """Minting a share link for a FAILED scan is refused (409).
+
+    Founder decision, checklist 3.24: a failed scan has no score that is ever
+    shown, so there is no report worth sending. PARTIAL scans stay shareable.
+    """
+
+    problem_type = "failed-scan-not-shareable"
+    title = "Failed scan cannot be shared"
+
+
 class EmailAlreadyRegistered(Conflict):
     problem_type = "email-already-registered"
     title = "That email address is already registered"

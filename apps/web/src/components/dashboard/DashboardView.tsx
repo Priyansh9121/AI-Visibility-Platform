@@ -50,6 +50,7 @@ import type { BadgeTone, Column, LedgerDimension, ScoreAbsence } from '@avp/desi
 import type { BillingStatus, Dashboard, ScanStatus, ScanSummary, UserRole } from '@avp/shared-types';
 import { Layers, Users } from 'lucide-react';
 import { formatStamp } from '@/lib/dates';
+import { shownComposite } from '@/lib/dashboard/shownComposite';
 import { deriveGettingStarted } from '@/lib/dashboard/gettingStarted';
 import { scanOutcomeSentence } from '@/lib/scans/scanOutcome';
 import { GettingStarted } from './GettingStarted';
@@ -407,7 +408,10 @@ export function DashboardView({
  */
 function PortfolioHero({ recentScans }: { recentScans: readonly ScanSummary[] }): JSX.Element {
   const scored = recentScans
-    .map((s) => (s.compositeScore == null ? null : Number(s.compositeScore)))
+    .map((s) => {
+      const shown = shownComposite(s);
+      return shown == null ? null : Number(shown);
+    })
     .filter((n): n is number => n != null && !Number.isNaN(n));
   const median =
     scored.length === 0
@@ -571,7 +575,8 @@ function ScoreCell({
   status: ScanStatus;
 }): JSX.Element {
   const absence: ScoreAbsence = SCORE_PENDING.includes(status) ? 'measuring' : 'unscored';
-  const value = composite == null ? null : Number(composite);
+  // A FAILED scan has no score on screen (3.24), whatever the API sent.
+  const value = composite == null || status === 'failed' ? null : Number(composite);
   return <ScoreMeter score={value == null || Number.isNaN(value) ? null : value} absence={absence} />;
 }
 

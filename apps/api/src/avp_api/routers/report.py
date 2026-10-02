@@ -18,8 +18,8 @@ from fastapi import APIRouter, Path, Response, status
 from sqlalchemy import select
 
 from ..deps import DbDep, PrincipalDep, SettingsDep
-from ..errors import NotFound
-from ..models import Scan
+from ..errors import FailedScanNotShareable, NotFound
+from ..models import Scan, ScanStatus
 from ..schemas.report import ReportOut, SharedReportRequest, ShareLinkOut
 from ..services import report as report_service
 from ..services import report_pdf as pdf_service
@@ -175,7 +175,12 @@ async def create_share_link(
     agency restating the decision to share, which is the signal an expiry
     should listen to. `services/share.py` carries the argument in full.
 
-    **Errors:** `401`, `404` (unknown scan, or another agency's).
+    **A FAILED scan cannot be shared** (3.24): `409`
+    `/problems/failed-scan-not-shareable`. Its score is never shown, so there
+    is no report to send. PARTIAL and every other status are unchanged.
+
+    **Errors:** `401`, `404` (unknown scan, or another agency's), `409`
+    (failed scan).
     """
     scan = (
         await db.execute(
@@ -184,6 +189,8 @@ async def create_share_link(
     ).scalar_one_or_none()
     if scan is None:
         raise NotFound(detail="No scan with that identifier.")
+    if scan.status is ScanStatus.FAILED:
+        raise FailedScanNotShareable(detail="This scan failed, so its report cannot be shared.")
 
     token, expires_at = await share_service.get_or_create_share_token(db, scan)
     # Commit before returning the URL. The operator's next action is to paste

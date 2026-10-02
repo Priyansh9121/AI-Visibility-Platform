@@ -755,7 +755,13 @@ def derive_narrative(report: dict[str, Any]) -> Narrative:
     biggest_gap = next((s for s in segments if s.is_biggest_gap), None)
 
     score = report.get("score")
-    if score is None:
+    if report.get("scanStatus") == "failed":
+        # A FAILED scan's narrative has status "failed" and no composite (3.24), even
+        # if a payload still carried a score. That is all this guards: the score and
+        # dimensions are blanked by the API (`build_report`), not here.
+        status = "failed"
+        score = None
+    elif score is None:
         status = "not_scored"
     elif score.get("status") == "insufficient_data":
         status = "insufficient_data"
@@ -828,6 +834,8 @@ def ahead_on_dimensions(report: dict[str, Any]) -> list[dict[str, Any]]:
 
 def score_heading(narrative: Narrative, subject_name: str) -> str:
     """The score beat's heading — a claim, never a category label."""
+    if narrative.status == "failed":
+        return f"{subject_name} has no score: this scan failed."
     if narrative.status == "not_scored":
         return f"{subject_name} has not been scored yet."
     if narrative.status == "insufficient_data" or narrative.composite is None:
