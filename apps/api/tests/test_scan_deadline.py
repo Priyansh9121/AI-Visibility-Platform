@@ -825,7 +825,9 @@ class TestAFailureNeverOverwritesAFinishedScan:
         ))
         await session.commit()
 
-        await executor_module._mark_failed(sid, exc, settings=settings)  # noqa: SLF001
+        await executor_module._mark_failed(  # noqa: SLF001
+            sid, exc, claimed=True, settings=settings
+        )
 
         scan = await _scan(session, sid)
         assert scan.status is ScanStatus.PARTIAL
@@ -861,7 +863,7 @@ class TestAFailureNeverOverwritesAFinishedScan:
             ))
             writer = asyncio.create_task(
                 executor_module._mark_failed(  # noqa: SLF001
-                    sid, ScanDeadlineError(), settings=settings
+                    sid, ScanDeadlineError(), claimed=True, settings=settings
                 )
             )
             try:
