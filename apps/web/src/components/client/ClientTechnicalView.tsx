@@ -41,6 +41,7 @@ import { ClientSpace } from '@/components/client/ClientSpace';
 import { latestComposite, latestScanId } from '@/components/client/ClientDetailView';
 import {
   auditDimensions,
+  checkDetailSentence,
   checkLabel,
   excludedComponents,
   groupChecks,
@@ -366,25 +367,26 @@ function Audited({ audit }: { audit: TechnicalAudit }): JSX.Element {
 
 function CheckRow({ check }: { check: AuditCheck }): JSX.Element {
   const value = num(check.value);
+  // What the check's code means, in a sentence, under the check — never the code itself
+  // (launch checklist 3.39: the row used to print `NO_CANONICAL_LINK` in mono, small and
+  // last). A check with no code, or with one nothing words, has no line.
+  const sentence = checkDetailSentence(check.detailCode);
   return (
-    <li className="flex flex-wrap items-center justify-between gap-4 border-t border-line-hairline py-3 first:border-t-0">
-      <span className="flex flex-wrap items-center gap-3">
-        <Badge tone={STATUS_TONE[check.status] ?? 'neutral'}>
-          {STATUS_LABEL[check.status] ?? check.status}
-        </Badge>
-        <span className="text-ui-base text-text-primary">{checkLabel(check.checkKey)}</span>
-      </span>
-      <span className="flex flex-wrap items-center gap-4">
+    <li className="flex flex-col gap-2 border-t border-line-hairline py-3 first:border-t-0">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <span className="flex flex-wrap items-center gap-3">
+          <Badge tone={STATUS_TONE[check.status] ?? 'neutral'}>
+            {STATUS_LABEL[check.status] ?? check.status}
+          </Badge>
+          <span className="text-ui-base text-text-primary">{checkLabel(check.checkKey)}</span>
+        </span>
         {value !== null && (
           <span className="font-mono text-ui-sm tabular-nums text-text-secondary">{value}</span>
         )}
-        {check.detailCode && (
-          // The machine code, small and last — the same treatment ErrorState
-          // gives a reference code. Never prose, because the backend never
-          // sends prose here.
-          <span className="font-mono text-ui-2xs text-text-tertiary">{check.detailCode}</span>
-        )}
-      </span>
+      </div>
+      {sentence !== null && (
+        <p className="max-w-measure text-ui-sm leading-prose text-text-secondary">{sentence}</p>
+      )}
     </li>
   );
 }

@@ -8,6 +8,7 @@
 
 import type { AuditCheck, TechnicalAudit } from '@avp/shared-types';
 import type { LedgerDimension } from '@avp/design-system';
+import { FIX_FOR_DETAIL_CODE, ROBOTS_DISALLOWED, ROBOTS_UNREACHABLE } from '@/lib/report/strings';
 
 /**
  * The four components in the order the audit weights them, heaviest first.
@@ -40,6 +41,84 @@ export const EXCLUSION_COPY: Record<string, string> = {
   NO_DATE_SIGNAL_AVAILABLE:
     'The site publishes no date signal at all — no Last-Modified header and no dated structured data. Scoring that as stale would punish a publishing convention rather than a visibility problem, so its weight was shared across the components that could be measured.',
 };
+
+/**
+ * What a check's code says on a row of this screen, where the fix list's wording does
+ * not do — launch checklist 3.39. Looked up BEFORE `FIX_FOR_DETAIL_CODE` (below).
+ *
+ * Two kinds of code are here.
+ *
+ * Codes no fix is worded for. The four Core Web Vitals codes are the lab and field ones:
+ * `LAB_MEASUREMENT_NOT_FIELD_DATA` rides on a measured LCP or CLS (a pass, a warning or a
+ * failure alike); the two `*_NOT_OBSERVED` codes and `FIELD_METRIC_REQUIRES_REAL_USER_DATA`
+ * ride on a check that did not apply. Each sentence is true of every check that carries
+ * its code: the vitals are read once, on one load of the page, by a browser that never
+ * clicks; a vital is absent when the crawler recorded none, whatever the reason.
+ * `ROBOTS_DISALLOWED` and `ROBOTS_UNREACHABLE` are here because a check on a read audit
+ * can carry them: the sitemap is asked for only if robots.txt allows it, and when the file
+ * that decides it forbids it, or could not be read, that check does not apply
+ * (`technical_audit._robots_file_checks`). The file is the site's or, after a redirect,
+ * the host it led to, so the sentence says "the robots.txt this depends on". "This" is
+ * whatever the row beside it names.
+ *
+ * Codes the fix list words, where that wording, standing alone on a row as the statement
+ * of what the check found, says more than the check found or points at something that is
+ * not on the row: "nothing else on this list" (`ROBOTS_TXT_DISALLOW`), "excluded from the
+ * indexes these answers are drawn from" (`META_ROBOTS_NOINDEX`), "Without it"
+ * (`NO_PRODUCT_OR_SERVICE_SCHEMA`), "anywhere on the page" (`NO_DATE_SIGNAL_AVAILABLE`,
+ * which looks at the Last-Modified header and the structured data, not the page's text),
+ * "Several competing" (`MULTIPLE_H1`, which is two or more) and "Nothing on the page
+ * states … what this organisation is" (`NO_ORGANIZATION_OR_LOCALBUSINESS`, which looks
+ * for eight type names only: `technical_audit.TRACKED_SCHEMA`, so `ProfessionalService`
+ * or `Plumber` markup fails it). The fix table is left as it is: the report's fix beat
+ * and the PDF (`report_narrative.py`) share it. Those six say what the check found, in
+ * this screen's own words.
+ */
+export const CHECK_DETAIL_SENTENCE: Readonly<Record<string, string>> = {
+  LCP_NOT_OBSERVED:
+    'The crawler did not record a Largest Contentful Paint for this page, so there is no figure.',
+  CLS_NOT_OBSERVED:
+    'The crawler did not record a Cumulative Layout Shift for this page, so there is no figure.',
+  LAB_MEASUREMENT_NOT_FIELD_DATA:
+    'Measured by the crawler on a single load of the page, not from real visitors.',
+  FIELD_METRIC_REQUIRES_REAL_USER_DATA:
+    'This is measured from real visitors tapping and clicking. The crawler never interacts with a page, so it cannot measure it.',
+  [ROBOTS_DISALLOWED]:
+    'The robots.txt this depends on asks crawlers like ours not to load this, so it was not checked.',
+  [ROBOTS_UNREACHABLE]:
+    'The crawler could not get a usable answer from the robots.txt this depends on, so it was not checked.',
+  // The fix list's six whose wording, alone on a row, says more than the check found.
+  // `ROBOTS_TXT_DISALLOW` reaches a row only on an audit that was read, so AVPScanBot was let
+  // in by its own group or an Allow: the rule is under `*` (`technical_audit.py`).
+  ROBOTS_TXT_DISALLOW:
+      'The site’s robots.txt has a rule that asks crawlers to stay out of the whole site (Disallow: /), except where another rule lets them in.',
+  META_ROBOTS_NOINDEX:
+    'The page is marked noindex, which asks search engines to leave it out of their indexes.',
+  NO_PRODUCT_OR_SERVICE_SCHEMA:
+    'The audited page has no Product or Service markup, so what the business sells has to be inferred from page copy rather than read from the markup.',
+  NO_DATE_SIGNAL_AVAILABLE:
+    'No usable Last-Modified header and no datePublished or dateModified in the page’s structured data was found, so its freshness cannot be established either way.',
+  MULTIPLE_H1:
+    'More than one top-level heading leaves the page’s subject ambiguous to anything parsing it.',
+  NO_ORGANIZATION_OR_LOCALBUSINESS:
+    'The audited page’s JSON-LD and microdata name none of the types this check looks for: Organization, Corporation, OnlineBusiness, LocalBusiness, Dentist, Restaurant, Store or MedicalBusiness.',
+};
+
+/**
+ * What a check's `detailCode` says, as a sentence, or null when it has none (no code, or
+ * one nothing words). Never the code itself: the screen prints this instead of it.
+ *
+ * This screen's own sentence first (`CHECK_DETAIL_SENTENCE`); otherwise the fix list's
+ * `detail` word for word (`FIX_FOR_DETAIL_CODE`: ten of its sixteen), so the report and
+ * this screen do not say one thing two ways where they need not. A code that is neither is
+ * shown as nothing rather than as itself.
+ */
+export function checkDetailSentence(code: string | null | undefined): string | null {
+  if (!code) return null;
+  if (Object.hasOwn(CHECK_DETAIL_SENTENCE, code)) return CHECK_DETAIL_SENTENCE[code]!;
+  if (Object.hasOwn(FIX_FOR_DETAIL_CODE, code)) return FIX_FOR_DETAIL_CODE[code]!.detail;
+  return null;
+}
 
 /** A decimal the API sends as a string, or null. Never NaN, never a silent 0. */
 export function num(value: string | number | null | undefined): number | null {

@@ -63,7 +63,7 @@ import { api, ApiProblem } from '@/lib/api';
 import { ClientSpace } from '@/components/client/ClientSpace';
 import { latestComposite, latestScanId } from '@/components/client/ClientDetailView';
 import { formatStamp } from '@/lib/dates';
-import { ENGINE_ACCENT, engineLabel } from '@/lib/client/engines';
+import { ENGINE_ACCENT, engineFailureSentence, engineLabel } from '@/lib/client/engines';
 import type { ClientDetailState } from '@/components/client/ClientDetailView';
 
 const RUN_TONE: Record<string, BadgeTone> = {
@@ -440,6 +440,7 @@ function EngineCard({
   const answered =
     result.status === 'ok' || result.status === 'answered_no_mention';
   const rivals = result.brands.filter((b) => !b.isSubject);
+  const failure = engineFailureSentence(result.errorCode);
 
   return (
     <div
@@ -459,12 +460,12 @@ function EngineCard({
 
       {!answered ? (
         // A genuine failure, distinct from an answer that did not name you.
-        // Collapsing the two would turn an outage into a finding.
+        // Collapsing the two would turn an outage into a finding. Why it failed is a
+        // sentence, never the code (launch checklist 3.39); a code nothing words adds
+        // nothing, so the card says only that the engine did not answer.
         <p className="text-ui-sm text-text-tertiary">
           This engine did not answer.
-          {result.errorCode != null && (
-            <span className="ml-1 font-mono text-ui-2xs">({result.errorCode})</span>
-          )}
+          {failure !== null && ` ${failure}`}
         </p>
       ) : result.mentioned ? (
         <p className="text-ui-sm text-text-body">
