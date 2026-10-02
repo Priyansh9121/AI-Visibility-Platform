@@ -32,8 +32,8 @@ const REFUSALS = {
       "This page no longer has the link's code (it is removed from the address bar once read). Start again from the sign-in page.",
   },
   expired: {
-    title: 'That Google sign-in has expired',
-    detail: 'It works for ten minutes and once. Start again from the sign-in page.',
+    title: 'That Google sign-in can no longer be used',
+    detail: 'It works once, for ten minutes, in the browser that started it. Start again from the sign-in page.',
   },
 } as const;
 
@@ -54,7 +54,8 @@ const UNREACHABLE = {
  * fetch, this owns the form. Two states are refusals, and the way out of both
  * is the front door. `no-code` is a page with no ticket to ask about, typically
  * a reload (the ticket is taken out of the address bar once read). `expired` is
- * the API refusing the ticket (unknown, already used, or past its ten minutes).
+ * the API refusing the ticket (unknown, already used, past its ten minutes, or
+ * opened in a browser that did not start the sign-in).
  * An API that does not answer, or answers 5xx, is not a refusal and is its own
  * state, `unreachable`, whose way out is Try again. Which one applies is the
  * route's call.

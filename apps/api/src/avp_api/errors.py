@@ -242,7 +242,7 @@ class InvalidGoogleTicket(ProblemError):
 
     status_code = status.HTTP_400_BAD_REQUEST
     problem_type = "invalid-google-ticket"
-    title = "That Google sign-in has expired"
+    title = "That Google sign-in can no longer be used"
 
 
 class SeatLimitReached(ProblemError):

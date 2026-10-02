@@ -185,8 +185,10 @@ describe('the privacy page says what the code does', () => {
     expect(PRIVACY.text).toMatch(/To have your account, or your agency and everything in it, deleted, email/);
   });
 
-  it('names the one cookie and says there are no trackers', () => {
+  it('names both cookies and says there are no trackers', () => {
     expect(PRIVACY.text).toContain('__Host-avp_session keeps you signed in');
+    expect(PRIVACY.text).toContain('__Host-avp_google_flow is set only while a Google sign-in is in progress');
+    expect(PRIVACY.text).toContain('lasts at most 11 minutes');
     expect(PRIVACY.text).toContain('There are no analytics, advertising or tracking scripts');
   });
 

@@ -19,8 +19,10 @@ that exists only when it is strictly necessary is one that gets dropped the
 day the code is rearranged.
 
 Nothing in this module trusts anything the browser sent. The email comes
-from the verified token, never from a form; the `state` is looked up, never
-compared to a cookie the browser could have written.
+from the verified token, never from a form; the `state` is looked up
+server-side, and a short-lived flow cookie (whose digest is parked with the
+state) ties it to the browser that pressed the button, so a flow started in
+one browser cannot be finished in another.
 
 THE ACCOUNT-LINKING POLICY, DECIDED AND WRITTEN DOWN
 ----------------------------------------------------
@@ -277,15 +279,26 @@ def _jwks() -> jwt.PyJWKClient:
 
 @dataclass(frozen=True, slots=True)
 class FlowState:
-    """What /start minted and /callback must find: the nonce and the PKCE verifier."""
+    """What /start minted and /callback must find.
+
+    The nonce, the PKCE verifier, and the digest of the flow cookie that ties
+    the flow to the browser that started it.
+    """
 
     nonce: str
     code_verifier: str
+    # The digest of the cookie value set on the browser that pressed the
+    # button. None for a record parked before the binding existed.
+    binding_digest: str | None = None
 
 
 def _pkce_challenge(verifier: str) -> str:
     digest = hashlib.sha256(verifier.encode("ascii")).digest()
     return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
+def _ticket_from_json(raw: str) -> tuple[GoogleIdentity, str | None]:
+    return GoogleIdentity.from_json(raw), json.loads(raw).get("binding_digest")
 
 
 class GoogleFlowStore:
@@ -300,43 +313,63 @@ class GoogleFlowStore:
         self._redis = redis
         self._settings = settings or get_settings()
 
-    async def begin(self) -> tuple[str, str, str]:
-        """Mint a flow. Returns (state, nonce, code_challenge)."""
+    async def begin(self) -> tuple[str, str, str, str]:
+        """Mint a flow. Returns (state, nonce, code_challenge, binding).
+
+        `binding` goes to the browser that pressed the button, in a cookie;
+        only its digest is parked, and the callback compares the two.
+        """
         state = new_session_token()
         nonce = secrets.token_urlsafe(24)
         verifier = secrets.token_urlsafe(48)
-        record = json.dumps({"nonce": nonce, "code_verifier": verifier})
+        binding = secrets.token_urlsafe(32)
+        record = json.dumps(
+            {
+                "nonce": nonce,
+                "code_verifier": verifier,
+                "binding_digest": token_digest(binding),
+            }
+        )
         await self._redis.set(
             f"{STATE_PREFIX}{token_digest(state)}",
             record,
             ex=self._settings.google_sign_in_ttl_seconds,
         )
-        return state, nonce, _pkce_challenge(verifier)
+        return state, nonce, _pkce_challenge(verifier), binding
 
     async def consume_state(self, state: str) -> FlowState | None:
         raw = await self._take(f"{STATE_PREFIX}{token_digest(state)}")
         if raw is None:
             return None
         d = json.loads(raw)
-        return FlowState(nonce=d["nonce"], code_verifier=d["code_verifier"])
+        return FlowState(
+            nonce=d["nonce"],
+            code_verifier=d["code_verifier"],
+            binding_digest=d.get("binding_digest"),
+        )
 
-    async def issue_ticket(self, identity: GoogleIdentity) -> str:
+    async def issue_ticket(self, identity: GoogleIdentity, binding_digest: str | None) -> str:
+        """Park a verified new address. The ticket is bound to the browser whose
+        flow cookie hashes to `binding_digest`: the callback's carry-over."""
         ticket = new_session_token()
+        record = json.loads(identity.to_json())
+        record["binding_digest"] = binding_digest
         await self._redis.set(
             f"{TICKET_PREFIX}{token_digest(ticket)}",
-            identity.to_json(),
+            json.dumps(record),
             ex=self._settings.google_sign_in_ttl_seconds,
         )
         return ticket
 
-    async def peek_ticket(self, ticket: str) -> GoogleIdentity | None:
-        """Read without consuming — the completion page shows the address first."""
+    async def peek_ticket(self, ticket: str) -> tuple[GoogleIdentity, str | None] | None:
+        """Read without consuming — the completion page shows the address first.
+        Returns the identity and the digest of the flow cookie it is bound to."""
         raw = await self._redis.get(f"{TICKET_PREFIX}{token_digest(ticket)}")
-        return None if raw is None else GoogleIdentity.from_json(raw)
+        return None if raw is None else _ticket_from_json(raw)
 
-    async def consume_ticket(self, ticket: str) -> GoogleIdentity | None:
+    async def consume_ticket(self, ticket: str) -> tuple[GoogleIdentity, str | None] | None:
         raw = await self._take(f"{TICKET_PREFIX}{token_digest(ticket)}")
-        return None if raw is None else GoogleIdentity.from_json(raw)
+        return None if raw is None else _ticket_from_json(raw)
 
     async def _take(self, key: str) -> str | None:
         # GET and DELETE in one MULTI/EXEC, so two callbacks racing on one

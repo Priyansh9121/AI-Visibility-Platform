@@ -178,9 +178,12 @@ export function PrivacyPolicy(): JSX.Element {
 
       <PageSection heading="Cookies and your browser">
         <Points>
-          <Point term="One cookie.">
+          <Point term="Two cookies.">
             __Host-avp_session keeps you signed in. It is set when you sign in, cannot be read by scripts
             on the page, and lasts {counted(RETENTION.sessionDays, 'day')} or until you sign out.
+            __Host-avp_google_flow is set only while a Google sign-in is in progress, so that it can be
+            finished only in the browser that started it. It cannot be read by scripts either, and lasts
+            at most {counted(RETENTION.googleSignUpMinutes + 1, 'minute')}.
           </Point>
           <Point term="Two preferences.">
             Your colour theme (avp.theme) and whether the sidebar’s client list is open
