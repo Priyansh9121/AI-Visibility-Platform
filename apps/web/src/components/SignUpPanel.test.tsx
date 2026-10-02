@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { act } from 'react';
+import { act, type JSX } from 'react';
 import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ApiProblem, GOOGLE_SIGN_IN_URL } from '@/lib/api';
@@ -191,5 +191,78 @@ describe('when the server answers 429', () => {
     expect(el.querySelector('.avp-errorstate')).not.toBeNull();
     act(() => root.unmount());
     document.body.innerHTML = '';
+  });
+});
+
+const AWAY = 'We could not reach the server. Check your connection and try again.';
+const away502 = () =>
+  new ApiProblem({
+    type: '/problems/unknown',
+    title: 'Request failed',
+    status: 502,
+    detail: 'The server returned 502.',
+    instance: '/api/v1/x',
+  });
+const typeInto = (input: HTMLInputElement, value: string) =>
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+async function submitForm(panel: JSX.Element): Promise<{ text: string; cleanup: () => void }> {
+  const el = document.createElement('div');
+  document.body.appendChild(el);
+  const root = createRoot(el);
+  act(() => root.render(panel));
+  el.querySelectorAll<HTMLInputElement>('input').forEach((i) =>
+    typeInto(i, i.type === 'email' ? 'a@b.example' : 'a-long-enough-value-1'),
+  );
+  act(() => {
+    el.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  });
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  return {
+    text: el.textContent ?? '',
+    cleanup: () => {
+      act(() => root.unmount());
+      document.body.innerHTML = '';
+    },
+  };
+}
+
+describe('when the API does not answer, the person is told in plain words', () => {
+  it('a network failure shows the shared sentence and no port number', async () => {
+    signUp.mockRejectedValue(new TypeError('Failed to fetch'));
+    const { text, cleanup } = await submitForm(<SignUpPanel onSignedUp={() => {}} onSwitchToSignIn={() => {}} animate={false} />);
+    expect(text).toContain(AWAY);
+    expect(text).not.toContain('8000');
+    expect(text).not.toContain('did not respond');
+    cleanup();
+  });
+
+  it("a 5xx that is not the API's own problem body shows the shared sentence", async () => {
+    signUp.mockRejectedValue(away502());
+    const { text, cleanup } = await submitForm(<SignUpPanel onSignedUp={() => {}} onSwitchToSignIn={() => {}} animate={false} />);
+    expect(text).toContain(AWAY);
+    expect(text).not.toContain('The server returned 502');
+    cleanup();
+  });
+
+  it('a 4xx problem still shows its own detail', async () => {
+    signUp.mockRejectedValue(
+      new ApiProblem({
+        type: '/problems/x',
+        title: 'Nope',
+        status: 403,
+        detail: 'The API says no, in its own words.',
+        instance: '/api/v1/x',
+      }),
+    );
+    const { text, cleanup } = await submitForm(<SignUpPanel onSignedUp={() => {}} onSwitchToSignIn={() => {}} animate={false} />);
+    expect(text).toContain('The API says no, in its own words.');
+    expect(text).not.toContain(AWAY);
+    cleanup();
   });
 });

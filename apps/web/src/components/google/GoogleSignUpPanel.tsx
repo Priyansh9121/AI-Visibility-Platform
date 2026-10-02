@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type FormEvent, type JSX } from 'react';
 import { Button, Card, CardBody, ErrorState, Reveal, TextField } from '@avp/design-system';
 import type { GooglePending } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
-import { apiWasAway } from '@/lib/apiAway';
+import { apiWasAway, API_AWAY_SENTENCE } from '@/lib/apiAway';
 
 export type GoogleSignUpState =
   | { kind: 'loading' }
@@ -173,7 +173,7 @@ export function GoogleSignUpPanel({
       } else {
         // No answer, or a 5xx (a proxy's 502 reaches here as an ApiProblem
         // carrying that status): nothing the API said is about this form.
-        setError('We could not reach the server. Check your connection and try again.');
+        setError(API_AWAY_SENTENCE);
       }
     } finally {
       setBusy(false);

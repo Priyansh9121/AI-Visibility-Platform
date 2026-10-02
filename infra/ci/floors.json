@@ -5,7 +5,7 @@
     "workers-pytest": 26,
     "shared-types-node-test": 53,
     "design-system-vitest": 846,
-    "web-vitest": 1399
+    "web-vitest": 1413
   },
   "ceilings": {
     "api-mypy-errors": 50
