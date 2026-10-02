@@ -2025,6 +2025,12 @@ shared report (the link a prospect opens, and its PDF) the field is always
 `null`: the sentence speaks about the agency's own scan allowance, and the code
 is not the link holder's business.
 
+**`shareExpiresAt` (2026-10-02, checklist 3.25)** is when this scan's *live* share
+link ends, or `null`: the token is set and its expiry is in the future. Never the
+token or the URL. It lets the report page offer "Withdraw link" without minting
+one first. `null` for a scan never shared, a withdrawn link and an expired one,
+and always `null` on the shared report and its PDF, like `scanErrorCode`.
+
 **`dimensions` is ordered heaviest-weight first.** The Luminance Ledger stacks
 the heaviest segment at the bottom and consumes this list directly, so the order
 is part of the visualisation's contract, not a display preference.

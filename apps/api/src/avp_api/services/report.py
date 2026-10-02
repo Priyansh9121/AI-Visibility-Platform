@@ -159,6 +159,13 @@ async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:
         scan_id=scan.id,
         scan_status=scan.status.value,
         scan_error_code=scan.error_code,
+        share_expires_at=(
+            scan.share_expires_at
+            if scan.share_token is not None
+            and scan.share_expires_at is not None
+            and scan.share_expires_at > datetime.now(UTC)
+            else None
+        ),
         visibility_flags=_visibility_flags(results, prompts),
         generated_at=datetime.now(UTC),
         scanned_at=scan.finished_at or scan.started_at,
@@ -195,10 +202,12 @@ async def build_public_report(session: AsyncSession, scan: Scan) -> ReportOut:
     `scan_error_code` says WHY a scan is partial or failed (`SCAN_DEADLINE_EXCEEDED`,
     `EXECUTOR_LOST`), which tells the agency whether the scan used up one of its
     scans and tells a stranger about how this platform runs, so it is null on
-    every public route. The status stays, as it always has been public.
+    every public route. `share_expires_at` (when the agency's link ends) is blanked
+    the same way. The status stays, as it always has been public.
     """
     report = await build_report(session, scan)
     report.scan_error_code = None
+    report.share_expires_at = None
     return report
 
 

@@ -3379,6 +3379,8 @@ export interface components {
             /** Scannedat */
             scannedAt?: string | null;
             score: components["schemas"]["ScoreDetailOut"] | null;
+            /** Shareexpiresat */
+            shareExpiresAt?: string | null;
             subject: components["schemas"]["ReportSubjectOut"];
             /**
              * Visibilityflags

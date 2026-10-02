@@ -3859,6 +3859,18 @@
               }
             ]
           },
+          "shareExpiresAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shareexpiresat"
+          },
           "subject": {
             "$ref": "#/components/schemas/ReportSubjectOut"
           },
