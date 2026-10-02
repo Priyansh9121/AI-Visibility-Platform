@@ -22128,3 +22128,43 @@ Drift check (north-star §8): Layer 5, Distribution / Action (the share bar) and
 - The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
 - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# The API serves its JSON bodies without Pydantic's alias warning: FastAPI 0.117.1, the wire unchanged
+
+**2026-10-02, the nineteenth entry of the day; branch `pilot-fixes-2`, the founder's brief "memory and the rest of the open decisions" (item M2).** One item, one commit.
+
+**Render: nothing to set. A dependency version changes (FastAPI 0.116.2 → 0.117.1, MIT, no new package, host or licence); no migration; the API's OpenAPI document is byte-identical.**
+
+Drift check (north-star §8): Layer 1, Delivery (the API's request handling, and its logs); lifecycle phase: Activation (Epic 9), a deploy whose logs say only what happened.
+
+## 1. What changed
+
+- **The symptom.** Render's API logs carried an `UnsupportedFieldAttributeWarning` for each body field on the first request to each route: "The 'alias' attribute with value 'engines' has no effect …", and the same for `accentColor`, `agencyName`, `classify`, `competitors`, `currentPassword`, `email`, `fullName`, `logoUrl`, `name`, `newPassword`, `password`, `prompt`, `promptLimit`, `role`, `ticket`, `token` and `url`.
+- **Is the alias ignored on the wire? No.** `ApiModel` gives every field a camelCase alias (`alias_generator=to_camel`), and a JSON body is validated through the whole model, so every alias works; the tests below send camelCase and read it back. The warning came from FastAPI 0.116.2 doing work it did not need: on the first request to a JSON-body route, `request_body_to_args` called `get_cached_model_fields`, which wraps each field of the body model in a `TypeAdapter(Annotated[annotation, field_info])` of its own. Those adapters serve form bodies only, and Pydantic warns, correctly, that an alias on a field inside `Annotated` has no effect there. FastAPI 0.117.0 builds them only for form data (fastapi/fastapi#13694). A minimal app with the same model base shows it: FastAPI 0.116.2 answers 200 having read `fullName`, with 9 alias warnings; 0.117.0, 0.117.1 and 0.118.0 answer the same with none.
+- **The fix, the smallest that keeps the wire identical:** `fastapi>=0.117.1,<0.118` in `apps/api/pyproject.toml` (was `>=0.115,<0.117`), both `uv.lock` files re-locked (FastAPI only; Starlette stays 0.48.0). A comment at the pin says why the cap stays (below).
+- **The suite no longer ignores it; it fails on it.** The `filterwarnings` entry that ignored the alias warning is gone, replaced by `error::pydantic.warnings.UnsupportedFieldAttributeWarning`, so any test whose request raises it fails (from the security review).
+- **Tests** (`tests/test_no_alias_warnings.py`, 12): a fresh interpreter imports the app and builds its OpenAPI schema with no such warning (what a deploy does at start); building the app raises none; every JSON-body route is walked through FastAPI's own `request_body_to_args` with its cache cleared first (it is warm by the time the file runs, which would hide a regression), and the walk is checked not to be vacuous; every camelCase alias is the live key of its field on every body route; no route takes a form or file body (the only path that still builds per-field adapters); and over HTTP, sign-up takes its names in camelCase, a bound on a camelCase field is enforced and reported by that name, and a scan starts with `promptLimit` and `engines` while out-of-range values are a 422 that starts nothing.
+- **No wire change:** OpenAPI regenerates byte-identical, so `api.gen.ts` does not change.
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS.** Every path this app uses behaves the same from 0.116.2 to 0.117.1, except the change wanted (JSON bodies no longer build per-field adapters); the dependency cache, `db_session` (one per request, shared by `current_principal` and the handler), the rate limiter and the background executor are unchanged.
+  - **Taken:** L1, the error filter above (a direct-call test alone would let the warning come back through another function).
+  - **L2, recorded at the pin:** FastAPI below 0.118 also holds Starlette below 0.49, which matters only once the API serves files; the API has no file-serving route today. The cap stays: 0.118 runs the teardown of `yield` dependencies after the response is sent, which would move `db_session`'s rollback and close relative to the scan executor's background task, and 0.119 restructures `fastapi._compat`, which this test imports. Lifting it needs its own review.
+
+## Found, not fixed
+
+- **The FastAPI cap** must be lifted, with its own review, before any route serves files (`FileResponse`, `StaticFiles`): the Starlette fixes for file serving are above the version this cap allows.
+
+## Verified
+
+**API pytest 2442 → 2454 (+12); floor raised to match.**
+- **The tests fail before the fix (the negative control):** with FastAPI 0.116.2 put back into the environment, 8 of the 12 fail (the body-route walk, the alias keys, and the camelCase tests, which make real requests), and so do 11 of `test_auth_flow.py`'s 12, through the new error filter. The import test passes on 0.116.2 as well: the warning was never at start-up, only on each body route's first request. FastAPI 0.117.1 restored with `uv sync --frozen`.
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, shared-types 53 (0 fail), design-system 935, web 1531, mypy 43 (ceiling 50). No alias warning anywhere in the API run's output.
+- ruff clean; all typechecks clean; the styleguide builds; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass (the pin's comment does not change the locks); Alembic upgrade and check pass on an empty database (no schema change).
+- The Python licence audits pass in both environments (FastAPI MIT, as before); the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+- OpenAPI regenerates byte-identical under FastAPI 0.117.1, and `api.gen.ts` with it: no wire change.
+- Exit codes were read from files.
