@@ -365,6 +365,257 @@ class TestTheConnectedAddressListener:
         assert guard.refused is None
 
 
+class _FakeRequest:
+    def __init__(
+        self, url: str, *, navigation: bool, frame: Any, frame_raises: bool,
+        navigation_raises: bool = False,
+    ) -> None:
+        self.url = url
+        self._navigation_raises = navigation_raises
+        self._navigation = navigation
+        self._frame = frame
+        self._frame_raises = frame_raises
+
+    def is_navigation_request(self) -> bool:
+        if self._navigation_raises:
+            raise RuntimeError("cannot tell")
+        return self._navigation
+
+    @property
+    def frame(self) -> Any:
+        if self._frame_raises:
+            raise RuntimeError("Service Worker requests have no frame")
+        return self._frame
+
+
+class _FakeRoute:
+    """A Playwright route, as far as `BrowserGuard.handle` reads one."""
+
+    def __init__(
+        self, url: str, *, navigation: bool, parent: Any, frame_raises: bool = False,
+        navigation_raises: bool = False,
+    ):
+        from types import SimpleNamespace
+
+        self.actions: list[tuple[str, Any]] = []
+        self.request = _FakeRequest(
+            url, navigation=navigation, frame=SimpleNamespace(parent_frame=parent),
+            frame_raises=frame_raises, navigation_raises=navigation_raises,
+        )
+
+    async def abort(self, reason: str | None = None) -> None:
+        self.actions.append(("abort", reason))
+
+    async def fallback(self) -> None:
+        self.actions.append(("fallback", None))
+
+
+class TestARefusedRequestBeforeItIsSent:
+    """Only the main frame's own navigation ends the run; anything else is aborted alone."""
+
+    @pytest.fixture(autouse=True)
+    def private(self, dns: dict[str, Any]) -> None:
+        dns["internal.test"] = ["10.0.0.5"]
+        dns["ok.test"] = ["93.184.216.34"]
+
+    async def test_a_main_frame_navigation_is_recorded_and_aborted(self) -> None:
+        guard = egress.BrowserGuard()
+        route = _FakeRoute("https://internal.test/", navigation=True, parent=None)
+        await guard.handle(route)
+        assert route.actions == [("abort", "blockedbyclient")]
+        assert guard.refused is not None and guard.refused.host == "internal.test"
+
+    async def test_a_sub_resource_is_aborted_and_not_recorded(self) -> None:
+        from structlog.testing import capture_logs
+
+        guard = egress.BrowserGuard()
+        main = object()
+        with capture_logs() as logs:
+            for path in ("a.js", "b.js"):
+                route = _FakeRoute(
+                    f"https://internal.test/{path}?q=1", navigation=False, parent=main
+                )
+                await guard.handle(route)
+                assert route.actions == [("abort", "blockedbyclient")]
+        assert guard.refused is None
+        guard.raise_if_refused()
+        # Once per host, host only.
+        assert [(e["event"], e["host"], e["log_level"]) for e in logs] == [
+            ("egress.request_refused", "internal.test", "info")
+        ]
+        assert set(logs[0]) == {"event", "log_level", "host"}
+
+    async def test_a_sub_resource_in_the_main_frame_is_not_a_navigation(self) -> None:
+        guard = egress.BrowserGuard()
+        route = _FakeRoute("https://internal.test/a.png", navigation=False, parent=None)
+        await guard.handle(route)
+        assert route.actions == [("abort", "blockedbyclient")]
+        assert guard.refused is None
+
+    async def test_a_sub_frame_navigation_is_aborted_and_not_recorded(self) -> None:
+        guard = egress.BrowserGuard()
+        route = _FakeRoute("https://internal.test/f", navigation=True, parent=object())
+        await guard.handle(route)
+        assert route.actions == [("abort", "blockedbyclient")]
+        assert guard.refused is None
+
+    async def test_a_request_whose_frame_cannot_be_read_fails_closed(self) -> None:
+        # Playwright raises for some requests (a service worker's): treated as the
+        # main frame's navigation, so the run ends rather than carrying on.
+        guard = egress.BrowserGuard()
+        route = _FakeRoute(
+            "https://internal.test/sw", navigation=False, parent=None, frame_raises=True
+        )
+        await guard.handle(route)
+        assert route.actions == [("abort", "blockedbyclient")]
+        assert guard.refused is not None
+
+    async def test_a_navigation_check_that_raises_fails_closed(self) -> None:
+        guard = egress.BrowserGuard()
+        route = _FakeRoute(
+            "https://internal.test/x", navigation=False, parent=None, navigation_raises=True
+        )
+        await guard.handle(route)
+        assert route.actions == [("abort", "blockedbyclient")]
+        assert guard.refused is not None
+
+    async def test_a_host_refused_as_a_sub_resource_still_ends_the_run_on_a_hop(self) -> None:
+        from types import SimpleNamespace
+
+        guard = egress.BrowserGuard()
+        await guard.handle(
+            _FakeRoute("https://internal.test/a.js", navigation=False, parent=object())
+        )
+        assert guard.refused is None
+        response = SimpleNamespace(
+            request=SimpleNamespace(url="https://ok.test/", redirected_from=None)
+        )
+        with pytest.raises(EgressRefused):
+            await guard.check_landing(response, "https://internal.test/landed")
+        assert guard.refused is not None
+
+    async def test_a_refusal_is_raised_fresh_each_time(self) -> None:
+        guard = egress.BrowserGuard()
+        raised = []
+        for _ in range(3):
+            with pytest.raises(EgressRefused) as caught:
+                await guard._verdict("internal.test", 443)  # noqa: SLF001
+            raised.append(caught.value)
+        assert len({id(e) for e in raised}) == 3
+        assert all((e.host, e.address) == ("internal.test", "10.0.0.5") for e in raised)
+        # Each traceback is its own and short: nothing accumulates across raises.
+        assert all(len(list(_frames(e.__traceback__))) < 4 for e in raised)
+
+    async def test_only_the_first_hosts_are_logged_by_name_and_the_rest_counted(
+        self, dns: dict[str, Any]
+    ) -> None:
+        from structlog.testing import capture_logs
+
+        guard = egress.BrowserGuard()
+        with capture_logs() as logs:
+            for i in range(13):
+                dns[f"h{i}.test"] = ["10.0.0.5"]
+                for _ in range(2):  # repeats of a named host are not logged again
+                    await guard.handle(
+                        _FakeRoute(f"https://h{i}.test/a", navigation=False, parent=object())
+                    )
+            await guard.finish()
+            await guard.finish()  # reported once
+        named = [e for e in logs if e["event"] == "egress.request_refused"]
+        more = [e for e in logs if e["event"] == "egress.request_refused_more"]
+        assert [e["host"] for e in named] == [f"h{i}.test" for i in range(10)]
+        assert len(more) == 1 and set(more[0]) == {"event", "log_level", "requests"}
+        assert more[0]["requests"] == 6  # 3 hosts x 2 requests, never named
+        assert "h10.test" not in str(more)
+
+    async def test_the_installed_script_disables_the_shared_worker(self) -> None:
+        scripts: list[str] = []
+
+        class Context:
+            async def route(self, *a: Any, **k: Any) -> None: ...
+            async def route_web_socket(self, *a: Any, **k: Any) -> None: ...
+            def on(self, *a: Any, **k: Any) -> None: ...
+
+            async def add_init_script(self, script: str) -> None:
+                scripts.append(script)
+
+        await egress.BrowserGuard().install(Context())
+        assert any("window.SharedWorker = undefined" in s for s in scripts)
+        assert any("window.RTCPeerConnection = undefined" in s for s in scripts)
+
+    async def test_a_public_request_goes_on_whatever_it_is(self) -> None:
+        guard = egress.BrowserGuard()
+        route = _FakeRoute("https://ok.test/a.js", navigation=False, parent=object())
+        await guard.handle(route)
+        assert route.actions == [("fallback", None)]
+        assert guard.refused is None
+
+
+def _frames(tb: Any) -> Any:
+    while tb is not None:
+        yield tb
+        tb = tb.tb_next
+
+
+class TestARedirectHopThatNeverAnswers:
+    """`request` listener: a hop sent into a private address is judged without a response."""
+
+    @pytest.fixture(autouse=True)
+    def names(self, dns: dict[str, Any]) -> None:
+        dns["internal.test"] = ["10.0.0.5"]
+        dns["ok.test"] = ["93.184.216.34"]
+
+    @staticmethod
+    def _request(url: str, hop: bool) -> Any:
+        from types import SimpleNamespace
+
+        return SimpleNamespace(url=url, redirected_from=object() if hop else None)
+
+    async def test_a_hop_into_a_private_address_is_recorded(self) -> None:
+        guard = egress.BrowserGuard()
+        await guard._on_request(self._request("https://internal.test/x", True))  # noqa: SLF001
+        assert guard.refused is not None and guard.refused.host == "internal.test"
+
+    async def test_a_request_that_is_not_a_hop_and_a_public_hop_are_left_alone(self) -> None:
+        guard = egress.BrowserGuard()
+        await guard._on_request(self._request("https://internal.test/x", False))  # noqa: SLF001
+        await guard._on_request(self._request("https://ok.test/x", True))  # noqa: SLF001
+        assert guard.refused is None
+
+    async def test_finish_waits_for_a_hop_still_being_judged(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import asyncio
+
+        async def slow(host: str, port: int) -> list[tuple]:
+            await asyncio.sleep(0.05)
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", port))]
+
+        monkeypatch.setattr(egress, "_getaddrinfo", slow)
+        guard = egress.BrowserGuard()
+        task = asyncio.ensure_future(
+            guard._on_request(self._request("https://slow.test/x", True))  # noqa: SLF001
+        )
+        await asyncio.sleep(0)
+        with pytest.raises(EgressRefused):
+            await guard.finish()
+        await task
+
+    async def test_install_listens_for_requests(self) -> None:
+        events: list[str] = []
+
+        class Context:
+            async def route(self, *a: Any, **k: Any) -> None: ...
+            async def route_web_socket(self, *a: Any, **k: Any) -> None: ...
+            async def add_init_script(self, *a: Any, **k: Any) -> None: ...
+
+            def on(self, event: str, handler: Any) -> None:
+                events.append(event)
+
+        await egress.BrowserGuard().install(Context())
+        assert "request" in events and "response" in events
+
+
 class TestARefusedHopIsRecorded:
     async def test_it_is_recorded_before_it_is_raised(self, dns: dict[str, Any]) -> None:
         from types import SimpleNamespace

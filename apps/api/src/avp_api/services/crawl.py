@@ -197,6 +197,13 @@ class RobotsGate:
     async def _fetch(self, origin: str) -> RobotsFile:
         # Redirects are followed by hand so each hop is egress-checked before
         # it is requested. robots.txt itself is not checked against robots.txt.
+        # A refusal here (the start address, or a redirect hop) deliberately ends
+        # the run as `ADDRESS_NOT_PUBLIC`, unlike a sub-resource the browser is
+        # refused: robots.txt is the permission check for the whole crawl, so if
+        # it cannot be fetched the crawler cannot learn the site's rules and must
+        # not crawl. The one exception: a robots.txt reached only through the
+        # audit's sitemap redirect (`technical_audit._fetch_side_files`), which is
+        # skipped like the sitemap, because it was refused before connecting.
         url = f"{origin}/robots.txt"
         async with self._client() as client:
             for _ in range(MAX_REDIRECTS + 1):
