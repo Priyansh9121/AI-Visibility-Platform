@@ -22573,3 +22573,80 @@ Drift check (north-star §8): Layer 1, Delivery (what the intake card, the Clien
   - OpenAPI and `api.gen.ts` regenerate with no change.
   - One of round 3's sentences changed after that run, so the web suite, its typecheck and its count gate were run again: 1693, all pass.
 - Exit codes were read from files.
+
+# A scan's audit waits two minutes for the browser, not five, and the deadline's worst case is restated wherever it is written
+
+**2026-10-03, the eighth entry of the day; branch `pilot-fixes-3`, the founder's brief "honest reports and the remaining pilot decisions" (launch checklist 3.35).** One item, one commit.
+
+**Render: nothing to set. No endpoint shape, schema, dependency or outbound host change.** One constant (`browser_slot.SCAN_AUDIT_WAIT_S`, 300 → 120 s). The description of `POST /scans/{scanId}/audit` changed (OpenAPI and `api.gen.ts` regenerated, descriptions only).
+
+Drift check (north-star §8): Layer 2, Measurement (a scan's technical audit and the scan's deadline); lifecycle phase: Activation (Epic 9), a pilot's scan finishing in time with its audit.
+
+## 1. What changed
+
+- **Founder decision (final):** the scan audit's wait for the browser goes from 300 s to 120 s; the deadline arithmetic is restated in the code, the docs and the checklist.
+- **What 120 s covers:** a run ahead that finishes normally. The audits timed for M1 (2026-10-02, 29 runs on real sites and a local page, in and out of a container) took 42 s at the most.
+- **What it no longer covers:** one capped run ahead. A run that hangs holds the browser until its own cap cuts it: 266 s for the intake's three-page crawl, 244.5 s for another scan's audit. A scan's audit queued behind such a run, with more than 120 s of its cap still to run, now ends `BROWSER_BUSY` after 120 s. The scan goes on without a Technical Foundation (excluded, never a zero), as it does for any other failed audit. At 300 s it waited such a run out, at a cost of 180 s more in the worst case.
+- **A request's wait** (`REQUEST_WAIT_S`, 60 s) is unchanged.
+- **The deadline's worst case, from the constants**, as `test_scan_executor` adds it up:
+
+  | Term | Seconds |
+  |---|---|
+  | co-citation, 2 × 62 | 124 |
+  | SerpApi, 2 × `serp.QUERY_CEILING_S` 21 | 42 |
+  | prompt generation | 122 |
+  | engines, 3 waves × 370 (122 + 4 × 62) | 1,110 |
+  | the audit's work before the browser, `crawl.PRE_BROWSER_BUDGET_S` (3.41) | 60 |
+  | the scan audit's wait | **120** (was 300) |
+  | the audit's run at its cap | 244.5 |
+  | fix generation | 242 |
+  | **Total** | **2,064.5** |
+
+  - Against `MAX_SCAN_DURATION` (2,400 s), the slack is 335.5 s and the margin ×1.16.
+  - On this branch before the change it was 2,244.5 s (×1.07).
+  - The figure moved twice today: R2's per-query ceiling took 8 s off, and 3.41's pre-browser budget added 50 s (it had been counted as one 10 s request).
+  - The comment on `MAX_SCAN_DURATION` now carries the line `worst case 2,064.5s of 2,400s: slack 335.5s, margin ×1.16`.
+  - The deadline test now checks that the comment states the sum it computes, whole line, and prints the replacement line when it does not. A bound that moves without the comment fails there.
+- **Restated in:**
+  - `browser_slot.py`: what 120 s covers and what it does not, with the two caps.
+  - `scan_executor.py`: the deadline comment, with 3.41's budget and this change in order.
+  - The docstring of `POST /scans/{scanId}/audit`. It said a scan's audit is recorded `BROWSER_BUSY` "when it waits that long", right after "more than a minute"; it now says up to two minutes.
+  - `docs/api-contracts.md`: the bounds paragraph and the `BROWSER_BUSY` code.
+  - `docs/runbook.md`: "Reading the API's memory", items 4 and 6. A `browser.slot_busy` line with `waited_ms` near 120000 is an audit that queued behind a hung run.
+  - `docs/crawl-worker-design-note.md`.
+  - The web comments behind "A scan usually takes a few minutes" (`scanOutcome.ts`, `LandingView.tsx`), which cited the 300 s wait.
+  - The launch checklist (its own commit, at the end of this brief).
+
+## 2. The review
+
+- No review was run. The brief asked for none for this item: one constant and the text that states it, no route or tenancy change. The landing step checked every restated figure against the constants and the test's own computed line.
+- Two corrections were made at landing:
+  - The implementer's comment cited "the heaviest audits measured took about 15 s". The repo recorded no such figure. The timed runs above give 42 s at the most.
+  - The worst case it pinned, 2,014.5 s (×1.19), was computed before 3.41's budget landed. The test failed on this tree with the line to write, 2,064.5 s (×1.16), and that is the line in the code and the design note.
+
+## Found, not fixed
+
+- **A queue, not one run:** 120 s covers one normal run ahead, not several. Four request reads and other scans' audits can queue, so several runs of about 30 s each could end an audit `BROWSER_BUSY` though none hangs. This is the founder's decision as made. `browser.slot_busy` lines with `waited_ms` near 120000 will show how often it happens.
+- **History left as written:** an older paragraph of the deadline comment ("about 1,900s … about 1.26x") is M1's figure on the day, before the wait was counted.
+
+## Verified
+
+**API pytest 3035 → 3035 (no tests added; floors unchanged).**
+- The tests that pin the wait were changed in place:
+  - `test_browser_slot.py`: the scan bound is 120 s; it is shorter than either run a cap has to cut (60 < 120 < 244.5); a request gives up at no more than half a scan's wait; the audit asks for the scan's bound.
+  - `test_agency_page_reads.py`:
+    - a scan's audit asks for exactly 120 s;
+    - a scan whose audit cannot get the browser fails that phase and goes on, with the real bound now passed through (only the time waited is scaled). The old test patched the constant away, so it never touched the real number.
+  - `test_scan_executor.py`: the deadline test checks the pinned line against its own sum.
+- **Negative controls:**
+  - On this tree, `SCAN_AUDIT_WAIT_S = 300.0` put back fails 6 of 191, and the deadline test's message gives the 300 s line (`worst case 2,244.5s of 2,400s: slack 155.5s, margin ×1.07`); restored and checked with `cmp`.
+  - The implementer's, on its base: the same, 6 of 190. The deadline test's message gave the 300 s line.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 26, shared-types 53 (0 fail), design-system 935, web 1693, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass.
+  - Alembic upgrade and check pass on an empty database (no schema change).
+  - The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no diff against this tree, which carries the new route description.
+- Exit codes were read from files.

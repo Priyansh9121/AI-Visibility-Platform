@@ -1427,8 +1427,9 @@ export interface paths {
          *     after the scan is found, so another agency's scan is still a `404`. A read that
          *     waits more than a minute for the browser is refused with a `429` too, and the audit
          *     already stored for the scan is kept. A scan's own audit, part of the scan, is not
-         *     one of these reads and is never refused: it is recorded as `failed` with
-         *     `errorCode: BROWSER_BUSY` when it waits that long, and the scan goes on.
+         *     one of these reads and is never refused: it waits up to two minutes for the
+         *     browser, and if the browser is not free by then the audit is recorded as `failed`
+         *     with `errorCode: BROWSER_BUSY` and the scan goes on.
          *
          *     **Errors:** `401`; `404` (unknown scan, or another agency's); `429 rate-limited`
          *     (with `Retry-After: 60`).

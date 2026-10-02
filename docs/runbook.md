@@ -285,7 +285,7 @@ for this reason.
 4. `browser.slot_waited` with a long `waited_ms` means a browser run queued
    behind another. Occasional waits are the design; a client being added while a
    scan audits waits for it. Waits that keep growing mean a run is slow or stuck.
-   A wait has a bound (60 s for a request, 300 s for a scan's audit): see 6.
+   A wait has a bound (60 s for a request, 120 s for a scan's audit): see 6.
 5. An audit that ends with the code `TIMEOUT` was cut by its cap: a step in the
    browser never returned, for example a page whose script never let the read
    finish. The cap is 244.5 s for the audit and 266 s for the crawl intake asks
@@ -295,7 +295,13 @@ for this reason.
 6. A `browser.slot_busy` line means a run waited for the browser as long as it
    was allowed and was sent away without one. What happens next depends on who
    asked. A scan's audit is recorded `failed` with `BROWSER_BUSY` and the scan goes
-   on to scoring, alerts and fixes; the line carries the `scan_id`. A request
+   on to scoring, alerts and fixes, without a Technical Foundation; the line carries
+   the `scan_id`. A scan's audit waits at most 120 s (300 s until launch checklist
+   3.35): long enough for a run ahead that finishes, and runs take seconds, but not
+   for one that hangs until its cap cuts it (244.5 s for an audit, 266 s for the
+   crawl intake asks for: item 5). So an audit that queues behind a hung run with
+   more than 120 s of its cap still to run ends `BROWSER_BUSY` after 120 s, and its
+   line has `waited_ms` near 120000. A request
    (adding a client with classification, reclassifying, or running an audit by
    hand) is answered **`429 rate-limited`**, "The crawler is busy with other pages
    right now. Try again in a minute.", with `Retry-After: 60`, and **writes

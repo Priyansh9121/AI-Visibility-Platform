@@ -140,18 +140,22 @@ LEASE = timedelta(seconds=180)
 # that sum and still leaves the scan its alerts and its fixes.
 #
 # M1 round 2 bounded the audit's WAIT for the one browser (`browser_slot`), and the
-# sum counts that too, at its bound, `SCAN_AUDIT_WAIT_S` (300s) before the run itself:
-# about 2,200s, so 2,400s still clears it, now by about 1.09x. The number is still
-# unchanged, and the margin is thinner: a full wait AND a full run in one scan is the
-# pathological case. The test below adds each term, so a bound that grows without
-# this number moving fails there and not in production.
+# sum counts that too, at its bound, `SCAN_AUDIT_WAIT_S`, before the run itself. The
+# bound was 300s, which took the sum to about 2,200s and left a margin of about ×1.09.
 #
 # Launch checklist 3.41 (round 3) bounded the audit's reads BEFORE the browser, which the
 # sum had counted as one request's timeout (10s): robots.txt, the sitemap and the
 # homepage's redirects, a request each under its own deadline, are now all under
-# `crawl.PRE_BROWSER_BUDGET_S` (60s) together, and the sum counts that. About 2,250s, so
-# 2,400s still clears it, now by about 1.065x (2,202.5s before, 1.09x). The number is
-# still unchanged, and the margin is thinner again: 3.35 is the founder's.
+# `crawl.PRE_BROWSER_BUDGET_S` (60s) together, and the sum counts that budget whole
+# (2,244.5s at a 300s wait, a margin of ×1.07). Launch checklist 3.35 (the founder's
+# decision) then made the wait 120s. Recomputed from the constants, the sum now
+# stands at:
+#
+#     worst case 2,064.5s of 2,400s: slack 335.5s, margin ×1.16
+#
+# A full wait AND a full run in one scan is still the pathological case. The test below
+# adds each term and checks that the line above says what it computes, so a bound that
+# moves without this number fails there and not in production.
 MAX_SCAN_DURATION = timedelta(seconds=2_400)
 
 # WHAT THE DEADLINE KEEPS — decision 7, the founder, 2026-10-01
