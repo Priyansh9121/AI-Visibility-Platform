@@ -50,7 +50,7 @@ const STATUS_TONE = {
 const STATUS_LABEL = {
   classified: 'Identified',
   ambiguous: 'Needs review',
-  unclassifiable: 'Could not read',
+  unclassifiable: 'Could not classify',
   pending: 'Pending',
 } as const;
 
@@ -138,7 +138,7 @@ export function ClientsView({
                   }
                 />
                 <StatTile
-                  label="Unreadable"
+                  label="Could not classify"
                   value={countOf(state.clients, 'unclassifiable')}
                   accent={2}
                   emphasis={countOf(state.clients, 'unclassifiable') > 0}

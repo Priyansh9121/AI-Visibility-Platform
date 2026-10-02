@@ -7,12 +7,11 @@ import { api, ApiProblem } from '@/lib/api';
 import { apiWasAway, API_AWAY_SENTENCE } from '@/lib/apiAway';
 import { ScanLimitNotice } from '@/components/billing/ScanLimitNotice';
 import {
-  ADDRESS_NOT_PUBLIC,
-  ADDRESS_NOT_PUBLIC_SENTENCE,
   ROBOTS_UNREACHABLE,
   ROBOTS_UNREACHABLE_ADVICE,
-  ROBOTS_UNREACHABLE_SENTENCE,
+  classificationFailure,
 } from '@/lib/report/strings';
+import { SCAN_DURATION_SENTENCE } from '@/lib/scans/scanOutcome';
 import { type ScanLimitProblem, scanLimitProblem } from '@/lib/billing/allowance';
 import { useScanStanding } from '@/lib/billing/useScanAllowance';
 
@@ -144,30 +143,11 @@ export function ClassificationResult({
               body="The site did not give a clear enough signal. Rather than guess — a wrong
                     industry would skew every competitor and prompt we generate from it — we
                     have left it unset."
-              code={client.classificationReasonCode}
             />
           )}
 
           {status === 'unclassifiable' && (
-            <Explain
-              heading="We could not read this site."
-              body={
-                client.classificationReasonCode === ADDRESS_NOT_PUBLIC
-                  ? ADDRESS_NOT_PUBLIC_SENTENCE
-                  : client.classificationReasonCode === ROBOTS_UNREACHABLE
-                    ? `${ROBOTS_UNREACHABLE_SENTENCE} ${ROBOTS_UNREACHABLE_ADVICE}`
-                    : `Nothing was classified. This usually means the site did not load, or the
-                    page carried no description of a business.`
-              }
-              /* robots.txt could not be read (launch checklist 3.41): the sentence says
-                 what happened, so the code under it would only repeat it as a machine's
-                 word. Every other state keeps its `Reason:` line. */
-              code={
-                client.classificationReasonCode === ROBOTS_UNREACHABLE
-                  ? null
-                  : client.classificationReasonCode
-              }
-            />
+            <Unclassifiable code={client.classificationReasonCode} />
           )}
 
           {client.crawl && (
@@ -226,7 +206,7 @@ export function ClassificationResult({
                   'Generating the questions its buyers ask',
                   'Putting each question to the AI answer engines',
                 ]}
-                hint="This takes under five minutes. You can leave this page — it keeps running."
+                hint={`${SCAN_DURATION_SENTENCE} You can leave this page — it keeps running.`}
               />
               <div className="flex flex-wrap gap-2">
                 <Button
@@ -291,24 +271,40 @@ function article(industry: string | null | undefined): string {
 function StatusBadge({ status }: { status: ClientDetail['classificationStatus'] }) {
   if (status === 'classified') return <Badge tone="success">Identified</Badge>;
   if (status === 'ambiguous') return <Badge tone="warn">Needs review</Badge>;
-  if (status === 'unclassifiable') return <Badge tone="danger">Could not read</Badge>;
+  // "Classify", not "read": under both of the unclassifiable card's headings (the crawler
+  // could not read the site, or the site was read and not classified) it is true. The
+  // Clients list says the same (`ClientsView`'s `STATUS_LABEL`).
+  if (status === 'unclassifiable') return <Badge tone="danger">Could not classify</Badge>;
   return <Badge tone="neutral">Pending</Badge>;
 }
 
-function Explain({
-  heading,
-  body,
-  code,
-}: {
-  heading: string;
-  body: string;
-  code: string | null | undefined;
-}) {
+/**
+ * An unclassifiable client: what happened, in a sentence, and never the code — launch
+ * checklist 3.39. The card used to say "This usually means the site did not load, or the
+ * page carried no description of a business" for every state it had no sentence for, and
+ * printed `Reason: <code>` under all but one. A code is a machine's word for what
+ * happened, and the sentence says it; and that guess blamed the site for failures that
+ * were the crawler's or the model's (`TIMEOUT`, `BROWSER_ERROR`, every `PROVIDER_*`).
+ *
+ * `classificationFailure` holds one sentence per code the classifier can record (a test
+ * reads `crawl.py` and `classify.py` back), and a generic one that guesses nothing for a
+ * code it does not know. `BROWSER_BUSY` is not among them and cannot reach this card: a
+ * read that never got the crawler's one browser writes nothing and answers 429
+ * (`intake.run_classification`), which the intake form shows above the form, not here.
+ */
+function Unclassifiable({ code }: { code: string | null | undefined }) {
+  const { heading, sentence } = classificationFailure(code);
+  // robots.txt could not be read (launch checklist 3.41): the person who typed the address
+  // is the one who can check it, so only this card says so, after what happened.
+  const body = code === ROBOTS_UNREACHABLE ? `${sentence} ${ROBOTS_UNREACHABLE_ADVICE}` : sentence;
+  return <Explain heading={heading} body={body} />;
+}
+
+function Explain({ heading, body }: { heading: string; body: string }) {
   return (
     <div>
       <p className="text-ui-md font-medium text-text-primary">{heading}</p>
       <p className="mt-2 max-w-measure text-ui-base leading-prose text-text-secondary">{body}</p>
-      {code && <p className="mt-3 font-mono text-ui-2xs text-text-tertiary">Reason: {code}</p>}
     </div>
   );
 }

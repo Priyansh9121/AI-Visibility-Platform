@@ -169,21 +169,30 @@ export function LandingView({
             </Button>
             <p className="text-ui-sm text-text-tertiary">
               {/*
-                "Under five minutes" — 2026-09-12. Five minutes is the 300s
-                scan budget (§7 Epic 9), the one figure this product commits
-                to, and measured scans now sit well inside it: 135s at the
-                current default (20 questions, four engines, reamaze.com), and
-                211–239s at the previous default of 24 questions and five
-                engines. The earlier "about ten minutes" was a hedge from
-                before any full scan had been timed since Epic 9.17; three full
-                scans later it overstated the wait four-fold. A bound rather
-                than a central figure, because engine latency this product does
-                not control still spreads runs by tens of seconds, and a bound
-                the budget enforces is the one claim a slow scan cannot falsify.
+                "A scan usually takes a few minutes" — launch checklist 3.39.
+                This said "under five minutes", on the premise that five
+                minutes was a scan budget the product enforces. It is not:
+                nothing cuts a scan at 300 s (the deadline is
+                `MAX_SCAN_DURATION`, forty minutes), and a scan's audit can
+                wait up to `SCAN_AUDIT_WAIT_S` (300 s) for the crawler's one
+                browser before it runs. Read from the dev database on
+                2026-10-03, 9 of 25 finished scans took longer than five
+                minutes (median 4.5, longest 7.6); 21 took between two and six.
+                So no figure, and "usually", which is what that range supports.
+                It is the sentence the dashboard and the intake card use
+                (`SCAN_DURATION_SENTENCE`), run on into this one.
+
+                The rest is what the code says today: twenty questions
+                (`TARGET_PROMPTS`), four default engines (`DEFAULT_ENGINES`),
+                one free scan for a Google sign-in (`FREE_SCAN_ALLOWANCE`,
+                `free_scan_requires_google`), the plan's price. ", one at a
+                time" is gone: it was never true of the engines, which a scan
+                asks together (`engines.ask_all` gathers them, and
+                `PROMPT_CONCURRENCY` runs twelve questions at once).
               */}
-              A scan usually takes under five minutes — twenty questions, put to four
-              AI answer engines, one at a time. Your first scan is free with a Google
-              sign-in. ${PLAN_PRICE_USD}/month after that.
+              A scan usually takes a few minutes — twenty questions, put to four AI
+              answer engines. Your first scan is free with a Google sign-in.
+              ${PLAN_PRICE_USD}/month after that.
             </p>
           </div>
         </PageSection>

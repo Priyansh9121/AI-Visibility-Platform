@@ -32,6 +32,7 @@ import { describe, it, expect } from 'vitest';
 import { compositeScore, visibilityBandLabel } from '@avp/design-system';
 import { EXAMPLE_DIMENSIONS } from './LandingView';
 import { PLAN_PRICE_USD } from './PricingCard';
+import { SCAN_DURATION_SENTENCE } from '@/lib/scans/scanOutcome';
 
 /** Every price a hand could plausibly type in words. Any of them beside "dollars" fails. */
 const PRICE_WORDS = [
@@ -59,12 +60,22 @@ describe('the page explains the product', () => {
     // no longer a default, so the copy must not promise Claude "in two modes".
     expect(out).toContain('Claude, ChatGPT and Gemini');
     expect(out).not.toContain('two modes');
-    // "Under five minutes" since 2026-09-12: the 300s budget, which measured
-    // scans now sit well inside (135s at the current default). "six minutes"
-    // was Epic 9.2's figure and "about ten minutes" a pre-measurement hedge.
-    expect(out).toContain('under five minutes');
+    // "A scan usually takes a few minutes" since launch checklist 3.39. "Under five
+    // minutes" (2026-09-12) rested on a 300s budget nothing enforces: 9 of the 25
+    // finished scans in the dev database took longer. "six minutes" was Epic 9.2's
+    // figure and "about ten minutes" a pre-measurement hedge. No figure is promised.
+    expect(out).toContain('usually takes a few minutes');
+    expect(out).not.toContain('five minutes');
     expect(out).not.toContain('six minutes');
     expect(out).not.toContain('ten minutes');
+    // The same words as the dashboard and the intake card (`SCAN_DURATION_SENTENCE`).
+    expect(out).toContain(SCAN_DURATION_SENTENCE.replace(/\.$/, ''));
+    // The engines are asked together, never "one at a time".
+    expect(out).not.toContain('one at a time');
+    // What the sentence goes on to say is what the code says (checked in round 2 of 3.39).
+    expect(out).toContain(
+      'twenty questions, put to four AI answer engines. Your first scan is free with a Google sign-in.',
+    );
   });
 
   it('walks the whole pipeline, not only the parts that photograph well', () => {

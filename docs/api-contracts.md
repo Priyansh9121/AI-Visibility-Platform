@@ -1182,7 +1182,7 @@ three of them mean `industry` is `null`:
 | `pending` | `null` | Created with `classify: false`; not yet attempted |
 | `classified` | **set** | Confident result |
 | `ambiguous` | `null` | Crawled fine, but the evidence did not support a confident call |
-| `unclassifiable` | `null` | Could not read the site, or it is not a business site |
+| `unclassifiable` | `null` | Nothing was classified: the crawler could not read the site, the site is not a business site, or the classifying model could not answer (`classificationReasonCode` says which; the web shows "Could not classify" and one sentence per code, never the code) |
 
 **The UI must never render a null industry as an empty field or a dash that
 reads like data.** `ambiguous` is a distinct outcome that needs its own

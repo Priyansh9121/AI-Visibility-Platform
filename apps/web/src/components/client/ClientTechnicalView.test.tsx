@@ -15,6 +15,7 @@ import {
   AUDIT_FAILURE_GENERIC,
   AUDIT_FAILURE_SENTENCE,
   EXCLUSION_REASON,
+  FIX_FOR_DETAIL_CODE,
   PARTIAL_AUDIT_LABEL,
   PARTIAL_AUDIT_NOTE,
   ROBOTS_UNREACHABLE_ADVICE,
@@ -345,5 +346,183 @@ describe('the Not measured card is named and lists its components', () => {
     const card = html.slice(html.indexOf('technical-not-in-score'));
     expect(card).toContain('<ul');
     expect((card.match(/<li[ >]/g) ?? []).length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('a check says what its code means, in a sentence under the check, and never the code — launch checklist 3.39', () => {
+  // The row used to print the audit's `detailCode` in mono, small and last
+  // (`NO_CANONICAL_LINK`, `LAB_MEASUREMENT_NOT_FIELD_DATA`). The codes are the API's
+  // (`technical_audit.build_checks`); the sentences are the fix list's, word for word, for
+  // ten of the sixteen it words, and this screen's own for the rest.
+  type Row = [key: string, status: string, code: string | null, value?: string];
+  const checks = (rows: Row[]) =>
+    rows.map(([checkKey, status, detailCode, value], i) => ({
+      id: `chk_${i}`,
+      checkKey,
+      status,
+      detailCode,
+      value: value ?? null,
+    })) as unknown as NonNullable<TechnicalAudit['checks']>;
+  const renderRows = (rows: Row[]) => render({ ...BASE, checks: checks(rows) });
+  /** What a reader sees: the markup's text, with the entities React writes turned back. */
+  const plain = (html: string) =>
+    html
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&#x27;/g, "'")
+      .replace(/&quot;/g, '"')
+      .replace(/&amp;/g, '&')
+      .replace(/\s+/g, ' ');
+  const MACHINE_CODE = /\b[A-Z]{3,}_[A-Z0-9_]+\b/;
+  /** The text of the one row whose markup mentions `label`, and of nothing around it. */
+  const rowText = (html: string, label: string): string =>
+    plain(
+      `<li ${html.split('<li ').find((chunk) => chunk.includes(label))!.split('</li>')[0]!}</li>`,
+    ).trim();
+
+  // Every code a check on a read audit can carry. The first sixteen are `FIX_FOR_DETAIL_CODE`'s.
+  const FIX_ROWS: Row[] = [
+    ['indexable', 'fail', 'META_ROBOTS_NOINDEX'],
+    ['robots_txt_present', 'warn', 'NO_ROBOTS_TXT'],
+    ['sitemap_present', 'warn', 'NO_SITEMAP_XML'],
+    ['canonical_present', 'warn', 'NO_CANONICAL_LINK'],
+    ['schema_present', 'fail', 'NO_STRUCTURED_DATA'],
+    ['schema_business_entity', 'fail', 'NO_ORGANIZATION_OR_LOCALBUSINESS'],
+    ['schema_faq', 'warn', 'NO_FAQ_SCHEMA'],
+    ['schema_product_or_service', 'warn', 'NO_PRODUCT_OR_SERVICE_SCHEMA'],
+    ['meta_title', 'fail', 'NO_TITLE'],
+    ['meta_description', 'warn', 'NO_META_DESCRIPTION'],
+    ['open_graph_tags', 'warn', 'NO_OPEN_GRAPH_TAGS'],
+    ['single_h1', 'warn', 'NO_H1'],
+    ['content_freshness', 'fail', 'CONTENT_STALE', '400'],
+  ];
+  const FIX_ROWS_2: Row[] = [
+    ['indexable', 'fail', 'ROBOTS_TXT_DISALLOW'],
+    ['single_h1', 'warn', 'MULTIPLE_H1', '3'],
+    ['content_freshness', 'not_applicable', 'NO_DATE_SIGNAL_AVAILABLE'],
+  ];
+  const OTHER_ROWS: Row[] = [
+    ['cwv_lcp', 'pass', 'LAB_MEASUREMENT_NOT_FIELD_DATA', '1840'],
+    ['cwv_cls', 'not_applicable', 'CLS_NOT_OBSERVED'],
+    ['cwv_inp', 'not_applicable', 'FIELD_METRIC_REQUIRES_REAL_USER_DATA'],
+  ];
+  const OTHER_ROWS_2: Row[] = [
+    ['cwv_lcp', 'not_applicable', 'LCP_NOT_OBSERVED'],
+    ['cwv_cls', 'warn', 'LAB_MEASUREMENT_NOT_FIELD_DATA', '0.18'],
+    ['sitemap_present', 'not_applicable', 'ROBOTS_DISALLOWED'],
+    ['robots_txt_present', 'not_applicable', 'ROBOTS_UNREACHABLE'],
+  ];
+  const ALL: Row[][] = [[...FIX_ROWS, ...OTHER_ROWS], [...FIX_ROWS_2, ...OTHER_ROWS_2]];
+
+  const SENTENCE_FOR: Record<string, string> = {
+    // The four Core Web Vitals codes: the lab and the field ones.
+    LCP_NOT_OBSERVED:
+      'The crawler did not record a Largest Contentful Paint for this page, so there is no figure.',
+    CLS_NOT_OBSERVED:
+      'The crawler did not record a Cumulative Layout Shift for this page, so there is no figure.',
+    LAB_MEASUREMENT_NOT_FIELD_DATA:
+      'Measured by the crawler on a single load of the page, not from real visitors.',
+    FIELD_METRIC_REQUIRES_REAL_USER_DATA:
+      'This is measured from real visitors tapping and clicking. The crawler never interacts with a page, so it cannot measure it.',
+    // The two a sitemap check can carry on a read audit, when robots.txt stops it.
+    ROBOTS_DISALLOWED:
+      'The robots.txt this depends on asks crawlers like ours not to load this, so it was not checked.',
+    ROBOTS_UNREACHABLE:
+      'The crawler could not get a usable answer from the robots.txt this depends on, so it was not checked.',
+    // Six of the fix list's sixteen, said in this screen's own words (rounds 2 and 3 of
+    // 3.39): standing on a row, the fix wording says more than the check found.
+    ROBOTS_TXT_DISALLOW:
+      'The site’s robots.txt has a rule that asks crawlers to stay out of the whole site (Disallow: /), except where another rule lets them in.',
+    META_ROBOTS_NOINDEX:
+      'The page is marked noindex, which asks search engines to leave it out of their indexes.',
+    NO_PRODUCT_OR_SERVICE_SCHEMA:
+      'The audited page has no Product or Service markup, so what the business sells has to be inferred from page copy rather than read from the markup.',
+    NO_DATE_SIGNAL_AVAILABLE:
+      'No usable Last-Modified header and no datePublished or dateModified in the page’s structured data was found, so its freshness cannot be established either way.',
+    MULTIPLE_H1:
+      'More than one top-level heading leaves the page’s subject ambiguous to anything parsing it.',
+    NO_ORGANIZATION_OR_LOCALBUSINESS:
+      'The audited page’s JSON-LD and microdata name none of the types this check looks for: Organization, Corporation, OnlineBusiness, LocalBusiness, Dentist, Restaurant, Store or MedicalBusiness.',
+  };
+  const expected = (code: string): string =>
+    SENTENCE_FOR[code] ?? FIX_FOR_DETAIL_CODE[code]!.detail;
+
+  it('the rows cover every code the table below words, so none is tested by name only', () => {
+    const codes = new Set(ALL.flat().map(([, , code]) => code));
+    // Sixteen the fix list words and six it does not; six of the sixteen are in the table too.
+    const worded = new Set([...Object.keys(FIX_FOR_DETAIL_CODE), ...Object.keys(SENTENCE_FOR)]);
+    expect(worded.size).toBe(22);
+    expect(codes.size).toBe(worded.size);
+    for (const code of worded) {
+      expect(codes.has(code), code).toBe(true);
+    }
+  });
+
+  it.each(ALL.flatMap((rows) => rows.map((row) => [row[2]!, rows] as const)))(
+    '%s: its sentence is on the screen, and the code is not',
+    (code, rows) => {
+      const html = renderRows([...rows]);
+      expect(plain(html)).toContain(expected(code));
+      expect(html).not.toContain(code);
+      // Where the table says it in its own words, the fix list's words are not on the row.
+      if (code in SENTENCE_FOR && code in FIX_FOR_DETAIL_CODE) {
+        expect(plain(html)).not.toContain(FIX_FOR_DETAIL_CODE[code]!.detail);
+      }
+    },
+  );
+
+  it('prints no machine code anywhere on a screen of rows that all carry one', () => {
+    for (const rows of ALL) {
+      const html = renderRows(rows);
+      expect(html.match(MACHINE_CODE)).toBeNull();
+      expect(html).not.toContain('font-mono text-ui-2xs');
+    }
+  });
+
+  it('gives the four lab and field codes wording, each its own', () => {
+    const four = ['LCP_NOT_OBSERVED', 'CLS_NOT_OBSERVED', 'LAB_MEASUREMENT_NOT_FIELD_DATA', 'FIELD_METRIC_REQUIRES_REAL_USER_DATA'];
+    expect(new Set(four.map((code) => SENTENCE_FOR[code])).size).toBe(4);
+    for (const code of four) expect(SENTENCE_FOR[code]).not.toContain(code);
+  });
+
+  it('a measured vital keeps its figure and gains its sentence', () => {
+    const html = renderRows([['cwv_lcp', 'pass', 'LAB_MEASUREMENT_NOT_FIELD_DATA', '1840']]);
+    expect(html).toContain('>1840<');
+    expect(plain(html)).toContain(SENTENCE_FOR.LAB_MEASUREMENT_NOT_FIELD_DATA);
+    expect(html).toContain('Largest Contentful Paint');
+  });
+
+  it('puts each sentence under its own check, and none under a check that carries no code', () => {
+    const html = renderRows([
+      ['canonical_present', 'warn', 'NO_CANONICAL_LINK'],
+      ['meta_title', 'pass', null],
+      ['meta_description', 'warn', 'NO_META_DESCRIPTION'],
+    ]);
+    const item = (label: string) => rowText(html, label);
+    expect(item('Canonical URL')).toContain(FIX_FOR_DETAIL_CODE.NO_CANONICAL_LINK!.detail);
+    expect(item('Canonical URL')).not.toContain(FIX_FOR_DETAIL_CODE.NO_META_DESCRIPTION!.detail);
+    expect(item('Title tag')).not.toContain(FIX_FOR_DETAIL_CODE.NO_CANONICAL_LINK!.detail);
+    expect(item('Title tag')).not.toContain(FIX_FOR_DETAIL_CODE.NO_META_DESCRIPTION!.detail);
+    expect(item('Title tag')).toBe('Pass Title tag');
+    expect(item('Meta description')).toContain(FIX_FOR_DETAIL_CODE.NO_META_DESCRIPTION!.detail);
+  });
+
+  it('a code nothing words is shown as nothing, never as itself', () => {
+    const html = renderRows([['meta_title', 'warn', 'SOMETHING_NEW']]);
+    expect(html).not.toContain('SOMETHING_NEW');
+    expect(html.match(MACHINE_CODE)).toBeNull();
+    expect(html).toContain('Title tag');
+    expect(rowText(html, 'Title tag')).toBe('Warn Title tag');
+  });
+
+  it('the codes a failed audit carries are not rows at all: it shows its own sentence instead', () => {
+    // `FETCH_FAILED`, `HTTP_503` and the rest are the failed audit's, worded by
+    // `auditFailureSentence` above; no row is drawn for them, so no row needs to word them.
+    const html = render({
+      ...FAILED,
+      errorCode: 'HTTP_503',
+      checks: checks([['site_reachable', 'fail', 'HTTP_503']]),
+    });
+    expect(html).not.toContain('HTTP_503');
+    expect(html).not.toContain('Every check');
   });
 });

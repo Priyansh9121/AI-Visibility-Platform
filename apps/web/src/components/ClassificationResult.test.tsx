@@ -8,12 +8,19 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ClassificationResult } from './ClassificationResult';
 import type { ClientDetail } from '@avp/shared-types';
-import { ROBOTS_UNREACHABLE_ADVICE, ROBOTS_UNREACHABLE_SENTENCE } from '@/lib/report/strings';
+import {
+  CLASSIFICATION_FAILURE_CODES,
+  ROBOTS_UNREACHABLE_ADVICE,
+  ROBOTS_UNREACHABLE_SENTENCE,
+} from '@/lib/report/strings';
+import { SCAN_DURATION_SENTENCE } from '@/lib/scans/scanOutcome';
 
 const base = {
   id: 'clnt_01M0TESTCLIENT0000000001',
@@ -87,19 +94,24 @@ describe('a non-result must not look like a result', () => {
     const out = render(as({ classificationStatus: 'ambiguous', industry: null,
       classificationReasonCode: 'LOW_CONFIDENCE' }));
     expect(out).toContain('could not classify this business confidently');
-    expect(out).toContain('LOW_CONFIDENCE');
+    // The sentence is the reason; the code under it was only its machine's word (3.39).
+    expect(out).not.toContain('LOW_CONFIDENCE');
+    expect(out).not.toContain('Reason:');
     expect(out).toContain('Needs review');
     // Never a dash in a field that reads like data.
     expect(out).not.toContain('is a .');
     expect(out).not.toContain('>—<');
   });
 
-  it('unclassifiable says what went wrong', () => {
+  it('unclassifiable says what went wrong, in a sentence and not the code', () => {
     const out = render(as({ classificationStatus: 'unclassifiable', industry: null,
       classificationReasonCode: 'FETCH_FAILED' }));
-    expect(out).toContain('could not read this site');
-    expect(out).toContain('FETCH_FAILED');
-    expect(out).toContain('Could not read');
+    expect(out).toContain('We could not read this site.');
+    expect(out).toContain(
+      'The crawler asked for the site’s home page and did not get a page it could read.',
+    );
+    expect(out).not.toContain('FETCH_FAILED');
+    expect(out).toContain('>Could not classify<');
   });
 
   it('unclassifiable by address says the network is not public, not that the site did not load', () => {
@@ -108,7 +120,8 @@ describe('a non-result must not look like a result', () => {
     expect(out).toContain(
       'The site’s address, or an address the site sent the crawler to, is on a private or reserved network, so the crawler did not read the site.',
     );
-    expect(out).toContain('Reason: ADDRESS_NOT_PUBLIC');
+    expect(out).not.toContain('ADDRESS_NOT_PUBLIC');
+    expect(out).not.toContain('Reason:');
     expect(out).not.toContain('robots.txt');
     expect(out).not.toContain('did not load');
   });
@@ -126,7 +139,7 @@ describe('unclassifiable because robots.txt could not be read — launch checkli
     expect(out).toContain(
       'The crawler tried to read the robots.txt of this site, or of an address the site sent it to, and did not get a usable answer. It obeys robots.txt, so without that answer it did not read the site.',
     );
-    expect(out).toContain('Could not read');
+    expect(out).toContain('>Could not classify<');
   });
 
   it('tells the person who typed the address what they can do, after the sentence', () => {
@@ -150,21 +163,29 @@ describe('unclassifiable because robots.txt could not be read — launch checkli
     }
   });
 
-  it('every other reason keeps the generic sentence and its code line', () => {
+  it('every other reason has a sentence of its own, and none of them is this one', () => {
+    // Until 3.39 every other state shared "This usually means the site did not load" and
+    // a `Reason:` line. The sentence per code is pinned below.
     const other = render(as({ classificationStatus: 'unclassifiable', industry: null,
       classificationReasonCode: 'FETCH_FAILED' }));
-    expect(other).toContain('This usually means the site did not load');
-    expect(other).toContain('Reason: FETCH_FAILED');
+    expect(other).toContain(
+      'The crawler asked for the site’s home page and did not get a page it could read.',
+    );
+    expect(other).not.toContain('did not load');
+    expect(other).not.toContain('Reason:');
     expect(other).not.toContain(ROBOTS_UNREACHABLE_SENTENCE);
   });
 
-  it('a robots.txt that really forbids the page is not given this sentence, and keeps the card it had', () => {
-    // 3.41 changed only which code an unreadable file is stored under. The wording of the
-    // generic sentence and of the code line is checklist 3.39's, and is as it was.
+  it('a robots.txt that really forbids the page says so, and is not given this sentence', () => {
+    // 3.41 changed only which code an unreadable file is stored under. A file that is read
+    // and forbids the page is the site's own word, and the card says that, in its own
+    // sentence (3.39) and without the code it used to print under the generic one.
     const forbidden = render(as({ classificationStatus: 'unclassifiable', industry: null,
       classificationReasonCode: 'ROBOTS_DISALLOWED' }));
     expect(forbidden).toContain('We could not read this site.');
-    expect(forbidden).toContain('Reason: ROBOTS_DISALLOWED');
+    expect(forbidden).toContain('asks crawlers like ours not to load its home page');
+    expect(forbidden).not.toContain('ROBOTS_DISALLOWED');
+    expect(forbidden).not.toContain('Reason:');
     expect(forbidden).not.toContain(ROBOTS_UNREACHABLE_SENTENCE);
     expect(forbidden).not.toContain(ROBOTS_UNREACHABLE_ADVICE);
   });
@@ -173,6 +194,266 @@ describe('unclassifiable because robots.txt could not be read — launch checkli
     expect(out).not.toContain('Run a scan');
     expect(out).toContain('Go to your scans');
     expect(out).toContain('Scan another site');
+  });
+});
+
+describe('an unclassifiable client says what happened, in a sentence, and never the code — launch checklist 3.39', () => {
+  // One row per way a client is recorded unclassifiable: the crawl's codes
+  // (`services/crawl.py`) and the classifier's own (`services/classify.py`). The sentences
+  // are written out here, not read from `strings.ts`, so a change to the copy is a change
+  // to this table. `TIMEOUT` is two failures under one code (the crawl's run cap and the
+  // classifier's deadline), so its heading and sentence are true of either.
+  const READ = 'We could not read this site.';
+  const CLASSIFY = 'We could not classify this site.';
+  // Three of the model provider's refusals (a key it refused, an account with no credit or
+  // quota, a request it rejected) are each a problem on our side, and share one sentence:
+  // which of the three it was is not something the person who typed the address can act on.
+  const OUR_SIDE =
+    'We could not use the model that classifies sites because of a problem on our side, so nothing was classified.';
+  const CASES: [code: string, heading: string, sentence: string][] = [
+    [
+      'ADDRESS_NOT_PUBLIC',
+      READ,
+      'The site’s address, or an address the site sent the crawler to, is on a private or reserved network, so the crawler did not read the site.',
+    ],
+    [
+      'ROBOTS_UNREACHABLE',
+      READ,
+      'The crawler tried to read the robots.txt of this site, or of an address the site sent it to, and did not get a usable answer. It obeys robots.txt, so without that answer it did not read the site.',
+    ],
+    [
+      'ROBOTS_DISALLOWED',
+      READ,
+      'The robots.txt of this site, or of an address the site sent the crawler to, asks crawlers like ours not to load its home page. The crawler obeys robots.txt, so it did not read the site.',
+    ],
+    ['BROWSER_ERROR', READ, 'The crawler’s browser could not complete a read of the site.'],
+    [
+      'FETCH_FAILED',
+      READ,
+      'The crawler asked for the site’s home page and did not get a page it could read.',
+    ],
+    [
+      'HTTP_503',
+      READ,
+      'The site answered with an error (HTTP 503) when the crawler asked for its home page.',
+    ],
+    [
+      'HTTP_404',
+      READ,
+      'The site answered with an error (HTTP 404) when the crawler asked for its home page.',
+    ],
+    [
+      'TIMEOUT',
+      CLASSIFY,
+      'Reading and classifying the site did not finish in the time we allow, so nothing was classified.',
+    ],
+    [
+      'INSUFFICIENT_CONTENT',
+      CLASSIFY,
+      'The crawler read too little text from this site to tell what business it is, so nothing was classified.',
+    ],
+    [
+      'NOT_A_BUSINESS_SITE',
+      CLASSIFY,
+      'The model found no operating business it could classify in what the crawler read, so nothing was classified.',
+    ],
+    ['PROVIDER_AUTH_FAILED', CLASSIFY, OUR_SIDE],
+    [
+      'PROVIDER_RATE_LIMITED',
+      CLASSIFY,
+      'The model’s provider asked us to slow down, so nothing was classified.',
+    ],
+    ['PROVIDER_QUOTA_EXHAUSTED', CLASSIFY, OUR_SIDE],
+    ['PROVIDER_BAD_REQUEST', CLASSIFY, OUR_SIDE],
+    [
+      'PROVIDER_UNREACHABLE',
+      CLASSIFY,
+      'We could not reach the model’s provider, so nothing was classified.',
+    ],
+    [
+      'PROVIDER_ERROR',
+      CLASSIFY,
+      'The request to the model’s provider failed, so nothing was classified.',
+    ],
+    [
+      'PROVIDER_SCHEMA_VIOLATION',
+      CLASSIFY,
+      'The model answered, but not in the form we asked for, so nothing was classified.',
+    ],
+    ['PROVIDER_REFUSED', CLASSIFY, 'The model declined to answer, so nothing was classified.'],
+    [
+      'PROVIDER_NO_OUTPUT',
+      CLASSIFY,
+      'The model did not return an answer we could read, so nothing was classified.',
+    ],
+  ];
+  // ALL_CAPS_WITH_UNDERSCORES is how every one of these is spelled. Single words
+  // (`TIMEOUT`) are checked by name.
+  const MACHINE_CODE = /\b[A-Z]{3,}_[A-Z0-9_]+\b/;
+  const unclassifiable = (code: string | null) =>
+    as({ classificationStatus: 'unclassifiable', industry: null, classificationReasonCode: code });
+
+  it('the table has a row for every code the card words, and a sentence of its own for each but three', () => {
+    const wordedCodes = CASES.map(([code]) => code).filter((code) => !code.startsWith('HTTP_'));
+    expect([...wordedCodes].sort()).toEqual([...CLASSIFICATION_FAILURE_CODES].sort());
+    // Every sentence is its own except the one three codes share (round 2 of 3.39).
+    const sharers = CASES.filter(([, , sentence]) => sentence === OUR_SIDE).map(([code]) => code);
+    expect(sharers.sort()).toEqual(['PROVIDER_AUTH_FAILED', 'PROVIDER_BAD_REQUEST', 'PROVIDER_QUOTA_EXHAUSTED']);
+    expect(new Set(CASES.map(([, , sentence]) => sentence)).size).toBe(CASES.length - 2);
+  });
+
+  it.each(CASES)('%s: the heading and the sentence, once, and neither the code nor the old guess', (code, heading, sentence) => {
+    const out = render(unclassifiable(code));
+    expect(out).toContain(heading);
+    expect(out.split(sentence).length - 1).toBe(1);
+    expect(out).not.toContain(code);
+    expect(out.match(MACHINE_CODE)).toBeNull();
+    for (const words of ['Reason:', 'did not load', 'usually means', 'carried no description']) {
+      expect(out, words).not.toContain(words);
+    }
+    // Still no scan to run.
+    expect(out).not.toContain('Run a scan');
+  });
+
+  it('the status badge says "Could not classify" under every heading, because that is true under both', () => {
+    // It said "Could not read", which the card's own sentence contradicts for every client
+    // whose site the crawler read and the model step then failed (round 2 of 3.39). The
+    // Clients list says the same (`ClientsView.test.tsx`).
+    for (const [code] of [...CASES, [null]] as [string | null][]) {
+      const out = render(unclassifiable(code));
+      expect(out, String(code)).toContain('<span class="avp-badge avp-badge--danger">Could not classify</span>');
+      expect(out, String(code)).not.toContain('>Could not read<');
+    }
+    // Both headings, with the badge beside them.
+    const crawler = render(unclassifiable('FETCH_FAILED'));
+    const model = render(unclassifiable('PROVIDER_REFUSED'));
+    expect(crawler).toContain(READ);
+    expect(model).toContain(CLASSIFY);
+    for (const out of [crawler, model]) expect(out).toContain('>Could not classify<');
+  });
+
+  it('only a crawler that could not read the site says so: a failure of the model step says it could not classify', () => {
+    for (const [code, heading] of CASES) {
+      const out = render(unclassifiable(code));
+      const other = heading === READ ? CLASSIFY : READ;
+      expect(out, code).not.toContain(other);
+    }
+    // The model step is not the site: none of its sentences speak of this site or the site
+    // (the one that says "sites" says what the model classifies), and the heading above
+    // them does not say the site could not be read.
+    for (const [code, , sentence] of CASES.filter(([c]) => c.startsWith('PROVIDER_'))) {
+      expect(sentence, code).not.toMatch(/\b(this|the) site\b/i);
+    }
+  });
+
+  it.each(['TIMEOUT', 'BROWSER_ERROR', 'BROWSER_BUSY', ...CASES.map(([c]) => c).filter((c) => c.startsWith('PROVIDER_'))])(
+    '%s is a failure on our side, and never says the site did not load',
+    (code) => {
+      const out = render(unclassifiable(code));
+      expect(out).not.toMatch(/did not load|would not load|failed to load|is down|not responding|unreachable site/i);
+      expect(out).not.toContain('usually means');
+      expect(out).not.toContain(code);
+    },
+  );
+
+  it.each([['SOMETHING_NEW'], ['HTTP_200'], ['HTTP_OK'], [null]])(
+    'a code the card has no wording for (%s) says nothing it cannot support, and shows no code',
+    (code) => {
+      const out = render(unclassifiable(code));
+      expect(out).toContain('We could not classify this site.');
+      expect(out).toContain('Nothing was classified, and we have no more specific reason to give.');
+      expect(out).not.toContain('did not load');
+      expect(out).not.toContain('Reason:');
+      if (code !== null) expect(out).not.toContain(code);
+    },
+  );
+
+  it('BROWSER_BUSY has no wording of its own, because no client can carry it', () => {
+    // Since M1 a read that never got the crawler's one browser writes nothing and answers
+    // 429 (`intake.run_classification`), so the code cannot reach this card. If one ever
+    // did, it would read as any code the card does not know: nothing about the site.
+    expect(CLASSIFICATION_FAILURE_CODES).not.toContain('BROWSER_BUSY');
+    const out = render(unclassifiable('BROWSER_BUSY'));
+    expect(out).toContain('Nothing was classified, and we have no more specific reason to give.');
+    expect(out).not.toContain('BROWSER_BUSY');
+  });
+});
+
+describe('the card words every code the API can record — read back from its source', () => {
+  // The codes are read out of the API's own files, so a code added there without wording
+  // here fails this suite instead of reaching a reader as `Reason: <code>` (or, now, as
+  // the generic sentence, which is true but says less).
+  // `__dirname`, not `import.meta.url`: this file runs under jsdom, where the latter is not a file URL.
+  const ROOT = join(__dirname, '../../../..');
+  const read = (path: string): string => readFileSync(join(ROOT, path), 'utf8');
+  const SERVICES = 'apps/api/src/avp_api/services/';
+
+  /** A one-line string constant in a Python source, exactly as written there. */
+  function pythonString(file: string, name: string): string {
+    const value = new RegExp(`^${name} = "([^"\\n]*)"$`, 'm').exec(read(`${SERVICES}${file}`))?.[1];
+    expect(value, `${name} is not a one-line string in ${file}`).toBeDefined();
+    return value!;
+  }
+
+  const literals = (file: string, key: 'reason_code' | 'error_code'): string[] =>
+    [...read(`${SERVICES}${file}`).matchAll(new RegExp(`${key}="([A-Z][A-Z0-9_]+)"`, 'g'))].map(
+      (m) => m[1]!,
+    );
+
+  // `LOW_CONFIDENCE` is the one reason an AMBIGUOUS client carries; the card's ambiguous
+  // sentence is its words. `BROWSER_BUSY` is refused before anything is written.
+  const AMBIGUOUS = ['LOW_CONFIDENCE'];
+  const NEVER_RECORDED = ['BROWSER_BUSY'];
+
+  const recorded = new Set<string>([
+    // classify.py: the model step's own reasons, and the unclassifiable ones it decides.
+    ...literals('classify.py', 'reason_code'),
+    // crawl.py: the literals, and the constants it records (`_robots_refused`, `_address_not_public`).
+    ...literals('crawl.py', 'error_code'),
+    pythonString('crawl.py', 'ROBOTS_DISALLOWED'),
+    pythonString('crawl.py', 'ROBOTS_UNREACHABLE'),
+    pythonString('egress.py', 'ADDRESS_NOT_PUBLIC'),
+    pythonString('browser_slot.py', 'BROWSER_BUSY'),
+  ]);
+
+  it('finds the codes it is meant to find, so an empty read cannot pass', () => {
+    for (const code of ['TIMEOUT', 'BROWSER_ERROR', 'FETCH_FAILED', 'INSUFFICIENT_CONTENT', 'PROVIDER_NO_OUTPUT']) {
+      expect(recorded.has(code), code).toBe(true);
+    }
+    expect(recorded.size).toBeGreaterThanOrEqual(18);
+  });
+
+  it('every code the API records for an unclassifiable client has a sentence', () => {
+    const unworded = [...recorded].filter(
+      (code) =>
+        !AMBIGUOUS.includes(code) &&
+        !NEVER_RECORDED.includes(code) &&
+        !CLASSIFICATION_FAILURE_CODES.includes(code),
+    );
+    expect(unworded).toEqual([]);
+  });
+
+  it('every sentence is for a code the API still records, so no wording is left for a code that is gone', () => {
+    const gone = CLASSIFICATION_FAILURE_CODES.filter((code) => !recorded.has(code));
+    expect(gone).toEqual([]);
+  });
+
+  it('`HTTP_<status>` is still how the crawl records a home page that answered with an error', () => {
+    expect(read(`${SERVICES}crawl.py`)).toContain('error_code=f"HTTP_{home[\'status\']}"');
+  });
+
+  it('a read that never got the browser still writes nothing: it is refused before the outcome is applied', () => {
+    // The claim in the comment on `Unclassifiable`, and the reason BROWSER_BUSY has no copy.
+    const source = read(`${SERVICES}intake.py`);
+    const refused = source.indexOf('if crawl.error_code == BROWSER_BUSY:');
+    expect(refused).toBeGreaterThan(-1);
+    expect(source.indexOf('raise crawler_busy()', refused)).toBeGreaterThan(refused);
+    expect(source.indexOf('raise crawler_busy()', refused)).toBeLessThan(
+      source.indexOf('apply_outcome(client, outcome)', refused),
+    );
+    expect(source.indexOf('raise crawler_busy()', refused)).toBeLessThan(
+      source.indexOf('await classify(crawl', refused),
+    );
   });
 });
 
@@ -275,6 +556,26 @@ describe('when the API does not answer to "Run a scan", the person is told in pl
     );
     expect(text).toContain(AWAY);
     expect(text).not.toContain('The server returned 502');
+  });
+
+  it('a started scan says how long it takes in the one sentence, and never "five minutes"', async () => {
+    // The hint said "This takes under five minutes", which a scan's own range does not
+    // keep to (launch checklist 3.39). The sentence is the one the dashboard and the
+    // getting-started checklist use.
+    const text = await runWith((url) =>
+      isScan(url)
+        ? Promise.resolve(
+            new Response(JSON.stringify({ id: 'scan_01M0TESTSCAN000000000001' }), {
+              status: 201,
+              headers: { 'Content-Type': 'application/json' },
+            }),
+          )
+        : Promise.reject(new TypeError('Failed to fetch')),
+    );
+    expect(text).toContain('Scan started.');
+    expect(text).toContain(`${SCAN_DURATION_SENTENCE} You can leave this page — it keeps running.`);
+    expect(text.toLowerCase()).not.toContain('five minutes');
+    expect(text).not.toContain('under five');
   });
 
   it('a 4xx problem still shows its own detail', async () => {

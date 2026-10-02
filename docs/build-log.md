@@ -22480,3 +22480,96 @@ Drift check (north-star §8): Layer 0, Trust (a scan's status is what happened t
 - **Negative controls:** on this tree, the final write made unconditional again fails 8 of the 26; restored and checked with `cmp`. The implementer's, each restored: read-then-write in place of the conditional statement fails the in-flight test; the chain's stop disabled, 1 (the reaper's row ends succeeded); `_mark_failed` ignoring the claim, 2; the flush removed, 1
 - **The rest of the bar** (this tree, one run): workers 26, shared-types 53 (0 fail), design-system 935, web 1557, mypy 43 (ceiling 50); ruff clean; all typechecks clean; the styleguide builds; all six count gates through `assert_count.py` pass; both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change); the Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged); OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# The intake card, the Technical screen's checks and the engine cards say what went wrong in a sentence true of the case and never print a code, and no screen promises a scan in under five minutes
+
+**2026-10-03, the seventh entry of the day; branch `pilot-fixes-3`, the founder's brief "honest reports and the remaining pilot decisions" (launch checklist 3.39).** One item, one commit.
+
+**Render: nothing to set. Web only: no endpoint, schema, dependency or outbound host change.** `docs/api-contracts.md` widens what `unclassifiable` means.
+
+Drift check (north-star §8): Layer 1, Delivery (what the intake card, the Clients list, the client's Technical and Prompts screens, the dashboard and the landing page say), reading Layer 2's outcome codes; lifecycle phase: Activation (Epic 9), a pilot's first site read and first scan. One rule across these screens (a failure is a true sentence, never a code), so one item.
+
+## 1. What changed
+
+- **Founder decision (final):** no raw code on these screens; a failure on our side never says the site "did not load"; reuse the 3.26/3.32 map; the Prompts screen's engine codes and the check rows' lab and field codes in words; remove "under five minutes" if it is untrue; the 429 moves to the form; UI review.
+- **The intake card** (`ClassificationResult.tsx`; the map is `classificationFailure` in `lib/report/strings.ts`): the `Reason: <code>` line and "usually means the site did not load" are gone. Each reason code has its own sentence under one of two headings: "We could not read this site." for the crawler's codes (`ADDRESS_NOT_PUBLIC`, `ROBOTS_DISALLOWED`, `ROBOTS_UNREACHABLE`, `BROWSER_ERROR`, `FETCH_FAILED`, and `HTTP_4xx`/`HTTP_5xx` through the audit's 3.26 sentence), and "We could not classify this site." for the rest (`TIMEOUT`, `INSUFFICIENT_CONTENT`, `NOT_A_BUSINESS_SITE`, the nine `PROVIDER_*`), whose sentences end "so nothing was classified". An unknown or missing code says "Nothing was classified, and we have no more specific reason to give." The badge says "Could not classify", true under both headings; the Clients list's badge and its tile say the same.
+  - The audit's `TIMEOUT`, `BROWSER_ERROR` and `FETCH_FAILED` sentences were not reused: they say "the home page" and "no response", which is untrue of the intake crawl (it reads up to three pages, and its `FETCH_FAILED` also covers a page that answered and could not be read). `TIMEOUT` is two failures under one code (the crawl's cap and the classifier's deadline), so its sentence names both.
+  - `BROWSER_BUSY` never reaches the card: `intake.run_classification` answers 429 before it classifies or writes (a test pins the order).
+  - `PROVIDER_AUTH_FAILED`, `PROVIDER_QUOTA_EXHAUSTED` and `PROVIDER_BAD_REQUEST` share one sentence, "We could not use the model that classifies sites because of a problem on our side, so nothing was classified.": our key or our credit is not the agency's to act on.
+- **The intake form** (`IntakeForm.tsx`): only a 409 and a 422 (about the address) stay on the field. A 429, 401, 403, any other 4xx and the shared "could not reach the server" sentence are an `ErrorState` above the form, titled "Could not start reading the site", with the field left clean. An empty submit clears an earlier form-level error.
+- **The Technical screen's check rows** (`ClientTechnicalView.tsx`, `checkDetailSentence` in `lib/client/technical.ts`): a row prints its code's sentence under the check instead of the code in mono. Ten of the fix list's sixteen codes show that list's `detail` word for word. Six are said in this screen's own words, because the fix wording, standing on a row, says more than the check found: `ROBOTS_TXT_DISALLOW`, `META_ROBOTS_NOINDEX`, `NO_PRODUCT_OR_SERVICE_SCHEMA`, `NO_DATE_SIGNAL_AVAILABLE`, `MULTIPLE_H1` and `NO_ORGANIZATION_OR_LOCALBUSINESS`. The four lab and field codes and the two robots codes a sitemap row can carry have sentences of their own; a code nothing words shows nothing. The fix table itself is unchanged (the report's fix beat and the PDF share it).
+- **The Prompts screen's engine cards** (`ClientPromptsView.tsx`, `engineFailureSentence` in `lib/client/engines.ts`): "This engine did not answer." is followed by a sentence for each of eleven engine codes instead of `(<errorCode>)`; the same three provider codes share "We could not get an answer from its provider because of a problem on our side." A fixture code nothing records (`ENGINE_TIMEOUT`) became `TIMEOUT`.
+- **"Under five minutes" is gone** from the intake hint, the dashboard's empty state, the getting-started step and the landing page. As a promise it was untrue: of 25 finished scans in the dev database (start to finish; these rows do not record the queue wait), 9 took more than five minutes, the median was 4.5 min and the longest 7.6, and nothing cuts a scan at 300 s (the deadline is 2,400 s). The first three now say "A scan usually takes a few minutes." (`SCAN_DURATION_SENTENCE`), and the landing page "A scan usually takes a few minutes — twenty questions, put to four AI answer engines. Your first scan is free with a Google sign-in. $160/month after that." (`TARGET_PROMPTS` 20, `DEFAULT_ENGINES` four, `FREE_SCAN_ALLOWANCE` 1 with a Google sign-in, `PLAN_PRICE_USD` 160). Its "one at a time" was dropped: the engines are asked together and twelve questions run at once.
+- `docs/api-contracts.md`: `unclassifiable`'s meaning names all three causes (the crawler could not read the site, it is not a business site, the classifying model could not answer) and says the web shows a sentence per code, never the code.
+
+## 2. The review
+
+- **UI review (sonnet), round 1: FAIL, narrowly**: three Mediums, no High.
+  - The "Could not read" badge contradicted "We could not classify this site." on twelve codes.
+  - Four reused fix sentences did not stand alone on a check row. One was untrue: `NO_DATE_SIGNAL_AVAILABLE` said no date was found "anywhere on the page", but the audit reads only the Last-Modified header and the structured data's dates.
+  - The landing page still promised "under five minutes".
+  - All three were taken in round 2, with four Lows: the three provider codes share one sentence, "usually", an empty submit clears the form error, and two wordings.
+- **Re-check of round 2: PASS WITH NITS**, nothing at High or Medium. It re-ran the duration query read-only and got the same figures. All four Lows were taken in round 3:
+  - "The whole site" on the Indexable row overstated. That row reaches the screen only when AVPScanBot was let in despite the `*` group's `Disallow: /`. It now reads "…stay out of the whole site (Disallow: /), except where another rule lets them in."
+  - The verbatim `NO_ORGANIZATION_OR_LOCALBUSINESS` sentence was broader than its check, which matches eight type names only. It now names them.
+  - The Clients tile says "Could not classify".
+  - A stale test comment was corrected.
+- **The reviewer's proposed entity sentence was not used.** It said the page has no "LocalBusiness type", which is untrue of `ProfessionalService` markup (a schema.org subtype the check does not match), and it added a claim about what the markup is for. Round 3 was not re-reviewed.
+
+## Found, not fixed
+
+- **Stored rows from before 3.41:** a client stored as `ROBOTS_DISALLOWED` for a robots.txt that could not be read now reads "asks crawlers like ours not to load its home page". This is the same limitation 3.41 recorded for the report and the Technical screen.
+- **The report's fix list and the PDF** still word three codes as before:
+  - `NO_ORGANIZATION_OR_LOCALBUSINESS`: "Nothing on the page states … what this organisation is".
+  - `NO_DATE_SIGNAL_AVAILABLE`: "anywhere on the page".
+  - `ROBOTS_TXT_DISALLOW`: "nothing else on this list can take effect".
+  - The fix table is mirrored in `report_narrative.py` and its fixture, so this is a larger change than this item.
+- **The entity check itself** accepts only Organization, Corporation, OnlineBusiness, LocalBusiness, Dentist, Restaurant, Store and MedicalBusiness. A page marked up as `ProfessionalService`, `LegalService` or `Plumber` fails it and loses Technical Foundation points. Widening it changes the score and needs a `FORMULA_VERSION` bump: a founder decision.
+- **The form's title over the away sentence** ("Could not start reading the site") is not known to be true when the answer is the proxy's timeout. A read that outlives the 150 s proxy may still finish and add the client. The other "Could not …" titles over that sentence share this.
+- **Not checked:** the Prompts screen's "This usually takes under a minute." (one prompt's re-run), and the intake's "usually takes a few seconds".
+- **Accessibility gaps older than this item, noted by the review:** the failure card's heading is a `<p>`, and a failed read is not announced (focus does not move).
+
+## Verified
+
+**Web vitest 1557 → 1693 (+136); floor raised to match.**
+- Per file, before → after:
+  - `ClassificationResult` 24 → 69:
+    - a row per reason code: its heading, its sentence once, no code, no `Reason:`, never "did not load";
+    - our-side codes never blame the site;
+    - the badge is "Could not classify" under every code;
+    - the API's codes are read back from `classify.py`, `crawl.py`, `egress.py` and `browser_slot.py`, so a code without wording fails, and so does wording for a code that is gone;
+    - `BROWSER_BUSY` is refused before any write;
+    - the started hint carries the shared sentence.
+  - `IntakeForm` 8 → 21:
+    - a 429, 401, 403 and the away sentence sit above the form with the field clean;
+    - a 409 and a 422 stay on the field;
+    - an empty submit clears an earlier alert.
+  - `ClientTechnicalView` 36 → 66: every code that can reach a row (22) shows its sentence under its own row and never the code; `technical_audit.py` is read back.
+  - `technical` 20 → 27: ten verbatim, six of its own, the lookup order, and the fix wording unchanged.
+  - `ClientPromptsView` 24 → 44: eleven engine codes, an unknown one and a missing one; `engines.py` is read back.
+  - `copyCoverage` 20 → 40.
+  - `scanOutcome` 10 → 11.
+  - Changed in place, same counts: `ClientsView` 21, `LandingView` 36, `DashboardView` 71, `gettingStarted` 14.
+- **Negative controls on this tree**, each restored and checked with `cmp`:
+  - The intake card printing `Reason: <code>` as its sentence fails 52 of 109 in `ClassificationResult` and `copyCoverage`.
+  - Dropping the entity sentence fails 3.
+  - The tile's old label fails 2.
+- **The implementer's negative controls**, each restored:
+  - `Reason:` back on the card, 40.
+  - Every intake error on the field again, 8.
+  - The code printed in the check row, 25.
+  - `(<errorCode>)` back on the engine card, 13.
+  - "Under five minutes" back on three screens, 5.
+  - The old badge and tile labels, 6.
+  - The fix list looked up first, 6.
+  - The empty submit's clear removed, 1.
+- **The rest of the bar** (this tree, one run):
+  - Counts: API 3035, workers 26, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass.
+  - Alembic upgrade and check pass on an empty database (no schema change).
+  - The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+  - One of round 3's sentences changed after that run, so the web suite, its typecheck and its count gate were run again: 1693, all pass.
+- Exit codes were read from files.
