@@ -258,6 +258,13 @@ class CrossEngineOut(ApiModel):
     reporting it as perfect consensus would make the strongest available claim
     from the weakest available evidence. `comparablePrompts` is the denominator
     every figure here is honest about.
+
+    **`standings` is `[]` for a scan whose status is `failed`** (checklist 3.37,
+    extending 3.24 and 3.30). A standing's mention rate and sentiment are
+    computed by the scoring functions, and the sentiments add up to the
+    Sentiment sub-score, which a failed scan does not show. `splits`,
+    `comparablePrompts` and `agreementRate` are facts about which engines named
+    the subject and are served as for any other status.
     """
 
     standings: list[EngineStandingOut]
@@ -371,7 +378,8 @@ class ReportProofOut(ApiModel):
     # Epic 9.23. Present on every report; an unrunnable comparison reports
     # itself through `comparablePrompts: 0` and a null `agreementRate` rather
     # than by being absent, so a reader can always tell "they agreed" from
-    # "there was nothing to compare".
+    # "there was nothing to compare". For a failed scan its `standings` is `[]`
+    # (`services/failed_scan.py`).
     cross_engine: CrossEngineOut
 
     total_citations: int

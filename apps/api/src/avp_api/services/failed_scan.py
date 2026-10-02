@@ -1,11 +1,12 @@
-"""What a FAILED scan never shows — checklist 3.24, extended by 3.30.
+"""What a FAILED scan never shows — checklist 3.24, extended by 3.30 and 3.37.
 
 A scan that ends FAILED can still carry what its chain wrote before it failed: a
 Score row, an audit whose Technical Foundation has a value, fix items worded from
 the score. The founder's rule is that a FAILED scan's score is never shown or
 counted, and neither is the sub-score, nor a fix the generator wrote. None of those
 rows is changed or deleted (scoring-spec.md rule 5): each is read as it always was
-and withheld on the way out.
+and withheld on the way out. "Withheld" means not computed and not shown; the last
+section says what it does not mean.
 
 One place says which scans that is and what is withheld, so the report
 (`services/report.py`), the fix list (`routers/action_items.py`), the audit routes
@@ -30,14 +31,43 @@ quote it. Blanking one field would leave the rest, so the rule is the whole list
 beat then falls back to its own fixed wording, as it does for a scan with no fixes
 generated.
 
-WHAT THIS DOES NOT COVER
-------------------------
-It withholds the score, the Technical Foundation sub-score and the component scores
-that add up to it (on the audit route), and the generated fixes. It does not withhold the
-report's per-engine standings (`proof.crossEngine.standings[]`), which carry each
-engine's mention rate and sentiment, computed by the same functions as the Mention
-Rate and Sentiment dimensions over one engine's answers. A FAILED scan's report still
-carries them.
+THE PER-ENGINE STANDINGS (checklist 3.37)
+-----------------------------------------
+The report's cross-engine reading (`proof.crossEngine`) carries one standing per
+engine: its mention rate and its sentiment, computed by `scoring.mention_rate` and
+`scoring.sentiment_score` on that engine's slice of the answers. The sentiment one is
+the Sentiment dimension's own function over the Sentiment dimension's own population
+(every answered result), so the standings' sentiments, weighted by how many of each
+engine's answers named the subject, add up to that dimension's sub-score: to within a
+rounding when every such answer carries a label, and closely when one does not. Left in
+a FAILED scan's report they would hand back the number this module exists to withhold,
+so `withhold_score_like_proof` empties them. Everything else in the proof beat stays: it
+is a fact about what was measured (a count, a boolean, a domain, a position as
+observed), and none of it is computed by a scoring function.
+
+WHAT "WITHHELD" MEANS, AND WHAT THIS DOES NOT COVER
+---------------------------------------------------
+This module withholds the score, the Technical Foundation sub-score and the component
+scores that add up to it (on the audit route), the generated fixes, and the report's
+per-engine standings.
+
+Withheld means not computed and not shown. It does not mean that the figure cannot be
+derived from what the scan stored: nothing here changes a stored row, or what the scan's
+own routes serve. For a FAILED scan the signed-in routes still return, as stored:
+
+* the inputs `scoring.compute_score` reads for Mention Rate, Share of Voice and
+  Sentiment. `GET /scans/{id}` (`ScanDetailOut.prompt_set` and `.results`),
+  `GET /scans/{id}/results` and `GET /scans/{id}/prompts` (`routers/scans.py`) serve each
+  prompt's intent and each answer's status, mention flag, sentiment label, brand
+  mentions and citations. Citation Strength reads the same citations and also the
+  platform's authority tiers, which no route serves;
+* every fact Technical Foundation is computed from. `GET /scans/{id}/audit`
+  (`routers/audits.py`) serves the indexable, sitemap and canonical flags, the schema
+  types and flags and the content age, with `componentWeights`.
+
+Those routes apply none of this module. Whether they should is the founder's decision
+(raised in the 3.37 review) and is not made here. Until it is, a FAILED scan has no score
+computed or shown for it, and its stored inputs are not hidden.
 """
 
 from __future__ import annotations
@@ -46,7 +76,7 @@ from collections.abc import Iterable
 
 from ..models.scan import Scan, ScanStatus
 from ..schemas.audit import TechnicalAuditOut
-from ..schemas.report import ReportAuditOut
+from ..schemas.report import ReportAuditOut, ReportProofOut
 
 
 def score_is_withheld(scan: Scan) -> bool:
@@ -76,8 +106,32 @@ def withhold_technical_foundation(audit: TechnicalAuditOut | ReportAuditOut) -> 
     share redistributed (`technical_audit.effective_weights(components)`), which says how
     the audit was measured and is not a score. So does every fact about the site: the
     checks, the booleans, the counts, the dates, the schema types. The report's audit
-    carries no components, so for it this blanks the sub-score alone.
+    carries no components today, so for it this blanks the sub-score alone.
+
+    The components are emptied on any audit that carries them, and not only on
+    `TechnicalAuditOut`: a class that gains a `components` field (the report's audit, or a
+    subclass of either) is covered without a change here.
     """
     audit.technical_foundation = None
-    if isinstance(audit, TechnicalAuditOut):
+    if hasattr(audit, "components"):
         audit.components = {}
+
+
+def withhold_score_like_proof(proof: ReportProofOut) -> None:
+    """Empty the proof beat's per-engine standings, the part of it built like a score.
+
+    A standing is one engine's mention rate and sentiment, from the same two functions
+    the Mention Rate and Sentiment dimensions use (`services/divergence.py`). The
+    sentiment ones add up to the withheld Sentiment sub-score (see the module
+    docstring), so a FAILED scan's report has no standings. The list is emptied, not
+    blanked entry by entry: that is the shape the web already draws as "no reading"
+    (`ReportView.tsx` draws no cross-engine section for an empty list, as for a scan
+    with no answers), and no schema field has to become nullable.
+
+    What stays is every fact the proof beat carries, and the rest of the cross-engine
+    reading with it: `splits` and `comparablePrompts` record which engines named the
+    subject on which questions, and `agreementRate` is only the share of comparable
+    questions that were not splits. The per-engine counts of answers and of answers
+    naming the subject are still in `engineCoverage`, the same numbers a standing carried.
+    """
+    proof.cross_engine.standings = []
