@@ -21955,3 +21955,30 @@ Drift check (north-star §8): Layer 1, Delivery (the public shared report and th
 - The Python and JavaScript licence audits pass (`pnpm licenses list --json`).
 - OpenAPI and `api.gen.ts` regenerate with no change from the committed files (descriptions of three routes changed in this item).
 - Exit codes were read from files.
+
+# A share-bar test checks the wording the failed-scan confirm question now uses
+
+**2026-10-02, the fifteenth entry of the day; branch `pilot-fixes-2`, a follow-up to the fourteenth (launch checklist 3.29).** One test line, one commit.
+
+**Render: nothing to set. Test only.**
+
+Drift check (north-star §8): Layer 1, Delivery (the share bar); lifecycle phase: Activation (Epic 9), what an agency is asked before a link is withdrawn.
+
+## 1. What changed
+
+- 3.29's UI review changed the failed-scan confirm question from "It is removed for good." to "It will be removed permanently." The contrast test that a scan which did not fail is never asked it ("and a scan that did not fail keeps the question it had", `ShareLinkBar.liveLink.test.tsx`) still asserted `not.toContain('removed for good')`, words that are no longer anywhere, so it could not fail. It now asserts `not.toContain('removed permanently')`.
+- Found by 3.28's implementer. Its own commit: the fix belongs to 3.29, which had already landed.
+
+## Verified
+
+**Web vitest 1499 → 1499 (no test added or removed).**
+- **Negative control:** the failed-scan sentence added to the question the other scans get fails this test (1 of the file's 27); restored and checked with `cmp`.
+
+**The rest of the bar** (this tree).
+- API pytest: the first run had one failure, a wall-clock test (`test_call_bounds.py`, `test_the_whole_call_is_bounded_even_when_every_attempt_hangs[classify]`: 1.66 s against a 1.0 s allowance) while four other suites ran on the same machine. Its file passed on its own (28 tests), and a full re-run passed: 2379 (floor 2379).
+- Workers 26, shared-types 53 (0 fail), design-system 875, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; the styleguide builds; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+- OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
