@@ -19,6 +19,11 @@ to demonstrate that is to call nothing else.
 
 from __future__ import annotations
 
+import asyncio
+import time
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
@@ -479,3 +484,209 @@ class TestASiteWhoseRobotsTxtKeepsUsOut:
         assert {"checkKey": "indexable", "detailCode": "ROBOTS_TXT_DISALLOW"}.items() <= next(
             f for f in report["audit"]["findings"] if f["checkKey"] == "indexable"
         ).items()
+
+
+# ---------------------------------------------------------------------------
+# M1 — the API's memory, and the audit step that could hang (checklist 3.20)
+# ---------------------------------------------------------------------------
+
+MEMORY_PHASES = ["competitors", "engines", "audit", "scoring", "alerts", "fixes", "finalized"]
+MEMORY_FIELDS = [
+    "process_tree_rss_mb", "cgroup_current_mb", "cgroup_anon_mb", "cgroup_peak_mb",
+    "cgroup_limit_mb",
+]
+
+
+class TestMemoryIsLoggedAfterEachPhase:
+    """`scan.phase_memory`: one line per phase, only numbers, and never able to cost a scan."""
+
+    async def test_every_phase_logs_its_memory_in_the_order_it_ran(
+        self, client: AsyncClient, stub_engines, monkeypatch  # noqa: ANN001
+    ) -> None:
+        from structlog.testing import capture_logs
+
+        from avp_api.services import memory_stats
+
+        numbers = {name: 10 * (position + 1) for position, name in enumerate(MEMORY_FIELDS)}
+        monkeypatch.setattr(memory_stats, "snapshot", lambda: dict(numbers))
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_engines(n_prompts=2)
+
+        with capture_logs() as logs:
+            sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+
+        lines = [entry for entry in logs if entry["event"] == "scan.phase_memory"]
+        assert [entry["phase"] for entry in lines] == MEMORY_PHASES
+        for entry in lines:
+            # The scan, the phase and the figures. Nothing else rides along.
+            assert entry == {
+                "event": "scan.phase_memory", "log_level": "info", "scan_id": sid,
+                "phase": entry["phase"], **numbers,
+            }
+
+    async def test_what_is_logged_on_this_machine_is_ints_or_none(
+        self, client: AsyncClient, stub_engines  # noqa: ANN001
+    ) -> None:
+        from structlog.testing import capture_logs
+
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_engines(n_prompts=2)
+
+        with capture_logs() as logs:
+            sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+
+        lines = [entry for entry in logs if entry["event"] == "scan.phase_memory"]
+        assert len(lines) == len(MEMORY_PHASES)
+        for entry in lines:
+            assert set(entry) == {"event", "log_level", "scan_id", "phase", *MEMORY_FIELDS}
+            assert entry["scan_id"] == sid
+            assert all(
+                entry[name] is None or type(entry[name]) is int for name in MEMORY_FIELDS
+            ), entry
+
+    async def test_the_phases_are_a_fixed_set(self) -> None:
+        from avp_api.services import scan_executor
+
+        assert list(scan_executor.MEMORY_PHASES) == MEMORY_PHASES
+
+    async def test_a_snapshot_that_raises_costs_the_scan_nothing(
+        self, client: AsyncClient, engine, stub_engines, monkeypatch  # noqa: ANN001
+    ) -> None:
+        from structlog.testing import capture_logs
+
+        from avp_api.services import memory_stats
+
+        def boom() -> dict[str, int | None]:
+            raise RuntimeError("memory exploded")
+
+        monkeypatch.setattr(memory_stats, "snapshot", boom)
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_engines(n_prompts=2)
+
+        with capture_logs() as logs:
+            sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+
+        # Nothing about the failure is logged, and nothing downstream of it failed.
+        logged = {entry["event"] for entry in logs}
+        assert not logged & {
+            "scan.phase_memory", "scan.chain.phase_failed", "scan.execute.failed",
+        }
+        factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+        async with factory() as s:
+            scan = await s.get(Scan, sid)
+            assert scan is not None and scan.status is ScanStatus.SUCCEEDED
+        assert await _rows(engine, Score, sid) and await _rows(engine, ActionItem, sid)
+
+    def test_the_helper_swallows_whatever_the_snapshot_does(
+        self, monkeypatch  # noqa: ANN001
+    ) -> None:
+        from structlog.testing import capture_logs
+
+        from avp_api.services import memory_stats, scan_executor
+
+        def boom() -> dict[str, int | None]:
+            raise RuntimeError("memory exploded")
+
+        monkeypatch.setattr(memory_stats, "snapshot", boom)
+
+        with capture_logs() as logs:
+            assert scan_executor._log_phase_memory("scan_whatever", "audit") is None  # noqa: SLF001
+
+        assert logs == []  # not even a line about the failure
+
+
+def _a_browser_whose_page_read_never_returns() -> SimpleNamespace:
+    """`async_playwright()`: everything answers except the audit's one `page.evaluate`."""
+
+    async def never(*args: object, **kwargs: object) -> None:
+        await asyncio.Event().wait()
+
+    landed = SimpleNamespace(url="https://helpscout.com/", redirected_from=None)
+    page = SimpleNamespace(
+        url="https://helpscout.com/", set_default_timeout=lambda ms: None,
+        add_init_script=AsyncMock(), wait_for_timeout=AsyncMock(), close=AsyncMock(),
+        goto=AsyncMock(return_value=SimpleNamespace(status=200, headers={}, request=landed)),
+        evaluate=never,
+    )
+    context = SimpleNamespace(
+        route=AsyncMock(), route_web_socket=AsyncMock(), on=lambda *args: None,
+        add_init_script=AsyncMock(), new_page=AsyncMock(return_value=page), close=AsyncMock(),
+    )
+    browser = SimpleNamespace(new_context=AsyncMock(return_value=context), close=AsyncMock())
+    driver = SimpleNamespace(chromium=SimpleNamespace(launch=AsyncMock(return_value=browser)))
+
+    class Manager:
+        async def __aenter__(self) -> SimpleNamespace:
+            return driver
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+    manager = Manager()
+    manager.browser, manager.context, manager.page = browser, context, page  # type: ignore[attr-defined]
+    return manager  # type: ignore[return-value]
+
+
+class TestAHungBrowserStepIsAFailedAuditPhase:
+    """Checklist 3.20.
+
+    One audit step, the page read, has no timeout of its own. When it hung, the
+    scan ran into its 2,400 s deadline and alerts and fix generation never ran.
+    The browser run is now capped, and a hang comes out as the timeout the audit
+    already had: a FAILED audit with `TIMEOUT`, and a chain that carries on.
+    """
+
+    async def test_the_audit_fails_with_a_timeout_and_every_later_phase_runs(
+        self, client: AsyncClient, engine, stub_engines, robots_web, monkeypatch  # noqa: ANN001
+    ) -> None:
+        from structlog.testing import capture_logs
+
+        from avp_api.models.technical_audit import AuditStatus
+        from avp_api.services import audit_runner, technical_audit
+
+        manager = _a_browser_whose_page_read_never_returns()
+        monkeypatch.setattr(audit_runner, "audit_site", technical_audit.audit_site)
+        monkeypatch.setattr(technical_audit, "async_playwright", lambda: manager)
+        monkeypatch.setattr(technical_audit, "audit_run_cap_s", lambda timeout_ms: 0.3)
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_engines(n_prompts=2)
+
+        started = time.monotonic()
+        with capture_logs() as logs:
+            # Bounded here as well: without the cap this call would wait out the scan's
+            # 2,400 s deadline, and a regression should fail this test, not hold the suite.
+            posted = await asyncio.wait_for(
+                client.post(f"{BASE}/clients/{cid}/scans", json={}), 60
+            )
+            sid = posted.json()["id"]
+        assert time.monotonic() - started < 60  # the cap, not the scan's deadline
+
+        # The audit: an ordinary failed one, with the code it already had for a timeout.
+        (audit,) = await _rows(engine, TechnicalAudit, sid, load=TechnicalAudit.checks)
+        assert audit.status is AuditStatus.FAILED
+        assert (audit.error_code, audit.pages_crawled) == ("TIMEOUT", 0)
+        assert [(c.check_key, c.status.value, c.detail_code) for c in audit.checks] == [
+            ("site_reachable", "error", "TIMEOUT")
+        ]
+        # Everything the hang used to cost: the browser was closed ...
+        manager.browser.close.assert_awaited_once()  # type: ignore[attr-defined]
+        manager.context.close.assert_awaited_once()  # type: ignore[attr-defined]
+        manager.page.close.assert_awaited_once()  # type: ignore[attr-defined]
+        # ... the phases after the audit all ran ...
+        phases = [e["phase"] for e in logs if e["event"] == "scan.phase_memory"]
+        assert phases == MEMORY_PHASES
+        scores = await _rows(engine, Score, sid)
+        assert scores and scores[0].composite is not None
+        assert scores[0].technical_foundation is None  # excluded, not scored as zero
+        assert await _rows(engine, ActionItem, sid), "fix generation did not run"
+        # ... and the scan ended on its own account, not on the deadline's.
+        factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+        async with factory() as s:
+            scan = await s.get(Scan, sid)
+            assert scan is not None
+            assert scan.status is ScanStatus.SUCCEEDED
+            assert scan.error_code is None

@@ -33,12 +33,23 @@ from urllib.parse import urljoin, urlparse, urlsplit
 import httpx
 import structlog
 import tldextract
+from playwright.async_api import BrowserContext, Page, async_playwright
 from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import async_playwright
 
 from ..config import Settings, get_settings
 from . import egress
 from .ai_crawlers import CrawlPolicy, crawl_policy
+from .browser_slot import (
+    BROWSER_BUSY,
+    EVALUATE_ALLOWANCE_S,
+    LAUNCH_ALLOWANCE_S,
+    NAME_LOOKUP_ALLOWANCE_S,
+    RUN_MARGIN_S,
+    TEARDOWN_ALLOWANCE_S,
+    BrowserBusy,
+    browser_slot,
+    close_browser,
+)
 from .egress import ADDRESS_NOT_PUBLIC, BrowserGuard, EgressRefused, EgressUnverified
 
 logger = structlog.get_logger(__name__)
@@ -384,11 +395,56 @@ def normalise_url(raw: str) -> str:
     return candidate
 
 
+def crawl_run_cap_s(max_pages: int, timeout_ms: int) -> float:
+    """The most one browser run of `crawl_site` may take: the driver starting to the browser gone.
+
+    M1, 2026-10-02. The run holds the process's one browser slot (`browser_slot`), so
+    a run that hangs holds every run behind it. Some steps have no timeout of their
+    own: `page.evaluate` takes none (`_fetch_page`), and nor does a call to a browser
+    that has stopped answering. The cap is on the whole run, and it is the SUM of
+    every step at its own ceiling, so a run in which each step does only what its own
+    timeout allows cannot reach it. Only a hang does, and it is then cut here and not
+    left to the scan's 2,400 s deadline.
+
+        browser launch                       30   Playwright's own launch timeout
+        per page, `max_pages` of them
+            the navigation                   12   `timeout_ms`
+            the landing checks before and
+              after the page is read          4   2 x egress.SETTLE_TIMEOUT_S
+            the page read                    15   EVALUATE_ALLOWANCE_S
+          a page                             31   x 4 pages = 124 (intake asks for 3: 93)
+        robots.txt of a host the gate has
+          not read (a redirect only the
+          browser was given)                 60   (MAX_REDIRECTS + 1) x ROBOTS_TIMEOUT
+        the final egress check                3   FINAL_SETTLE_TIMEOUT_S + 1
+        closing page, context, browser       35   TEARDOWN_ALLOWANCE_S
+        the guard's name lookups             30   NAME_LOOKUP_ALLOWANCE_S
+        the driver starting, set-up calls    15   RUN_MARGIN_S
+                                           ----
+        297 s for the default 4 pages; 266 s for the 3 intake asks for.
+
+    A cap that fires ends the run as `TIMEOUT`, the code a timeout already had here.
+    """
+    pages = max(max_pages, 1)  # the homepage is always read
+    one_page = timeout_ms / 1000 + 2 * egress.SETTLE_TIMEOUT_S + EVALUATE_ALLOWANCE_S
+    return (
+        LAUNCH_ALLOWANCE_S
+        + pages * one_page
+        + (MAX_REDIRECTS + 1) * ROBOTS_TIMEOUT
+        + egress.FINAL_SETTLE_TIMEOUT_S + 1.0
+        + TEARDOWN_ALLOWANCE_S
+        + NAME_LOOKUP_ALLOWANCE_S
+        + RUN_MARGIN_S
+    )
+
+
 async def crawl_site(
     url: str,
     *,
     max_pages: int = DEFAULT_MAX_PAGES,
     timeout_ms: int = DEFAULT_TIMEOUT_MS,
+    slot_wait_s: float | None = None,
+    client_id: str | None = None,
 ) -> CrawlResult:
     """Fetch the homepage plus a few key pages and extract classification input.
 
@@ -399,6 +455,20 @@ async def crawl_site(
     **robots.txt first** (2026-09-29). Nothing the file forbids this crawler is
     fetched, and a forbidden homepage means no crawl at all: `ok=False` with
     `ROBOTS_DISALLOWED`, which the classifier records as its reason.
+
+    **One browser at a time, under a cap** (M1, 2026-10-02). The browser run holds the
+    process's one browser slot (`browser_slot`), and `crawl_run_cap_s` cuts it if
+    something in it never returns: it ends as `TIMEOUT`, with nothing kept.
+
+    **A wait for the slot that runs out is a failed read too** (M1 round 2): another
+    run held the browser for `slot_wait_s` (None: a request's `REQUEST_WAIT_S`; every
+    caller of this function in the API is a request), so no browser was started and
+    the result is `ok=False` with `BROWSER_BUSY`, nothing kept. What the caller does
+    with it is its own: `intake.run_classification` refuses the request and writes
+    nothing (M1 round 3).
+
+    `client_id` is our own id for the client being read, put on the browser slot's log
+    lines (`browser_slot._refs`); it is never a URL.
     """
     start_url = normalise_url(url)
     domain = registrable_domain(start_url)
@@ -416,7 +486,14 @@ async def crawl_site(
         return await _crawl(
             gate, home_url, signals,
             user_agent=user_agent, max_pages=max_pages, timeout_ms=timeout_ms,
-            guard=guard,
+            guard=guard, slot_wait_s=slot_wait_s, client_id=client_id,
+        )
+    except BrowserBusy:
+        # The browser was never started: another run held the slot for the whole wait.
+        # Nothing was read, so nothing is kept, and the classifier records the code as
+        # its reason as it does any other failed read.
+        return CrawlResult(
+            signals=_nothing_kept(start_url), text_extract="", ok=False, error_code=BROWSER_BUSY
         )
     except EgressRefused as exc:
         return _address_not_public(start_url, exc)
@@ -434,11 +511,27 @@ async def crawl_site(
         if guard.unverified:
             return _egress_unverified(start_url)
         logger.warning("crawl.playwright_error", url=start_url, error=type(exc).__name__)
+        # Nothing is kept: the error can arrive after pages were read and before the final
+        # egress check (`guard.finish`) said what they showed may be kept, or in place of
+        # that check, and the caller returns whatever `signals` holds (M1 round 3).
         return CrawlResult(
-            signals=signals, text_extract="", ok=False, error_code="BROWSER_ERROR"
+            signals=_nothing_kept(start_url), text_extract="", ok=False, error_code="BROWSER_ERROR"
         )
     except TimeoutError:
-        return CrawlResult(signals=signals, text_extract="", ok=False, error_code="TIMEOUT")
+        # The run's cap (`crawl_run_cap_s`): something in the browser never returned.
+        # What the guard had already decided outranks it, as for a browser error above.
+        # That includes a refusal only the robots gate raised, when the cap fell while
+        # the run was closing: `_crawl` records it on the guard before the closes
+        # (`BrowserGuard.record_outcome`). Otherwise nothing is kept either: the final
+        # egress check (`guard.finish`) never ran, so what the pages showed is not
+        # verified.
+        if guard.refused is not None:
+            return _address_not_public(start_url, guard.refused)
+        if guard.unverified:
+            return _egress_unverified(start_url)
+        return CrawlResult(
+            signals=_nothing_kept(start_url), text_extract="", ok=False, error_code="TIMEOUT"
+        )
 
 
 def _nothing_kept(url: str) -> CrawlSignals:
@@ -480,13 +573,25 @@ async def _crawl(
     max_pages: int,
     timeout_ms: int,
     guard: BrowserGuard,
+    slot_wait_s: float | None,
+    client_id: str | None,
 ) -> CrawlResult:
     """The browser half of `crawl_site`, from a homepage robots.txt allows."""
     domain = signals.registrable_domain
-    async with async_playwright() as pw:
+    # One browser per process at a time, and the run under its cap (`crawl_run_cap_s`).
+    # Entered in this order and left in reverse: the slot is held first, so time spent
+    # waiting for it is not time the run was allowed; the driver stops, and the cap
+    # ends, before the slot is given back.
+    async with (
+        browser_slot("crawl", wait_s=slot_wait_s, client_id=client_id),
+        asyncio.timeout(crawl_run_cap_s(max_pages, timeout_ms)),
+        async_playwright() as pw,
+    ):
         browser = await pw.chromium.launch(
             args=["--disable-dev-shm-usage", "--no-sandbox", egress.WEBRTC_LAUNCH_ARG]
         )
+        context: BrowserContext | None = None
+        page: Page | None = None
         try:
             context = await browser.new_context(
                 user_agent=user_agent,
@@ -582,8 +687,15 @@ async def _crawl(
             signals.word_count = len(text.split())
 
             return CrawlResult(signals=signals, text_extract=text, titles=titles)
+        except (EgressRefused, EgressUnverified) as outcome:
+            # Put on the guard BEFORE the closes below: the cap can fall while they
+            # run, and what arrives then is a `TimeoutError` that has forgotten this.
+            guard.record_outcome(outcome)
+            raise
         finally:
-            await browser.close()
+            # On every way out: a return, an egress refusal, any exception, the cap, a
+            # cancellation. Nothing the run opened outlives it.
+            await close_browser(browser, context=context, page=page)
 
 
 async def _fetch_page(page, url: str, timeout_ms: int, guard: BrowserGuard) -> dict | None:  # noqa: ANN001

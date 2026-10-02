@@ -44,6 +44,7 @@ Epic 4: a non-reproducible measurement is taken once, upstream, and persisted.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -51,13 +52,25 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 import structlog
+from playwright.async_api import BrowserContext, Page, async_playwright
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
-from playwright.async_api import async_playwright
 
 from . import egress
 from .ai_crawlers import AgentAccess, evaluate_robots, unknown_access
+from .browser_slot import (
+    BROWSER_BUSY,
+    EVALUATE_ALLOWANCE_S,
+    LAUNCH_ALLOWANCE_S,
+    NAME_LOOKUP_ALLOWANCE_S,
+    RUN_MARGIN_S,
+    TEARDOWN_ALLOWANCE_S,
+    BrowserBusy,
+    browser_slot,
+    close_browser,
+)
 from .crawl import (
+    MAX_REDIRECTS,
     ROBOTS_DISALLOWED,
     Followed,
     RobotsGate,
@@ -334,8 +347,104 @@ def _egress_unverified(signals: AuditSignals) -> AuditSignals:
     )
 
 
-async def audit_site(url: str, *, timeout_ms: int = PAGE_TIMEOUT_MS) -> AuditSignals:
-    """Crawl one site for structural signals. Never raises for an unreachable site."""
+def _read_before_the_browser(signals: AuditSignals, error_code: str) -> AuditSignals:
+    """A failed audit that keeps only what was read before the browser started.
+
+    Those are the facts `audit_site` gets from robots.txt and the sitemap, by the gate,
+    before it asks for the browser: whether robots.txt is there, whether it allows
+    crawling, whether there is a sitemap (or robots.txt forbids reading it) and the
+    verdict per AI crawler. They were read, and checked, on their own. Everything the
+    page gave (schema types, counts, vitals, the status, the Last-Modified header, the
+    landing's load state) is dropped, because a run that ended here never passed the
+    final egress check (`guard.finish`) that says what a page showed may be kept.
+    `audit_runner` stores whatever it is handed, so this is a FRESH object, as
+    `_address_not_public` returns one, and not the live `signals`.
+    """
+    return AuditSignals(
+        url=signals.url,
+        domain=signals.domain,
+        ok=False,
+        error_code=error_code,
+        robots_txt_present=signals.robots_txt_present,
+        robots_allows_crawl=signals.robots_allows_crawl,
+        has_sitemap=signals.has_sitemap,
+        sitemap_disallowed=signals.sitemap_disallowed,
+        ai_crawler_access=list(signals.ai_crawler_access),
+    )
+
+
+def audit_run_cap_s(timeout_ms: int = PAGE_TIMEOUT_MS) -> float:
+    """The most one browser run of `audit_site` may take: the driver starting to the browser gone.
+
+    M1, 2026-10-02, and **launch checklist 3.20**: one step of the audit had no
+    timeout of its own. `page.evaluate`, the read of the page after the vitals wait,
+    takes none and is outside `set_default_timeout`'s reach, so a page whose script
+    never let it return left the scan to its 2,400 s deadline, and alerts and fix
+    generation never ran. The run also holds the process's one browser slot
+    (`browser_slot`), so a hang held every browser run behind it.
+
+    The cap is on the whole run, and it is the SUM of every step at its own ceiling,
+    so a run in which each step does only what its own timeout allows cannot reach
+    it. Only a hang does, and it is then cut here, comes out as the `TIMEOUT` this
+    audit already had, and the scan goes on.
+
+        browser launch                       30   Playwright's own launch timeout
+        the load, then the fallback          50   2 x `timeout_ms` (25 s each)
+        robots.txt of a host the gate has
+          not read (a redirect only the
+          browser was given)                 60   (MAX_REDIRECTS + 1) x SIDE_FETCH_TIMEOUT
+        the landing checks either side of
+          the page read                       4   2 x egress.SETTLE_TIMEOUT_S
+        the vitals wait                     2.5   SETTLE_MS
+        the page read: 3.20's step           15   EVALUATE_ALLOWANCE_S
+        the final egress check                3   FINAL_SETTLE_TIMEOUT_S + 1
+        closing page, context, browser       35   TEARDOWN_ALLOWANCE_S
+        the guard's name lookups             30   NAME_LOOKUP_ALLOWANCE_S
+        the driver starting, set-up calls    15   RUN_MARGIN_S
+                                          -----
+        244.5 s for the default 25 s page timeout.
+
+    robots.txt and sitemap.xml are read before the browser starts, by the gate, with
+    timeouts of their own; they are not under this cap and do not hold the slot.
+    """
+    return (
+        LAUNCH_ALLOWANCE_S
+        + 2 * timeout_ms / 1000
+        + (MAX_REDIRECTS + 1) * SIDE_FETCH_TIMEOUT
+        + 2 * egress.SETTLE_TIMEOUT_S
+        + SETTLE_MS / 1000
+        + EVALUATE_ALLOWANCE_S
+        + egress.FINAL_SETTLE_TIMEOUT_S + 1.0
+        + TEARDOWN_ALLOWANCE_S
+        + NAME_LOOKUP_ALLOWANCE_S
+        + RUN_MARGIN_S
+    )
+
+
+async def audit_site(
+    url: str,
+    *,
+    timeout_ms: int = PAGE_TIMEOUT_MS,
+    slot_wait_s: float | None = None,
+    scan_id: str | None = None,
+) -> AuditSignals:
+    """Crawl one site for structural signals. Never raises for an unreachable site.
+
+    **One browser at a time, under a cap** (M1, 2026-10-02): the browser run holds the
+    process's one browser slot (`browser_slot`) and `audit_run_cap_s` cuts it if a
+    step never returns. It ends as `TIMEOUT`, and the scan goes on (checklist 3.20).
+
+    **A wait for the slot that runs out is a failed audit too** (M1 round 2). The wait
+    is bounded by `slot_wait_s`: None, a request's `REQUEST_WAIT_S`, or a scan's
+    `SCAN_AUDIT_WAIT_S` when `scan_executor` says so. Past it no browser is started
+    and the audit is `ok=False` with `BROWSER_BUSY`, like `BROWSER_ERROR` and
+    `TIMEOUT` a report about our attempt and never a finding about the site. What the
+    caller does with it is its own: a scan records it and goes on, a request is
+    refused and writes nothing (`audit_runner.run_audit`, M1 round 3).
+
+    `scan_id` is our own id for the scan this audit belongs to, put on the browser
+    slot's log lines (`browser_slot._refs`); it is never a URL.
+    """
     start_url = normalise_url(url)
     domain = registrable_domain(start_url)
     signals = AuditSignals(url=start_url, domain=domain)
@@ -374,10 +483,20 @@ async def audit_site(url: str, *, timeout_ms: int = PAGE_TIMEOUT_MS) -> AuditSig
 
     guard = BrowserGuard()
     try:
-        async with async_playwright() as pw:
+        # One browser per process at a time, and the run under its cap
+        # (`audit_run_cap_s`). Entered in this order and left in reverse: the slot is
+        # held first, so time spent waiting for it is not time the run was allowed;
+        # the driver stops, and the cap ends, before the slot is given back.
+        async with (
+            browser_slot("audit", wait_s=slot_wait_s, scan_id=scan_id),
+            asyncio.timeout(audit_run_cap_s(timeout_ms)),
+            async_playwright() as pw,
+        ):
             browser = await pw.chromium.launch(
                 args=["--disable-dev-shm-usage", "--no-sandbox", egress.WEBRTC_LAUNCH_ARG]
             )
+            context: BrowserContext | None = None
+            page: Page | None = None
             try:
                 # NO resource blocking — see the module note. Images must load
                 # or LCP is meaningless.
@@ -582,9 +701,20 @@ async def audit_site(url: str, *, timeout_ms: int = PAGE_TIMEOUT_MS) -> AuditSig
                 # audit as one, and a connected address never read fails it closed.
                 await guard.finish()
                 return signals
+            except (EgressRefused, EgressUnverified) as outcome:
+                # Put on the guard BEFORE the closes below: the cap can fall while they
+                # run, and what arrives then is a `TimeoutError` that has forgotten this.
+                guard.record_outcome(outcome)
+                raise
             finally:
-                await browser.close()
+                # On every way out: a return, an egress refusal, any exception, the cap,
+                # a cancellation. Nothing the run opened outlives it.
+                await close_browser(browser, context=context, page=page)
 
+    except BrowserBusy:
+        # The browser was never started: another run held the slot for the whole wait.
+        # What robots.txt and the sitemap said was read before it, and is kept.
+        return _read_before_the_browser(signals, BROWSER_BUSY)
     except EgressRefused:
         return _address_not_public(signals)
     except EgressUnverified:
@@ -598,13 +728,27 @@ async def audit_site(url: str, *, timeout_ms: int = PAGE_TIMEOUT_MS) -> AuditSig
         if guard.unverified:
             return _egress_unverified(signals)
         logger.warning("audit.playwright_error", domain=domain, error=type(exc).__name__)
-        signals.ok = False
-        signals.error_code = "BROWSER_ERROR"
-        return signals
+        # Only what was read before the browser started is kept, as for `TIMEOUT` (M1
+        # round 3): the error can arrive after the page was read and before the final
+        # egress check (`guard.finish`) said what it showed may be kept, and
+        # `audit_runner` stores whatever it is handed.
+        return _read_before_the_browser(signals, "BROWSER_ERROR")
     except TimeoutError:
-        signals.ok = False
-        signals.error_code = "TIMEOUT"
-        return signals
+        # The run's cap (`audit_run_cap_s`): a step in the browser never returned, 3.20's
+        # among them. What the guard had already decided outranks it, as for a browser
+        # error above. That includes a refusal only the robots gate raised, when the cap
+        # fell while the run was closing: the run records it on the guard before the
+        # closes (`BrowserGuard.record_outcome`). Otherwise it is an ordinary failed
+        # audit: `TIMEOUT`, which `build_checks` reads as "we could not measure", never
+        # as a finding about the site. It keeps what robots.txt and the sitemap said,
+        # read before the browser started, and NOTHING the page gave: the cap can fall
+        # after the page was read and before the final egress check (`guard.finish`)
+        # ran, and facts that never passed it are not ours to keep.
+        if guard.refused is not None:
+            return _address_not_public(signals)
+        if guard.unverified:
+            return _egress_unverified(signals)
+        return _read_before_the_browser(signals, "TIMEOUT")
 
 
 # ===========================================================================
@@ -712,7 +856,8 @@ def build_checks(signals: AuditSignals) -> list[CheckVerdict]:
       `HTTP_503`). That is the site describing itself, and it is a genuine
       `fail` a client can act on.
     * **We could not complete the measurement** (`BROWSER_ERROR`, `TIMEOUT`,
-      `FETCH_FAILED`). That is a report about our attempt. It stays `error`,
+      `FETCH_FAILED`, and since M1 round 2 `BROWSER_BUSY`: the browser was held by
+      another run for the whole wait). That is a report about our attempt. It stays `error`,
       which `audit_findings` no longer treats as a finding — the same
       distinction this codebase already draws between `NOT_YET_MEASURED` and
       `NO_POPULATION`, applied one layer down.

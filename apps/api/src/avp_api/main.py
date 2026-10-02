@@ -6,6 +6,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -32,14 +33,31 @@ from .routers import (
     scans,
     scores,
 )
+from .services import memory_stats
 
 logger = logging.getLogger(__name__)
+# The stdlib logger above is the start-up line's; structured events go through this one.
+structured_logger = structlog.get_logger(__name__)
+
+
+def _log_memory_at_start() -> None:
+    """`app.memory_at_start`: what the process holds before it serves anything. Numbers only.
+
+    The baseline the per-phase and per-browser lines are read against (runbook:
+    "Reading the API's memory"). It must never keep the app from starting, so it
+    catches everything, whatever `snapshot` does.
+    """
+    try:
+        structured_logger.info("app.memory_at_start", **memory_stats.snapshot())
+    except Exception:  # noqa: BLE001 - a memory reading is never worth a start-up
+        return
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
     logger.info("api starting environment=%s", settings.environment)
+    _log_memory_at_start()
     yield
     # Return pooled connections deliberately, so a redeploy does not leave
     # Postgres holding sockets until they time out.

@@ -15,6 +15,12 @@
 
 FROM mcr.microsoft.com/playwright/python:v1.62.0-noble
 
+# tini, to be PID 1 (see the ENTRYPOINT). Installed as root, so before `USER`; the
+# package lists are removed in the same layer, so it adds the one package.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tini \
+    && rm -rf /var/lib/apt/lists/*
+
 # uv, pinned, from its own image rather than a curl-pipe.
 COPY --from=ghcr.io/astral-sh/uv:0.8.17 /uv /uvx /bin/
 
@@ -53,4 +59,11 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=4).status == 200 else 1)"
 
-ENTRYPOINT ["/app/apps/api/docker-entrypoint.sh"]
+# WHY tini IS PID 1. Every browser run leaves orphans: Chromium's helper
+# processes outlive the process that started them, and Linux hands an orphan to
+# PID 1. That used to be uvicorn (`exec uvicorn` in docker-entrypoint.sh), which
+# never reaps, so each one stayed a zombie until the container restarted. They
+# cost no memory, but they accumulate and fill the process table. tini reaps them,
+# and passes SIGTERM on to the script, which `exec`s uvicorn, so a deploy still
+# stops the server cleanly. It is Ubuntu's own package (MIT), installed above.
+ENTRYPOINT ["/usr/bin/tini", "--", "/app/apps/api/docker-entrypoint.sh"]

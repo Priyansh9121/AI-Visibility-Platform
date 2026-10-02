@@ -892,7 +892,9 @@ class TestATimedOutAuditNeverBecomesAClientFix:
         ]
         return audit
 
-    @pytest.mark.parametrize("code", ["BROWSER_ERROR", "TIMEOUT", "FETCH_FAILED"])
+    @pytest.mark.parametrize(
+        "code", ["BROWSER_ERROR", "TIMEOUT", "FETCH_FAILED", "BROWSER_BUSY"]
+    )
     def test_our_own_timeout_produces_no_candidate(self, code: str) -> None:
         from avp_api.services.fix_runner import audit_findings
 

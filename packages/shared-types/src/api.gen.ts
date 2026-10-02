@@ -765,6 +765,19 @@ export interface paths {
          *     seconds, so one round trip is both sufficient and simpler than polling.
          *
          *     Set `classify: false` to create the record without spending an LLM call.
+         *
+         *     **One site read per agency at a time, and four at once** (2026-10-02). With
+         *     classification on, this request reads the site in the API's one browser. An agency
+         *     may have one such read queued or running at once, counted here, on
+         *     `POST /clients/{clientId}/reclassify` and on `POST /scans/{scanId}/audit` together,
+         *     and only four agencies at once. Past either limit the request is refused before
+         *     anything is created. A read that waits more than a minute for the browser is
+         *     refused the same way, and writes nothing: no client is created.
+         *
+         *     **Errors:** `429 rate-limited` (with `Retry-After: 60`): "Your agency already has a
+         *     site being read. Try again in a minute." or "The crawler is busy with other pages
+         *     right now. Try again in a minute."; `409 invalid-url`; `409 conflict`;
+         *     `422 validation-failed`.
          */
         post: operations["create_client_api_v1_clients_post"];
         delete?: never;
@@ -1048,6 +1061,15 @@ export interface paths {
          *
          *     Needed because a site changes, and because an AMBIGUOUS result is often
          *     worth retrying after the operator has looked at the site themselves.
+         *
+         *     **One site read per agency at a time, and four at once** (2026-10-02), shared with
+         *     `POST /clients` and `POST /scans/{scanId}/audit`: while the agency's other read is
+         *     queued or running, or four agencies' reads are, this is a `429`. Checked after the
+         *     client is found, so another agency's client is still a `404`. A read that waits
+         *     more than a minute for the browser is refused with a `429` too, and the client
+         *     keeps the classification it had.
+         *
+         *     **Errors:** `404 not-found`; `429 rate-limited` (with `Retry-After: 60`).
          */
         post: operations["reclassify_client_api_v1_clients__clientId__reclassify_post"];
         delete?: never;
@@ -1399,7 +1421,17 @@ export interface paths {
          *     unknown one. The scan's status is read again after the crawl, so a scan that fails
          *     while the audit runs is blanked too. Every other status is unchanged.
          *
-         *     **Errors:** `401`, `404` (unknown scan, or another agency's).
+         *     **One site read per agency at a time, and four at once** (2026-10-02), shared with
+         *     `POST /clients` and `POST /clients/{clientId}/reclassify`: while the agency's other
+         *     read is queued or running, or four agencies' reads are, this is a `429`. Checked
+         *     after the scan is found, so another agency's scan is still a `404`. A read that
+         *     waits more than a minute for the browser is refused with a `429` too, and the audit
+         *     already stored for the scan is kept. A scan's own audit, part of the scan, is not
+         *     one of these reads and is never refused: it is recorded as `failed` with
+         *     `errorCode: BROWSER_BUSY` when it waits that long, and the scan goes on.
+         *
+         *     **Errors:** `401`; `404` (unknown scan, or another agency's); `429 rate-limited`
+         *     (with `Retry-After: 60`).
          */
         post: operations["run_audit_api_v1_scans__scanId__audit_post"];
         delete?: never;
