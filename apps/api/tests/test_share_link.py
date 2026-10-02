@@ -98,10 +98,11 @@ class TestMinting:
     async def test_the_same_scan_returns_the_same_token_every_time(
         self, client: AsyncClient, stub_engines
     ) -> None:  # noqa: ANN001
-        """Idempotent, because there is no revocation.
+        """Idempotent while a link is live: the second press returns the link already made.
 
-        Every token minted is a URL that works forever, so a second click that
-        minted a second token would quietly leave a live link nobody tracks.
+        Every extra token is a URL nobody is tracking, so a second click that
+        minted a second token would quietly leave a live link nobody tracks. The
+        end is the same too (`TestExpiry` holds that, checklist 3.28).
         """
         await _sign_up(client, "Share Agency", "share@test.example")
         sid = await _scored_scan(client, stub_engines)
@@ -116,6 +117,48 @@ class TestMinting:
         # 200 rather than 201: the second call creates nothing and must not say
         # it did.
         assert first.json()["scanId"] == sid
+
+    async def test_two_presses_at_once_on_a_scan_with_no_link_make_one_link(
+        self, client: AsyncClient, session, stub_engines
+    ) -> None:  # noqa: ANN001
+        """The row lock keeps a race to one token, and here the race is forced.
+
+        Another connection holds the scan's row, so both presses have read the scan
+        (no link yet) and are queued on the lock before either can write. That is the
+        interleaving which, unlocked, mints two tokens and leaves the first caller
+        holding a URL that no longer works. Then the row is let go. The first press
+        through mints; the second must read that token off the locked row rather than
+        act on the copy it read earlier, and must return it as it is: the same token
+        and the same end, because a press on a live link writes nothing (3.28).
+        """
+        import asyncio
+
+        from sqlalchemy import select
+
+        await _sign_up(client, "Race Agency", "race1@test.example")
+        sid = await _scored_scan(client, stub_engines)
+        assert await _link_on_the_row(sid) == (None, None)
+
+        await session.execute(select(Scan.id).where(Scan.id == sid).with_for_update())
+        presses = [
+            asyncio.create_task(client.post(f"{BASE}/scans/{sid}/share")) for _ in range(2)
+        ]
+        try:
+            await _until_queued_on_a_row_lock(2)
+        finally:
+            await session.rollback()
+            results = await asyncio.gather(*presses, return_exceptions=True)
+
+        a, b = results
+        assert not isinstance(a, BaseException), a
+        assert not isinstance(b, BaseException), b
+        assert a.status_code == b.status_code == 200, (a.text, b.text)
+        assert a.json()["token"] == b.json()["token"]
+        assert a.json()["expiresAt"] == b.json()["expiresAt"]
+        assert await _link_on_the_row(sid) == (
+            a.json()["token"],
+            datetime.fromisoformat(a.json()["expiresAt"]),
+        )
 
     async def test_two_scans_get_two_different_unguessable_tokens(
         self, client: AsyncClient, stub_engines
@@ -440,6 +483,65 @@ async def _expire(scan_id: str) -> None:
         await s.commit()
 
 
+async def _set_expiry(scan_id: str, at: datetime) -> None:
+    """Put a link's end at a chosen instant: the row, not a patched clock — checklist 3.28."""
+    from avp_api.db import get_sessionmaker
+
+    async with get_sessionmaker()() as s:
+        await s.execute(sa_update(Scan).where(Scan.id == scan_id).values(share_expires_at=at))
+        await s.commit()
+
+
+async def _link_on_the_row(scan_id: str) -> tuple[str | None, datetime | None]:
+    """The scan's share token and its end, read fresh from the database."""
+    from sqlalchemy import select
+
+    from avp_api.db import get_sessionmaker
+
+    async with get_sessionmaker()() as s:
+        row = (
+            await s.execute(
+                select(Scan.share_token, Scan.share_expires_at).where(Scan.id == scan_id)
+            )
+        ).one()
+    return row.share_token, row.share_expires_at
+
+
+async def _until_queued_on_a_row_lock(queued: int, *, seconds: float = 10.0) -> None:
+    """Wait until `queued` statements in this database are waiting on a row lock.
+
+    Asks `pg_stat_activity` from a connection of its own, so the lock the caller is
+    holding is not disturbed. The query text is matched on `FOR UPDATE`, which is
+    how `share.get_or_create_share_token` takes the scan.
+    """
+    import asyncio
+
+    from sqlalchemy import text as sa_text
+
+    from avp_api.db import get_sessionmaker
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + seconds
+    while True:
+        async with get_sessionmaker()() as s:
+            waiting = (
+                await s.execute(
+                    sa_text(
+                        "SELECT count(*) FROM pg_stat_activity"
+                        " WHERE datname = current_database()"
+                        " AND pid <> pg_backend_pid()"
+                        " AND wait_event_type = 'Lock'"
+                        " AND query ILIKE '%for update%'"
+                    )
+                )
+            ).scalar_one()
+        if waiting >= queued:
+            return
+        if loop.time() > deadline:
+            pytest.fail(f"{waiting} of {queued} presses were waiting on the scan's row lock")
+        await asyncio.sleep(0.05)
+
+
 class TestRevocation:
     """Taking a link back — Epic 9.21.
 
@@ -558,18 +660,22 @@ class TestRevocation:
     async def test_a_link_minted_after_a_revoke_is_a_new_one_and_the_old_stays_dead(
         self, client: AsyncClient, stub_engines
     ) -> None:  # noqa: ANN001
-        """Re-sharing issues a new capability, which is why re-mint refreshes.
+        """After a withdrawal no link is live, so a press makes a new one — checklist 3.28.
 
-        This is the asymmetry that decided it: revoke-and-mint is the only
-        other way to extend a link, and it breaks every copy already sent.
+        A new token with a fresh 30 days, and the address that was taken down stays
+        down. Withdrawing and pressing again is therefore also how an agency gets a
+        link with a new end, and it breaks every copy already sent.
         """
         await _sign_up(client, "Revoke Agency", "revoke7@test.example")
         sid = await _scored_scan(client, stub_engines)
         first = (await client.post(f"{BASE}/scans/{sid}/share")).json()["token"]
         await client.delete(f"{BASE}/scans/{sid}/share")
-        second = (await client.post(f"{BASE}/scans/{sid}/share")).json()["token"]
+        again = (await client.post(f"{BASE}/scans/{sid}/share")).json()
+        second = again["token"]
 
         assert first != second
+        remaining = datetime.fromisoformat(again["expiresAt"]) - datetime.now(UTC)
+        assert timedelta(days=29) < remaining <= share_service.SHARE_TTL
         client.cookies.clear()
         assert (await _shared(client, first)).status_code == 404
         assert (await _shared(client, second)).status_code == 200
@@ -638,14 +744,16 @@ class TestExpiry:
         # The same comparison `test_malformed_and_well_formed_misses_...` makes.
         assert _problem(never) == _problem(expired)
 
-    async def test_re_sharing_extends_an_almost_dead_link_without_changing_its_url(
+    async def test_pressing_after_the_link_expired_makes_a_new_link_and_the_old_address_stays_dead(
         self, client: AsyncClient, stub_engines
     ) -> None:  # noqa: ANN001
-        """The whole argument for refresh-on-re-mint, as a test.
+        """An ended link is not live, so a press makes a new one — checklist 3.28.
 
-        Without it an agency re-sending on day 29 would have to revoke and
-        re-mint, which issues a different URL and breaks the copy they are
-        re-sending. The token is stable; the clock is not.
+        This was `test_re_sharing_extends_an_almost_dead_link_without_changing_its_url`:
+        a press on an expired link used to move the end of the SAME token, so the
+        address that had stopped working opened the report again. A link's end is
+        final now. Keeping a report going past it takes a new link at a new address,
+        and the one that ended stays ended on both public routes.
         """
         await _sign_up(client, "Expiry Agency", "expiry4@test.example")
         sid = await _scored_scan(client, stub_engines)
@@ -653,7 +761,7 @@ class TestExpiry:
         await _expire(sid)
 
         client.cookies.clear()
-        assert (await _shared(client, first['token'])).status_code == 404
+        assert (await _shared(client, first["token"])).status_code == 404
 
         await client.post(
             f"{BASE}/auth/login",
@@ -661,13 +769,111 @@ class TestExpiry:
         )
         second = (await client.post(f"{BASE}/scans/{sid}/share")).json()
 
-        assert second["token"] == first["token"], "the URL already sent must survive"
-        assert second["url"] == first["url"]
-        assert datetime.fromisoformat(second["expiresAt"]) > datetime.fromisoformat(
-            first["expiresAt"]
-        )
+        assert second["token"] != first["token"], "an address that has ended must not come back"
+        assert second["url"] != first["url"]
+        ends = datetime.fromisoformat(second["expiresAt"])
+        assert timedelta(days=29) < ends - datetime.now(UTC) <= share_service.SHARE_TTL
+        # The row holds the new link and nothing of the old one.
+        assert await _link_on_the_row(sid) == (second["token"], ends)
         client.cookies.clear()
-        assert (await _shared(client, first['token'])).status_code == 200
+        assert (await _shared(client, first["token"])).status_code == 404
+        assert (await _shared_pdf(client, first["token"])).status_code == 404
+        assert (await _shared(client, second["token"])).status_code == 200
+        assert (await _shared_pdf(client, second["token"])).status_code == 200
+
+    async def test_pressing_on_a_live_link_returns_it_exactly_as_it_is(
+        self, client: AsyncClient, stub_engines
+    ) -> None:  # noqa: ANN001
+        """Same token, same URL, same end, and nothing is written — checklist 3.28.
+
+        The founder's decision, replacing Epic 9.21's refresh: what the share bar
+        says ("The link works until ...") stays true of the link that was sent. The
+        link is put a day from its end first, as an agency re-sending on day 29 would
+        find it. A press that moved the end would show as a date a month out, where
+        the day left cannot be mistaken for it, however fast the two presses are.
+        """
+        await _sign_up(client, "Expiry Agency", "expiry6@test.example")
+        sid = await _scored_scan(client, stub_engines)
+        first = (await client.post(f"{BASE}/scans/{sid}/share")).json()
+        a_day_left = datetime.now(UTC) + timedelta(days=1)
+        await _set_expiry(sid, a_day_left)
+        before = await _link_on_the_row(sid)
+        assert before == (first["token"], a_day_left)
+
+        presses = [await client.post(f"{BASE}/scans/{sid}/share") for _ in range(2)]
+
+        for press in presses:
+            assert press.status_code == 200, press.text
+            link = press.json()
+            assert link["token"] == first["token"]
+            assert link["url"] == first["url"]
+            assert datetime.fromisoformat(link["expiresAt"]) == a_day_left
+        # The row is as it was before the presses: no write moved the end.
+        assert await _link_on_the_row(sid) == before
+        # What the bar reads on the next page load says the same end.
+        report = (await client.get(f"{BASE}/scans/{sid}/report")).json()
+        assert report["shareExpiresAt"] == presses[1].json()["expiresAt"]
+        # And the link was never off: a stranger opens it.
+        client.cookies.clear()
+        assert (await _shared(client, first["token"])).status_code == 200
+        assert (await _shared_pdf(client, first["token"])).status_code == 200
+
+    async def test_the_press_and_the_public_lookup_draw_the_line_at_the_same_microsecond(
+        self, client: AsyncClient, session, stub_engines
+    ) -> None:  # noqa: ANN001
+        """An end exactly at `now` is over; one microsecond later it is live — checklist 3.28.
+
+        The rule is stated twice: in Python for the press (`share.link_is_live`) and
+        in SQL for the public lookup (`scan_for_share_token`). They have to agree on
+        the edge, or a link would be live to one and over to the other: handed back by
+        a press that the lookup refuses, or replaced by a press while the lookup still
+        serves it. The clock is passed in, so the test stands exactly on the edge
+        instead of racing it.
+        """
+        await _sign_up(client, "Edge Agency", "edge1@test.example")
+        sid = await _scored_scan(client, stub_engines)
+        first = (await client.post(f"{BASE}/scans/{sid}/share")).json()["token"]
+        scan = await session.get(Scan, sid)
+        now = datetime(2031, 6, 1, 12, 0, 0, tzinfo=UTC)
+
+        # The end is exactly `now`: over. The lookup refuses it, and a press makes a NEW link.
+        await _set_expiry(sid, now)
+        assert await share_service.scan_for_share_token(session, first, now=now) is None
+        token, ends = await share_service.get_or_create_share_token(session, scan, now=now)
+        await session.commit()
+        assert token != first
+        assert ends == now + share_service.SHARE_TTL
+        assert await _link_on_the_row(sid) == (token, ends)
+        assert await share_service.scan_for_share_token(session, first, now=now) is None
+        assert await share_service.scan_for_share_token(session, token, now=now) is not None
+
+        # The end is `now` plus one microsecond: live. The lookup still serves it, and a
+        # press returns it exactly as it is.
+        edge = now + timedelta(microseconds=1)
+        await _set_expiry(sid, edge)
+        assert await share_service.scan_for_share_token(session, token, now=now) is not None
+        pressed = await share_service.get_or_create_share_token(session, scan, now=now)
+        await session.commit()
+        assert pressed == (token, edge)
+        assert await _link_on_the_row(sid) == (token, edge)
+
+    def test_link_is_live_needs_a_token_and_an_end_strictly_after_now(self) -> None:
+        """The one Python statement of the rule, as a table — checklist 3.28.
+
+        It is what the press and the signed-in report's `shareExpiresAt` both ask. A
+        token with no end, or an end with no token, cannot be written (the CHECK on
+        `scans`), so this is the only place those shapes are asserted: neither is live.
+        """
+        now = datetime(2031, 6, 1, 12, 0, 0, tzinfo=UTC)
+        microsecond = timedelta(microseconds=1)
+        live = share_service.link_is_live
+
+        assert live("token", now + microsecond, now) is True
+        assert live("token", now, now) is False
+        assert live("token", now - microsecond, now) is False
+        assert live("token", None, now) is False
+        assert live(None, now + timedelta(days=1), now) is False
+        assert live(None, None, now) is False
 
     async def test_a_token_without_an_expiry_serves_nothing(
         self, client: AsyncClient, stub_engines

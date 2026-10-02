@@ -261,10 +261,10 @@ class TestAScanThatFailsWhileItIsBeingShared:
 
     `create_share_link` reads the scan, lets it through if it has not failed, and only
     then takes the row lock inside `get_or_create_share_token`. A scan failed by the
-    reaper or a deadline in that gap used to get a link, or have a live link's end
-    pushed out, from a request that had read it a moment before. The service now
-    looks at the locked row's own status and raises the route's own 409 before it
-    writes anything.
+    reaper or a deadline in that gap used to get a link, or be handed a live one that
+    no longer opens the report, from a request that had read it a moment before. The
+    service now looks at the locked row's own status and raises the route's own 409
+    before it writes anything, and before it hands back a link that is live.
     """
 
     @pytest.mark.parametrize(
@@ -304,6 +304,9 @@ class TestAScanThatFailsWhileItIsBeingShared:
         # Not vacuous: the route's own check passed a scan that had not failed.
         assert seen_by_the_route
         assert ScanStatus.FAILED not in seen_by_the_route
+        # The guard: the FAILED refusal comes before the live-link shortcut. With a link
+        # already live, that shortcut would answer 200 and hand its token back, so the
+        # 409, and no `token` in the body, are what show the refusal is made first.
         assert resp.status_code == 409, resp.text
         body = resp.json()
         assert body["type"] == "/problems/failed-scan-not-shareable"
@@ -311,7 +314,7 @@ class TestAScanThatFailsWhileItIsBeingShared:
         assert "token" not in body
         await session.refresh(scan)
         assert scan.status is ScanStatus.FAILED
-        # Nothing was written: no link minted, and a live link's end not pushed out.
+        # And nothing was written: no link minted, and a live one left as it was.
         assert (scan.share_token, scan.share_expires_at) == before
 
     async def test_the_service_looks_at_the_locked_row_not_at_the_scan_it_was_handed(

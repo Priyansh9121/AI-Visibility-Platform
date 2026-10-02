@@ -2285,14 +2285,16 @@ for a real and a fake token.
 measurement until an agency decides otherwise; minting a token for every scan
 and relying on the URL being unknown would make that decision for them.
 
-**`200`, not `201`, and idempotent.** Calling twice returns the *same* token
-rather than a second live link to the same report: every extra token would be a
-URL nobody is tracking. The second call creates nothing, so it does not claim
-to. Serialised with `SELECT … FOR UPDATE`: two
-concurrent calls would otherwise generate two different tokens and issue two
-UPDATEs against the same row, and the loser would walk away holding a URL that
-404s. There is no unique violation to catch in that race, so the lock is
-load-bearing rather than defensive.
+**`200`, not `201`, and idempotent.** While the scan has a live link, calling
+again returns that link exactly as it is: the *same* token, the same URL and the
+same `expiresAt`, and nothing is written. Every extra token would be a URL
+nobody is tracking, so the second call mints nothing and does not claim to.
+Serialised with `SELECT … FOR UPDATE`: two
+concurrent calls on a scan with no link would otherwise generate two different
+tokens and issue two UPDATEs against the same row, and the loser would walk away
+holding a URL that 404s. There is no unique violation to catch in that race, so
+the lock is load-bearing rather than defensive. The loser reads the winner's
+link off the locked row and returns it as it is.
 
 **Response `200`** — `ShareLinkOut`:
 ```json
@@ -2304,15 +2306,32 @@ load-bearing rather than defensive.
 }
 ```
 
-**A second call pushes `expiresAt` out — Epic 9.21.** Idempotence is about the
-token's identity, not its lifetime. The alternative reading leaves no way to
-extend a link without changing its URL, because the only other route is
-revoke-and-mint, which issues a new token and kills every copy already sent —
-so an agency re-sharing on day 29 would have to break the link they are
-re-sending. Re-sharing is the agency restating the decision to share, which is
-exactly the signal an expiry should listen to.
+**A press on a live link does not move its end — Epic 9.21, changed by
+checklist 3.28 (founder decision).** A link is *live* when its token is set and
+its `expiresAt` is in the future. A press on a live link returns it exactly as it
+is: the same token and the same `expiresAt`, with nothing written. Epic 9.21 first
+had a second call push `expiresAt` out to 30 days from that press, and bring an
+ended token back to life; it no longer does either. The share bar says links
+last 30 days from when they are created and shows "The link works until …" for
+the end the link was given, so a press that moved the end would have made both
+untrue of the link already sent, and silently: pressing "Get shareable link" is
+also how the signed-in report gets the URL back, because the report carries
+`shareExpiresAt` and never the token.
 
-**Links live 30 days** (`share.SHARE_TTL`). It must outlive the conversation it
+A press makes a link only when none is live, and what it makes is **new**:
+
+| The scan's link | A press returns |
+|---|---|
+| live | the same token and `expiresAt`; nothing written |
+| never made, or withdrawn | a new token, `expiresAt` 30 days from the press |
+| ended (`expiresAt` in the past) | a new token, `expiresAt` 30 days from the press; the ended token is replaced, so its address stays dead on both public routes |
+
+A link's end is never moved in place. A link that has ended is replaced by
+pressing again; a live one that has to be replaced sooner is withdrawn first,
+and withdrawing ends the address that was sent. A scan that `failed` is refused
+before any of this (`409`, below).
+
+**Links live 30 days** (`share.SHARE_TTL`), from when they are made. It must outlive the conversation it
 was sent for — a report is read, forwarded, and put in front of a budget holder
 over days to a couple of weeks — and must not outlive the data, since a month on
 a re-scan would show different numbers and the link would be making a stale
@@ -3070,11 +3089,12 @@ address, and a 30-day TTL for the link nobody remembers sending. Neither reaches
 a copy already downloaded, which is stated on both PDF routes.
 
 **PDF export shipped in Epic 9.14** — see `GET /scans/{scanId}/report.pdf` and
-`POST /reports/shared/pdf` above. Branding remains unbuilt, and the send path is
-still not "finished": a share link has no expiry and no revocation (recorded
-above), and white-labelling is name-and-slug only, so a report sent today —
-web or PDF — carries the agency's name but not its logo or colours. See
-`build-log.md` Epic 9.0 for the slice order and Epic 9.8 for what the link
+`POST /reports/shared/pdf` above. Branding was then unbuilt, and the send path
+not yet "finished": a share link had no expiry and no revocation (both shipped
+in Epic 9.21), and white-labelling was name-and-slug only, so a report sent
+then — web or PDF — carried the agency's name but not its logo or colours
+(Epic 9.22 added a logo and one chrome accent; a custom domain is deferred).
+See `build-log.md` Epic 9.0 for the slice order and Epic 9.8 for what the link
 deliberately does not do.
 
 **The two seat rows left this table in Epic 9.14** — see *Agencies (seat
