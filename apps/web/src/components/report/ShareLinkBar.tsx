@@ -26,7 +26,7 @@
  * field. See build-log Epic 9.8.
  */
 
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { Button, Card, CardBody, TextField } from '@avp/design-system';
 import { ApiProblem, api } from '@/lib/api';
 import { apiWasAway } from '@/lib/apiAway';
@@ -41,7 +41,10 @@ type Ready = {
   expiresAt: string | null;
   copied: boolean;
   withdraw: Withdraw;
-  error: string | null;
+  // What the alert region says beside the link, and which press it is about: on a live link a
+  // failed mint and a failed withdraw both land here, and only the mint's is Get's to be
+  // described by (3.33).
+  error: { from: 'mint' | 'withdraw'; text: string } | null;
 };
 
 type State =
@@ -62,6 +65,20 @@ const FAILED_SCAN_SENTENCE = 'This scan failed, so its report cannot be shared.'
  * withdrawn: no end date is shown for it, and nothing says it works.
  */
 const FAILED_SCAN_LINK_SENTENCE = 'Its existing link no longer opens the report.';
+/** What a mint that failed says, in the alert region and, through `aria-describedby`, to Get (3.33). */
+const LINK_NOT_CREATED_SENTENCE = 'The link could not be created. Try again.';
+
+/**
+ * Said in the status region once Get shareable link has made a link (3.33), and the one
+ * announcement of its end date: the "works until" line is not a live region. The date is
+ * `formatStamp`'s, as in that line. A response with no end date says only that the link is
+ * ready, never a date it was not given.
+ */
+function linkReadySentence(expiresAt: string | null): string {
+  return expiresAt === null
+    ? 'Link ready.'
+    : `Link ready. It works until ${formatStamp(expiresAt)}.`;
+}
 
 export function ShareLinkBar({
   scanId,
@@ -100,13 +117,37 @@ export function ShareLinkBar({
   // button off the page and closing it brings it back, and focus should be on it
   // when it returns rather than on <body> (the button that was pressed disables
   // while the request is out, so on a failure focus has nowhere else to be).
-  // Cleared when the question is asked again.
+  // Cleared when the question is asked again, and when a mint starts.
   const [refocusTrigger, setRefocusTrigger] = useState(false);
+  // The Get button's id, so focus can be put back on it: Button takes an id and no ref.
+  const getButtonId = useId();
+  // The id of the sentence a failed mint says, which Get is described by while it shows.
+  const mintFailureId = useId();
+  // Counts mints that have failed (3.33). The Get button disables while its request is out,
+  // which takes focus off the page, and it is the same element when the request fails, so
+  // there is no remount for an autoFocus (as the Withdraw link has) to act on: the effect
+  // below puts focus back on it once the commit that re-enables it is done.
+  const [getFocusRequest, setGetFocusRequest] = useState(0);
+  useEffect(() => {
+    if (getFocusRequest === 0) return;
+    const get = document.getElementById(getButtonId);
+    const active = document.activeElement;
+    // Only if focus is still lost, or still on the button: a person who has moved on to
+    // something else while the request was out keeps their place.
+    if (get !== null && (active === null || active === document.body || active === get)) {
+      get.focus();
+    }
+  }, [getFocusRequest, getButtonId]);
 
   async function mint() {
     // A link already known to be live (from the payload or an earlier mint) is
     // still live when this press fails, so it is put back with the failure beside it.
     const live = state.kind === 'ready' ? state : null;
+    // This press replaces what the Withdraw question was last used for. Focus goes to the new
+    // link's field when it is made (3.33) and back to this button when it is not, so the
+    // Withdraw link that comes back with either must not claim it first, as it would if a
+    // Keep link or a failed withdraw on the link being replaced had left this flag set.
+    setRefocusTrigger(false);
     setState({ kind: 'working', live });
     try {
       const link = await api.shareLink(scanId);
@@ -132,9 +173,11 @@ export function ShareLinkBar({
       }
       setState(
         live
-          ? { ...live, withdraw: 'idle', error: 'The link could not be created. Try again.' }
+          ? { ...live, withdraw: 'idle', error: { from: 'mint', text: LINK_NOT_CREATED_SENTENCE } }
           : { kind: 'failed' },
       );
+      // Not for the refusal above: there Get leaves the page, and there is nothing to retry.
+      setGetFocusRequest((n) => n + 1);
     }
   }
 
@@ -157,12 +200,15 @@ export function ShareLinkBar({
         // which may well still open — and that is what the person needs to know.
         // Except for a failed scan's (3.29): the API refuses that link whatever
         // happened here, so "may still open" would be untrue of it.
-        error:
-          e instanceof Error && !apiWasAway(e)
-            ? e.message
-            : failedScan
-              ? 'The link could not be withdrawn. Try again.'
-              : 'The link could not be withdrawn and may still open. Try again.',
+        error: {
+          from: 'withdraw',
+          text:
+            e instanceof Error && !apiWasAway(e)
+              ? e.message
+              : failedScan
+                ? 'The link could not be withdrawn. Try again.'
+                : 'The link could not be withdrawn and may still open. Try again.',
+        },
       });
     }
   }
@@ -190,6 +236,12 @@ export function ShareLinkBar({
   // The link known to be live: shown, or being replaced by a mint that is out.
   const live = state.kind === 'ready' ? state : state.kind === 'working' ? state.live : null;
   const withdrawing = state.kind === 'ready' && state.withdraw !== 'idle';
+  // The alert region is saying that the last mint failed (3.33). A failed withdraw beside Get is
+  // not this: it is about the link, and Get is not described by it. Focus goes back to Get in the
+  // same tick as the alert appears, and a screen reader may cut the alert off for the focus
+  // change, so Get carries the sentence itself (as DownloadPdfButton's does for its failure).
+  const mintFailed =
+    state.kind === 'failed' || (state.kind === 'ready' && state.error?.from === 'mint');
 
   return (
     <Card elevation="seated">
@@ -215,9 +267,11 @@ export function ShareLinkBar({
 
           {!failedScan && (state.kind !== 'ready' || state.url === null) && (
             <Button
+              id={getButtonId}
               variant="secondary"
               onClick={mint}
               disabled={state.kind === 'working' || withdrawing}
+              aria-describedby={mintFailed ? mintFailureId : undefined}
             >
               {state.kind === 'working' ? 'Creating…' : 'Get shareable link'}
             </Button>
@@ -313,14 +367,31 @@ export function ShareLinkBar({
               Link withdrawn. It no longer opens this report.
             </p>
           )}
+          {/*
+            The link a mint has made, from the mint until it is withdrawn (3.33). Only a
+            mint gives the bar a URL, so this is not said for a link the page was loaded
+            with. Never for a failed scan, whose link opens nothing (3.29): nothing on the
+            bar says it works. The "works until" line above is not live, so this is the
+            one announcement of the date.
+          */}
+          {!failedScan && state.kind === 'ready' && state.url !== null && (
+            <p className="mt-3 text-ui-sm text-text-secondary">
+              {linkReadySentence(state.expiresAt)}
+            </p>
+          )}
         </div>
         <div role="alert">
           {state.kind === 'ready' && state.error !== null && (
-            <p className="mt-3 max-w-measure text-ui-sm leading-prose text-danger">{state.error}</p>
+            <p
+              id={state.error.from === 'mint' ? mintFailureId : undefined}
+              className="mt-3 max-w-measure text-ui-sm leading-prose text-danger"
+            >
+              {state.error.text}
+            </p>
           )}
           {state.kind === 'failed' && (
-            <p className="mt-3 max-w-measure text-ui-sm leading-prose text-danger">
-              The link could not be created. Try again.
+            <p id={mintFailureId} className="mt-3 max-w-measure text-ui-sm leading-prose text-danger">
+              {LINK_NOT_CREATED_SENTENCE}
             </p>
           )}
         </div>
@@ -362,6 +433,10 @@ function ReadyLink({
           label="Public report link"
           readOnly
           value={url}
+          // Focus lands here when the link is made (3.33), because the button that was
+          // pressed has just left the page. The field mounts only then: the token is never
+          // sent back, so a link the page was loaded with has none. `onFocus` selects it.
+          autoFocus
           onFocus={(e) => e.currentTarget.select()}
         />
       </div>

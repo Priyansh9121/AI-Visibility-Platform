@@ -46,7 +46,9 @@ textarea {
   color: inherit;
 }
 
-/* Emphasis is light, not lift — one global rule so no component reimplements it. */
+/* Emphasis is light, not lift — one global rule so no component reimplements it.
+   The one exception is a filled button (components.css, checklist 3.33), whose ring
+   would merge with its fill: it swaps the token for --avp-focus-ring-filled. */
 :where(a, button, input, select, textarea, [tabindex]):focus-visible {
   outline: none;
   box-shadow: var(--avp-focus-ring);
