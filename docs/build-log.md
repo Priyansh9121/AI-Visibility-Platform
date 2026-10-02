@@ -21869,3 +21869,41 @@ Drift check (north-star §8): no product layer; the launch plan. Lifecycle phase
   - The Python licence audit passes in both environments; `pnpm licenses list --json` audited by `js_license_audit.py`: 236 packages, 233 ok, 3 REVIEW (unchanged; none added by this branch), PASS.
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - **Over the branch:** API pytest 2226 → 2367, web vitest 1399 → 1473, design-system vitest 846 → 875; workers, shared-types and the mypy count unchanged.
+
+# The client Technical screen says what happened to a failed audit in a sentence, not the code
+
+**2026-10-02, the thirteenth entry of the day; branch `pilot-fixes-2`, the founder's brief "memory and the rest of the open decisions" (launch checklist 3.32).** One item, one commit.
+
+**Render: nothing to set. No endpoint, schema, dependency or outbound host change.**
+
+Drift check (north-star §8): Layer 1, Delivery (the signed-in client Technical screen); lifecycle phase: Activation (Epic 9), an agency reading why a site could not be audited.
+
+## 1. What changed
+
+- **Failed-audit states only** (`ClientTechnicalView.tsx`). The generic failed audit printed `Reason: <code>` (for example `Reason: FETCH_FAILED`) in the EmptyState's note. It now shows the same sentence the report's failed-audit card shows since 3.26, from `auditFailureSentence`: "The crawler’s browser stopped before it could read the home page." (`BROWSER_ERROR`), "The crawler asked for the home page and got no response." (`FETCH_FAILED`), "The home page did not finish loading in the time the crawler allows." (`TIMEOUT`), "The site answered with an error (HTTP 503) when the crawler asked for its home page." (`HTTP_<status>`), and "The crawler could not read the home page." for any other code or none (it used to show no note when there was no code; the report already shows the generic sentence).
+- `ROBOTS_DISALLOWED` and `ADDRESS_NOT_PUBLIC` keep their own title and body and lose their `Reason: CODE` note: the body already says why and what follows, so the note could only repeat it. No note element renders there at all.
+- Text only, in existing EmptyState props; no class, token, layout or library change.
+
+## 2. The review
+
+- **UI review (sonnet): PASS WITH NITS.** Checked: each sentence against where its code is set in `technical_audit.py`; nothing invented; the note slot is the quiet tertiary sans line (13 px), which a sentence suits; tertiary on the ground is asserted at 4.5:1 or more; no test removed or weakened.
+  - **Taken:** a pin that the two dedicated states render no note element at all (EmptyState draws an empty paragraph and its gap for any note that is not null).
+  - **Left, and reported to the founder:** the reviewer's High predates this item. `ROBOTS_DISALLOWED` is also stored when robots.txt could not be read at all (no answer, a name that will not resolve, a timeout, 5xx, 429 or a redirect loop: `CrawlPolicy.allows` is false for each), so the screen and the report then say "This site asks crawlers like ours to stay out" for a site that did not answer. Telling the cases apart needs a distinct API code (for example `ROBOTS_UNREACHABLE`) and touches the scoring exclusion and the contract: a founder decision. Also left: a page still slow on the audit's fallback load is caught as `BROWSER_ERROR`, so `TIMEOUT` is close to unreachable (an upstream change to stored codes); on HTTP and unknown codes the body's "An unreachable site…" sits above a more specific note (the same pairing as the report card).
+
+## Found, not fixed
+
+- **Other raw codes on screen**, the same rule in principle, each its own item: the per-check detail codes on ok and partial audits on this screen (`CheckRow`, a deliberate reference-code slot; `FIX_FOR_DETAIL_CODE` words 16 of them, the four lab and field codes have no wording); `Reason: <code>` on the intake classification card (`ClassificationResult.tsx`, a wider code set including provider states whose wording is a product decision); `(<errorCode>)` on an engine result in `ClientPromptsView.tsx`.
+
+## Verified
+
+**Web vitest 1473 → 1490 (+17); floor raised to match.**
+- `ClientTechnicalView.test.tsx` (13 → 30 tests): every failed state shows its sentence exactly once and never the code (`BROWSER_ERROR`, `FETCH_FAILED`, `TIMEOUT`, `HTTP_503`, `HTTP_404`, an unknown code, no code); the two dedicated states keep their copy, show no code, no `Reason:` and no note element; a guard that no failed state renders a code-shaped string (upper case with underscores), over nine `errorCode` values including null, with a self-test that the pattern matches the codes it guards against. The two assertions that pinned `Reason: FETCH_FAILED` and `Reason: ADDRESS_NOT_PUBLIC` now assert the sentence and `not.toContain` the code.
+- **Negative control:** `Reason: ${audit.errorCode}` put back on the generic state fails 13 of the 30 tests; restored and checked with `cmp`. (The implementer ran six more, each restored: the robots or address-not-public `Reason:` back, the robots note repeating its body, the code appended to the sentence, another code as the robots note, no note when there is no code.)
+
+**The rest of the bar** (this tree, one run).
+- API pytest 2367, workers 26, shared-types 53 (0 fail), design-system 875, mypy 47 (ceiling 50).
+- ruff clean; all typechecks clean; the styleguide builds; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`).
+- OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

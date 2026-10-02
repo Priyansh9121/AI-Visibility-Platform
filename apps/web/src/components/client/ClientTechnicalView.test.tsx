@@ -11,7 +11,14 @@ import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ClientTechnicalView, type TechnicalState } from './ClientTechnicalView';
 import type { Client, TechnicalAudit } from '@avp/shared-types';
-import { PARTIAL_AUDIT_LABEL, PARTIAL_AUDIT_NOTE } from '@/lib/report/strings';
+import {
+  AUDIT_FAILURE_GENERIC,
+  AUDIT_FAILURE_SENTENCE,
+  EXCLUSION_REASON,
+  PARTIAL_AUDIT_LABEL,
+  PARTIAL_AUDIT_NOTE,
+  auditFailureSentence,
+} from '@/lib/report/strings';
 import { clientsMe, identifiedClient } from '@/lib/clients/__fixtures__/clients';
 import { threeScanHistory } from '@/lib/client/__fixtures__/history';
 
@@ -93,6 +100,9 @@ const render = (audit: TechnicalAudit | null) => {
   return renderToStaticMarkup(<ClientTechnicalView state={state} me={clientsMe} />);
 };
 
+/** How many times `needle` is said: a sentence the screen repeats reads as a fault. */
+const occurrences = (html: string, needle: string): number => html.split(needle).length - 1;
+
 describe('a partial audit renders as the scored audit it is', () => {
   const html = render(PARTIAL);
 
@@ -121,29 +131,108 @@ describe('a partial audit renders as the scored audit it is', () => {
 });
 
 describe('a failed audit is the only unreadable one', () => {
-  it('says the site could not be read, with its reason and no figures', () => {
+  it('says the site could not be read, with what happened in a sentence and no figures', () => {
     const html = render(FAILED);
     expect(html).toContain('The site could not be read');
-    expect(html).toContain('Reason: FETCH_FAILED');
+    expect(html).toContain(AUDIT_FAILURE_SENTENCE.FETCH_FAILED);
+    expect(html).not.toContain('FETCH_FAILED');
+    expect(html).not.toContain('Reason:');
     expect(html).not.toContain('Pages crawled');
     expect(html).not.toContain('Not measured');
   });
 
-  it('words a robots.txt refusal as the site’s choice, not an unreachable site', () => {
+  it('words a robots.txt refusal as the site’s choice, not an unreachable site, and never as the code', () => {
     const html = render({ ...FAILED, errorCode: 'ROBOTS_DISALLOWED' });
     expect(html).toContain('asks crawlers like ours to stay out');
     expect(html).not.toContain('could not be read');
+    expect(html).not.toContain('ROBOTS_DISALLOWED');
+    expect(html).not.toContain('Reason:');
+    // The body already says why, and where to look next; a note under it that
+    // said it again would be the same sentence twice.
+    expect(occurrences(html, EXCLUSION_REASON.CRAWL_DISALLOWED!.detail)).toBe(1);
+    // No note at all: EmptyState renders an empty note paragraph (and its gap)
+    // for any note that is not null, so an empty string would sneak one back.
+    expect(html).not.toContain('avp-empty__note');
   });
 });
 
 describe('a site whose address is not public', () => {
-  it('says the crawler did not read it, and never mentions robots.txt', () => {
+  it('says the crawler did not read it, never mentions robots.txt, and never prints the code', () => {
     const html = render({ ...FAILED, errorCode: 'ADDRESS_NOT_PUBLIC' });
     expect(html).toContain('Address not public');
     expect(html).toContain('is on a private or reserved network, so the crawler did not read the site');
-    expect(html).toContain('Reason: ADDRESS_NOT_PUBLIC');
+    expect(html).not.toContain('ADDRESS_NOT_PUBLIC');
+    expect(html).not.toContain('Reason:');
     expect(html).not.toContain('robots.txt');
     expect(html).not.toContain('could not be read');
+    expect(occurrences(html, EXCLUSION_REASON.CRAWL_ADDRESS_NOT_PUBLIC!.detail)).toBe(1);
+    expect(html).not.toContain('avp-empty__note');
+  });
+});
+
+describe('a failed audit says what happened in a sentence, and never the code', () => {
+  // The same sentence the report's failed-audit card shows (`auditFailureSentence`,
+  // launch checklist 3.26), one per way the audit can fail.
+  const cases: [code: string, sentence: string][] = [
+    ['BROWSER_ERROR', AUDIT_FAILURE_SENTENCE.BROWSER_ERROR!],
+    ['FETCH_FAILED', AUDIT_FAILURE_SENTENCE.FETCH_FAILED!],
+    ['TIMEOUT', AUDIT_FAILURE_SENTENCE.TIMEOUT!],
+    ['HTTP_503', auditFailureSentence('HTTP_503')],
+    ['SOMETHING_NEW', AUDIT_FAILURE_GENERIC],
+  ];
+
+  it('has a sentence of its own for each code, and the status the crawler saw', () => {
+    expect(new Set(cases.map(([, sentence]) => sentence)).size).toBe(cases.length);
+    expect(auditFailureSentence('HTTP_503')).toContain('HTTP 503');
+    expect(auditFailureSentence('SOMETHING_NEW')).toBe(AUDIT_FAILURE_GENERIC);
+  });
+
+  it.each(cases)('%s: the sentence, once, and not the code', (code, sentence) => {
+    const html = render({ ...FAILED, errorCode: code });
+    expect(html).toContain('The site could not be read');
+    expect(occurrences(html, sentence)).toBe(1);
+    expect(html).not.toContain(code);
+    expect(html).not.toContain('Reason:');
+    expect(html).not.toContain('(HTTP_');
+    expect(html).not.toContain('Pages crawled');
+  });
+
+  it('a failed audit that carries no code says the generic sentence, as the report does', () => {
+    const html = render({ ...FAILED, errorCode: null });
+    expect(html).toContain('The site could not be read');
+    expect(occurrences(html, AUDIT_FAILURE_GENERIC)).toBe(1);
+    expect(html).not.toContain('Reason:');
+  });
+});
+
+describe('no failed state prints a machine code', () => {
+  // ALL_CAPS_WITH_UNDERSCORES is how every audit code is spelled: FETCH_FAILED,
+  // BROWSER_ERROR, HTTP_503, ROBOTS_DISALLOWED, ADDRESS_NOT_PUBLIC. It does not
+  // see a single word, so `TIMEOUT` is also checked by name below.
+  const MACHINE_CODE = /\b[A-Z]{3,}_[A-Z0-9_]+\b/;
+  const codes: (string | null)[] = [
+    'ROBOTS_DISALLOWED',
+    'ADDRESS_NOT_PUBLIC',
+    'BROWSER_ERROR',
+    'FETCH_FAILED',
+    'TIMEOUT',
+    'HTTP_503',
+    'HTTP_404',
+    'SOMETHING_NEW',
+    null,
+  ];
+
+  it('the pattern sees the codes it is guarding against', () => {
+    for (const code of codes.filter((c) => c !== null && c !== 'TIMEOUT')) {
+      expect(`Reason: ${code}`, String(code)).toMatch(MACHINE_CODE);
+    }
+    expect(AUDIT_FAILURE_GENERIC).not.toMatch(MACHINE_CODE);
+  });
+
+  it.each(codes)('errorCode %s', (code) => {
+    const html = render({ ...FAILED, errorCode: code });
+    expect(html.match(MACHINE_CODE)).toBeNull();
+    if (code !== null) expect(html).not.toContain(code);
   });
 });
 
