@@ -56,6 +56,12 @@ type State =
 
 /** Said in place of the button for a scan that failed (3.24); the API refuses it too. */
 const FAILED_SCAN_SENTENCE = 'This scan failed, so its report cannot be shared.';
+/**
+ * Added to it when a link made before the scan failed is still on the scan (3.29). The public
+ * report refuses a failed scan's link like a withdrawn one, so the link stays only to be
+ * withdrawn: no end date is shown for it, and nothing says it works.
+ */
+const FAILED_SCAN_LINK_SENTENCE = 'Its existing link no longer opens the report.';
 
 export function ShareLinkBar({
   scanId,
@@ -82,6 +88,11 @@ export function ShareLinkBar({
   // The API's own sentence once it has refused a mint for a failed scan (409): the bar
   // then shows the failed-scan state, as it does for `scanStatus === 'failed'`.
   const [refusal, setRefusal] = useState<string | null>(null);
+  // A failed scan cannot be shared (3.24), and a link made before it failed no longer opens
+  // its report (3.29), but that link can still be withdrawn (3.25): the sentences replace the
+  // lead and the Get button, and a live link keeps its Withdraw but not its end date, its
+  // field or its Copy. Read by the handlers below as well, so it is settled before them.
+  const failedScan = scanStatus === 'failed' || refusal !== null;
   // The question the Withdraw button answers, so the button can be described by it.
   const questionId = useId();
   // Set when the question is answered without a withdrawal: by "Keep link", and
@@ -144,10 +155,14 @@ export function ShareLinkBar({
         // A 4xx is the API refusing, and its own sentence says why. Anything
         // else (no answer, a proxy's 502, a 5xx) says nothing about the link,
         // which may well still open — and that is what the person needs to know.
+        // Except for a failed scan's (3.29): the API refuses that link whatever
+        // happened here, so "may still open" would be untrue of it.
         error:
           e instanceof Error && !apiWasAway(e)
             ? e.message
-            : 'The link could not be withdrawn and may still open. Try again.',
+            : failedScan
+              ? 'The link could not be withdrawn. Try again.'
+              : 'The link could not be withdrawn and may still open. Try again.',
       });
     }
   }
@@ -172,10 +187,6 @@ export function ShareLinkBar({
     }
   }
 
-  // A failed scan cannot be shared (3.24), but one shared before it failed can
-  // still be withdrawn (3.25): the sentence replaces the lead and the Get
-  // button, and a live link keeps its end date and its Withdraw.
-  const failedScan = scanStatus === 'failed' || refusal !== null;
   // The link known to be live: shown, or being replaced by a mint that is out.
   const live = state.kind === 'ready' ? state : state.kind === 'working' ? state.live : null;
   const withdrawing = state.kind === 'ready' && state.withdraw !== 'idle';
@@ -197,7 +208,7 @@ export function ShareLinkBar({
               className="mt-1 text-ui-sm leading-prose text-text-secondary"
             >
               {failedScan
-                ? `${refusal ?? FAILED_SCAN_SENTENCE}${live ? ' Its existing link works until it is withdrawn or ends.' : ''}`
+                ? `${refusal ?? FAILED_SCAN_SENTENCE}${live ? ` ${FAILED_SCAN_LINK_SENTENCE}` : ''}`
                 : `Creates a link anyone can open without an account. Links last ${counted(RETENTION.shareLinkDays, 'day')} from when they are created. Only share it with the client this report is about.`}
             </p>
           </div>
@@ -213,7 +224,8 @@ export function ShareLinkBar({
           )}
         </div>
 
-        {live !== null && live.expiresAt !== null && (
+        {/* Never for a failed scan: its link is refused, so it does not "work" until anything. */}
+        {!failedScan && live !== null && live.expiresAt !== null && (
           <p className="mt-4 text-ui-sm leading-prose text-text-secondary">
             The link works until {formatStamp(live.expiresAt)}.
           </p>
@@ -229,7 +241,8 @@ export function ShareLinkBar({
 
         {state.kind === 'ready' && (
           <div className="mt-4 flex flex-wrap items-end gap-3">
-            {state.url !== null && (
+            {/* Not for a failed scan: a link made earlier in the visit opens nothing now. */}
+            {!failedScan && state.url !== null && (
               <ReadyLink
                 url={state.url}
                 copied={state.copied}
@@ -253,8 +266,11 @@ export function ShareLinkBar({
         )}
         {state.kind === 'ready' && state.withdraw !== 'idle' && (
           <div className="mt-4 flex flex-wrap items-center gap-3">
+            {/* A failed scan's link opens nothing already, so "will no longer see" would be untrue of it. */}
             <p id={questionId} className="text-ui-sm leading-prose text-text-secondary">
-              Withdraw this link? Anyone who opens it will no longer see the report.
+              {failedScan
+                ? 'Withdraw this link? It will be removed permanently.'
+                : 'Withdraw this link? Anyone who opens it will no longer see the report.'}
             </p>
             <Button
               variant="danger"

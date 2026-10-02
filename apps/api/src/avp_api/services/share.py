@@ -32,6 +32,14 @@ Neither reaches a copy already downloaded. A PDF on someone's disk cannot be
 recalled by anything this module does, and `routers/report.py` says so on the
 route that serves it.
 
+A FAILED SCAN'S LINK — checklist 3.29
+-------------------------------------
+A failed scan cannot be shared (3.24), and a link minted before the scan failed
+is refused like a withdrawn one: `scan_for_share_token` answers None for it, so
+both public routes 404 with nothing to tell it from an unknown token. The token
+itself stays on the row. It is the agency's to withdraw, and its end date is
+still on the signed-in report so the screen can offer Withdraw.
+
 THIS MODULE AND THE LEASE WRITE THE SAME ROW — checked 2026-09-08
 -----------------------------------------------------------------
 Both functions below take `SELECT ... FOR UPDATE` on a `Scan`. The lease
@@ -73,10 +81,16 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import Scan
+from ..errors import FailedScanNotShareable
+from ..models import Scan, ScanStatus
 from ..security import new_share_token
 
 logger = structlog.get_logger(__name__)
+
+# What a refused mint says (checklist 3.24). One sentence in one place: the web shows the
+# API's own detail as it comes, and the route's check before the lock and this module's
+# check under it must not drift into two wordings.
+FAILED_SCAN_NOT_SHAREABLE_DETAIL = "This scan failed, so its report cannot be shared."
 
 # --- how long a share link lives ---------------------------------------------
 # Thirty days, and there is no prior number in this product to anchor to — so
@@ -126,6 +140,16 @@ async def get_or_create_share_token(session: AsyncSession, scan: Scan) -> str:
     second call still returns the same token and still creates nothing — what
     it does is restate the decision to share, which is exactly the signal an
     expiry should listen to.
+
+    **A FAILED scan is refused here too, under the lock** (checklist 3.29,
+    security review). `create_share_link` reads the scan and refuses a failed
+    one before it calls this, but that read is not under this lock: a scan the
+    reaper or a deadline failed in between used to get a link, or have a live
+    link's end pushed out, from a request that had seen it healthy. So the
+    status is read again from the locked row, not from the `scan` handed in,
+    which may be exactly as stale as that route's read, and the route's own 409
+    is raised before anything is written. The request's session rolls back on
+    the way out, which releases the lock.
     """
     locked = (
         await session.execute(
@@ -137,6 +161,11 @@ async def get_or_create_share_token(session: AsyncSession, scan: Scan) -> str:
             .execution_options(populate_existing=True)
         )
     ).scalar_one()
+
+    # Nothing has been written yet, so refusing here leaves the row as it was: no
+    # token minted, no live link's expiry moved.
+    if locked.status is ScanStatus.FAILED:
+        raise FailedScanNotShareable(detail=FAILED_SCAN_NOT_SHAREABLE_DETAIL)
 
     expires_at = datetime.now(UTC) + SHARE_TTL
     if locked.share_token is not None:
@@ -202,20 +231,39 @@ async def scan_for_share_token(session: AsyncSession, token: str) -> Scan | None
     """The scan a public token points at, or None.
 
     **One lookup shape for every rejection.** A malformed token, an unknown
-    token, an empty token, a REVOKED token and an EXPIRED one all take this
-    same path and all return None, so the caller has exactly one thing to say
-    (404) and no branch that could leak which kind of wrong a guess was. There
-    is no shape check in this function: the POST body's `token` is bounded
-    1..512 characters by Pydantic before it gets here, and anything outside
-    that gets a 422 identical for a real token and a made-up one, so the bound
-    reveals nothing about which tokens exist. Within the bound, no charset or
-    length test runs ahead of the lookup, which would answer "was that even a
-    plausible token?" faster than "does it exist?" (a timing oracle).
+    token, an empty token, a REVOKED token, an EXPIRED one and one whose scan
+    FAILED all take this same path and all return None, so the caller has
+    exactly one thing to say (404) and no branch that could leak which kind of
+    wrong a guess was. There is no shape check in this function: the POST
+    body's `token` is bounded 1..512 characters by Pydantic before it gets
+    here, and anything outside that gets a 422 identical for a real token and a
+    made-up one, so the bound reveals nothing about which tokens exist. Within
+    the bound, no charset or length test runs ahead of the lookup, which would
+    answer "was that even a plausible token?" faster than "does it exist?" (a
+    timing oracle).
 
-    Revocation and expiry are NOT special cases of that rule — they are the
-    same rule, which is why the predicate lives in this one query rather than
-    in either route. A revoked token has no row to find at all; an expired one
-    is filtered here. Neither can be told from a token that never existed.
+    Revocation, expiry and a failed scan are NOT special cases of that rule —
+    they are the same rule, which is why the predicate lives in this one query
+    rather than in either route. A revoked token has no row to find at all; an
+    expired one and a failed scan's are found by the token's index and dropped
+    by the rest of the predicate. All of them get the answer a token that never
+    existed gets.
+
+    **A FAILED scan's link is dead, and the token is kept** (checklist 3.29,
+    the founder's decision). A failed scan's score is never shown (3.24), so
+    there is no report worth sending, and a link minted while the scan was still
+    running used to keep serving it without a score. It is refused now, as a
+    withdrawn one is. The token is NOT cleared: the agency's own report still
+    says when it ends (`shareExpiresAt`), so "Withdraw link" stays reachable,
+    and withdrawing is what removes it. The status test belongs in this WHERE
+    clause for the reason the expiry test does: the refusal costs what an
+    expired token costs, one indexed lookup that finds the row and drops it on
+    the rest of the predicate, with no second query. That is a row fetch more
+    than a token nobody was ever given costs, and this does not claim
+    otherwise; what is the same for every kind of miss is the answer. A check
+    made after the lookup would be a further step, taken only for a token that
+    exists and whose scan failed, and a second place for a route to disagree
+    with the other.
 
     **A missing expiry is not "never expires".** The comparison below is
     strict, so NULL never matches, and a token that somehow reached the table
@@ -227,6 +275,7 @@ async def scan_for_share_token(session: AsyncSession, token: str) -> Scan | None
                 Scan.share_token == token,
                 Scan.share_expires_at.is_not(None),
                 Scan.share_expires_at > datetime.now(UTC),
+                Scan.status != ScanStatus.FAILED,
             )
         )
     ).scalar_one_or_none()

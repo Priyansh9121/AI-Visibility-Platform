@@ -832,14 +832,20 @@ class TestSharingAndTheLeaseShareOneRow:
             # un-shared the report it is still producing.
             assert scan.lease_expires_at is not None
 
-    async def test_the_reaper_can_still_take_a_scan_that_is_being_shared(
+    async def test_a_scan_reaped_while_it_is_shared_keeps_its_token_and_its_link_stops_opening(
         self, client: AsyncClient, stub_engines
     ) -> None:  # noqa: ANN001
-        """A shared link does not pin a scan against the reaper.
+        """A shared link does not pin a scan against the reaper, and a reaped scan's link is dead.
 
         Sharing writes `share_token`; reaping reads `lease_expires_at` and
         writes `status`. Neither predicate mentions the other's columns, so a
         report can be shared and its executor still be found dead.
+
+        What the link does afterwards changed with checklist 3.29. This test used
+        to end "and the link still works: reaping is a statement about the
+        executor, not about whether the report may be read". A FAILED scan's link
+        now opens nothing, the way a withdrawn one does; the token stays on the
+        row, so the agency can still withdraw it.
         """
         from datetime import timedelta
 
@@ -867,9 +873,22 @@ class TestSharingAndTheLeaseShareOneRow:
             await s.refresh(scan)
             assert scan.status is ScanStatus.FAILED
             assert scan.error_code == EXECUTOR_LOST
-            # And the link still works: reaping is a statement about the
-            # executor, not about whether the report may be read.
+            # The token is kept, so the agency can still take the link down.
             assert scan.share_token == token
+
+        # The link opens nothing now, and says what a token that never existed says.
+        client.cookies.clear()
+        refused = await _shared(client, token)
+        never = await _shared(client, "A" * 43)
+        assert refused.status_code == never.status_code == 404
+        assert _problem(refused) == _problem(never)
+        assert (await _shared_pdf(client, token)).status_code == 404
+
+        await client.post(
+            f"{BASE}/auth/login",
+            json={"email": "leaseshare3@test.example", "password": "correct-horse-battery-staple"},
+        )
+        assert (await client.delete(f"{BASE}/scans/{sid}/share")).status_code == 204
 
 
 class TestTheTokenIsNotInThePath:

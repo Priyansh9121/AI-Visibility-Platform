@@ -1238,10 +1238,10 @@ export interface paths {
          *       A holder cannot edit the competitor set, re-run the scan, or reach any
          *       other scan — the token resolves to exactly one row.
          *     * **`404` for every rejection, with one code path.** An unknown, revoked or
-         *       expired token is indistinguishable in both status and body. The only
-         *       pre-check is the body's length bound (`422` for an empty or over-512
-         *       token); it says nothing about whether any token is real. Every plausible
-         *       guess pays for the same index lookup.
+         *       expired token, and one whose scan FAILED (3.29), is indistinguishable in
+         *       both status and body. The only pre-check is the body's length bound (`422`
+         *       for an empty or over-512 token); it says nothing about whether any token
+         *       is real. Every plausible guess pays for the same index lookup.
          *     * **The token is in the POST body, not the path**, so it stays out of
          *       request logs.
          *     * **No `401`, ever.** A `401` would say "this token is real, authenticate to
@@ -1302,7 +1302,9 @@ export interface paths {
          *
          *     **A revoked or expired link stops serving files immediately**, on the same
          *     lookup as the JSON route: `scan_for_share_token` returns nothing and this
-         *     route 404s like any other miss. What revocation cannot do is recall a copy
+         *     route 404s like any other miss. So does a link whose scan FAILED (3.29): the
+         *     token is kept for the agency to withdraw, but it opens nothing. What
+         *     revocation cannot do is recall a copy
          *     already on someone's disk, and nothing can — the alternative would be
          *     serving a watermarked or phone-home document, which is a different product
          *     with different privacy properties. So the residual gap is real, bounded,
@@ -1631,7 +1633,12 @@ export interface paths {
          *
          *     **A FAILED scan cannot be shared** (3.24): `409`
          *     `/problems/failed-scan-not-shareable`. Its score is never shown, so there
-         *     is no report to send. PARTIAL and every other status are unchanged.
+         *     is no report to send. PARTIAL and every other status are unchanged. The
+         *     status is read again under the row lock, so a scan that fails while this
+         *     request is in flight is refused the same way and nothing is written. A link
+         *     minted before the scan failed stays on the row, so it can still be
+         *     withdrawn, but it no longer opens the report (3.29): the public routes
+         *     refuse it like a withdrawn one.
          *
          *     **Errors:** `401`, `404` (unknown scan, or another agency's), `409`
          *     (failed scan).
