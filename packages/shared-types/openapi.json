@@ -7618,7 +7618,7 @@
     },
     "/api/v1/scans/{scanId}/score": {
       "get": {
-        "description": "The most recent stored Score for a scan, with the competitor comparison.\n\nThe comparison is recomputed from persisted rows on read rather than stored\n\u2014 it is a pure function of data already in the database, and a second copy\ncould fall out of step with the first.\n\n**A FAILED scan has no score** (3.30, extending 3.24): the same `404` as a scan\nnot yet scored, with the detail \"This scan failed, so it has no score.\",\nwhatever rows the scan kept. They are not read, changed or deleted.\n\n**Errors:** `401`; `404` (unknown scan, another agency's, not yet scored, or\nfailed).",
+        "description": "The most recent stored Score for a scan, with the competitor comparison.\n\nThe comparison and the subject's average position are derived from\npersisted rows on read rather than stored \u2014 they are a pure function of data\nalready in the database, and a second copy could fall out of step with the\nfirst. Reading a score computes no score and writes nothing.\n\n**A FAILED scan has no score** (3.30, extending 3.24): the same `404` as a scan\nnot yet scored, with the detail \"This scan failed, so it has no score.\",\nwhatever rows the scan kept. They are not read, changed or deleted.\n\n**Errors:** `401`; `404` (unknown scan, another agency's, not yet scored, or\nfailed).",
         "operationId": "get_scan_score_api_v1_scans__scanId__score_get",
         "parameters": [
           {

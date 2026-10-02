@@ -1297,8 +1297,10 @@ moves between scans.
 all** — `CompetitorComparison` is derived on read by design
 (`scoring_runner.score_scan`: *"a pure function of rows already persisted, so
 storing it would create a second copy that can fall out of step with the
-first"*). This endpoint calls that same function, so a figure here cannot
-disagree with the same figure on the report for the same scan.
+first"*). This endpoint calls `score_scan(persist=False)`, whose comparison the
+report reads through `scoring_runner.compare_on_read` (a test holds the two
+equal), so a figure here cannot disagree with the same figure on the report for
+the same scan. Nothing is persisted, and so no `scoring.completed` is logged.
 
 Scans that produced no reading (queued, running, failed, cancelled) are excluded
 from `scans` and counted in `scansWithoutData`, so a client with four scans and
@@ -1872,7 +1874,12 @@ while this runs either fails first (`409`) or is scored first and fails after. `
 
 #### `GET /api/v1/scans/{scanId}/score`
 **Auth required.** The most recent stored Score, with the competitor comparison
-recomputed from persisted rows on read.
+and the subject's average position derived from persisted rows on read
+(`scoring_runner.compare_on_read`). Reading a score computes no score, writes
+nothing and logs no `scoring.completed`: that line says a Score was written.
+The rivals' figures are derived by the current formula with the platform's tiers
+as they are at the time of the read; the stored Score is as it was when it was
+scored, under its own `formulaVersion`.
 
 **A `failed` scan has no score** (checklist 3.30, extending 3.24): the same `404
 /problems/not-found` as a scan not yet scored, with `detail` "This scan failed, so
@@ -2084,6 +2091,13 @@ reason differs, so `FORMULA_VERSION` did not change for either.
 rows Epics 3–6 wrote. The only new numbers are aggregates — citation counts per
 domain, mention shares, per-engine coverage — and each is a count over stored
 facts. Makes no provider calls and costs nothing.
+
+**Opening a report is a read.** The competitor comparison (each competitor's
+figures) and `score`'s `averagePosition`, `positionCount` and `competitors` are
+derived on read from the persisted rows, by the same function
+`GET /scans/{scanId}/score` uses (`scoring_runner.compare_on_read`). No score is
+computed or written, and `scoring.completed` is not logged. The same holds for
+the PDF, `POST /reports/shared` and `POST /reports/shared/pdf`.
 
 **Why one endpoint rather than four calls.** The proof beat needs aggregates the
 raw endpoints do not expose. Deriving them client-side means paging

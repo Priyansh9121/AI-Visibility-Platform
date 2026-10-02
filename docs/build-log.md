@@ -22274,3 +22274,64 @@ Drift check (north-star §8): no product layer; the launch plan. Lifecycle phase
 - OpenAPI and `api.gen.ts` regenerate with no change.
 - Over the branch: API 2367 → 2656, web 1473 → 1533, design-system 875 → 935, mypy 47 → 43; workers and shared-types unchanged.
 - Exit codes were read from files.
+
+# Opening a report or a score reads the stored score and no longer re-scores the scan
+
+**2026-10-03, the third entry of the day; branch `pilot-fixes-3`, the founder's brief "honest reports and the remaining pilot decisions" (item R1).** One item, one commit.
+
+**Render: nothing to set. No migration, no dependency or outbound host.** One route description changed (`GET /scans/{scanId}/score`; OpenAPI and `api.gen.ts` regenerated).
+
+Drift check (north-star §8): Layer 1, Delivery (the report, its PDF and the score route) and Layer 3, Insight (the comparison derived on read); lifecycle phase: Activation (Epic 9), a report an agency sends.
+
+## 1. What the investigation found
+
+- **The founder's production fact:** after a scan finished, `scoring.completed` (same `inputs_digest`, `status=scored`) was logged again every time its report was opened, signed in (`GET /scans/{id}/report`) and public (`POST /reports/shared`). The second pilot dry run had already noticed it ("Every report read re-scores… harmless", in "Second pilot dry run — the fixes hold, and the report still says things it cannot back").
+- **Why:** `build_report` (`services/report.py`) and `GET /scans/{scanId}/score` (`routers/scores.py`) called `scoring_runner.score_scan(session, scan, persist=False)`. With `persist=False` it loaded the results, the competitor facts, the audit's Technical Foundation and the platform-wide domain-authority aggregate, ran the whole `compute_score` with its inputs digest, wrote nothing (every write sits under `if persist:`), and logged `scoring.completed` unconditionally. The PDFs and the public routes go through `build_report`; `GET /clients/{id}/history` made the same call once per plotted scan.
+- **No write, proved:** opening the signed-in report and PDF, the public report and PDF, the score and the history three times each leaves every row of every table as it was, every column including `computed_at` and `updated_at`, and Postgres's `xmin`/`xmax` (which move even on a same-value UPDATE or a row lock); a SQL trace shows no INSERT, UPDATE, DELETE or lock. All 27 scans in the dev database were also read on a connection set read-only, which would have raised on any write. Scoring-spec rule 5 held; the log line said otherwise.
+- **What the report needs from a recompute:** only the subject's average position and position count and the per-competitor comparison (mention rate, share of voice, citation strength, positions). The Score row stores none of them, so a computation stays.
+
+## 2. What changed
+
+- **`scoring_runner.compare_on_read(session, scan, score)`** (with a pure `scoring.comparison_from_facts`) computes exactly that from the stored rows: no Score built, no inputs digest, no audit read, the platform tiers read once and only when there are rivals, nothing for a stored `insufficient_data` row, nothing logged. `build_report` and `GET /score` use it.
+- **`score_scan` logs `scoring.completed` only when it saves a Score.** The `persist=False` callers that remain (the history view, three scripts, one test) are silent.
+- **The bodies are unchanged:** the report and score bodies of all 27 dev scans are byte-identical before and after (54 documents, `generatedAt` aside); 800 random fact sets give the same comparison as `compute_score`; ten scan shapes (no competitor set, a struck rival, nothing answered, every dimension excluded…) give the same as the old call.
+- `docs/api-contracts.md`: the score route, the report route and the history note.
+
+## 3. Cost per report view, before → after
+
+On a platform-sized database (6,460 citations), a realistic scan (24 prompts × 3 engines, 392 citations, 5 rivals, an audit), 90 timed views each, while other agents loaded the machine (p95 is noise):
+
+| | before | after |
+|---|---|---|
+| `build_report` view: SQL statements | 22 | 21 |
+| `build_report` view: median / p95 | 31.2 / 78.6 ms | 26.4 / 64.2 ms |
+| `GET /score` view: SQL statements | 11 | 10 |
+| `GET /score` view: median / p95 | 19.2 / 65.5 ms | 16.9 / 59.7 ms |
+| `scoring.completed` lines per view | 1 | 0 |
+
+The replaced step itself: 16.6 → 14.8 ms. Scoring was never the main cost: loading the results (8.5 ms) and the tier aggregate (6.1 ms) are.
+
+## 4. The review
+
+- No security review: no write path changed (the brief asks for one only if a write path changes; the no-write test and the read-only replay say none does). No web change, so no UI review.
+
+## Found, not fixed
+
+- **A rival's Citation Strength in a report is measured when the report is opened, not when the scan was scored**, beside the subject's stored figure. It needs the platform-wide authority tiers, which move with every agency's scans; on one stored scan the rivals read 76.69 / 70.13 / 62.64 / 76.19 / 100.00 with an empty platform and 80.77 / 76.57 / 71.01 / 78.21 / 100.00 after 20 more clients, and a "leads by" gap went from 18.7 to 22.8 with nothing about the scan changed. Rivals are also always computed with the current formula: in the dev data 22 of 25 scored scans show rival figures beside a subject figure from an older definition. Shown on five surfaces (the report table, the "leads on Citation Strength" sentence, the client Competitors view, the PDF, the API). A test pins the drift as a characterisation. Options for the founder: store the comparison at scoring; show it only beside a current-formula score; say in the copy that rival figures are measured when the report is opened; or drop the rival column until the first ships.
+- **`GET /clients/{id}/history`** still runs a full `score_scan(persist=False)` per plotted scan on every view (about 17 ms and 8–9 statements each) and mixes the stored composite with a recomputed share of voice; it no longer logs.
+- **`build_report` loads the results and the competitor set twice** (once for the proof beat, once for the comparison), about 9 ms of 26.
+- **Two test files share one fixed database name** (`test_migrations.py`, `test_enum_constraints.py`: `avp_migration_check`), so two full API runs at once on one Postgres collide; seen while worktrees ran in parallel.
+
+## Verified
+
+**API pytest 2656 → 2680 (+24); floor raised to match.**
+- `tests/test_reads_are_reads.py` (24): the no-write test with two controls that show the snapshot and the trace can fail; no read path reaches scoring or reads the audit; the tier read happens once and only with rivals; the comparison equals what `compute_score` derives (800 fact sets) and what the old call returned (ten scenarios); the bodies are those a re-scoring read gave; no read path logs `scoring.completed`, and a scored scan still logs it once with the same fields.
+- **Negative controls:** on this tree, `scoring.completed` logged unconditionally again fails the two log tests; restored and checked with `cmp`. The implementer's, each restored: the original bug (the old call and the unconditional log) fails 3; the comparison ignoring the tiers, 7; a rival's Citation Strength always included, 3; `compare_on_read` writing and committing the Score, 5; reading the audit, 1.
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, shared-types 53 (0 fail), design-system 935, web 1533, mypy 43 (ceiling 50).
+- ruff clean; all typechecks clean; the styleguide builds; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+- OpenAPI and `api.gen.ts` regenerate with no change from the committed files (one route description changed in this item).
+- Exit codes were read from files.
