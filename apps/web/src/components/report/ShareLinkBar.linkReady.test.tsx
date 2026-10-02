@@ -9,11 +9,19 @@
  * back to Get shareable link, which a browser took off it while it was disabled, so a retry is
  * one key away. A failed scan never reaches this path (no Get button), and the 3.24 and 3.29
  * states are asserted as they were.
+ *
+ * 3.38 then made that message for screen readers only: it is visually hidden
+ * (`avp-visually-hidden`), so a sighted reader sees the date once, in the works-until line. The
+ * tests above read `textContent`, which is the same with or without a stylesheet, so they hold
+ * either way; the last two describes are the ones that pin which element is hidden and which is not.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const shareLink = vi.fn();
 const withdrawShareLink = vi.fn();
@@ -592,5 +600,209 @@ describe('a failed scan never says its link is ready', () => {
       root = null;
       document.body.innerHTML = '';
     }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// 3.38: the ready message is for screen readers. The works-until line already shows the date, so
+// the status line that announces it is visually hidden and a sighted reader sees the date once.
+// jsdom has no stylesheet, so "hidden" is asserted as the design system's class, and the rule
+// behind that class is read from its source in the last describe.
+// ---------------------------------------------------------------------------------------------
+
+const HIDDEN = '.avp-visually-hidden';
+// `fileURLToPath` takes `import.meta.url` as a string: under jsdom the global `URL` is jsdom's,
+// which Node's `fileURLToPath` does not accept as a file URL.
+const COMPONENTS_CSS = readFileSync(
+  join(
+    dirname(fileURLToPath(import.meta.url)),
+    '../../../../../packages/design-system/src/styles/components.css',
+  ),
+  'utf8',
+);
+
+/** What a sighted reader is given: the bar's text with every visually hidden element taken out. */
+function sightedText(el: HTMLElement): string {
+  const clone = el.cloneNode(true) as HTMLElement;
+  for (const hidden of [...clone.querySelectorAll(HIDDEN)]) hidden.remove();
+  return clone.textContent ?? '';
+}
+const times = (text: string, part: string) => text.split(part).length - 1;
+/** The text of every visually hidden element on the bar. */
+const hiddenTexts = (el: HTMLElement) => [...el.querySelectorAll(HIDDEN)].map((h) => h.textContent);
+
+describe('the ready message is for screen readers: a sighted reader sees the date once (3.38)', () => {
+  it('is carried by an element that is visually hidden, inside a status region that is not', async () => {
+    shareLink.mockResolvedValue({ url: URL_, expiresAt: MINTED });
+    const el = mounted();
+    await press(el, 'Get shareable link');
+
+    const region = status(el) as HTMLElement;
+    const carriers = [...region.querySelectorAll('p')].filter((p) => p.textContent === READY);
+    // Not vacuous: the sentence is on the bar, in one element of its own.
+    expect(carriers).toHaveLength(1);
+    expect(carriers[0]!.matches(HIDDEN)).toBe(true);
+    // Clipped, not taken out of what a screen reader is given.
+    expect(carriers[0]!.closest('[aria-hidden="true"], [hidden]')).toBeNull();
+    // It is the text that is hidden: the region, and everything it sits in, is as it was.
+    expect(region.closest(HIDDEN)).toBeNull();
+    expect(region.getAttribute('role')).toBe('status');
+    expect(region.hasAttribute('hidden')).toBe(false);
+    expect(region.hasAttribute('aria-hidden')).toBe(false);
+    expect(region.style.display === 'none' || region.style.visibility === 'hidden').toBe(false);
+  });
+
+  it.each<[string, string | undefined]>([
+    ['from no link', undefined],
+    ['from a live link', LIVE],
+  ])(
+    '%s: the date is on screen once, in the works-until line, and the announcement still carries it',
+    async (_from, shareExpiresAt) => {
+      shareLink.mockResolvedValue({ url: URL_, expiresAt: MINTED });
+      const el = mounted({ shareExpiresAt });
+      await press(el, 'Get shareable link');
+
+      const sighted = sightedText(el);
+      expect(times(sighted, MINTED_STAMP)).toBe(1);
+      expect(sighted).toContain(`The link works until ${MINTED_STAMP}.`);
+      expect(sighted).not.toContain('Link ready');
+      expect(sighted).not.toContain(LIVE_STAMP);
+      // What a screen reader is given is as it was: the sentence, with the date, in the region,
+      // so the date is in the text twice and on the screen once.
+      expect(status(el)?.textContent).toBe(READY);
+      expect(times(el.textContent ?? '', MINTED_STAMP)).toBe(2);
+    },
+  );
+
+  it('the status region is the same element before the mint, after it and after a withdraw, and is never hidden', async () => {
+    shareLink.mockResolvedValue({ url: URL_, expiresAt: MINTED });
+    withdrawShareLink.mockResolvedValue(undefined);
+    const el = mounted();
+    const region = status(el)!;
+    const hidden = (r: Element) =>
+      r.closest(HIDDEN) !== null || r.hasAttribute('hidden') || r.hasAttribute('aria-hidden');
+    expect(region.textContent).toBe('');
+    expect(hidden(region)).toBe(false);
+
+    await press(el, 'Get shareable link');
+    expect(status(el)).toBe(region);
+    expect(region.textContent).toBe(READY);
+    expect(hidden(region)).toBe(false);
+
+    await confirmWithdraw(el);
+    expect(status(el)).toBe(region);
+    expect(region.textContent).toBe(WITHDRAWN);
+    expect(hidden(region)).toBe(false);
+  });
+
+  it.each<[string, string | undefined]>([
+    ['a link just made', undefined],
+    ['a link the page was loaded with', LIVE],
+  ])('the withdrawn message for %s is on screen, not hidden', async (_which, shareExpiresAt) => {
+    shareLink.mockResolvedValue({ url: URL_, expiresAt: MINTED });
+    withdrawShareLink.mockResolvedValue(undefined);
+    const el = mounted({ shareExpiresAt });
+    if (shareExpiresAt === undefined) await press(el, 'Get shareable link');
+    await confirmWithdraw(el);
+
+    const message = [...status(el)!.querySelectorAll('p')].find((p) => p.textContent === WITHDRAWN);
+    // Not vacuous: the message is there, in an element of its own.
+    expect(message).toBeDefined();
+    expect(message!.matches(HIDDEN)).toBe(false);
+    expect(hiddenTexts(el)).toEqual([]);
+    expect(sightedText(el)).toContain(WITHDRAWN);
+    expect(sightedText(el)).not.toContain('Link ready');
+  });
+
+  it('hides only that message: while the link is on the bar it is the one hidden element, and the rest of the bar shows', async () => {
+    shareLink.mockResolvedValue({ url: URL_, expiresAt: MINTED });
+    const el = mounted();
+    await press(el, 'Get shareable link');
+
+    expect(hiddenTexts(el)).toEqual([READY]);
+    // The lead, the works-until line and the field's label are what a sighted reader has.
+    const sighted = sightedText(el);
+    expect(sighted).toContain('Send this report');
+    expect(sighted).toContain('Creates a link anyone can open');
+    expect(sighted).toContain(`The link works until ${MINTED_STAMP}.`);
+    expect(sighted).toContain('Public report link');
+    // Asking the Withdraw question adds text, and none of it is hidden.
+    act(() => button(el, 'Withdraw link')!.click());
+    expect(hiddenTexts(el)).toEqual([READY]);
+    expect(sightedText(el)).toContain(
+      'Withdraw this link? Anyone who opens it will no longer see the report.',
+    );
+  });
+
+  it('a failed mint and a failed withdraw are said on screen: no alert text is hidden', async () => {
+    const MAY_STILL_OPEN = 'The link could not be withdrawn and may still open. Try again.';
+    const el = mounted();
+    await failedMint(el);
+    expect(alert(el)?.textContent).toBe(FAILURE);
+    expect(alert(el)!.querySelector(HIDDEN)).toBeNull();
+    expect(hiddenTexts(el)).toEqual([]);
+    expect(sightedText(el)).toContain(FAILURE);
+
+    shareLink.mockResolvedValue({ url: URL_, expiresAt: MINTED });
+    withdrawShareLink.mockRejectedValue(new TypeError('Failed to fetch'));
+    await press(el, 'Get shareable link');
+    await confirmWithdraw(el);
+    expect(alert(el)?.textContent).toBe(MAY_STILL_OPEN);
+    expect(alert(el)!.querySelector(HIDDEN)).toBeNull();
+    expect(sightedText(el)).toContain(MAY_STILL_OPEN);
+    // Beside it the link is still there, and its ready message is still the one hidden element.
+    expect(hiddenTexts(el)).toEqual([READY]);
+  });
+
+  it('with no end date "Link ready." is hidden too, and nothing on screen gives a date or says the link works', async () => {
+    shareLink.mockResolvedValue({ url: URL_ });
+    const el = mounted();
+    await press(el, 'Get shareable link');
+
+    expect(status(el)?.textContent).toBe('Link ready.');
+    expect(hiddenTexts(el)).toEqual(['Link ready.']);
+    const sighted = sightedText(el);
+    expect(sighted).not.toContain('Link ready');
+    expect(sighted).not.toContain('works until');
+    // What is on screen is the link itself: its field has focus, beside Copy.
+    expect(sighted).toContain('Public report link');
+    expect(document.activeElement).toBe(field(el));
+  });
+
+  it('a failed scan has nothing hidden and nothing announced, and a link made before the page learned it failed leaves with it', async () => {
+    for (const shareExpiresAt of [LIVE, null]) {
+      const el = mounted({ scanStatus: 'failed', shareExpiresAt });
+      expect(hiddenTexts(el)).toEqual([]);
+      expect(status(el)?.textContent).toBe('');
+      act(() => root?.unmount());
+      root = null;
+      document.body.innerHTML = '';
+    }
+
+    shareLink.mockResolvedValue({ url: URL_, expiresAt: MINTED });
+    const el = mounted({ scanStatus: 'partial' });
+    await press(el, 'Get shareable link');
+    // Not vacuous: made, and its message hidden.
+    expect(hiddenTexts(el)).toEqual([READY]);
+    act(() =>
+      root!.render(<ShareLinkBar scanId="scan_01" scanStatus="failed" shareExpiresAt={undefined} />),
+    );
+    expect(hiddenTexts(el)).toEqual([]);
+    expect(status(el)?.textContent).toBe('');
+  });
+});
+
+describe('.avp-visually-hidden clips its text and leaves it in what a screen reader is given (3.38)', () => {
+  it('is not display: none or visibility: hidden, which would silence the live region it is in', () => {
+    const rule = COMPONENTS_CSS.match(/(?:^|\n)\.avp-visually-hidden\s*\{([^}]*)\}/);
+    expect(rule, '.avp-visually-hidden rule missing').not.toBeNull();
+    const body = rule![1]!;
+    // Taken out of the accessibility tree: nothing would be read when the message arrives.
+    expect(body).not.toMatch(/display\s*:\s*none/);
+    expect(body).not.toMatch(/visibility\s*:\s*hidden/);
+    // What makes it hidden to the eye and not to a reader: out of the flow, and clipped.
+    expect(body).toMatch(/position\s*:\s*absolute/);
+    expect(body).toMatch(/overflow\s*:\s*hidden/);
+    expect(body).toMatch(/clip(-path)?\s*:/);
   });
 });

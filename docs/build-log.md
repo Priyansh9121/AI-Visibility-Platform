@@ -22692,3 +22692,45 @@ Drift check (north-star §8): Layer 1, Delivery (the report and its PDF) and Lay
   - The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts` regenerate with no diff against this tree, which carries the new `CrossEngineOut` description.
 - Exit codes were read from files.
+
+# After "Get shareable link" a sighted reader sees the link's end date once; a screen reader still hears "Link ready. It works until …"
+
+**2026-10-03, the tenth entry of the day; branch `pilot-fixes-3`, the founder's brief "honest reports and the remaining pilot decisions" (launch checklist 3.38, its date half).** One item, one commit.
+
+**Render: nothing to set. Web only.**
+
+Drift check (north-star §8): Layer 5, Distribution / Action (the share bar); lifecycle phase: Activation (Epic 9), the moment an agency gets the link it will send.
+
+## 1. What changed
+
+- **Founder decision (final):** keep the "Link ready. It works until <date>." announcement for screen readers but hide it visually, so sighted users see the date once.
+- `ShareLinkBar.tsx`: the message's paragraph carries the design system's `avp-visually-hidden` (absolute, 1×1 px, `clip-path: inset(50%)`; not `display: none` or `visibility: hidden`, which would silence the live region) instead of its visible classes. The `role="status"` region stays in the page and visible, its other message ("Link withdrawn. It no longer opens this report.") and the alerts stay on screen, and 3.33's focus to the link field and Get's description by a failed mint's sentence are unchanged. The end-date-less variant ("Link ready.") is hidden too; the API always sends an end date.
+- After a mint a sighted reader sees the standing "The link works until …" line and the focused, selected link field; the date appears once. In headless Chromium the accessibility tree reads `status > paragraph: Link ready. It works until 20 Nov 2026, 10:00 UTC.`, and the card is the height of a card with no message.
+- No 3.33 test changed: they read `textContent`, which carries no CSS.
+
+## 2. The review
+
+- **UI review (sonnet): PASS WITH NITS.** 4.1.3 met: the text is clipped, not removed, in a region present from the start; the repo already uses the same technique for a status message (the PDF button). Nothing material lost for a sighted user; the class is the design system's full clip pattern; 3.33 unchanged.
+  - **For the founder's deploy check:** a VoiceOver and NVDA pass on the deployed app would settle what no test can (some screen readers drop a polite message when focus moves in the same moment; the date is then still on the standing line). Checklist 1.1e, step 6, says what to look and listen for (the checklist commit at the end of this brief), and 1.1d's step 5 now says the sentence is announced, not shown.
+
+## Found, not fixed
+
+- **The second half of row 3.38:** for a link live on load, the lead still says "Creates a link…" and the busy label "Creating…", though a press now returns the existing link (3.28). Not in this decision.
+- **The date has one voice after a mint:** the polite region. If a screen reader drops that message when focus moves to the field, the person hears the field and the address but not the date, which is then only on the standing line. Describing the field by the standing line (`aria-describedby`) would be a fallback, at the cost of the date being read twice where both are spoken. Not needed for AA; from 3.33, not this change.
+- **Copy → "Copied"** changes only the button's name, which screen readers do not reliably announce; a visually hidden status beside it would.
+- **Two spellings of one thing:** `apps/web` uses Tailwind's `sr-only` in four places and the design system has `avp-visually-hidden`.
+
+## Verified
+
+**Web vitest 1697 → 1708 (+11); floor raised to match.**
+- `ShareLinkBar.linkReady.test.tsx` (+11): the message is carried by a visually hidden element inside a status region that is not hidden; from no link and from a live link the date is on screen once (the bar's text with every hidden element removed) and the announcement still carries it; the region is the same element before a mint, after it and after a withdrawal, never hidden; the withdrawn messages are on screen; only that message is hidden; a failed mint and a failed withdrawal are said on screen; with no end date "Link ready." is hidden too; a failed scan announces nothing; the class is not `display: none` or `visibility: hidden` (read from `components.css`).
+- **Negative controls:** on this tree, the message drawn visibly again (its old classes) fails 7 of the 41 in `ShareLinkBar.linkReady.test.tsx`; restored and checked with `cmp`; the implementer's, each restored: the region hidden instead of its text, 6 fail; the withdrawn message hidden too, 2; the CSS rule turned into `display: none`, `visibility: hidden` or left without `clip-path`, 1 each.
+- **The rest of the bar** (this tree, one run):
+  - Counts: API 3056, workers 26, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass.
+  - Alembic upgrade and check pass on an empty database (no schema change).
+  - The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
