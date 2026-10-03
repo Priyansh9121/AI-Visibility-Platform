@@ -23833,3 +23833,93 @@ The security review passed with nits, and all of them were fixed in a second rou
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# Competitor detection from the button is for paying agencies and the platform operator; a scan's own detection is unchanged
+
+**2026-10-04, the fifth entry of the day; branch `pilot-fixes-5`, the founder's brief "free trial, US$150, usage visibility and pilot guardrails" (item 3.61).** One item, one commit.
+
+**Render: nothing to set.** Where billing is configured (Render has both Stripe settings), an agency without an `active` or `trialing` subscription can no longer press detect once this is deployed. While Render runs on Stripe's test keys, a test card makes any agency `active`, so the gate holds for real only from launch checklist 2.2 (the security review's M1, below).
+
+Drift check (north-star §8): Layer 1, Delivery (who may call a route), reading the plan of §5.3; lifecycle phase: Activation (Epic 9). It protects the SerpApi plan the pilots share: 250 searches a month, used by production too.
+
+## 1. What changed
+
+3.53's review found that the detect route's limit caps each client, not each agency. An account could add clients without a classification call and detect once on each, about six paid searches each time, out of a quota the whole platform shares. The founder's decision: the route is for paying agencies and the operator.
+
+- **The rule** (`scan_allowance.assert_may_run_detection`). A press is allowed when any one of these holds:
+  - billing is not configured: the scan gate's own switch, `gate_enabled`, because nobody could subscribe there;
+  - the agency is paid up (`billing.is_active`: `active` or `trialing`), whichever of its seats presses;
+  - the user is the exempt operator (`is_exempt`: the listed address and a linked Google identity).
+- **The refusal.** Everyone else gets `402 subscription-required` (a new `SubscriptionRequired` in `errors.py`) with one sentence for every case. It names no status and has no code: "Running competitor detection on its own needs an active subscription. A scan still finds a client's competitors the first time it runs." One info line is logged, `competitors.detect.subscription_required`, with `client_id` and `agency_id` only.
+- **Where it sits in the route** (`routers/competitors.py`): after the client is found, so another agency's client is still a 404 whatever the plan. It comes before the client's day is claimed, so a refused press makes no search, opens no scan and spends none of the day.
+  - It reads the stored status and never asks Stripe. It takes no lock and touches no Redis key.
+  - 3.53's once-per-client-per-day limit stays for everyone who is allowed.
+  - A scan's own detection (`ensure_set_for_scan`, inside `POST /clients/{clientId}/scans`) is not this route and is unchanged.
+- **`GET /clients/{clientId}/competitors`'s 404** now ends "A scan runs detection for a client that has none." It used to end "Run detection first.", which pointed at the route.
+- **Two client screens stopped pointing at detection:**
+  - Answer gaps, with no rivals:
+    - Old: "No rivals were detected for this scan, so only this client has a column. Run competitor detection to widen the grid."
+    - New: "No rivals were detected for this scan, or none was named in an answer, so only this client has a column. A rival never detected cannot appear here."
+  - Competitors, no set: the sentence now ends "…and there is nobody to compare." It no longer says "…and there is no field to draw. The report is where a competitor set is detected or named by hand." The report detects nothing, and its editor is drawn only under a table of rivals.
+  - Competitors, an empty list:
+    - Old: "Detection ran and found nobody it was confident enough to name. The report is where a competitor set can be named by hand."
+    - New: "This scan’s competitor list is empty, so there is nobody to compare."
+  - The "Detection status: <code>" note is gone, because it printed the API's code.
+- **Docs and comments:**
+  - `docs/api-contracts.md`: the new problem type, the route's section and its errors, and the 404's sentence.
+  - The billing section's "**These endpoints gate nothing.**" paragraph, untrue since the scan allowance of 2026-09-28, now says what the stored status gates.
+  - Docstrings in `scan_allowance.py` (a new section, "DETECTION FROM THE BUTTON IS FOR THE PLAN"), `billing.py` and `models/tenancy.py`.
+  - OpenAPI and `api.gen.ts` are regenerated.
+
+## 2. The review
+
+**Security review: passed with nits.**
+- **M1, for the founder.** Render runs Stripe's test keys, so anyone who checks out with a test card becomes `active`. The gate, like the scan allowance, holds only from 2.2. Options:
+  - keep the route operator-only until live keys are in;
+  - accept it while the pilots are free;
+  - or record each subscription's `livemode` from the verified webhook and count only live ones in production.
+- **L1, accepted:** a paying agency and the operator are still capped per client, not per agency.
+- **L2:** built in P2 (`billing.half_configured`).
+- **L3:** `trialing` counts as paid, as the founder decided; the trial takes a card.
+- **L4, older than this item:** signing in with Google links a password account by its verified email and keeps the password and its sessions.
+- **Nit:** `scan_allowance.py`'s docstring was also edited by P2. Merged by hand, keeping both.
+
+**UI review: passed with nits.** Every new sentence is true against the API.
+- No dropped element was an accessibility affordance: the status note was a plain paragraph.
+- No class, token or markup changed.
+- Two nits, both taken:
+  - "no field to draw" used the screen's own word for a heading the reader of an empty state has not seen. It now says "nobody to compare", as the screen's other empty state does.
+  - One test's title said the opposite of its assertion, and is renamed.
+- A third, about the landing page's "survives every later re-detection", goes to 3.63, which owns that page's copy.
+
+## Found, not fixed
+
+- **An empty competitor set is permanent** (for the founder). A later scan carries it forward. The report's editor is drawn only under a table of rivals. The detect route is now for paying agencies. So an unpaid agency whose first detection found nobody has no way to get a set. Options:
+  - carry forward only a set with rivals in it;
+  - an editor for an empty set;
+  - allow one re-detect.
+- **Copy in the same family that is still not true:**
+  - the competitor editor says "Saving an empty list clears the set … until the scan is run again", but a later scan carries the empty set forward;
+  - the report's empty card shows the `no_signal` wording for any empty list, one emptied by hand included.
+- **A stale comment:** `models/tenancy.py`'s subscription header still says "NULL is the correct, expected state for every agency that exists today".
+
+## Verified
+
+**API pytest 3561 → 3588 (+27) and web vitest 1852 → 1859 (+7); floors raised to match.** One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **New tests:**
+  - `test_detect_needs_plan.py` (25): each status refused or allowed, the operator, billing not configured, the order against the 404 and against the day, the log line, no Stripe call;
+  - `test_competitor_endpoints.py` (+2);
+  - the two screens' tests (+7).
+- **On this tree:** `routers/competitors.py`, `scan_allowance.py`, `errors.py` and the two screens back to `HEAD`.
+  - The two API files fail 19 of 59.
+  - The two screens' tests fail 8 of 58.
+  - All restored and checked with `cmp`.
+- **The first full run had one failure outside this item.** In `test_crawler_access.py` a sign-up answered 503 (`auth.rate_limit.unavailable`): Redis did not answer within its 2 s socket timeout while the Mac was swapping under parallel test runs (Redis's slow log showed 10 to 50 ms commands). The file passes alone (17 of 17), and the whole bar was run again.
+- **The rest of the bar** (this tree, the second run):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `f45983cfa5e3`) and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts`, regenerated in this commit, regenerate again with no change.
+- Exit codes were read from files.

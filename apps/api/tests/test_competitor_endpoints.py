@@ -6,13 +6,22 @@ and the API contract without paid SerpApi searches or model calls.
 
 from __future__ import annotations
 
+import pytest
 from httpx import AsyncClient
 
 from avp_api.services import competitors as detection
+from avp_api.services import scan_runner
 from avp_api.services.cocitation import CoCitationHit, CoCitationResult
 from avp_api.services.serp import SerpHit, SerpResult
 
 BASE = "/api/v1"
+# What `GET` and `PUT /clients/{clientId}/competitors` say for a client with no set on any
+# scan. Whole, so a change to what a caller reads has to change this test. It tells nobody
+# to press the detect route, which only paying agencies may (launch checklist 3.61).
+NO_SET = (
+    "No competitor set for this client yet. "
+    "A scan runs detection for a client that has none."
+)
 
 
 async def _sign_up(client: AsyncClient, email: str = "comp@test.example") -> None:
@@ -220,12 +229,17 @@ class TestReads:
         ranks = [c["rank"] for c in body["competitors"]]
         assert ranks == sorted(ranks)
 
-    async def test_get_before_detection_is_404(self, client: AsyncClient) -> None:
+    async def test_get_before_a_set_exists_is_404(self, client: AsyncClient) -> None:
         await _sign_up(client)
         cid = await _make_client(client)
         resp = await client.get(f"{BASE}/clients/{cid}/competitors")
         assert resp.status_code == 404
-        assert "Run detection first" in resp.json()["detail"]
+        assert resp.headers["content-type"].startswith("application/problem+json")
+        assert resp.json()["type"] == "/problems/not-found"
+        assert resp.json()["detail"] == NO_SET
+        # True for every caller: an agency that may not press the detect route reads this
+        # too, so it says nothing of the kind.
+        assert "Run detection" not in resp.json()["detail"]
 
     async def test_another_agency_cannot_read_the_set(
         self, client: AsyncClient, stub_discovery
@@ -243,6 +257,55 @@ class TestReads:
         async with Second(transport=transport, base_url="http://testserver") as other:
             await _sign_up(other, "two@iso.example")
             assert (await other.get(f"{BASE}/clients/{cid}/competitors")).status_code == 404
+
+
+class TestAClientWithNoSetYet:
+    """What `GET` and `PUT` say before any scan has made a set, and what makes one.
+
+    The sentence names the thing that makes a set — a scan, which runs detection for a
+    client that has none — so each half is pinned here: the 404 on both routes, that the
+    refused `PUT` writes nothing, and that a scan really does end it.
+    """
+
+    async def test_put_before_a_set_exists_is_404_with_the_same_sentence(
+        self, client: AsyncClient
+    ) -> None:
+        await _sign_up(client)
+        cid = await _make_client(client)
+
+        resp = await client.put(
+            f"{BASE}/clients/{cid}/competitors",
+            json={"competitors": [{"name": "Zendesk", "domain": "zendesk.com"}]},
+        )
+
+        assert resp.status_code == 404, resp.text
+        assert resp.json()["type"] == "/problems/not-found"
+        assert resp.json()["detail"] == NO_SET
+        # Nothing was made by the refusal: naming rivals by hand does not start a set.
+        assert (await client.get(f"{BASE}/clients/{cid}/competitors")).status_code == 404
+
+    async def test_a_scan_is_what_ends_the_404(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The sentence's second half is true: a scan runs detection for a client with none."""
+        await _sign_up(client)
+        cid = await _make_client(client)
+        assert (await client.get(f"{BASE}/clients/{cid}/competitors")).status_code == 404
+
+        async def no_engines(*args, **kwargs) -> None:  # noqa: ANN002, ANN003, ARG001
+            # The competitor-set phase is the one under test and it comes first; the engine
+            # loop would otherwise call the real providers.
+            return None
+
+        monkeypatch.setattr(scan_runner, "run_scan", no_engines)
+        started = await client.post(f"{BASE}/clients/{cid}/scans", json={})
+        assert started.status_code == 202, started.text
+
+        found = await client.get(f"{BASE}/clients/{cid}/competitors")
+        assert found.status_code == 200, found.text
+        # The scan's own set, with rivals the (stubbed) detection found.
+        assert found.json()["scanId"] == started.json()["id"]
+        assert found.json()["competitors"] != []
 
 
 class TestSerpGateEndToEnd:

@@ -982,20 +982,35 @@ export interface paths {
          *     model calls, so it is explicitly operator-triggered rather than implicit in
          *     intake — an accidental re-detection costs money.
          *
-         *     **Once per client per 24 hours** (2026-10-03, launch checklist 3.53). The day is
-         *     taken when a run starts, so a run that then fails still counts: its searches may
-         *     already be spent. Checked after the client is found, so another agency's client is
-         *     still a `404` and cannot spend this client's day, and before anything is done.
-         *     Another client of the same agency has its own day. A scan's own detection, for a
-         *     client with no competitor set yet, is never refused by this limit and does not use
-         *     the day up; neither does replacing the set by hand with `PUT`.
+         *     **For paying agencies since 2026-10-04** (launch checklist 3.61, the founder's
+         *     decision). The 24-hour limit below caps a client, not an agency, and every run is
+         *     paid searches, so the route is for an agency whose subscription is `active` or
+         *     `trialing`, and for the platform operator (a listed address with a linked Google
+         *     identity, the scan allowance's own exemption). Anyone else is refused with
+         *     `402 subscription-required` and one plain sentence that names no status and no code.
+         *     Where billing is not configured the route stays open, as the scan allowance does. It
+         *     is checked after the client is found, so another agency's client is still a `404`
+         *     whatever the caller's plan, and before the day below is taken, so a refused press
+         *     spends none of the client's day: no search is made and no scan is opened. A scan's own
+         *     detection is not this route and is unaffected: a client with no competitor set gets
+         *     one when it is first scanned, on any plan.
+         *
+         *     **Once per client per 24 hours** (2026-10-03, launch checklist 3.53), for those who
+         *     are allowed. The day is taken when a run starts, so a run that then fails still
+         *     counts: its searches may already be spent. Checked after the client is found, so
+         *     another agency's client is still a `404` and cannot spend this client's day, and
+         *     before anything is done. Another client of the same agency has its own day. A scan's
+         *     own detection, for a client with no competitor set yet, is never refused by this
+         *     limit and does not use the day up; neither does replacing the set by hand with `PUT`.
          *
          *     Competitors an operator marked as overrides are preserved across runs.
          *
-         *     **Errors:** `401 authentication-required`; `404 not-found`; `429 rate-limited` (with
-         *     `Retry-After`, the whole seconds left in the 24 hours): "Competitor detection already
-         *     ran for this client in the last 24 hours. It can run again in about N hours." (the
-         *     last hour reads "in under an hour"); `503 service-unavailable` (Redis cannot say
+         *     **Errors:** `401 authentication-required`; `402 subscription-required` ("Running
+         *     competitor detection on its own needs an active subscription. A scan still finds a
+         *     client's competitors the first time it runs."); `404 not-found`; `429 rate-limited`
+         *     (with `Retry-After`, the whole seconds left in the 24 hours): "Competitor detection
+         *     already ran for this client in the last 24 hours. It can run again in about N hours."
+         *     (the last hour reads "in under an hour"); `503 service-unavailable` (Redis cannot say
          *     whether the day is taken, so nothing runs).
          */
         post: operations["detect_competitors_api_v1_clients__clientId__competitors_detect_post"];
