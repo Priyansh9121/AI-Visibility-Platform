@@ -24079,3 +24079,86 @@ Fixed in a second round:
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# Intake refuses a website whose name is not a valid hostname, in plain words that quote nothing that was typed
+
+**2026-10-04, the eighth entry of the day; branch `pilot-fixes-5`, the founder's brief "free trial, US$150, usage visibility and pilot guardrails" (item 3.67).** One item, one commit.
+
+**Render: nothing to set.** One dependency is now declared, `idna`. It was already installed and locked at 3.19 through httpx, and its version does not change.
+
+Drift check (north-star §8): Layer 0, Trust (only a name DNS would carry reaches the crawler, a search or a prompt), at Layer 1's intake; lifecycle phase: Activation (Epic 9), the first thing an agency types.
+
+## 1. What changed
+
+S1's security review found that intake took a client's domain without checking that every label is a hostname label (Low). Now `services/intake.py` checks the host of the typed address, every label of it, subdomains included, before anything is stored or fetched. It checks the stored registrable domain again.
+
+- **What a name may be** (`encode_hostname`):
+  - each label is 1 to 63 characters of a–z, 0–9 and `-`, with no hyphen at either end;
+  - the whole name is at most 253 characters, and one trailing dot (the root) is dropped;
+  - a label with a non-ASCII character is encoded with the `idna` package (IDNA 2008, strict: refused rather than mapped). It is the package httpx uses for the robots.txt request; pages are fetched by Chromium from `https://{domain}`;
+  - a label typed as punycode (`xn--…`) must decode and re-encode to itself, so an emoji name is refused in both spellings;
+  - a name or label too long is refused before any encoding, so the cost of a long input is bounded.
+- **What is stored is unchanged:** the registrable domain, lower-case, and Unicode for an internationalised name (`bücher.de`). A name typed as punycode is kept as typed.
+- **Two refusals, both `409 invalid-url`, and neither quotes anything typed:**
+  - a host that is not a valid name: "That is not a valid website name. Names can only contain letters, numbers and hyphens, with dots between the parts. Enter an address such as example.com.";
+  - an address with no public domain (an IP address, `localhost`, a bare suffix): "That address does not contain a public domain name. Enter a website address such as example.com." It used to begin with the typed address in quotes, so a typed user name and password came back in the 409's body.
+- **The dependency:** `idna>=3.10,<4` in `apps/api/pyproject.toml` (BSD-3-Clause), with both uv locks updated and no version changed. It is classified in the providers fixture as a library that contacts nothing.
+- **Docs:** `docs/api-contracts.md`'s `invalid-url` row, `POST /clients`' errors, and a dated paragraph with both sentences.
+- **Web:** the intake form's test fixture carries the new sentence.
+
+## 2. The review
+
+**Security review: passed with nits** (no Critical, High or Medium). Nothing the check accepts reaches the crawler, a search or a prompt as anything but a plain hostname:
+- IP literals in every notation have no public suffix;
+- userinfo, ports and paths are cut off;
+- percent-encoding, control, zero-width and bidi characters are refused;
+- the egress guard still checks every address actually connected.
+
+Fixed in a third round:
+- **L1:** the "public domain" refusal echoed the input. It now quotes nothing, and a test puts a marker in the user name, path and query of 13 refused inputs and finds it in no problem member.
+- **L2:** an `xn--` label was never decoded.
+- **L3:** there was no length cap before encoding. Tests count zero `idna.encode` calls for a 2,000-character label and for 1,000 short labels.
+- **L6:** a docstring said httpx makes every request the crawler sends.
+
+**For the founder, not built:**
+- **D1:** mixed-script look-alike names are accepted and stored as Unicode. Options:
+  - keep accepting them;
+  - refuse labels that mix scripts;
+  - show the punycode beside the Unicode name on reports and share links.
+- **D2:** one internationalised site can be two clients (`bücher.de` and `xn--bcher-kva.de`). An IDN client also gets no "owned" credit for a citation whose URL carries the other spelling. Fix: store or compare one canonical form.
+- **D4, a design question outside this item:** Tier B's platform authority list excludes every agency's competitor rows, manual and suppressed ones included. One agency's lists therefore change the tier used for every agency's Citation Strength.
+- **D6:** subdomain labels are held to the same rule, so `my_shop.example.com` is refused although only `example.com` would be kept.
+
+## Found, not fixed
+
+- **Domains still unchecked:**
+  - A competitor's domain typed through `PUT /clients/{clientId}/competitors` is only stripped, lower-cased and capped at 253. It reaches the fix generator's prompt, the report and share links, and citation typing.
+  - A domain a model proposes in co-citation only goes through `registrable_domain`.
+  - Neither is crawled or searched.
+- **Clients stored before this change are never re-checked.** A read-only count on production would show whether any name fails the rule.
+- **Case mapping:** `str.lower()` is not UTS-46's mapping (capital ẞ, the Greek final sigma), so an all-capitals German or Greek name can be stored as a different name from the one a browser would open. It is then used consistently.
+
+## Verified
+
+**API pytest 3836 → 4084 (+248); floor raised to match.** Web is unchanged at 1859: one fixture row changed. One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **`test_intake_hostname.py` (248):**
+  - every refusal and its exact sentence;
+  - the problem's shape with no code;
+  - at the endpoint, with classification on and off: nothing fetched, nothing stored;
+  - IDN encoding agrees with httpx's;
+  - punycode labels, the length bounds, and the marker test above;
+  - a fuzz of 6,000 seeded inputs: 819 accepted and 5,181 refused, only ever with one of the two sentences. It covers bidi controls, BOM, joiners, combining marks and right-to-left letters; IDNA 2008 accepts a wholly right-to-left label such as `אבג.com`.
+- **The implementer's negative controls,** each restored and checked:
+  - the echo put back: 25 fail;
+  - the `xn--` check off: 34;
+  - each length guard removed: 1 each, 3 with both;
+  - the providers fixture line removed: `providers.test.ts` fails.
+- **On this tree:** with `intake.py` back to `HEAD`, `test_intake_hostname.py` cannot be collected (it imports `encode_hostname`). With the check turned into a no-op (`_require_hostname` returning at once), 104 of its 248 fail. Restored and checked with `cmp`.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass (66 and 81 packages, `idna` 3.19 in both), and Alembic upgrade (to `f45983cfa5e3`) and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments (65 and 80 distributions; `idna` BSD-3-Clause), and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
