@@ -1,0 +1,28 @@
+{
+  "id": "clnt_00000000000000000000000000",
+  "agencyId": "agcy_00000000000000000000000000",
+  "name": "prospect-site.com",
+  "domain": "prospect-site.com",
+  "kind": "prospect",
+  "industry": null,
+  "industryNiche": null,
+  "brandName": null,
+  "classificationStatus": "unclassifiable",
+  "classificationReasonCode": "ROBOTS_UNREACHABLE",
+  "industryConfidence": null,
+  "industryConfidenceScore": null,
+  "classifiedAt": "2026-01-01T00:00:00Z",
+  "classifierModel": "claude-opus-5",
+  "createdAt": "2026-01-01T00:00:00Z",
+  "updatedAt": "2026-01-01T00:00:00Z",
+  "crawl": {
+    "pagesFetched": 0,
+    "urlsFetched": [],
+    "schemaTypes": [],
+    "wordCount": 0,
+    "h1Count": 0,
+    "hasTitle": false,
+    "hasMetaDescription": false,
+    "detectedLanguage": null
+  }
+}

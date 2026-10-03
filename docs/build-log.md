@@ -23614,3 +23614,58 @@ The founder's facts (2026-10-03):
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# A test proves the intake card says the crawler got no usable answer when a site's robots.txt does not answer, from the API's real response to the card
+
+**2026-10-04, the second entry of the day; branch `pilot-fixes-4`, the founder's brief "search accuracy, guardrails and pilot hardening" (item T1).** One item, one commit.
+
+**Render: nothing to set. Tests, a fixture and screenshots only; no product code.**
+
+Drift check (north-star §8): Layer 1, Delivery (the intake card), reading Layer 2's crawl; lifecycle phase: Activation (Epic 9), the first thing an agency sees after adding a client. It replaces the manual check in 1.1e step 5.
+
+## 1. What changed
+
+Both halves were tested, but separately. The API's tests (`test_robots_obeyed.py`) show intake of a site whose robots.txt does not answer returns `classificationReasonCode: ROBOTS_UNREACHABLE`. The card's test (`ClassificationResult.test.tsx`) renders the card given that code. Nothing tied the two: a change to the response's shape or code would have left both suites green while the card said something else.
+
+- **One fixture both suites read:** `packages/shared-types/fixtures/intake-robots-unreachable.json`, the real `POST /api/v1/clients` body for such a site.
+  - Its ids and times are replaced by fixed placeholders, after their shapes are checked.
+  - The API test writes it under `AVP_WRITE_FIXTURES=1`, because the API owns the body; a normal run asserts equality.
+- **The API test** (`tests/test_intake_robots_unreachable.py`, 10 tests):
+  - it signs up and posts `prospect-site.com`, with robots.txt timing out on the read (the suite's `robots_web` fake) and a browser stand-in that raises if the crawler starts one;
+  - it asserts 201, `unclassifiable`, `ROBOTS_UNREACHABLE`, no industry and only `/robots.txt` fetched;
+  - it asserts the normalised body equals the fixture;
+  - nine more prove the normaliser refuses a malformed id or time, so it cannot hide a shape change.
+- **The web test** (`src/app/intakeRobotsUnreachable.test.tsx`, 7 tests):
+  - it mounts the real intake page (`app/page.tsx`) in jsdom, with only `fetch` stubbed, the intake call answered with the fixture's bytes;
+  - it types the site and submits;
+  - it reads the card: the 3.41 heading, sentence and advice exactly (written out, not imported from the strings file), no upper-case code anywhere, not the "asks crawlers to stay out" wording, and no Run a scan.
+- **Screenshots:** `docs/screenshots/robots-unreachable-2026-10-03/card-light.png` and `card-dark.png`.
+  - The card from the real page, with the compiled design-system CSS and the real fonts.
+  - Visible text in both themes: "We could not read this site." / "The crawler tried to read the robots.txt of this site, or of an address the site sent it to, and did not get a usable answer. It obeys robots.txt, so without that answer it did not read the site. Check that the address is right and the site opens in a browser, then try again." / "Could not classify", with no code.
+
+## Found, not fixed
+
+- **A client whose crawl was refused still records `classifierModel` and `classifiedAt`,** though no model was called: `apply_outcome` copies the classifier's default model. No screen reads either field. A change of `CLASSIFIER_MODEL` will also need the fixture regenerated.
+- **The card shows "What we read: 0 pages · 0 words"** under "it did not read the site": true, and redundant (a copy decision).
+
+## Verified
+
+**API pytest 3406 → 3416 (+10) and web vitest 1842 → 1849 (+7); floors raised to match.** One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **Negative controls** (the implementer's, each restored and checked by hash):
+  - the fixture's code changed to `ROBOTS_DISALLOWED`: 3 web tests fail, and the API's equality test;
+  - the API made to return `ROBOTS_DISALLOWED` (`RobotsGate.refusal_code`): the API test fails;
+  - the fixture's field renamed (a shape change): 3 web tests fail;
+  - the card dropping its advice: 1 fails;
+  - the card printing `Reason: <code>`: 2 fail;
+  - another code printed: 1 fails;
+  - the page dropping the code between the request and the card: 1 fails (a bare-card render would not catch it, which is why the page is mounted);
+  - the API answering 500: the setup fails loudly, so no assertion passes on an empty card.
+- **On this tree:** the fixture's `classificationReasonCode` set to `ROBOTS_DISALLOWED` makes the API's equality test fail (1 of its 10) and 3 of the 7 web tests fail. Restored and checked with `cmp`.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
