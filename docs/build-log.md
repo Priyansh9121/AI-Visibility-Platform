@@ -23923,3 +23923,38 @@ Drift check (north-star §8): Layer 1, Delivery (who may call a route), reading 
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts`, regenerated in this commit, regenerate again with no change.
 - Exit codes were read from files.
+
+# The terms and privacy pages say they were last updated on 2026-10-04, the day the terms' price changed
+
+**2026-10-04, the sixth entry of the day; branch `pilot-fixes-5`, the founder's brief "free trial, US$150, usage visibility and pilot guardrails" (a follow-up to P2, from its UI review).** One commit.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 1, Delivery (what `/terms` and `/privacy` say), under Layer 0's facts-only rule; lifecycle phase: Activation (Epic 9), the pages a pilot agency reads before it pays.
+
+## 1. What changed
+
+- **The date.** `LEGAL_UPDATED` in `apps/web/src/lib/legal/operator.ts` goes from `'2026-09-29'` to `'2026-10-04'`. Both pages print it at the top: "Last updated 4 Oct 2026."
+- **Why.**
+  - The terms say "When these terms change, the date at the top changes with them."
+  - P2 (`bc00748`) changed the plan's price on the terms to US$150 and left the date at 29 Sep 2026, so that sentence was not true. The UI review found it.
+  - The privacy page's cookie wording had also changed on 2026-10-02 (`94378fe`, `e39a2c2`) without a new date. One shared date covers both pages, so one change makes both true.
+- **The test.** `legalPages.test.tsx` pins the new date.
+
+## Found, not fixed
+
+- **One date for two pages** (for the founder, with the lawyer review in 2.4). If each page should carry its own date, that is a design change.
+- **Nothing fails a change to a page that leaves the date alone.** The pin only proves the date is the one written in the test.
+
+## Verified
+
+**Counts unchanged:** API 3588, web 1859. No test was added; one pin changed.
+- **On this tree:** the old date put back makes the pin fail (2 of the file's 18: one test per page). Restored and checked with `cmp`.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `f45983cfa5e3`) and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

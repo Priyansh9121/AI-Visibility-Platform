@@ -72,7 +72,7 @@ describe('both pages render signed out, from the landing page’s own parts', ()
     // The footer, linking both pages.
     expect(rendered.html).toContain('href="/privacy"');
     expect(rendered.html).toContain('href="/terms"');
-    expect(rendered.text).toContain('Last updated 29 Sep 2026.');
+    expect(rendered.text).toContain('Last updated 4 Oct 2026.');
   });
 
   it('no module either page is built from can reach the session API', () => {
