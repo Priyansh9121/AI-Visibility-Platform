@@ -190,6 +190,11 @@ probe goes to the **web** host: that is the path every real request takes.
    the service logs `auth.rate_limit.ip_header_missing`, requests are
    arriving without the header and are sharing one bucket; undo step 4.
 
+**Rotating `APP_SECRET`** renames every rate-limit key (each ends in a hash keyed
+with it), so it resets every login, sign-up, reset and change-password window and
+every client's 24-hour detection day. For the same reason a client's detection day
+cannot be cleared by hand without that secret.
+
 ## If the logs show a second Stripe subscription
 
 Checkout refuses a new subscription while one is live, expires older open

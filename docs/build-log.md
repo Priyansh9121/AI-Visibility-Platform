@@ -22971,3 +22971,94 @@ Drift check (north-star §8): Layer 2, Measurement (competitor search); lifecycl
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# Competitor detection from its route runs once per client per 24 hours; a scan's own detection is never limited
+
+**2026-10-03, the fifteenth entry of the day; branch `pilot-fixes-4`, the founder's brief "search accuracy, guardrails and pilot hardening" (launch checklist 3.53).** One item, one commit.
+
+**Render: nothing to set (no setting, schema, dependency or outbound host).** The route `POST /clients/{clientId}/competitors/detect` gains two answers: 429 `rate-limited` and 503 `service-unavailable`. Its request and response shapes are unchanged, and `docs/api-contracts.md` and the generated contract are updated.
+
+Drift check (north-star §8): Layer 1, Delivery (a route's limit); lifecycle phase: Activation (Epic 9). It protects the SerpApi plan the pilots share: 250 searches a month, used by production too.
+
+## 1. What changed
+
+- **The founder's decision:** once per client per day from the button, and always allowed as part of a scan.
+- **`services/rate_limit.py` `claim_detection`:**
+  - **The key:** one per client, `rl:detect_competitors:client:<digest>`, keyed with `APP_SECRET` like the other `rl:` keys, so no client id appears in Redis.
+  - **The claim is one Lua step:** `SET NX PX 86400000`, else the time left. A key that somehow has no expiry is given one, never kept for good.
+  - **A refusal:** 429 `rate-limited`, `Retry-After` in whole seconds (rounded up, at least 1), and the sentence "Competitor detection already ran for this client in the last 24 hours. It can run again in about N hours." N is rounded up, so nobody is sent back early. The last hour reads "in under an hour", and exactly one hour "in about an hour".
+  - **The words "ran" and not "were detected":** a counted run may have failed.
+  - **A Redis error:** 503 and no detection (fails closed: the route spends paid searches, and a signed-in request already needs Redis for its session).
+- **The route** claims after `get_client`, so another agency's client is still a 404 and cannot spend or see the day, and before any work.
+  - A run that then fails still counts, because its searches may already be spent.
+  - Its docstring (the OpenAPI description) states the limit and the errors (401, 404, 429, 503).
+- **Scans never call the claim:** a scan's detection neither waits for the day nor spends it.
+- **Logs:**
+  - a refusal logs `competitors.detect.rate_limited` with `client_id`, `agency_id` and `retry_after_s`, so a burst across one agency's clients shows as one agency;
+  - Redis failing logs `competitors.detect.rate_limit_unavailable` with no fields;
+  - an allowed run logs nothing new.
+- **Tests that press the route twice on purpose:** 11 now pass a day between presses (a new `a_day_passes` fixture deletes the client's key). Two of them would have passed without detecting a second time; both now assert the second run.
+- **`docs/runbook.md`:** rotating `APP_SECRET` renames every rate-limit key, which resets every login, sign-up, reset and change-password window and every client's detection day. A client's day cannot be cleared by hand without that secret.
+- **No web change.** No screen calls this route: from the web, detection runs only inside a scan. The 429's sentence is ready for a button, if the founder wants one.
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS.** Checked clean:
+  - tenancy, including the 404/429 order;
+  - the atomic claim, tested with 20 claims at once;
+  - fail-closed;
+  - the log fields;
+  - no collision with the login limiter's keys;
+  - `Retry-After`;
+  - the Origin check covering the POST;
+  - that only this route and a scan reach detection.
+- **Taken:** 401 added to the route's documented errors; `agency_id` on the refusal line; the runbook line on `APP_SECRET`.
+- **Medium, a recommendation beyond the founder's decision (for the founder):** the per-client day does not cap a whole agency. Clients can be added without a classification call, so one free account could still spend many searches in a day across many new clients. The smallest fix needs no new number: allow the route only to a user with a verified identity or an agency with an active plan, the same rule the free scan uses. A per-agency or platform-wide daily count is the alternative.
+- **Low:** a client's day lasts only as long as Redis keeps its key. The eviction policy is now `noeviction` (checklist 3.4), but the Free plan keeps no data across a restart.
+
+## Found, not fixed
+
+- **The agency-wide cap or identity gate** (the Medium above): the founder decides.
+- **A Redis error after the claim's script ran** leaves the day spent though nothing ran (fail-closed, no retry). Rare.
+- **`tests/test_answer_gaps.py`** presses the route once per scan to stand in for a scan's own detection; calling `ensure_set_for_scan` would be truer.
+
+## Verified
+
+**API pytest 3201 → 3234 (+33); floor raised to match.** One test is skipped on macOS as before: it reads Linux's `/proc`.
+- `tests/test_detect_rate_limit.py` (33):
+  - a second press is refused in plain words and runs nothing (no search, no scan opened);
+  - the day is one key with a real 24-hour expiry and a digest, not the client's id;
+  - the next day it runs again (the key really expires);
+  - a key with no expiry is given one;
+  - five presses at once run detection once, and 20 direct claims at once give exactly one winner;
+  - a run whose searches all fail, or that raises, still counts;
+  - another client of the same agency is not limited;
+  - another agency's client is a 404 and spends nothing;
+  - a scan detects though the client's day is spent, and does not spend it;
+  - Redis down is a 503 and runs nothing (4 kinds of failure);
+  - the refusal's log line carries exactly `client_id`, `agency_id` and `retry_after_s`;
+  - a burst across one agency's clients shows as one agency;
+  - the wait is rounded up, in the sentence and in `Retry-After`.
+- **Negative controls:**
+  - **On this tree:** with `rate_limit.py` and `routers/competitors.py` put back to the previous commit, 32 of the 33 fail. The other agency's 404 holds without any check; the ordering control below shows it bites. Restored and checked with `cmp`.
+  - **The implementer's controls, each restored:**
+    - no check: 15 fail;
+    - the check before `get_client`: 1 (the other agency's 404);
+    - the check after the work: 10;
+    - a scan's detection through the check: 2;
+    - read-then-write instead of one step: 6;
+    - fail open: 4;
+    - a failed run gives its day back: 1;
+    - hours rounded down: 4;
+    - `Retry-After` without its floor: 1;
+    - the raw client id in the key: 1;
+    - the key in the log line: 1;
+    - `agency_id` dropped or wrong: 2.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 26, shared-types 53 (0 fail), design-system 935, web 1708, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts`, regenerated in this commit for the route's description, regenerate with no further change.
+- Exit codes were read from files.
