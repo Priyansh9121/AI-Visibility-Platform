@@ -22777,3 +22777,54 @@ Drift check (north-star §8): Layer 1, Delivery (the dashboard's getting-started
   - The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts` regenerate with no change: the schema change is a comment.
 - Exit codes were read from files.
+
+# The launch checklist says what `pilot-fixes-3` closed, how to merge it, and every decision still open
+
+**2026-10-03, the twelfth entry of the day; branch `pilot-fixes-3`, the founder's brief "honest reports and the remaining pilot decisions" (its finish).** One commit, `docs/launch-checklist.md` and this entry only.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): no product layer; the launch plan. Lifecycle phase: Activation (Epic 9), what stands between the code and the first pilots.
+
+## 1. What changed
+
+- **Status and merge steps:**
+  - The status line says PRs #2 to #6 are merged (`main` at `811f013`).
+  - 1.1d is marked merged (PR #6). Its step 5 now says that after this branch the "Link ready" sentence is announced to screen readers, not shown.
+  - New 1.1e, how to merge this branch: nothing to set, no migration, both services from one push. After the deploy:
+    - a report opened twice logs no `scoring.completed`;
+    - a failed or retried competitor search says its kind and carries no URL or key;
+    - what a `browser.slot_busy` near 120000 ms means;
+    - an unreadable robots.txt on the intake card;
+    - the share link, looked at and listened to;
+    - the dashboard step with one live link and none.
+- **Rows closed, each with its commit:**
+  - 3.35 (`6c06790`);
+  - 3.36 (`111045d`);
+  - 3.37 (`9d25c0a`);
+  - 3.38 (`6c3d981`);
+  - 3.39 (`504b9e2`);
+  - 3.41 (`24a139f`);
+  - 3.42 (`eac7a97`);
+  - new 3.44 for R1 (`3303deb`) and 3.45 for R2 (`652ba9b`, its entry completed in `313dff2`), with their findings.
+- **New rows, the decisions and follow-ups this brief found:**
+  - 3.46: stored `ROBOTS_DISALLOWED` rows that were really unreadable.
+  - 3.47: the signed-in scan routes serve every input of a failed scan's withheld sub-scores (3.37's Medium).
+  - 3.48: the business-entity check knows eight schema.org types (widening it is a formula change).
+  - 3.49: the report's fix list and PDF overstate three findings.
+  - 3.50: legacy non-Latin charsets for robots.txt and sitemaps, and the `/crawler` page's limits.
+  - 3.51: the dashboard step going dark when its link ends.
+  - 3.52: the share bar's lead and busy label for a live link, and Copy's announcement.
+  - 3.53: the detect route's searches have no limit.
+  - 3.54: the untracked `docs/skills-audit-2026-09-30/`, left untouched.
+
+## Verified
+
+**The final bar on this tree** (the commands of `ci.yml`, run locally; this commit changes no code, and no test reads either file it changes).
+- Counts: API 3074, workers 26, shared-types 53 (0 fail), design-system 935, web 1708, mypy 43 (ceiling 50).
+- Ruff is clean, all typechecks pass, the styleguide builds, and all six count gates pass through `assert_count.py`.
+- Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+- The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+- OpenAPI and `api.gen.ts` regenerate with no change.
+- Over the branch: API 2656 → 3074, web 1533 → 1708; design-system 935, workers 26, shared-types 53 and mypy 43 unchanged.
+- Exit codes were read from files.
