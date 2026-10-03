@@ -258,6 +258,29 @@ class TestTheClientTheGateBuildsIsReallyGuarded:
                 await client.get("http://internal.test/")
         assert inner.connected == []
 
+    async def test_a_refusal_at_connection_time_propagates_through_the_gates_exchange(
+        self, dns: dict[str, Any], inner: _Inner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The gate's own address check is satisfied (it is told the address is fine) and the
+        # connection-time check, which resolves again, is not: a name that answers differently
+        # the second time. With the REAL client the refusal must come out of `_exchange` as
+        # itself and end the run, never be read as a request that got no answer.
+        dns["rebind.test"] = ["10.0.0.5"]
+        gate = crawl.RobotsGate(user_agent="ua")
+
+        async def passes(url: str) -> bool:
+            return True
+
+        monkeypatch.setattr(gate, "_egress_ok", passes)
+
+        async with gate._client() as client:  # noqa: SLF001
+            with pytest.raises(EgressRefused):
+                await gate._exchange(client, "GET", "https://rebind.test/robots.txt", 1_000)  # noqa: SLF001
+        # ...and so out of the gate's own fetch, which a run ends as `ADDRESS_NOT_PUBLIC` on.
+        with pytest.raises(EgressRefused):
+            await gate.file("https://rebind.test")
+        assert inner.connected == []
+
     async def test_a_literal_private_address_in_the_url_is_refused_too(
         self, dns: dict[str, Any], inner: _Inner
     ) -> None:

@@ -828,7 +828,7 @@ class TestTheCapIsArithmeticFromTheCodesOwnTimeouts:
         stages = (
             browser_slot.LAUNCH_ALLOWANCE_S
             + 2 * technical_audit.PAGE_TIMEOUT_MS / 1000  # the load, then the fallback
-            + (crawl.MAX_REDIRECTS + 1) * technical_audit.SIDE_FETCH_TIMEOUT  # a robots.txt
+            + (crawl.MAX_REDIRECTS + 1) * technical_audit.SIDE_FETCH_DEADLINE_S  # a robots.txt
             + 2 * egress.SETTLE_TIMEOUT_S  # the landing checks either side of the read
             + technical_audit.SETTLE_MS / 1000  # the vitals wait
             + browser_slot.EVALUATE_ALLOWANCE_S  # page.evaluate: no timeout of its own (3.20)
@@ -853,7 +853,7 @@ class TestTheCapIsArithmeticFromTheCodesOwnTimeouts:
         stages = (
             browser_slot.LAUNCH_ALLOWANCE_S
             + max_pages * one_page
-            + (crawl.MAX_REDIRECTS + 1) * crawl.ROBOTS_TIMEOUT  # a landing host not read yet
+            + (crawl.MAX_REDIRECTS + 1) * crawl.ROBOTS_REQUEST_DEADLINE_S  # a landing host
             + egress.FINAL_SETTLE_TIMEOUT_S + 1.0
             + browser_slot.TEARDOWN_ALLOWANCE_S
             + browser_slot.NAME_LOOKUP_ALLOWANCE_S
@@ -863,6 +863,24 @@ class TestTheCapIsArithmeticFromTheCodesOwnTimeouts:
 
         assert cap > stages
         assert cap < stages + 2 * browser_slot.RUN_MARGIN_S
+
+    def test_the_gates_deadlines_made_the_robots_term_a_ceiling_and_moved_no_cap(self) -> None:
+        """Launch checklist 3.41, round 2: a request of the gate ends by a TOTAL deadline.
+
+        The robots.txt term in both caps is `(MAX_REDIRECTS + 1)` requests at one figure. It
+        used to be httpx's per-operation timeout, which a server that sends a byte every few
+        seconds never reaches, so the sum was only ever true of a server that answered.
+        Each deadline is that same number, so no cap moved; these are the figures the
+        docstrings state and the scan budget was reasoned from. Raising a deadline by `d`
+        raises its cap by `6 * d` and fails here, which is the prompt to reconsider
+        the scan deadline's margin (launch checklist 3.35) before it is accepted.
+        """
+        assert crawl.ROBOTS_REQUEST_DEADLINE_S >= crawl.ROBOTS_TIMEOUT
+        assert technical_audit.SIDE_FETCH_DEADLINE_S >= technical_audit.SIDE_FETCH_TIMEOUT
+        assert crawl.ROBOTS_REQUEST_DEADLINE_S == technical_audit.SIDE_FETCH_DEADLINE_S == 10.0
+        assert crawl.crawl_run_cap_s(4, 12_000) == 297.0
+        assert crawl.crawl_run_cap_s(3, 12_000) == 266.0
+        assert technical_audit.audit_run_cap_s() == 244.5
 
     def test_the_crawl_cap_grows_with_the_pages_and_the_navigation_timeout(self) -> None:
         base = crawl.crawl_run_cap_s(3, 12_000)
@@ -1157,23 +1175,31 @@ class TestAWaitForTheSlotIsBounded:
 
 
 class TestTheTwoBounds:
-    def test_a_request_waits_a_minute_and_a_scans_audit_five(self) -> None:
+    def test_a_request_waits_a_minute_and_a_scans_audit_two(self) -> None:
         assert browser_slot.REQUEST_WAIT_S == 60.0
-        assert browser_slot.SCAN_AUDIT_WAIT_S == 300.0
+        assert browser_slot.SCAN_AUDIT_WAIT_S == 120.0  # launch checklist 3.35; it was 300 s
 
-    def test_a_scans_wait_covers_the_longest_single_run_that_can_be_ahead_of_it(self) -> None:
-        """One capped run ahead of it, and a margin; not a second cap beside it."""
+    def test_a_scans_wait_is_shorter_than_either_run_that_a_cap_has_to_cut(self) -> None:
+        """What 120 s no longer covers: one capped run ahead (launch checklist 3.35).
+
+        At 300 s the wait was one capped run and a margin. Now a scan's audit queued behind a
+        run that has just begun to hang, until the crawl's cap (266 s) or the audit's
+        (244.5 s) cuts it, ends `BROWSER_BUSY` after its wait and the scan goes on without a
+        Technical Foundation. That holds only while the wait is under the SHORTER of the two
+        caps, and it stays a longer wait than a request's.
+        """
         pages = inspect.signature(intake.run_classification).parameters["max_pages"].default
-        longest = max(
+        shortest_cap = min(
             technical_audit.audit_run_cap_s(),
             crawl.crawl_run_cap_s(pages, crawl.DEFAULT_TIMEOUT_MS),
         )
 
         wait = browser_slot.SCAN_AUDIT_WAIT_S
-        assert longest < wait < 2 * longest
+        assert browser_slot.REQUEST_WAIT_S < wait < shortest_cap
 
     def test_a_request_gives_up_well_before_a_scan_would(self) -> None:
-        assert browser_slot.REQUEST_WAIT_S < browser_slot.SCAN_AUDIT_WAIT_S / 2
+        # At most half: the scan's bound is twice the request's (60 s and 120 s).
+        assert browser_slot.REQUEST_WAIT_S <= browser_slot.SCAN_AUDIT_WAIT_S / 2
 
 
 @pytest.fixture
@@ -1214,7 +1240,7 @@ class TestWhichBoundEachCallerAsksFor:
         )
 
         assert result.ok
-        assert waits_asked_for == [("audit", 300.0)]
+        assert waits_asked_for == [("audit", 120.0)]  # the scan's bound, not the request's 60 s
 
 
 async def run_while_the_slot_is_held(

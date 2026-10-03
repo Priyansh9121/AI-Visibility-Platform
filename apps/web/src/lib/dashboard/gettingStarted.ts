@@ -34,6 +34,7 @@
  */
 
 import { shownComposite } from './shownComposite';
+import { SCAN_DURATION_SENTENCE } from '@/lib/scans/scanOutcome';
 import type { Dashboard } from '@avp/shared-types';
 
 export type GettingStartedKey = 'client' | 'scan' | 'score' | 'teammate' | 'share';
@@ -107,7 +108,7 @@ export function deriveGettingStarted(dashboard: Dashboard): GettingStarted {
           ? 'One is running now.'
           : plural(scanCount, 'scan')
         : clientCount >= 1
-          ? 'Under five minutes from start to score.'
+          ? SCAN_DURATION_SENTENCE
           : 'After a client is added.',
     ...(scanCount >= 1 || clientCount === 0
       ? {}

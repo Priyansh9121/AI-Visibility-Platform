@@ -40,6 +40,15 @@ both public routes 404 with nothing to tell it from an unknown token. The token
 itself stays on the row. It is the agency's to withdraw, and its end date is
 still on the signed-in report so the screen can offer Withdraw.
 
+WHAT THE DASHBOARD COUNTS — checklist 3.42
+------------------------------------------
+The dashboard's "Share a report" step counts the links that would open, and no
+others: an expired link and a failed scan's are not links to anyone. It asks the
+public lookup's own question. `link_would_open` is that question written once as
+SQL, and both `scan_for_share_token` and `count_links_that_open` put it in their
+WHERE clause, so the number on the dashboard and what a stranger holding the
+address can open cannot drift apart.
+
 THIS MODULE AND THE LEASE WRITE THE SAME ROW — checked 2026-09-08
 -----------------------------------------------------------------
 Both functions below take `SELECT ... FOR UPDATE` on a `Scan`. The lease
@@ -78,7 +87,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..errors import FailedScanNotShareable
@@ -119,11 +128,11 @@ def link_is_live(token: str | None, expires_at: datetime | None, now: datetime) 
     """Whether a share link is live at `now`: a token is set and its end is after `now`.
 
     **The one Python statement of a rule that is also written as SQL**, in
-    `scan_for_share_token` (`share_token == token`, `share_expires_at IS NOT NULL`,
-    `share_expires_at > now`). The two have to agree to the microsecond, or a link
-    would be live to one and over to the other: handed back by a press that the
-    lookup refuses, or replaced by a press while the lookup still serves it. The
-    lookup filters in the query, so it cannot call this and carries a comment back
+    `link_would_open` below (`share_token IS NOT NULL`, `share_expires_at IS NOT NULL`,
+    `share_expires_at > now`, and a status test that this leaves out). The two have to
+    agree to the microsecond, or a link would be live to one and over to the other:
+    handed back by a press that the lookup refuses, or replaced by a press while the
+    lookup still serves it. A query cannot call this, so the SQL carries a comment back
     to it instead, and `TestExpiry` in `test_share_link.py` stands on the edge of
     both. This is what `get_or_create_share_token` asks, and what
     `services/report.py` asks for the signed-in report's `shareExpiresAt`.
@@ -134,12 +143,94 @@ def link_is_live(token: str | None, expires_at: datetime | None, now: datetime) 
     neither is an end with no token. The CHECK on `scans` keeps both unwritable,
     but the read path treats them as dead, so this does too.
 
-    **A scan's status is not part of it.** The public lookup adds that test itself
+    **A scan's status is not part of it.** `link_would_open` adds that test itself
     (a FAILED scan's link is refused, 3.29), a press refuses a failed scan before it
     asks this, and the signed-in report still reports a failed scan's link so the
     screen can offer Withdraw.
     """
     return token is not None and expires_at is not None and expires_at > now
+
+
+def link_would_open(now: datetime) -> ColumnElement[bool]:
+    """SQL: this scan's share link would open at `now` — checklist 3.29 and 3.42.
+
+    **The one place the rule is written as SQL, and two queries ask it.**
+    `scan_for_share_token` (the public lookup, which adds `share_token == token`) and
+    `count_links_that_open` (the dashboard's "Share a report" step) both put this in
+    their WHERE clause. What the dashboard calls a live link and what a stranger
+    holding the address can open are therefore one expression, and a change to when a
+    link opens is a change here that both follow. Neither query restates a part of it.
+    `test_dashboard_shared_count.py` pins that from two sides: a table of cases the two
+    must answer alike, and a patched expression that both must read.
+
+    **Never use this alone: it is half of a check.** It says a link would open, not whose
+    link it is. It names no token and no agency, so by itself it matches every agency's
+    live links at once. A lookup that used it without the token would read across
+    tenants, and a count that used it without the agency would add up the whole product's
+    links. The name reads like a complete test and is not one. Pair it with the scope that
+    fits the caller: `Scan.share_token == token` (the public lookup, so only the holder of
+    that address reaches that scan) or `Scan.agency_id == agency_id` (the dashboard's
+    count, so only the caller's own agency is counted). A new caller adds its own scope the
+    same way.
+
+    A link would open when `link_is_live` says it is live (a token is set, an end is
+    set, and the end is strictly after `now`) and the scan has not FAILED. The status
+    test is the one thing `link_is_live` leaves out.
+
+    **A CANCELLED scan's link opens, so it is counted.** Nothing writes CANCELLED today,
+    but the lookup serves a cancelled scan's link and so does this (it refuses only
+    FAILED). Leaving a cancelled scan out of the count alone would have the dashboard
+    call dead a link a stranger can open. If cancelled scans' links should stop
+    opening, that is a change to this expression, and the lookup and the count both
+    follow it.
+
+    `now` is passed in, not read here, so each caller states its own clock.
+    """
+    return and_(
+        # `link_is_live`, written as SQL: a token is set, its end is set, and the end is
+        # after `now`. Change one and change the other. (In the lookup, `share_token ==
+        # token` already implies the first; the count has no other test for it.)
+        Scan.share_token.is_not(None),
+        Scan.share_expires_at.is_not(None),
+        Scan.share_expires_at > now,
+        # The one thing `link_is_live` leaves out: a failed scan's link is refused.
+        Scan.status != ScanStatus.FAILED,
+    )
+
+
+async def count_links_that_open(
+    session: AsyncSession, agency_id: str, *, now: datetime | None = None
+) -> int:
+    """How many of this agency's scans have a share link that would open at `now`.
+
+    This is the dashboard's `sharedScanCount`, behind its "Share a report" step. A scan
+    has at most one link at a time, so it counts scans and links alike. A withdrawn
+    link, an expired one and a failed scan's are not counted: none of them opens for
+    anyone. The test is `link_would_open`, the public lookup's own, and not a column
+    that merely says a token was once set.
+
+    **Scoped to the agency.** Another agency's links are never in this number.
+
+    **The count describes the account as it is, not a history.** Minting a link adds
+    to it. Withdrawing one takes it off, and so does a link reaching its end or its scan
+    failing, because then the link opens nothing. That is why an agency's last link
+    running out un-does the step, as withdrawing it does.
+
+    One count in one query, filtered by the agency and by `link_would_open`: the shape
+    it had when it asked only for a token (the agency, and a token set), with the end
+    and the status as two more tests on the rows it already reads. No new index, and
+    no schema change. `now` is the clock, and only a test passes it.
+    """
+    now = now or datetime.now(UTC)
+    return int(
+        (
+            await session.execute(
+                select(func.count())
+                .select_from(Scan)
+                .where(Scan.agency_id == agency_id, link_would_open(now))
+            )
+        ).scalar_one()
+    )
 
 
 async def get_or_create_share_token(
@@ -292,10 +383,10 @@ async def scan_for_share_token(
 
     Revocation, expiry and a failed scan are NOT special cases of that rule —
     they are the same rule, which is why the predicate lives in this one query
-    rather than in either route. A revoked token has no row to find at all; an
-    expired one and a failed scan's are found by the token's index and dropped
-    by the rest of the predicate. All of them get the answer a token that never
-    existed gets.
+    (through `link_would_open`) rather than in either route. A revoked token has
+    no row to find at all; an expired one and a failed scan's are found by the
+    token's index and dropped by the rest of the predicate. All of them get the
+    answer a token that never existed gets.
 
     **A FAILED scan's link is dead, and the token is kept** (checklist 3.29,
     the founder's decision). A failed scan's score is never shown (3.24), so
@@ -313,27 +404,25 @@ async def scan_for_share_token(
     exists and whose scan failed, and a second place for a route to disagree
     with the other.
 
-    **A missing expiry is not "never expires".** The comparison below is
-    strict, so NULL never matches, and a token that somehow reached the table
-    without one serves nothing. Fail-closed, for a credential.
+    **A missing expiry is not "never expires".** The comparison in
+    `link_would_open` is strict, so NULL never matches, and a token that somehow
+    reached the table without one serves nothing. Fail-closed, for a credential.
 
-    **The "live" half of that predicate has a second statement in Python,**
-    `link_is_live`, which a press asks (and the signed-in report's
-    `shareExpiresAt`). The two are kept in step by the edge test in
-    `test_share_link.py::TestExpiry`. `now` is the clock, and only a test passes it.
+    **Everything but the token's match is `link_would_open`,** which the dashboard's
+    count of live links asks as well (3.42), so what a stranger can open and what the
+    dashboard counts are one expression. Its "live" half also has a second statement in
+    Python, `link_is_live`, which a press asks (and the signed-in report's
+    `shareExpiresAt`); the edge test in `test_share_link.py::TestExpiry` keeps those two
+    in step. `now` is the clock, and only a test passes it.
     """
     now = now or datetime.now(UTC)
     return (
         await session.execute(
             select(Scan).where(
-                # These three are `link_is_live`, written as SQL so the lookup filters
-                # in the query: the token matches, its end is set, and the end is after
-                # `now`. Change one and change the other.
                 Scan.share_token == token,
-                Scan.share_expires_at.is_not(None),
-                Scan.share_expires_at > now,
-                # The one thing `link_is_live` leaves out: a failed scan's link is refused.
-                Scan.status != ScanStatus.FAILED,
+                # The end, and a failed scan: the rule that decides whether a link
+                # opens, shared with the dashboard's count and written once.
+                link_would_open(now),
             )
         )
     ).scalar_one_or_none()

@@ -19,6 +19,8 @@ import {
   AUDIT_FAILURE_GENERIC,
   AUDIT_FAILURE_SENTENCE,
   EXCLUSION_REASON,
+  ROBOTS_UNREACHABLE_ADVICE,
+  ROBOTS_UNREACHABLE_SENTENCE,
   auditFailureSentence,
   checkLabel,
 } from '@/lib/report/strings';
@@ -35,6 +37,8 @@ import {
   notYetMeasuredReport,
   failedScanReport,
   partialDeadlineReport,
+  robotsUnreachableReport,
+  robotsUnreachableWithFindingsReport,
   unscoredReport,
   weakSignalReport,
 } from '@/lib/report/__fixtures__/reports';
@@ -870,6 +874,129 @@ describe('a site whose robots.txt keeps the crawler out — 2026-09-29', () => {
 
   it('a failed crawl is still worded as one', () => {
     expect(render(failedAuditReport)).toContain('The site could not be read');
+  });
+});
+
+/**
+ * robots.txt could not be read — launch checklist 3.41. Until 2026-10-03 this was
+ * stored as ROBOTS_DISALLOWED, and the report said "This site's robots.txt asks
+ * crawlers like ours not to load its pages" of a site that never answered. The
+ * crawler still fetches nothing; the report must say what happened.
+ */
+describe('a site whose robots.txt could not be read — launch checklist 3.41', () => {
+  const html = render(robotsUnreachableReport);
+  const publicHtml = renderToStaticMarkup(
+    <ReportView report={robotsUnreachableReport} animate={false} publicView />,
+  );
+
+  it('says what happened, in the copy both sides share', () => {
+    expect(html).toContain(EXCLUSION_REASON.CRAWL_POLICY_UNREADABLE!.label);
+    expect(html).toContain(ROBOTS_UNREACHABLE_SENTENCE);
+    expect(html).toContain(
+      'The crawler tried to read the robots.txt of this site, or of an address the site sent it to, and did not get a usable answer. It obeys robots.txt, so without that answer it did not read the site.',
+    );
+    expect(html).toContain('The site was not read');
+  });
+
+  it('keeps the intake’s advice off the report: only the person who typed the address can act on it', () => {
+    expect(html).not.toContain(ROBOTS_UNREACHABLE_ADVICE);
+    expect(html).not.toContain('then try again');
+  });
+
+  it('lets the title row wrap, as the “Left out” card does', () => {
+    // The label badge is long: on a narrow screen it must drop under the title, not push
+    // the card wider than the page.
+    const title = html.slice(html.indexOf('The site was not read') - 200, html.indexOf('The site was not read'));
+    expect(title).toContain('flex flex-wrap items-center');
+  });
+
+  it('never says the site asks crawlers to stay out, or that it blocked anything', () => {
+    for (const page of [html, publicHtml]) {
+      for (const words of [
+        'stay out',
+        'asks crawlers',
+        'not to load its pages',
+        'Blocked by robots.txt',
+        'What the site’s robots.txt says',
+      ]) {
+        expect(page, words).not.toContain(words);
+      }
+      // The refusal's own sentence is for a file that was read and forbids the page.
+      expect(page).not.toContain(EXCLUSION_REASON.CRAWL_DISALLOWED!.detail);
+    }
+    // ...and it is not a failed crawl: the page was never asked for.
+    expect(html).not.toContain('The site could not be read');
+    expect(html).not.toContain('Audit failed');
+    expect(html).not.toContain('Not yet checked');
+  });
+
+  it('shows no machine code', () => {
+    for (const code of [
+      'ROBOTS_UNREACHABLE',
+      'CRAWL_POLICY_UNREADABLE',
+      'ROBOTS_DISALLOWED',
+      'CRAWL_DISALLOWED',
+    ]) {
+      expect(html, code).not.toContain(code);
+      expect(publicHtml, code).not.toContain(code);
+    }
+  });
+
+  it('derives the exclusion under its own reason, and no fix about robots.txt', () => {
+    const narrative = deriveNarrative(robotsUnreachableReport);
+    expect(narrative.exclusions.map((e) => [e.key, e.reason])).toEqual([
+      ['technical_foundation', 'CRAWL_POLICY_UNREADABLE'],
+    ]);
+    // An unreadable file is not a missing one: no "publish a robots.txt", and no
+    // "stop robots.txt blocking crawlers" for a file nobody read.
+    const ids = narrative.fixes.map((f) => f.id);
+    expect(ids).not.toContain('audit:robots_txt_present');
+    expect(ids).not.toContain('audit:indexable');
+  });
+
+  it('a file that really forbids the page keeps its own words', () => {
+    const disallowed = render(crawlDisallowedReport);
+    expect(disallowed).toContain(EXCLUSION_REASON.CRAWL_DISALLOWED!.detail);
+    expect(disallowed).not.toContain(ROBOTS_UNREACHABLE_SENTENCE);
+  });
+
+  it('lists no table when every check was not applicable', () => {
+    expect(html).not.toContain('Checks that did not pass');
+    expect(html).not.toContain('The checks that did not pass are below.');
+  });
+});
+
+describe('a site whose own robots.txt was missing but whose redirect did not answer — 3.41, round 2', () => {
+  const html = render(robotsUnreachableWithFindingsReport);
+  const narrative = deriveNarrative(robotsUnreachableWithFindingsReport);
+
+  it('still says it could not read robots.txt, and never that the site asks crawlers to stay out', () => {
+    expect(html).toContain('The site was not read');
+    expect(html).toContain(ROBOTS_UNREACHABLE_SENTENCE);
+    for (const words of ['stay out', 'asks crawlers', 'Blocked by robots.txt', 'The site could not be read']) {
+      expect(html, words).not.toContain(words);
+    }
+  });
+
+  it('lists what the site’s own answers did say, the way the refusal’s card does', () => {
+    expect(html).toContain('The checks that did not pass are below.');
+    expect(html).toContain('Checks that did not pass');
+    expect(html).toContain(checkLabel('robots_txt_present'));
+    expect(html).toContain(checkLabel('sitemap_present'));
+    // Same table, same badges: a warning is a warning.
+    expect(html).toContain('>warn<');
+  });
+
+  it('and the fix list carries them, because they are true of the site', () => {
+    const ids = narrative.fixes.map((f) => f.id);
+    expect(ids).toContain('audit:robots_txt_present');
+    expect(ids).toContain('audit:sitemap_present');
+  });
+
+  it('the report with every check not applicable carries no such fixes', () => {
+    const ids = deriveNarrative(robotsUnreachableReport).fixes.map((f) => f.id);
+    expect(ids).not.toContain('audit:robots_txt_present');
+    expect(ids).not.toContain('audit:sitemap_present');
   });
 });
 

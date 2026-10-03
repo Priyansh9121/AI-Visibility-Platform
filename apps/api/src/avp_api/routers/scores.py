@@ -16,7 +16,7 @@ from ..models import Scan, Score
 from ..schemas.score import CompetitorScoreOut, ScoreDetailOut, ScoreOut
 from ..services import scoring_runner
 from ..services.failed_scan import score_is_withheld
-from ..services.scoring import ScoreResult
+from ..services.scoring import ReadComparison, ScoreResult
 
 router = APIRouter(tags=["scores"])
 
@@ -42,10 +42,15 @@ async def _load_scan(db: Any, scan_id: str, agency_id: str) -> Scan:
 
 
 def _detail(
-    row: Score, computed: ScoreResult, previous_versions: list[str] | None = None
+    row: Score,
+    computed: ScoreResult | ReadComparison,
+    previous_versions: list[str] | None = None,
 ) -> ScoreDetailOut:
     """The stored row plus what is derived on read: the comparison and the
-    subject's average position, both pure functions of persisted rows."""
+    subject's average position, both pure functions of persisted rows.
+
+    `computed` is a `ScoreResult` straight after scoring (`POST`) and a
+    `ReadComparison` on a read (`GET`); both carry the three figures used."""
     out = ScoreDetailOut.model_validate(row)
     out.previous_formula_versions = previous_versions or []
     out.average_position = computed.average_position
@@ -132,9 +137,10 @@ async def get_scan_score(
 ) -> Any:
     """The most recent stored Score for a scan, with the competitor comparison.
 
-    The comparison is recomputed from persisted rows on read rather than stored
-    — it is a pure function of data already in the database, and a second copy
-    could fall out of step with the first.
+    The comparison and the subject's average position are derived from
+    persisted rows on read rather than stored — they are a pure function of data
+    already in the database, and a second copy could fall out of step with the
+    first. Reading a score computes no score and writes nothing.
 
     **A FAILED scan has no score** (3.30, extending 3.24): the same `404` as a scan
     not yet scored, with the detail "This scan failed, so it has no score.",
@@ -149,7 +155,7 @@ async def get_scan_score(
     row = await scoring_runner.latest_score(db, scan.id)
     if row is None:
         raise NotFound(detail="This scan has not been scored yet.")
-    _, computed, _competitors = await scoring_runner.score_scan(db, scan, persist=False)
+    computed = await scoring_runner.compare_on_read(db, scan, row)
     return _detail(
         row, computed,
         await scoring_runner.prior_formula_versions(db, scan.id, row.formula_version),

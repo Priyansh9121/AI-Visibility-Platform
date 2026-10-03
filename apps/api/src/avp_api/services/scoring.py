@@ -112,10 +112,15 @@ FORMULA_VERSION = "v5"
 # this crawler.
 # CRAWL_ADDRESS_NOT_PUBLIC: the site's address (or a redirect's) is not a public
 # one, so the crawler's egress guard refused to connect.
+# CRAWL_POLICY_UNREADABLE (2026-10-03, launch checklist 3.41): the site's robots.txt
+# could not be read (no answer, an error, redirects that never reach a file), so the
+# crawler, which obeys robots.txt, read nothing. The site did not forbid anything,
+# which is why this is not CRAWL_DISALLOWED.
 # None moves the formula: each excludes and redistributes, and the reason
 # enters the digest only when set.
 TECHNICAL_FOUNDATION_EXCLUSIONS = (
     "NOT_YET_MEASURED", "CRAWL_DISALLOWED", "CRAWL_ADDRESS_NOT_PUBLIC",
+    "CRAWL_POLICY_UNREADABLE",
 )
 
 TWO_PLACES = Decimal("0.01")
@@ -316,6 +321,23 @@ class ScoreResult:
 
     def value(self, dimension: Dimension) -> Decimal | None:
         return self.sub_scores[dimension].value
+
+
+@dataclass(slots=True)
+class ReadComparison:
+    """What a report reads beside a stored Score that the Score row does not store.
+
+    The subject's mean position with the count it is averaged over, and the
+    per-rival comparison: the same three fields `ScoreResult` carries
+    (`average_position`, `position_count`, `competitors`), and nothing else.
+    There is no composite, no sub-score and no inputs digest here, because
+    nothing that makes one is run to produce this. `comparison_from_facts`
+    builds it.
+    """
+
+    average_position: Decimal | None = None
+    position_count: int = 0
+    competitors: list[CompetitorComparison] = field(default_factory=list)
 
 
 def weighted_composite(
@@ -851,6 +873,71 @@ def compare_competitors(
     return out
 
 
+def comparison_from_facts(
+    results: list[ResultFacts],
+    competitors: list[CompetitorFacts],
+    *,
+    competitor_set_status: DetectionStatus | None,
+    authority: DomainAuthority = CURATED_ONLY,
+) -> ReadComparison:
+    """The subject's mean position and the per-rival comparison — what a report reads.
+
+    **The same figures `compute_score` puts in `ScoreResult.average_position`,
+    `.position_count` and `.competitors` for a scan it scores**, from the same
+    functions (`average_position`, `compare_competitors`), without computing
+    the composite, the five sub-scores or the inputs digest. A report shows a
+    stored Score and these three derived figures; before this function it
+    scored the whole scan again to get them. `test_reads_are_reads.py` holds
+    the two equal over randomised facts, so a change to `compute_score` that
+    moves one and not the other fails there.
+
+    **The one decision it repeats from `compute_score`**: whether a rival's
+    Citation Strength is part of the comparison. It is exactly when
+    `compute_score` leaves the subject's Citation Strength in — awareness
+    answers exist, at least one cited domain has a tier, and there is a
+    competitor set to compare against (not `NO_SIGNAL`, not empty) — so a
+    column still means one thing (scoring-spec.md, v2.1).
+
+    **Not decided here: whether the scan was scorable at all.** `compute_score`
+    answers an unrunnable scan (nothing answered, or every dimension excluded)
+    with no comparison; this function has no sentiment or Technical
+    Foundation to know the second. The caller reads that from the stored
+    Score's `status` and does not call this for an `insufficient_data` row
+    (`scoring_runner.compare_on_read`).
+
+    **What `authority` is.** The rivals' Citation Strength reads each cited
+    domain's tier, so the caller passes the lookup it wants them read with.
+    `compare_on_read` passes today's, which is why a rival's figure is "as of
+    now" while the subject's stored one is "as of when it was scored".
+    """
+    answered = [r for r in results if r.answered]
+    if not answered:
+        return ReadComparison()
+
+    aware = awareness_only(answered)
+    no_competitors = (
+        not competitors
+        or competitor_set_status is None
+        or competitor_set_status is DetectionStatus.NO_SIGNAL
+    )
+    include_citation_strength = (
+        bool(aware)
+        and bool(authority.tiers_for(_cited_domains(aware)))
+        and not no_competitors
+    )
+    subject_position, subject_position_count = average_position(aware)
+    return ReadComparison(
+        average_position=subject_position,
+        position_count=subject_position_count,
+        competitors=compare_competitors(
+            results,
+            competitors,
+            include_citation_strength=include_citation_strength,
+            authority=authority,
+        ),
+    )
+
+
 def compute_score(
     results: list[ResultFacts],
     competitors: list[CompetitorFacts],
@@ -1079,6 +1166,11 @@ def compute_score(
     # dimension produces and the formula is unchanged — under its own reason.
     # Without the TECHNICAL_FOUNDATION_NOT_MEASURED flag, whose sentence ("had
     # not been audited") would be false: the audit ran, and read robots.txt.
+    #
+    # CRAWL_POLICY_UNREADABLE (2026-10-03) is the fourth way: robots.txt could not
+    # be read, so the crawler read nothing and the site said nothing. Excluded
+    # identically; the dimensions excluded, and when, are the same for every reason
+    # in `TECHNICAL_FOUNDATION_EXCLUSIONS`, so `FORMULA_VERSION` did not move.
     tf_value: Decimal | None
     if technical_foundation is None:
         tf_value = None

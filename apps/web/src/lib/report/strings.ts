@@ -66,6 +66,38 @@ export const DIMENSION_MEANING: Record<string, string> = {
 export const ROBOTS_DISALLOWED = 'ROBOTS_DISALLOWED';
 
 /**
+ * The same, when robots.txt could not be read at all — 2026-10-03 (launch
+ * checklist 3.41). `ROBOTS_UNREACHABLE` in the API's `services/crawl.py`, which a
+ * test reads back. No answer, a name that does not resolve, a timeout, a 5xx, a
+ * 429 or redirects that never reach a file: the crawler fetches nothing then, as
+ * for a file that forbids it, but the SITE forbade nothing, so the screens must
+ * not say it asks crawlers to stay out. Until this code every one of those cases
+ * was stored as `ROBOTS_DISALLOWED`, and older rows still are.
+ */
+export const ROBOTS_UNREACHABLE = 'ROBOTS_UNREACHABLE';
+
+/**
+ * What happened when robots.txt could not be read, in one place for the intake
+ * card and for `EXCLUSION_REASON.CRAWL_POLICY_UNREADABLE`, so they cannot word it
+ * two ways. True of every case the code covers, which is why it says "did not get
+ * a usable answer" and not "did not answer" (a 503 and a 429 are answers; so is a
+ * redirect that never ends), why it says "of this site, or of an address the site
+ * sent it to" (the file that could not be read can be a redirect's, or the one the
+ * browser landed on), and why it says nothing of what the site asks of crawlers: the
+ * file was never read. It blames nobody. Mirrored word for word in
+ * `report_narrative.EXCLUSION_DETAIL`.
+ */
+export const ROBOTS_UNREACHABLE_SENTENCE =
+  'The crawler tried to read the robots.txt of this site, or of an address the site sent it to, and did not get a usable answer. It obeys robots.txt, so without that answer it did not read the site.';
+
+/**
+ * What the person who just added the site can do about it: only the intake card says
+ * this, because only there is someone who typed the address.
+ */
+export const ROBOTS_UNREACHABLE_ADVICE =
+  'Check that the address is right and the site opens in a browser, then try again.';
+
+/**
  * The reason code when the site's address is not a public one — a client's
  * `classificationReasonCode` and a failed audit's `errorCode` alike.
  * `ADDRESS_NOT_PUBLIC` in the API's `services/egress.py`. Not a robots.txt
@@ -87,8 +119,8 @@ export const ADDRESS_NOT_PUBLIC_SENTENCE =
  * another page for the whole wait, so a scan's audit never started; only a scan
  * records it, a request is refused instead), and `HTTP_<status>` (the home page
  * answered 400 or above). Each says what happened and makes no guess at why, and
- * none blames the site. The raw code is never shown; `ROBOTS_DISALLOWED` and
- * `ADDRESS_NOT_PUBLIC` have their own copy.
+ * none blames the site. The raw code is never shown; `ROBOTS_DISALLOWED`,
+ * `ROBOTS_UNREACHABLE` and `ADDRESS_NOT_PUBLIC` have their own copy.
  */
 export const AUDIT_FAILURE_SENTENCE: Record<string, string> = {
   BROWSER_ERROR: 'The crawler’s browser stopped before it could read the home page.',
@@ -110,6 +142,153 @@ export function auditFailureSentence(errorCode: string | null | undefined): stri
     return `The site answered with an error (HTTP ${status}) when the crawler asked for its home page.`;
   }
   return AUDIT_FAILURE_GENERIC;
+}
+
+/** The intake card's heading when the crawler could not read the site. */
+export const CLASSIFICATION_READ_HEADING = 'We could not read this site.';
+
+/**
+ * Its heading for everything else, which includes the model step failing: the crawler
+ * had read the site then, so "could not read" would be untrue. "Classify" is true of
+ * every way a client ends up `unclassifiable`.
+ */
+export const CLASSIFICATION_CLASSIFY_HEADING = 'We could not classify this site.';
+
+/** What three of the model provider's refusals share: a problem on our side, and no more than that. */
+const OUR_SIDE_SENTENCE =
+  'We could not use the model that classifies sites because of a problem on our side, so nothing was classified.';
+
+/**
+ * One plain sentence per way a client is recorded `unclassifiable`, in place of the
+ * code and of "This usually means the site did not load" (launch checklist 3.39). The
+ * codes are the crawl's (`error_code` in `services/crawl.py`) and the classifier's own
+ * (`reason_code` in `services/classify.py`); a test reads both files back, so a code
+ * added there without wording here fails.
+ *
+ * Each sentence is true of every case that records its code, says what happened, and
+ * blames nobody. A code the crawl records says what the crawler did; a code the model
+ * step records says what that step did, and none of those says the site did not load.
+ * Only `HTTP_<status>` says the site answered with an error, because it did.
+ *
+ * `TIMEOUT` is two failures under one code: the crawl's run cap, and the classifier's
+ * own deadline on its call. Its sentence names both, so it is true of either.
+ *
+ * The audit's `TIMEOUT`, `BROWSER_ERROR` and `FETCH_FAILED` sentences are not reused
+ * here, because each says something that is not true of every intake crawl. They speak
+ * of "the home page" and of "no response", which holds for an audit (one page, read to
+ * the end). The intake crawl reads up to three pages, so its run cap and its browser can
+ * fail after the home page was read, its `BROWSER_ERROR` is also what a connection the
+ * browser made but the crawler could not verify is recorded as (nothing is kept then),
+ * and its `FETCH_FAILED` also covers a home page that answered but could not be read.
+ * The sentences below say "the site" and "could not complete a read" instead. The
+ * `HTTP_<status>` sentence is the audit's, as it describes the same thing: the home
+ * page's answer.
+ *
+ * `PROVIDER_AUTH_FAILED`, `PROVIDER_QUOTA_EXHAUSTED` and `PROVIDER_BAD_REQUEST` share one
+ * sentence. Each is a problem on our side (a key the provider refused, an account with no
+ * credit or quota, a request it rejected), and which of the three it was is not something
+ * the person who typed the address can act on or needs to read. They keep an entry each so
+ * a test can read the API's codes back against them.
+ *
+ * `BROWSER_BUSY` has no entry on purpose. Since M1 a read that never got the crawler's
+ * one browser writes nothing and answers 429 (`intake.run_classification` raises before
+ * `classify` or `apply_outcome`), so no client carries it as its reason; wording it here
+ * would be copy nothing can reach. If one ever did, it gets the generic sentence below,
+ * which says nothing about the site.
+ *
+ * `ROBOTS_UNREACHABLE` and `ADDRESS_NOT_PUBLIC` keep the sentences they already had.
+ * Older clients whose robots.txt could not be read are still stored as
+ * `ROBOTS_DISALLOWED` (launch checklist 3.41), and read as that here too.
+ */
+const CLASSIFICATION_FAILURE: Record<string, { heading: string; sentence: string }> = {
+  [ADDRESS_NOT_PUBLIC]: {
+    heading: CLASSIFICATION_READ_HEADING,
+    sentence: ADDRESS_NOT_PUBLIC_SENTENCE,
+  },
+  [ROBOTS_UNREACHABLE]: {
+    heading: CLASSIFICATION_READ_HEADING,
+    sentence: ROBOTS_UNREACHABLE_SENTENCE,
+  },
+  [ROBOTS_DISALLOWED]: {
+    heading: CLASSIFICATION_READ_HEADING,
+    sentence:
+      'The robots.txt of this site, or of an address the site sent the crawler to, asks crawlers like ours not to load its home page. The crawler obeys robots.txt, so it did not read the site.',
+  },
+  BROWSER_ERROR: {
+    heading: CLASSIFICATION_READ_HEADING,
+    sentence: 'The crawler’s browser could not complete a read of the site.',
+  },
+  FETCH_FAILED: {
+    heading: CLASSIFICATION_READ_HEADING,
+    sentence: 'The crawler asked for the site’s home page and did not get a page it could read.',
+  },
+  TIMEOUT: {
+    heading: CLASSIFICATION_CLASSIFY_HEADING,
+    sentence:
+      'Reading and classifying the site did not finish in the time we allow, so nothing was classified.',
+  },
+  INSUFFICIENT_CONTENT: {
+    heading: CLASSIFICATION_CLASSIFY_HEADING,
+    sentence:
+      'The crawler read too little text from this site to tell what business it is, so nothing was classified.',
+  },
+  NOT_A_BUSINESS_SITE: {
+    heading: CLASSIFICATION_CLASSIFY_HEADING,
+    sentence:
+      'The model found no operating business it could classify in what the crawler read, so nothing was classified.',
+  },
+  PROVIDER_AUTH_FAILED: { heading: CLASSIFICATION_CLASSIFY_HEADING, sentence: OUR_SIDE_SENTENCE },
+  PROVIDER_RATE_LIMITED: {
+    heading: CLASSIFICATION_CLASSIFY_HEADING,
+    sentence: 'The model’s provider asked us to slow down, so nothing was classified.',
+  },
+  PROVIDER_QUOTA_EXHAUSTED: { heading: CLASSIFICATION_CLASSIFY_HEADING, sentence: OUR_SIDE_SENTENCE },
+  PROVIDER_BAD_REQUEST: { heading: CLASSIFICATION_CLASSIFY_HEADING, sentence: OUR_SIDE_SENTENCE },
+  PROVIDER_UNREACHABLE: {
+    heading: CLASSIFICATION_CLASSIFY_HEADING,
+    sentence: 'We could not reach the model’s provider, so nothing was classified.',
+  },
+  PROVIDER_ERROR: {
+    heading: CLASSIFICATION_CLASSIFY_HEADING,
+    sentence: 'The request to the model’s provider failed, so nothing was classified.',
+  },
+  PROVIDER_SCHEMA_VIOLATION: {
+    heading: CLASSIFICATION_CLASSIFY_HEADING,
+    sentence: 'The model answered, but not in the form we asked for, so nothing was classified.',
+  },
+  PROVIDER_REFUSED: {
+    heading: CLASSIFICATION_CLASSIFY_HEADING,
+    sentence: 'The model declined to answer, so nothing was classified.',
+  },
+  PROVIDER_NO_OUTPUT: {
+    heading: CLASSIFICATION_CLASSIFY_HEADING,
+    sentence: 'The model did not return an answer we could read, so nothing was classified.',
+  },
+};
+
+/** The codes `CLASSIFICATION_FAILURE` words, for the test that reads the API's source back. */
+export const CLASSIFICATION_FAILURE_CODES: readonly string[] = Object.keys(CLASSIFICATION_FAILURE);
+
+/** Any code this list does not know, or none: no code, no guess at a cause. */
+export const CLASSIFICATION_FAILURE_GENERIC =
+  'Nothing was classified, and we have no more specific reason to give.';
+
+/**
+ * What the intake card says of an `unclassifiable` client's reason code: a heading and
+ * one sentence, neither containing the code. `HTTP_<status>` is the audit's sentence
+ * (the crawler asked for the home page and the site answered with an error).
+ */
+export function classificationFailure(reasonCode: string | null | undefined): {
+  heading: string;
+  sentence: string;
+} {
+  if (reasonCode && Object.hasOwn(CLASSIFICATION_FAILURE, reasonCode)) {
+    return CLASSIFICATION_FAILURE[reasonCode]!;
+  }
+  if (reasonCode && /^HTTP_[45]\d\d$/.test(reasonCode)) {
+    return { heading: CLASSIFICATION_READ_HEADING, sentence: auditFailureSentence(reasonCode) };
+  }
+  return { heading: CLASSIFICATION_CLASSIFY_HEADING, sentence: CLASSIFICATION_FAILURE_GENERIC };
 }
 
 /**
@@ -174,6 +353,13 @@ export const EXCLUSION_REASON: Record<string, { label: string; detail: string }>
     label: 'Address not public',
     detail:
       'The site’s address, or an address the site sent the crawler to, is on a private or reserved network, so the crawler did not read the site. Technical Foundation is left out of the score.',
+  },
+  // 2026-10-03 (launch checklist 3.41). robots.txt could not be read, so the
+  // crawler read nothing — and the site forbade nothing, which is why this is not
+  // CRAWL_DISALLOWED. Mirrored word for word in `report_narrative`.
+  CRAWL_POLICY_UNREADABLE: {
+    label: 'Could not read robots.txt',
+    detail: `${ROBOTS_UNREACHABLE_SENTENCE} Technical Foundation is left out of the score.`,
   },
 };
 

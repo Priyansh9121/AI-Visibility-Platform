@@ -21,6 +21,7 @@ like `CrawlResult` in services/crawl.py.
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass, field
 
 import httpx
@@ -32,8 +33,53 @@ from .crawl import registrable_domain
 logger = structlog.get_logger(__name__)
 
 SERPAPI_URL = "https://serpapi.com/search.json"
-DEFAULT_TIMEOUT = 25.0
 RESULTS_PER_QUERY = 10
+
+# --- The request's bound (2026-10-03) ----------------------------------------
+# Production logged `competitors.serp_failed error_code=SERP_TIMEOUT` for a scan's
+# SERP queries: each had waited out the 25 s timeout this module used to carry, and
+# the scan lost its SERP signal. The measurement that followed ran this module's own
+# `search` for real: 24 uncached searches (4 businesses x the 6 queries `build_queries`
+# makes, three at a time as `search_many` runs them), all ok. Slowest 6.93 s, p95 2.54 s,
+# median 1.54 s, none over 10 s; a business's six queries took 3.2-9.0 s in all.
+#
+# So 25 s was not too short and three at once is not too many. A provider that answers
+# in 1.5 s does not take 25 s on several queries at once unless a connection hung, or
+# SerpApi (or the path to it from Render) was briefly down. The fix is to stop one hung
+# request from costing the signal, and to make the next failure say what kind it was:
+#
+#   * 10 s per attempt: about 1.4x the slowest search measured and 4x the p95. It is a
+#     DEADLINE on the whole attempt (`asyncio.timeout`), because httpx's own budgets apply
+#     to each network step (connect, write, read, pool) and not to the attempt: a response
+#     that keeps arriving a byte at a time never runs one out. Under the deadline sit those
+#     budgets: connect 5 s, because a TLS handshake to SerpApi is well under a second, and
+#     write, read and pool 9 s. A second under, so that a connection that hangs, the
+#     failure seen, ends on its own phase's timeout and the log line names the phase. Only
+#     an attempt that no one phase accounts for ends on the deadline, and is `total`.
+#   * ONE retry, two attempts in all, after a 1 s pause and on a NEW client, so on a new
+#     connection: the retry must not wait on the connection that hung. Only where no
+#     answer came, a timeout or a transport failure (refused, reset, DNS). Never for an
+#     answer, whatever it says (401, 429, 5xx, bad JSON, an `error` payload): the
+#     provider has spoken, and asking again would be billed or rate-limited again.
+#     "No answer" does not mean "not billed": SerpApi may already have run, and billed,
+#     the search whose answer never arrived, so a retry after a read failure can be a
+#     second billed search. Only a failure to connect certainly was not. So every retry
+#     is logged, `serp.retried` when one was needed and `serp.attempts_failed` when it
+#     did not help, and the extra searches against the shared plan can be counted.
+#   * The worst case for one query is 10 + 1 + 10 = 21 s of waiting (it was 25 s), plus
+#     the fraction of a second it takes to open two clients. The deadline makes that a
+#     ceiling, not an expectation. `search_many` runs three at a time, so a detection's
+#     six queries are two waves: at most 42 s (it was 50 s), which is also all that
+#     `POST /clients/{clientId}/competitors/detect` waits on SerpApi. The phase stays
+#     bounded and is no longer than before. `test_scan_executor.py` adds `QUERY_CEILING_S`
+#     into the scan's worst case.
+ATTEMPT_TIMEOUT_S = 10.0
+CONNECT_TIMEOUT_S = 5.0
+PHASE_TIMEOUT_S = 9.0
+PHASE_TIMEOUTS = httpx.Timeout(PHASE_TIMEOUT_S, connect=CONNECT_TIMEOUT_S)
+MAX_ATTEMPTS = 2
+RETRY_PAUSE_S = 1.0
+QUERY_CEILING_S = MAX_ATTEMPTS * ATTEMPT_TIMEOUT_S + (MAX_ATTEMPTS - 1) * RETRY_PAUSE_S
 
 # Domains that rank for "best X" queries but are never the competitor — they
 # are publishers, marketplaces, directories and social platforms writing ABOUT
@@ -157,10 +203,98 @@ def build_queries(
     return queries
 
 
+_TIMEOUT_KINDS: tuple[tuple[type[httpx.TimeoutException], str], ...] = (
+    (httpx.ConnectTimeout, "connect"),
+    (httpx.ReadTimeout, "read"),
+    (httpx.WriteTimeout, "write"),
+    (httpx.PoolTimeout, "pool"),
+)
+
+
+def _failure_kind(exc: Exception) -> str:
+    """What kind of failure `exc` was, from its class alone.
+
+    A timeout is `connect`, `read`, `write` or `pool`: the phase that gave up is what
+    tells a host that never answered from one that answered and then went quiet. An
+    attempt that ran out its own deadline (the builtin `TimeoutError`, raised by
+    `asyncio.timeout`) is `total`. Any other failure is its class name. **Never its
+    message**: an httpx error's text can carry the request URL, and the URL carries the
+    API key.
+    """
+    if isinstance(exc, TimeoutError):
+        return "total"
+    for timeout_class, kind in _TIMEOUT_KINDS:
+        if isinstance(exc, timeout_class):
+            return kind
+    return type(exc).__name__
+
+
+def _since_ms(started: float) -> int:
+    return int((time.perf_counter() - started) * 1000)
+
+
+def _gave_up(query: str, exc: Exception, kinds: list[str], started: float) -> SerpResult:
+    """The query that no attempt answered: one line of numbers and kinds, and the code."""
+    # Numbers and kinds only. NEVER the exception's text, the request, the URL or the
+    # params: the URL carries the API key.
+    logger.warning(
+        "serp.attempts_failed", attempts=len(kinds), elapsed_ms=_since_ms(started), kinds=kinds
+    )
+    timed_out = isinstance(exc, httpx.TimeoutException | TimeoutError)
+    return SerpResult(
+        query=query, ok=False, error_code="SERP_TIMEOUT" if timed_out else "SERP_UNREACHABLE"
+    )
+
+
+async def _get(query: str, params: dict[str, str]) -> httpx.Response | SerpResult:
+    """The search request, tried again once if no answer came. A `SerpResult` means none did.
+
+    Only a timeout, a transport failure (`httpx.TransportError`: refused, reset, DNS) or
+    an attempt that ran out its deadline is tried again. That is not a promise that the
+    first attempt cost nothing: a read failure may already have been processed, and
+    billed, by SerpApi, so a retry can be a second billed search. Every retry is logged
+    for that reason, `serp.retried` when one was needed and `serp.attempts_failed` when
+    it did not help. Whatever answers is returned as it is and judged by the caller, and
+    so is anything else httpx raises (a body it cannot decode is an answer too). The
+    error codes are the ones this module has always had.
+    """
+    started = time.perf_counter()
+    kinds: list[str] = []
+    while True:
+        try:
+            # A new client for each attempt, so the retry never waits on the connection
+            # that hung. The deadline is inside it, so that a cut attempt closes its
+            # client in the ordinary way and not under a cancellation.
+            async with httpx.AsyncClient(timeout=PHASE_TIMEOUTS) as client:
+                async with asyncio.timeout(ATTEMPT_TIMEOUT_S):
+                    response = await client.get(SERPAPI_URL, params=params)
+        except (httpx.TransportError, TimeoutError) as exc:
+            kinds.append(_failure_kind(exc))
+            if len(kinds) < MAX_ATTEMPTS:
+                await asyncio.sleep(RETRY_PAUSE_S)
+                continue
+            return _gave_up(query, exc, kinds, started)
+        except httpx.HTTPError as exc:
+            kinds.append(_failure_kind(exc))
+            return _gave_up(query, exc, kinds, started)
+        if kinds:
+            # A retry was needed, and it was answered. Not a failure, and still a second
+            # search against the plan. Numbers and kinds only, as above.
+            logger.info(
+                "serp.retried", attempts=len(kinds) + 1, kinds=kinds, elapsed_ms=_since_ms(started)
+            )
+        return response
+
+
 async def search(
     query: str, *, settings: Settings | None = None, num: int = RESULTS_PER_QUERY
 ) -> SerpResult:
-    """Run one Google search via SerpApi. Never raises for an upstream failure."""
+    """Run one Google search via SerpApi. Never raises for an upstream failure.
+
+    A request that got no answer (a timeout, a refused or reset connection, an attempt
+    that ran past its deadline) is made once more, after a pause; an answer never is.
+    The bound is at the top of the module.
+    """
     settings = settings or get_settings()
     api_key = settings.provider_key("serpapi_key")
     if not api_key:
@@ -175,13 +309,10 @@ async def search(
         "gl": "us",
     }
 
-    try:
-        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
-            response = await client.get(SERPAPI_URL, params=params)
-    except httpx.TimeoutException:
-        return SerpResult(query=query, ok=False, error_code="SERP_TIMEOUT")
-    except httpx.HTTPError:
-        return SerpResult(query=query, ok=False, error_code="SERP_UNREACHABLE")
+    got = await _get(query, params)
+    if isinstance(got, SerpResult):
+        return got
+    response = got
 
     if response.status_code == 401:
         logger.error("serp.auth_failed")
@@ -225,6 +356,10 @@ async def search_many(
     Bounded because SerpApi bills per search and rate-limits: firing an
     unbounded gather at a paid, rate-limited API is how a detection run turns
     into a bill and a wall of 429s.
+
+    A search that is tried again does so inside its slot, so the three never
+    become four, and a detection's six queries are two waves of at most
+    `QUERY_CEILING_S` each.
     """
     semaphore = asyncio.Semaphore(concurrency)
 

@@ -126,24 +126,31 @@ BROWSER_BUSY = "BROWSER_BUSY"
 # waited this long has already used up the time a person is promised, and is told so
 # instead of being kept waiting.
 REQUEST_WAIT_S = 60.0
-# A SCAN'S AUDIT (phase 6). Nobody is at a screen, it holds only the scan's own
-# connection, and what giving up costs is the audit's findings, so it may wait for a
-# whole run ahead of it. The longest single run that can hold the slot, each at its
-# cap (`crawl.crawl_run_cap_s`, `technical_audit.audit_run_cap_s`):
+# A SCAN'S AUDIT (phase 6). Nobody is at a screen and it holds only the scan's own
+# connection, and what giving up costs is the audit's findings: the scan goes on,
+# scored without a Technical Foundation (excluded, never a zero). So it waits longer
+# than a request does, but not for long: its wait is also time the scan's 2,400 s
+# deadline has to clear (`scan_executor.MAX_SCAN_DURATION` works the sum out, and the
+# deadline test in `test_scan_executor` pins it). 120 s is the founder's decision
+# (launch checklist 3.35); it was 300 s.
+#
+# WHAT 120 s COVERS: a run ahead that finishes normally. Runs take seconds: the audits
+# timed for M1 (2026-10-02, 29 runs on real sites and a local page, in and out of a
+# container) took 42 s at the most, so a scan's audit gets its browser behind a run
+# that is doing its work.
+#
+# WHAT IT NO LONGER COVERS: one capped run ahead. A run that hangs holds the slot until
+# its own cap cuts it. The two kinds of run, each at its cap:
 #
 #     the intake's crawl, 3 pages         266   crawl.crawl_run_cap_s(3, 12 s)
 #     another scan's audit              244.5   technical_audit.audit_run_cap_s()
-#     margin over the longer one           34
-#                                         ---
-#                                         300
 #
-# One run ahead, then, and a queue longer than that ends the audit as `BROWSER_BUSY`
-# and the scan goes on, as it does for any other failed audit. How it fits the scan's
-# 2,400 s deadline: that deadline's worst case already counts the audit's run at its
-# cap (244.5 s) after its 10 s of side files, and this wait comes before the run, so
-# the sum is 300 s longer, 2,202.5 s, and 2,400 s still clears it (by 1.09x;
-# `test_scan_executor`, the deadline test, adds this term and fails if it stops).
-SCAN_AUDIT_WAIT_S = 300.0
+# Both are longer than 120 s. So a scan's audit that queues behind a run that hangs, with
+# more than 120 s of its cap still to run, now ends as `BROWSER_BUSY` after 120 s and the
+# scan goes on without a Technical Foundation, as it does for any other failed audit. (At
+# 300 s it waited such a run out, with 34 s over the longer of the two, and got its
+# audit; the price was 180 s more in the worst case.)
+SCAN_AUDIT_WAIT_S = 120.0
 
 # ---------------------------------------------------------------------------
 # What a run's cap allows for the steps the code gives no timeout of its own.

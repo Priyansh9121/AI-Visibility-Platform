@@ -16,6 +16,7 @@ the happy path is exactly the case that never exercises them.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 from datetime import UTC, datetime, timedelta
 
@@ -531,15 +532,17 @@ class TestTheDeadlineCatchesWhatALeaseCannot:
         )
         waves = math.ceil(prompts.MAX_PROMPTS / runner.PROMPT_CONCURRENCY)
         worst_case = (
-            # detection: 4 seed prompts at concurrency 3, 6 SERP queries at 3
+            # detection: 4 seed prompts at concurrency 3, 6 SERP queries at 3, each
+            # query at its ceiling: two attempts and the pause between them
             2 * cocitation.CO_CITATION_BOUND.ceiling
-            + 2 * serp.DEFAULT_TIMEOUT
+            + 2 * serp.QUERY_CEILING_S
             + prompts.GENERATOR_BOUND.ceiling
             + waves * slot
-            # the audit: its side files before the browser, then its wait for the one
-            # browser at the scan's bound (M1 round 2), then the run at its cap (M1; a
+            # the audit: its reads before the browser at their one budget (3.41 round 3: each
+            # request had its own deadline and a chain of them had none), then its wait for the
+            # one browser at the scan's bound (M1 round 2), then the run at its cap (M1; a
             # hung page read used to have no ceiling at all, 3.20)
-            + technical_audit.SIDE_FETCH_TIMEOUT
+            + technical_audit.PRE_BROWSER_BUDGET_S
             + browser_slot.SCAN_AUDIT_WAIT_S
             + technical_audit.audit_run_cap_s()
             + fix_generator.FIX_BOUND.ceiling
@@ -551,6 +554,21 @@ class TestTheDeadlineCatchesWhatALeaseCannot:
         )
         # And not so generous that it stops being a backstop.
         assert MAX_SCAN_DURATION.total_seconds() < 2 * worst_case
+
+        # Launch checklist 3.35: the comment on `MAX_SCAN_DURATION` has one line that states
+        # this sum, the slack and the margin it leaves, and the whole line is looked up in
+        # the module's source (not each figure: the comment keeps the old ones as history).
+        # A bound that moves, the scan audit's 120 s wait among them, fails here and names
+        # the line the comment must now carry, so it cannot keep a number that is no
+        # longer true.
+        deadline = MAX_SCAN_DURATION.total_seconds()
+        stated = (
+            f"worst case {worst_case:,.1f}s of {deadline:,.0f}s: "
+            f"slack {deadline - worst_case:,.1f}s, margin ×{deadline / worst_case:.2f}"
+        )
+        assert stated in inspect.getsource(executor_module), (
+            f"the comment on MAX_SCAN_DURATION must state the sum it computes, as: {stated}"
+        )
 
 
 class TestStaleScanReaper:

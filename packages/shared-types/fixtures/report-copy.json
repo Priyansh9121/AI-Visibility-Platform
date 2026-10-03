@@ -41,6 +41,10 @@
     "CRAWL_ADDRESS_NOT_PUBLIC": {
       "label": "Address not public",
       "detail": "The site’s address, or an address the site sent the crawler to, is on a private or reserved network, so the crawler did not read the site. Technical Foundation is left out of the score."
+    },
+    "CRAWL_POLICY_UNREADABLE": {
+      "label": "Could not read robots.txt",
+      "detail": "The crawler tried to read the robots.txt of this site, or of an address the site sent it to, and did not get a usable answer. It obeys robots.txt, so without that answer it did not read the site. Technical Foundation is left out of the score."
     }
   },
   "degradationFlag": {

@@ -41,6 +41,7 @@ import { ClientSpace } from '@/components/client/ClientSpace';
 import { latestComposite, latestScanId } from '@/components/client/ClientDetailView';
 import {
   auditDimensions,
+  checkDetailSentence,
   checkLabel,
   excludedComponents,
   groupChecks,
@@ -53,6 +54,7 @@ import {
   PARTIAL_AUDIT_NOTE,
   ADDRESS_NOT_PUBLIC,
   ROBOTS_DISALLOWED,
+  ROBOTS_UNREACHABLE,
   auditFailureSentence,
 } from '@/lib/report/strings';
 
@@ -186,6 +188,20 @@ function Audited({ audit }: { audit: TechnicalAudit }): JSX.Element {
         eyebrow="Technical"
         title="This site asks crawlers like ours to stay out"
         body={`${EXCLUSION_REASON.CRAWL_DISALLOWED!.detail} This crawler obeys robots.txt, so nothing here is scored. What the file says to AI crawlers is on the Crawler screen.`}
+      />
+    );
+  }
+  // robots.txt could not be read at all — 2026-10-03 (launch checklist 3.41). The
+  // crawler read nothing, as for a file that forbids it, but the site forbade
+  // nothing, so it is not worded as a refusal; nor as a failed crawl, since the page
+  // was never asked for. The title says what happened and the body is the sentence
+  // the report shows. No note: the body already says it, and there is no code to show.
+  if (audit.status === 'failed' && audit.errorCode === ROBOTS_UNREACHABLE) {
+    return (
+      <EmptyState
+        eyebrow="Technical"
+        title={EXCLUSION_REASON.CRAWL_POLICY_UNREADABLE!.label}
+        body={EXCLUSION_REASON.CRAWL_POLICY_UNREADABLE!.detail}
       />
     );
   }
@@ -351,25 +367,26 @@ function Audited({ audit }: { audit: TechnicalAudit }): JSX.Element {
 
 function CheckRow({ check }: { check: AuditCheck }): JSX.Element {
   const value = num(check.value);
+  // What the check's code means, in a sentence, under the check — never the code itself
+  // (launch checklist 3.39: the row used to print `NO_CANONICAL_LINK` in mono, small and
+  // last). A check with no code, or with one nothing words, has no line.
+  const sentence = checkDetailSentence(check.detailCode);
   return (
-    <li className="flex flex-wrap items-center justify-between gap-4 border-t border-line-hairline py-3 first:border-t-0">
-      <span className="flex flex-wrap items-center gap-3">
-        <Badge tone={STATUS_TONE[check.status] ?? 'neutral'}>
-          {STATUS_LABEL[check.status] ?? check.status}
-        </Badge>
-        <span className="text-ui-base text-text-primary">{checkLabel(check.checkKey)}</span>
-      </span>
-      <span className="flex flex-wrap items-center gap-4">
+    <li className="flex flex-col gap-2 border-t border-line-hairline py-3 first:border-t-0">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <span className="flex flex-wrap items-center gap-3">
+          <Badge tone={STATUS_TONE[check.status] ?? 'neutral'}>
+            {STATUS_LABEL[check.status] ?? check.status}
+          </Badge>
+          <span className="text-ui-base text-text-primary">{checkLabel(check.checkKey)}</span>
+        </span>
         {value !== null && (
           <span className="font-mono text-ui-sm tabular-nums text-text-secondary">{value}</span>
         )}
-        {check.detailCode && (
-          // The machine code, small and last — the same treatment ErrorState
-          // gives a reference code. Never prose, because the backend never
-          // sends prose here.
-          <span className="font-mono text-ui-2xs text-text-tertiary">{check.detailCode}</span>
-        )}
-      </span>
+      </div>
+      {sentence !== null && (
+        <p className="max-w-measure text-ui-sm leading-prose text-text-secondary">{sentence}</p>
+      )}
     </li>
   );
 }

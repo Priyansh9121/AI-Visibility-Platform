@@ -8,7 +8,11 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { renderToStaticMarkup } from 'react-dom/server';
+import type { PromptRun } from '@avp/shared-types';
 import { PromptsPanel, runSegments } from './ClientPromptsView';
 import {
   EXHAUSTED,
@@ -16,6 +20,7 @@ import {
   absentRun,
   mixedRun,
 } from '@/lib/client/__fixtures__/promptRuns';
+import { ENGINE_FAILURE_SENTENCE, engineFailureSentence } from '@/lib/client/engines';
 
 const noop = () => {};
 
@@ -109,10 +114,14 @@ describe('an engine that did not name the client is a finding, not a failure', (
     expect(html).toContain('Zendesk');
   });
 
-  it('keeps it distinct from an engine that genuinely failed', () => {
+  it('keeps it distinct from an engine that genuinely failed, and says why in a sentence, not the code', () => {
     const html = panel();
     expect(html).toContain('This engine did not answer');
-    expect(html).toContain('ENGINE_TIMEOUT');
+    // The card used to print the code in mono: `(ENGINE_TIMEOUT)`, which is not even one
+    // the API records. It says what happened instead (launch checklist 3.39).
+    expect(html).toContain('It did not respond in the time we allow.');
+    expect(html).not.toContain('ENGINE_TIMEOUT');
+    expect(html).not.toContain('(TIMEOUT)');
   });
 
   it('reports a run where nobody named the client without reading as broken', () => {
@@ -211,5 +220,109 @@ describe('each run carries a strip of what the engines did', () => {
     const html = panel({ runs: [absentRun] });
     expect(html).not.toContain('avp-verdict__seg--tone-beacon');
     expect(html).toContain('Did not name you');
+  });
+});
+
+describe('an engine that did not answer says why in a sentence, and never the code — launch checklist 3.39', () => {
+  // One row per code an engine result can carry (`services/engines.py`). The sentence
+  // follows "This engine did not answer." in the same paragraph.
+  // Three of the provider's refusals (a key it refused, an account with no credit or quota,
+  // a request it rejected) are each a problem on our side, and share one sentence.
+  const OUR_SIDE = 'We could not get an answer from its provider because of a problem on our side.';
+  const CASES: [code: string, sentence: string][] = [
+    ['TIMEOUT', 'It did not respond in the time we allow.'],
+    ['PROVIDER_RATE_LIMITED', 'Its provider asked us to slow down.'],
+    ['PROVIDER_AUTH_FAILED', OUR_SIDE],
+    ['PROVIDER_QUOTA_EXHAUSTED', OUR_SIDE],
+    ['PROVIDER_BAD_REQUEST', OUR_SIDE],
+    ['PROVIDER_UNREACHABLE', 'We could not reach its provider.'],
+    ['PROVIDER_ERROR', 'The request to its provider failed.'],
+    ['PROVIDER_REFUSED', 'It declined to answer this question.'],
+    ['ANSWER_TRUNCATED', 'Its answer was cut off before it finished.'],
+    ['ANSWER_PAUSED', 'It had not finished its answer when the response came back.'],
+    ['STOP_REASON_UNKNOWN', 'It stopped for a reason we do not recognise.'],
+  ];
+  const MACHINE_CODE = /\b[A-Z]{3,}_[A-Z0-9_]+\b/;
+
+  /** `mixedRun` with its failed engine's code replaced: the other two engines are as they were. */
+  const withCode = (code: string | null): PromptRun =>
+    ({
+      ...mixedRun,
+      results: mixedRun.results.map((r) => (r.status === 'timeout' ? { ...r, errorCode: code } : r)),
+    }) as PromptRun;
+
+  it('has a row for every sentence the screen has, and a sentence of its own for each but three', () => {
+    expect(CASES.map(([code]) => code).sort()).toEqual(Object.keys(ENGINE_FAILURE_SENTENCE).sort());
+    const sharers = CASES.filter(([, sentence]) => sentence === OUR_SIDE).map(([code]) => code);
+    expect(sharers.sort()).toEqual(['PROVIDER_AUTH_FAILED', 'PROVIDER_BAD_REQUEST', 'PROVIDER_QUOTA_EXHAUSTED']);
+    expect(new Set(CASES.map(([, sentence]) => sentence)).size).toBe(CASES.length - 2);
+  });
+
+  it.each(CASES)('%s: the sentence, once, after the lead, and not the code', (code, sentence) => {
+    const html = panel({ runs: [withCode(code)] });
+    expect(html.split(`This engine did not answer. ${sentence}`).length - 1).toBe(1);
+    expect(html).not.toContain(`(${code})`);
+    expect(html).not.toContain(code);
+    expect(html.match(MACHINE_CODE)).toBeNull();
+    expect(html).not.toContain('font-mono text-ui-2xs">(');
+  });
+
+  it.each([['SOMETHING_NEW'], [null]])(
+    'a code nothing words (%s) leaves the lead on its own, and shows no code',
+    (code) => {
+      const html = panel({ runs: [withCode(code)] });
+      expect(html).toContain('This engine did not answer.</p>');
+      expect(html).not.toContain('This engine did not answer. ');
+      if (code !== null) expect(html).not.toContain(code);
+      expect(html.match(MACHINE_CODE)).toBeNull();
+    },
+  );
+
+  it('blames nobody: not the person who asked, not the brand, not the engine', () => {
+    for (const [code, sentence] of CASES) {
+      expect(sentence, code).not.toMatch(/\byou\b|\byour\b|\bbrand\b|\bclient\b|\bprompt\b/i);
+    }
+  });
+
+  it('a named or unnamed answer is not given a failure sentence', () => {
+    const html = panel();
+    // Three engines in `mixedRun`: one named, one did not, one timed out. One sentence.
+    expect(html.split('This engine did not answer.').length - 1).toBe(1);
+    for (const sentence of Object.values(ENGINE_FAILURE_SENTENCE)) {
+      expect(html.split(sentence).length - 1).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('engineFailureSentence is null for no code, an empty one, one nothing words, and an inherited name', () => {
+    for (const code of [null, undefined, '', 'SOMETHING_NEW', 'constructor', 'toString']) {
+      expect(engineFailureSentence(code), String(code)).toBeNull();
+    }
+  });
+
+  describe('every code an engine can record is worded — read back from engines.py', () => {
+    const ROOT = fileURLToPath(new URL('../../../../../', import.meta.url));
+    const source = readFileSync(join(ROOT, 'apps/api/src/avp_api/services/engines.py'), 'utf8');
+    // The error mapping's strings, the one place `TIMEOUT` is spelled, and the three stop-reason
+    // constants (`ANSWER_TRUNCATED`, `ANSWER_PAUSED`, `STOP_REASON_UNKNOWN`).
+    const recorded = new Set<string>([
+      ...[...source.matchAll(/"(PROVIDER_[A-Z_]+)"/g)].map((m) => m[1]!),
+      ...[...source.matchAll(/^(ANSWER_[A-Z_]+|STOP_REASON_UNKNOWN) = "\1"$/gm)].map((m) => m[1]!),
+      ...(source.includes('EngineResultStatus.TIMEOUT, "TIMEOUT"') ? ['TIMEOUT'] : []),
+    ]);
+
+    it('finds the codes it is meant to find, so an empty read cannot pass', () => {
+      for (const code of ['TIMEOUT', 'PROVIDER_RATE_LIMITED', 'PROVIDER_REFUSED', 'ANSWER_TRUNCATED', 'STOP_REASON_UNKNOWN']) {
+        expect(recorded.has(code), code).toBe(true);
+      }
+      expect(recorded.size).toBeGreaterThanOrEqual(11);
+    });
+
+    it('has a sentence for each', () => {
+      expect([...recorded].filter((code) => engineFailureSentence(code) === null)).toEqual([]);
+    });
+
+    it('has no sentence for a code the engines no longer record', () => {
+      expect(Object.keys(ENGINE_FAILURE_SENTENCE).filter((code) => !recorded.has(code))).toEqual([]);
+    });
   });
 });

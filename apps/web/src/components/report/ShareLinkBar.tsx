@@ -14,7 +14,8 @@
  *
  * The design-system-only rule: every element comes from `@avp/design-system` — `Button`,
  * `Card`, `CardBody` and `TextField` — and the only local classes are layout
- * utilities (flex, gap, margin) resolving to the preset's own spacing scale.
+ * utilities (flex, gap, margin) resolving to the preset's own spacing scale, and the design
+ * system's own `avp-visually-hidden` for the one message that is for screen readers (3.38).
  *
  * **The URL field is a `TextField`, not a hand-styled `<input>`.** The first
  * draft of this component rolled its own bordered input and reached for
@@ -72,7 +73,8 @@ const LINK_NOT_CREATED_SENTENCE = 'The link could not be created. Try again.';
  * Said in the status region once Get shareable link has made a link (3.33), and the one
  * announcement of its end date: the "works until" line is not a live region. The date is
  * `formatStamp`'s, as in that line. A response with no end date says only that the link is
- * ready, never a date it was not given.
+ * ready, never a date it was not given. Visually hidden (3.38): it is for a screen reader,
+ * and a sighted reader has the date once, in that line.
  */
 function linkReadySentence(expiresAt: string | null): string {
   return expiresAt === null
@@ -373,11 +375,15 @@ export function ShareLinkBar({
             with. Never for a failed scan, whose link opens nothing (3.29): nothing on the
             bar says it works. The "works until" line above is not live, so this is the
             one announcement of the date.
+
+            For screen readers only (3.38): that line already shows the date, so a
+            sighted reader would see it twice. The text is clipped, not removed, so it is
+            still read when it arrives. The region stays visible as it was, and so does the
+            withdrawn message beside it. `display: none`, `hidden` or `visibility: hidden`
+            on this text or on the region would silence the announcement.
           */}
           {!failedScan && state.kind === 'ready' && state.url !== null && (
-            <p className="mt-3 text-ui-sm text-text-secondary">
-              {linkReadySentence(state.expiresAt)}
-            </p>
+            <p className="avp-visually-hidden">{linkReadySentence(state.expiresAt)}</p>
           )}
         </div>
         <div role="alert">

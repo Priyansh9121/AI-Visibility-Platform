@@ -13,9 +13,11 @@ doing that to DB 0 would sign out every local development session.
 
 from __future__ import annotations
 
+import asyncio
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 
+import httpx
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -530,6 +532,39 @@ def no_real_dns(monkeypatch):  # noqa: ANN001, ANN201
     monkeypatch.setattr(egress, "_getaddrinfo", refuse)
 
 
+class _ChunkStream(httpx.AsyncByteStream):
+    """A response body that is produced as it is read, so a test sees how much was pulled."""
+
+    def __init__(self, chunks: Callable[[], AsyncIterator[bytes]]) -> None:
+        self._chunks = chunks
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        async for chunk in self._chunks():
+            yield chunk
+
+
+async def _never() -> httpx.Response:
+    """An answer that does not come: what a handler returns to stall a request's headers."""
+    await asyncio.Event().wait()
+    raise AssertionError("unreachable")
+
+
+async def _later(seconds: float, response: httpx.Response) -> httpx.Response:
+    """An answer that comes, slowly: what a handler returns to make a request take `seconds`."""
+    await asyncio.sleep(seconds)
+    return response
+
+
+def _in_pieces(data: bytes, size: int = 65_536) -> Callable[[], AsyncIterator[bytes]]:
+    """A body that arrives in network-sized pieces, as it does from a real server."""
+
+    async def chunks() -> AsyncIterator[bytes]:
+        for start in range(0, len(data), size):
+            yield data[start : start + size]
+
+    return chunks
+
+
 class FakeWeb:
     """The sites the robots gate talks to, served from memory — 2026-09-29.
 
@@ -542,6 +577,15 @@ class FakeWeb:
     `PUBLIC_ADDRESS` unless `resolve_to(host, *addresses)` says otherwise —
     `dns_fails(host)` makes a name not resolve. Nothing here touches the real
     network, and `lookups` records every name asked for.
+
+    Ways to make a server hard to read (launch checklist 3.41, rounds 2 and 3):
+    `serve_stream(url, chunks)` answers with a body produced as it is read (a very long
+    one, or one that never ends), `hang(url)` never answers at all, headers included, and
+    `slow(url, seconds)` answers, but only after `seconds`.
+
+    Every answer, `serve` too, is a STREAMED response, as a real client gets from a real
+    server: the gate reads the raw stream (`Response.aiter_raw`), which a response that
+    was built from a string and read already would refuse.
     """
 
     # A public address that is not in a documentation range (those are refused).
@@ -551,6 +595,11 @@ class FakeWeb:
         self.resolutions: dict[str, list[str] | Exception] = {}
         self.lookups: list[str] = []
         self.routes: dict[str, tuple[int, str, dict[str, str]]] = {}
+        self.streams: dict[
+            str, tuple[int, dict[str, str], Callable[[], AsyncIterator[bytes]]]
+        ] = {}
+        self.hangs: set[str] = set()
+        self.delays: dict[str, float] = {}
         self.failures: dict[str, Exception] = {}
         self.requests: list[tuple[str, str, str]] = []
 
@@ -562,6 +611,18 @@ class FakeWeb:
 
     def fail(self, url: str, exc: Exception) -> None:
         self.failures[url] = exc
+
+    def serve_stream(
+        self, url: str, chunks: Callable[[], AsyncIterator[bytes]], *, status: int = 200,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        self.streams[url] = (status, headers or {"content-type": "text/plain"}, chunks)
+
+    def hang(self, url: str) -> None:
+        self.hangs.add(url)
+
+    def slow(self, url: str, seconds: float) -> None:
+        self.delays[url] = seconds
 
     def resolve_to(self, host: str, *addresses: str) -> None:
         self.resolutions[host.lower()] = list(addresses)
@@ -591,8 +652,17 @@ class FakeWeb:
         self.requests.append((request.method, url, request.headers.get("user-agent", "")))
         if url in self.failures:
             raise self.failures[url]
-        status, body, headers = self.routes.get(url, (404, "", {}))
-        return httpx.Response(status, text=body, headers=headers)
+        if url in self.hangs:
+            return _never()  # MockTransport awaits what is not a Response
+        if url in self.streams:
+            status, headers, chunks = self.streams[url]
+        else:
+            status, body, headers = self.routes.get(url, (404, "", {}))
+            chunks = _in_pieces(body.encode())
+        response = httpx.Response(status, headers=headers, stream=_ChunkStream(chunks))
+        if url in self.delays:
+            return _later(self.delays[url], response)
+        return response
 
     def fetched(self, method: str | None = None) -> list[str]:
         return [url for m, url, _ in self.requests if method is None or m == method]

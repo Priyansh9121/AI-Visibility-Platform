@@ -486,6 +486,65 @@ class TestASiteWhoseRobotsTxtKeepsUsOut:
         ).items()
 
 
+class TestASiteWhoseRobotsTxtCannotBeRead:
+    """The whole chain against a site whose robots.txt did not answer — launch checklist 3.41.
+
+    The crawler fetches nothing, exactly as for a robots.txt that forbids it, but the
+    site forbade nothing, so the audit, the score and the report must not say it did.
+    """
+
+    async def test_nothing_is_said_about_a_file_nobody_read(
+        self, client: AsyncClient, engine, stub_engines, robots_web, monkeypatch  # noqa: ANN001
+    ) -> None:
+        from avp_api.models.technical_audit import AuditStatus
+        from avp_api.services import audit_runner, technical_audit
+
+        def no_browser():  # noqa: ANN202
+            raise AssertionError("the browser was launched with no robots.txt to read")
+
+        monkeypatch.setattr(audit_runner, "audit_site", technical_audit.audit_site)
+        monkeypatch.setattr(technical_audit, "async_playwright", no_browser)
+        robots_web.serve("https://helpscout.com/robots.txt", status=503)
+
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_engines(n_prompts=3)
+        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json={})).json()["id"]
+
+        # The audit: robots.txt only, stored as a failed audit with its own code.
+        assert robots_web.fetched() == ["https://helpscout.com/robots.txt"]
+        (audit,) = await _rows(engine, TechnicalAudit, sid, load=TechnicalAudit.checks)
+        assert audit.status is AuditStatus.FAILED
+        assert (audit.error_code, audit.pages_crawled) == ("ROBOTS_UNREACHABLE", 0)
+        assert audit.technical_foundation is None
+        checks = {c.check_key: (c.status.value, c.detail_code) for c in audit.checks}
+        assert checks["indexable"] == ("not_applicable", "ROBOTS_UNREACHABLE")
+        assert checks["robots_txt_present"] == ("not_applicable", "ROBOTS_UNREACHABLE")
+        assert checks["meta_title"] == ("not_applicable", "ROBOTS_UNREACHABLE")
+        assert not [k for k, (status, _) in checks.items() if status in ("warn", "fail", "error")]
+
+        # The score: Technical Foundation excluded, under the reason that says why.
+        (score,) = await _rows(engine, Score, sid)
+        assert score.excluded_dimensions["technical_foundation"] == "CRAWL_POLICY_UNREADABLE"
+        assert "TECHNICAL_FOUNDATION_NOT_MEASURED" not in score.degradation_flags
+        assert "technical_foundation" not in score.weights
+        assert score.composite is not None
+        assert score.formula_version == "v5"
+
+        # No fix tells the client to publish a robots.txt that may well exist.
+        fixes = await _rows(engine, ActionItem, sid)
+        assert fixes, "fix generation did not run"
+        assert "robots_txt_present" not in [f.source_key for f in fixes]
+        assert "indexable" not in [f.source_key for f in fixes]
+
+        # The report says what happened, and carries no finding.
+        report = (await client.get(f"{BASE}/scans/{sid}/report")).json()
+        tf = next(d for d in report["dimensions"] if d["key"] == "technical_foundation")
+        assert (tf["included"], tf["exclusionReason"]) == (False, "CRAWL_POLICY_UNREADABLE")
+        assert report["audit"]["errorCode"] == "ROBOTS_UNREACHABLE"
+        assert report["audit"]["findings"] == []
+
+
 # ---------------------------------------------------------------------------
 # M1 — the API's memory, and the audit step that could hang (checklist 3.20)
 # ---------------------------------------------------------------------------

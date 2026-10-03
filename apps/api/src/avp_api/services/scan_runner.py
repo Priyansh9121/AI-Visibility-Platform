@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -180,6 +180,26 @@ async def finalize_scan(session: AsyncSession, scan: Scan) -> Scan:
     Idempotent by the same guard the executor uses: a scan already terminal is
     left alone, because a second stamp would move `finished_at` forward for a
     scan that finished earlier.
+
+    **THE STAMP IS CONDITIONAL ON THE ROW, NOT ON THE CHAIN'S COPY OF IT** —
+    launch checklist 3.36. The guard above reads `scan.status`, which is only
+    this session's copy: `expire_on_commit` is off (`db.py`), so another
+    transaction's write does not reach it. Only a refresh does, and the chain
+    refreshes the scan only after a failed phase (`scan_executor._attempt`). A
+    reaper that fails a scan whose chain is still alive therefore leaves that
+    copy saying RUNNING until the next heartbeat finds the row changed and
+    cancels the chain, up to `HEARTBEAT_INTERVAL` later. Stamped through the
+    ORM, the write was an UPDATE with no condition on the status, so a finalize
+    inside that window replaced FAILED with SUCCEEDED or PARTIAL, and a failed
+    scan's share link (3.29) opened again.
+
+    So the write is one `UPDATE ... WHERE status = 'running'`, the shape of the
+    lease renewal (`scan_executor.renew_lease`) and of the deadline's stamp, and
+    not a read followed by a write: Postgres checks the condition again once the
+    row is free of any other transaction's write. Zero rows matched is a
+    definite answer, that somebody else owns this scan's fate (the reaper, the
+    deadline's finalise, `_mark_failed`). Nothing is written, `scan.finalize_lost`
+    is logged with the status the row has, and the scan is returned as stored.
     """
     if scan.status in (
         ScanStatus.SUCCEEDED,
@@ -191,12 +211,29 @@ async def finalize_scan(session: AsyncSession, scan: Scan) -> Scan:
 
     failures = await count_engine_failures(session, scan.id)
     status, error_code = terminal_status_for(failures, scan.engine_result_count)
-    scan.status = status
+    values: dict[str, object] = {"status": status, "finished_at": datetime.now(UTC)}
     if error_code is not None:
-        scan.error_code = error_code
-    scan.finished_at = datetime.now(UTC)
+        values["error_code"] = error_code
+    # Anything still pending on the session goes out BEFORE the stamp. The session does
+    # not autoflush, so left for the commit below it would be written AFTER the stamp,
+    # as an ORM UPDATE with no condition at all, and could replace what the stamp wrote.
     await session.flush()
+    stamped = (
+        await session.execute(
+            update(Scan)
+            .where(Scan.id == scan.id, Scan.status == ScanStatus.RUNNING)
+            .values(**values)
+            .returning(Scan.id)
+            .execution_options(synchronize_session=False)
+        )
+    ).scalar_one_or_none()
     await session.commit()
+    # `synchronize_session=False` leaves the chain's copy as it was, so it is read
+    # again: the scan comes back as the row has it, whoever wrote it.
+    await session.refresh(scan)
+    if stamped is None:
+        logger.warning("scan.finalize_lost", scan_id=scan.id, status=scan.status.value)
+        return scan
     logger.info(
         "scan.finalized",
         scan_id=scan.id,

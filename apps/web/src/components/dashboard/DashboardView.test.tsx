@@ -30,7 +30,7 @@ import {
   unscoredQueuedDashboard,
 } from '@/lib/dashboard/__fixtures__/dashboards';
 import type { Dashboard } from '@avp/shared-types';
-import { scanOutcomeSentence } from '@/lib/scans/scanOutcome';
+import { SCAN_DURATION_SENTENCE, scanOutcomeSentence } from '@/lib/scans/scanOutcome';
 
 const render = (dashboard: Dashboard, props: Partial<Parameters<typeof DashboardView>[0]> = {}) =>
   renderToStaticMarkup(
@@ -65,8 +65,12 @@ describe('the empty state is written, not blank', () => {
     expect(html).not.toContain('avp-table');
   });
 
-  it('is honest about the wait rather than silent about it', () => {
-    expect(render(emptyDashboard)).toContain('under five minutes');
+  it('is honest about the wait rather than silent about it, and puts no figure on it', () => {
+    // "A full scan takes under five minutes" was untrue (launch checklist 3.39): a scan's
+    // own range runs past it. The sentence is the one the intake card and the checklist use.
+    const html = render(emptyDashboard);
+    expect(html).toContain(`${SCAN_DURATION_SENTENCE} The five bars are the dimensions it fills in`);
+    expect(html.toLowerCase()).not.toContain('five minutes');
   });
 
   it('clients but no scans is its own state, not the empty agency one', () => {
@@ -387,7 +391,8 @@ describe('a brand-new agency is shown the shape of a scan, not a graphic', () =>
   it('still says everything it said before, and still offers the way out', () => {
     const html = render(emptyDashboard);
     expect(html).toContain('No scans yet');
-    expect(html).toContain('under five minutes');
+    expect(html).toContain(SCAN_DURATION_SENTENCE);
+    expect(html.toLowerCase()).not.toContain('five minutes');
     expect(html).toContain('Add your first client');
   });
 });
@@ -525,7 +530,8 @@ describe('the getting-started checklist', () => {
     expect(html.indexOf('Add your first client')).toBeLessThan(html.indexOf('avp-empty'));
     // The figure and the explanation stay.
     expect(html).toContain('avp-ledger--unmeasured');
-    expect(html).toContain('under five minutes');
+    expect(html).toContain(SCAN_DURATION_SENTENCE);
+    expect(html.toLowerCase()).not.toContain('five minutes');
   });
 
   it('the no-scans-yet state likewise hands its button up', () => {

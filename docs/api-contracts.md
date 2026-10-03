@@ -1067,9 +1067,15 @@ getting-started checklist rather than the server storing per-step flags:
   and is not counted. **A `failed` scan is not counted**, even if it kept a score
   row (a deadline that came after scoring): its score is never shown or counted
   (checklist 3.24).
-- `sharedScanCount` — scans with a live share link (`share_token IS NOT
-  NULL`). Minting sets it, revocation clears it, expiry does not: the count
-  describes the account as it is, not a history of links that once existed.
+- `sharedScanCount` — scans whose share link would open now: the test the
+  public report routes apply to a token (a token is set, its end is after
+  now, and the scan has not `failed`). **A link past its end is not
+  counted, and neither is a failed scan's**, even while the token is still
+  on the row for the agency to withdraw (checklist 3.42). Minting a link
+  adds to the count; withdrawing one, a link reaching its end and a scan
+  failing each take one off. The count describes the account as it is, not
+  a history of links that once existed. A `cancelled` scan's link opens, so
+  it is counted; nothing writes `cancelled` today.
 - `gettingStartedDismissed` — whether someone at the agency has closed the
   checklist. The one stored fact; the rest are derived on read.
 
@@ -1182,7 +1188,7 @@ three of them mean `industry` is `null`:
 | `pending` | `null` | Created with `classify: false`; not yet attempted |
 | `classified` | **set** | Confident result |
 | `ambiguous` | `null` | Crawled fine, but the evidence did not support a confident call |
-| `unclassifiable` | `null` | Could not read the site, or it is not a business site |
+| `unclassifiable` | `null` | Nothing was classified: the crawler could not read the site, the site is not a business site, or the classifying model could not answer (`classificationReasonCode` says which; the web shows "Could not classify" and one sentence per code, never the code) |
 
 **The UI must never render a null industry as an empty field or a dash that
 reads like data.** `ambiguous` is a distinct outcome that needs its own
@@ -1204,8 +1210,38 @@ the database by `ck_clients_industry_matches_classification_status`.
 | `PROVIDER_RATE_LIMITED` / `PROVIDER_UNREACHABLE` / `PROVIDER_ERROR` | Upstream model call failed |
 | `PROVIDER_REFUSED` | Model declined to answer |
 | `PROVIDER_SCHEMA_VIOLATION` | Model answered, but its answer did not fit the classifier's schema (2026-09-11) |
-| `ROBOTS_DISALLOWED` | The site's robots.txt forbids AVPScanBot its homepage, so nothing was read (2026-09-29) |
+| `ROBOTS_DISALLOWED` | The site's robots.txt was read and forbids AVPScanBot its homepage, so nothing was read (2026-09-29) |
+| `ROBOTS_UNREACHABLE` | The site's robots.txt, or that of an address the site sent the crawler to, could not be read at all: no answer (a timeout, a refused connection, a name that does not resolve, a response that has not finished within 10 s), a 5xx, a 429, or redirects that never reach a file. The crawler fetches nothing without it, as for `ROBOTS_DISALLOWED`, but the site forbade nothing (2026-10-03, launch checklist 3.41) |
 | `ADDRESS_NOT_PUBLIC` | The site's address, an address the site sent the crawler to (a redirect hop or landing of a navigation, or a robots.txt redirect), or an address Chromium reports it connected to, is not on the public internet (private, loopback, link-local, carrier-grade NAT, multicast, reserved or unspecified, including those forms inside an IPv6 address), so the crawl stopped and nothing was kept (2026-10-01) |
+
+**What the crawler does with robots.txt** (`ai_crawlers.crawl_policy`, RFC 9309 §2.3.1;
+`ROBOTS_UNREACHABLE` changed the code reported, not what the crawler does): a 2xx is read
+whatever its content type, over its first 512,000 characters, and its rules for AVPScanBot
+(else `*`) decide; any other 4xx (404, 410, 403 …) means there is no file, so everything is
+allowed; a 429, a 5xx, no answer at all, or redirects that never reach a file mean the file
+cannot be read, so **nothing is fetched** and the outcome is `ROBOTS_UNREACHABLE`. Each
+request the crawler's gate makes (robots.txt, a HEAD hop of the homepage's redirects, the
+audit's sitemap) must finish within **10 s in total**, from the address check to its last
+byte, and reads no more than it needs: robots.txt is streamed and dropped at its first
+512,000 characters, a sitemap at its first 64 KiB (it is judged by whether it is XML, which
+its first characters say). A request that has not finished by then is "no answer": for
+robots.txt that is `ROBOTS_UNREACHABLE`; for a HEAD hop and the sitemap it is the failure
+they always had (the address is left as it is; no sitemap was found). Only a 2xx answer's
+body is read at all (a slow 404 is still "no file", a 5xx is its status), and only as
+text the gate can decode: plain, or gzip or deflate coded once (it asks for those two and
+no others) and inflated no further than four bytes a character of the cap, in UTF-8,
+UTF-16, UTF-32 (those two with a byte-order mark), ASCII, ISO-8859-n or Windows-125x, under
+any spelling Python knows for them (a response that names no charset is read as UTF-8).
+The charset is checked by name before a byte of the body is read, because decoding is CPU
+on the API's one event loop that no deadline can interrupt. Two codings stacked, any other
+coding (`br`, `zstd`, …), a corrupt stream, any other charset (UTF-7 or Shift_JIS as much as
+one that is not text at all), and a hop whose address is not http or https are "no answer"
+too. When a chain of redirects runs out, the last Location's robots.txt is read before it
+is handed on.
+All the reads before the browser starts, together, must finish within **60 s**
+(`PRE_BROWSER_BUDGET_S`): past that the run ends `TIMEOUT` and starts no browser. Rows
+stored before 2026-10-03 carry `ROBOTS_DISALLOWED` for the unreadable cases too; nothing
+recorded which a row was, so they are not re-labelled.
 
 `BROWSER_BUSY` is never a classification reason (2026-10-02): a read that cannot
 get the API's one browser is refused with a `429` (below) and the client is left as
@@ -1249,11 +1285,15 @@ that it is refused with the same `429` ("The crawler is busy with other pages ri
 now. Try again in a minute.") and **writes nothing**: no client is created here, a
 reclassified client keeps its classification, and a hand-run audit keeps the one
 stored. No client is left `unclassifiable` for it, because a site that was never
-read is not a site that could not be read. Once it has the browser, one run is cut
+read is not a site that could not be read. Before it asks for the browser, its reads of robots.txt and the
+homepage's redirects must finish within **60 s** in total, or it ends as `TIMEOUT` with
+no browser started. Once it has the browser, one run is cut
 at **266 s** for the three pages intake asks for (`crawl_run_cap_s`), ending as
 `TIMEOUT` with nothing kept. A scan's own audit waits for the browser at most
-**300 s**, one capped run ahead of it and a margin, and records `BROWSER_BUSY` when
-that runs out (the scan goes on); its run is cut at **244.5 s**.
+**120 s** (it was 300 s until 2026-10-03; launch checklist 3.35): long enough for a run
+ahead that finishes, not for one that hangs until its own cap cuts it (244.5 s for an
+audit, 266 s for the crawl above). It records `BROWSER_BUSY` when that runs out, and the
+scan goes on without a Technical Foundation; its own run is cut at **244.5 s**.
 
 #### `GET /api/v1/clients`
 **Auth required.** Cursor-paginated, newest first.
@@ -1297,8 +1337,10 @@ moves between scans.
 all** — `CompetitorComparison` is derived on read by design
 (`scoring_runner.score_scan`: *"a pure function of rows already persisted, so
 storing it would create a second copy that can fall out of step with the
-first"*). This endpoint calls that same function, so a figure here cannot
-disagree with the same figure on the report for the same scan.
+first"*). This endpoint calls `score_scan(persist=False)`, whose comparison the
+report reads through `scoring_runner.compare_on_read` (a test holds the two
+equal), so a figure here cannot disagree with the same figure on the report for
+the same scan. Nothing is persisted, and so no `scoring.completed` is logged.
 
 Scans that produced no reading (queued, running, failed, cancelled) are excluded
 from `scans` and counted in `scansWithoutData`, so a client with four scans and
@@ -1723,6 +1765,15 @@ position 1 of 1 for every mention, because there is nothing else to detect.
 scan submitted more than 15 minutes ago, it fails that one scan with
 `EXECUTOR_NEVER_STARTED` and returns it as `failed`.
 
+**A `failed` scan is served as stored** (checklist 3.37 review). Its score is withheld
+(checklist 3.24 and 3.30), and withheld means not computed and not shown. It does not
+mean it cannot be derived from what the scan stored: this route returns the prompt set
+(each prompt's `intent`) and every engine result (`status`, `mentioned`, `position`,
+`sentiment`, `brandMentions`, `citations`), which are all the inputs Mention Rate, Share of
+Voice and Sentiment are computed from. `GET /scans/{scanId}/results` and
+`GET /scans/{scanId}/prompts` return the same rows. None of the three applies the
+failed-scan rule today; whether they should is the founder's decision and is open.
+
 #### `GET /api/v1/scans/{scanId}/results`
 **Auth required.** Cursor-paginated engine results, ascending by id.
 Separate from the scan detail because a full scan is 60+ rows with nested
@@ -1730,9 +1781,15 @@ mentions and citations.
 
 **Query:** `limit` (1–200, default 25), `cursor`.
 
+**A `failed` scan's results are served as stored**, `sentiment` and `mentioned` on each
+included: see `GET /api/v1/scans/{scanId}`.
+
 #### `GET /api/v1/scans/{scanId}/prompts`
 **Auth required.** The generated prompt set, ordered by `position`.
 `404` if the scan has no prompt set yet.
+
+**A `failed` scan's prompt set is served as stored**, each prompt's `intent` included:
+see `GET /api/v1/scans/{scanId}`.
 
 #### `GET /api/v1/clients/{clientId}/scans`
 **Auth required.** A client's scans, newest first. Cursor-paginated.
@@ -1811,6 +1868,7 @@ interchangeable:
 | `NO_COMPETITOR_SET` (Citation Strength, v3) | Tiered domains were cited but no competitor set exists to normalise against — same code, same reason as Share of Voice | "no comparison was made" |
 | `CRAWL_DISALLOWED` | Technical Foundation: the site's robots.txt forbids AVPScanBot, so the audit read nothing (2026-09-29) | "Blocked by robots.txt" |
 | `CRAWL_ADDRESS_NOT_PUBLIC` | Technical Foundation: the site's address, or an address the site sent the crawler to, is not on the public internet, so the audit kept nothing (2026-10-01) | "Address not public" |
+| `CRAWL_POLICY_UNREADABLE` | Technical Foundation: the site's robots.txt could not be read at all (no answer, an error, redirects that never reach a file), so the audit read nothing; the site forbade nothing (2026-10-03) | "Could not read robots.txt" |
 
 An excluded dimension's weight is redistributed proportionally across the rest.
 **A null sub-score is never a zero** — a brand nobody mentioned has not been
@@ -1872,7 +1930,12 @@ while this runs either fails first (`409`) or is scored first and fails after. `
 
 #### `GET /api/v1/scans/{scanId}/score`
 **Auth required.** The most recent stored Score, with the competitor comparison
-recomputed from persisted rows on read.
+and the subject's average position derived from persisted rows on read
+(`scoring_runner.compare_on_read`). Reading a score computes no score, writes
+nothing and logs no `scoring.completed`: that line says a Score was written.
+The rivals' figures are derived by the current formula with the platform's tiers
+as they are at the time of the read; the stored Score is as it was when it was
+scored, under its own `formulaVersion`.
 
 **A `failed` scan has no score** (checklist 3.30, extending 3.24): the same `404
 /problems/not-found` as a scan not yet scored, with `detail` "This scan failed, so
@@ -1958,19 +2021,45 @@ through the same helper and carries no components at all. `succeeded` and `parti
 are unchanged, and the agency check comes first: another agency's failed scan is the same
 `404` as an unknown one.
 
+**Withheld here means not computed and not shown.** The facts about the site come back,
+and the sub-score is computed from nine of them (`isIndexable`, `hasSitemap`,
+`canonicalPresent`, `schemaTypes`, the four `has…Schema` flags and `contentAgeDays`), so
+it can be worked out from this response (checklist 3.37 review). Whether the audit
+routes should withhold more is the founder's decision and is open.
+
 | `status` | Meaning |
 |---|---|
 | `ok` | Every component measurable; `components` and `componentWeights` filled. |
 | `partial` | Read the page, but a component had no signal (e.g. no date anywhere). Scored on what was measurable; `components` and `componentWeights` show the measured ones, and `excludedComponents` lists those left out with their reason (e.g., `content_freshness: NO_DATE_SIGNAL_AVAILABLE`). |
 | `failed` | Could not read the site. `technicalFoundation`, `components` and `componentWeights` are all empty. |
 
-A `failed` audit's `errorCode` says why. Two codes mean the crawler declined to
+A `failed` audit's `errorCode` says why. Three codes mean the crawler declined to
 read the site rather than failed to:
 
-- `ROBOTS_DISALLOWED` (2026-09-29): the site's robots.txt forbids AVPScanBot the
-  homepage. Page checks are `not_applicable` with that `detailCode`; a blanket
-  `Disallow: /` under `User-agent: *` still fails `indexable` with
+- `ROBOTS_DISALLOWED` (2026-09-29): the site's robots.txt was read and forbids
+  AVPScanBot the homepage. Page checks are `not_applicable` with that `detailCode`; a
+  blanket `Disallow: /` under `User-agent: *` still fails `indexable` with
   `ROBOTS_TXT_DISALLOW`, because robots.txt itself was read.
+- `ROBOTS_UNREACHABLE` (2026-10-03, launch checklist 3.41): the site's robots.txt, or
+  that of an address the site sent the crawler to (a redirect hop, or where the browser
+  landed), could not be read: no answer (a timeout, a refused connection, a name that
+  does not resolve, a response that had not finished within 10 s), a 5xx, a 429, or
+  redirects that never reach a file. The crawler fetches nothing then, exactly as for
+  `ROBOTS_DISALLOWED` (RFC 9309 §2.3.1.4; a 429 is treated like a 5xx), but the site
+  forbade nothing and the code says so. Until then these were stored as
+  `ROBOTS_DISALLOWED`. Only what was actually read is reported, so what the checks say
+  depends on whose file it was:
+  - **The site's own robots.txt could not be read.** Every check but `cwv_inp` is
+    `not_applicable` with that `detailCode`, `robots_txt_present` and `sitemap_present`
+    included, because a file that did not answer is not a missing one: nothing here is a
+    finding. The AI crawler table is `unknown` for every agent (`robotsReadable: false`).
+  - **Another host's file could not be read**, the site's own having been read (a redirect's, or
+    where the browser landed). The site's own checks are what they were: `robots_txt_present`
+    passes, or is the `NO_ROBOTS_TXT` warning when its own file was a 404; `sitemap_present`
+    passes, or is the `NO_SITEMAP_XML` warning when the sitemap it was allowed to ask for was
+    not there. They are findings, as they would be for any audit, and the report lists them.
+    The checks that needed the page are `not_applicable` with `ROBOTS_UNREACHABLE`.
+  A missing file (a 404 or any 4xx but 429) is an answer, not this: the crawl goes on.
 - `ADDRESS_NOT_PUBLIC` (2026-10-01): the run ends when the site's own
   address, a navigation's redirect hop or landing, robots.txt or its redirect,
   or an address Chromium reports it connected to is not on the public
@@ -1993,7 +2082,10 @@ Technical Foundation as `NOT_YET_MEASURED`.
   which has no timeout of its own, and the scan goes on (launch checklist 3.20). The
   facts robots.txt and the sitemap gave, read before the browser started, are
   kept; nothing the page gave is, because the cap can fall before the last egress
-  check has said the page's facts may be kept.
+  check has said the page's facts may be kept. An audit whose reads before the browser
+  (robots.txt, the sitemap, the homepage's redirects) have not finished within **60 s**
+  in total (`PRE_BROWSER_BUDGET_S`, 2026-10-03) ends `TIMEOUT` too, with no browser started;
+  it keeps the side files' facts if they had finished, and nothing otherwise.
 - `BROWSER_ERROR` (2026-10-03): kept apart from a reading like `TIMEOUT`. The
   browser can fail after the page was read and before the last egress check said
   what it showed may be kept (or while it closes), and what the page gave up to
@@ -2004,7 +2096,9 @@ Technical Foundation as `NOT_YET_MEASURED`.
 - `BROWSER_BUSY` (2026-10-02): the API reads one page at a time in its one
   browser, and another read held it for the whole wait, so no browser was started
   for this audit. Only the audit inside a scan (phase 6) records it, after waiting
-  **300 s**; the scan goes on to scoring, alerts and fixes. The robots.txt and
+  **120 s** (300 s until 2026-10-03: a run ahead that finishes is waited out, one that
+  hangs until its own cap is not); the scan goes on to scoring, alerts and fixes,
+  without a Technical Foundation. The robots.txt and
   sitemap facts, read before the wait, are kept. `POST /scans/{scanId}/audit` never
   stores it: after **60 s** it answers `429 rate-limited` and the audit already
   stored for the scan is kept.
@@ -2058,7 +2152,8 @@ inside a scan is not one of these and is never refused.
 
 **A `failed` scan's audit carries no `technicalFoundation` and no `components`** here too
 (checklist 3.30, extending 3.24): `null` and `{}`, `componentWeights` and every other
-field as stored. See `POST` above.
+field as stored. See `POST` above, including what "withheld" does not mean: the nine
+facts the sub-score is computed from are returned.
 
 #### Effect on scoring
 
@@ -2067,9 +2162,13 @@ instead of excluding it as `NOT_YET_MEASURED`, and the effective weights return
 to §6's table exactly (30/25/20/15/10). A **failed** audit leaves the dimension
 excluded — an unreadable site is not a measured zero.
 The exclusion reason is `NOT_YET_MEASURED`, except `CRAWL_DISALLOWED` for an
-audit failed with `ROBOTS_DISALLOWED` and `CRAWL_ADDRESS_NOT_PUBLIC` for one
-failed with `ADDRESS_NOT_PUBLIC`. All three give the same composite; only the
-reason differs, so `FORMULA_VERSION` did not change for either.
+audit failed with `ROBOTS_DISALLOWED`, `CRAWL_ADDRESS_NOT_PUBLIC` for one
+failed with `ADDRESS_NOT_PUBLIC` and `CRAWL_POLICY_UNREADABLE` for one failed with
+`ROBOTS_UNREACHABLE`. All four give the same composite, with the same dimensions
+excluded in the same cases; only the reason differs, so `FORMULA_VERSION` did not change
+for any. The reason enters `inputsDigest` when it is set (a score read as
+`CRAWL_POLICY_UNREADABLE` has its own digest), so a stored score keeps the digest and the
+reason it was computed with.
 
 ---
 
@@ -2084,6 +2183,13 @@ reason differs, so `FORMULA_VERSION` did not change for either.
 rows Epics 3–6 wrote. The only new numbers are aggregates — citation counts per
 domain, mention shares, per-engine coverage — and each is a count over stored
 facts. Makes no provider calls and costs nothing.
+
+**Opening a report is a read.** The competitor comparison (each competitor's
+figures) and `score`'s `averagePosition`, `positionCount` and `competitors` are
+derived on read from the persisted rows, by the same function
+`GET /scans/{scanId}/score` uses (`scoring_runner.compare_on_read`). No score is
+computed or written, and `scoring.completed` is not logged. The same holds for
+the PDF, `POST /reports/shared` and `POST /reports/shared/pdf`.
 
 **Why one endpoint rather than four calls.** The proof beat needs aggregates the
 raw endpoints do not expose. Deriving them client-side means paging
@@ -2240,12 +2346,33 @@ kept a score row: `score` is `null`, `dimensions` is `[]`, each competitor's
 `mentionRate` and `shareOfVoice` are `null`, `audit.technicalFoundation` is
 `null`, and `actionItems` is `[]` (checklist 3.30: the fix generator was handed the
 score, so nothing it wrote is served; the fix beat then renders its deterministic
-derivation, as for a scan with no fixes generated). The shared report and its PDF
-do not serve a `failed` scan at all: its share link is refused like a withdrawn one
-(checklist 3.29, under `POST /api/v1/reports/shared`). No row is changed or
-deleted: the Score row is not read, and the fix rows are read and not served.
-`proof.crossEngine.standings[]` (each engine's mention rate and sentiment) is not
-withheld.
+derivation, as for a scan with no fixes generated). `proof.crossEngine.standings`
+is `[]` too (checklist 3.37): each standing is one engine's mention rate and
+sentiment, computed by the same functions as two score dimensions, and the
+sentiments add up to the Sentiment sub-score the scan does not show. The web draws
+no cross-engine section for an empty list, as for a scan with no answers.
+`splits`, `comparablePrompts` and `agreementRate` stay, with every other count,
+boolean, domain and position in `proof`, because they are facts about what was
+measured; `proof.engineCoverage` still gives each engine's answers and answers
+naming the subject. The shared report and its PDF do not serve a `failed` scan at
+all: its share link is refused like a withdrawn one (checklist 3.29, under
+`POST /api/v1/reports/shared`). No row is changed or deleted: the Score row is not
+read, the fix rows are read and not served, and the answers the standings were
+computed from are read as they always were. Every other status serves `standings`
+as before.
+
+**"Withheld" here means not computed and not shown. It does not mean "cannot be derived
+from what the scan stored"** (checklist 3.37 review). A failed scan's stored rows are
+unchanged and its own routes serve them as stored: `GET /api/v1/scans/{scanId}` (the
+prompt set with each prompt's `intent`, and every engine result), `.../results`,
+`.../prompts` and `.../audit` return every input Mention Rate, Share of Voice, Sentiment
+and Technical Foundation are computed from. Whether those routes should withhold anything
+for a failed scan is the founder's decision and is open.
+
+**`visibilityFlags` is served as for any status.** `NAMED_ONLY_WHEN_PROMPTED` is kept as a
+finding about where the mentions came from, and on a failed scan it says that the Mention
+Rate the scan does not show was 0 (no question that left out the subject's name produced
+a mention, while one that included it did).
 
 **`outranksSubject`** is arithmetic over stored counts and ordinals — more
 appearances wins; on a tie, the better position wins. Not a judgement.
@@ -2436,7 +2563,9 @@ every report. Carries `standings` (each engine's own mention rate and
 sentiment, computed by `scoring.mention_rate` and `scoring.sentiment_score` on
 that engine's slice — not recomputed, so the per-engine figures cannot drift
 from the composite), `splits` (prompts one engine answered naming the subject
-and another answered without it), `comparablePrompts`, and `agreementRate`.
+and another answered without it), `comparablePrompts`, and `agreementRate`. For a
+`failed` scan `standings` is `[]` (checklist 3.37; see the report's failed-scan note
+above) and the rest is served as for any status.
 
 Two rules the shape enforces. **Only engines that ANSWERED appear on either
 side of a split** — a rate-limited or timed-out call is missing data, not

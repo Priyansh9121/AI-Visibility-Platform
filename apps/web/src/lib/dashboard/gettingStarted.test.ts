@@ -10,6 +10,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { deriveGettingStarted } from './gettingStarted';
+import { SCAN_DURATION_SENTENCE } from '@/lib/scans/scanOutcome';
 import {
   completeDashboard,
   dismissedDashboard,
@@ -56,7 +57,10 @@ describe('the steps are read off the account, one fact each', () => {
     expect(steps.client!.action).toBeUndefined();
     expect(steps.scan!.done).toBe(false);
     expect(steps.scan!.action).toEqual({ label: 'Run the first scan', href: '/' });
-    expect(steps.scan!.detail).toBe('Under five minutes from start to score.');
+    // The one sentence the dashboard and the intake card share, and no figure (3.39).
+    expect(steps.scan!.detail).toBe(SCAN_DURATION_SENTENCE);
+    expect(steps.scan!.detail).toBe('A scan usually takes a few minutes.');
+    expect(steps.scan!.detail.toLowerCase()).not.toContain('five minutes');
   });
 
   it('a running scan lights the scan step and tells the score step to wait', () => {

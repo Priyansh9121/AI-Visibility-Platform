@@ -53,5 +53,8 @@ class DashboardOut(ApiModel):
     # agency. `getting_started_dismissed` is the one fact that is stored, and
     # the only one that is a decision rather than a state.
     scored_scan_count: int
+    # Scans whose share link would open right now: the public lookup's own test, so a link
+    # past its end and a failed scan's are not in it (checklist 3.42). Not scans that ever
+    # had a link. A cancelled scan's link opens, so it is in it.
     shared_scan_count: int
     getting_started_dismissed: bool

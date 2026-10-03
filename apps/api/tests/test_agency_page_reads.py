@@ -54,7 +54,6 @@ from avp_api.services import (
     audit_runner,
     browser_slot,
     crawl,
-    scan_executor,
     technical_audit,
 )
 from avp_api.services import intake as intake_service
@@ -875,7 +874,7 @@ class TestAScansOwnAuditIsNotOneOfThem:
         stub_engines()
 
         await client.post(f"{BASE}/clients/{cid}/scans", json={})
-        assert page_reads.audit_waits == [browser_slot.SCAN_AUDIT_WAIT_S]  # 300 s: the scan's
+        assert page_reads.audit_waits == [120.0]  # the scan's own bound (checklist 3.35)
 
         page_reads.audit_waits.clear()
         resp = await routes.call("audit", held=False)()
@@ -887,11 +886,25 @@ class TestAScansOwnAuditIsNotOneOfThem:
         self, client: AsyncClient, engine, stub_engines, robots_web: Any,  # noqa: ANN001
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """The wait is the scan's own, and when it runs out the audit is a failed one."""
+        """The wait is the scan's own, and when it runs out the audit is a failed one.
+
+        The scan's audit asks the slot for its real bound, 120 s (launch checklist 3.35),
+        and the test records what it was asked for. Only the time the slot then waits is
+        scaled down, to 0.3 s, so the test does not sit through two minutes.
+        """
         from avp_api.models import ActionItem, Score
 
         monkeypatch.setattr(audit_runner, "audit_site", technical_audit.audit_site)
-        monkeypatch.setattr(scan_executor, "SCAN_AUDIT_WAIT_S", 0.3)  # a minute, scaled down
+        asked: list[float | None] = []
+        real_slot = browser_slot.browser_slot
+
+        def scaled_down(
+            kind: browser_slot.BrowserKind, *, wait_s: float | None = None, **refs: str | None
+        ) -> Any:
+            asked.append(wait_s)
+            return real_slot(kind, wait_s=0.3, **refs)
+
+        monkeypatch.setattr(technical_audit, "browser_slot", scaled_down)
 
         def launched(*args: Any, **kwargs: Any) -> Any:  # noqa: ARG001
             pytest.fail("a browser was started for an audit that never got the slot")
@@ -908,6 +921,7 @@ class TestAScansOwnAuditIsNotOneOfThem:
                 )
         sid = started.json()["id"]
 
+        assert asked == [120.0]  # the scan's real bound: the 0.3 s above is only its copy
         scan, audit = await _scan_and_its_audit(engine, sid)
         assert audit is not None and audit.status is AuditStatus.FAILED
         assert (audit.error_code, audit.pages_crawled) == ("BROWSER_BUSY", 0)
