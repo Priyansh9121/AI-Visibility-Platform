@@ -109,13 +109,17 @@ EXCLUSION_DETAIL: dict[str, str] = {
     # v3 — 2026-09-27. The dimension is measured now, so this fires only when a
     # scan's citations are all unclassified. The second tier's limitation is
     # stated here, to the reader, and not only in a docstring.
+    # 2026-10-03: the first tier's list says what `domain_authority`'s curated lists
+    # hold — suffixes for government, military and education bodies, and the named
+    # domains — and `tests/test_report_copy.py` fails when the two disagree.
     "NO_AUTHORITY_DATA": (
         "Citation Strength weighs the sources an answer cites when it names the brand, "
-        "on two tiers: a short structural list — government and university domains, "
-        "Wikipedia, the AP and Reuters wire services, and the cross-industry review "
-        "platforms (Better Business Bureau, Trustpilot, G2, Capterra) — and the domains "
-        "engines cite across at least three client industries and five clients on this "
-        "platform, leaving out domains that are themselves brands in a scanned market. "
+        "on two tiers: a short structural list — government, military and education "
+        "domains; Wikipedia and Wikidata; the AP and Reuters wire services; and the "
+        "cross-industry review platforms (Better Business Bureau, Trustpilot, G2, "
+        "Capterra) — and the domains engines cite across at least three client "
+        "industries and five clients on this platform, leaving out domains that are "
+        "themselves brands in a scanned market. "
         "Nothing cited in this scan’s unprompted answers is on either tier, so there is no "
         "authority to measure and the dimension is left out with its weight spread "
         "across the others, rather than scored as zero. The second tier counts "

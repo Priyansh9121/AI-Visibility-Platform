@@ -23062,3 +23062,72 @@ Drift check (north-star §8): Layer 1, Delivery (a route's limit); lifecycle pha
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts`, regenerated in this commit for the route's description, regenerate with no further change.
 - Exit codes were read from files.
+
+# The report's reason for leaving out Citation Strength names the trusted sources the code counts
+
+**2026-10-03, the sixteenth entry of the day; branch `pilot-fixes-4`, the founder's brief "search accuracy, guardrails and pilot hardening" (item C1).** One item, one commit.
+
+**Render: nothing to set. No endpoint, schema, dependency or outbound host change.** One sentence of report copy changes, on screen and in the PDF.
+
+Drift check (north-star §8): Layer 1, Delivery (what the report says about a score); lifecycle phase: Activation (Epic 9), the report a pilot sends.
+
+## 1. What was found
+
+- **The scans.** Three production scans of 2026-10-03:
+  - two were scored with `excluded=['citation_strength']`: one whose competitor set was carried forward from an earlier scan, and the new `.in` client (`flags=['WEAK_COMPETITOR_SET']`);
+  - the new `.com.au` client was scored with `excluded=[]`.
+- **The rule, by elimination.** `compute_score` leaves Citation Strength out for one of three reasons, in this order:
+  1. `NO_AWARENESS_POPULATION`, no awareness answers;
+  2. `NO_AUTHORITY_DATA`, the awareness answers cite no domain with an authority tier;
+  3. `NO_COMPETITOR_SET`.
+
+  The `scoring.completed` line lists the dimensions left out, not the reason, so the reason was found by elimination:
+  - Share of Voice was measured on all three scans. It is left out under `NO_COMPETITOR_SET` from the same test (`no_competitors`), so that reason did not apply.
+  - Mention Rate was measured, so the scans had awareness answers.
+
+  So both exclusions were `NO_AUTHORITY_DATA`: nothing the engines cited in those scans' unprompted answers is on either tier. The `.com.au` scan's answers cited at least one domain that is.
+- **Not a bug.** The rule works as designed.
+  - The first tier is a fixed list (`services/domain_authority.py`): government, military and education domain suffixes, with their country forms such as `.gov.au` and `.edu.au`, which are handled; Wikipedia, Wikidata, the AP, Reuters, the BBB, Trustpilot, G2 and Capterra.
+  - The second tier is built from this platform's own history: domains cited across at least three client industries and five clients, market participants left out. In production that history is a few days of pilot scans; how many domains it holds there was not checked (no access to production's database).
+- **The report's words, sentence by sentence, against the code:**
+  - True: the dimension weighs the sources an answer cites when it names the brand; the three-industries, five-clients rule and the market participants left out; nothing cited in the unprompted answers is on either tier, so the weight is spread across the others; the second tier's uncalibrated classification; the citations are still shown in the evidence below (beat 03 on screen and in the PDF, under the exclusion note).
+  - **Not true:** the first tier was described as "government and university domains, Wikipedia, …". The list also holds military domains and Wikidata, and its education suffixes cover schools and other bodies, not only universities.
+
+## 2. What changed
+
+- **The enumeration,** in `report_narrative.EXCLUSION_DETAIL["NO_AUTHORITY_DATA"]` and its word-for-word twin in `strings.ts`, now reads "government, military and education domains, Wikipedia and Wikidata, the AP and Reuters wire services, and the cross-industry review platforms (Better Business Bureau, Trustpilot, G2, Capterra)". The shared fixture (`packages/shared-types/fixtures/report-copy.json`) is regenerated.
+- **A test ties the sentence to the code** (`tests/test_report_copy.py`). Every kind of suffix and every named domain on the curated list must be named in the sentence, and the sentence may name nothing that is no longer on the list. So a change to the list fails until the copy follows.
+
+## 3. The review
+
+- **UI review (sonnet): PASS WITH NITS**, no Blocker, Major or Minor.
+  - Checked: everything on the code's list is named and nothing that is not; the API string, the web string and the fixture are byte-identical; no other screen or document restates the list; `docs/scoring-spec.md` agrees.
+  - **Taken:** semicolons between the list's items, because three of them carry their own "and".
+
+## Found, not fixed
+
+- **`scoring.completed` logs which dimensions were left out but not why,** so a production question like this one needs elimination. A reason per dimension on that line would answer it directly. That is a small logging change, not a bug, so it was not made.
+- **The sentence's thresholds** ("three client industries and five clients") are not tied by a test to `MIN_PLATFORM_INDUSTRIES` and `MIN_PLATFORM_CLIENTS`.
+
+## Verified
+
+**API pytest 3234 → 3235 (+1); floor raised to match.** Web 1708, unchanged: the parity tests read the regenerated fixture. One test is skipped on macOS as before: it reads Linux's `/proc`.
+- `test_the_tier_a_list_in_the_sentence_is_the_list_in_the_code`.
+- **Negative controls:**
+  - The old sentence fails the new test, which names exactly what it lacks: education, military, Wikidata.
+  - The implementer's mutations, each restored, all fail:
+    - the copy dropping Wikidata or military;
+    - the code gaining a named domain or a suffix label the sentence does not cover;
+    - the code losing `mil` or `wikidata.org`.
+  - One mutation passes: a name added to the sentence that is on no list. That is a stated limit of the test, which knows only its own table of names.
+- **The web side:**
+  - The parity tests (`copyContract.test.ts` with `test_report_copy.py`) pass on the regenerated fixture.
+  - A PDF rendered with this exclusion carries the new enumeration and not "university domains".
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 26, shared-types 53 (0 fail), design-system 935, web 1708, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
