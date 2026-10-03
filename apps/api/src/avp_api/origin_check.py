@@ -46,7 +46,8 @@ raised out here would be nobody's to catch and would become a bare 500. It is
 rendered through `errors._problem_response`, the serializer those handlers use,
 so its members, its `instance` and its content type are theirs by construction.
 
-Registered in `main.py` BEFORE the CORS middleware, which keeps CORS outermost.
+Registered in `main.py` BEFORE the CORS middleware, which keeps CORS outside it. (One
+layer sits further out than CORS: the security headers, which read and answer nothing.)
 """
 
 from __future__ import annotations

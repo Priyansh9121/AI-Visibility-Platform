@@ -36,6 +36,18 @@ intent; the schema defines the shapes.
   `browser.memory`, `browser.slot_waited`, `browser.slot_busy`; the three about
   the browser carry `scan_id` or `client_id`); `docs/runbook.md`, "Reading the
   API's memory", says what each carries.
+- Security headers (2026-10-03, checklist 3.1): every API response, an error or
+  a CORS preflight included, carries six headers, added by
+  `avp_api/security_headers.py` unless the response already set that header
+  itself: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+  `Content-Security-Policy: frame-ancestors 'none'`,
+  `Referrer-Policy: no-referrer`,
+  `Strict-Transport-Security: max-age=63072000; includeSubDomains` and
+  `Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()`.
+  The one response without them is an unhandled-exception 500, which Starlette
+  builds outside every middleware.
+  The web app sends its own set on every page except the proxied `/api/v1`
+  paths, where a browser gets the API's set, once (`apps/web/next.config.mjs`).
 
 ### Authentication
 
