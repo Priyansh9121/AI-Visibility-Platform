@@ -23298,3 +23298,108 @@ These were verified, as the founder could not. The run used the real production 
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# The web app and the API send security headers on every response, with the full content security policy in report-only mode
+
+**2026-10-03, the nineteenth entry of the day; branch `pilot-fixes-4`, the founder's brief "search accuracy, guardrails and pilot hardening" (launch checklist 3.1).** One item, one commit.
+
+**Render: nothing to set. No endpoint, schema, dependency or outbound host change.**
+- The API's container start line gains `--no-server-header`, so its image changes.
+- After the deploy, check the headers on a served response (1.1f).
+- Use a GET: the API's GET routes answer HEAD with 405, so `curl -sI` misleads there. `curl -sS -D - -o /dev/null <url>` shows a GET's headers.
+
+Drift check (north-star §8): Layer 1, Delivery (how both hosts answer a browser); lifecycle phase: Activation (Epic 9), hardening before the first pilots.
+
+## 1. What changed
+
+- **The web app** (`apps/web/next.config.mjs`). Every route except the proxied `/api/v1/*` gets:
+  - `Strict-Transport-Security: max-age=63072000; includeSubDomains` (no `preload`);
+  - `X-Content-Type-Options: nosniff`;
+  - `Referrer-Policy: strict-origin-when-cross-origin`;
+  - `X-Frame-Options: DENY`;
+  - an enforced `Content-Security-Policy: frame-ancestors 'none'`, the anti-framing directive alone, which cannot break a script;
+  - `Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()`;
+  - and a `Content-Security-Policy-Report-Only` holding the full policy: `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'`.
+
+  More on the web side:
+  - `img-src` allows `https:` because an agency's logo may be on any https host: the column's constraint is `logo_url LIKE 'https://%'`.
+  - The token pages keep `Referrer-Policy: no-referrer` and `X-Robots-Tag: noindex, nofollow`: their entries come after the site-wide one, and Next lets a later value win.
+  - The site-wide pattern, `/((?!api/v1(?:/|$)).*)`, is the exact complement of the proxy rewrite, so `/api/v1` carries the API's own set once.
+  - `poweredByHeader: false` drops `X-Powered-By: Next.js`.
+- **The API:** a pure ASGI middleware (`avp_api/security_headers.py`).
+  - **The headers:** `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Content-Security-Policy: frame-ancestors 'none'`, `Referrer-Policy: no-referrer`, the same HSTS and the same Permissions-Policy, each unless the response already set that header.
+  - **Where it sits:** it is the outermost layer, so CORS preflights and the Origin check's 403 carry them too. CORS still sits outside everything that reads or answers a request; this layer reads and answers nothing.
+  - **What it touches:** only the response's start message, so a streamed response still streams and the PDF keeps its own `Content-Disposition` and `Cache-Control`.
+  - **The start line:** `docker-entrypoint.sh` adds `--no-server-header`, so there is no `Server: uvicorn`.
+- **Why the full CSP stays report-only:** Next inlines its own scripts, so dropping `'unsafe-inline'` needs a nonce per request, which means rendering every page per request. Google sign-in, Stripe and the signed-in pages could not be exercised here.
+- **Drift guards:** the HSTS and Permissions-Policy values sent by the web and the API are cross-checked by a test. Any page nested under a `[token]` route must carry its own no-referrer and noindex entry, or the web tests fail.
+- **`docs/api-contracts.md`:** a convention bullet listing the six headers.
+
+## 2. On a real build
+
+- **Setup:** `next build` and `next start` in a worktree, with the API on uvicorn behind it.
+- **`curl`:** every header once on public pages, the 404 and a static asset; `no-referrer` with `noindex, nofollow` on the seven token pages; the API's six on `/api/v1/health` directly and through the proxy, with no web set riding along; no `X-Powered-By` and no `Server` header anywhere.
+  - This also answers checklist 3.10 on a served response, locally: the seven token paths carry noindex and no-referrer.
+- **Playwright in Chromium, 17 page loads, report-only CSP: zero violations.**
+  - Public pages, the credential pages with and without a fragment, and the signed-out app shells.
+  - Positive controls show the probe sees violations: a `default-src 'none'` page gave 73, and an injected https logo gave one under `img-src 'self' data:` and none under the shipped policy.
+
+## 3. The review
+
+- **Security review (opus): PASS WITH NITS**, nothing at Medium.
+  - Checked clean:
+    - CORS: preflights, refused origins and credentials as before;
+    - the Origin check, unaffected;
+    - the exclusion pattern, matched against the same raw path as the rewrite (case, trailing slash, `/api/v10`, `%2F`);
+    - the token pages' override;
+    - Permissions-Policy, which keeps clipboard writing for the copy buttons;
+    - streaming and the PDF;
+    - nothing leaked.
+  - **Taken:** no `Server` and no `X-Powered-By`; the HSTS cross-check; a stale "CORS stays outermost" docstring; nested `[token]` pages caught.
+
+## Found, not fixed
+
+- **Responses built outside the middleware stack carry no security headers:** Starlette's 500 for an unhandled exception, uvicorn's own 400s, Next's 308 redirects, and Next's proxy error when the API is down. Each body is fixed text, and HSTS is already cached from other responses. An exception handler that sets the headers itself would cover the API's 500.
+- **HSTS is sent in every environment.** Browsers ignore it over http, so local development is unaffected unless someone serves localhost over https.
+- **Founder decisions:**
+  - **Enforcing the full CSP:** click through the live site signed in (Google sign-in, Checkout, the billing portal, a PDF download, a branded report) with the console open, and switch the header if no "[Report Only]" line appears. Enforcing as written adds no script protection while `'unsafe-inline'` stays. There is no endpoint collecting violations.
+  - **Framing is denied everywhere,** the share page included. That rules out embedding a share link, and the product spec's embeddable free-scan widget would need its own route left out.
+  - **`includeSubDomains`** is safe on today's two `onrender.com` hosts. Decide again when a custom domain is attached.
+
+## Verified
+
+**API pytest 3284 → 3310 (+26) and web vitest 1781 → 1841 (+60); floors raised to match.** One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **New tests:**
+  - `tests/test_security_headers.py` (25):
+    - each header's exact value, exactly once, on a 200, a 404, a 401, the Origin check's 403, allowed and refused preflights, a 429 with `Retry-After` kept, and the PDF;
+    - a sweep of all 59 method and path pairs;
+    - a route's own header kept, with mixed case counted;
+    - streaming;
+    - websocket and lifespan passed through;
+    - the web and API values compared.
+  - `tests/test_dockerfile.py` (+1): the entrypoint's real `exec uvicorn` line handed to uvicorn's own parser.
+  - `src/app/securityHeaders.test.ts` (57): effective headers for about 40 paths through Next's own route matcher and merge order, the complement of the proxy, the pinned config, nested token pages.
+  - `src/app/referrerPolicy.test.ts` (+3): the finder for nested token pages.
+- **Negative controls:**
+  - **On this tree:** with `main.py`, `next.config.mjs` and the entrypoint put back to the previous commit, 15 API and 43 web tests fail. Restored and checked with `cmp`.
+  - **The implementer's controls, each restored:**
+    - middleware not registered: 13 of 25 fail;
+    - inside CORS: the preflight and order tests;
+    - overwrite instead of keep;
+    - case-sensitive names;
+    - a buffering layer: the streaming test;
+    - Permissions-Policy or HSTS drift on either side;
+    - the site-wide rule moved last: 10 fail;
+    - the source `/:path*`: 10 fail;
+    - the enforced CSP grown: 24 fail;
+    - `--no-server-header` dropped or mistyped;
+    - `poweredByHeader: true`;
+    - a real nested token page with no entry: 5 fail.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 26, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

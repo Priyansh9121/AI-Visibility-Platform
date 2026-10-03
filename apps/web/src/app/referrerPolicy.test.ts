@@ -10,8 +10,9 @@
  * is in the build log's 2026-09-29 entry.)
  */
 
-import { describe, it, expect } from 'vitest';
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getPathMatch } from 'next/dist/shared/lib/router/utils/path-match';
@@ -26,16 +27,23 @@ const NO_REFERRER = { key: 'Referrer-Policy', value: 'no-referrer' };
  */
 const NOINDEX_NOFOLLOW = 'noindex, nofollow';
 
-/** Every page under app/ with a `[token]` segment, as a Next path pattern. */
-function tokenRoutes(dir: string = APP): string[] {
+/**
+ * Every page under app/ with a `[token]` segment at it or above it, as a Next path
+ * pattern: `/share/:token` and, should one ever exist, `/share/:token/print`. A page
+ * nested under a token carries the same token in its address, so it is a credential
+ * page as much as the one at the token. `dir` and `root` are for the synthetic tree
+ * below; by default this reads the real app.
+ */
+function tokenRoutes(dir: string = APP, root: string = APP): string[] {
   const found: string[] = [];
+  const segments = relative(root, dir)
+    .split(sep)
+    .filter((s) => s !== '' && !/^\(.*\)$/.test(s)); // a route group is no part of the address
+  if (segments.includes('[token]') && existsSync(join(dir, 'page.tsx'))) {
+    found.push(`/${segments.join('/').replace(/\[token\]/g, ':token')}`);
+  }
   for (const name of readdirSync(dir)) {
-    const path = join(dir, name);
-    if (!statSync(path).isDirectory()) continue;
-    if (name === '[token]' && existsSync(join(path, 'page.tsx'))) {
-      found.push(`/${relative(APP, path).split(sep).join('/').replace('[token]', ':token')}`);
-    }
-    found.push(...tokenRoutes(path));
+    if (statSync(join(dir, name)).isDirectory()) found.push(...tokenRoutes(join(dir, name), root));
   }
   return found;
 }
@@ -64,6 +72,71 @@ describe('pages whose address is a credential send no Referer', () => {
   it.each([...tokenRoutes(), '/sign-up/google'])('%s does', async (source) => {
     // /sign-up/google carries an unfinished Google sign-up (its ticket is in the fragment).
     expect(await rulesFor(source)).toContainEqual(NO_REFERRER);
+  });
+});
+
+/**
+ * A page BELOW a `[token]` segment is a credential page too: `/share/[token]/print`
+ * would carry the token in its address as `/share/[token]` does. The rules name each
+ * page by its exact path, so a page nobody wrote an entry for gets no `no-referrer`.
+ * `tokenRoutes` finds such pages at any depth, so the tests above fail for one until it
+ * has its entry. None exists today, so that is proved here on a synthetic app tree.
+ */
+describe('a page nested under a token page is a credential page too', () => {
+  let tree: string;
+
+  beforeAll(() => {
+    tree = mkdtempSync(join(tmpdir(), 'avp-app-'));
+    for (const dir of [
+      'share/[token]',
+      'share/[token]/print',
+      'invite/[token]/step/two', // nothing at the token itself, two levels below it
+      '(legal)/reset-password/[token]/print', // a route group is no part of the address
+      'clients/[clientId]',
+      'clients/[clientId]/alerts',
+    ]) {
+      mkdirSync(join(tree, dir), { recursive: true });
+      writeFileSync(join(tree, dir, 'page.tsx'), '');
+    }
+  });
+  afterAll(() => rmSync(tree, { recursive: true, force: true }));
+
+  type Entry = { source: string; headers: { key: string; value: string }[] };
+  const entry = (source: string): Entry => ({
+    source,
+    headers: [NO_REFERRER, { key: 'X-Robots-Tag', value: NOINDEX_NOFOLLOW }],
+  });
+  /** The routes that no entry names with a `no-referrer`, which is what `rulesFor` finds for each. */
+  const withoutNoReferrer = (routes: string[], entries: Entry[]) =>
+    routes.filter(
+      (route) =>
+        !entries
+          .filter((e) => e.source === route)
+          .flatMap((e) => e.headers)
+          .some((h) => h.key === NO_REFERRER.key && h.value === NO_REFERRER.value),
+    );
+
+  it('finds a page at any depth below a token, through a route group, and no other page', () => {
+    expect(tokenRoutes(tree, tree).sort()).toEqual([
+      '/invite/:token/step/two',
+      '/reset-password/:token/print',
+      '/share/:token',
+      '/share/:token/print',
+    ]);
+  });
+
+  it('flags every one that has no entry of its own', () => {
+    // An entry for the page at the token (`/share/:token`) does not reach the one below it.
+    expect(withoutNoReferrer(tokenRoutes(tree, tree), [entry('/share/:token')]).sort()).toEqual([
+      '/invite/:token/step/two',
+      '/reset-password/:token/print',
+      '/share/:token/print',
+    ]);
+  });
+
+  it('stops flagging them once each has its entry', () => {
+    const entries = tokenRoutes(tree, tree).map(entry);
+    expect(withoutNoReferrer(tokenRoutes(tree, tree), entries)).toEqual([]);
   });
 });
 
