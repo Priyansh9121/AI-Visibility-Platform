@@ -129,6 +129,7 @@ make it `unparsed`.
 | `/problems/google-sign-in-not-configured` | 503 | Google sign-in is not configured on this deployment |
 | `/problems/service-unavailable` | 503 | A dependency the request needs is down |
 | `/problems/scan-limit-reached` | 402 | A scan cannot start on the allowance. Carries `code` (`SCAN_LIMIT_FREE_USED`, `SCAN_LIMIT_MONTHLY`, or since 2026-09-29 `SCAN_LIMIT_VERIFY_REQUIRED` — the free scan, asked for by a user with no linked Google identity), `scansUsed`, `scanLimit`, `periodResetsAt` (monthly only) |
+| `/problems/subscription-required` | 402 | The route is for paying agencies and this agency is not one. Since 2026-10-04 only `POST /clients/{clientId}/competitors/detect`, when billing is configured, the agency's subscription is not `active` or `trialing`, and the user is not the exempt operator. `detail` is one sentence for every case, naming no status and no code: "Running competitor detection on its own needs an active subscription. A scan still finds a client's competitors the first time it runs." No `code`, no counts. No search is made, no scan is opened and the client's day is not taken |
 
 Validation problems add an `errors` member:
 
@@ -707,10 +708,14 @@ Stripe, in **TEST MODE**: the keys are
 `sk_test_…` and `price_…` with `livemode: false`, and **no code anywhere behaves
 differently on a live key.** Going live is swapping two environment variables.
 
-**These endpoints gate nothing.** An agency with no subscription has exactly the
-access it had before they existed — sign-up, onboarding, scanning, scoring and
-reporting are all unchanged and ungated. `subscription_status` records whether an
-agency PAYS, not what it MAY DO.
+**These endpoints gate nothing themselves; the status they record gates two things.**
+Since 2026-09-28 the scan allowance reads `subscription_status` (one free scan per
+agency, then 40 a month while it is `active` or `trialing`; `services/scan_allowance.py`
+and "The scan allowance" below), and since 2026-10-04 so does the detect route
+(`POST /clients/{clientId}/competitors/detect`, launch checklist 3.61). Sign-up,
+onboarding, and opening scores and reports are not gated. (Until 2026-10-04 this
+paragraph said that nothing was gated and that `subscription_status` recorded only
+whether an agency pays, which stopped being true on 2026-09-28.)
 
 All three authenticated routes require **owner or admin**, the same authority
 rule Epic 9.14 set for seat management, on the same argument: `UserRole`'s own
@@ -1402,6 +1407,39 @@ deliberately — the chain never re-detects for a client that already has a set,
 precisely so it cannot spend quota or overwrite an operator's correction on its
 own.
 
+**For paying agencies since 2026-10-04** (launch checklist 3.61). The founder's
+decision: the route is allowed for an agency whose subscription is `active` or
+`trialing`, and for the platform operator; everyone else gets a plain refusal. The
+per-client day below stays for those who are allowed, and a scan's own detection is
+unaffected. The reason is 3.53's security review: the day caps a client, not an agency,
+and an account can add clients without a classification call and detect once on each,
+about six paid searches a time out of a quota the whole platform shares. A press is
+allowed when any one of these holds:
+
+- billing is **not configured** on the deployment: the scan allowance's own switch
+  (`STRIPE_SECRET_KEY` and `STRIPE_PRICE_ID` both set means billing is configured; with
+  neither, or only one, the route is open, because nobody could subscribe there);
+- the agency is **paid up**: `subscription_status` is `active` or `trialing`
+  (`isActive` on `GET /agencies/{agencyId}/billing`), whichever of its seats presses the
+  button, with or without a linked Google identity;
+- the signed-in user is the **exempt operator**: an address in
+  `SCAN_ALLOWANCE_EXEMPT_EMAILS` **and** a linked Google identity, never the address
+  alone, and that user only, not the agency's other seats.
+
+Anything else (no subscription, `past_due`, `unpaid`, `paused`, `incomplete`,
+`canceled`, or a status nobody has decided about) is refused with
+`402 subscription-required` and one sentence that is the same in every case and names no
+status and no code. The plan is checked **after the client is found**, so another
+agency's client is a `404` whatever the caller's plan, and **before the day is taken**, so
+a refused press makes no search, opens no scan and spends none of the client's day: a
+lapsed agency whose day is already taken is told about its plan and not about the day.
+It reads the agency's stored status and never asks Stripe, takes no lock and touches no
+Redis key. A scan's own detection is not this route: `POST /clients/{clientId}/scans`
+still detects for a client that has no competitor set, on any plan the scan itself is
+allowed to start on. Nothing new to set on Render: the switch and the operator's
+exemption are the scan allowance's own settings, and where billing is configured an
+agency without an active plan can no longer press this button once this is deployed.
+
 **Once per client per 24 hours** (2026-10-03, launch checklist 3.53). The founder's
 decision: once per client per day from this button, and always allowed as part of a
 scan. A second press for the same client inside 24 hours is refused with `429` and
@@ -1467,7 +1505,14 @@ Industry classification confidence is uncalibrated (Finding 2, open), so when an
 operator reports a bad set the first question is whether a bad industry label
 seeded it — this makes that answerable without re-running.
 
-**Errors:** `401`, `404 not-found` (unknown client, or another agency's),
+**Errors:** `401`, `402 subscription-required` (2026-10-04: billing is configured and
+the agency is not `active` or `trialing` and the user is not the exempt operator; detail
+"Running competitor detection on its own needs an active subscription. A scan still
+finds a client's competitors the first time it runs."; no `code` and no other member
+beyond the five every problem has; nothing ran and the client's day was not taken; one
+`info` log line, `competitors.detect.subscription_required`, with `client_id` and
+`agency_id` and nothing else, and none for an allowed press), `404 not-found` (unknown
+client, or another agency's; asked before the plan),
 `429 rate-limited` (2026-10-03: this client's detection already ran in the last 24
 hours, with `Retry-After` header in whole seconds, never below 1, the time left in
 the 24 hours; detail "Competitor detection already ran for this client in the last
@@ -1483,8 +1528,14 @@ detail "This is temporarily unavailable. Please try again shortly.").
 #### `GET /api/v1/clients/{clientId}/competitors`
 **Auth required.** The client's most recent set, competitors in rank order.
 
-**Errors:** `401`; `404` if detection has never run — detail: *"No competitor
-set for this client. Run detection first."*
+**Errors:** `401`; `404` for an unknown client or another agency's, and for a client
+with no competitor set on any scan — detail: *"No competitor set for this client yet.
+A scan runs detection for a client that has none."* (2026-10-04, launch checklist 3.61;
+it used to end "Run detection first."). The sentence is the same for every caller, so
+it tells nobody to call `POST /clients/{clientId}/competitors/detect`, which is for
+paying agencies. It says what makes a set, a scan, whose competitor phase runs detection
+for a client that has none, and does not promise that a scan will be allowed to start
+or will succeed.
 
 #### `PUT /api/v1/clients/{clientId}/competitors`
 **Auth required.** Replace the set by hand.
@@ -1522,7 +1573,10 @@ part-detected and part-hand-set. Changing this means redefining what the field
 measures, which is a scoring-semantics decision rather than a UI one. Recorded
 in build-log Epic 3.6.
 
-Max 10 competitors. **Errors:** `401`, `404`, `422`.
+Max 10 competitors. **Errors:** `401`; `404` for an unknown client or another agency's,
+and for a client with no competitor set on any scan yet, with the same sentence as `GET`
+above (reworded 2026-10-04): there is nothing to replace, and naming rivals by hand does
+not start a set, so a refused `PUT` writes nothing; `422`.
 
 **CORS:** `PUT` was missing from `allow_methods` until Epic 3.6. This is the only
 PUT in the API, nothing in a browser called it until the override UI shipped, and

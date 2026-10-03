@@ -305,6 +305,23 @@ class ScanLimitReached(ProblemError):
     title = "Scan limit reached"
 
 
+class SubscriptionRequired(ProblemError):
+    """What was asked for is for paying agencies, and this agency is not one — 2026-10-04.
+
+    **402**, as `ScanLimitReached` is and for the same reason: the thing asked for costs
+    money the caller has not paid for. A type of its own, and no `code` or counts: there is
+    no allowance here to say how much of, only a plan to have. Raised by
+    `POST /clients/{clientId}/competitors/detect` (launch checklist 3.61, through
+    `services/scan_allowance.assert_may_run_detection`). The sentence is the caller's, one
+    for every case, and names no status: an agency that never subscribed and one whose
+    subscription lapsed read the same words.
+    """
+
+    status_code = status.HTTP_402_PAYMENT_REQUIRED
+    problem_type = "subscription-required"
+    title = "Subscription required"
+
+
 class ServiceUnavailable(ProblemError):
     """A dependency this route cannot safely do without is down (503)."""
 

@@ -15,11 +15,15 @@ is the right eventual model. That needs §5.4 row 2's `UsageRecord` to exist
 first, and it does not. Nothing here should be read as a step taken toward it
 or away from it.
 
-It is **not** a paywall. No function in this module is consulted before letting
-anybody do anything. `subscription_status` records whether an agency PAYS; it
-does not record what an agency MAY DO, and no caller treats it as though it
-did. Sign-up, onboarding, scanning, scoring and reporting are exactly as free
-as they were before this file existed.
+It is **not** where the plan is enforced. `subscription_status` records whether
+an agency PAYS, and `is_active` below is the one reading of it; what a plan lets
+an agency DO is decided in `services/scan_allowance.py`, which asks `is_active`.
+As of 2026-10-04 that is starting a scan (one free, then forty a month, since
+2026-09-28) and calling the competitor-detection route. That module's docstring
+is the list of what is gated and when; this one adds nothing to it. Nothing in
+this file refuses a feature of the product. What it refuses concerns billing
+itself: a Stripe setting that is missing, a webhook signature that is wrong, a
+second checkout while a subscription is live.
 
 TEST-MODE KEYS, AND NO CODE THAT KNOWS THE DIFFERENCE
 -----------------------------------------------------

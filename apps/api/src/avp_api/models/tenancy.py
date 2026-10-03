@@ -77,11 +77,16 @@ class Agency(Base, TimestampMixin, SoftDeleteMixin):
     # a product decision nobody has made. When a second plan exists, that is the
     # work; until then these columns say everything there is to say.
     #
-    # NOTHING IN THE PRODUCT IS GATED ON ANY OF THEM. An agency with all four
-    # NULL has exactly the access it had before this epic — scanning, scoring,
-    # reporting, seats. These record whether an agency PAYS, not what it may do.
-    # A future brief that wants a paywall is proposing a product decision and
-    # must say so out loud.
+    # THESE RECORD WHETHER AN AGENCY PAYS. WHAT A PLAN LETS IT DO IS DECIDED IN
+    # `services/scan_allowance.py`, NOT HERE. That module reads `subscription_status`
+    # through `billing.is_active` and, where billing is configured, gates the start
+    # of a scan (one free, then forty a month on the plan, since 2026-09-28) and the
+    # competitor-detection route (2026-10-04). An agency that has never subscribed is
+    # a free agency: it can still sign up, add clients, and view, share and export
+    # reports, and it is held to the free allowance rather than the plan's. Where
+    # billing is not configured nothing is gated at all. Anything beyond that list is
+    # a product decision a brief must say out loud, and its rule goes in that module
+    # with its reason, not on these columns.
 
     # The Stripe Customer this agency is. Written once, then reused forever —
     # `services/billing.py` looks here before creating one, so a second visit to
