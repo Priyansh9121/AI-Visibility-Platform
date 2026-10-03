@@ -12,7 +12,8 @@
  *
  * That changed by founder decision, not by drift. $29/month became a real,
  * published price backed by a real Stripe Price object (repriced to $160 on
- * 2026-09-22 — `PLAN_PRICE_USD` below says what did and did not move), and §5.3 has been
+ * 2026-09-22 and to $150 on 2026-10-04, both founder decisions — `PLAN_PRICE_USD`
+ * below says what did and did not move), and §5.3 has been
  * updated to say so rather than left to contradict this page. The rest of Epic
  * 9.10's rule is untouched: no testimonial, no logo wall, no user count, no
  * invented scale. A price the founder decided to charge is a fact about us; a
@@ -70,8 +71,17 @@ import { Button, Card, CardBody } from '@avp/design-system';
  * the $29.00 Price (`price_1U9For…`) is still active, and Render's variable
  * still has to be changed by hand. That is exactly the "kept in step by hand"
  * deal the paragraph above describes. Build log, 2026-09-22 and 2026-09-23.
+ *
+ * Repriced $160 → $150 on 2026-10-04 (founder decision). The number moves here;
+ * the Stripe side stays the founder's: a $160.00 test-mode Price has existed
+ * since 2026-09-23, and a $150.00 one is for the founder to create in the
+ * dashboard and name in `STRIPE_PRICE_ID` (locally and on Render). The two are
+ * no longer kept in step by hand alone: the API states the same number in
+ * `services/billing.py` (`PLAN_PRICE_USD`) and, when deployed, at start and every
+ * hour, reads the configured Price and logs `billing.price_mismatch` when it is
+ * not the plan; `planPrice.test.ts` fails if this constant and that one differ.
  */
-export const PLAN_PRICE_USD = 160;
+export const PLAN_PRICE_USD = 150;
 
 /**
  * Seats included, matching `Settings.default_seat_limit` (3) and

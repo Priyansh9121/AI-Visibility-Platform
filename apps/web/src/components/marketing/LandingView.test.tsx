@@ -38,7 +38,8 @@ import { SCAN_DURATION_SENTENCE } from '@/lib/scans/scanOutcome';
 const PRICE_WORDS = [
   'nineteen', 'twenty', 'twenty-nine', 'thirty', 'thirty-nine', 'forty', 'forty-nine', 'fifty',
   'fifty-nine', 'sixty', 'seventy', 'seventy-nine', 'eighty', 'ninety', 'ninety-nine',
-  'one hundred', 'a hundred', 'one hundred and sixty', 'two hundred',
+  'one hundred', 'a hundred', 'one hundred and fifty', 'one hundred fifty', 'a hundred and fifty',
+  'one hundred and sixty', 'two hundred',
 ];
 import { renderToStaticMarkup } from 'react-dom/server';
 import { LandingView } from './LandingView';
@@ -166,10 +167,12 @@ describe('the header is on page one, before any scrolling or clicking', () => {
 });
 
 describe('the price is published, deliberately', () => {
-  it('states $160 a month on the pricing card', () => {
+  it('states $150 a month on the pricing card', () => {
     const out = html();
-    expect(out).toContain('$160');
+    expect(out).toContain('$150');
     expect(out).toContain('per month');
+    // Repriced by the founder on 2026-10-04: the old figure is nowhere on the page.
+    expect(out).not.toContain('$160');
   });
 
   it('says what the plan includes, seats named rather than implied', () => {
@@ -179,7 +182,7 @@ describe('the price is published, deliberately', () => {
 
   it('agrees with itself everywhere a number appears', () => {
     const out = html();
-    // A page that says $160 in one place and something else in another is worse
+    // A page that says $150 in one place and something else in another is worse
     // than a page with no price. Every mention comes from one constant; this
     // asserts no hand-typed one crept in — as a figure OR in words. The pricing
     // heading read "Twenty-nine dollars a month" above a $160 card for six
@@ -393,7 +396,7 @@ describe('the page arrives rather than being already there — Epic 9.16', () =>
     // until it arrives; it must never remove it from the document.
     const out = live();
     expect(out).toContain('For SEO and digital marketing agencies');
-    expect(out).toContain('$160');
+    expect(out).toContain('$150');
     expect(out).toContain('One URL in, and nothing else to fill in');
     expect(out).toContain('Signing up is free. Your first scan is free with a Google sign-in.');
   });

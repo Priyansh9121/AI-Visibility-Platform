@@ -693,12 +693,16 @@ Three refusals:
 
 ### Billing (subscriptions) — Epic 9.15
 
-**One plan, $160/month, 3 seats** — $29 from Epic 9.15 until 2026-09-22. A
-$160.00/month test-mode Price exists since 2026-09-23 (`price_1UIh3b…`, read
-back at 16000 USD) and the local `STRIPE_PRICE_ID` names it; the $29.00 Price
-(`price_1U9For…`) is still active. Render's `STRIPE_PRICE_ID` was not changed
-from here, so the deployed checkout subscribes at $29 until it is (build log,
-2026-09-23).
+**One plan, $150/month, 3 seats** — $29 from Epic 9.15 until 2026-09-22, then
+$160 until 2026-10-04, then $150 (founder decision). The price is
+`PLAN_PRICE_USD` in `apps/web/src/components/marketing/PricingCard.tsx` and in
+`services/billing.py`, held equal by a web test. A $160.00/month test-mode Price
+exists since 2026-09-23 (`price_1UIh3b…`, read back at 16000 USD) and the local
+`STRIPE_PRICE_ID` names it; Render's names the same $160 test Price (founder,
+2026-10-04). A US$150/month Price is the founder's to create and name in
+`STRIPE_PRICE_ID`; until then a deployed API logs `billing.price_mismatch` at start
+and hourly (`docs/runbook.md`, "Reading the billing price lines"). The $29.00 Price
+(`price_1U9For…`) is still active.
 Stripe, in **TEST MODE**: the keys are
 `sk_test_…` and `price_…` with `livemode: false`, and **no code anywhere behaves
 differently on a live key.** Going live is swapping two environment variables.
@@ -754,7 +758,7 @@ allowance applies until `currentPeriodEnd`; Settings says "Ends" rather than
 **The scan allowance — 2026-09-28** (`services/scan_allowance.py`). One free
 scan per agency for life (`FREE_SCAN_ALLOWANCE = 1`); forty per calendar
 month, UTC, on the plan (`PAID_SCANS_PER_MONTH = 40` — 40 × ~$1.70 of engine
-cost ≈ $68 against $160). `scansUsedThisPeriod` counts scans that hold a
+cost ≈ $68 against $150 since 2026-10-04, $160 before). `scansUsedThisPeriod` counts scans that hold a
 slot — everything not `failed` or `cancelled`, in-flight included — this
 month for a paid agency and lifetime for a free one. `scanLimit` is **null
 when billing is not configured** on the deployment (no `STRIPE_SECRET_KEY`

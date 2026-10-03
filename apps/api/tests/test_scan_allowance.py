@@ -32,6 +32,7 @@ from avp_api.db import get_sessionmaker
 from avp_api.deps import google_provider, scan_executor
 from avp_api.models import Agency, Scan, ScanStatus, ScanTrigger, User, UserRole
 from avp_api.services import auth as auth_service
+from avp_api.services import billing as billing_service
 from avp_api.services import scan_allowance as allowance
 from avp_api.services.google_oauth import GoogleIdentity
 
@@ -245,9 +246,12 @@ async def _continue_with_google(client: AsyncClient) -> Any:
 
 class TestTheNumbersAreArgued:
     def test_the_paid_cap_leaves_a_margin_over_engine_cost(self) -> None:
-        # 40 × $1.70 ≈ $68 against $160 — about 57% gross margin before SerpApi.
+        # 40 × $1.70 ≈ $68 against $150 — about 55% gross margin before SerpApi (it was $160, about
+        # 57%, until the founder's repricing of 2026-10-04). The price is the one the API checks
+        # Stripe against, so the margin is argued at the price the plan really has.
         engine_cost = allowance.PAID_SCANS_PER_MONTH * 1.70
-        assert engine_cost < 160 * 0.5, "the cap must leave at least half the price as margin"
+        price = billing_service.PLAN_PRICE_USD
+        assert engine_cost < price * 0.5, "the cap must leave at least half the price as margin"
 
     def test_the_paid_cap_fits_serpapis_free_tier_even_if_every_scan_is_a_new_client(
         self,

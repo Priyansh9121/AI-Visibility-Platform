@@ -129,15 +129,22 @@ describe('who runs it', () => {
 describe('the numbers come from the constants, and the constants from the API', () => {
   it('the terms state the plan in the constants’ numbers', () => {
     expect(TERMS.text).toContain(`$${PLAN_PRICE_USD} a month, billed monthly in US dollars`);
+    // Literally as well as through the constant, so a repricing has to change this line
+    // on purpose (2026-10-04: $150, the founder's decision).
+    expect(TERMS.text).toContain('$150 a month, billed monthly in US dollars');
+    expect(TERMS.text).not.toContain('$160');
     expect(TERMS.text).toContain(`${PLAN_SEATS} seats and ${PLAN_SCANS_PER_MONTH} scans a month`);
     expect(PLAN_FREE_SCANS).toBe(1);
     expect(TERMS.text).toContain('your agency’s first scan is free with a Google sign-in');
   });
 
   it('the terms page types no plan number by hand', () => {
-    // Any "160", "40" or "3 seats" in the component's source is a second
+    // Any "150", "40" or "3 seats" in the component's source is a second
     // copy of a constant, which is how a price comes to disagree with itself.
+    // ("160" went with the 2026-10-04 repricing, and stays refused: a hand-typed
+    // old price would be the stale copy this test exists to catch.)
     const source = read('apps/web/src/components/legal/TermsOfService.tsx');
+    expect(source).not.toMatch(/\b150\b/);
     expect(source).not.toMatch(/\b160\b/);
     expect(source).not.toMatch(/\b40\b/);
     expect(source).not.toMatch(/\b3 seats\b/);

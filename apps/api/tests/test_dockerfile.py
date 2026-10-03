@@ -198,6 +198,36 @@ class TestTheScriptHandsOverToUvicorn:
         assert parsed["workers"] == 1
         assert parsed["proxy_headers"] is True
 
+    @staticmethod
+    def code_lines() -> list[str]:
+        """The script's lines that are code: not blank, not a comment."""
+        return [
+            line.strip() for line in ENTRYPOINT_SCRIPT.read_text().splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+
+    def test_it_unsets_stripe_log_before_it_starts_anything(self) -> None:
+        """The Stripe SDK PRINTS each request, the bodies and Stripe's error messages to stderr
+        when `STRIPE_LOG` is `info` or `debug`, and reads the variable once, as it is imported:
+        it has to be gone before alembic or uvicorn is started. The behaviour, with the real
+        script run under stubs, is `tests/test_secrets_stay_out_of_logs.py`; this pins the line
+        and its place, so it cannot drift below the `alembic` call or the `exec`."""
+        code = self.code_lines()
+
+        assert code.count("unset STRIPE_LOG") == 1
+        unset = code.index("unset STRIPE_LOG")
+        assert unset < code.index("alembic upgrade head")
+        assert unset < next(i for i, line in enumerate(code) if line.startswith("exec uvicorn"))
+
+    def test_the_why_of_the_unset_is_written_next_to_it(self) -> None:
+        comments = "\n".join(
+            line for line in ENTRYPOINT_SCRIPT.read_text().splitlines()
+            if line.strip().startswith("#")
+        )
+
+        assert "STRIPE_LOG" in comments
+        assert "stderr" in comments
+
     def test_the_one_worker_is_said_to_be_deliberate(self) -> None:
         comments = "\n".join(
             line for line in ENTRYPOINT_SCRIPT.read_text().splitlines()

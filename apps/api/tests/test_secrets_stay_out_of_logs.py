@@ -29,6 +29,7 @@ import pytest
 import structlog
 from httpx import AsyncClient
 from pydantic import SecretStr
+from stripe import _util as stripe_util
 
 import avp_api
 from avp_api.config import PROVIDER_SETTINGS, Settings
@@ -204,7 +205,8 @@ KEY_SENTINEL = "SERPKEYSENTINEL-0123456789abcdef"
 # and not quietly shrink them.
 HTTP_LOGGERS = ("httpx", "httpcore")
 ANTHROPIC_LOGGER = "anthropic"
-ALL_QUIET = (*HTTP_LOGGERS, ANTHROPIC_LOGGER)
+STRIPE_LOGGER = "stripe"
+ALL_QUIET = (*HTTP_LOGGERS, ANTHROPIC_LOGGER, STRIPE_LOGGER)
 # The loggers httpcore actually writes through: children of `httpcore`.
 HTTPCORE_CHILDREN = (
     "httpcore.connection",
@@ -219,7 +221,7 @@ PROMPT_SENTINEL = "PROMPTSENTINEL the page text of a client site"
 
 @pytest.fixture
 def unconfigured_loggers() -> Iterator[None]:
-    """`httpx`, `httpcore` and `anthropic` as a process nothing has configured has them.
+    """`httpx`, `httpcore`, `anthropic` and `stripe` as a process nothing has configured has them.
 
     That is no level of their own. Earlier tests have usually pinned them already (every
     `create_app` does), so this puts them back, and puts back whatever it found. `setLevel`,
@@ -378,6 +380,101 @@ class TestTheAnthropicSdkDoesNotWriteThePrompt:
         assert logging.getLogger(ANTHROPIC_LOGGER).level == logging.WARNING
 
 
+# What one call through the Stripe SDK writes, as the SDK's own helpers write it. The URL, the
+# request body (an agency's name, say) and Stripe's error message are what must not reach a log.
+STRIPE_URL = "/v1/customers/cus_STRIPELOGURLSENTINEL"
+STRIPE_BODY = "name=STRIPEBODYSENTINEL+Agency&email=person%40example.test"
+STRIPE_ERROR = "No such customer: STRIPEERRORSENTINEL"
+STRIPE_SENTINELS = ("STRIPELOGURLSENTINEL", "STRIPEBODYSENTINEL", "STRIPEERRORSENTINEL")
+
+
+def _the_sdk_writes_one_call() -> None:
+    stripe_util.log_info("Request to Stripe api", method="post", url=STRIPE_URL)
+    stripe_util.log_debug("Post details", post_data=STRIPE_BODY, api_version="2026-08-26")
+    stripe_util.log_debug("API response body", body=STRIPE_BODY)
+    stripe_util.log_info("Stripe v1 API error received", error_message=STRIPE_ERROR)
+
+
+@pytest.mark.usefixtures("unconfigured_loggers")
+class TestTheStripeSdkDoesNotWriteItsRequests:
+    """The SDK logs through `stripe`: INFO for each request's method and URL and for each error
+    Stripe answers with (its message), DEBUG for the request body and the response body. A request
+    body carries an agency's name; a response body, a customer's.
+
+    Nothing in the app switches stdlib logging on, so the lines are dropped. These pin that they
+    stay dropped when something does: `configure_logging` gives `stripe` a level of its own, and a
+    logger with a level of its own does not follow the root. (The SDK can also PRINT the same lines
+    to stderr, past every logger level: that is `STRIPE_LOG`, switched off at the entrypoint,
+    below.)
+    """
+
+    def test_left_alone_the_sdk_does_write_them_at_info_and_debug(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The hazard, shown, so the tests below cannot pass for want of a line to catch."""
+        caplog.set_level(logging.DEBUG)
+
+        _the_sdk_writes_one_call()
+
+        for sentinel in STRIPE_SENTINELS:
+            assert sentinel in caplog.text, (
+                f"the Stripe SDK no longer writes {sentinel!r} through its logger: "
+                "the pin in logs.py may be retired"
+            )
+
+    @pytest.mark.parametrize("root_level", [logging.INFO, logging.DEBUG], ids=["INFO", "DEBUG"])
+    @pytest.mark.parametrize("root_opened", ["after", "before"])
+    def test_with_logging_configured_as_the_app_does_none_of_it_is_written(
+        self, settings: Settings, caplog: pytest.LogCaptureFixture, root_level: int,
+        root_opened: str,
+    ) -> None:
+        """Whichever order the root logger is opened and the app's logging is configured in."""
+        if root_opened == "before":
+            caplog.set_level(root_level)
+        configure_logging(settings)
+        if root_opened == "after":
+            caplog.set_level(root_level)
+
+        _the_sdk_writes_one_call()
+
+        for sentinel in STRIPE_SENTINELS:
+            assert sentinel not in caplog.text, sentinel
+
+    def test_a_real_problem_from_the_sdk_is_still_written(
+        self, settings: Settings, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        configure_logging(settings)
+        caplog.set_level(logging.DEBUG)
+
+        logging.getLogger("stripe").warning("a real problem")
+
+        assert "a real problem" in caplog.text
+
+    def test_configure_logging_pins_the_stripe_logger_to_warning_on_the_logger_itself(
+        self, settings: Settings
+    ) -> None:
+        logger = logging.getLogger(STRIPE_LOGGER)
+        assert logger.level == logging.NOTSET, "the fixture should have cleared it"
+        root_level = logging.getLogger().level
+
+        configure_logging(settings)
+        configure_logging(settings)
+
+        assert logger.level == logging.WARNING
+        assert logging.getLogger().level == root_level
+
+    def test_create_app_leaves_it_pinned(self, settings: Settings) -> None:
+        create_app(settings)
+
+        assert logging.getLogger(STRIPE_LOGGER).level == logging.WARNING
+
+    def test_logs_py_names_it_among_the_quiet_loggers(self) -> None:
+        """The literal list above is what these tests hold the module to, not the other way."""
+        from avp_api.logs import QUIET_LOGGERS
+
+        assert set(ALL_QUIET) <= set(QUIET_LOGGERS)
+
+
 def _fresh_process(code: str, tmp_path: Path) -> dict[str, Any]:
     """Run `code` in a fresh interpreter with `ANTHROPIC_LOG` set; read the JSON it prints last."""
     env = {
@@ -398,8 +495,10 @@ def _fresh_process(code: str, tmp_path: Path) -> dict[str, Any]:
     return seen
 
 
-# The levels of the three loggers, as an expression for the fresh interpreter to print.
-_LEVELS = "{n: logging.getLogger(n).level for n in ('httpx', 'httpcore', 'anthropic')}"
+# The levels of the quiet loggers, as an expression for the fresh interpreter to print.
+_LEVELS = (
+    "{n: logging.getLogger(n).level for n in ('httpx', 'httpcore', 'anthropic', 'stripe')}"
+)
 
 
 class TestThePinsComeLastInTheRealImportOrder:
@@ -420,7 +519,7 @@ class TestThePinsComeLastInTheRealImportOrder:
         assert seen["anthropic"] == logging.INFO
         assert seen["httpx"] == logging.INFO
 
-    def test_importing_the_app_imports_the_sdk_and_leaves_all_three_at_warning(
+    def test_importing_the_app_imports_the_sdk_and_leaves_every_quiet_logger_at_warning(
         self, tmp_path: Path
     ) -> None:
         # Only the app is imported: if the SDK is among its imports it is already in
@@ -533,3 +632,145 @@ class TestTheScriptsThatCallSerpapiConfigureLogging:
             f"{name}: configure_logging (line {configured[0]}) comes after main() "
             f"has already awaited something (line {first_io})"
         )
+
+
+# ---------------------------------------------------------------------------
+# the Stripe SDK prints past every logger when STRIPE_LOG is set — 2026-10-04
+# ---------------------------------------------------------------------------
+
+ENTRYPOINT = Path(avp_api.__file__).resolve().parents[2] / "docker-entrypoint.sh"
+SDK_LINE = "log_info('Request to Stripe api', method='get', url='/v1/prices/price_PRINTSENTINEL')"
+
+
+def _python(code: str, tmp_path: Path, **env: str) -> subprocess.CompletedProcess[str]:
+    """Run `code` in a fresh interpreter, with `env` added, and keep its stderr."""
+    full = {
+        **os.environ,
+        "PYTHONPATH": str(Path(avp_api.__file__).resolve().parents[1]),
+        **env,
+    }
+    for name in ("STRIPE_LOG", "ENVIRONMENT"):
+        if name not in env:
+            full.pop(name, None)
+    # From an empty directory, so that no developer's `.env` is read.
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        env=full, cwd=tmp_path, capture_output=True, text=True, timeout=120, check=False,
+    )
+
+
+class TestTheStripeSdkPrintsWhenToldTo:
+    """`STRIPE_LOG=info` (or `debug`) makes the SDK PRINT each request's method and URL, and the
+    message of each error Stripe answers with, to stderr. It prints; it does not log, so no logger
+    level stops it, and the pin on the `stripe` logger above is not the protection. `debug` adds
+    the request and response bodies. The variable is read once, as `stripe._util` is imported
+    (`STRIPE_LOG = os.environ.get("STRIPE_LOG")`), so unsetting it in Python code that runs after
+    the import changes nothing: it has to be gone before the process starts. That is what the
+    entrypoint does.
+    """
+
+    @pytest.mark.parametrize("level", ["info", "debug"])
+    def test_with_it_set_the_sdk_prints_the_request_to_stderr(
+        self, tmp_path: Path, level: str
+    ) -> None:
+        """The hazard, shown, so the entrypoint tests below cannot pass for want of a line."""
+        done = _python(
+            f"from stripe._util import log_info\n{SDK_LINE}", tmp_path, STRIPE_LOG=level
+        )
+
+        assert done.returncode == 0, done.stderr[-1500:]
+        assert "price_PRINTSENTINEL" in done.stderr
+
+    def test_without_it_the_sdk_prints_nothing(self, tmp_path: Path) -> None:
+        done = _python(f"from stripe._util import log_info\n{SDK_LINE}", tmp_path)
+
+        assert done.returncode == 0, done.stderr[-1500:]
+        assert "PRINTSENTINEL" not in done.stderr
+
+    def test_it_is_read_once_at_import_so_unsetting_it_later_in_python_is_too_late(
+        self, tmp_path: Path
+    ) -> None:
+        done = _python(
+            "import os\n"
+            "from stripe._util import log_info\n"
+            "del os.environ['STRIPE_LOG']\n"
+            f"{SDK_LINE}",
+            tmp_path,
+            STRIPE_LOG="info",
+        )
+
+        assert done.returncode == 0, done.stderr[-1500:]
+        assert "price_PRINTSENTINEL" in done.stderr
+
+
+def _run_entrypoint(script: Path, tmp_path: Path, **env: str) -> dict[str, str]:
+    """Run an entrypoint script with `alembic` and `uvicorn` replaced by stubs; what each saw.
+
+    The stubs write their arguments, `STRIPE_LOG` (or `<unset>`) and their place in the order to
+    files, and `cd` is a no-op, since the script `cd`s into `/app`. The real script is what runs:
+    its `set -euo pipefail`, its order, its `exec`.
+    """
+    bin_dir = tmp_path / "bin"
+    out = tmp_path / "out"
+    bin_dir.mkdir(exist_ok=True)
+    out.mkdir(exist_ok=True)
+    for name in ("alembic", "uvicorn"):
+        stub = bin_dir / name
+        stub.write_text(
+            "#!/bin/sh\n"
+            f'printf \'%s\' "${{STRIPE_LOG-<unset>}}" > "$STUB_OUT/{name}.stripe_log"\n'
+            f'printf \'%s\' "$*" > "$STUB_OUT/{name}.argv"\n'
+            f'printf \'%s\\n\' {name} >> "$STUB_OUT/order"\n'
+        )
+        stub.chmod(0o755)
+    environment = {
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "STUB_OUT": str(out),
+        "PORT": "9",
+        "HOME": str(tmp_path),
+        **env,
+    }
+    done = subprocess.run(
+        ["bash", "-c", 'cd() { :; }; export -f cd; exec "$0"', str(script)],
+        env=environment, cwd=tmp_path, capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert done.returncode == 0, (done.stdout + done.stderr)[-2000:]
+    return {path.name: path.read_text() for path in out.iterdir()}
+
+
+class TestTheEntrypointSwitchesItOff:
+    """The container's entrypoint unsets `STRIPE_LOG` before it starts anything, so a variable
+    set on the host (a debugging session left on, a template that carried it) cannot make the API
+    print every Stripe request, the request bodies and the answers to stderr, which Render keeps."""
+
+    @pytest.mark.parametrize("level", ["info", "debug"])
+    def test_neither_alembic_nor_uvicorn_is_given_the_variable(
+        self, tmp_path: Path, level: str
+    ) -> None:
+        seen = _run_entrypoint(ENTRYPOINT, tmp_path, STRIPE_LOG=level)
+
+        assert seen["alembic.stripe_log"] == "<unset>"
+        assert seen["uvicorn.stripe_log"] == "<unset>"
+
+    def test_it_is_the_real_script_that_ran_and_in_its_order(self, tmp_path: Path) -> None:
+        seen = _run_entrypoint(ENTRYPOINT, tmp_path, STRIPE_LOG="info")
+
+        assert seen["order"] == "alembic\nuvicorn\n"
+        assert seen["alembic.argv"] == "upgrade head"
+        assert seen["uvicorn.argv"].startswith("avp_api.main:app ")
+        assert "--workers 1" in seen["uvicorn.argv"]
+
+    def test_without_the_line_the_harness_does_see_it(self, tmp_path: Path) -> None:
+        """A control inside the test: the same script minus the unset, so the check above is
+        known to be able to tell."""
+        lines = ENTRYPOINT.read_text().splitlines(keepends=True)
+        kept = [line for line in lines if line.strip() != "unset STRIPE_LOG"]
+        assert len(kept) == len(lines) - 1, "the script has no `unset STRIPE_LOG` line to remove"
+        without = tmp_path / "docker-entrypoint.sh"
+        without.write_text("".join(kept))
+        without.chmod(0o755)
+
+        seen = _run_entrypoint(without, tmp_path, STRIPE_LOG="debug")
+
+        assert seen["alembic.stripe_log"] == "debug"
+        assert seen["uvicorn.stripe_log"] == "debug"

@@ -37,7 +37,7 @@ Begin every answer with one line: `mode: test` or `mode: unknown (live not exclu
   - Period end: on the pinned API version `current_period_end` lives under `items.data[]`, not top level (`period_end_of`, `services/billing.py:175`); reading the top-level field gives nothing, silently.
   - Unmatched events are not recorded, so Stripe's Resend applies once an operator links the agency.
   - Log lines: `stripe.webhook.applied|stale|duplicate|ignored|unmatched|rejected|second_subscription` (ids only).
-- **Seats**: `Agency.seat_limit` defaults to 3 (`config.py` `default_seat_limit`) and `services/seats.py` enforces it under a row lock. The pricing card sells $160/month and 3 seats (`apps/web/src/components/marketing/PricingCard.tsx:69,79`: `PLAN_PRICE_USD`, `PLAN_SEATS`); Stripe quantity is fixed at 1, so seats are an AVP limit, not Stripe per-seat billing. Do not write "per seat" about Stripe.
+- **Seats**: `Agency.seat_limit` defaults to 3 (`config.py` `default_seat_limit`) and `services/seats.py` enforces it under a row lock. The pricing card sells $150/month (since 2026-10-04; $160 before) and 3 seats (`apps/web/src/components/marketing/PricingCard.tsx`: `PLAN_PRICE_USD`, `PLAN_SEATS`; the API's `services/billing.py` `PLAN_PRICE_USD` is held equal by a web test and checked against the configured Stripe Price at start and hourly, when deployed, `billing.price_check`); Stripe quantity is fixed at 1, so seats are an AVP limit, not Stripe per-seat billing. Do not write "per seat" about Stripe.
 
 ## Procedures
 
@@ -57,7 +57,7 @@ Follow `docs/runbook.md` as written; do not paraphrase the steps from memory. Yo
 This is an API change: follow `fastapi`, run the targeted `apps/api/tests/test_billing.py` (no test reaches the network; `_client` is patched), keep Stripe calls inside `services/billing.py`, never add a status-writing route, and never log payloads, emails or keys (`logs.py`, `test_secrets_stay_out_of_logs.py`). Endpoint change: regenerate OpenAPI and shared-types per `CLAUDE.md`, and let the scribe update `docs/api-contracts.md`. A new Stripe dependency or host needs `providers.test.ts` and `/privacy` (founder decision on legal copy). Any billing diff goes to the `security-reviewer` agent (`CLAUDE.md`). Run targeted tests with output redirected to a file and read the exit code, never piped; `assert_count.py api-pytest` applies only to the full suite (the floor is for the whole run), not a targeted one. See `verification-before-completion`.
 
 ## Numbers
-Quote prices and limits only from a named repo source with its date (for example `$160`: `apps/web/src/components/marketing/PricingCard.tsx:69` (`PLAN_PRICE_USD`) and `docs/runbook.md` Live Stripe test step 2; seats: `config.py`). No revenue, MRR, fee or conversion figures unless the founder supplies them with a date and source; otherwise write "not measured".
+Quote prices and limits only from a named repo source with its date (for example `$150`, since 2026-10-04: `apps/web/src/components/marketing/PricingCard.tsx` (`PLAN_PRICE_USD`) and `docs/runbook.md` Live Stripe test step 2; seats: `config.py`). No revenue, MRR, fee or conversion figures unless the founder supplies them with a date and source; otherwise write "not measured".
 
 ## Output
 

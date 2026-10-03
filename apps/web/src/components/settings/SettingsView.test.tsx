@@ -136,7 +136,9 @@ describe('the "not built yet" list is maintained in both directions', () => {
     expect(html).not.toContain('records pricing as undecided');
     // The real thing is there instead.
     expect(html).toContain('What you pay');
-    expect(html).toContain('$160 a month');
+    expect(html).toContain('$150 a month');
+    // Repriced by the founder on 2026-10-04: the old figure is nowhere on the screen.
+    expect(html).not.toContain('$160');
   });
 
   it('still names the things that genuinely are missing', () => {
@@ -163,7 +165,7 @@ describe('the "not built yet" list is maintained in both directions', () => {
 
 describe('the billing lead depends on what the agency has', () => {
   const lead = (billing: BillingStatus | null) => render({ ...READY, billing });
-  const BASE = 'One plan, $160 a month, 3 seats.';
+  const BASE = 'One plan, $150 a month, 3 seats.';
 
   it('says only the plan when billing is not known', () => {
     const html = lead(null);
@@ -204,7 +206,7 @@ describe('the billing lead depends on what the agency has', () => {
  */
 describe('the billing lead for a subscription that needs attention', () => {
   const lead = (billing: BillingStatus) => render({ ...READY, billing });
-  const BASE = 'One plan, $160 a month, 3 seats.';
+  const BASE = 'One plan, $150 a month, 3 seats.';
   const NEEDS_ATTENTION = ['past_due', 'unpaid', 'paused', 'incomplete', 'some_future_status'];
   const withStatus = (subscriptionStatus: string, over: Partial<BillingStatus> = {}): BillingStatus => ({
     ...pastDueSubscription,
@@ -270,7 +272,8 @@ describe('billing', () => {
     const html = render(READY);
     expect(html).toContain('No subscription');
     expect(html).toContain('Subscribe');
-    expect(html).toContain('$160');
+    expect(html).toContain('$150');
+    expect(html).not.toContain('$160');
   });
 
   it('states the renewal date when a subscription is live', () => {
