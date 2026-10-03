@@ -37,6 +37,7 @@ import structlog
 from pydantic import BaseModel, Field, ValidationError
 
 from ..config import Settings, get_settings
+from . import usage
 from .call_bounds import CallBound
 from .crawl import CrawlResult
 
@@ -249,16 +250,25 @@ async def classify(
             status="unclassifiable", reason_code="INSUFFICIENT_CONTENT"
         )
 
+    # Built before the call is counted, as every other site does: a key that is not set is not a
+    # request that was made (`provider_key` raises, and nothing catches it below).
+    client = CLASSIFIER_BOUND.client(settings)
     try:
-        async with CLASSIFIER_BOUND.deadline():
-            response = await CLASSIFIER_BOUND.client(settings).messages.parse(
-                model=CLASSIFIER_MODEL,
-                max_tokens=CLASSIFIER_MAX_TOKENS,
-                output_config={"effort": CLASSIFIER_EFFORT},
-                system=system_prompt or SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": build_prompt(crawl)}],
-                output_format=IndustryClassification,
-            )
+        # Counted, not changed (`usage.py`). Classification happens at intake and is not part of
+        # a scan: it has its own `llm.call` lines and is never in a scan's total.
+        with usage.track(
+            usage.ANTHROPIC, usage.Purpose.CLASSIFICATION, model=CLASSIFIER_MODEL
+        ) as call:
+            async with CLASSIFIER_BOUND.deadline():
+                response = await client.messages.parse(
+                    model=CLASSIFIER_MODEL,
+                    max_tokens=CLASSIFIER_MAX_TOKENS,
+                    output_config={"effort": CLASSIFIER_EFFORT},
+                    system=system_prompt or SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": build_prompt(crawl)}],
+                    output_format=IndustryClassification,
+                )
+            call.read_anthropic(response)
     except anthropic.AuthenticationError:
         logger.error("classify.auth_failed")
         return ClassificationOutcome(status="unclassifiable", reason_code="PROVIDER_AUTH_FAILED")

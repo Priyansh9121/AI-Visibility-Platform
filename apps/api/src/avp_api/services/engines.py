@@ -108,6 +108,7 @@ import structlog
 
 from ..config import Settings, get_settings
 from ..models.engine_result import Engine, EngineResultStatus
+from . import usage
 from .crawl import registrable_domain
 
 logger = structlog.get_logger(__name__)
@@ -501,6 +502,9 @@ class _ClaudeBase:
             api_key=settings.provider_key("anthropic_api_key"),
             timeout=DEFAULT_TIMEOUT,
             max_retries=MAX_RETRIES,
+            # Reports each HTTP attempt the SDK makes inside `create`, so a retry it makes on
+            # its own is counted (`usage.py`). Neither number above changes.
+            **usage.sdk_client_options(),
         )
         answer = EngineAnswer(
             engine=self.engine, engine_version=self.version, prompt_text=prompt
@@ -537,10 +541,17 @@ class _ClaudeBase:
             ]
 
         try:
-            # The outer deadline is what makes ENGINE_CALL_CEILING a guarantee
-            # rather than an arithmetic claim about someone else's internals.
-            async with asyncio.timeout(ENGINE_CALL_CEILING):
-                response = await client.messages.create(**kwargs)
+            # Counted, not changed (`usage.py`): one `llm.call` line for each request this
+            # call makes, read from the response before anything below decides what it means.
+            with usage.track(
+                usage.ANTHROPIC, usage.Purpose.ENGINE,
+                model=ANSWER_MODEL, engine=self.engine.value,
+            ) as call:
+                # The outer deadline is what makes ENGINE_CALL_CEILING a guarantee
+                # rather than an arithmetic claim about someone else's internals.
+                async with asyncio.timeout(ENGINE_CALL_CEILING):
+                    response = await client.messages.create(**kwargs)
+                call.read_anthropic(response)
         except Exception as exc:  # noqa: BLE001 - mapped to a status, never raised
             answer.status, answer.error_code = _map_error(exc)
             answer.latency_ms = int((time.perf_counter() - started) * 1000)
@@ -831,25 +842,30 @@ class ChatGptAdapter:
         started = time.perf_counter()
 
         try:
-            async with asyncio.timeout(ENGINE_CALL_CEILING):
-                async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
-                    response = await client.post(
-                        f"{OPENAI_BASE_URL}/chat/completions",
-                        headers={
-                            "Authorization": (
-                                f"Bearer {settings.provider_key('openai_api_key')}"
-                            ),
-                            "Content-Type": "application/json",
-                        },
-                        json={
-                            "model": OPENAI_ANSWER_MODEL,
-                            "max_completion_tokens": OPENAI_MAX_TOKENS,
-                            "reasoning_effort": OPENAI_REASONING_EFFORT,
-                            "messages": [{"role": "user", "content": prompt}],
-                        },
-                    )
-                    response.raise_for_status()
-                    payload = response.json()
+            with usage.track(
+                usage.OPENAI, usage.Purpose.ENGINE,
+                model=OPENAI_ANSWER_MODEL, engine=self.engine.value,
+            ) as call:
+                async with asyncio.timeout(ENGINE_CALL_CEILING):
+                    async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+                        response = await client.post(
+                            f"{OPENAI_BASE_URL}/chat/completions",
+                            headers={
+                                "Authorization": (
+                                    f"Bearer {settings.provider_key('openai_api_key')}"
+                                ),
+                                "Content-Type": "application/json",
+                            },
+                            json={
+                                "model": OPENAI_ANSWER_MODEL,
+                                "max_completion_tokens": OPENAI_MAX_TOKENS,
+                                "reasoning_effort": OPENAI_REASONING_EFFORT,
+                                "messages": [{"role": "user", "content": prompt}],
+                            },
+                        )
+                        response.raise_for_status()
+                        payload = response.json()
+                call.read_openai(payload)
         except Exception as exc:  # noqa: BLE001 - mapped to a status, never raised
             answer.status, answer.error_code = _map_openai_error(exc)
             answer.latency_ms = int((time.perf_counter() - started) * 1000)
@@ -928,29 +944,40 @@ class PerplexityAdapter:
             "Content-Type": "application/json",
         }
         try:
-            async with asyncio.timeout(ENGINE_CALL_CEILING):
-                async with httpx.AsyncClient(timeout=PERPLEXITY_TIMEOUT) as client:
-                    response = await client.post(
-                        f"{PERPLEXITY_BASE_URL}/v1/agent", headers=headers, json=request
-                    )
-                    # ONE retry on a 429 that names its wait — 2026-09-12,
-                    # the fix Epic 21.1 deferred. Refused requests are not
-                    # billed, so the retry is free; it is taken only when the
-                    # vendor says how long, only when that fits the ceiling,
-                    # and through the start pacer like any other start.
-                    if response.status_code == 429:
-                        wait = _retry_after_seconds(response.headers.get("retry-after"))
-                        if wait is not None and wait <= PERPLEXITY_RETRY_AFTER_MAX:
-                            logger.info("engines.perplexity_retry_after", seconds=wait)
-                            await asyncio.sleep(wait)
-                            pacer = _pacer(self.engine)
-                            if pacer is not None:
-                                await pacer.admit()
-                            response = await client.post(
-                                f"{PERPLEXITY_BASE_URL}/v1/agent", headers=headers, json=request
-                            )
-                    response.raise_for_status()
-                    payload = response.json()
+            # Each of the two requests this call can make is one `llm.call` line, and the
+            # second is marked as the retry it is (`usage.py`).
+            with usage.track(
+                usage.PERPLEXITY, usage.Purpose.ENGINE,
+                model=PERPLEXITY_ANSWER_MODEL, engine=self.engine.value,
+            ) as call:
+                async with asyncio.timeout(ENGINE_CALL_CEILING):
+                    async with httpx.AsyncClient(timeout=PERPLEXITY_TIMEOUT) as client:
+                        call.begin_attempt()
+                        response = await client.post(
+                            f"{PERPLEXITY_BASE_URL}/v1/agent", headers=headers, json=request
+                        )
+                        # ONE retry on a 429 that names its wait — 2026-09-12,
+                        # the fix Epic 21.1 deferred. Refused requests are not
+                        # billed, so the retry is free; it is taken only when the
+                        # vendor says how long, only when that fits the ceiling,
+                        # and through the start pacer like any other start.
+                        if response.status_code == 429:
+                            wait = _retry_after_seconds(response.headers.get("retry-after"))
+                            if wait is not None and wait <= PERPLEXITY_RETRY_AFTER_MAX:
+                                logger.info("engines.perplexity_retry_after", seconds=wait)
+                                call.attempt_failed("http_429")
+                                await asyncio.sleep(wait)
+                                pacer = _pacer(self.engine)
+                                if pacer is not None:
+                                    await pacer.admit()
+                                call.begin_attempt()
+                                response = await client.post(
+                                    f"{PERPLEXITY_BASE_URL}/v1/agent",
+                                    headers=headers, json=request,
+                                )
+                        response.raise_for_status()
+                        payload = response.json()
+                call.read_perplexity(payload)
         except Exception as exc:  # noqa: BLE001 - mapped to a status, never raised
             answer.status, answer.error_code = _map_perplexity_error(exc)
             answer.latency_ms = int((time.perf_counter() - started) * 1000)
@@ -1077,24 +1104,29 @@ class GeminiAdapter:
         started = time.perf_counter()
 
         try:
-            async with asyncio.timeout(ENGINE_CALL_CEILING):
-                async with httpx.AsyncClient(timeout=GEMINI_TIMEOUT) as client:
-                    response = await client.post(
-                        f"{GEMINI_BASE_URL}/models/{GEMINI_ANSWER_MODEL}:generateContent",
-                        headers={
-                            "x-goog-api-key": settings.provider_key("google_ai_api_key"),
-                            "Content-Type": "application/json",
-                        },
-                        json={
-                            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                            "generationConfig": {
-                                "maxOutputTokens": GEMINI_MAX_OUTPUT_TOKENS,
-                                "thinkingConfig": {"thinkingLevel": GEMINI_THINKING_LEVEL},
+            with usage.track(
+                usage.GOOGLE, usage.Purpose.ENGINE,
+                model=GEMINI_ANSWER_MODEL, engine=self.engine.value,
+            ) as call:
+                async with asyncio.timeout(ENGINE_CALL_CEILING):
+                    async with httpx.AsyncClient(timeout=GEMINI_TIMEOUT) as client:
+                        response = await client.post(
+                            f"{GEMINI_BASE_URL}/models/{GEMINI_ANSWER_MODEL}:generateContent",
+                            headers={
+                                "x-goog-api-key": settings.provider_key("google_ai_api_key"),
+                                "Content-Type": "application/json",
                             },
-                        },
-                    )
-                    response.raise_for_status()
-                    payload = response.json()
+                            json={
+                                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                                "generationConfig": {
+                                    "maxOutputTokens": GEMINI_MAX_OUTPUT_TOKENS,
+                                    "thinkingConfig": {"thinkingLevel": GEMINI_THINKING_LEVEL},
+                                },
+                            },
+                        )
+                        response.raise_for_status()
+                        payload = response.json()
+                call.read_gemini(payload)
         except Exception as exc:  # noqa: BLE001 - mapped to a status, never raised
             answer.status, answer.error_code = _map_gemini_error(exc)
             answer.latency_ms = int((time.perf_counter() - started) * 1000)

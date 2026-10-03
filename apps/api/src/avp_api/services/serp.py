@@ -29,6 +29,7 @@ import httpx
 import structlog
 
 from ..config import Settings, get_settings
+from . import usage
 from .crawl import registrable_domain
 
 logger = structlog.get_logger(__name__)
@@ -327,6 +328,9 @@ def _gave_up(query: str, exc: Exception, kinds: list[str], started: float) -> Se
     logger.warning(
         "serp.attempts_failed", attempts=len(kinds), elapsed_ms=_since_ms(started), kinds=kinds
     )
+    # Into the scan's total, if this is one (`usage.py`): every request that got no answer, and
+    # nothing that did. Whether such a request is billed is the question at the top of the module.
+    usage.record_serp_search(attempts=len(kinds), no_answer=len(kinds), answer=None)
     timed_out = isinstance(exc, httpx.TimeoutException | TimeoutError)
     return SerpResult(
         query=query, ok=False, error_code="SERP_TIMEOUT" if timed_out else "SERP_UNREACHABLE"
@@ -438,6 +442,15 @@ async def search(
         hits=len(result.hits),
         status=answered.response.status_code,
         error_code=result.error_code,
+    )
+    # Into the scan's total, if this is one (`usage.py`): the requests that got no answer before
+    # the one that did, and what that one said. An answer that is an error is not billed (the
+    # pricing page, quoted at the top of this module); an `ok` one is, unless SerpApi's cache
+    # served it.
+    usage.record_serp_search(
+        attempts=answered.attempts,
+        no_answer=answered.attempts - 1,
+        answer="ok" if result.ok else "error",
     )
     return result
 

@@ -23958,3 +23958,124 @@ Drift check (north-star §8): Layer 1, Delivery (what `/terms` and `/privacy` sa
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# Every paid provider call logs its counts, and every scan ends with one line that totals them
+
+**2026-10-04, the seventh entry of the day; branch `pilot-fixes-5`, the founder's brief "free trial, US$150, usage visibility and pilot guardrails" (item U1).** One item, one commit.
+
+**Render: nothing to set.** Both new lines are INFO. `LOG_LEVEL` must stay `INFO` or unset, or neither is written.
+
+Drift check (north-star §8): Layer 2, Measurement (the paid-call boundary), with Layer 0's rule that only counts are kept; lifecycle phase: Activation (Epic 9). It serves §5.1's unit economics: until now production threw away the usage every provider sends back, so no customer scan's cost had ever been measured.
+
+## 1. What changed
+
+- **`llm.call`, one line for each paid HTTP request** to Anthropic, OpenAI, Perplexity or Google (`services/usage.py`, `track()` around each call). Fields:
+  - `scan_id`, `provider`, `purpose` (`engine`, `sentiment`, `prompt_generation`, `fixes`, `detection`, `classification`), `engine`;
+  - `model` as the response says it was served, else the model asked for. It is kept only if it is 1 to 100 characters of `[A-Za-z0-9._:/-]`; anything else is dropped;
+  - `input_tokens`, `output_tokens` (reasoning included), `reasoning_tokens`, `cache_read_tokens`, `cache_write_tokens`, `search_invocations`;
+  - `retry`, `ok`, and `error`: `http_<status>` or the exception's class, never its message.
+- **What each provider's usage is read from:**
+  - Anthropic: `usage.input_tokens`, `output_tokens`, `output_tokens_details.thinking_tokens`, the cache counts and `server_tool_use.web_search_requests`.
+  - OpenAI: `prompt_tokens`, `completion_tokens` and its reasoning and cached details.
+  - Perplexity: `input_tokens`, `output_tokens`, the cache read and `tool_calls_details.web_search.invocation`. Its own `usage.cost`, a dollar figure, is deliberately not read.
+  - Gemini: `promptTokenCount`, `candidatesTokenCount` plus `thoughtsTokenCount`, `cachedContentTokenCount`, `modelVersion`, and the number of grounding queries, never their text.
+- **Wrapped calls:** the four engine adapters, and each `messages.parse` in `extraction.py`, `prompts.py`, `fix_generator.py`, `cocitation.py` and `classify.py`.
+- **Retries are visible.**
+  - The Anthropic SDK's own retries inside one call are counted by its per-attempt middleware (`count_attempts`, attached in `call_bounds.py`). On the pinned SDK the middleware also sends the SDK's raw-response header (`X-Stainless-Raw-Response: raw`, which carries no secret); a test compares the requests with and without it, and that header is the only difference. An SDK without middleware gets none and counts no retries.
+  - Perplexity's own retry after a 429 is marked by its adapter.
+- **`scan.usage`, one line for each scan** (`execute_scan` runs inside `usage.scan_scope`), however the scan ended.
+  - Fields per line of the scan, for `engines` (all together), `engine_<id>`, `sentiment`, `prompt_generation`, `fixes` and `detection`: `_calls`, `_unanswered`, `_retries`, the token and search sums, and `_model` (only models that answered).
+  - SerpApi: `serpapi_attempted`, `serpapi_ok`, `serpapi_error` and `serpapi_no_answer` are always written. `serpapi_billed_or_unknown` (ok plus no answer) is an upper bound on what SerpApi billed.
+  - A zero counter is left out, except `_calls`, `_input_tokens` and `_output_tokens`. The sample line for four engines and three prompts is 1,589 bytes.
+- **Calls outside a scan** log `scan_id=None` and are in no total: the detect route, the fixes route, classification at intake and an ad-hoc prompt run.
+- **Bookkeeping never fails a call.** Every reader, the log call, the accumulator and the middleware swallow their own errors. A cancellation passes through untouched.
+- **No dollar figures in production code.**
+  - `test_no_prices_in_src.py` refuses any dollar string literal and any rate table keyed by model anywhere under `src`.
+  - `usage.py` must hold none at all, comments included.
+- **`scripts/verify_e2e.py --price-usage '<line>'`** (or `-` for standard input) prices a pasted `scan.usage` line offline, with no key and no database.
+  - Its `RATES` table now carries the source and the read date of each rate: the five token rates read 2026-10-03, and the two per-search fees as first read (2026-09-08 and 2026-09-11).
+  - SerpApi has no per-search rate in the repo. `--serp-per-search` prices `serpapi_billed_or_unknown` as an upper bound; without it SerpApi is listed under missing rates.
+  - A model with no rate is listed, never priced at nothing.
+- **`docs/runbook.md`:** a new section, "Reading the usage lines", covers every field, what is never in a total, what the lines undercount, and how to price a line.
+
+## 2. The review
+
+**Security review: passed with nits** (no Critical, High or Medium).
+- Nothing secret, third-party or identifying can reach either line.
+- The middleware alters neither request nor response.
+- One scan's calls cannot land in another's total.
+
+Fixed in a second round:
+- **L1:** the "never raises" rule was not enforced in two places (the accumulator inside `__exit__`, and `record_serp_search`). Both are guarded now, and a test ties every `Purpose` to its line.
+- **L2:** the SerpApi key was never checked. Every SerpApi test now runs under a guard that no line holds the key or the URL, with fakes that echo both into their errors. The whole-scan test checks all five providers' keys.
+- **Info:** the middleware docstrings said it changes nothing; they now name the header.
+- **Info:** the script's `--serp-per-search` refuses NaN, infinities and negative numbers.
+- **Untested fallback:** an SDK without middleware is now tested.
+
+## For the founder: keeping usage in the database (not built)
+
+- **Recommended shape:** a table `scan_usage_lines`, one row per scan, line, engine and model, about 8 rows for a four-engine scan.
+  - The counters above as integers.
+  - The four SerpApi counts on the scan or in a 1:1 row.
+  - Unique on (scan, line, engine, model).
+- **Cost:** two statements per scan and about 3 KB on disk, written after the scan's scope ends, in its own session, so it can never fail a scan. It needs:
+  - a model, a migration, the writer and tests;
+  - the Supabase privileges treatment for new tables (D1 already removes the Data API roles' privileges from every new table in `public`).
+- **Alternatives:**
+  - per-call rows: about 165 for a 20-prompt scan, about 35 to 50 KB;
+  - a JSON column on `scans`: one update, about 1.5 KB, weaker to aggregate.
+- **What it would allow:** cost per scan, client, agency and month, with rates applied when read, so no money is stored; margin against the plan; retry waste per engine; and a basis for any cap.
+
+## Found, not fixed
+
+- **A schema miss fails a whole scan after it was paid for.** `classify_sentiment`, `generate_prompts` and `run_seed_prompt` do not catch pydantic's `ValidationError` from `messages.parse`; only `classify` and `fix_generator` do. A scratch run confirmed sentiment raises it, which fails the scan (`EXECUTION_FAILED`).
+- **A failed scan's other prompt slots keep spending.** `scan_runner` gathers them with `asyncio.gather`, which does not cancel the others when one raises (also `cocitation.py` and `serp.py`). Their lines carry the scan's id but are logged after its total and are not in it.
+- **Lines that undercount:**
+  - a response the SDK cannot parse was billed and logs zero counts (`ok=False error=ValidationError`);
+  - a timed-out attempt may have been billed with nothing to show.
+- **Dollar figures in comments:** 20 comment lines under `src` still carry provider dollar figures (`engines.py` 9, `scan_allowance.py` 6, `extraction.py` 3, `prompts.py` 1, `classify.py` 1).
+- **Forward-looking:** structlog's `merge_contextvars` is on. Nothing binds a context variable today, but anything that ever binds an agency, user or domain would appear on both lines.
+- **Log volume:** about 165 `llm.call` lines (about 54 KB) for a 20-prompt, four-engine scan, plus the 1.6 KB total.
+
+## Verified
+
+**API pytest 3588 → 3836 (+248); floor raised to match.** One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **New tests (248):**
+  - `test_usage.py` (86);
+  - `test_llm_call_lines.py` (35);
+  - `test_scan_usage.py` (10): whole scans through the real `execute_scan`, every field against the sum of the scan's own lines;
+  - `test_price_usage.py` (77);
+  - `test_serp_usage.py` (30);
+  - `test_no_prices_in_src.py` (10).
+- **The implementer's negative controls,** each restored and checked byte-for-byte. Round one:
+  - Gemini's thoughts dropped: 2 fail;
+  - the retry flag forced off: 5;
+  - the scan scope removed: 7;
+  - the middleware not attached: 5;
+  - a dollar string in `usage.py`: 4;
+  - a rate table in `engines.py`: 1;
+  - a rate changed: 11;
+  - a read date blanked: 4;
+  - an engine line counted twice: 13;
+  - the exception's message as the error label: 5;
+  - SerpApi not counted: 16 and 10;
+  - the total logged only on success: 4;
+  - the model not sanitised: 9;
+  - an unanswered request naming a model: 5;
+  - and seven more.
+
+  Round two:
+  - the two guards removed: 2 and 3 fail;
+  - a purpose with no line: 3;
+  - a SerpApi URL logged: 15 failed and 19 errors;
+  - the new field missing: 23, or summed wrongly: 19;
+  - NaN accepted: 16.
+- **On this tree:** every source U1 changed back to `HEAD` (only `usage.py` kept), and 135 of the 248 new tests fail. Restored and checked with `cmp`.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, web 1859, mypy 43 (ceiling 50; 111 files checked, `usage.py` the new one).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `f45983cfa5e3`) and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
