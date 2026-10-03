@@ -23669,3 +23669,73 @@ Both halves were tested, but separately. The API's tests (`test_robots_obeyed.py
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# The launch checklist says what `pilot-fixes-4` closed, how to merge it, and every decision still open
+
+**2026-10-04, the third entry of the day; branch `pilot-fixes-4`, the founder's brief "search accuracy, guardrails and pilot hardening" (its finish).** One commit, `docs/launch-checklist.md` and this entry only.
+
+**Render: nothing to set.** This branch's one migration and its checks are in 1.1f.
+
+Drift check (north-star §8): no product layer; the launch plan. Lifecycle phase: Activation (Epic 9), what stands between the code and the first pilots.
+
+## 1. What changed
+
+- **Status and merge steps:**
+  - The status line says PRs #2 to #7 are merged (`main` at `942115a`).
+  - 1.1e is marked merged (PR #7). Its step 5 is now T1's automated test, and its steps 6 and 7 were checked in a browser on a local production build (3.52).
+  - **New 1.1f,** how to merge this branch: nothing to set, one migration (`f45983cfa5e3`), both services from one push. After the deploy:
+    - the Redis lines, including the one expected `redis.data_lost`;
+    - the Supabase grants check, before and after;
+    - the headers on served responses with a GET, which closes 3.10 on production;
+    - one scan's `serp.completed` lines and the `country` on `competitors.detected`;
+    - the report-only CSP clicked through signed in;
+    - the share bar listened to.
+- **Rows closed, each with its commit:**
+  - 3.1 (`f6e232d`);
+  - 3.3 (the founder's Data API switch, and D1 `c247ef9`);
+  - 3.4 (the founder's `noeviction`, with K1's facts);
+  - 3.10 (locally);
+  - 3.49 (`9d1b213`);
+  - 3.52 (`9760e1a`);
+  - 3.53 (`5a919c8`);
+  - 3.54 (the move);
+  - new 3.55 (S1, `596e403`), 3.57 (S2, `40c9a43`), 3.58 (C1, `3114aff`) and 3.59 (K1, `b3cdfb2`).
+- **The founder's decisions, recorded:**
+  - 3.2: after the pilots;
+  - 3.45: keep retrying reads;
+  - 3.46: accepted;
+  - 3.47: kept;
+  - 3.48: kept for a later formula version;
+  - 3.50: left until a pilot needs it;
+  - 3.51: kept going dark;
+  - 3.4: when to upgrade Redis, and not touching its settings while pilots are signed in.
+- **New rows, the decisions and follow-ups this brief found:**
+  - 3.56: detection's query shapes, US-only publisher list and missing country field;
+  - 3.60: sessions never slide;
+  - 3.61: an agency-wide cap or identity gate on the detect route;
+  - 3.62: no web button calls that route;
+  - 3.63: the landing and pricing copy's ordering claim;
+  - 3.64: the fix generator's model inputs;
+  - 3.65: audit checks that may read wrongly;
+  - 3.66: a search answer that is not a JSON object;
+  - 3.67: a hostname check at intake;
+  - 3.68: the header residuals;
+  - 3.69: D1's residuals;
+  - 3.70: the same announcement gap on Settings' invite link;
+  - 3.71: a refused crawl still recording a classifier model.
+
+## Verified
+
+**The final bar on this tree** (the commands of `ci.yml`, run locally; this commit changes no code, and no test reads either file it changes).
+- Counts: API 3416 (one test skipped on macOS: it reads Linux's `/proc`), workers 27, shared-types 53 (0 fail), design-system 935, web 1849, mypy 43 (ceiling 50).
+- Ruff is clean, all typechecks pass, the styleguide builds, and all six count gates pass through `assert_count.py`.
+- Both `uv lock --check` runs pass, and Alembic upgrade (through `f45983cfa5e3`) and check pass on an empty database.
+- The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+- OpenAPI and `api.gen.ts` regenerate with no change.
+- Over the branch:
+  - API 3074 → 3416;
+  - web 1708 → 1849;
+  - workers 26 → 27;
+  - design-system 935, shared-types 53 and mypy 43 unchanged.
+- SerpApi: 12 requests over the whole brief, all in S1's investigation; 5 counted against the plan.
+- Exit codes were read from files.
