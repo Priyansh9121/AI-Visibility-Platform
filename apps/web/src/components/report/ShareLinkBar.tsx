@@ -15,7 +15,8 @@
  * The design-system-only rule: every element comes from `@avp/design-system` — `Button`,
  * `Card`, `CardBody` and `TextField` — and the only local classes are layout
  * utilities (flex, gap, margin) resolving to the preset's own spacing scale, and the design
- * system's own `avp-visually-hidden` for the one message that is for screen readers (3.38).
+ * system's own `avp-visually-hidden` for the two messages that are for screen readers: that the
+ * link is ready (3.38) and that it was copied (3.52).
  *
  * **The URL field is a `TextField`, not a hand-styled `<input>`.** The first
  * draft of this component rolled its own bordered input and reached for
@@ -40,7 +41,15 @@ type Ready = {
   kind: 'ready';
   url: string | null;
   expiresAt: string | null;
-  copied: boolean;
+  // How many times Copy has worked on this link in a row (3.52): 0 until it has, and again once a
+  // copy is refused or the link is being withdrawn. Above 0 the button says "Copied" and the status
+  // region says "Link copied.". The count is that sentence's key, so each copy is a new element in
+  // the region, which a screen reader announces, where the same words in the same element are no change.
+  copies: number;
+  // The link was live before this bar did anything: the report loaded with it, or a press found it
+  // and was given it back (3.28). The lead then says there is a live link, not that the bar creates
+  // one (3.52). A link the bar made from nothing is false here, and its lead stays as it was.
+  existing: boolean;
   withdraw: Withdraw;
   // What the alert region says beside the link, and which press it is about: on a live link a
   // failed mint and a failed withdraw both land here, and only the mint's is Get's to be
@@ -66,8 +75,52 @@ const FAILED_SCAN_SENTENCE = 'This scan failed, so its report cannot be shared.'
  * withdrawn: no end date is shown for it, and nothing says it works.
  */
 const FAILED_SCAN_LINK_SENTENCE = 'Its existing link no longer opens the report.';
-/** What a mint that failed says, in the alert region and, through `aria-describedby`, to Get (3.33). */
+/**
+ * What a mint that failed says when no link is live, in the alert region and, through
+ * `aria-describedby`, to Get (3.33).
+ */
 const LINK_NOT_CREATED_SENTENCE = 'The link could not be created. Try again.';
+/**
+ * What a press that failed says when a link is live (3.52), said where and to whom
+ * `LINK_NOT_CREATED_SENTENCE` is. Nothing was being created: the press asks for a link that
+ * exists, and a failure of that leaves the link as it was (3.28).
+ */
+const LINK_NOT_GOT_SENTENCE = 'We could not get the link. Try again.';
+/**
+ * Get's busy label while a link is live (3.52). A press on a live link returns it as it is (3.28),
+ * so nothing is created and "Creating…" would be untrue; with no link live a press does make one,
+ * and the label stays "Creating…".
+ */
+const GETTING_LINK_LABEL = 'Getting the link…';
+/**
+ * Said in the status region once a copy has worked (3.52), beside the ready sentence. The button's
+ * new name ("Copied") is not reliably announced, and a copy that is refused says nothing: the link
+ * is on screen and selectable, and nothing on the bar claims a copy that did not happen.
+ */
+const LINK_COPIED_SENTENCE = 'Link copied.';
+
+/**
+ * The two sentences every lead ends with, live link or not: how long links last, and who gets
+ * one. Read at render, not at load, because the days are `RETENTION`'s, which a test changes.
+ */
+function linkRulesSentences(): string {
+  return `Links last ${counted(RETENTION.shareLinkDays, 'day')} from when they are created. Only share it with the client this report is about.`;
+}
+
+/** The lead with no link live: what Get shareable link will do. */
+function noLinkLead(): string {
+  return `Creates a link anyone can open without an account. ${linkRulesSentences()}`;
+}
+
+/**
+ * The lead for a link that was live before the bar did anything (3.52). It says what is true of
+ * that link, not that the bar creates one: since 3.28 a press of Get shareable link returns it as
+ * it is. "The link" is the address, so whoever holds it can open the report. It ends as the other
+ * lead does, so the days still come from the one constant.
+ */
+function liveLinkLead(): string {
+  return `This report has a live link. Anyone with the link can open the report without an account. ${linkRulesSentences()}`;
+}
 
 /**
  * Said in the status region once Get shareable link has made a link (3.33), and the one
@@ -98,7 +151,8 @@ export function ShareLinkBar({
           kind: 'ready',
           url: null,
           expiresAt: shareExpiresAt,
-          copied: false,
+          copies: 0,
+          existing: true,
           withdraw: 'idle',
           error: null,
         }
@@ -157,7 +211,9 @@ export function ShareLinkBar({
         kind: 'ready',
         url: link.url,
         expiresAt: link.expiresAt ?? null,
-        copied: false,
+        copies: 0,
+        // A press made with a link live was given it back (3.28), whatever the lead said before.
+        existing: live !== null,
         withdraw: 'idle',
         error: null,
       });
@@ -173,9 +229,11 @@ export function ShareLinkBar({
         setState(live ? { ...live, withdraw: 'idle', error: null } : { kind: 'idle' });
         return;
       }
+      // With a link live the press asked for it and nothing was being created, so the failure
+      // does not say it was (3.52). It is still a mint's failure: Get is described by it (3.33).
       setState(
         live
-          ? { ...live, withdraw: 'idle', error: { from: 'mint', text: LINK_NOT_CREATED_SENTENCE } }
+          ? { ...live, withdraw: 'idle', error: { from: 'mint', text: LINK_NOT_GOT_SENTENCE } }
           : { kind: 'failed' },
       );
       // Not for the refusal above: there Get leaves the page, and there is nothing to retry.
@@ -183,8 +241,8 @@ export function ShareLinkBar({
     }
   }
 
-  async function withdraw(url: string | null, expiresAt: string | null) {
-    setState({ kind: 'ready', url, expiresAt, copied: false, withdraw: 'working', error: null });
+  async function withdraw(from: Ready) {
+    setState({ ...from, copies: 0, withdraw: 'working', error: null });
     try {
       await api.withdrawShareLink(scanId);
       // The URL leaves state entirely: a withdrawn link must not stay in the DOM.
@@ -192,10 +250,8 @@ export function ShareLinkBar({
     } catch (e) {
       setRefocusTrigger(true);
       setState({
-        kind: 'ready',
-        url,
-        expiresAt,
-        copied: false,
+        ...from,
+        copies: 0,
         withdraw: 'idle',
         // A 4xx is the API refusing, and its own sentence says why. Anything
         // else (no answer, a proxy's 502, a 5xx) says nothing about the link,
@@ -221,9 +277,15 @@ export function ShareLinkBar({
     // gone and its URL must not come back), may be under way (a fresh `ready`
     // here would reset it to idle and offer a second DELETE), or the bar may be
     // showing a newer link. So the answer is applied only to the state that is
-    // still this link's, and changes `copied` and nothing else about it.
-    const mark = (copied: boolean) =>
-      setState((s) => (s.kind === 'ready' && s.url === url ? { ...s, copied } : s));
+    // still this link's, and changes `copies` and nothing else about it.
+    //
+    // A copy that worked adds one, and that puts "Link copied." in the status region
+    // (3.52). The same guard keeps a late answer from saying so for a link that has been
+    // withdrawn or replaced since.
+    const mark = (worked: boolean) =>
+      setState((s) =>
+        s.kind === 'ready' && s.url === url ? { ...s, copies: worked ? s.copies + 1 : 0 } : s,
+      );
     try {
       await navigator.clipboard.writeText(url);
       mark(true);
@@ -231,12 +293,16 @@ export function ShareLinkBar({
       // Clipboard access is denied in some browsers and over plain HTTP. The
       // URL is already on screen and selectable, so this is not a failure
       // worth interrupting anyone over — it just means they copy it by hand.
+      // Said nowhere (3.52): "Link copied." is only for a copy that happened.
       mark(false);
     }
   }
 
   // The link known to be live: shown, or being replaced by a mint that is out.
   const live = state.kind === 'ready' ? state : state.kind === 'working' ? state.live : null;
+  // That link was live before the bar did anything about it (3.52): it picks the lead and the
+  // lead's key. It stays true through a press, a mint and Copy, and ends with a withdraw.
+  const linkWasLive = live?.existing === true;
   const withdrawing = state.kind === 'ready' && state.withdraw !== 'idle';
   // The alert region is saying that the last mint failed (3.33). A failed withdraw beside Get is
   // not this: it is about the link, and Get is not described by it. Focus goes back to Get in the
@@ -255,15 +321,30 @@ export function ShareLinkBar({
               A live region that is in the page from the start, so a refusal that
               replaces the lead (and takes the Get button, and its focus, off the page)
               is announced rather than silently swapped in.
+
+              What the lead says of the link follows what the bar knows (3.52): a link that
+              was live before the bar did anything gets the sentence about a live link, and
+              any other the one about what Get does. A press that succeeds leaves it as it
+              was, because any change to these words is read out, and the whole lead would
+              be read on top of "Link ready".
+
+              When the live link is withdrawn the lead goes back to the sentence about Get,
+              and that is a NEW element: the key follows whether a link was live to begin
+              with. The change is then not read out beside "Link withdrawn…", which has said
+              what happened. A refusal does not change the key, so it still edits this region
+              in place and is read out.
             */}
             <p
+              key={linkWasLive ? 'live-link' : 'no-link'}
               aria-live="polite"
               data-testid="share-lead"
               className="mt-1 text-ui-sm leading-prose text-text-secondary"
             >
               {failedScan
                 ? `${refusal ?? FAILED_SCAN_SENTENCE}${live ? ` ${FAILED_SCAN_LINK_SENTENCE}` : ''}`
-                : `Creates a link anyone can open without an account. Links last ${counted(RETENTION.shareLinkDays, 'day')} from when they are created. Only share it with the client this report is about.`}
+                : linkWasLive
+                  ? liveLinkLead()
+                  : noLinkLead()}
             </p>
           </div>
 
@@ -275,7 +356,11 @@ export function ShareLinkBar({
               disabled={state.kind === 'working' || withdrawing}
               aria-describedby={mintFailed ? mintFailureId : undefined}
             >
-              {state.kind === 'working' ? 'Creating…' : 'Get shareable link'}
+              {state.kind === 'working'
+                ? state.live !== null
+                  ? GETTING_LINK_LABEL
+                  : 'Creating…'
+                : 'Get shareable link'}
             </Button>
           )}
         </div>
@@ -301,7 +386,7 @@ export function ShareLinkBar({
             {!failedScan && state.url !== null && (
               <ReadyLink
                 url={state.url}
-                copied={state.copied}
+                copied={state.copies > 0}
                 disabled={state.withdraw === 'working'}
                 onCopy={copy}
               />
@@ -332,7 +417,7 @@ export function ShareLinkBar({
               variant="danger"
               aria-describedby={questionId}
               disabled={state.withdraw === 'working'}
-              onClick={() => withdraw(state.url, state.expiresAt)}
+              onClick={() => withdraw(state)}
             >
               {state.withdraw === 'working' ? 'Withdrawing…' : 'Withdraw link'}
             </Button>
@@ -362,8 +447,13 @@ export function ShareLinkBar({
           already in it, so a message mounted as a new element is often never
           read. Each step here takes the control that was focused off the page,
           which is the other reason the messages cannot be left to focus.
+
+          `status` is atomic unless it is told otherwise, and a screen reader reads an
+          atomic region whole whenever any part of it changes. Once a link has been copied
+          this one holds two sentences (3.52), so it is not atomic: what is read is what is
+          added, and "Link copied." does not bring "Link ready. It works until …" with it.
         */}
-        <div role="status">
+        <div role="status" aria-atomic="false">
           {state.kind === 'withdrawn' && (
             <p className="mt-3 text-ui-sm text-text-secondary">
               Link withdrawn. It no longer opens this report.
@@ -383,7 +473,21 @@ export function ShareLinkBar({
             on this text or on the region would silence the announcement.
           */}
           {!failedScan && state.kind === 'ready' && state.url !== null && (
-            <p className="avp-visually-hidden">{linkReadySentence(state.expiresAt)}</p>
+            <>
+              <p className="avp-visually-hidden">{linkReadySentence(state.expiresAt)}</p>
+              {/*
+                A copy that worked (3.52), in the same way and beside it: a sentence of its own,
+                so the ready sentence is not touched. The key is the number of copies, so a
+                second copy takes this element out and puts a new one in. The same words in
+                the same element would be no change to the region, and nothing would be read.
+                A refused copy takes it away again and says nothing.
+              */}
+              {state.copies > 0 && (
+                <p key={state.copies} className="avp-visually-hidden">
+                  {LINK_COPIED_SENTENCE}
+                </p>
+              )}
+            </>
           )}
         </div>
         <div role="alert">
