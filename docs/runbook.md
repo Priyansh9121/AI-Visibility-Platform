@@ -190,6 +190,11 @@ probe goes to the **web** host: that is the path every real request takes.
    the service logs `auth.rate_limit.ip_header_missing`, requests are
    arriving without the header and are sharing one bucket; undo step 4.
 
+**Rotating `APP_SECRET`** renames every rate-limit key (each ends in a hash keyed
+with it), so it resets every login, sign-up, reset and change-password window and
+every client's 24-hour detection day. For the same reason a client's detection day
+cannot be cleared by hand without that secret.
+
 ## If the logs show a second Stripe subscription
 
 Checkout refuses a new subscription while one is live, expires older open
@@ -326,3 +331,293 @@ for this reason.
 last restart: the counters belong to the container, and a restart starts them
 again. The API image runs `tini` as PID 1, so the zombie `headless_shell`
 processes a browser run used to leave behind are reaped; they cost no memory.
+
+## Reading the Redis lines
+
+**When:** everyone was signed out at once, a pilot says "it logged me out", or
+you want to know how the instance is set. One Redis instance (Render Key Value)
+holds the sessions, the rate-limit windows and the Google sign-in state. On the
+Free plan (25 MB, nothing kept on disk) a restart empties it. The API writes two
+lines about it, from K1 (launch checklist 3.4 is the setting they check).
+
+**Where:** the Render dashboard → the **API** service → **Logs**. Search for the
+event name. Neither line carries a key, an address or an id; the first carries one
+word, the policy.
+
+**The lines**
+
+| Event | Level | When | Carries |
+|---|---|---|---|
+| `redis.eviction_policy` | info | once, when the API starts, just after `app.memory_at_start` | `policy`: the instance's `maxmemory-policy`, or `unknown` |
+| `redis.data_lost` | warning | the API looked for its marker key and Redis no longer had it | nothing |
+
+**`redis.eviction_policy`.** `noeviction` is what checklist 3.4 asks for: when
+Redis is full it refuses writes (a sign-in then fails with an error) and deletes
+nothing. Any `allkeys-…` or `volatile-…` policy means Redis may delete keys when
+it is full, without saying so: sessions (people are signed out), the list that
+lets a password change sign someone out everywhere, and rate-limit windows.
+`unknown` means the API could not read the policy: Render refused the command,
+or Redis could not be reached when the API started. The instance's settings page
+in Render says what it is.
+
+**`redis.data_lost`.** The API writes one small key, `avp:sentinel`, that never
+expires, and looks for it when it starts and every 60 seconds after. If it is
+missing, Redis was emptied since the last look. The one API process that finds it
+missing writes it back and logs this line, once, so it shows within about a
+minute of the wipe. A deploy alone never logs it: Redis keeps running through a
+deploy and the new API finds the key. **It is also logged once the first time an
+API starts against a Redis that has never held the key: the first deploy of this
+change, and any new instance. That one is not a loss.** The marker is the one key
+the API keeps with no expiry, on purpose. Every other key expires on its own (a
+session after 14 days, a rate-limit window when its window ends, a Google sign-in
+after 10 minutes), and `tests/test_redis_expiry.py` checks it for every key the API writes.
+
+**What a wipe costs.**
+
+- *Lost:* every session (everyone signs in again), every rate-limit window (a
+  login or sign-up count starts from zero, and competitor detection can be run
+  again for every client because its 24 hours start over), and any Google sign-in
+  in flight (the person lands back on the sign-in page with an error, or is told
+  the sign-in can no longer be used, and starts again).
+- *Not lost:* scans (they run in the API process and live in Postgres, not
+  Redis), clients, reports, share links, billing, accounts.
+- A session also ends on its own 14 days after sign-in, used or not, so someone
+  signed out after two weeks is not a wipe.
+
+**When to act (the founder's decision, 2026-10-03):** upgrade the Key Value plan
+during the pilot when `redis.data_lost` appears and no wipe was expected, or when
+the instance's memory is above 50%. Do not change the Key Value settings while
+pilots are signed in: a change may restart the instance, and a restart is the
+wipe.
+
+## Reading competitor-search lines
+
+**When:** competitor detection lost a search (`competitors.serp_failed`), or you want
+to know how long SerpApi takes from Render and whether the retry ever helps. A
+detection makes 3 to 6 Google searches through SerpApi, three at a time, and the API
+logs a line for each search that reached SerpApi.
+
+**Where:** the Render dashboard → the **API** service → **Logs**. Search for the event
+name. Every line below carries numbers, our own codes and the HTTP status, and nothing
+else: no query, no client, no domain, no URL, no key.
+
+**The lines**
+
+| Event | Level | When | Carries |
+|---|---|---|---|
+| `serp.completed` | info | SerpApi answered the search, whatever it said | `elapsed_ms`, `attempts`, `hits`, `status`, `error_code` |
+| `serp.retried` | info | the first attempt got no answer and the retry did; logged before that search's `serp.completed` | `attempts` (always 2), `kinds` (how the first attempt failed), `elapsed_ms` |
+| `serp.attempts_failed` | warning | no attempt got an answer, so the search failed | `attempts`, `kinds` (how each attempt failed), `elapsed_ms` |
+
+**Every search that reached SerpApi logs exactly one of `serp.completed` and
+`serp.attempts_failed`**, and `serp.retried` besides when a retry answered, so those two
+add up to the number of searches made. A search that was never sent (no `SERPAPI_KEY`)
+logs none of the three.
+
+**`serp.completed`, field by field**
+
+- `elapsed_ms`: milliseconds from the start of the search's first attempt to the end of
+  reading its answer. The wait for one of the three slots is not in it. An answer to the
+  retry has the failed first attempt and the 1 s pause in it: at least 1,000, and up to
+  about 21,000.
+- `attempts`: 1, or 2 when the first attempt got no answer and the retry did.
+- `hits`: the organic results kept (those with a usable domain). 0 for an error answer,
+  and also when Google had nothing to return: `error_code` tells the two apart.
+- `status`: the HTTP status SerpApi sent. A 200 is not always a result page: see
+  `error_code`.
+- `error_code`: `None` for a result page. Otherwise our code for the answer:
+  `SERP_AUTH_FAILED` (401: the key is wrong or revoked; a `serp.auth_failed` error line
+  comes with it), `SERP_RATE_LIMITED` (429), `SERP_HTTP_<n>` (any other status; a
+  `serp.http_error` warning with the status comes with it), `SERP_BAD_JSON` (a 200 whose
+  body was not JSON) or `SERP_API_ERROR` (a 200 whose body carried an `error`).
+
+**`serp.retried` and `serp.attempts_failed`, field by field**
+
+- `attempts`: how many attempts were made. Always 2 on `serp.retried`. On
+  `serp.attempts_failed` it is 2, or 1 when the failure is one that is not retried (an
+  httpx error that is not a transport failure, such as a body it could not decode).
+- `kinds`: one entry for each attempt that got no answer. `connect`: never connected.
+  `read`: connected, sent the search and heard nothing back within the 9 s read budget.
+  `write` and `pool`: the other httpx timeouts. `total`: the attempt ran out its 10 s
+  deadline with no single step out of time (an answer that kept arriving a byte at a
+  time). Anything else is the error's class name (`ConnectError`, `ReadError`,
+  `RemoteProtocolError`: refused, reset, dropped; `DecodingError`).
+- `elapsed_ms`: as above, to the answer (`serp.retried`) or to the end of the last
+  attempt (`serp.attempts_failed`).
+
+**How to read the latency**
+
+1. Search `serp.completed` and copy `elapsed_ms` from the lines with `attempts=1` and
+   `error_code=None`: single requests that worked. With fewer than 20 lines the 95th
+   percentile is only the slowest one, so let some scans run first.
+2. Sort them. The median is the middle value; the 95th percentile is the one 95% of the
+   way up (the 19th of 20). For comparison, 24 searches made from a development Mac on
+   2026-10-03 had a median of 1.54 s, a 95th percentile of 2.54 s and a slowest of
+   6.93 s, none over 10 s.
+3. Count the lines close to the limits. An attempt is cut when it has heard nothing for
+   9 s (the read budget, `PHASE_TIMEOUT_S`) or has run 10 s (the deadline,
+   `ATTEMPT_TIMEOUT_S`), so a search at 8,000 ms or more came close.
+4. Read the `attempts=2` lines apart: each is a search the retry rescued, and its
+   `elapsed_ms` is not one request's time.
+5. Then read the `serp.attempts_failed` lines by their `kinds`. A `read` on both
+   attempts is a search SerpApi took and did not answer in time.
+
+**Billing.** A failed connect is never billed and a read failure was not billed when
+measured (2026-10-03, against the account's monthly count), and SerpApi bills only a
+search it records as successful, so a search it finished after we stopped waiting would
+be billed and only the account's count would show it, not these lines (the evidence is
+in the comment at the top of `services/serp.py`).
+
+**What would justify a change.** The timeouts and the retry are unchanged until there is
+data. This is what the numbers would mean.
+
+- Answered searches cluster near the 9 s read budget (many `attempts=1` lines at 8,000 ms
+  or more): the read budget, and the 10 s deadline with it, are too short for SerpApi
+  from Render, and would be raised together (`PHASE_TIMEOUT_S` and `ATTEMPT_TIMEOUT_S`
+  in `services/serp.py`). A scan's worst case moves with them, because
+  `serp.QUERY_CEILING_S` is added into it (`test_scan_executor.py`).
+- Answered searches are all fast (none near 9,000 ms) and the failures are `read` on both
+  attempts: the provider is stuck on those searches, and waiting longer will not help. The
+  retry costs about 10 s a search (the 1 s pause and a second 9 s wait) and has not
+  rescued one yet: of the 3 searches seen to time out on a read by 2026-10-03, the retry
+  timed out too. The founder has decided to keep retrying a read failure; these lines are
+  how to see whether it ever pays.
+
+**Not in the logs:** which client, scan or query a line is for (several searches run at
+once, so their lines interleave), the market, the URL, the key and anything SerpApi
+returned. `competitors.serp_failed` (one for each search that failed, an error answer
+included) names the query and its `error_code`, and `competitors.detected`, logged after
+the searches' lines, carries the `client_id` and the `country` the searches were made in.
+
+## Supabase grants check
+
+**When:** before the deploy that ships revision `f45983cfa5e3` (which takes `anon` and
+`authenticated`, the two roles Supabase's Data API acts as, off everything in `public`), after
+it, and again after any revision that creates a table, view, sequence or function there, after
+any change to the Data API settings, and after enabling an extension into `public`. It is
+read-only and it is yours to run: nothing in the repo opens a production session.
+
+**Where:** the Supabase dashboard → **SQL Editor**. Paste one query at a time.
+
+**Before the deploy.** Two checks.
+
+- Confirm that the user part of the API service's `DATABASE_URL` (Render → the API service →
+  Environment) is `postgres`, or `postgres.<project-ref>` through the pooler. The revision acts
+  as that user, and its step on the default privileges of `postgres` needs it to be `postgres`
+  or a member of it. Read the user part only; do not paste the URL anywhere.
+- Run this query. It lists every table, view, sequence and routine in `public` whose owner
+  `postgres` cannot act as. Expect no rows. The revision cannot revoke on such an object, so
+  it skips it without a word and the object keeps whatever the Data API roles were granted on
+  it (a revoke on it would fail the deploy).
+
+```sql
+select c.oid::regclass::text as object, c.relkind::text as kind,
+       pg_get_userbyid(c.relowner) as owner
+  from pg_class c
+ where c.relnamespace = 'public'::regnamespace
+   and c.relkind in ('r', 'p', 'v', 'm', 'f', 'S')
+   and not pg_has_role('postgres', c.relowner, 'USAGE')
+union all
+select p.oid::regprocedure::text, 'routine', pg_get_userbyid(p.proowner)
+  from pg_proc p
+ where p.pronamespace = 'public'::regnamespace
+   and not pg_has_role('postgres', p.proowner, 'USAGE')
+ order by 1;
+```
+
+**After the deploy.** Three queries.
+
+**1. Functions and procedures in `public`.** Every one, with whether each role can run it.
+Expect no rows: AVP creates none (a search of the revisions and `apps/api/src` on 2026-10-03
+found no function, procedure, trigger, view or extension). A row with `from_extension` filled
+belongs to an extension, and a row whose `owner` is not `postgres` is not ours either. `true`
+in the two `can_execute` columns is Postgres's default grant of EXECUTE to every role, not a
+grant to `anon` or `authenticated` by name, and the revision leaves it alone. It matters only
+for a function that is there, and the Data API is off.
+
+```sql
+select p.oid::regprocedure                                       as routine,
+       pg_get_userbyid(p.proowner)                               as owner,
+       p.prosecdef                                               as security_definer,
+       has_function_privilege('anon', p.oid, 'EXECUTE')          as anon_can_execute,
+       has_function_privilege('authenticated', p.oid, 'EXECUTE') as authenticated_can_execute,
+       (select e.extname
+          from pg_depend d
+          join pg_extension e on e.oid = d.refobjid
+         where d.classid = 'pg_proc'::regclass and d.objid = p.oid
+           and d.deptype = 'e')                                  as from_extension
+  from pg_proc p
+ where p.pronamespace = 'public'::regnamespace
+ order by p.proname, p.oid;
+```
+
+**2. Privileges held by name.** Every privilege either role still holds on a table, view,
+sequence, column or routine in `public`, and every grant to PUBLIC on a relation or column
+(`kind` is `r` table, `v` view, `S` sequence, `column` or `routine`; `grantee` is `PUBLIC` for
+those). Expect no rows.
+
+```sql
+select c.relname::text as object, c.relkind::text as kind, null::name as column_name,
+       a.privilege_type, coalesce(r.rolname, 'PUBLIC') as grantee
+  from pg_class c
+ cross join lateral aclexplode(c.relacl) a
+  left join pg_roles r on r.oid = a.grantee
+ where c.relnamespace = 'public'::regnamespace
+   and (a.grantee = 0 or r.rolname in ('anon', 'authenticated'))
+union all
+select c.relname::text, 'column', att.attname, a.privilege_type, coalesce(r.rolname, 'PUBLIC')
+  from pg_attribute att
+  join pg_class c on c.oid = att.attrelid
+ cross join lateral aclexplode(att.attacl) a
+  left join pg_roles r on r.oid = a.grantee
+ where c.relnamespace = 'public'::regnamespace
+   and (a.grantee = 0 or r.rolname in ('anon', 'authenticated'))
+union all
+select p.oid::regprocedure::text, 'routine', null, a.privilege_type, r.rolname
+  from pg_proc p
+ cross join lateral aclexplode(p.proacl) a
+  join pg_roles r on r.oid = a.grantee
+ where p.pronamespace = 'public'::regnamespace
+   and r.rolname in ('anon', 'authenticated')
+ order by 1, 3, 4, 5;
+```
+
+**3. Default privileges.** Every default privilege that still names either role, for any
+owner role and any schema (`object_type` is `r` table, `S` sequence, `f` function). Expect no
+row with `owner_role` `postgres` whose `schema` is `public` or `(every schema)`. A row for
+another owner role, such as `supabase_admin`, may appear: the revision does not touch it, and
+Alembic creates nothing as that role.
+
+```sql
+select pg_get_userbyid(d.defaclrole) as owner_role,
+       case d.defaclnamespace when 0 then '(every schema)'
+            else d.defaclnamespace::regnamespace::text end as schema,
+       d.defaclobjtype::text as object_type,
+       a.privilege_type, r.rolname as grantee
+  from pg_default_acl d
+ cross join lateral aclexplode(d.defaclacl) a
+  join pg_roles r on r.oid = a.grantee
+ where r.rolname in ('anon', 'authenticated')
+ order by 1, 2, 3, 4, 5;
+```
+
+**Reading it.** Query 2 empty and no `postgres` row for `public` or `(every schema)` in query
+3: done. Anything else means a grant is back or the revision did not reach it. Say which row
+it is: the fix is a new revision, because a grant changed by hand is invisible to
+`alembic check`.
+
+- A table, view, sequence or routine still listed by query 2 is most likely one the
+  before-the-deploy query listed: the revision skipped it.
+- If query 3 still shows `postgres` rows for `public`, the likeliest cause is that the deploy
+  ran as a user that is neither `postgres` nor a member of it. The revision then skips that
+  step and logs a warning from `alembic.runtime.migration` that starts with
+  `revoke_data_api_grants`; search the deploy log for it. The server's own notice never
+  reaches the log.
+- A `postgres` row whose schema is `(every schema)` is a default that applies to every schema.
+  A per-schema revoke cannot remove it, so the revision leaves it; removing it takes a
+  revision of its own, and whether to write one is the founder's call.
+
+**Not covered:** `service_role`, the default privileges of any owner role other than
+`postgres` and the user the migrations run as, and PUBLIC's own default privileges. Whether
+the Data API is switched on is a dashboard setting; this check shows what the database would
+allow if it were.

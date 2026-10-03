@@ -670,6 +670,22 @@ describe('a partial or failed scan says why, and whether it counted — checklis
     );
   });
 
+  it('a scan whose job was lost before it started says so in a sentence, and that it does not count', () => {
+    // K1. A scan queued, then lost with its job, is failed by the dashboard's own read as
+    // EXECUTOR_NEVER_STARTED once 15 minutes pass (`test_scan_job_lost.py`). The row carries that
+    // code and nothing else about it: the sentence is ours, and the code is never shown. The
+    // endings fixture has no such row, so this is the one place the dashboard is asserted to
+    // render it.
+    const lost = render({
+      ...failedDashboard,
+      recentScans: [{ ...failedDashboard.recentScans[0]!, errorCode: 'EXECUTOR_NEVER_STARTED' }],
+    });
+    expect(lost).toContain(`This scan did not start because our server restarted. ${FREE}`);
+    expect(lost).toContain('avp-badge--danger');
+    expect(lost).toContain(OUTCOME);
+    expect(lost).not.toMatch(/EXECUTOR_NEVER_STARTED|NEVER_STARTED/);
+  });
+
   it('says nothing on a scan that succeeded, is waiting, running or called off', () => {
     for (const name of ['Clean Run Co', 'Waiting Co', 'Busy Co', 'Called Off Co']) {
       const row = rowFor(name);

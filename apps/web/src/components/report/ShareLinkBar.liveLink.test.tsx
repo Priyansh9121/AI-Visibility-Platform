@@ -178,6 +178,9 @@ describe('a link that is already live', () => {
 });
 
 describe('a failed Get shareable link while a link is live', () => {
+  // With a link live the press asks for it and nothing is created, so a failure says it could not be
+  // got (3.52). With no link live a press does create one, and its failure is as it was.
+  const FAILURE_LIVE = 'We could not get the link. Try again.';
   const FAILURE = 'The link could not be created. Try again.';
 
   it('keeps the date line and Withdraw, and says the failure in the alert region', async () => {
@@ -189,7 +192,7 @@ describe('a failed Get shareable link while a link is live', () => {
     await settle();
     expect(el.textContent).toContain(LIVE_LINE);
     expect(button(el, 'Withdraw link')).toBeDefined();
-    expect(el.querySelector('[role="alert"]')?.textContent).toBe(FAILURE);
+    expect(el.querySelector('[role="alert"]')?.textContent).toBe(FAILURE_LIVE);
   });
 
   it('and Withdraw still works afterwards', async () => {
@@ -486,15 +489,16 @@ describe('review fixes', () => {
 
   // Was "keeps the date line while Creating…, with Withdraw disabled", and ended on the minted date.
   // `shareLink` answers as the API now does for a live link (3.28): the same end, so the line is
-  // the same after it too.
-  it('keeps the date line while Creating… and after the same end comes back, with Withdraw disabled meanwhile', async () => {
+  // the same after it too. The busy label is "Getting the link…" with a link live (3.52): nothing
+  // is created, and ShareLinkBar.wording.test.tsx holds the labels for both cases.
+  it('keeps the date line while Getting the link… and after the same end comes back, with Withdraw disabled meanwhile', async () => {
     let finish!: (v: { url: string; expiresAt: string }) => void;
     shareLink.mockReturnValue(new Promise((r) => (finish = r)));
     const el = mounted({ shareExpiresAt: LIVE });
     await act(async () => {
       button(el, 'Get shareable link')!.click();
     });
-    expect(button(el, 'Creating…')!.disabled).toBe(true);
+    expect(button(el, 'Getting the link…')!.disabled).toBe(true);
     expect(dateLines(el)).toEqual([LIVE_LINE]);
     expect(button(el, 'Withdraw link')!.disabled).toBe(true);
     await act(async () => finish({ url: URL_, expiresAt: LIVE }));

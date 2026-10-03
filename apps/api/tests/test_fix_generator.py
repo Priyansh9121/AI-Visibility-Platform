@@ -133,7 +133,7 @@ class TestCandidates:
         assert sum(1 for c in candidates if c.source is ActionItemSource.AUDIT) == 2
 
     def test_a_crawl_blocking_check_is_promoted_above_everything(self) -> None:
-        """Nothing else on the list can take effect underneath a noindex."""
+        """A noindex is a crawl and indexing finding, so it sorts first."""
         candidates = build_candidates(
             HELPSCOUT, [("indexable", "fail", "META_ROBOTS_NOINDEX"), *HELPSCOUT_FINDINGS]
         )

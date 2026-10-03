@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 import httpx
@@ -61,11 +62,11 @@ RESULTS_PER_QUERY = 10
 #     answer came, a timeout or a transport failure (refused, reset, DNS). Never for an
 #     answer, whatever it says (401, 429, 5xx, bad JSON, an `error` payload): the
 #     provider has spoken, and asking again would be billed or rate-limited again.
-#     "No answer" does not mean "not billed": SerpApi may already have run, and billed,
-#     the search whose answer never arrived, so a retry after a read failure can be a
-#     second billed search. Only a failure to connect certainly was not. So every retry
-#     is logged, `serp.retried` when one was needed and `serp.attempts_failed` when it
-#     did not help, and the extra searches against the shared plan can be counted.
+#     Whether an attempt that got no answer is billed is settled below. Every retry is
+#     logged, `serp.retried` when one was needed and `serp.attempts_failed` when it did
+#     not help, and so is every query that was answered, `serp.completed`, with how long
+#     it took: the latency distribution of the searches Render makes. How to read the
+#     three lines: docs/runbook.md, "Reading competitor-search lines".
 #   * The worst case for one query is 10 + 1 + 10 = 21 s of waiting (it was 25 s), plus
 #     the fraction of a second it takes to open two clients. The deadline makes that a
 #     ceiling, not an expectation. `search_many` runs three at a time, so a detection's
@@ -73,6 +74,31 @@ RESULTS_PER_QUERY = 10
 #     `POST /clients/{clientId}/competitors/detect` waits on SerpApi. The phase stays
 #     bounded and is no longer than before. `test_scan_executor.py` adds `QUERY_CEILING_S`
 #     into the scan's worst case.
+#
+# Is an attempt that got no answer billed? Looked into on 2026-10-03.
+#
+# SerpApi's pricing page (read 2026-10-03): "Only successful searches are counted toward
+# your monthly searches. Cached, errored, and failed searches are not." Its Search API page:
+# "Cached searches are free, and are not counted towards your searches per month."
+#
+# Measured the same day from a development Mac: 12 requests for 10 queries, 2 of them
+# retried after a read timeout. 8 were answered and 4 attempts timed out on the read. The
+# account's month count read 66 before, 75 at 17:20:57, and 71 at 17:23:15 and at 17:27:25,
+# so 5 searches were counted in all. The count rose by 4 more than it kept, the number of
+# attempts that timed out, which fits those being counted for a moment and then dropped; and
+# 5 is fewer than the 8 answered, which fits SerpApi's cache serving a repeat of a recent
+# identical search free.
+#
+# So a failure to connect never reaches SerpApi and is never billed, a read failure was not
+# billed when measured, and SerpApi bills only a search it records as successful. A search
+# it completed after we stopped waiting would be a successful search, and the account's
+# count is the only place that would show it: no line this module logs can.
+#
+# What the retry has done so far: of the 3 queries seen to time out on a read (production's
+# .com.au client's query and 2 measured here), the retry timed out on a read too, `attempts=2
+# ... kinds=['read', 'read']`, about 19.1 to 19.3 s for the query in all (a 9 s read, the 1 s
+# pause, a 9 s read). The founder has decided to keep retrying a read failure; this records
+# what was seen and changes nothing.
 ATTEMPT_TIMEOUT_S = 10.0
 CONNECT_TIMEOUT_S = 5.0
 PHASE_TIMEOUT_S = 9.0
@@ -80,6 +106,53 @@ PHASE_TIMEOUTS = httpx.Timeout(PHASE_TIMEOUT_S, connect=CONNECT_TIMEOUT_S)
 MAX_ATTEMPTS = 2
 RETRY_PAUSE_S = 1.0
 QUERY_CEILING_S = MAX_ATTEMPTS * ATTEMPT_TIMEOUT_S + (MAX_ATTEMPTS - 1) * RETRY_PAUSE_S
+
+# --- The market a search is made in (2026-10-03) -----------------------------------------
+# `search` used to send `gl=us` for every client. Production on 2026-10-03, two new clients:
+# an Indian business (a .in domain) logged `competitors.serp_gate_applied considered=44
+# eligible=27 gated_out=17` and `competitors.detected confidence=0.000 status=weak_signal
+# returned=5`; an Australian one (.com.au), with one query timed out, `considered=44
+# eligible=14 gated_out=30` and `confidence=0.000`. `decide_detection` takes confidence as the
+# share of the returned rivals that BOTH signals found, so 0.000 is five rivals and not one
+# found by search and the model.
+#
+# Reproduced the same day through this code path, with each client's own classification and
+# real searches, varying only `gl` and keeping the same co-citation answers in both arms.
+# The .in client under gl=us: 3 queries, 27 result domains, none a brand the model had
+# named, so 0 corroborated and 0.000. The .com.au client under gl=us: 2 queries, 17 domains,
+# none named, 0.000; under gl=au the same 2 queries returned one rival's own domain, that
+# rival was corroborated and the confidence was 0.200, status ok. Searched from the United
+# States, neither client's results named a rival the model named; searched from Australia,
+# the Australian client's did. The market is not the whole of it: under gl=in two of the .in
+# client's three queries got no answer (both read timeouts, twice each) and the third named
+# no rival the model named either.
+#
+# So a search is made in the client's own market. Nothing in the data model records a country
+# (no field on Client, Agency or the classification output), so the domain is the only source
+# there is, and a country-code TLD names it. Anything else (.com, .org, .net, .io, .ai, .co,
+# any label not listed) says nothing about where the business trades and searches the default,
+# Australia, because the pilots are Australian agencies. The list is extended by adding a row.
+# `hl` stays `en`: the queries are English. The scoring formula does not change (and so
+# `FORMULA_VERSION` does not): what changes is the input detection is given.
+DEFAULT_SEARCH_COUNTRY = "au"
+SEARCH_COUNTRY_BY_TLD: Mapping[str, str] = {
+    "au": "au",
+    "nz": "nz",
+    "uk": "uk",  # the United Kingdom's own TLD, and Google's `gl` for it (ISO's is "gb")
+    "ie": "ie",
+    "ca": "ca",
+    "us": "us",
+    "za": "za",
+    "in": "in",
+    "sg": "sg",
+    "my": "my",
+    "ph": "ph",
+    "hk": "hk",
+    "id": "id",
+    "jp": "jp",
+}
+# The only values `search` will send as `gl`: one this module could itself have chosen.
+_SEARCH_COUNTRIES = frozenset(SEARCH_COUNTRY_BY_TLD.values())
 
 # Domains that rank for "best X" queries but are never the competitor — they
 # are publishers, marketplaces, directories and social platforms writing ABOUT
@@ -203,6 +276,20 @@ def build_queries(
     return queries
 
 
+def search_country(domain: str) -> str:
+    """The Google country (`gl`) to search in for a client's domain.
+
+    The domain's last label if it is a country-code TLD in `SEARCH_COUNTRY_BY_TLD`, else
+    the default: `example.com.au` is `au`, `example.in` is `in`, `example.com` is the
+    default. Pure: no I/O, case does not matter, and a trailing dot is allowed.
+    """
+    host = domain.strip().lower().rstrip(".")
+    if "." not in host:
+        # A bare name has no TLD, whatever it is called.
+        return DEFAULT_SEARCH_COUNTRY
+    return SEARCH_COUNTRY_BY_TLD.get(host.rpartition(".")[2], DEFAULT_SEARCH_COUNTRY)
+
+
 _TIMEOUT_KINDS: tuple[tuple[type[httpx.TimeoutException], str], ...] = (
     (httpx.ConnectTimeout, "connect"),
     (httpx.ReadTimeout, "read"),
@@ -246,17 +333,30 @@ def _gave_up(query: str, exc: Exception, kinds: list[str], started: float) -> Se
     )
 
 
-async def _get(query: str, params: dict[str, str]) -> httpx.Response | SerpResult:
+@dataclass(slots=True)
+class _Answered:
+    """What `_get` returns when SerpApi answered: the response, and what getting it took."""
+
+    response: httpx.Response
+    # 1, or 2 when the first attempt got no answer and the retry did.
+    attempts: int
+    # `time.perf_counter()` when the first attempt began, so that the caller can say how long
+    # the query took from there to the end of parsing the answer.
+    started: float
+
+
+async def _get(query: str, params: dict[str, str]) -> _Answered | SerpResult:
     """The search request, tried again once if no answer came. A `SerpResult` means none did.
 
     Only a timeout, a transport failure (`httpx.TransportError`: refused, reset, DNS) or
-    an attempt that ran out its deadline is tried again. That is not a promise that the
-    first attempt cost nothing: a read failure may already have been processed, and
-    billed, by SerpApi, so a retry can be a second billed search. Every retry is logged
-    for that reason, `serp.retried` when one was needed and `serp.attempts_failed` when
-    it did not help. Whatever answers is returned as it is and judged by the caller, and
-    so is anything else httpx raises (a body it cannot decode is an answer too). The
-    error codes are the ones this module has always had.
+    an attempt that ran out its deadline is tried again. A retry costs time, up to the pause
+    and another attempt's deadline. Whether an attempt that got no answer is billed is
+    settled at the top of the module: a failure to connect never was, and a read failure
+    was not when measured. Every retry is logged, `serp.retried` when one was needed and
+    `serp.attempts_failed` when it did not help. Whatever answers is returned as it is, with
+    the number of attempts it took and when the first began, and judged by the caller, and
+    so is anything else httpx raises (a body it cannot decode is an answer too). The error
+    codes are the ones this module has always had.
     """
     started = time.perf_counter()
     kinds: list[str] = []
@@ -279,21 +379,34 @@ async def _get(query: str, params: dict[str, str]) -> httpx.Response | SerpResul
             return _gave_up(query, exc, kinds, started)
         if kinds:
             # A retry was needed, and it was answered. Not a failure, and still a second
-            # search against the plan. Numbers and kinds only, as above.
+            # request. Numbers and kinds only, as above.
             logger.info(
                 "serp.retried", attempts=len(kinds) + 1, kinds=kinds, elapsed_ms=_since_ms(started)
             )
-        return response
+        return _Answered(response=response, attempts=len(kinds) + 1, started=started)
 
 
 async def search(
-    query: str, *, settings: Settings | None = None, num: int = RESULTS_PER_QUERY
+    query: str,
+    *,
+    settings: Settings | None = None,
+    num: int = RESULTS_PER_QUERY,
+    country: str = DEFAULT_SEARCH_COUNTRY,
 ) -> SerpResult:
     """Run one Google search via SerpApi. Never raises for an upstream failure.
 
+    The search is made in `country` (Google's `gl`; `search_country` picks it for a
+    client's domain). A value that is not one of `SEARCH_COUNTRY_BY_TLD`'s values is sent
+    as the default, so no arbitrary string ever reaches the request. `hl` stays `en`.
+
     A request that got no answer (a timeout, a refused or reset connection, an attempt
     that ran past its deadline) is made once more, after a pause; an answer never is.
-    The bound is at the top of the module.
+    The bound is at the top of the module, and so is whether an attempt that got no answer
+    is billed (a failure to connect never was, and a read failure was not when measured).
+
+    One line is logged for each query that reached SerpApi: `serp.completed` when it was
+    answered, whatever the answer said, and `serp.attempts_failed` (from `_get`) when it
+    was not. A missing key sends nothing and logs neither.
     """
     settings = settings or get_settings()
     api_key = settings.provider_key("serpapi_key")
@@ -306,14 +419,35 @@ async def search(
         "api_key": api_key,
         "num": str(num),
         "hl": "en",
-        "gl": "us",
+        "gl": country if country in _SEARCH_COUNTRIES else DEFAULT_SEARCH_COUNTRY,
     }
 
-    got = await _get(query, params)
-    if isinstance(got, SerpResult):
-        return got
-    response = got
+    answered = await _get(query, params)
+    if isinstance(answered, SerpResult):
+        return answered
 
+    result = _judge(query, answered.response)
+    # The one line for a query SerpApi answered; the time is read after the answer is
+    # parsed. Facts only: how long, how many attempts, how many hits, the HTTP status and
+    # this module's code. NEVER the query, the market, the key, the URL, the body or an
+    # exception's message: the URL carries the API key.
+    logger.info(
+        "serp.completed",
+        elapsed_ms=_since_ms(answered.started),
+        attempts=answered.attempts,
+        hits=len(result.hits),
+        status=answered.response.status_code,
+        error_code=result.error_code,
+    )
+    return result
+
+
+def _judge(query: str, response: httpx.Response) -> SerpResult:
+    """What an answer says: its hits, or this module's code for what went wrong.
+
+    A 401, a 429, any other status that is not a 200, a body that is not JSON and one that
+    carries an `error` are each an error, and none of them is asked for twice.
+    """
     if response.status_code == 401:
         logger.error("serp.auth_failed")
         return SerpResult(query=query, ok=False, error_code="SERP_AUTH_FAILED")
@@ -349,9 +483,13 @@ async def search(
 
 
 async def search_many(
-    queries: list[str], *, settings: Settings | None = None, concurrency: int = 3
+    queries: list[str],
+    *,
+    settings: Settings | None = None,
+    concurrency: int = 3,
+    country: str = DEFAULT_SEARCH_COUNTRY,
 ) -> list[SerpResult]:
-    """Run several queries concurrently, bounded.
+    """Run several queries concurrently, bounded, all in the one `country`.
 
     Bounded because SerpApi bills per search and rate-limits: firing an
     unbounded gather at a paid, rate-limited API is how a detection run turns
@@ -365,7 +503,7 @@ async def search_many(
 
     async def one(q: str) -> SerpResult:
         async with semaphore:
-            return await search(q, settings=settings)
+            return await search(q, settings=settings, country=country)
 
     return list(await asyncio.gather(*(one(q) for q in queries)))
 

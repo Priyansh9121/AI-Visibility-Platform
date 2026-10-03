@@ -104,6 +104,36 @@ async def test_no_model_drift_against_head(fresh_database: str) -> None:
 
 
 @pytest.mark.skipif(not ALEMBIC.exists(), reason="alembic not installed")
+async def test_no_routine_in_public_is_executable_by_public(fresh_database: str) -> None:
+    """A guard for later revisions (see `..._revoke_data_api_grants.py`).
+
+    Postgres grants EXECUTE on a new function to PUBLIC, and the Supabase Data API roles
+    inherit it, so revoking from them by name does not remove it. Nothing creates a function in
+    `public` today. The revision that does must take EXECUTE from PUBLIC on it, or keep it out
+    of `public`, and this fails until it does.
+    """
+    assert _alembic(["upgrade", "head"], fresh_database).returncode == 0
+
+    engine = create_async_engine(fresh_database)
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "select p.oid::regprocedure::text from pg_proc p "
+                "cross join lateral aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a "
+                "where p.pronamespace = 'public'::regnamespace "
+                "and a.grantee = 0 and a.privilege_type = 'EXECUTE' order by 1"
+            )
+        )
+        executable_by_public = [r[0] for r in rows]
+    await engine.dispose()
+
+    assert executable_by_public == [], (
+        f"PUBLIC may execute {executable_by_public}; revoke EXECUTE from PUBLIC on each, "
+        "or create it outside `public`"
+    )
+
+
+@pytest.mark.skipif(not ALEMBIC.exists(), reason="alembic not installed")
 async def test_downgrade_to_base_removes_everything(fresh_database: str) -> None:
     """A migration that cannot be reversed cannot be safely deployed."""
     assert _alembic(["upgrade", "head"], fresh_database).returncode == 0

@@ -36,6 +36,18 @@ intent; the schema defines the shapes.
   `browser.memory`, `browser.slot_waited`, `browser.slot_busy`; the three about
   the browser carry `scan_id` or `client_id`); `docs/runbook.md`, "Reading the
   API's memory", says what each carries.
+- Security headers (2026-10-03, checklist 3.1): every API response, an error or
+  a CORS preflight included, carries six headers, added by
+  `avp_api/security_headers.py` unless the response already set that header
+  itself: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+  `Content-Security-Policy: frame-ancestors 'none'`,
+  `Referrer-Policy: no-referrer`,
+  `Strict-Transport-Security: max-age=63072000; includeSubDomains` and
+  `Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()`.
+  The one response without them is an unhandled-exception 500, which Starlette
+  builds outside every middleware.
+  The web app sends its own set on every page except the proxied `/api/v1`
+  paths, where a browser gets the API's set, once (`apps/web/next.config.mjs`).
 
 ### Authentication
 
@@ -110,7 +122,7 @@ make it `unparsed`.
 | `/problems/invalid-reset-token` | 400 | Reset link unknown, expired, used, or orphaned |
 | `/problems/invalid-invitation` | 400 | Invitation unknown, expired, accepted, revoked, or orphaned |
 | `/problems/invalid-google-ticket` | 400 | Google sign-up ticket unknown, used or expired |
-| `/problems/rate-limited` | 429 | Too many requests. The credential routes (each says its limit) and, since 2026-10-02, the three routes that read a site in the API's one browser (`POST /clients` with classification, `POST /clients/{clientId}/reclassify`, `POST /scans/{scanId}/audit`). `Retry-After` is `60` and `detail` is one of two sentences: "Your agency already has a site being read. Try again in a minute." (this agency's other read is still queued or running) or "The crawler is busy with other pages right now. Try again in a minute." (four agencies' reads are already inside, or this read waited its whole 60 s for the browser). Nothing is written in either case |
+| `/problems/rate-limited` | 429 | Too many requests. The credential routes (each says its limit) and, since 2026-10-02, the three routes that read a site in the API's one browser (`POST /clients` with classification, `POST /clients/{clientId}/reclassify`, `POST /scans/{scanId}/audit`). `Retry-After` is `60` and `detail` is one of two sentences: "Your agency already has a site being read. Try again in a minute." (this agency's other read is still queued or running) or "The crawler is busy with other pages right now. Try again in a minute." (four agencies' reads are already inside, or this read waited its whole 60 s for the browser). Nothing is written in either case. Since 2026-10-03 also `POST /clients/{clientId}/competitors/detect`, once per client per 24 hours: there `Retry-After` is the whole seconds left in the 24 hours and `detail` is "Competitor detection already ran for this client in the last 24 hours. It can run again in about N hours." (the last hour reads "in under an hour"); no search is made and no scan is opened |
 | `/problems/invalid-url` | 409 | Submitted URL has no public domain |
 | `/problems/invalid-webhook-signature` | 400 | Billing webhook signature missing, malformed or wrong |
 | `/problems/billing-not-configured` | 503 | A Stripe setting is unset. `detail` names the variable |
@@ -1386,6 +1398,22 @@ deliberately — the chain never re-detects for a client that already has a set,
 precisely so it cannot spend quota or overwrite an operator's correction on its
 own.
 
+**Once per client per 24 hours** (2026-10-03, launch checklist 3.53). The founder's
+decision: once per client per day from this button, and always allowed as part of a
+scan. A second press for the same client inside 24 hours is refused with `429` and
+does nothing: no search is made and no scan is opened. The day is taken when a run
+**starts**, so a run that then fails (SerpApi down, an error writing the set) still
+counts: its searches may already be spent. The check runs after the client is found,
+so another agency's client is still a `404` and cannot spend this client's day, and
+another client of the same agency has a day of its own. A scan's own detection (the
+chain above, for a client with no competitor set yet) never goes through this route:
+it is not refused by the day and does not use it up, and neither does `PUT` below.
+The day is one Redis key per client (`rl:detect_competitors:client:{digest}`, the
+client id hashed as the credential routes hash theirs), set with `SET NX PX 86400000`
+in one atomic step, so two presses at once cannot both run. It is a fixed window: it
+ends when the key expires. With Redis down the route refuses with `503` rather than
+run unmetered, because a run spends paid searches. Nothing to set on Render.
+
 **Response `201`** — `CompetitorSetOut`:
 ```json
 {
@@ -1435,7 +1463,18 @@ Industry classification confidence is uncalibrated (Finding 2, open), so when an
 operator reports a bad set the first question is whether a bad industry label
 seeded it — this makes that answerable without re-running.
 
-**Errors:** `401`, `404 not-found` (unknown client, or another agency's).
+**Errors:** `401`, `404 not-found` (unknown client, or another agency's),
+`429 rate-limited` (2026-10-03: this client's detection already ran in the last 24
+hours, with `Retry-After` header in whole seconds, never below 1, the time left in
+the 24 hours; detail "Competitor detection already ran for this client in the last
+24 hours. It can run again in about N hours." — the wait is rounded up so nobody is
+sent back too early, and the last hour reads "in under an hour" or, at exactly an
+hour, "in about an hour"; the sentence carries no code, key or id and is written to
+be shown as it is; one `info` log line, `competitors.detect.rate_limited`, with
+`client_id`, `agency_id` (the caller's, so a burst across one agency's clients shows)
+and `retry_after_s` and nothing else, and none for an allowed run),
+`503 service-unavailable` (Redis cannot say whether the day is taken; nothing ran;
+detail "This is temporarily unavailable. Please try again shortly.").
 
 #### `GET /api/v1/clients/{clientId}/competitors`
 **Auth required.** The client's most recent set, competitors in rank order.

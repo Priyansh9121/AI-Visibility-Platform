@@ -490,10 +490,17 @@ def _fix_beat(doc: PdfDocument, story: narrative.Narrative) -> None:
 
 
 def _fix_heading(story: narrative.Narrative) -> str:
+    """The fix beat's heading, the screen's (`ReportView.tsx`, `fixHeading`) word for word.
+
+    "From this scan" and not "the audit named": a list with no point figure is the audit's
+    findings and the citation fix, and the citation fix is not an audit finding.
+    """
+    count = len(story.fixes)
+    noun = "change" if count == 1 else "changes"
     with_points = [f for f in story.fixes if f.points_upside]
     if with_points and story.recoverable_points > 0:
-        return f"{len(story.fixes)} changes, worth {story.recoverable_points:.1f} points."
-    return f"{len(story.fixes)} specific changes the audit named."
+        return f"{count} {noun}, worth {story.recoverable_points:.1f} points."
+    return f"{count} specific {noun} from this scan."
 
 
 # ---------------------------------------------------------------------------

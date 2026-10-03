@@ -20,4 +20,7 @@ echo "entrypoint: serving on :${PORT:-8000}"
 # second worker would be a second browser and a second count. The flag is what pins
 # it: uvicorn reads WEB_CONCURRENCY only when --workers is absent, so a host that
 # sets that variable would otherwise start more of them without anyone asking.
-exec uvicorn avp_api.main:app --host 0.0.0.0 --port "${PORT:-8000}" --workers 1 --proxy-headers --forwarded-allow-ips='*'
+#
+# NO `Server: uvicorn` header on any response (launch checklist 3.1): it tells a
+# stranger what runs here. The web app turns off X-Powered-By for the same reason.
+exec uvicorn avp_api.main:app --host 0.0.0.0 --port "${PORT:-8000}" --workers 1 --proxy-headers --forwarded-allow-ips='*' --no-server-header
