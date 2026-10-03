@@ -99,9 +99,11 @@ describe('no subscription — the state every agency is in today', () => {
     // The SAME component the landing page renders, in its signed-in state, so
     // the price someone was quoted on the way in is the price they see on the
     // way to paying it.
-    expect(html).toContain('$160');
+    expect(html).toContain('$150');
     expect(html).toContain('per month');
     expect(html).toContain('Subscribe');
+    // Repriced by the founder on 2026-10-04: the card carries the new price only.
+    expect(html).not.toContain('$160');
   });
 
   it('tones it neutral, never as a warning', () => {

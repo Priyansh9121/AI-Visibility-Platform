@@ -20,17 +20,19 @@ const render = (props: Parameters<typeof PricingCard>[0] = {}) =>
   renderToStaticMarkup(<PricingCard {...props} />);
 
 describe('the price itself', () => {
-  it('is $160 a month, stated as a number and a period', () => {
+  it('is $150 a month, stated as a number and a period', () => {
     const out = render();
-    expect(out).toContain('$160');
+    expect(out).toContain('$150');
     expect(out).toContain('per month');
+    // The founder repriced it on 2026-10-04; the old figure is nowhere on the card.
+    expect(out).not.toContain('$160');
   });
 
   it('exports the number rather than burying it in copy', () => {
     // Two places on the landing page quote this. A card that hard-coded the
     // string would let the hero and the card disagree, which is the one thing
     // a published price may not do.
-    expect(PLAN_PRICE_USD).toBe(160);
+    expect(PLAN_PRICE_USD).toBe(150);
     expect(render()).toContain(`$${PLAN_PRICE_USD}`);
   });
 

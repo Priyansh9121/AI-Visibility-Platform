@@ -3,12 +3,13 @@
 WHY A GATE EXISTS AT ALL
 ------------------------
 Until this date nothing in the product was behind the plan, and the pricing
-card said so. Stripe is wired to a $160 Price; no rational agency pays for
-what it already gets free. And a scan is not free to run: about **$1.70 in
-engine calls** each, plus 6 of the **250 SerpApi searches** the Free tier
-allows per month — about 41 scans platform-wide before every user's
-competitor detection stops at once. An unmetered free tier is an open cost
-line with a shared fuse. So: the plan gates STARTING a scan, and only that.
+card said so. Stripe is wired to a $160 Price (repriced to $150 on 2026-10-04,
+founder decision); no rational agency pays for what it already gets free. And
+a scan is not free to run: about **$1.70 in engine calls** each, plus 6 of the
+**250 SerpApi searches** the Free tier allows per month — about 41 scans
+platform-wide before every user's competitor detection stops at once. An
+unmetered free tier is an open cost line with a shared fuse. So: the plan
+gates STARTING a scan, and only that.
 
 THE ALLOWANCE
 -------------
@@ -195,14 +196,16 @@ from . import billing
 # and is not a number worth building a second agency to get again.
 FREE_SCAN_ALLOWANCE = 1
 
-# Forty a month on the $160 plan. The arithmetic: a scan costs about $1.70 in
-# engine calls (measured, build log 2026-09-12: 20 prompts × 4 engines plus
-# sentiment), so 40 × $1.70 ≈ $68 of engine cost against $160 — about 57%
-# gross margin before SerpApi. SerpApi's Free tier is 250 searches a month and
-# detection spends 6 per NEW client, so forty scans of forty new clients would
-# be 240 searches; forty re-scans of existing clients spend none. The cap is
-# per calendar month, UTC, because Stripe's billing period and a calendar
-# month differ by at most a few days and a month is what the card can say.
+# Forty a month on the $150 plan (repriced to $150 on 2026-10-04, founder
+# decision; it was $160). The arithmetic: a scan costs about $1.70 in engine
+# calls (measured, build log 2026-09-12: 20 prompts × 4 engines plus
+# sentiment), so 40 × $1.70 ≈ $68 of engine cost against $150 — about 55% gross
+# margin before SerpApi (about 57% at the old $160). SerpApi's Free tier is 250
+# searches a month and detection spends 6 per NEW client, so forty scans of
+# forty new clients would be 240 searches; forty re-scans of existing clients
+# spend none. The cap is per calendar month, UTC, because Stripe's billing
+# period and a calendar month differ by at most a few days and a month is what
+# the card can say.
 PAID_SCANS_PER_MONTH = 40
 
 # A scan that finished with something to show. Holds its slot for good.

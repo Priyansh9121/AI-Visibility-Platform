@@ -23739,3 +23739,97 @@ Drift check (north-star §8): no product layer; the launch plan. Lifecycle phase
   - design-system 935, shared-types 53 and mypy 43 unchanged.
 - SerpApi: 12 requests over the whole brief, all in S1's investigation; 5 counted against the plan.
 - Exit codes were read from files.
+
+# The plan is US$150 a month, and a deployed API checks at start and every hour that the Stripe Price it sells is that plan
+
+**2026-10-04, the fourth entry of the day; branch `pilot-fixes-5`, the founder's brief "free trial, US$150, usage visibility and pilot guardrails" (item P2).** One item, one commit.
+
+**Render: after the deploy, the founder sets `STRIPE_PRICE_ID` on the API service to a US$150 monthly Price created in Stripe's test mode.** Render's variable names the US$160 test Price today (the founder, 2026-10-04), so until it changes the API logs `billing.price_mismatch` at start and every hour, the pages say US$150, and Checkout still shows US$160 (test mode, so no one is charged). Expect `billing.price_check ok=True` once it is set. `STRIPE_LOG`, if it is ever set there, is now ignored.
+
+Drift check (north-star §8): no product layer; the commercial architecture (§5.3, the published price), with Layer 0's rule that no key reaches a log; lifecycle phase: Activation (Epic 9), the plan a pilot agency pays for.
+
+## 1. What changed
+
+- **The price, from its one source on each side.**
+  - Web: `PLAN_PRICE_USD` in `PricingCard.tsx` is 150. The landing page, the pricing card, Settings' billing panel and the terms already build their sentences from it. Only the comments that dated the old price changed.
+  - API: `services/billing.py` gains the plan's terms: `PLAN_PRICE_USD = 150`, `PLAN_CURRENCY = "usd"`, `PLAN_INTERVAL = "month"`, `PLAN_INTERVAL_COUNT = 1`, `PLAN_USAGE_TYPE = "licensed"` and `PLAN_UNIT_AMOUNT_CENTS`.
+  - A new web test, `planPrice.test.ts`, reads `billing.py` and fails when the two constants differ, or when the card stops saying US dollars and per month.
+  - The tests that pinned $160 now pin $150, and they refuse a hand-typed 160:
+    - the landing page, pricing card, billing panel and Settings tests;
+    - the terms page test (`legalPages.test.tsx`);
+    - `test_scan_allowance.py`'s margin test, which now reads the price from `billing.PLAN_PRICE_USD`.
+- **The check** (`billing.price_check`, run by the new `price_watch.py` from the API's lifespan).
+  - When it runs: once at start, then every hour. It runs only on a deployed API (staging or production) with both `STRIPE_SECRET_KEY` and `STRIPE_PRICE_ID` set. A local or CI start never calls Stripe, whatever its `.env` holds.
+  - What it does: one read (`prices.retrieve`), bounded at 60 s, which writes nothing at Stripe. It compares the Price's amount, currency, interval, interval count and usage type with the plan, and requires the Price to be active.
+  - It logs one of three lines:
+    - `billing.price_check ok=True price_id=…` (info);
+    - `billing.price_mismatch` (warning), each field as `expected_…` and `actual_…`, amounts in cents;
+    - `billing.price_check_failed error_type=<class>` (warning), the exception's class and never its message, which can quote the key.
+  - It never fails or delays the start, because the first check runs inside the task. Stopping is bounded at 5 s.
+- **`billing.half_configured missing=<VARIABLE>`** (error, once at start, deployed only), when billing is only part set up:
+  - one of the key and the Price id is set without the other, so billing counts as off: checkout answers 503 and the scan allowance is off for every agency;
+  - or both are set and `STRIPE_WEBHOOK_SECRET` is not, so a customer can pay and the payment is never recorded.
+  - It names the variable, never a value.
+- **The Stripe SDK cannot print a request to the log.**
+  - `docker-entrypoint.sh` unsets `STRIPE_LOG` before Alembic and uvicorn start. With it set, the SDK prints every request, error message and body to stderr.
+  - `logs.py` adds `stripe` to `QUIET_LOGGERS`, so the SDK's logger writes nothing below a warning.
+- **Docs:**
+  - `docs/runbook.md`: Live Stripe test step 2 says US$150, and a new section, "Reading the billing price lines", covers each line and what to do.
+  - `docs/api-contracts.md`: the price paragraph, and the plan's margin figure (≈ $68 against $150).
+  - north-star §5.3: the price, and that Render's `STRIPE_PRICE_ID` names the $160 test Price.
+  - Prices quoted in the `stripe-billing-ops` and `market-research` skills.
+  - Comments in `.env.example` and `scan_allowance.py`.
+
+## 2. The review
+
+The security review passed with nits, and all of them were fixed in a second round except one:
+- **L1:** the check ran on any start with the two settings, a laptop's included; it now runs only on a deployed API.
+- **L2:** an archived or metered US$150 Price would have read as ok; the check now requires an active, licensed Price.
+- **L3:** `STRIPE_LOG` could print request bodies; the entrypoint unsets it, and the SDK's logger is quiet.
+- **L5:** a missing webhook secret is now named.
+- **Nit:** `stop` is bounded.
+- **Not taken, L4:** the mismatch line stays a warning rather than an error, because the brief says a warning.
+
+## Found, not fixed
+
+- **For the founder:**
+  - Checkout still opens on a Price that fails the check. The reviewer recommends refusing it (503) on a definite mismatch, read fresh inside `create_checkout_session`, before live keys.
+  - Subscriptions already on the US$160 Price are not repriced (none is real: test mode).
+- `STRIPE_LOG` is unset only in the container. A developer who exports it and runs `uvicorn` against Stripe still gets the SDK's printing.
+- `redis_watch.stop` still waits for its task without a bound (the same nit `price_watch.stop` had).
+
+## Verified
+
+**API pytest 3416 → 3561 (+145) and web vitest 1849 → 1852 (+3); floors raised to match.** One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **New tests:**
+  - `test_price_check.py` (126);
+  - `test_secrets_stay_out_of_logs.py` 46 → 63: the `stripe` logger stays quiet, `STRIPE_LOG` set at import prints and unset prints nothing, and the real entrypoint run under stubs hides it from both programs;
+  - `test_dockerfile.py` 13 → 15;
+  - `planPrice.test.ts` (3).
+- **Negative controls** (the implementer's twelve, each restored and checked byte-for-byte):
+  - the start ignoring the environment: 11 fail;
+  - no `active` check: 5;
+  - no `usage_type` check: 3;
+  - the new fields not logged: 28;
+  - `active`'s type not validated: 2;
+  - `stripe` not quiet: 7;
+  - no unset in the entrypoint: 4;
+  - the unset after Alembic: 3;
+  - no webhook-secret branch: 4;
+  - the webhook named before the key or Price id: 8;
+  - `stop` waiting for ever: 1, after the test's 15 s watchdog;
+  - `stop` not reading the outcome: 1.
+- **On this tree:** `billing.py`, `main.py`, `logs.py`, `docker-entrypoint.sh` and `PricingCard.tsx` back to `HEAD`, and `price_watch.py` removed.
+  - `test_price_check.py` cannot be collected.
+  - `test_secrets_stay_out_of_logs.py` and `test_dockerfile.py` fail 13 of 78.
+  - `planPrice.test.ts` and `PricingCard.test.tsx` fail 5 of 25.
+  - All restored and checked with `cmp`.
+- **No Stripe call was made.** Every test patches `_client`, and the example lines come from fake clients.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `f45983cfa5e3`) and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

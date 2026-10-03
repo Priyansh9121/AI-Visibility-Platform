@@ -713,16 +713,17 @@ recognising one that exists.**
 
 #### 5.3.1 What is now real — [DECIDED, on the founder's explicit instruction]
 
-**One plan, $160/month, 3 seats, published on the public landing page.** ($29
-from Epic 9.15 until 2026-09-22, when the founder repriced it.)
+**One plan, $150/month, 3 seats, published on the public landing page.** ($29
+from Epic 9.15 until 2026-09-22, when the founder repriced it to $160; repriced
+again to $150 on 2026-10-04, by the founder's decision.)
 
 | | |
 |---|---|
-| Price | **$160.00 USD / month**, recurring, no annual option — $29.00 until 2026-09-22 |
+| Price | **$150.00 USD / month**, recurring, no annual option — since 2026-10-04 (founder decision); $160.00 from 2026-09-22 until then, and $29.00 until 2026-09-22 |
 | Seats | **3** — `Agency.seat_limit`'s existing default, not a new entitlement |
 | Where it is published | `apps/web/src/components/marketing/LandingView.tsx`, Pricing section |
-| Where the number lives in code | `PricingCard.tsx`'s `PLAN_PRICE_USD`, and the Stripe Price object |
-| Are the two in step? | **Locally, since 2026-09-23; on Render, not confirmed.** `PLAN_PRICE_USD` is 160; a $160.00/month Price now exists on the test-mode account (`price_1UIh3b…`, created 2026-09-23, read back and confirmed at 16000 USD) and the local `STRIPE_PRICE_ID` names it. The $29.00 Price (`price_1U9For…`) is still active and is what Render's `STRIPE_PRICE_ID` named when last set — until that variable is changed on the Render dashboard and a checkout re-run, the deployed checkout still subscribes at $29 |
+| Where the number lives in code | `PricingCard.tsx`'s `PLAN_PRICE_USD` (the web), `services/billing.py`'s `PLAN_PRICE_USD` (the API; a web test reads it and fails if the two differ), and the Stripe Price object |
+| Are the two in step? | **No — repriced to $150 on 2026-10-04 (founder decision); a $150.00 Price is the founder's to create in the Stripe dashboard and name in `STRIPE_PRICE_ID`, locally and on Render.** `PLAN_PRICE_USD` is 150 on both sides, the web and the API. History: a $160.00/month Price was created on the test-mode account on 2026-09-23 (`price_1UIh3b…`, read back and confirmed at 16000 USD) and the local `STRIPE_PRICE_ID` named it; the $29.00 Price (`price_1U9For…`) is still active and was what Render's `STRIPE_PRICE_ID` named when last recorded here. **The founder confirmed on 2026-10-04 that Render's `STRIPE_PRICE_ID` names the $160 TEST Price**, so until a $150 Price is created and named there, the deployed checkout subscribes at $160 (test mode), not at the published $150. A **deployed** API (staging or production; a local one never calls Stripe for this) reads the configured Price back at start and every hour (`billing.price_check`) and logs `billing.price_mismatch`, with the expected and actual amounts in cents and whether the Price is active and licensed, when it is not an active, licensed US$150 a month Price |
 | Payment processor | **Stripe** — chosen and built, Epic 9.15 |
 | Stripe mode | **TEST MODE.** `sk_test_…` / `price_…` with `livemode: false` |
 | Real money moved | **None. Not one cent.** See the caveat below |
@@ -731,7 +732,7 @@ from Epic 9.15 until 2026-09-22, when the founder repriced it.)
 did so by founder decision rather than by evidence.** The re-validation trigger
 at §0 has NOT fired: no pilot conversation has happened, no pricing objection
 has been heard, and §5.1's per-scan dollar cost is still unmeasured. So the
-$160 figure — and the $29 before it — is **decided, not validated** — those are different things, and the
+$150 figure — and the $160 and the $29 before it — is **decided, not validated** — those are different things, and the
 distinction is the whole reason this document has labels. What changed is that
 the founder chose to publish a number and charge against it; what did not
 change is that nobody has yet paid it or argued about it.
@@ -758,7 +759,7 @@ decision and must say so.
 code.** Only ONE plan is built and sold. These three rows remain shape, not
 price. **Do not quote them.** They also rest on a per-scan cost that has never
 been measured (§5.1) — so the margin implied by any of them is currently
-unknowable, which is equally true of the $160 above.
+unknowable, which is equally true of the $150 above.
 
 | Tier | Seats | Scans / month | Intended buyer |
 |---|---|---|---|

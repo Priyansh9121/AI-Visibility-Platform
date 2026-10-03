@@ -72,8 +72,8 @@ All of this happens in Stripe's **Test mode**. Never use a live key.
    after deploy applies whatever its age.
 
 2. **Price.** In the Stripe dashboard (Test mode), open Product catalogue and
-   find or create the product with a recurring monthly Price of US$160. Copy
-   its Price ID (`price_…`).
+   find or create the product with a recurring monthly Price of US$150 (the
+   price since 2026-10-04). Copy its Price ID (`price_…`).
 
 3. **Render.** On the API service (`ai-visibility-platform-5gk4`), open
    Environment. Set `STRIPE_PRICE_ID` to that id. Confirm `STRIPE_SECRET_KEY`
@@ -194,6 +194,43 @@ probe goes to the **web** host: that is the path every real request takes.
 with it), so it resets every login, sign-up, reset and change-password window and
 every client's 24-hour detection day. For the same reason a client's detection day
 cannot be cleared by hand without that secret.
+
+## Reading the billing price lines
+
+**When:** a **deployed** API (staging or production) reads the Stripe Price named by
+`STRIPE_PRICE_ID` once at start and then once an hour, when both `STRIPE_SECRET_KEY` and
+`STRIPE_PRICE_ID` are set. A local API never does: starting it on a laptop calls nothing
+at Stripe, whatever its `.env` holds. The check is a read; it changes nothing at Stripe.
+
+**Where:** Render → the **API** service → **Logs**, by event name.
+
+- `billing.price_check ok=True price_id=…`: the Price is active, licensed (a flat amount,
+  not metered) and US$150 a month, billed every month: what the pricing card and Settings
+  say.
+- `billing.price_mismatch` (warning): it is not. Each field comes as `expected_…` and
+  `actual_…`: the amount in cents (15000 is US$150), the currency, the interval, the
+  interval count, whether the Price is active, and its usage type. An archived Price
+  (`actual_active=False`) and a metered one (`actual_usage_type=metered`) are mismatches
+  even when the amount is right: checkout cannot use the first and the second is billed by
+  usage, not as the plan. The fix is the founder's: create an active, licensed US$150
+  monthly Price in Stripe (test mode until 2.2) and set `STRIPE_PRICE_ID` on the API
+  service to its id. The line repeats every hour until then.
+- `billing.price_check_failed error_type=…` (warning): Stripe could not be read (a wrong
+  key, the network, a timeout, or an answer that is not a Price). Only the error's class
+  is logged, never its message.
+- `billing.half_configured missing=…` (error, once at start, deployed only): billing is
+  only part set up. `missing` names the one variable that is not set, and never a value.
+  - `STRIPE_SECRET_KEY` or `STRIPE_PRICE_ID`: only one of the two is set. Billing then
+    counts as not configured: checkout answers 503 and the scan allowance is off for
+    every agency.
+  - `STRIPE_WEBHOOK_SECRET`: the key and the Price id are set but not the webhook secret.
+    Customers can pay, and every Stripe webhook is refused with a 503, so a payment is
+    never recorded and the agency never shows as subscribed.
+
+  Set the missing variable.
+
+`STRIPE_LOG` does nothing on this service: the container's start script unsets it, because
+the Stripe SDK would otherwise print every request, error message and body to stderr.
 
 ## If the logs show a second Stripe subscription
 

@@ -34,8 +34,8 @@ what the image runs on Render. uvicorn configures its own loggers BEFORE it
 imports the app, so a filter added here is not overwritten; the build log's
 2026-09-29 entry records that run, with the redacted lines it printed.
 
-THE LOGGERS KEPT QUIET — 2026-10-03
------------------------------------
+THE LOGGERS KEPT QUIET — 2026-10-03 (`stripe` added 2026-10-04)
+---------------------------------------------------------------
 httpx logs every request it makes through the stdlib, at INFO, with the whole URL:
 `HTTP Request: GET https://serpapi.com/search.json?api_key=… "HTTP/1.1 200 OK"`. The
 SerpApi key travels in that query string. httpcore's DEBUG trace prints the host, the
@@ -45,16 +45,27 @@ options at DEBUG, the prompt in them: `Request options: {… 'json_data': {'mess
 engine's answer text: the third-party raw text the facts-only rule says not to keep, and
 Render keeps stdout.
 
+The Stripe SDK logs through `stripe`: at INFO each request's method and URL and the message of
+each error Stripe answers with, at DEBUG the request body (an agency's name goes to Stripe as the
+customer's name) and the response body (`stripe/_util.py`, `stripe/_api_requestor.py`).
+
 Nothing prints any of it while no stdlib handler or level is configured, which is the
 case here, so all of it is dropped. Two things can change that: a root-level change
 (`logging.basicConfig(level=INFO)`), and the Anthropic SDK itself, which raises its own
 logger and the `httpx` one to INFO or DEBUG and installs a root handler when
 `ANTHROPIC_LOG` is `info` or `debug` (anthropic 0.125.0, `_utils/_logs.py`, run when the
-package is imported). So `configure_logging` pins `httpx`, `httpcore` and `anthropic` to
-WARNING, on the loggers themselves and not inherited from the root, and `create_app` runs
+package is imported). So `configure_logging` pins `httpx`, `httpcore`, `anthropic` and `stripe`
+to WARNING, on the loggers themselves and not inherited from the root, and `create_app` runs
 it once everything is imported, so the pin is applied last. A warning or an error from any
 of them is still written. `ANTHROPIC_LOG` therefore changes nothing in this app.
 `tests/test_secrets_stay_out_of_logs.py` holds all of it, the import order included.
+
+ONE THING THE PIN CANNOT REACH: `STRIPE_LOG`. With it set to `info` or `debug` the Stripe SDK
+does not only log those lines, it PRINTS them to stderr (`print(..., file=sys.stderr)`), past every
+logger level, and Render's log collects stderr as it does stdout. The SDK reads the variable once,
+as it is imported, so the protection cannot be Python code that runs later: `docker-entrypoint.sh`
+unsets it before it starts anything, and `tests/test_secrets_stay_out_of_logs.py` runs that
+script to prove it.
 """
 
 from __future__ import annotations
@@ -71,8 +82,10 @@ ACCESS_LOGGER = "uvicorn.access"
 # whole URL at INFO, and the SerpApi key is a parameter of that URL; `httpcore` traces the
 # host, the port and every response header at DEBUG; `anthropic` writes each request's
 # options at DEBUG, the prompt text in them: client-site content and, for sentiment, the
-# engine's answer text, which the facts-only rule says not to keep.
-QUIET_LOGGERS = ("httpx", "httpcore", "anthropic")
+# engine's answer text, which the facts-only rule says not to keep; `stripe` writes each
+# request's URL and Stripe's error messages at INFO and the request and response bodies at
+# DEBUG (its stderr printing, `STRIPE_LOG`, is switched off in `docker-entrypoint.sh`).
+QUIET_LOGGERS = ("httpx", "httpcore", "anthropic", "stripe")
 REDACTED = "…"
 
 # Under /reports/ only the two body-token routes, `/reports/shared` and
@@ -121,8 +134,8 @@ class RedactSecretPaths(logging.Filter):
 
 def configure_logging(settings: Settings) -> None:
     """Apply the level to structlog, put the redaction on the access log, and keep what
-    httpx, httpcore and the Anthropic SDK would write about their requests out of the log.
-    Idempotent."""
+    httpx, httpcore and the Anthropic and Stripe SDKs would write about their requests out of
+    the log. Idempotent."""
     structlog.configure(
         wrapper_class=structlog.make_filtering_bound_logger(settings.effective_log_level)
     )

@@ -59,11 +59,26 @@ says not to assume. Its two runtime dependencies were already present:
 The facts-only rule is not at stake. Nothing here touches engine answers or
 competitor pages; the only third-party data is our own Stripe account's view of
 our own customers.
+
+THE PRICE THE API EXPECTS, AND THE CHECK THAT READS IT BACK
+-----------------------------------------------------------
+The plan is US$150 a month (founder decision, 2026-10-04; $160 from 2026-09-22,
+$29 before). The Price object that charges it lives in Stripe and is the
+founder's to create in the dashboard: this module never creates or edits one. It
+states the number (`PLAN_PRICE_USD` and the currency and period beside it) and
+`price_check` reads the Price `STRIPE_PRICE_ID` names and compares, so a Price at
+the wrong amount is a warning in the log when it is configured and not a
+customer's receipt. `price_watch.py` runs it, on a DEPLOYED API only, at start and
+every hour after; it is one READ, it writes nothing at Stripe, and it cannot fail or
+delay a start. (`price_check` itself does not look at the environment: a local start
+never reaches it, because the task that calls it is not started.)
 """
 
 from __future__ import annotations
 
+import asyncio
 import enum
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -89,6 +104,30 @@ logger = structlog.get_logger(__name__)
 
 STRIPE_TIMEOUT_SECONDS = 15
 STRIPE_MAX_RETRIES = 1
+
+# The plan this API sells, and so the Price it expects `STRIPE_PRICE_ID` to name. US$150 a
+# month, by founder decision on 2026-10-04 ($160 from 2026-09-22, $29 before that). The web
+# states the same number once more, as `PLAN_PRICE_USD` in
+# `apps/web/src/components/marketing/PricingCard.tsx`, and
+# `apps/web/src/components/marketing/planPrice.test.ts` reads these lines and fails if the two
+# differ, so neither can move alone. The assignments are plain on purpose: that test finds them
+# by shape. The Stripe Price itself is the founder's to create; nothing here does.
+PLAN_PRICE_USD = 150
+PLAN_CURRENCY = "usd"
+PLAN_INTERVAL = "month"
+# Billed every one month: a Price that bills every two is another plan.
+PLAN_INTERVAL_COUNT = 1
+# A flat amount per unit, which is Stripe's `licensed` usage type. A `metered` Price bills by
+# usage reported to Stripe, and nothing here reports any: it is not the flat plan.
+PLAN_USAGE_TYPE = "licensed"
+# Stripe states an amount in the currency's smallest unit, which for US dollars is the cent.
+# Derived, so the price is typed once; a change of currency changes this line too.
+PLAN_UNIT_AMOUNT_CENTS = PLAN_PRICE_USD * 100
+# The longest one `price_check` waits for Stripe. The client's own bounds (15 s a call, one
+# retry) give up well inside this; it is here for a call that is stuck past them, so a hang is a
+# `billing.price_check_failed` line and not a check that never reports.
+PRICE_CHECK_TIMEOUT_S = 60.0
+
 # How long a checkout waits for another checkout of the same agency.
 CHECKOUT_LOCK_TIMEOUT = "3s"
 # How long a Checkout link stays payable (founder decision 5, 2026-10-01).
@@ -280,6 +319,190 @@ def _get(obj: Any, key: str) -> Any:
     if isinstance(obj, dict):
         return obj.get(key)
     return getattr(obj, key, None)
+
+
+# ---------------------------------------------------------------------------
+# the plan's price, read back from Stripe
+# ---------------------------------------------------------------------------
+
+
+def is_configured(settings: Settings) -> bool:
+    """Whether Stripe is set up here: the secret key AND the Price id are both set.
+
+    The same two settings the scan allowance's gate reads
+    (`scan_allowance.gate_enabled`), which is what "billing is configured" means
+    everywhere in the API. With either one missing nothing about billing runs, the
+    price check included.
+    """
+    return bool(settings.stripe_secret_key and settings.stripe_price_id)
+
+
+def log_half_configured(settings: Settings) -> None:
+    """ERROR `billing.half_configured` when a DEPLOYED API has billing only part set up.
+
+    `missing` names the environment variable that is not set, and the line carries nothing else:
+    never a value. Two states, one line each (never both at once):
+
+    * Exactly one of `STRIPE_SECRET_KEY` and `STRIPE_PRICE_ID` is set (`missing` is the other).
+      Billing is on only when BOTH are set (`is_configured`, the same two settings
+      `scan_allowance.gate_enabled` reads), so with one set the billing gates are off for every
+      agency, the scan allowance among them, and checkout answers 503, and nothing else in the
+      API says so. That is a deployment that looks configured and is not.
+    * Both are set and `STRIPE_WEBHOOK_SECRET` is not (`missing="STRIPE_WEBHOOK_SECRET"`).
+      Checkout works, so a customer can pay, and every webhook is refused with a 503
+      (`verify_webhook`): the payment is never recorded and the agency never shows as subscribed.
+
+    Only a deployed API says it (`Settings.is_deployed`: staging or production). Locally and in CI
+    a part-set billing is ordinary: the suite and `.env.example` leave Stripe unset, and a
+    developer may set only a key. Nothing set is a supported state (billing off) and says nothing,
+    as does a webhook secret with no key or Price id (there is no billing for it to serve), and
+    everything set is the price check's (`price_check`). Called once, from the lifespan, and never
+    fails a start.
+    """
+    if not settings.is_deployed:
+        return
+    key_set = bool(settings.stripe_secret_key)
+    price_set = bool(settings.stripe_price_id)
+    if key_set != price_set:
+        missing = "STRIPE_PRICE_ID" if key_set else "STRIPE_SECRET_KEY"
+    elif key_set and not settings.stripe_webhook_secret:
+        missing = "STRIPE_WEBHOOK_SECRET"
+    else:
+        return
+    logger.error("billing.half_configured", missing=missing)
+
+
+class MalformedPriceError(ValueError):
+    """What Stripe returned for the Price is not shaped like a Price.
+
+    Carries no message on purpose: `price_check` logs the class name and nothing
+    else, so nothing odd from a response can reach a log through this.
+    """
+
+
+@dataclass(frozen=True)
+class _PriceTerms:
+    """What a Stripe Price says it charges and whether it can be bought: the six things the plan
+    is checked on."""
+
+    amount: int | None  # `unit_amount`, in cents; null on a tiered Price
+    currency: str
+    interval: str | None  # `recurring.interval`; None on a one-time Price
+    interval_count: int | None  # `recurring.interval_count`; None on a one-time Price
+    active: bool | None  # `active`: false once the Price is archived
+    usage_type: str | None  # `recurring.usage_type`, `licensed` or `metered`; None if one-time
+
+
+def _is_whole_number(value: Any) -> bool:
+    """An `int` and not a `bool`, which Python counts as one."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _price_terms(price: Any) -> _PriceTerms:
+    """The terms of a Price, or `MalformedPriceError` when it is not shaped like one.
+
+    Null is a real answer and is kept: a one-time Price has `recurring: null`, a
+    tiered one has `unit_amount: null`. What is refused is a value Stripe never
+    sends: a currency that is not text (every Price has one, so a missing one is
+    not a Price), an amount or a count that is not a whole number, an interval or a
+    usage type that is not text, an `active` that is not a boolean, or no object at
+    all. Only whole numbers, text and booleans come out, so only those can reach a
+    log line.
+    """
+    amount = _get(price, "unit_amount")
+    currency = _get(price, "currency")
+    active = _get(price, "active")
+    recurring = _get(price, "recurring")
+    interval = _get(recurring, "interval")
+    interval_count = _get(recurring, "interval_count")
+    usage_type = _get(recurring, "usage_type")
+    if (
+        not isinstance(currency, str)
+        or (amount is not None and not _is_whole_number(amount))
+        or (active is not None and not isinstance(active, bool))
+        or (interval is not None and not isinstance(interval, str))
+        or (interval_count is not None and not _is_whole_number(interval_count))
+        or (usage_type is not None and not isinstance(usage_type, str))
+    ):
+        raise MalformedPriceError
+    return _PriceTerms(
+        amount=amount,
+        currency=currency,
+        interval=interval,
+        interval_count=interval_count,
+        active=active,
+        usage_type=usage_type,
+    )
+
+
+async def price_check(settings: Settings) -> None:
+    """Read the Price `STRIPE_PRICE_ID` names and log whether it is the plan. Never raises.
+
+    One READ (`prices.retrieve`) through `_client`: it writes nothing at Stripe. It
+    compares the Price's `unit_amount`, `currency`, `recurring.interval`,
+    `recurring.interval_count` and `recurring.usage_type` with `PLAN_UNIT_AMOUNT_CENTS`,
+    `PLAN_CURRENCY`, `PLAN_INTERVAL`, `PLAN_INTERVAL_COUNT` and `PLAN_USAGE_TYPE`, and
+    requires `active` to be true: an archived Price cannot be bought, and a metered one
+    bills by usage. It says one of three things:
+
+    * `billing.price_check`, info, `ok=True` and `price_id`: the Price is the plan.
+    * `billing.price_mismatch`, warning: it is not. Fields: `price_id`, then each of
+      `amount`, `currency`, `interval`, `interval_count`, `active` and `usage_type` as
+      `expected_*` and `actual_*`. **Amounts are in cents** (US$150 is 15,000), as
+      Stripe states them. `actual_interval`, `actual_interval_count` and
+      `actual_usage_type` are null on a one-time Price and `actual_amount` is null on a
+      tiered one. The `*_interval_count`, `*_active` and `*_usage_type` fields are there
+      so that a Price whose amount, currency and interval all match, and which is
+      archived, billed every two months or metered, is not a mismatch whose fields all
+      read the same.
+    * `billing.price_check_failed`, warning, `error_type` only: Stripe answered with
+      an error, did not answer in `PRICE_CHECK_TIMEOUT_S`, or answered with
+      something that is not a Price. `error_type` is the exception's CLASS NAME and
+      never its message, which can carry request details (an authentication error
+      quotes the key it refused). The key is never logged, and of the response only
+      the four values above are.
+
+    With Stripe not configured (`is_configured`) it does nothing: no call and no
+    line. A cancellation is not swallowed (`CancelledError` is not an `Exception`),
+    so shutdown can still end the task that runs this.
+    """
+    if not is_configured(settings):
+        return
+    try:
+        price_id = settings.provider_key("stripe_price_id")
+        async with asyncio.timeout(PRICE_CHECK_TIMEOUT_S):
+            price = await _client(settings).v1.prices.retrieve_async(price_id)
+        found = _price_terms(price)
+    except Exception as exc:  # noqa: BLE001 - a check that fails is reported, never raised
+        logger.warning("billing.price_check_failed", error_type=type(exc).__name__)
+        return
+
+    if (
+        found.amount == PLAN_UNIT_AMOUNT_CENTS
+        and found.currency == PLAN_CURRENCY
+        and found.interval == PLAN_INTERVAL
+        and found.interval_count == PLAN_INTERVAL_COUNT
+        and found.usage_type == PLAN_USAGE_TYPE
+        and found.active is True
+    ):
+        logger.info("billing.price_check", ok=True, price_id=price_id)
+        return
+    logger.warning(
+        "billing.price_mismatch",
+        price_id=price_id,
+        expected_amount=PLAN_UNIT_AMOUNT_CENTS,
+        actual_amount=found.amount,
+        expected_currency=PLAN_CURRENCY,
+        actual_currency=found.currency,
+        expected_interval=PLAN_INTERVAL,
+        actual_interval=found.interval,
+        expected_interval_count=PLAN_INTERVAL_COUNT,
+        actual_interval_count=found.interval_count,
+        expected_active=True,
+        actual_active=found.active,
+        expected_usage_type=PLAN_USAGE_TYPE,
+        actual_usage_type=found.usage_type,
+    )
 
 
 # ---------------------------------------------------------------------------
