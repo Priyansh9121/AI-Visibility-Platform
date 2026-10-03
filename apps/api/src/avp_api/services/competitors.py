@@ -458,6 +458,10 @@ async def detect_from_facts(
     but nothing would have caught them drifting apart. Now there is one
     implementation and the script calls it.
 
+    Both signals run in the client's own market: the search in the country its
+    domain's TLD names (`serp.search_country`), and the model told the domain as
+    well as the brand.
+
     `client_id` is for the log line only and is optional for exactly that
     reason: a caller with no Client row still gets a real detection.
     """
@@ -475,9 +479,22 @@ async def detect_from_facts(
         industry=industry,
         niche=niche,
     )
-    subject_brand = brand_name or name or domain
+    # The market a detection runs in (2026-10-03; the search side is measured in serp.py,
+    # above `DEFAULT_SEARCH_COUNTRY`). Production's new .in client, an Indian dessert-cafe
+    # chain, came out at `confidence=0.000`. Reproduced through this path: searched as
+    # gl=us, its 3 queries returned 27 result domains and none was a brand the model had
+    # named. And the model was given only the brand name: its two brand-anchored seed
+    # prompts named US packaged-waffle brands, where with the brand and its domain as the
+    # subject all four prompts named Indian dessert chains. So the search runs
+    # in the country the domain's TLD names, and the subject is the brand WITH its
+    # domain, or the domain alone when no name is known. The queries and seed prompts
+    # are as they were, and so are the SERP gate, the confidence and `FORMULA_VERSION`:
+    # detection's inputs change, not its arithmetic.
+    country = serp_service.search_country(domain)
+    brand = brand_name or name
+    subject_brand = f"{brand} ({domain})" if brand else domain
 
-    serp_results = await serp_service.search_many(queries, settings=settings)
+    serp_results = await serp_service.search_many(queries, settings=settings, country=country)
     co_citation_results = await cocitation_service.run_seed_prompts(
         prompts, subject_brand=subject_brand, settings=settings
     )
@@ -511,6 +528,7 @@ async def detect_from_facts(
         confidence=str(outcome.detection_confidence),
         returned=len(outcome.candidates),
         considered=outcome.candidates_considered,
+        country=country,
     )
     return outcome
 

@@ -22828,3 +22828,81 @@ Drift check (north-star §8): no product layer; the launch plan. Lifecycle phase
 - OpenAPI and `api.gen.ts` regenerate with no change.
 - Over the branch: API 2656 → 3074, web 1533 → 1708; design-system 935, workers 26, shared-types 53 and mypy 43 unchanged.
 - Exit codes were read from files.
+
+# Competitor detection searches in the client's own market and tells the model the client's domain
+
+**2026-10-03, the thirteenth entry of the day; branch `pilot-fixes-4`, the founder's brief "search accuracy, guardrails and pilot hardening" (item S1).** One item, one commit.
+
+**Render: nothing to set. No endpoint shape, schema, dependency or outbound host change.** What a detection searches and asks changes: `POST /clients/{clientId}/competitors/detect` and a scan's own detection.
+
+Drift check (north-star §8): Layer 2, Measurement (competitor detection); lifecycle phase: Activation (Epic 9), the competitor set a pilot's first report compares against.
+
+## 1. What was found
+
+- **What 0.000 means.** `decide_detection` sets the confidence to the share of the returned rivals that both signals found: search and the co-citation model (`services/competitors.py`). Two production scans on 2026-10-03 returned five rivals at `confidence=0.000`, so not one of the five was found by both.
+  - A new `.in` client: `considered=44 eligible=27 gated_out=17`, `status=weak_signal returned=5`, no search failure.
+  - A new `.com.au` client: one query timed out on both attempts (`kinds=['read','read']`), then `considered=44 eligible=14 gated_out=30`.
+- **Reproduced the same day through the production code path.** Each client's own crawl and classification, its four co-citation prompts, and ten real searches with only `gl` varied. The same co-citation answers were used in both arms, and the production merge, score and decide functions were run over them. Results:
+
+  | Client | Search market | Queries answered | Result domains the model also named | Confidence |
+  |---|---|---|---|---|
+  | `.in` | gl=us (production) | 3 of 3 | none of 22 | 0.000 |
+  | `.in` | gl=in | 1 of 3 | none of 9 | 0.000 |
+  | `.com.au` | gl=us (production) | 2 of 2 | none of 15 | 0.000 |
+  | `.com.au` | gl=au | 2 of 2 | one rival's own domain | 0.200, status ok |
+
+- **Search: `services/serp.py` sent `gl=us` for every client.** Searched from the United States, neither client's results named a rival the model named; searched from Australia, the Australian client's did.
+- **The model: it was never told the client's domain.** `detect_from_facts` passed only the brand name. For the `.in` client, its two brand-anchored prompts named US packaged-waffle brands. With the brand and its domain in the subject line, all four prompts named Indian dessert chains. For the `.com.au` client the model named Australian banks either way.
+- **The market is not the whole of it.** The `.in` client's results under gl=us were publishers and noise; its "<niche> providers" query returned hashicorp.com and terraform.io. Under gl=in, two of its three queries got no answer.
+- **Nothing in the data model records a country.** There is no field on `Client`, on `Agency` or in the classification output, so the domain's country-code TLD is the only source.
+
+## 2. What changed
+
+- **`services/serp.py`:**
+  - `search_country(domain)` maps a domain's last label to Google's `gl`. The list is exactly au, nz, uk (`gl=uk`), ie, ca, us, za, in, sg, my, ph, hk, id and jp, and a row is added to extend it.
+  - Anything else (.com, .org, .io, .ai, .co, an unlisted label) searches the default, `au`, because the pilots are Australian agencies.
+  - `search` and `search_many` take `country=` and send it as `gl`. A value that is not one of the list's values is sent as `au`, so no arbitrary string reaches the request. `hl` stays `en`.
+- **`services/competitors.py` `detect_from_facts`:**
+  - It searches in `search_country(domain)`.
+  - The co-citation subject is "<brand> (<domain>)", or the domain alone when no name is known.
+  - `competitors.detected` now carries `country`.
+- **`scripts/verify_competitors.py`:** its `--serp-only` branch passes the same country, so the live check keeps measuring what the API runs.
+- **Unchanged:** the queries, the seed prompts, the search gate, the confidence and `FORMULA_VERSION` (v5). Detection's inputs change, not the scoring arithmetic, and no stored score is re-scored.
+- **Behaviour change to know about:** every client whose domain is not on the list, every `.com` included, is now searched in Australia rather than the United States. The brief decided this. Its effect on a US-facing `.com` client was not measured (no searches were left).
+
+## 3. The review
+
+- **Security review (opus): PASS WITH NITS**, nothing at Medium.
+  - Checked clean: no client-controlled string can reach `gl` or any other parameter; the key and URL are in no log line, and the new log field is one of fourteen fixed codes; nothing new is persisted; tenancy is unchanged; the per-detection bound is unchanged (at most 12 SerpApi requests, the same four model calls); `/privacy` stays true.
+  - **Taken (Low):** the two production clients' domains, which the first draft wrote into code comments and tests, are replaced by neutral examples. No client name is in committed text.
+  - **Left (Low), as found-not-fixed below:** intake does not check that a domain is a hostname.
+
+## Found, not fixed
+
+- **The query shapes.** "<niche> providers" built from a long comma-joined niche returns unrelated sites; the `.in` client's returned hashicorp.com and terraform.io.
+- **`NON_COMPETITOR_DOMAINS` lists US publishers only.** Local publishers and directories (news.com.au, whirlpool.net.au, canstar.com.au, infochoice.com.au, so.city, district.in, homegrown.co.in) pass as rivals; news.com.au took a top-five place in the `.com.au` reproduction.
+- **Intake accepts a domain without checking that every label is a hostname label.** The same string already went to the model in every scan's prompts; it now also goes in the co-citation subject line. The fix is a hostname check in `intake.parse_domain`.
+- **A business on a generic TLD searches Australia whatever its market.** A country field (on the agency or the client) would remove the guess.
+
+## Verified
+
+**API pytest 3074 → 3146 (+72); floor raised to match.** One test is skipped on macOS as before: it reads Linux's `/proc`.
+- `tests/test_search_country.py` (72):
+  - the TLD-to-country table, including the default and unlisted labels;
+  - `gl` on the wire from a `MockTransport`, with junk values sent as `au`;
+  - `search_many` forwarding the country;
+  - `detect_from_facts` searching in the client's country with the domain in the model's subject (`.in`, `.com.au`, `.com`, name-only, domain-only);
+  - the `competitors.detected` line's exact key set.
+- **Negative controls:**
+  - On this tree, with both source files put back to `main`: 71 of the 72 fail; the one guard that holds on both sides passes. Restored and checked against the patch with `cmp`.
+  - The implementer's eight single-line mutations each failed between 1 and 37 tests.
+- **SerpApi spend for the whole brief:** 12 requests, all in this investigation (10 queries; 2 were tried again after a read timeout). 8 were answered and 4 attempts timed out on the read. The account's month count went from 66 to 71: 5 counted.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 26, shared-types 53 (0 fail), design-system 935, web 1708, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`. They were run by hand on the bar's logs, because the local bar script split the repository's path at its spaces when it called the gate; the script is fixed for the next runs.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+  - The Mac slept on and off while this bar ran (18:04 to 20:03 by the clock), so the step times mean nothing; every step's own exit code was read from its file.
+- Exit codes were read from files.
