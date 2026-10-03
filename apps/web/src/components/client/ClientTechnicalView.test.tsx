@@ -126,11 +126,69 @@ describe('a partial audit renders as the scored audit it is', () => {
   it('names what was not measured and why', () => {
     expect(html).toContain('Not measured');
     expect(html).toContain('Content Freshness');
-    expect(html).toContain('The site publishes no date signal at all');
+    // What the audit read, not "The site publishes no date signal at all" (launch checklist 3.49).
+    expect(html).toContain(
+      'The audit read no date from the audited page’s Last-Modified header or from a datePublished or dateModified in its JSON-LD. It does not read dates printed on the page.',
+    );
+    expect(html).not.toContain('publishes no date signal');
   });
 
   it('still lists every check', () => {
     expect(html).toContain('Every check');
+  });
+});
+
+describe('a partial audit says what the audit read about dates, in the card and under the check — launch checklist 3.49', () => {
+  // A real partial audit carries both: the "Not in this score" card for the excluded component,
+  // and the `not_applicable` freshness check with the same code.
+  const audit = {
+    ...PARTIAL,
+    checks: [
+      ...(PARTIAL.checks ?? []),
+      {
+        id: 'chk_fresh',
+        checkKey: 'content_freshness',
+        status: 'not_applicable',
+        detailCode: 'NO_DATE_SIGNAL_AVAILABLE',
+        value: null,
+      },
+    ],
+  } as unknown as TechnicalAudit;
+  const html = render(audit);
+  /** The text of the one list item whose markup mentions `needle`, and of nothing around it. */
+  const itemText = (needle: string): string =>
+    `<li ${html.split('<li ').find((chunk) => chunk.includes(needle))!.split('</li>')[0]!}</li>`
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&#x27;/g, "'")
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  it('draws both, as two items, so the test is of the screen and not of a table', () => {
+    // The card's label is the component's ("Content Freshness"); the row's is the check's, and
+    // under it is the sentence for the code.
+    const card = itemText('Not measured');
+    const row = itemText('Content freshness');
+    expect(card).toContain('Content Freshness');
+    expect(card).not.toContain('No usable Last-Modified header');
+    expect(row).toContain('No usable Last-Modified header');
+    expect(row).not.toContain('Not measured');
+  });
+
+  it('says "at all" and "structured data" of neither', () => {
+    const card = itemText('Not measured');
+    const row = itemText('Content freshness');
+    for (const [where, text] of [['the card', card], ['the row', row]] as const) {
+      for (const gone of ['at all', 'structured data', 'The site publishes', 'date signal']) {
+        expect(text, `${where}: ${gone}`).not.toContain(gone);
+      }
+      expect(text, `${where} names the JSON-LD`).toContain('JSON-LD');
+    }
+    expect(card).toContain(
+      'The audit read no date from the audited page’s Last-Modified header or from a datePublished or dateModified in its JSON-LD. It does not read dates printed on the page.',
+    );
+    expect(row).toContain(
+      'No usable Last-Modified header and no datePublished or dateModified in the page’s JSON-LD was found',
+    );
   });
 });
 
@@ -437,7 +495,7 @@ describe('a check says what its code means, in a sentence under the check, and n
     NO_PRODUCT_OR_SERVICE_SCHEMA:
       'The audited page has no Product or Service markup, so what the business sells has to be inferred from page copy rather than read from the markup.',
     NO_DATE_SIGNAL_AVAILABLE:
-      'No usable Last-Modified header and no datePublished or dateModified in the page’s structured data was found, so its freshness cannot be established either way.',
+      'No usable Last-Modified header and no datePublished or dateModified in the page’s JSON-LD was found, so its freshness cannot be established either way.',
     MULTIPLE_H1:
       'More than one top-level heading leaves the page’s subject ambiguous to anything parsing it.',
     NO_ORGANIZATION_OR_LOCALBUSINESS:

@@ -109,8 +109,8 @@ FIX_BOUND = CallBound(timeout=120.0, max_retries=1)  # ceiling: 242.0s
 MAX_FIXES = 5
 MAX_DIMENSION_FIXES = 3
 MIN_GAP_POINTS = Decimal("2")
-# A site telling crawlers to stay out is promoted above everything else:
-# nothing else on the list can take effect underneath it.
+# Crawl and indexing checks sort first, ahead of the points ranking: a finding on the
+# `indexable` or the `robots_txt_present` check (`derive.ts` has the same rule).
 BLOCKING_CHECK_KEYS = ("indexable", "robots_txt_present")
 
 MAX_TITLE_CHARS = 200
