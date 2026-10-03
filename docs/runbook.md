@@ -326,3 +326,102 @@ for this reason.
 last restart: the counters belong to the container, and a restart starts them
 again. The API image runs `tini` as PID 1, so the zombie `headless_shell`
 processes a browser run used to leave behind are reaped; they cost no memory.
+
+## Reading competitor-search lines
+
+**When:** competitor detection lost a search (`competitors.serp_failed`), or you want
+to know how long SerpApi takes from Render and whether the retry ever helps. A
+detection makes 3 to 6 Google searches through SerpApi, three at a time, and the API
+logs a line for each search that reached SerpApi.
+
+**Where:** the Render dashboard → the **API** service → **Logs**. Search for the event
+name. Every line below carries numbers, our own codes and the HTTP status, and nothing
+else: no query, no client, no domain, no URL, no key.
+
+**The lines**
+
+| Event | Level | When | Carries |
+|---|---|---|---|
+| `serp.completed` | info | SerpApi answered the search, whatever it said | `elapsed_ms`, `attempts`, `hits`, `status`, `error_code` |
+| `serp.retried` | info | the first attempt got no answer and the retry did; logged before that search's `serp.completed` | `attempts` (always 2), `kinds` (how the first attempt failed), `elapsed_ms` |
+| `serp.attempts_failed` | warning | no attempt got an answer, so the search failed | `attempts`, `kinds` (how each attempt failed), `elapsed_ms` |
+
+**Every search that reached SerpApi logs exactly one of `serp.completed` and
+`serp.attempts_failed`**, and `serp.retried` besides when a retry answered, so those two
+add up to the number of searches made. A search that was never sent (no `SERPAPI_KEY`)
+logs none of the three.
+
+**`serp.completed`, field by field**
+
+- `elapsed_ms`: milliseconds from the start of the search's first attempt to the end of
+  reading its answer. The wait for one of the three slots is not in it. An answer to the
+  retry has the failed first attempt and the 1 s pause in it: at least 1,000, and up to
+  about 21,000.
+- `attempts`: 1, or 2 when the first attempt got no answer and the retry did.
+- `hits`: the organic results kept (those with a usable domain). 0 for an error answer,
+  and also when Google had nothing to return: `error_code` tells the two apart.
+- `status`: the HTTP status SerpApi sent. A 200 is not always a result page: see
+  `error_code`.
+- `error_code`: `None` for a result page. Otherwise our code for the answer:
+  `SERP_AUTH_FAILED` (401: the key is wrong or revoked; a `serp.auth_failed` error line
+  comes with it), `SERP_RATE_LIMITED` (429), `SERP_HTTP_<n>` (any other status; a
+  `serp.http_error` warning with the status comes with it), `SERP_BAD_JSON` (a 200 whose
+  body was not JSON) or `SERP_API_ERROR` (a 200 whose body carried an `error`).
+
+**`serp.retried` and `serp.attempts_failed`, field by field**
+
+- `attempts`: how many attempts were made. Always 2 on `serp.retried`. On
+  `serp.attempts_failed` it is 2, or 1 when the failure is one that is not retried (an
+  httpx error that is not a transport failure, such as a body it could not decode).
+- `kinds`: one entry for each attempt that got no answer. `connect`: never connected.
+  `read`: connected, sent the search and heard nothing back within the 9 s read budget.
+  `write` and `pool`: the other httpx timeouts. `total`: the attempt ran out its 10 s
+  deadline with no single step out of time (an answer that kept arriving a byte at a
+  time). Anything else is the error's class name (`ConnectError`, `ReadError`,
+  `RemoteProtocolError`: refused, reset, dropped; `DecodingError`).
+- `elapsed_ms`: as above, to the answer (`serp.retried`) or to the end of the last
+  attempt (`serp.attempts_failed`).
+
+**How to read the latency**
+
+1. Search `serp.completed` and copy `elapsed_ms` from the lines with `attempts=1` and
+   `error_code=None`: single requests that worked. With fewer than 20 lines the 95th
+   percentile is only the slowest one, so let some scans run first.
+2. Sort them. The median is the middle value; the 95th percentile is the one 95% of the
+   way up (the 19th of 20). For comparison, 24 searches made from a development Mac on
+   2026-10-03 had a median of 1.54 s, a 95th percentile of 2.54 s and a slowest of
+   6.93 s, none over 10 s.
+3. Count the lines close to the limits. An attempt is cut when it has heard nothing for
+   9 s (the read budget, `PHASE_TIMEOUT_S`) or has run 10 s (the deadline,
+   `ATTEMPT_TIMEOUT_S`), so a search at 8,000 ms or more came close.
+4. Read the `attempts=2` lines apart: each is a search the retry rescued, and its
+   `elapsed_ms` is not one request's time.
+5. Then read the `serp.attempts_failed` lines by their `kinds`. A `read` on both
+   attempts is a search SerpApi took and did not answer in time.
+
+**Billing.** A failed connect is never billed and a read failure was not billed when
+measured (2026-10-03, against the account's monthly count), and SerpApi bills only a
+search it records as successful, so a search it finished after we stopped waiting would
+be billed and only the account's count would show it, not these lines (the evidence is
+in the comment at the top of `services/serp.py`).
+
+**What would justify a change.** The timeouts and the retry are unchanged until there is
+data. This is what the numbers would mean.
+
+- Answered searches cluster near the 9 s read budget (many `attempts=1` lines at 8,000 ms
+  or more): the read budget, and the 10 s deadline with it, are too short for SerpApi
+  from Render, and would be raised together (`PHASE_TIMEOUT_S` and `ATTEMPT_TIMEOUT_S`
+  in `services/serp.py`). A scan's worst case moves with them, because
+  `serp.QUERY_CEILING_S` is added into it (`test_scan_executor.py`).
+- Answered searches are all fast (none near 9,000 ms) and the failures are `read` on both
+  attempts: the provider is stuck on those searches, and waiting longer will not help. The
+  retry costs about 10 s a search (the 1 s pause and a second 9 s wait) and has not
+  rescued one yet: of the 3 searches seen to time out on a read by 2026-10-03, the retry
+  timed out too. The founder has decided to keep retrying a read failure; these lines are
+  how to see whether it ever pays.
+
+**Not in the logs:** which client, scan or query a line is for (several searches run at
+once, so their lines interleave), the market, the URL, the key and anything SerpApi
+returned. `competitors.serp_failed` (one for each search that failed, an error answer
+included) names the query and its `error_code`, and `competitors.detected`, logged after
+the searches' lines, carries the `client_id` and the `country` the searches were made in.
