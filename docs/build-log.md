@@ -23515,3 +23515,102 @@ Drift check (north-star §8): Layer 1, Delivery (the API's start-up and its sess
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - **Run for real:** uvicorn on a scratch Redis database logged `redis.eviction_policy policy=noeviction` then one `redis.data_lost`; deleting the sentinel while it ran gave a second about 55 s later; SIGTERM shut down cleanly.
 - Exit codes were read from files.
+
+# A migration takes every privilege in `public` away from Supabase's Data API roles, now and for tables added later
+
+**2026-10-04, the first entry of the day; branch `pilot-fixes-4`, the founder's brief "search accuracy, guardrails and pilot hardening" (item D1).** One item, one commit.
+
+**Render: nothing to set. One migration, `f45983cfa5e3`, runs in the API container before it serves, under `lock_timeout = '5s'`.** In Supabase it revokes the grants; on local and CI Postgres, where `anon` and `authenticated` do not exist, it does nothing. The founder's checks after the deploy are in `docs/runbook.md`, "Supabase grants check" (1.1f).
+
+Drift check (north-star §8): Layer 0, Trust substrate (no one reaches an agency's data except through the API); lifecycle phase: Activation (Epic 9), the database the pilots' data lives in.
+
+## 1. What changed
+
+The founder's facts (2026-10-03):
+- the Supabase Data API is now off;
+- `anon` and `authenticated` held REFERENCES, TRIGGER, TRUNCATE and MAINTAIN on all 25 public tables, with RLS on;
+- `postgres`'s default privileges in `public` gave both roles `Dxtm`.
+
+- **The revision** (`infra/db/migrations/versions/20261003_2302_f45983cfa5e3_revoke_data_api_grants.py`), one `DO` block, for each of `anon` and `authenticated` only if the role exists:
+  - **`REVOKE ALL … CASCADE` on every table, view, materialized view, partitioned or foreign table, sequence and routine in `public`** whose owner the migration user can act as. A REVOKE on anything else would fail the deploy, and no such object is AVP's: 24 model tables plus `alembic_version` is the founder's 25. Nothing is caught.
+  - **`ROUTINE`, not `FUNCTION`:** `ON FUNCTION` leaves a procedure's grant in place.
+  - **The migration user's own default privileges** in `public`, revoked for tables, sequences and functions (any role may change its own).
+  - **`postgres`'s default privileges** in `public`, revoked the same way when the migration user is a member of `postgres`, so a table Alembic adds later is not granted to either role.
+  - If the user is not a member, that step is skipped and `upgrade()` logs a warning through Alembic's logger, which reaches the deploy log. A Postgres NOTICE would not: `env.py` registers no listener, so asyncpg discards them.
+- **`downgrade()` does nothing,** on purpose: re-granting the Data API roles is never wanted.
+- **Left alone:** PUBLIC's default EXECUTE on routines (AVP has no function, view, trigger, sequence or extension in `public`), schema USAGE, `service_role`, other schemas, and the default privileges of any other owner role (`supabase_admin` among them).
+- **`docs/runbook.md`, "Supabase grants check":**
+  - **Before the deploy:** confirm the user part of `DATABASE_URL` is `postgres` (or `postgres.<project-ref>` through the pooler), and run a read-only query that lists objects in `public` whose owner `postgres` cannot act as. Expect none.
+  - **After it, three read-only queries:** the routines in `public` and whether each role can run them; every privilege either role, or PUBLIC, still holds on a relation or a column (expect none); and every default privilege naming either role (expect no `postgres` row for `public` or for every schema).
+  - **When to run them again:** after any change to the Data API settings, and after enabling an extension into `public`.
+  - The revision's docstring carries the same queries, and a test holds the two copies equal.
+- **Locks:** each per-object REVOKE takes an ACCESS SHARE lock on its object until the migration commits. It waits only behind an ACCESS EXCLUSIVE lock, bounded by the 5 s `lock_timeout`; app traffic neither waits nor blocks.
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS**, nothing at Medium.
+- **Taken:**
+  - only objects the migration user can act as are revoked, so a Supabase- or extension-owned object in `public` cannot fail every deploy (the `ALL … IN SCHEMA` form was measured failing outright on a stranger's table or sequence);
+  - the migration user's own defaults;
+  - the visible warning;
+  - query 3's reading, including every-schema defaults;
+  - query 2 reporting PUBLIC;
+  - the before-deploy step;
+  - CASCADE;
+  - a test of the production shape;
+  - a snapshot that nobody else's privileges change;
+  - a guard that no routine in `public` is left executable by PUBLIC;
+  - query 1's guidance.
+- **Checked clean:** the app's own role and `service_role` keep everything; schema USAGE is fine to leave; tenancy is not touched; the queries are read-only and carry no exploit detail; there is one Alembic head.
+
+## Found, not fixed
+
+- **`env.py` registers no asyncpg notice listener,** so any migration's NOTICE or WARNING never reaches the deploy log. This revision logs its one warning through Alembic instead.
+- **`tests/test_migrations.py` uses one fixed scratch database name per cluster,** so two worktrees running it at once can drop each other's.
+- **The library skill `supabase-ops` still says the revokes stay a founder step, not a revision.** This revision supersedes that.
+- **Not run on Postgres 17** (CI's version) on this Mac; all local runs were on 18.4. CI runs the suite and the migration on 17.
+
+## Verified
+
+**API pytest 3382 → 3406 (+24); floor raised to match.** One test is skipped on macOS as before: it reads Linux's `/proc`.
+- **`tests/test_supabase_grants.py` (23).** Each runs inside one transaction that is always rolled back, and a second connection confirms afterwards that no role was left behind. The tests:
+  - simulate Supabase (the roles, their table, sequence, routine and column grants, and `postgres`'s default ACLs, plus probe objects);
+  - after the revision, assert that neither role holds anything on any relation in `public` and that each app table was individually seen before and clear after;
+  - assert that nothing `postgres` creates later is granted to either role;
+  - assert that only existing roles are touched;
+  - cover a migration user that is not a member of `postgres` (only that step skipped, the warning logged);
+  - cover the production shape: a non-superuser `postgres` owning every table runs it silently and holds nothing afterwards;
+  - cover a stranger's table, sequence, function and procedure: skipped without error, and listed by the before-deploy query;
+  - assert that everyone else's privileges are unchanged;
+  - assert that `downgrade` re-grants nothing;
+  - assert that the runbook's queries equal the docstring's and find the grants before and none after;
+  - include a standing check on the test database as it is.
+- **`tests/test_migrations.py` (+1):** no routine in `public` is executable by PUBLIC on a freshly migrated database.
+- **Negative controls:**
+  - **On this tree:** with the per-object REVOKE replaced by `NULL;`, 14 of the 23 fail. Restored and checked with `cmp`.
+  - **The implementer's 23 mutations, each restored and checked by hash,** all fail at least one test. They covered:
+    - the ownership filter removed;
+    - tables, sequences or routines never revoked;
+    - `ROUTINE` changed to `FUNCTION`;
+    - the user's own defaults missing or partial;
+    - `service_role` revoked too;
+    - EXECUTE taken from PUBLIC;
+    - the default step needing a superuser, or removed;
+    - the warning at INFO, always logged, or run offline;
+    - the guards removed;
+    - `upgrade()` not running the SQL;
+    - `lock_timeout` dropped;
+    - `downgrade()` re-granting;
+    - three runbook queries broken.
+- **Alembic, on a freshly created empty database:**
+  - `upgrade head` (`3e8a5b7c9d14 -> f45983cfa5e3`), `check`, `downgrade -1`, `upgrade head` and `check` again all pass;
+  - an offline `upgrade head --sql` renders the block verbatim;
+  - the bar's own Alembic step ran it again on an empty database.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, web 1842, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `f45983cfa5e3`) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

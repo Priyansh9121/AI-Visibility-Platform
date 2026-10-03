@@ -488,3 +488,136 @@ once, so their lines interleave), the market, the URL, the key and anything Serp
 returned. `competitors.serp_failed` (one for each search that failed, an error answer
 included) names the query and its `error_code`, and `competitors.detected`, logged after
 the searches' lines, carries the `client_id` and the `country` the searches were made in.
+
+## Supabase grants check
+
+**When:** before the deploy that ships revision `f45983cfa5e3` (which takes `anon` and
+`authenticated`, the two roles Supabase's Data API acts as, off everything in `public`), after
+it, and again after any revision that creates a table, view, sequence or function there, after
+any change to the Data API settings, and after enabling an extension into `public`. It is
+read-only and it is yours to run: nothing in the repo opens a production session.
+
+**Where:** the Supabase dashboard → **SQL Editor**. Paste one query at a time.
+
+**Before the deploy.** Two checks.
+
+- Confirm that the user part of the API service's `DATABASE_URL` (Render → the API service →
+  Environment) is `postgres`, or `postgres.<project-ref>` through the pooler. The revision acts
+  as that user, and its step on the default privileges of `postgres` needs it to be `postgres`
+  or a member of it. Read the user part only; do not paste the URL anywhere.
+- Run this query. It lists every table, view, sequence and routine in `public` whose owner
+  `postgres` cannot act as. Expect no rows. The revision cannot revoke on such an object, so
+  it skips it without a word and the object keeps whatever the Data API roles were granted on
+  it (a revoke on it would fail the deploy).
+
+```sql
+select c.oid::regclass::text as object, c.relkind::text as kind,
+       pg_get_userbyid(c.relowner) as owner
+  from pg_class c
+ where c.relnamespace = 'public'::regnamespace
+   and c.relkind in ('r', 'p', 'v', 'm', 'f', 'S')
+   and not pg_has_role('postgres', c.relowner, 'USAGE')
+union all
+select p.oid::regprocedure::text, 'routine', pg_get_userbyid(p.proowner)
+  from pg_proc p
+ where p.pronamespace = 'public'::regnamespace
+   and not pg_has_role('postgres', p.proowner, 'USAGE')
+ order by 1;
+```
+
+**After the deploy.** Three queries.
+
+**1. Functions and procedures in `public`.** Every one, with whether each role can run it.
+Expect no rows: AVP creates none (a search of the revisions and `apps/api/src` on 2026-10-03
+found no function, procedure, trigger, view or extension). A row with `from_extension` filled
+belongs to an extension, and a row whose `owner` is not `postgres` is not ours either. `true`
+in the two `can_execute` columns is Postgres's default grant of EXECUTE to every role, not a
+grant to `anon` or `authenticated` by name, and the revision leaves it alone. It matters only
+for a function that is there, and the Data API is off.
+
+```sql
+select p.oid::regprocedure                                       as routine,
+       pg_get_userbyid(p.proowner)                               as owner,
+       p.prosecdef                                               as security_definer,
+       has_function_privilege('anon', p.oid, 'EXECUTE')          as anon_can_execute,
+       has_function_privilege('authenticated', p.oid, 'EXECUTE') as authenticated_can_execute,
+       (select e.extname
+          from pg_depend d
+          join pg_extension e on e.oid = d.refobjid
+         where d.classid = 'pg_proc'::regclass and d.objid = p.oid
+           and d.deptype = 'e')                                  as from_extension
+  from pg_proc p
+ where p.pronamespace = 'public'::regnamespace
+ order by p.proname, p.oid;
+```
+
+**2. Privileges held by name.** Every privilege either role still holds on a table, view,
+sequence, column or routine in `public`, and every grant to PUBLIC on a relation or column
+(`kind` is `r` table, `v` view, `S` sequence, `column` or `routine`; `grantee` is `PUBLIC` for
+those). Expect no rows.
+
+```sql
+select c.relname::text as object, c.relkind::text as kind, null::name as column_name,
+       a.privilege_type, coalesce(r.rolname, 'PUBLIC') as grantee
+  from pg_class c
+ cross join lateral aclexplode(c.relacl) a
+  left join pg_roles r on r.oid = a.grantee
+ where c.relnamespace = 'public'::regnamespace
+   and (a.grantee = 0 or r.rolname in ('anon', 'authenticated'))
+union all
+select c.relname::text, 'column', att.attname, a.privilege_type, coalesce(r.rolname, 'PUBLIC')
+  from pg_attribute att
+  join pg_class c on c.oid = att.attrelid
+ cross join lateral aclexplode(att.attacl) a
+  left join pg_roles r on r.oid = a.grantee
+ where c.relnamespace = 'public'::regnamespace
+   and (a.grantee = 0 or r.rolname in ('anon', 'authenticated'))
+union all
+select p.oid::regprocedure::text, 'routine', null, a.privilege_type, r.rolname
+  from pg_proc p
+ cross join lateral aclexplode(p.proacl) a
+  join pg_roles r on r.oid = a.grantee
+ where p.pronamespace = 'public'::regnamespace
+   and r.rolname in ('anon', 'authenticated')
+ order by 1, 3, 4, 5;
+```
+
+**3. Default privileges.** Every default privilege that still names either role, for any
+owner role and any schema (`object_type` is `r` table, `S` sequence, `f` function). Expect no
+row with `owner_role` `postgres` whose `schema` is `public` or `(every schema)`. A row for
+another owner role, such as `supabase_admin`, may appear: the revision does not touch it, and
+Alembic creates nothing as that role.
+
+```sql
+select pg_get_userbyid(d.defaclrole) as owner_role,
+       case d.defaclnamespace when 0 then '(every schema)'
+            else d.defaclnamespace::regnamespace::text end as schema,
+       d.defaclobjtype::text as object_type,
+       a.privilege_type, r.rolname as grantee
+  from pg_default_acl d
+ cross join lateral aclexplode(d.defaclacl) a
+  join pg_roles r on r.oid = a.grantee
+ where r.rolname in ('anon', 'authenticated')
+ order by 1, 2, 3, 4, 5;
+```
+
+**Reading it.** Query 2 empty and no `postgres` row for `public` or `(every schema)` in query
+3: done. Anything else means a grant is back or the revision did not reach it. Say which row
+it is: the fix is a new revision, because a grant changed by hand is invisible to
+`alembic check`.
+
+- A table, view, sequence or routine still listed by query 2 is most likely one the
+  before-the-deploy query listed: the revision skipped it.
+- If query 3 still shows `postgres` rows for `public`, the likeliest cause is that the deploy
+  ran as a user that is neither `postgres` nor a member of it. The revision then skips that
+  step and logs a warning from `alembic.runtime.migration` that starts with
+  `revoke_data_api_grants`; search the deploy log for it. The server's own notice never
+  reaches the log.
+- A `postgres` row whose schema is `(every schema)` is a default that applies to every schema.
+  A per-schema revoke cannot remove it, so the revision leaves it; removing it takes a
+  revision of its own, and whether to write one is the founder's call.
+
+**Not covered:** `service_role`, the default privileges of any owner role other than
+`postgres` and the user the migrations run as, and PUBLIC's own default privileges. Whether
+the Data API is switched on is a dashboard setting; this check shows what the database would
+allow if it were.
