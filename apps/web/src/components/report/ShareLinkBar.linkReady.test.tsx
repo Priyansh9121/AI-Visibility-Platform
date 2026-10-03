@@ -50,6 +50,9 @@ const MINTED_STAMP = '20 Nov 2026, 10:00 UTC';
 const READY = `Link ready. It works until ${MINTED_STAMP}.`;
 const URL_ = 'https://app.example/share#TOKENSENTINEL0123456789';
 const FAILURE = 'The link could not be created. Try again.';
+// A press with a link live asks for it, and nothing is created, so its failure says it could not be
+// got (3.52). Everywhere here that a failed press has a link live before it, this is the sentence.
+const FAILURE_LIVE = 'We could not get the link. Try again.';
 const WITHDRAWN = 'Link withdrawn. It no longer opens this report.';
 const FAILED_LEAD = 'This scan failed, so its report cannot be shared.';
 let root: Root | null = null;
@@ -117,8 +120,17 @@ const loseFocus = () =>
     sink.remove();
   });
 
+// Get's label while a press is out: "Creating…" when there is no link to get, and "Getting the
+// link…" when one is live (3.52). The helper below is told which, so it can say the press is out.
+const BUSY = 'Creating…';
+const BUSY_LIVE = 'Getting the link…';
+
 /** Press Get with its request held open, lose focus as a browser does, then fail the request. */
-async function failedMint(el: HTMLElement, failure: unknown = new TypeError('Failed to fetch')) {
+async function failedMint(
+  el: HTMLElement,
+  failure: unknown = new TypeError('Failed to fetch'),
+  busy: string = BUSY,
+) {
   let fail!: (e: unknown) => void;
   shareLink.mockReturnValueOnce(new Promise((_, reject) => (fail = reject)));
   const get = button(el, 'Get shareable link')!;
@@ -127,7 +139,7 @@ async function failedMint(el: HTMLElement, failure: unknown = new TypeError('Fai
     get.click();
   });
   // Not vacuous: the request is out, Get is disabled, and focus is on <body>.
-  expect(button(el, 'Creating…')?.disabled).toBe(true);
+  expect(button(el, busy)?.disabled).toBe(true);
   loseFocus();
   expect(document.activeElement).toBe(document.body);
   await act(async () => fail(failure));
@@ -283,19 +295,27 @@ describe('the status region says the link is ready, and when it ends', () => {
     expect(el.textContent).not.toContain('—');
   });
 
-  it('stays while the link is on the bar: Copy and the Withdraw question leave it as it was', async () => {
+  // Was "...: Copy and the Withdraw question leave it as it was", with the region reading exactly the
+  // ready sentence after Copy. Since 3.52 a copy that worked adds its own sentence beside it
+  // ("Link copied.", in ShareLinkBar.wording.test.tsx), so what is held here is that the ready
+  // sentence is still there, unchanged, through Copy and through the Withdraw question.
+  it('stays while the link is on the bar: Copy adds its own sentence beside it, and the Withdraw question leaves both as they were', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
     try {
       shareLink.mockResolvedValue({ url: URL_, expiresAt: MINTED });
       const el = mounted();
       await press(el, 'Get shareable link');
+      const ready = [...status(el)!.querySelectorAll('p')].find((p) => p.textContent === READY);
+      expect(ready).toBeDefined();
       await press(el, 'Copy');
       expect(button(el, 'Copied')).toBeDefined();
-      expect(status(el)?.textContent).toBe(READY);
+      const sentences = () => [...status(el)!.querySelectorAll('p')].map((p) => p.textContent);
+      expect(sentences()).toEqual([READY, 'Link copied.']);
+      expect([...status(el)!.querySelectorAll('p')][0]).toBe(ready);
       act(() => button(el, 'Withdraw link')!.click());
       expect(el.textContent).toContain('Withdraw this link?');
-      expect(status(el)?.textContent).toBe(READY);
+      expect(sentences()).toEqual([READY, 'Link copied.']);
     } finally {
       delete (navigator as { clipboard?: unknown }).clipboard;
     }
@@ -346,7 +366,7 @@ describe('a mint that fails announces its failure as before, with no field to ta
     expect(el.querySelector('input')).toBeNull();
     expect(document.activeElement?.tagName).not.toBe('INPUT');
     expect(status(el)?.textContent).toBe('');
-    expect(alert(el)?.textContent).toBe(FAILURE);
+    expect(alert(el)?.textContent).toBe(FAILURE_LIVE);
     expect(el.textContent).toContain(`The link works until ${LIVE_STAMP}.`);
     expect(button(el, 'Withdraw link')).toBeDefined();
   });
@@ -402,9 +422,9 @@ describe('a mint that fails gives focus back to Get shareable link, so a retry i
 
   it('with a live link before it: focus is on Get shareable link, its line and Withdraw stay, and the key retries', async () => {
     const el = mounted({ shareExpiresAt: LIVE });
-    await failedMint(el);
+    await failedMint(el, undefined, BUSY_LIVE);
 
-    expect(alert(el)?.textContent).toBe(FAILURE);
+    expect(alert(el)?.textContent).toBe(FAILURE_LIVE);
     expect(document.activeElement).toBe(button(el, 'Get shareable link'));
     expect(el.textContent).toContain(`The link works until ${LIVE_STAMP}.`);
     expect(button(el, 'Withdraw link')).toBeDefined();
@@ -425,8 +445,9 @@ describe('a mint that fails gives focus back to Get shareable link, so a retry i
     // Not vacuous: the flag is set, so Withdraw link has focus.
     expect(document.activeElement).toBe(button(el, 'Withdraw link'));
 
-    await failedMint(el);
+    await failedMint(el, undefined, BUSY_LIVE);
 
+    expect(alert(el)?.textContent).toBe(FAILURE_LIVE);
     expect(document.activeElement).toBe(button(el, 'Get shareable link'));
     expect(document.activeElement).not.toBe(button(el, 'Withdraw link'));
   });
@@ -489,13 +510,13 @@ describe('Get shareable link is described by the failure of its own mint, so a s
 
   it('after a failed mint with a live link before it: Get is described by the failure sentence, which is the alert\'s own', async () => {
     const el = mounted({ shareExpiresAt: LIVE });
-    await failedMint(el);
+    await failedMint(el, undefined, BUSY_LIVE);
 
     const get = button(el, 'Get shareable link');
-    expect(description(get)).toBe(FAILURE);
+    expect(description(get)).toBe(FAILURE_LIVE);
     const id = get!.getAttribute('aria-describedby')!;
     expect(get!.ownerDocument.getElementById(id)?.closest('[role="alert"]')).toBe(alert(el));
-    expect(alert(el)?.textContent).toBe(FAILURE);
+    expect(alert(el)?.textContent).toBe(FAILURE_LIVE);
   });
 
   it.each<[string, unknown, string]>([
@@ -526,9 +547,9 @@ describe('Get shareable link is described by the failure of its own mint, so a s
   it('a withdraw failure that follows a mint failure takes the description away with the sentence', async () => {
     withdrawShareLink.mockRejectedValue(new TypeError('Failed to fetch'));
     const el = mounted({ shareExpiresAt: LIVE });
-    await failedMint(el);
+    await failedMint(el, undefined, BUSY_LIVE);
     // Not vacuous: the mint's failure was on the bar, and Get was described by it.
-    expect(description(button(el, 'Get shareable link'))).toBe(FAILURE);
+    expect(description(button(el, 'Get shareable link'))).toBe(FAILURE_LIVE);
 
     await confirmWithdraw(el);
 

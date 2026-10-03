@@ -23222,3 +23222,79 @@ The founder's standard: every sentence true, the same as 3.39. Each new sentence
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# The share bar says what is true of a link that is already live, and a copy is announced
+
+**2026-10-03, the eighteenth entry of the day; branch `pilot-fixes-4`, the founder's brief "search accuracy, guardrails and pilot hardening" (launch checklist 3.52).** One item, one commit.
+
+**Render: nothing to set. No endpoint, schema, dependency or outbound host change.** Web only: `ShareLinkBar.tsx`.
+
+Drift check (north-star §8): Layer 5, Distribution / Action (the share bar); lifecycle phase: Activation (Epic 9), the moment an agency gets the link it will send.
+
+## 1. What changed
+
+Since 3.28 a press of "Get shareable link" on a live link returns that link as it is. The bar still spoke as if it made one, and Copy changed only its button's name.
+
+- **The lead.** When the report loads with a live link, the lead read "Creates a link anyone can open without an account. …". It now reads "This report has a live link. Anyone with the link can open the report without an account. Links last 30 days from when they are created. Only share it with the client this report is about."
+  - With no link live it is unchanged.
+  - A press that returns the live link leaves the lead as it was, because any change to it would be read out on top of "Link ready".
+  - After the live link is withdrawn the lead goes back to "Creates a link…", as a NEW element (a key on whether a link was live to begin with). The change is not read out beside "Link withdrawn…", which already said what happened. A refusal keeps the key, so it is still announced.
+- **The busy label** on a press while a link is live is "Getting the link…", not "Creating…". With no link it stays "Creating…".
+- **A failed press** with a link live says "We could not get the link. Try again.", not that it could not be created. With no link it is unchanged. 3.33's focus stays: back to Get, which is described by the sentence.
+- **Copy:** a successful copy puts "Link copied." in a second visually hidden paragraph of the status region, which is now `aria-atomic="false"`.
+  - "Link ready. It works until …" is not read again.
+  - Each copy makes a new element, so a second copy is heard again.
+  - A refused copy says nothing, as before: the link is on screen and selectable.
+
+## 2. The review
+
+- **UI review (sonnet): FAIL on one Major, then PASS WITH NITS.**
+  - **The Major, fixed:** a failed press on a live link still said the link "could not be created".
+  - **Also taken:** the remount key on the lead, so a withdraw does not read the lead's change aloud beside "Link withdrawn…" (a Minor); and the plainer lead without "anyone with its address" (a Nit).
+  - **Left (Nit):** after a fresh mint the lead still says "Creates a link…" above the new link. It is true of the bar, and changing it would read the whole lead aloud on top of "Link ready".
+- **Checked clean:** the date still shows once (3.38); focus and selection after a mint (3.33); only `avp-visually-hidden` added; `aria-atomic="false"` overriding `role="status"`'s implicit atomic.
+
+## 3. In a browser: the founder's two checks
+
+These were verified, as the founder could not. The run used the real production build of the web app (`next build`, then `next start`) in Chromium. Every `/api/v1` call the pages made was answered from responses the real API produced: captured in-process by the suite's own fixtures against a test database (sign-up, a scored scan, the mint, the dashboard with one link, the withdraw, the dashboard again). No account was made on any running server. A recorder on the proxy target logged no server-side API call.
+
+- **(a) The link's date shows once.** After "Get shareable link", "02 Nov 2026, 12:44 UTC" (the API's `expiresAt`) is on screen exactly once, on "The link works until …". "Link ready. It works until …" is in the clipped status region. After Copy, the status region also holds "Link copied." and the date is still on screen once.
+  - Playwright's `is_visible()` and `innerText` both count clipped text, so the count walks the computed styles. Unhiding the status paragraph makes it 2, so the count can see a duplicate.
+- **(a2) A link live on load:** the new lead, the date once, and "Getting the link…" while a (delayed) press is in flight.
+- **(b) The dashboard's step goes dark after the only live link is withdrawn.**
+  - Before: "4/5, Four of five lit." with "Share a report" done ("Done: … One live link.", the lamp lit).
+  - The withdraw on the report page: the question, then "Link withdrawn. It no longer opens this report.".
+  - After: "3/5, Three of five lit." with the step to do ("To do: … Open a report and create its link.", the lamp dark).
+- **Screenshots:** `docs/screenshots/share-bar-2026-10-03/`, 13 bar and card crops, light and dark for (a). The token in the link field belongs to a test database that is now empty.
+
+## Found, not fixed
+
+- **A focused link field draws a ring inside a ring:** the global `input:focus-visible` shadow plus the field's own `:focus-within` ring. This is checklist 3.40, open.
+- **"Copied" does not go back to "Copy"** until the link changes, so "Link copied." stays in the status region as long. Pre-existing.
+- **Settings' invite link** (`SeatsPanel.tsx`, Copy link → Copied) has the same name-only pattern.
+- **No screen reader was run.** The structure is proven in jsdom and Chromium's accessibility tree, and the checklist's listening step stays the founder's.
+
+## Verified
+
+**Web vitest 1738 → 1781 (+43); floor raised to match.**
+- `ShareLinkBar.wording.test.tsx` (43): the lead per state, kept across a press and returned after a withdraw; the busy label per state; the failed-press sentence per state; the lead element kept across press, mint, Copy and a refusal and new after a withdraw; "Link copied." beside the untouched ready sentence, re-made on each copy; silence on a refused copy and with no clipboard; the date shown once in every state.
+- Updated in place for the new strings: `ShareLinkBar.linkReady.test.tsx` and `ShareLinkBar.liveLink.test.tsx`.
+- **Negative controls:**
+  - **On this tree:** with `ShareLinkBar.tsx` put back to the previous commit, 33 of the 165 of the five ShareLinkBar files' tests fail. Restored and checked with `cmp`.
+  - **The implementer's 18 single mutations** each failed at least one test. They covered:
+    - the lead or busy label stuck;
+    - no "Link copied." or no key on it;
+    - the region left atomic;
+    - the lead flipping on a press or stuck after a withdraw;
+    - the ready sentence drawn visibly (3.38);
+    - a refused copy announced;
+    - the live failed-press sentence wrong either way;
+    - the lead's key missing, following the state or flipping on a refusal.
+- **The rest of the bar** (this tree, one run):
+  - Counts: API 3284 (one test skipped on macOS as before), workers 26, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
