@@ -510,12 +510,49 @@ export interface FixCopy {
  * a fix list "correctly names those gaps with actionable language" — this table
  * is the deterministic floor that already meets it, before Epic 8's LLM pass
  * enriches it.
+ *
+ * Four entries say only what the audit read — launch checklist 3.49, 2026-10-03. They
+ * used to say more, and each was untrue of a case that carries its code:
+ *
+ *  - `ROBOTS_TXT_DISALLOW`: "nothing else on this list can take effect", and a title that
+ *    named "the crawlers that build AI answers". The check reads one robots.txt group, the
+ *    one for all crawlers, for a `Disallow: /` line (`technical_audit._fetch_side_files`);
+ *    it ignores Allow lines and every named crawler's group, so a crawler may be let in,
+ *    or an AI crawler may have a group of its own, and the finding still stands. The code
+ *    reaches this list on a read audit, where the crawler was let in despite the rule, and
+ *    on one where robots.txt kept the crawler off the page (`_robots_refused_checks`), so
+ *    the sentences say what the rule asks and never whether our crawler got in. The title
+ *    names the `User-agent: *` group and not "all crawlers": a crawler with a group of its
+ *    own ignores the `*` group (RFC 9309), so "the rules for all crawlers" was not strictly
+ *    true either.
+ *  - `NO_DATE_SIGNAL_AVAILABLE`: "anywhere on the page". The audit reads the page's
+ *    Last-Modified header and the datePublished and dateModified in its JSON-LD, and no
+ *    date printed on the page.
+ *  - `CONTENT_STALE`: "publish a visible updated date", and "Freshness is one of the few
+ *    signals available for judging whether an answer is still current". The audit takes the
+ *    newest of the page's Last-Modified header and the datePublished and dateModified in its
+ *    JSON-LD (`audit_site`), and calls the page stale when that is more than 180 days old
+ *    (`build_checks`: a warning to 365 days, a failure after). A date printed on the page is
+ *    not read, so publishing one would not clear the finding; and nothing the audit measures
+ *    supports a claim about which signals are available for judging an answer.
+ *  - `NO_ORGANIZATION_OR_LOCALBUSINESS`: "Nothing on the page states … what this
+ *    organisation is". The check matches eight schema.org type names
+ *    (`technical_audit.TRACKED_SCHEMA`), so a page marked up as `ProfessionalService` does
+ *    state what it is and still fails. The sentence that said what the markup is for went
+ *    too: nothing the audit measures supports it.
+ *
+ * `report_narrative.py` carries the same four, word for word, and the PDF prints that
+ * copy. No shared fixture holds these codes (`report-copy.json` has no detail-code table
+ * and `report-cases.json` carries only `NO_FAQ_SCHEMA` and `NO_PRODUCT_OR_SERVICE_SCHEMA`),
+ * so what holds the two together is `auditFixWording.test.ts` here, which reads the API's
+ * table back and compares it with this one, and `test_audit_fix_wording.py` there, which
+ * pins the text and runs each sentence's claims against the audit.
  */
 export const FIX_FOR_DETAIL_CODE: Record<string, FixCopy> = {
   ROBOTS_TXT_DISALLOW: {
-    title: 'Stop robots.txt from blocking the crawlers that build AI answers',
+    title: 'Remove Disallow: / from the User-agent: * rules in robots.txt',
     detail:
-      'The site currently tells crawlers to stay out. Until that is lifted, nothing else on this list can take effect — an answer engine cannot cite a page it is not allowed to read.',
+      'The audit found a Disallow: / rule under User-agent: * in the site’s robots.txt. That rule asks crawlers that have no rule of their own to stay out of the whole site, except where another rule lets them in. A crawler that obeys it does not read the pages it covers. Removing it, or narrowing it to the paths that should stay private, clears this finding.',
     effort: 'S',
   },
   META_ROBOTS_NOINDEX: {
@@ -551,7 +588,7 @@ export const FIX_FOR_DETAIL_CODE: Record<string, FixCopy> = {
   NO_ORGANIZATION_OR_LOCALBUSINESS: {
     title: 'Add Organization or LocalBusiness schema to the homepage',
     detail:
-      'Nothing on the page states, in machine-readable form, what this organisation is. This is the entity marker the rest of the structured data hangs off.',
+      'The audit found none of Organization, Corporation, OnlineBusiness, LocalBusiness, Dentist, Restaurant, Store or MedicalBusiness in the audited page’s JSON-LD or microdata. Adding Organization or LocalBusiness markup to the homepage clears this finding.',
     effort: 'S',
   },
   NO_FAQ_SCHEMA: {
@@ -595,15 +632,15 @@ export const FIX_FOR_DETAIL_CODE: Record<string, FixCopy> = {
     effort: 'S',
   },
   CONTENT_STALE: {
-    title: 'Refresh the audited page and publish a visible updated date',
+    title: 'Refresh the audited page and publish an updated dateModified in its JSON-LD',
     detail:
-      'The most recent date signal on this page is old. Freshness is one of the few signals available for judging whether an answer is still current.',
+      'The newest date the audit read from the audited page, in its Last-Modified header or in a datePublished or dateModified in its JSON-LD, is more than 180 days old. Dates printed on the page are not read. Once the page is refreshed, a dateModified from the last 180 days in the JSON-LD (YYYY-MM-DD), or a Last-Modified header that recent, clears this finding.',
     effort: 'M',
   },
   NO_DATE_SIGNAL_AVAILABLE: {
     title: 'Publish machine-readable dates on the main pages',
     detail:
-      'No date could be found anywhere on the page, so its freshness cannot be established either way. A dateModified in the structured data fixes this.',
+      'The audit read no date from the audited page’s Last-Modified header or from a datePublished or dateModified in its JSON-LD, so it cannot tell whether the page is fresh or stale. Dates printed on the page are not read. A dateModified in the JSON-LD (YYYY-MM-DD), or a Last-Modified header from the server, gives the audit a date to read.',
     effort: 'S',
   },
 };

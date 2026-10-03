@@ -11,14 +11,15 @@
 
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { BEAT_SEQUENCE } from '@avp/design-system';
+import { BEAT_SEQUENCE, layoutLedger } from '@avp/design-system';
 import { ReportView } from './ReportView';
 import type { Report } from '@avp/shared-types';
-import { deriveNarrative } from '@/lib/report/derive';
+import { deriveNarrative, toLedgerDimensions } from '@/lib/report/derive';
 import {
   AUDIT_FAILURE_GENERIC,
   AUDIT_FAILURE_SENTENCE,
   EXCLUSION_REASON,
+  FIX_FOR_DETAIL_CODE,
   ROBOTS_UNREACHABLE_ADVICE,
   ROBOTS_UNREACHABLE_SENTENCE,
   auditFailureSentence,
@@ -384,6 +385,44 @@ describe('facts-only: the rendered page carries facts only', () => {
   });
 });
 
+/**
+ * Reports built from the fixtures for launch checklist 3.49's fix-beat sentences: a list with no
+ * point figure, a list of one, and a list the wording was generated for. Gaps are
+ * `weight x (100 - subscore) / 100`, so a subscore of 99 leaves every dimension under the 2 points
+ * a fix needs, and 100 leaves none.
+ */
+type Findings = NonNullable<Report['audit']>['findings'];
+const finding = (checkKey: string, status: string, detailCode: string) =>
+  ({ id: `tchk_${checkKey}`, checkKey, status, value: null, detailCode }) as Findings[number];
+const withFindings = (base: Report, findings: Findings): Report => ({
+  ...base,
+  audit: { ...base.audit!, findings },
+});
+const withoutUnclaimedDomain = (base: Report): Report => ({
+  ...base,
+  proof: { ...base.proof!, unclaimedCitedDomains: [] },
+});
+const withSubscores = (base: Report, subscores: Record<string, string>): Report => ({
+  ...base,
+  dimensions: base.dimensions.map((d) => {
+    const subscore = subscores[d.key];
+    return subscore === undefined ? d : { ...d, subscore };
+  }),
+});
+const ALL_NEARLY_LIT = {
+  mention_rate: '99.00',
+  share_of_voice: '99.00',
+  citation_strength: '99.00',
+  sentiment: '99.00',
+  technical_foundation: '99.00',
+};
+/** Scored, but every gap is under 2 points: the fix list is the audit's findings and the citation. */
+const scoredWithNoGapToFix = withSubscores(helpscoutReport, ALL_NEARLY_LIT);
+/** One fix with a figure, and nothing else: the citation gap, no findings, no unclaimed domain. */
+const oneGapOnly = withoutUnclaimedDomain(
+  withFindings(withSubscores(helpscoutReport, { share_of_voice: '100.00', sentiment: '100.00' }), []),
+);
+
 describe('the fix beat with Epic 8 generated copy', () => {
   const html = render(generatedFixesReport);
 
@@ -427,6 +466,59 @@ describe('the fix beat with Epic 8 generated copy', () => {
 
   it('says the wording was generated and the arithmetic was not', () => {
     expect(html).toContain('written for this scan from its own figures');
+  });
+
+  it('says what the wording did not change: which changes appear, their order and the points are computed, not written — launch checklist 3.49', () => {
+    // It used to call all three "unchanged arithmetic — the same gap calculation that drew the
+    // chart", and then said the points came "by the same gap calculation" as well: the paragraph
+    // above it already says where the points come from. Only the points are the gap calculation:
+    // the order puts a fix for a noindex tag, a Disallow: / rule or a missing robots.txt first and
+    // sorts the fixes with no figure by id, and which changes appear follows rules (a cap, the
+    // audit's findings, the unclaimed domain). The PDF says the same (`test_report_pdf.py`).
+    expect(html).toContain(
+      'Which changes appear, their order, and the points beside them are computed, not written.',
+    );
+    expect(html).not.toContain('computed, not written, the points by');
+    expect(html).not.toContain('unchanged arithmetic');
+  });
+
+  it('says only what is on the page: with no point figure there are no points beside the changes', () => {
+    // The wording is generated for the audit's findings too, so a list with no figure can carry it.
+    const report = withSubscores(generatedFixesReport, ALL_NEARLY_LIT);
+    const fixes = deriveNarrative(report).fixes;
+    expect(fixes.some((f) => f.generated)).toBe(true);
+    expect(fixes.every((f) => f.pointsUpside === undefined)).toBe(true);
+    const page = render(report);
+    expect(page).toContain('Which changes appear and their order are computed, not written.');
+    expect(page).not.toContain('the points beside them');
+  });
+
+  it('is true of the list: the wording lies over the derived list and moves no change, no order and no figure', () => {
+    const derived = deriveNarrative({ ...generatedFixesReport, actionItems: [] }).fixes;
+    const worded = deriveNarrative(generatedFixesReport).fixes;
+    expect(worded.some((f) => f.generated)).toBe(true);
+    expect(derived.some((f) => f.generated)).toBe(false);
+    expect(worded.map((f) => [f.id, f.source, f.pointsUpside])).toEqual(
+      derived.map((f) => [f.id, f.source, f.pointsUpside]),
+    );
+    // And the figures are the chart's own: each gap fix carries its segment's gap, from the design
+    // system's `layoutLedger`, the function that draws the chart.
+    const chart = new Map(
+      layoutLedger(toLedgerDimensions(generatedFixesReport.dimensions)).segments.map((s) => [s.key, s.gap]),
+    );
+    const gapFixes = worded.filter((f) => f.source === 'gap');
+    expect(gapFixes.length).toBeGreaterThan(0);
+    for (const fix of gapFixes) {
+      const gap = chart.get(fix.id.replace('gap:', ''));
+      expect(gap, fix.id).toBeDefined();
+      expect(fix.pointsUpside, fix.id).toBe(Math.round(gap! * 10) / 10);
+    }
+  });
+
+  it('says it only when some wording was generated', () => {
+    for (const report of [helpscoutReport, crawlDisallowedReport]) {
+      expect(render(report)).not.toContain('computed, not written');
+    }
   });
 
   it('uses no off-system colour value', () => {
@@ -872,8 +964,196 @@ describe('a site whose robots.txt keeps the crawler out — 2026-09-29', () => {
     ]);
   });
 
+  it('words the blanket rule as what the file says: not the crawlers that build AI answers shut out, and not the rest of the list void — launch checklist 3.49', () => {
+    // The fix reads as the audit found it, on a report whose crawler was kept out and so
+    // on one it was let into: it says what the rule asks and never whether we got in.
+    const fix = FIX_FOR_DETAIL_CODE.ROBOTS_TXT_DISALLOW!;
+    expect(html).toContain(fix.title);
+    expect(html).toContain(fix.detail);
+    expect(html).toContain('The audit found a Disallow: / rule under User-agent: * in the site’s robots.txt.');
+    for (const phrase of [
+      'nothing else on this list',
+      'can take effect',
+      'tells crawlers to stay out',
+      'cannot cite',
+      'crawlers that build AI answers',
+    ]) {
+      expect(html, phrase).not.toContain(phrase);
+    }
+  });
+
   it('a failed crawl is still worded as one', () => {
     expect(render(failedAuditReport)).toContain('The site could not be read');
+  });
+});
+
+describe('the fix beat says how it is ordered, and is ordered that way — launch checklist 3.49', () => {
+  // `derive.ts` sorts a finding on the `indexable` or `robots_txt_present` check first, then the
+  // fixes with a point figure, largest first, then the rest, by id. The lead used to say only
+  // "Ordered by the points each one recovers", which is untrue of the first. It says the first rule
+  // only when the list has a fix it applies to, so a report that never read the site, or whose
+  // address is not public, still never mentions robots.txt; and it says nothing of a ranking by
+  // points, or of where the points come from, when no fix in the list has a point figure.
+  // `derive.test.ts` holds the order on synthetic findings; this holds the sentences and the
+  // order as the page draws them.
+  const LEAD_WITH_A_PROMOTED_FIX =
+    'Ordered by the points each one recovers, not by how quickly it can be done. The exception is a fix for a noindex tag, a Disallow: / rule in robots.txt or a missing robots.txt, which comes first. Changes with no point figure follow those that have one.';
+  const LEAD_WITHOUT =
+    'Ordered by the points each one recovers, not by how quickly it can be done. Changes with no point figure follow those that have one.';
+  const LEAD_NO_FIGURES =
+    'None of these changes has a point figure, so none is ranked by the points it recovers.';
+  const LEAD_NO_FIGURES_PROMOTED = `${LEAD_NO_FIGURES} A fix for a noindex tag, a Disallow: / rule in robots.txt or a missing robots.txt is listed first.`;
+  const POINT_FIGURES =
+    'The point figures come from the same arithmetic that drew the chart above: a dimension’s gap is its weight multiplied by how far short of 100 it scored.';
+  const publicRender = (report: Parameters<typeof render>[0]) =>
+    renderToStaticMarkup(<ReportView report={report} animate={false} publicView />);
+  const titlesInOrder = (html: string, report: Report) => {
+    const positions = deriveNarrative(report).fixes.map((f) => html.indexOf(f.title));
+    expect(positions.every((position) => position >= 0)).toBe(true);
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
+  };
+
+  it('says the exception when the list has a fix it applies to, signed in and public', () => {
+    expect(deriveNarrative(crawlDisallowedReport).fixes.map((f) => f.id)).toContain('audit:indexable');
+    for (const html of [render(crawlDisallowedReport), publicRender(crawlDisallowedReport)]) {
+      expect(html).toContain(LEAD_WITH_A_PROMOTED_FIX);
+      expect(html).toContain(POINT_FIGURES);
+      expect(html).not.toContain(LEAD_WITHOUT);
+    }
+  });
+
+  it('does not say it when the list has none, so robots.txt is not mentioned for no reason', () => {
+    // The reports below have fixes (gaps, or the citation) and no finding on either check.
+    for (const report of [helpscoutReport, addressNotPublicReport, robotsUnreachableReport]) {
+      const ids = deriveNarrative(report).fixes.map((f) => f.id);
+      expect(ids, 'a list with a fix beat').not.toEqual([]);
+      expect(ids).not.toContain('audit:indexable');
+      expect(ids).not.toContain('audit:robots_txt_present');
+      for (const html of [render(report), publicRender(report)]) {
+        expect(html).toContain(LEAD_WITHOUT);
+        expect(html).toContain(POINT_FIGURES);
+        expect(html).not.toContain('a Disallow: / rule in robots.txt');
+      }
+    }
+  });
+
+  it('no longer says the order is by points alone, or splices the exception into one sentence', () => {
+    for (const report of [helpscoutReport, crawlDisallowedReport]) {
+      const html = render(report);
+      expect(html).not.toContain('how quickly it can be done. The point figures');
+      expect(html).not.toContain('can be done, except that a fix for');
+      expect(html).not.toContain('After it, changes with no point figure');
+    }
+  });
+
+  it('draws the fixes in that order: the promoted one first, though it carries no figure', () => {
+    const html = render(crawlDisallowedReport);
+    const fixes = deriveNarrative(crawlDisallowedReport).fixes;
+    expect(fixes[0]!.id).toBe('audit:indexable');
+    expect(fixes[0]!.pointsUpside).toBeUndefined();
+    titlesInOrder(html, crawlDisallowedReport);
+    // After it: every fix with a figure, then every fix without one, and none the other way round.
+    const rest = fixes.slice(1);
+    const firstWithout = rest.findIndex((f) => f.pointsUpside === undefined);
+    expect(firstWithout).toBeGreaterThan(0);
+    expect(rest.slice(firstWithout).every((f) => f.pointsUpside === undefined)).toBe(true);
+    const figures = rest.slice(0, firstWithout).map((f) => f.pointsUpside!);
+    expect(figures).toEqual([...figures].sort((a, b) => b - a));
+  });
+
+  describe('a list where no fix has a point figure', () => {
+    // An unscored report, and a scored one whose gaps are all under 2 points: the lead has no
+    // ranking by points to describe, and no point figures to say the origin of.
+    const reports: [string, Report][] = [
+      ['an unscored report', unscoredReport],
+      ['a scored report with no gap to fix', scoredWithNoGapToFix],
+    ];
+
+    it.each(reports)('%s says so, and describes neither a ranking by points nor point figures', (_name, report) => {
+      const fixes = deriveNarrative(report).fixes;
+      expect(fixes.length).toBeGreaterThan(0);
+      expect(fixes.every((f) => f.pointsUpside === undefined)).toBe(true);
+      for (const html of [render(report), publicRender(report)]) {
+        expect(html).toContain(LEAD_NO_FIGURES);
+        expect(html).not.toContain(LEAD_NO_FIGURES_PROMOTED);
+        expect(html).not.toContain('Ordered by the points each one recovers');
+        expect(html).not.toContain('The point figures come from');
+        expect(html).not.toContain('a Disallow: / rule in robots.txt');
+        // What it says of the audit's fixes does not depend on there being figures.
+        expect(html).toContain('Fixes drawn from the technical audit name the exact check that did not pass.');
+      }
+    });
+
+    it('lists the audit’s fixes by check, then the citation fix, and says no more of the order', () => {
+      expect(deriveNarrative(unscoredReport).fixes.map((f) => f.id)).toEqual([
+        'audit:schema_faq',
+        'audit:schema_product_or_service',
+        'citation:eesel.ai',
+      ]);
+      titlesInOrder(render(unscoredReport), unscoredReport);
+    });
+
+    it('says a promoted fix is listed first, and the rest follow by check', () => {
+      // `audit:canonical_present` sorts before `audit:indexable`, and still comes after it.
+      const report = withFindings(unscoredReport, [
+        finding('canonical_present', 'warn', 'NO_CANONICAL_LINK'),
+        finding('indexable', 'fail', 'ROBOTS_TXT_DISALLOW'),
+        ...unscoredReport.audit!.findings,
+      ]);
+      expect(deriveNarrative(report).fixes.map((f) => f.id)).toEqual([
+        'audit:indexable',
+        'audit:canonical_present',
+        'audit:schema_faq',
+        'audit:schema_product_or_service',
+        'citation:eesel.ai',
+      ]);
+      for (const html of [render(report), publicRender(report)]) {
+        expect(html).toContain(LEAD_NO_FIGURES_PROMOTED);
+        expect(html).not.toContain('Ordered by the points each one recovers');
+        expect(html).not.toContain('The point figures come from');
+      }
+      titlesInOrder(render(report), report);
+    });
+
+    it('is not a failed scan’s report, which has no fix list to lead', () => {
+      expect(deriveNarrative(failedScanReport).fixes).toEqual([]);
+      const html = render(failedScanReport);
+      expect(html).not.toContain(LEAD_NO_FIGURES);
+      expect(html).not.toContain('Ordered by the points each one recovers');
+    });
+  });
+
+  describe('the heading counts its changes, and says whose they are', () => {
+    // "1 changes" was wrong, and "specific changes the audit named" was untrue of a list that is
+    // only the citation fix, which is not an audit finding. The PDF's heading is the same words
+    // (`test_report_pdf.py`).
+    it('says "change" for one and "changes" for more, with and without points', () => {
+      expect(render(helpscoutReport)).toContain('6 changes, worth 40.6 points.');
+      expect(deriveNarrative(oneGapOnly).fixes.map((f) => f.id)).toEqual(['gap:citation_strength']);
+      expect(render(oneGapOnly)).toContain('1 change, worth 19.3 points.');
+      expect(render(unscoredReport)).toContain('3 specific changes from this scan.');
+      const oneFinding = withoutUnclaimedDomain(
+        withFindings(unscoredReport, [finding('canonical_present', 'warn', 'NO_CANONICAL_LINK')]),
+      );
+      expect(deriveNarrative(oneFinding).fixes.map((f) => f.id)).toEqual(['audit:canonical_present']);
+      expect(render(oneFinding)).toContain('1 specific change from this scan.');
+    });
+
+    it('is true of a list that is only the citation fix', () => {
+      const citationOnly = withFindings(unscoredReport, []);
+      expect(deriveNarrative(citationOnly).fixes.map((f) => f.id)).toEqual(['citation:eesel.ai']);
+      expect(render(citationOnly)).toContain('1 specific change from this scan.');
+    });
+
+    it('never says "1 changes", "1 specific changes" or "the audit named"', () => {
+      for (const report of [helpscoutReport, oneGapOnly, unscoredReport, scoredWithNoGapToFix, withFindings(unscoredReport, [])]) {
+        for (const html of [render(report), publicRender(report)]) {
+          expect(html).not.toContain('1 changes');
+          expect(html).not.toContain('1 specific changes');
+          expect(html).not.toContain('the audit named');
+        }
+      }
+    });
   });
 });
 

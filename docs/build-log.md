@@ -23131,3 +23131,94 @@ Drift check (north-star §8): Layer 1, Delivery (what the report says about a sc
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# The fix list, the PDF and the Technical screen say only what the audit read about robots.txt, the organisation markup and dates
+
+**2026-10-03, the seventeenth entry of the day; branch `pilot-fixes-4`, the founder's brief "search accuracy, guardrails and pilot hardening" (launch checklist 3.49).** One item, one commit.
+
+**Render: nothing to set. No endpoint, schema, dependency or outbound host change.** Report copy changes on screen and in the PDF, and on the client Technical screen.
+
+Drift check (north-star §8): Layer 4, Prescription (the fix list), and the Layer 1 surfaces that print it; lifecycle phase: Activation (Epic 9), the report a pilot sends.
+
+## 1. What changed
+
+The founder's standard: every sentence true, the same as 3.39. Each new sentence was checked by running `services/technical_audit.py`'s own functions, not only by reading them; those runs are now tests.
+
+- **`ROBOTS_TXT_DISALLOW`** (the fix table in `strings.ts` and `report_narrative.py`, and the PDF):
+  - **Title:** "Stop robots.txt from blocking the crawlers that build AI answers" → "Remove Disallow: / from the User-agent: * rules in robots.txt".
+  - **Detail:** "… Until that is lifted, nothing else on this list can take effect …" → "The audit found a Disallow: / rule under User-agent: * in the site's robots.txt. That rule asks crawlers that have no rule of their own to stay out of the whole site, except where another rule lets them in. A crawler that obeys it does not read the pages it covers. Removing it, or narrowing it to the paths that should stay private, clears this finding."
+  - **Why:** the check reads only the `*` group's `Disallow: /` lines. It ignores Allow lines and every named crawler's group, so a site that admits an AI crawler by name is still flagged.
+  - The finding also reaches reports where our crawler was let in and read the page, so the rest of the list could take effect.
+- **`NO_ORGANIZATION_OR_LOCALBUSINESS`:** "Nothing on the page states, in machine-readable form, what this organisation is …" → "The audit found none of Organization, Corporation, OnlineBusiness, LocalBusiness, Dentist, Restaurant, Store or MedicalBusiness in the audited page's JSON-LD or microdata. Adding Organization or LocalBusiness markup to the homepage clears this finding."
+  - A page marked up as `ProfessionalService` does state what it is, and still fails.
+  - A test runs the remedy through `build_checks`: fail before, pass after.
+- **`NO_DATE_SIGNAL_AVAILABLE`:** "No date could be found anywhere on the page …" → the audit read no date from the page's Last-Modified header or a JSON-LD `datePublished`/`dateModified`; dates printed on the page are not read; a JSON-LD `dateModified` (YYYY-MM-DD) or a Last-Modified header gives it one.
+  - This fix cannot reach a report's list today: the check is `not_applicable` whenever it carries this code. The copy is made true anyway.
+- **`CONTENT_STALE`,** found by the review: its title told the reader to "publish a visible updated date", which the audit cannot read. The new copy:
+  - **Title:** "Refresh the audited page and publish an updated dateModified in its JSON-LD".
+  - **Detail:** it states the real rule. The newest of the header and JSON-LD dates is more than 180 days old (a warning to 365 days, a failure after). Dates printed on the page are not read. A JSON-LD `dateModified` or a Last-Modified header from the last 180 days clears it.
+- **The Technical screen** (`apps/web/src/lib/client/technical.ts`):
+  - **The "Not in this score" card** said "The site publishes no date signal at all". The audit reads one page, so it now says what the audit read and that printed dates are not. It names the component the screen shows, "Content Freshness", whose weight was shared across the others: proven by scoring a page with no date (30/20/25 become 40.00/26.67/33.33).
+  - **The date check's sentence** said "structured data" where only JSON-LD is read.
+- **The fix list's own sentences** (`ReportView.tsx`, and the PDF where it has a twin):
+  - **The lead** said "Ordered by the points each one recovers" though the sort puts a noindex tag, a `Disallow: /` rule or a missing robots.txt first (`derive.ts`, `BLOCKING_FIX_IDS`, now exported). The old robots detail had been the only explanation.
+    - It now names that exception, and only when such a fix is in the list, so a site whose robots.txt was never read is never told about it.
+    - When no fix has a point figure (an unscored report, or all gaps under 2 points), it says "None of these changes has a point figure, so none is ranked by the points it recovers." and does not explain point figures that are not there.
+  - **The generated-wording note** said the order was "the same gap calculation that drew the chart". It now says "Which changes appear, their order, and the points beside them are computed, not written." (without "and the points beside them" when there are none). A test proves the order and the points do not move when wording is generated.
+  - **The heading** said "1 changes" and "N specific changes the audit named" (untrue of a list holding the citation fix, which is not an audit finding). It now reads "1 change" and "N specific changes from this scan", on screen and in the PDF.
+- **Comments only:** five developer comments that restated "nothing else on the list can take effect" (`report_narrative.py`, `derive.ts`, `fix_generator.py`, and two tests), and two in `technical_audit.py`. A check proves that module's code is unchanged apart from comments and docstrings.
+- **Parity.** No shared fixture held these codes, so `auditFixWording.test.ts` reads the API's table out of `report_narrative.py` and compares all 16 entries with `strings.ts`. `test_audit_fix_wording.py` pins the text and runs each claim against the audit. The eight type names are read back from `TRACKED_SCHEMA` on both sides, so widening that check (3.48) fails both suites until the copy follows.
+
+## 2. The review
+
+- **UI review (sonnet), three passes: PASS WITH NITS**, no Blocker or Major.
+- **Taken:**
+  - the robots title naming the `User-agent: *` group;
+  - `CONTENT_STALE`;
+  - "clears this finding" for the entity fix;
+  - the Technical card in one voice;
+  - the lead's exception, conditional, split in two, and the no-figure case;
+  - the generated-wording note;
+  - the heading's singular and "from this scan";
+  - the comments.
+- Each pass checked every new sentence against `technical_audit.py` and `derive.ts`: the 180 and 365-day thresholds, the newest-date rule, the blocking ids and the sort, and the `enrich` overlay.
+
+## Found, not fixed
+
+- **The landing page and the pricing card claim an ordering the code does not use:** "specific changes ordered by what they would move and what they would cost to do" (`LandingView.tsx`) and "Named fixes, ordered by what they would move and what they would cost you" (`PricingCard.tsx`). The order is by points; effort is shown, never sorted on. Proposed: "…ordered by the points each would recover, with the effort of each shown beside it." Marketing copy is the founder's to change.
+- **The fix generator's model inputs** still say that something which blocks the others outranks something worth more points (`SYSTEM_PROMPT` and the `priority` field description in `fix_generator.py`). That invites generated wording like "this blocks everything else". Changing model input is the founder's call.
+- **Checks that look wrong, not copy** (scoring inputs, so a `FORMULA_VERSION` question, with 3.48):
+  - the blanket robots check ignores Allow lines and reads only the start host's file;
+  - the entity check misses an IRI-form `@type` (`https://schema.org/Organization`);
+  - the fix list puts a missing robots.txt (a warning, which blocks nothing) above every measured gap.
+- **Three other fix entries carry softer versions of the same pattern** and were not in the item: `META_ROBOTS_NOINDEX`, `MULTIPLE_H1` ("Several competing", where the check fires at two) and `NO_PRODUCT_OR_SERVICE_SCHEMA`.
+
+## Verified
+
+**API pytest 3235 → 3284 (+49) and web vitest 1708 → 1738 (+30); floors raised to match.** One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **New tests:**
+  - `tests/test_audit_fix_wording.py` (39): the four entries pinned character for character; the claims run against the audit (eight robots.txt bodies, dated JSON-LD and Last-Modified, 180 passing and 181 stale, the page read containing no date reader, the entity remedy clearing the finding, the weight shared); the eight types read back; the order the lead describes.
+  - `tests/test_report_pdf.py` (+10): each entry's PDF text, with none of the old phrases and no code; the PDF heading's five cases.
+  - Web: `auditFixWording.test.ts` (the 16-entry parity, the types read back); `ReportView.test.tsx`, `technical.test.ts`, `ClientTechnicalView.test.tsx` and `derive.test.ts` (the new sentences per state, the lead's variants, the order, the heading, the note).
+- **Negative controls:**
+  - **On this tree:** with the eight source files put back to the previous commit, 18 API and 25 web tests fail. Restored and checked with `cmp`.
+  - **The implementer's controls,** over five rounds, each restored and checked:
+    - each old sentence put back on one side only, caught by its pin or by parity;
+    - a ninth entity type;
+    - the page read made to read `<time datetime>`;
+    - the robots check made to honour Allow lines;
+    - the stale threshold moved;
+    - newest-date replaced by oldest;
+    - a missing date scored as zero;
+    - promotion dropped from either sort;
+    - the lead always plain or always the exception;
+    - the singular heading and "the audit named" put back on each side;
+    - the note claiming points with none.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 26, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

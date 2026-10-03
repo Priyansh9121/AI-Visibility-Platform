@@ -45,7 +45,7 @@ import type { CSSProperties } from 'react';
 import type { ReactNode } from 'react';
 import type { Report, ReportCompetitorSet } from '@avp/shared-types';
 import { ArrowRight, Bot, Building2, CalendarDays, Globe, MessageSquare } from 'lucide-react';
-import { deriveNarrative, gapHeading, scoreHeading } from '@/lib/report/derive';
+import { BLOCKING_FIX_IDS, deriveNarrative, gapHeading, scoreHeading } from '@/lib/report/derive';
 import { scanOutcomeSentence } from '@/lib/scans/scanOutcome';
 import {
   DEGRADATION_FLAG,
@@ -1236,14 +1236,19 @@ function FixBeat({ report, narrative }: { report: Report; narrative: Narrative }
     );
   }
 
+  // Some fixes have a point figure and some do not; a list where none does (an unscored report,
+  // a scored one whose gaps are all under 2 points) has no figure for these sentences to describe.
+  const figures = narrative.fixes.some((fix) => fix.pointsUpside !== undefined);
+
   return (
     <Beat id="fix" heading={fixHeading(narrative)}>
       <Prose>
         <p>
-          Ordered by the points each one recovers, not by how quickly it can be done. The point
-          figures come from the same arithmetic that drew the chart above: a dimension&rsquo;s gap
-          is its weight multiplied by how far short of 100 it scored. Fixes drawn from the
-          technical audit name the exact check that did not pass.
+          {fixOrderSentence(narrative, figures)}
+          {figures
+            ? ' The point figures come from the same arithmetic that drew the chart above: a dimension’s gap is its weight multiplied by how far short of 100 it scored.'
+            : ''}{' '}
+          Fixes drawn from the technical audit name the exact check that did not pass.
         </p>
       </Prose>
       <div className="mt-5">
@@ -1273,20 +1278,51 @@ function FixBeat({ report, narrative }: { report: Report; narrative: Narrative }
           {narrative.fixes.every((f) => f.generated)
             ? 'The wording, priority and effort above were written for this scan from its own figures.'
             : 'Where a change was drawn from a measured gap or an audit finding, its wording, priority and effort were written for this scan from its own figures.'}{' '}
-          Which changes appear, their order, and the points beside them are unchanged arithmetic
-          &mdash; the same gap calculation that drew the chart.
+          {figures
+            ? 'Which changes appear, their order, and the points beside them are computed, not written.'
+            : 'Which changes appear and their order are computed, not written.'}
         </p>
       )}
     </Beat>
   );
 }
 
+/**
+ * How the fix list is ordered, in words true of this list (launch checklist 3.49).
+ *
+ * `deriveFixes` sorts a finding on the `indexable` or `robots_txt_present` check first, whatever
+ * its points, then the fixes that carry a point figure, largest first, then those that do not, by
+ * id: the audit's by check, then the citation fix. The first rule is said only when the list has
+ * a fix it applies to: a report whose crawler could not read the site, or whose address is not
+ * public, never mentions robots.txt here. A list where no fix has a point figure (an unscored
+ * report, or a scored one whose gaps are all under 2 points) says so, and does not describe a
+ * ranking by points. It says nothing of the order beyond the first rule: the rest is by id, the
+ * audit's checks in alphabetical order, then the citation fix.
+ */
+function fixOrderSentence(narrative: Narrative, figures: boolean): string {
+  const promoted = narrative.fixes.some((fix) => BLOCKING_FIX_IDS.includes(fix.id));
+  if (!figures) {
+    return promoted
+      ? 'None of these changes has a point figure, so none is ranked by the points it recovers. A fix for a noindex tag, a Disallow: / rule in robots.txt or a missing robots.txt is listed first.'
+      : 'None of these changes has a point figure, so none is ranked by the points it recovers.';
+  }
+  return promoted
+    ? 'Ordered by the points each one recovers, not by how quickly it can be done. The exception is a fix for a noindex tag, a Disallow: / rule in robots.txt or a missing robots.txt, which comes first. Changes with no point figure follow those that have one.'
+    : 'Ordered by the points each one recovers, not by how quickly it can be done. Changes with no point figure follow those that have one.';
+}
+
+/**
+ * The fix list's heading. "From this scan" and not "the audit named": a list with no point figure
+ * is the audit's findings and the citation fix, and the citation fix is not an audit finding.
+ */
 function fixHeading(narrative: Narrative): string {
+  const count = narrative.fixes.length;
+  const noun = count === 1 ? 'change' : 'changes';
   const withPoints = narrative.fixes.filter((f) => f.pointsUpside);
   if (withPoints.length > 0 && narrative.recoverablePoints > 0) {
-    return `${narrative.fixes.length} changes, worth ${narrative.recoverablePoints.toFixed(1)} points.`;
+    return `${count} ${noun}, worth ${narrative.recoverablePoints.toFixed(1)} points.`;
   }
-  return `${narrative.fixes.length} specific changes the audit named.`;
+  return `${count} specific ${noun} from this scan.`;
 }
 
 // ---------------------------------------------------------------------------

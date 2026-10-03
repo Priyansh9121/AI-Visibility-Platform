@@ -13,6 +13,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   CHECK_DETAIL_SENTENCE,
+  COMPONENT_LABEL,
+  EXCLUSION_COPY,
   auditDimensions,
   checkDetailSentence,
   checkLabel,
@@ -102,6 +104,10 @@ describe('an unmeasurable component is explained, not scored zero', () => {
     const [e] = excludedComponents(LINEAR);
     expect(e!.label).toBe('Content Freshness');
     expect(e!.code).toBe('NO_DATE_SIGNAL_AVAILABLE');
+    // What the audit read (launch checklist 3.49), and why the component is left out.
+    expect(e!.copy).toBe(
+      'The audit read no date from the audited page’s Last-Modified header or from a datePublished or dateModified in its JSON-LD. It does not read dates printed on the page. Scoring a page with no readable date as stale would punish a publishing convention rather than a visibility problem, so the weight of Content Freshness was shared across the components that could be measured.',
+    );
     expect(e!.copy).toContain('publishing convention');
   });
 
@@ -115,6 +121,41 @@ describe('an unmeasurable component is explained, not scored zero', () => {
       excludedComponents: { indexation: 'SOME_NEW_CODE' },
     } as unknown as TechnicalAudit;
     expect(excludedComponents(odd)[0]!.copy).toContain('could not be measured');
+  });
+});
+
+describe('the date wording says what the audit read — launch checklist 3.49', () => {
+  // Two sentences said more than the audit read of a page with no date. The card said "The site
+  // publishes no date signal at all": the audit reads one page, not a site, and of that page only
+  // the Last-Modified header and the datePublished and dateModified in its JSON-LD (a date in the
+  // microdata is not read, nor is one printed on the page). The row said "structured data", which
+  // covers the microdata too.
+  it('neither the exclusion card nor the check’s sentence says "at all" or "structured data"', () => {
+    for (const [where, text] of [
+      ['the exclusion card', EXCLUSION_COPY.NO_DATE_SIGNAL_AVAILABLE!],
+      ['the check’s sentence', CHECK_DETAIL_SENTENCE.NO_DATE_SIGNAL_AVAILABLE!],
+    ] as const) {
+      for (const gone of ['at all', 'structured data', 'The site publishes', 'date signal']) {
+        expect(text, `${where}: ${gone}`).not.toContain(gone);
+      }
+      // What each says instead: the header, and the JSON-LD's two dates.
+      expect(text, `${where} names the header`).toContain('Last-Modified');
+      expect(text, `${where} names the JSON-LD`).toContain('JSON-LD');
+      expect(text, `${where} names the two dates`).toContain('datePublished or dateModified');
+    }
+    // The card also says what is not read, which is true of the audit and which a reader with a
+    // date printed on the page needs to know.
+    expect(EXCLUSION_COPY.NO_DATE_SIGNAL_AVAILABLE).toContain('It does not read dates printed on the page.');
+  });
+
+  it('the card names the component as this screen does, and says the weight was shared', () => {
+    // "Content Freshness" is `COMPONENT_LABEL`'s name for it, which the card's own label and the
+    // Ledger use; the weight claim is held against `score_audit` in `test_audit_fix_wording.py`.
+    expect(COMPONENT_LABEL.content_freshness).toBe('Content Freshness');
+    const card = EXCLUSION_COPY.NO_DATE_SIGNAL_AVAILABLE!;
+    expect(card).toContain(`the weight of ${COMPONENT_LABEL.content_freshness} was shared across the components that could be measured`);
+    expect(card).not.toContain('its weight');
+    expect(excludedComponents(LINEAR)[0]!.label).toBe(COMPONENT_LABEL.content_freshness);
   });
 });
 
@@ -252,7 +293,7 @@ describe('checkDetailSentence — launch checklist 3.39', () => {
       NO_PRODUCT_OR_SERVICE_SCHEMA:
         'The audited page has no Product or Service markup, so what the business sells has to be inferred from page copy rather than read from the markup.',
       NO_DATE_SIGNAL_AVAILABLE:
-        'No usable Last-Modified header and no datePublished or dateModified in the page’s structured data was found, so its freshness cannot be established either way.',
+        'No usable Last-Modified header and no datePublished or dateModified in the page’s JSON-LD was found, so its freshness cannot be established either way.',
       MULTIPLE_H1:
         'More than one top-level heading leaves the page’s subject ambiguous to anything parsing it.',
       NO_ORGANIZATION_OR_LOCALBUSINESS:
@@ -266,16 +307,24 @@ describe('checkDetailSentence — launch checklist 3.39', () => {
       expect(FIX_FOR_DETAIL_CODE[code], code).toBeDefined();
       expect(sentence, code).not.toBe(FIX_FOR_DETAIL_CODE[code]!.detail);
     }
-    // What the fix wording said that a row cannot stand behind.
+    // What the fix wording says that a row cannot stand behind, for the three the fix table
+    // still words that way: the fix list is left as it was, and the row does not say it.
     for (const [code, phrase] of [
-      ['ROBOTS_TXT_DISALLOW', 'nothing else on this list'],
       ['META_ROBOTS_NOINDEX', 'excluded from the indexes these answers are drawn from'],
       ['NO_PRODUCT_OR_SERVICE_SCHEMA', 'Without it'],
-      ['NO_DATE_SIGNAL_AVAILABLE', 'anywhere on the page'],
       ['MULTIPLE_H1', 'Several competing'],
-      ['NO_ORGANIZATION_OR_LOCALBUSINESS', 'Nothing on the page states'],
     ] as const) {
       expect(FIX_FOR_DETAIL_CODE[code]!.detail, `${code}: the fix list is left as it was`).toContain(phrase);
+      expect(checkDetailSentence(code), code).not.toContain(phrase);
+    }
+    // The other three were reworded in the fix table (launch checklist 3.49): what it used to
+    // say that a row could not stand behind is on neither. `auditFixWording.test.ts` holds the new text.
+    for (const [code, phrase] of [
+      ['ROBOTS_TXT_DISALLOW', 'nothing else on this list'],
+      ['NO_DATE_SIGNAL_AVAILABLE', 'anywhere on the page'],
+      ['NO_ORGANIZATION_OR_LOCALBUSINESS', 'Nothing on the page states'],
+    ] as const) {
+      expect(FIX_FOR_DETAIL_CODE[code]!.detail, `${code}: the fix list no longer says it`).not.toContain(phrase);
       expect(checkDetailSentence(code), code).not.toContain(phrase);
     }
   });
