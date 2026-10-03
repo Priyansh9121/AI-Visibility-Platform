@@ -467,7 +467,7 @@ class TestCompetitorSetScope:
     """
 
     async def test_the_report_scopes_the_confidence_to_the_detected_rows(
-        self, client: AsyncClient, stub_engines, stub_discovery
+        self, client: AsyncClient, stub_engines, stub_discovery, a_day_passes
     ) -> None:  # noqa: ANN001
         await _sign_up(client)
         resp = await client.post(
@@ -481,7 +481,9 @@ class TestCompetitorSetScope:
             f"{BASE}/clients/{cid}/competitors",
             json={"competitors": [{"name": "Operator Pick", "domain": "operatorpick.com"}]},
         )
-        # Re-detect so a fresh confidence is written over a part-hand-set list.
+        # Re-detect (the next day: the button runs once per client per day) so a fresh
+        # confidence is written over a part-hand-set list.
+        await a_day_passes()
         stub_discovery(
             serp_domains=["b.com", "c.com"],
             cocit_brands=[("B", "b.com"), ("C", "c.com")],

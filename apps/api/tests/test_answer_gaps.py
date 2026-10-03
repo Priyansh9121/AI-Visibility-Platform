@@ -321,7 +321,7 @@ class TestRecurrence:
         assert sum(body[k] for k in buckets) == body["prompts"] == len(body["rows"])
 
     async def test_rivals_are_counted_across_scans_because_they_persist(
-        self, client: AsyncClient, stub_engines, stub_discovery
+        self, client: AsyncClient, stub_engines, stub_discovery, a_day_passes
     ) -> None:  # noqa: ANN001
         """The cross-scan half of recurrence, on the axis that survives."""
         await _sign_up(client)
@@ -335,6 +335,8 @@ class TestRecurrence:
         # a fixture artefact rather than against the rollup.
         await _detect(client, cid, stub_discovery, ("Zendesk", "Freshdesk"))
         await _run_scan(client, cid)
+        # The button runs once per client per day, so the second scan's set is a day on.
+        await a_day_passes()
         await _detect(client, cid, stub_discovery, ("Zendesk", "Freshdesk"))
         await _run_scan(client, cid)
 

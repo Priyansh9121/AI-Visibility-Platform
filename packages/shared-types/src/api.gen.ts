@@ -982,7 +982,21 @@ export interface paths {
          *     model calls, so it is explicitly operator-triggered rather than implicit in
          *     intake — an accidental re-detection costs money.
          *
+         *     **Once per client per 24 hours** (2026-10-03, launch checklist 3.53). The day is
+         *     taken when a run starts, so a run that then fails still counts: its searches may
+         *     already be spent. Checked after the client is found, so another agency's client is
+         *     still a `404` and cannot spend this client's day, and before anything is done.
+         *     Another client of the same agency has its own day. A scan's own detection, for a
+         *     client with no competitor set yet, is never refused by this limit and does not use
+         *     the day up; neither does replacing the set by hand with `PUT`.
+         *
          *     Competitors an operator marked as overrides are preserved across runs.
+         *
+         *     **Errors:** `401 authentication-required`; `404 not-found`; `429 rate-limited` (with
+         *     `Retry-After`, the whole seconds left in the 24 hours): "Competitor detection already
+         *     ran for this client in the last 24 hours. It can run again in about N hours." (the
+         *     last hour reads "in under an hour"); `503 service-unavailable` (Redis cannot say
+         *     whether the day is taken, so nothing runs).
          */
         post: operations["detect_competitors_api_v1_clients__clientId__competitors_detect_post"];
         delete?: never;

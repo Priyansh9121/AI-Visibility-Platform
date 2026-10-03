@@ -169,7 +169,7 @@ class TestOverride:
         assert body["detectionConfidence"] is None
 
     async def test_manual_entries_survive_redetection(
-        self, client: AsyncClient, stub_discovery
+        self, client: AsyncClient, stub_discovery, a_day_passes
     ) -> None:  # noqa: ANN001
         """The point of an override: a correction must not be silently undone."""
         await _sign_up(client)
@@ -181,6 +181,7 @@ class TestOverride:
             json={"competitors": [{"name": "Operator Pick", "domain": "operatorpick.com"}]},
         )
 
+        await a_day_passes()  # detection from the button runs once per client per day
         stub_discovery(serp_domains=["b.com", "c.com"], cocit_brands=[("B", "b.com")])
         body = (await client.post(f"{BASE}/clients/{cid}/competitors/detect")).json()
         names = [c["name"] for c in body["competitors"]]
@@ -383,7 +384,7 @@ class TestStruckCompetitorsStayStruck:
     """
 
     async def test_a_struck_rival_does_not_come_back_on_redetection(
-        self, client: AsyncClient, stub_discovery
+        self, client: AsyncClient, stub_discovery, a_day_passes
     ) -> None:  # noqa: ANN001
         await _sign_up(client)
         cid = await _make_client(client)
@@ -400,7 +401,8 @@ class TestStruckCompetitorsStayStruck:
             json={"competitors": [{"name": "Keep", "domain": "keep.com"}]},
         )
 
-        # Detection runs again and re-offers exactly the struck rival.
+        # The next day, detection runs again and re-offers exactly the struck rival.
+        await a_day_passes()
         stub_discovery(
             serp_domains=["strike.com"], cocit_brands=[("Strike", "strike.com")]
         )
@@ -477,7 +479,7 @@ class TestStruckCompetitorsStayStruck:
         assert [c["name"] for c in revived["competitors"]] == ["Keep", "Strike"]
 
     async def test_tombstones_do_not_consume_ranks(
-        self, client: AsyncClient, stub_discovery
+        self, client: AsyncClient, stub_discovery, a_day_passes
     ) -> None:  # noqa: ANN001
         """A suppressed row is not a competitor. If it took a rank, the next
         detected rival would start at 3 in a two-rival set and the report's
@@ -493,13 +495,14 @@ class TestStruckCompetitorsStayStruck:
             f"{BASE}/clients/{cid}/competitors",
             json={"competitors": [{"name": "Keep", "domain": "keep.com"}]},
         )
+        await a_day_passes()
         stub_discovery(serp_domains=["fresh.com"], cocit_brands=[("Fresh", "fresh.com")])
         body = (await client.post(f"{BASE}/clients/{cid}/competitors/detect")).json()
         ranks = sorted(c["rank"] for c in body["competitors"])
         assert ranks == list(range(1, len(ranks) + 1)), body["competitors"]
 
     async def test_striking_everything_still_blocks_redetection(
-        self, client: AsyncClient, stub_discovery
+        self, client: AsyncClient, stub_discovery, a_day_passes
     ) -> None:  # noqa: ANN001
         """An empty override is a statement that none of these are rivals, not
         an absence of opinion."""
@@ -509,6 +512,7 @@ class TestStruckCompetitorsStayStruck:
         await client.post(f"{BASE}/clients/{cid}/competitors/detect")
         await client.put(f"{BASE}/clients/{cid}/competitors", json={"competitors": []})
 
+        await a_day_passes()
         stub_discovery(serp_domains=["strike.com"], cocit_brands=[("Strike", "strike.com")])
         body = (await client.post(f"{BASE}/clients/{cid}/competitors/detect")).json()
         assert [c["name"] for c in body["competitors"]] == []
@@ -728,7 +732,7 @@ class TestAttributionSurvivesAnOverride:
         )
 
     async def test_redetection_keeps_attribution_for_rivals_it_finds_again(
-        self, client: AsyncClient, session, stub_discovery
+        self, client: AsyncClient, session, stub_discovery, a_day_passes
     ) -> None:  # noqa: ANN001
         """Finding 4 named `apply_override`; `persist_detection` had it too.
 
@@ -746,9 +750,12 @@ class TestAttributionSurvivesAnOverride:
         scan_id = (await client.get(f"{BASE}/clients/{cid}/competitors")).json()["scanId"]
         await self._attribute(session, scan_id)
 
-        # Detection runs again and still finds Keep.
+        # The next day, detection runs again and still finds Keep. The status is asserted:
+        # a refused second run would leave the attribution as it was and pass untested.
+        await a_day_passes()
         stub_discovery(serp_domains=["keep.com"], cocit_brands=[("Keep", "keep.com")])
-        await client.post(f"{BASE}/clients/{cid}/competitors/detect")
+        redetected = await client.post(f"{BASE}/clients/{cid}/competitors/detect")
+        assert redetected.status_code == 201, redetected.text
 
         after = await self._attribution(session, scan_id)
         kept = {k: v for k, v in after.items() if "keep" in k.lower()}
@@ -758,7 +765,7 @@ class TestAttributionSurvivesAnOverride:
         )
 
     async def test_redetecting_the_same_rival_does_not_500(
-        self, client: AsyncClient, stub_discovery
+        self, client: AsyncClient, stub_discovery, a_day_passes
     ) -> None:  # noqa: ANN001
         """A second, separate defect Epic 3.9 found while fixing Finding 4.
 
@@ -780,6 +787,7 @@ class TestAttributionSurvivesAnOverride:
             await client.post(f"{BASE}/clients/{cid}/competitors/detect")
         ).status_code == 201
 
+        await a_day_passes()
         stub_discovery(serp_domains=["keep.com"], cocit_brands=[("Keep", "keep.com")])
         again = await client.post(f"{BASE}/clients/{cid}/competitors/detect")
         assert again.status_code == 201, f"re-detection failed: {again.text[:300]}"
@@ -828,7 +836,7 @@ class TestConfidenceSaysWhatItCovers:
         )
 
     async def test_covers_only_the_detected_rows_on_a_mixed_set(
-        self, client: AsyncClient, stub_discovery
+        self, client: AsyncClient, stub_discovery, a_day_passes
     ) -> None:  # noqa: ANN001
         """The case Finding 3 was actually about.
 
@@ -845,6 +853,7 @@ class TestConfidenceSaysWhatItCovers:
             json={"competitors": [{"name": "Operator Pick", "domain": "operatorpick.com"}]},
         )
 
+        await a_day_passes()
         stub_discovery(
             serp_domains=["b.com", "c.com"],
             cocit_brands=[("B", "b.com"), ("C", "c.com")],
@@ -875,7 +884,7 @@ class TestConfidenceSaysWhatItCovers:
         assert body["confidenceCovers"] == 0
 
     async def test_a_struck_rival_stops_being_covered(
-        self, client: AsyncClient, stub_discovery
+        self, client: AsyncClient, stub_discovery, a_day_passes
     ) -> None:  # noqa: ANN001
         """A tombstone is not a row the figure describes, and not a row at all.
 
@@ -897,6 +906,7 @@ class TestConfidenceSaysWhatItCovers:
             f"{BASE}/clients/{cid}/competitors",
             json={"competitors": [{"name": keep["name"], "domain": keep["domain"]}]},
         )
+        await a_day_passes()
         stub_discovery(serp_domains=["c.com"], cocit_brands=[("C", "c.com")])
         body = (await client.post(f"{BASE}/clients/{cid}/competitors/detect")).json()
 
