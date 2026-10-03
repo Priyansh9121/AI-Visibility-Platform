@@ -10,7 +10,7 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import __version__
+from . import __version__, redis_watch
 from .config import Settings, get_settings
 from .db import dispose_engine
 from .errors import register_error_handlers
@@ -33,6 +33,7 @@ from .routers import (
     scans,
     scores,
 )
+from .security_headers import SecurityHeadersMiddleware
 from .services import memory_stats
 
 logger = logging.getLogger(__name__)
@@ -58,7 +59,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
     logger.info("api starting environment=%s", settings.environment)
     _log_memory_at_start()
-    yield
+    # `redis.eviction_policy` now, and `redis.data_lost` whenever the sentinel goes missing, for as
+    # long as the app runs (`redis_watch.py`). Neither can fail the start.
+    redis_watcher = await redis_watch.start(settings)
+    try:
+        yield
+    finally:
+        # Before the pool below is closed, so the watcher is never mid-call on a closed pool.
+        await redis_watch.stop(redis_watcher)
     # Return pooled connections deliberately, so a redeploy does not leave
     # Postgres holding sockets until they time out.
     await dispose_engine()
@@ -141,9 +149,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # an origin which is not listed is refused, session or not; one that names
     # none is refused only if it carries the session cookie. Added BEFORE the
     # CORS middleware, on purpose: Starlette makes the last `add_middleware` call
-    # the outermost layer, and CORS has to stay outermost. It answers a preflight
-    # (an OPTIONS, which this never checks) before anything else sees it, and
-    # whatever this returns, the refusal included, passes back out through it.
+    # the outermost layer, and CORS has to stay outside every layer that reads or
+    # answers a request. It answers a preflight (an OPTIONS, which this never
+    # checks) before this sees it, and whatever this returns, the refusal
+    # included, passes back out through it. (The one layer outside CORS answers
+    # nothing: the security headers, added last, below.)
     app.add_middleware(
         OriginCheckMiddleware,
         allowed_origins=settings.cors_allow_origins,
@@ -163,6 +173,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=_registered_methods(app),
         allow_headers=["Content-Type", "Accept", "X-Requested-With"],
     )
+
+    # Security headers on every response — launch checklist 3.1, see
+    # `security_headers.py`. Added LAST, so this is the OUTERMOST layer, outside
+    # CORS. That is deliberate and the only way to reach everything: the CORS
+    # middleware answers a preflight itself, without calling what it wraps, so a
+    # layer inside it never sees a preflight, and a preflight needs these headers
+    # as much as any response. The origin check's refusals pass back out through
+    # here too. CORS itself behaves exactly as before: this layer reads no request,
+    # answers none, and only appends to a response's head on its way out.
+    #
+    # What it cannot reach: an unhandled exception's 500. Starlette builds that in
+    # `ServerErrorMiddleware`, which sits outside every user middleware, so that
+    # response leaves without these headers (and without CORS's, as ever). Every
+    # error the API chooses to send (`errors.py`) is raised or returned inside the
+    # stack, and carries them.
+    app.add_middleware(SecurityHeadersMiddleware)
 
     return app
 

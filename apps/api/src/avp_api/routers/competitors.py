@@ -11,7 +11,7 @@ from fastapi import APIRouter, Path, status
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from ..deps import DbDep, PrincipalDep, SettingsDep
+from ..deps import DbDep, PrincipalDep, RedisDep, SettingsDep
 from ..errors import NotFound
 from ..models import CompetitorSet, Scan
 from ..schemas.competitor import (
@@ -20,6 +20,7 @@ from ..schemas.competitor import (
     ReplaceCompetitorsRequest,
 )
 from ..services import competitors as detection
+from ..services import rate_limit
 from ..services.intake import get_client
 
 router = APIRouter(prefix="/clients", tags=["competitors"])
@@ -83,6 +84,7 @@ async def detect_competitors(
     principal: PrincipalDep,
     db: DbDep,
     settings: SettingsDep,
+    redis: RedisDep,
     client_id: str = Path(alias="clientId"),
 ) -> Any:
     """Run SERP + AI co-citation discovery and rank the top competitors.
@@ -91,9 +93,28 @@ async def detect_competitors(
     model calls, so it is explicitly operator-triggered rather than implicit in
     intake — an accidental re-detection costs money.
 
+    **Once per client per 24 hours** (2026-10-03, launch checklist 3.53). The day is
+    taken when a run starts, so a run that then fails still counts: its searches may
+    already be spent. Checked after the client is found, so another agency's client is
+    still a `404` and cannot spend this client's day, and before anything is done.
+    Another client of the same agency has its own day. A scan's own detection, for a
+    client with no competitor set yet, is never refused by this limit and does not use
+    the day up; neither does replacing the set by hand with `PUT`.
+
     Competitors an operator marked as overrides are preserved across runs.
+
+    **Errors:** `401 authentication-required`; `404 not-found`; `429 rate-limited` (with
+    `Retry-After`, the whole seconds left in the 24 hours): "Competitor detection already
+    ran for this client in the last 24 hours. It can run again in about N hours." (the
+    last hour reads "in under an hour"); `503 service-unavailable` (Redis cannot say
+    whether the day is taken, so nothing runs).
     """
     client = await get_client(db, agency_id=principal.agency_id, client_id=client_id)
+    # After the client is found and before any work: the first thing a run does is open a
+    # scan, and the searches that follow are the money. See `rate_limit.claim_detection`.
+    await rate_limit.claim_detection(
+        redis, settings, client_id=client.id, agency_id=principal.agency_id
+    )
     scan = await detection.get_or_create_scan(db, client, user_id=principal.user_id)
     outcome = await detection.detect_for_client(client, settings=settings)
     competitor_set = await detection.persist_detection(db, scan, outcome)

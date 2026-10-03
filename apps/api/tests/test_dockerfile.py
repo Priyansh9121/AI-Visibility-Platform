@@ -171,6 +171,33 @@ class TestTheScriptHandsOverToUvicorn:
         assert config(None).workers == 4  # the trap: the variable decides when the flag is absent
         assert config(workers).workers == 1  # and with the flag, it is not read
 
+    def test_uvicorn_is_told_not_to_announce_itself(self) -> None:
+        """`--no-server-header`: no `Server: uvicorn` on any response (launch checklist 3.1).
+
+        It tells a stranger what runs here; the web app's twin, `X-Powered-By`, is off for
+        the same reason. Asked of uvicorn's own command-line parser, given every word on
+        the line as the shell would pass it: it accepts the line (a mistyped flag is
+        refused there, and CI's image job would be the only other place to notice), the
+        flag is what turns the header off (it is on without it), and the worker count and
+        the proxy setting are still read as they were.
+        """
+        from uvicorn.main import main as uvicorn_cli
+
+        argv = self.exec_argv()
+        assert argv.count("--no-server-header") == 1
+        # The shell expands the port; shlex does not. Dropped: `exec uvicorn`.
+        words = [word.replace("${PORT:-8000}", "8000") for word in argv[2:]]
+
+        parsed = uvicorn_cli.make_context("uvicorn", list(words)).params
+        without = uvicorn_cli.make_context(
+            "uvicorn", [word for word in words if word != "--no-server-header"]
+        ).params
+
+        assert parsed["server_header"] is False
+        assert without["server_header"] is True, "the flag is not what turns it off"
+        assert parsed["workers"] == 1
+        assert parsed["proxy_headers"] is True
+
     def test_the_one_worker_is_said_to_be_deliberate(self) -> None:
         comments = "\n".join(
             line for line in ENTRYPOINT_SCRIPT.read_text().splitlines()

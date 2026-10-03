@@ -23,6 +23,14 @@ signed-in account's email (never in the clear).
 failing open there would switch off the guard exactly when it is needed.
 Reset-request fails open: it does not use Redis and replies identically either
 way.
+
+**Detection from the button is limited here too, and is not a credential guard.**
+`claim_detection` gives each client one `POST /clients/{clientId}/competitors/detect`
+run per 24 hours (launch checklist 3.53). One key per client,
+`rl:detect_competitors:client:{digest}`, with the client id hashed like every subject
+above, taken with `SET NX PX` in one Lua step so two presses at once cannot both win.
+It fails closed, because the run spends paid searches, and a scan's own detection never
+passes through it.
 """
 
 from __future__ import annotations
@@ -262,3 +270,102 @@ async def clear_login(redis: Redis, settings: Settings, *, email: str) -> None:
         await redis.delete(*keys)
     except (RedisError, OSError):
         logger.warning("auth.rate_limit.unavailable")
+
+
+# --- Competitor detection from the button: once per client per day ----------
+#
+# Launch checklist 3.53, the founder's decision (2026-10-03): once per client per day from
+# the button, always allowed as part of a scan. A run is about six paid SerpApi searches,
+# up to twelve with retries, out of a monthly quota the whole platform shares.
+
+DETECT_ACTION = "detect_competitors"
+DETECT_WINDOW_HOURS = 24
+_HOUR_MS = 3_600_000
+DETECT_WINDOW_MS = DETECT_WINDOW_HOURS * _HOUR_MS  # 86_400_000
+
+# KEYS: the client's key. ARGV: window ms. Takes the day with SET NX PX, so of two presses
+# at once exactly one wins. Returns {1, window ms} when this call took the day, otherwise
+# {0, ms left on it}. A key that somehow has no expiry is given one rather than blocking
+# the client for ever, as `_HIT` does.
+_CLAIM = """
+if redis.call('SET', KEYS[1], '1', 'NX', 'PX', ARGV[1]) then
+  return {1, tonumber(ARGV[1])}
+end
+local ttl = redis.call('PTTL', KEYS[1])
+if ttl < 0 then
+  redis.call('PEXPIRE', KEYS[1], ARGV[1])
+  ttl = tonumber(ARGV[1])
+end
+return {0, ttl}
+"""
+
+
+def _whole_seconds(ms: int) -> int:
+    """Seconds left, rounded up and never below one: the `Retry-After` value."""
+    return max(1, math.ceil(ms / 1000))
+
+
+def _detect_refused(ms_left: int) -> RateLimited:
+    """The 429 for a client whose day is taken, with `ms_left` still on it.
+
+    The wait is rounded UP, so nobody is sent back before it would work: 1 h 10 min left
+    reads "in about 2 hours". The last hour says "in under an hour", and an hour to the
+    millisecond "in about an hour". The sentence names no key, id or code, and says nothing
+    about scans: a scan does not re-detect a client that already has a set, so it is not
+    a way round this.
+    """
+    if ms_left < _HOUR_MS:
+        wait = "in under an hour"
+    else:
+        hours = math.ceil(ms_left / _HOUR_MS)
+        wait = "in about an hour" if hours == 1 else f"in about {hours} hours"
+    return RateLimited(
+        detail=(
+            f"Competitor detection already ran for this client in the last "
+            f"{DETECT_WINDOW_HOURS} hours. It can run again {wait}."
+        ),
+        headers={"Retry-After": str(_whole_seconds(ms_left))},
+    )
+
+
+async def claim_detection(
+    redis: Redis, settings: Settings, *, client_id: str, agency_id: str
+) -> None:
+    """Take this client's one detection run for the day, or refuse it.
+
+    Called by `POST /clients/{clientId}/competitors/detect` after the client is found, so
+    another agency's client is a 404 and cannot spend this client's day, and before any
+    work. Raises `RateLimited` (429, `Retry-After` the whole seconds left) when the day is
+    taken, and `ServiceUnavailable` (503) when Redis cannot say. `agency_id` is the
+    caller's, and goes to the refusal's log line and nowhere else (it is not in the key):
+    the limit is per client, so a burst across one agency's clients shows only there.
+
+    **Counted when the run starts, not when it ends.** The run spends paid searches from
+    its first step, so one that then fails (SerpApi down, an error writing the set) has
+    still used its day: giving the day back on a failure would let a run that keeps failing
+    keep spending searches.
+
+    **Fails closed**, like login and unlike reset-request: the route spends money, so an
+    unmetered run is worse than a refused one. A signed-in request already needs Redis for
+    its session, so failing closed adds no outage that was not already there.
+
+    A scan's detection (`ensure_set_for_scan`) never calls this: it is neither refused by
+    the day nor counted in it. The one log line is the refusal's; an allowed run adds none.
+    """
+    key = _key(settings, DETECT_ACTION, "client", client_id)
+    try:
+        claimed, ms_left = await _eval(redis, _CLAIM, [key], [str(DETECT_WINDOW_MS)])
+    except (RedisError, OSError):
+        logger.warning("competitors.detect.rate_limit_unavailable")
+        raise ServiceUnavailable(
+            detail="This is temporarily unavailable. Please try again shortly."
+        ) from None
+    if int(claimed):
+        return
+    logger.info(
+        "competitors.detect.rate_limited",
+        client_id=client_id,
+        agency_id=agency_id,
+        retry_after_s=_whole_seconds(int(ms_left)),
+    )
+    raise _detect_refused(int(ms_left))

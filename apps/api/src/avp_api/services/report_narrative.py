@@ -50,8 +50,8 @@ MAX_DIMENSION_FIXES = 3
 MAX_CITATION_FIXES = 1
 MIN_GAP_POINTS = 2
 
-# Crawl-blocking checks sort above everything: nothing else on the list can
-# take effect underneath a site that tells crawlers to stay out.
+# Crawl and indexing checks sort first, ahead of the points ranking: a finding on the
+# `indexable` or the `robots_txt_present` check (`derive.ts` has the same rule).
 BLOCKING_FIX_IDS = ("audit:indexable", "audit:robots_txt_present")
 
 DIMENSION_LABEL: dict[str, str] = {
@@ -109,13 +109,17 @@ EXCLUSION_DETAIL: dict[str, str] = {
     # v3 — 2026-09-27. The dimension is measured now, so this fires only when a
     # scan's citations are all unclassified. The second tier's limitation is
     # stated here, to the reader, and not only in a docstring.
+    # 2026-10-03: the first tier's list says what `domain_authority`'s curated lists
+    # hold — suffixes for government, military and education bodies, and the named
+    # domains — and `tests/test_report_copy.py` fails when the two disagree.
     "NO_AUTHORITY_DATA": (
         "Citation Strength weighs the sources an answer cites when it names the brand, "
-        "on two tiers: a short structural list — government and university domains, "
-        "Wikipedia, the AP and Reuters wire services, and the cross-industry review "
-        "platforms (Better Business Bureau, Trustpilot, G2, Capterra) — and the domains "
-        "engines cite across at least three client industries and five clients on this "
-        "platform, leaving out domains that are themselves brands in a scanned market. "
+        "on two tiers: a short structural list — government, military and education "
+        "domains; Wikipedia and Wikidata; the AP and Reuters wire services; and the "
+        "cross-industry review platforms (Better Business Bureau, Trustpilot, G2, "
+        "Capterra) — and the domains engines cite across at least three client "
+        "industries and five clients on this platform, leaving out domains that are "
+        "themselves brands in a scanned market. "
         "Nothing cited in this scan’s unprompted answers is on either tier, so there is no "
         "authority to measure and the dimension is left out with its weight spread "
         "across the others, rather than scored as zero. The second tier counts "
@@ -300,12 +304,51 @@ FIX_FOR_DIMENSION: dict[str, tuple[str, str, str]] = {
     ),
 }
 
+# Four entries below say only what the audit read — launch checklist 3.49, 2026-10-03.
+# They used to say more, and each was untrue of a case that carries its code:
+#
+#   ROBOTS_TXT_DISALLOW: "nothing else on this list can take effect", and a title that
+#     named "the crawlers that build AI answers". The check reads one robots.txt group,
+#     `*`, for a `Disallow: /` line (`technical_audit._fetch_side_files`); it ignores
+#     Allow lines and every named crawler's group, so a crawler may be let in, or an AI
+#     crawler may have a group of its own, and the finding still stands. The code reaches
+#     this list on a read audit, where the crawler was let in despite the rule, and on
+#     one where robots.txt kept the crawler off the page (`_robots_refused_checks`), so
+#     the sentences say what the rule asks and never whether our crawler got in. The
+#     title names the `User-agent: *` group and not "all crawlers": a crawler with a group
+#     of its own ignores the `*` group (RFC 9309), so "the rules for all crawlers" was not
+#     strictly true either.
+#   NO_DATE_SIGNAL_AVAILABLE: "anywhere on the page". The audit reads the page's
+#     Last-Modified header and the datePublished and dateModified in its JSON-LD, and no
+#     date printed on the page.
+#   CONTENT_STALE: "publish a visible updated date", and "Freshness is one of the few
+#     signals available for judging whether an answer is still current". The audit takes
+#     the newest of the page's Last-Modified header and the datePublished and dateModified
+#     in its JSON-LD (`audit_site`), and calls the page stale when that is more than 180
+#     days old (`build_checks`: a warning to 365 days, a failure after). A date printed on
+#     the page is not read, so publishing one would not clear the finding; and nothing the
+#     audit measures supports a claim about which signals are available for judging an
+#     answer.
+#   NO_ORGANIZATION_OR_LOCALBUSINESS: "Nothing on the page states … what this
+#     organisation is". The check matches eight schema.org type names
+#     (`technical_audit.TRACKED_SCHEMA`), so a page marked up as `ProfessionalService`
+#     does state what it is and still fails. The sentence that said what the markup is
+#     for went too: nothing the audit measures supports it.
+#
+# `strings.ts` carries the same four, word for word. No shared fixture holds these
+# codes (`report-copy.json` has no detail-code table and `report-cases.json` carries
+# only NO_FAQ_SCHEMA and NO_PRODUCT_OR_SERVICE_SCHEMA), so what holds the two together
+# is `test_audit_fix_wording.py` here, which pins the text and runs each sentence's
+# claims against the audit, and `auditFixWording.test.ts` there, which reads this table
+# back and compares it with `strings.ts`.
 FIX_FOR_DETAIL_CODE: dict[str, tuple[str, str, str]] = {
     "ROBOTS_TXT_DISALLOW": (
-        "Stop robots.txt from blocking the crawlers that build AI answers",
-        "The site currently tells crawlers to stay out. Until that is lifted, nothing "
-        "else on this list can take effect — an answer engine cannot cite a page it "
-        "is not allowed to read.",
+        "Remove Disallow: / from the User-agent: * rules in robots.txt",
+        "The audit found a Disallow: / rule under User-agent: * in the site’s robots.txt. "
+        "That rule asks crawlers that have no rule of their own to stay out of the whole "
+        "site, except where another rule lets them in. A crawler that obeys it does not "
+        "read the pages it covers. Removing it, or narrowing it to the paths that should "
+        "stay private, clears this finding.",
         "S",
     ),
     "META_ROBOTS_NOINDEX": (
@@ -341,8 +384,10 @@ FIX_FOR_DETAIL_CODE: dict[str, tuple[str, str, str]] = {
     ),
     "NO_ORGANIZATION_OR_LOCALBUSINESS": (
         "Add Organization or LocalBusiness schema to the homepage",
-        "Nothing on the page states, in machine-readable form, what this organisation "
-        "is. This is the entity marker the rest of the structured data hangs off.",
+        "The audit found none of Organization, Corporation, OnlineBusiness, LocalBusiness, "
+        "Dentist, Restaurant, Store or MedicalBusiness in the audited page’s JSON-LD or "
+        "microdata. Adding Organization or LocalBusiness markup to the homepage clears "
+        "this finding.",
         "S",
     ),
     "NO_FAQ_SCHEMA": (
@@ -387,15 +432,21 @@ FIX_FOR_DETAIL_CODE: dict[str, tuple[str, str, str]] = {
         "S",
     ),
     "CONTENT_STALE": (
-        "Refresh the audited page and publish a visible updated date",
-        "The most recent date signal on this page is old. Freshness is one of the few "
-        "signals available for judging whether an answer is still current.",
+        "Refresh the audited page and publish an updated dateModified in its JSON-LD",
+        "The newest date the audit read from the audited page, in its Last-Modified header "
+        "or in a datePublished or dateModified in its JSON-LD, is more than 180 days old. "
+        "Dates printed on the page are not read. Once the page is refreshed, a dateModified "
+        "from the last 180 days in the JSON-LD (YYYY-MM-DD), or a Last-Modified header that "
+        "recent, clears this finding.",
         "M",
     ),
     "NO_DATE_SIGNAL_AVAILABLE": (
         "Publish machine-readable dates on the main pages",
-        "No date could be found anywhere on the page, so its freshness cannot be "
-        "established either way. A dateModified in the structured data fixes this.",
+        "The audit read no date from the audited page’s Last-Modified header or from a "
+        "datePublished or dateModified in its JSON-LD, so it cannot tell whether the page "
+        "is fresh or stale. Dates printed on the page are not read. A dateModified in the "
+        "JSON-LD (YYYY-MM-DD), or a Last-Modified header from the server, gives the audit "
+        "a date to read.",
         "S",
     ),
 }

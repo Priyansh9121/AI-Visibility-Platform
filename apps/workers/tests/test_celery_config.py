@@ -44,6 +44,18 @@ def test_time_limits_bound_a_stuck_stage() -> None:
     assert celery_app.conf.task_time_limit > celery_app.conf.task_soft_time_limit
 
 
+def test_results_expire_on_their_own() -> None:
+    """A result is given back after a day, so a small Redis does not fill with them — K1.
+
+    The Redis result backend writes each `celery-task-meta-<id>` with this lifetime (read from
+    a real Redis: PTTL about 86,400,000 ms). The broker's keys, a queue's list and its binding
+    set, carry no expiry and kombu cannot give them one; they exist only while a task has been
+    sent, and nothing sends one today.
+    """
+    assert celery_app.conf.result_expires == 60 * 60 * 24
+    assert celery_app.backend.expires == 60 * 60 * 24
+
+
 def test_queues_are_separated_by_workload() -> None:
     """IO-bound engine calls must not starve CPU-bound audits."""
     routes = celery_app.conf.task_routes

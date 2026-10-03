@@ -22828,3 +22828,914 @@ Drift check (north-star §8): no product layer; the launch plan. Lifecycle phase
 - OpenAPI and `api.gen.ts` regenerate with no change.
 - Over the branch: API 2656 → 3074, web 1533 → 1708; design-system 935, workers 26, shared-types 53 and mypy 43 unchanged.
 - Exit codes were read from files.
+
+# Competitor detection searches in the client's own market and tells the model the client's domain
+
+**2026-10-03, the thirteenth entry of the day; branch `pilot-fixes-4`, the founder's brief "search accuracy, guardrails and pilot hardening" (item S1).** One item, one commit.
+
+**Render: nothing to set. No endpoint shape, schema, dependency or outbound host change.** What a detection searches and asks changes: `POST /clients/{clientId}/competitors/detect` and a scan's own detection.
+
+Drift check (north-star §8): Layer 2, Measurement (competitor detection); lifecycle phase: Activation (Epic 9), the competitor set a pilot's first report compares against.
+
+## 1. What was found
+
+- **What 0.000 means.** `decide_detection` sets the confidence to the share of the returned rivals that both signals found: search and the co-citation model (`services/competitors.py`). Two production scans on 2026-10-03 returned five rivals at `confidence=0.000`, so not one of the five was found by both.
+  - A new `.in` client: `considered=44 eligible=27 gated_out=17`, `status=weak_signal returned=5`, no search failure.
+  - A new `.com.au` client: one query timed out on both attempts (`kinds=['read','read']`), then `considered=44 eligible=14 gated_out=30`.
+- **Reproduced the same day through the production code path.** Each client's own crawl and classification, its four co-citation prompts, and ten real searches with only `gl` varied. The same co-citation answers were used in both arms, and the production merge, score and decide functions were run over them. Results:
+
+  | Client | Search market | Queries answered | Result domains the model also named | Confidence |
+  |---|---|---|---|---|
+  | `.in` | gl=us (production) | 3 of 3 | none of 22 | 0.000 |
+  | `.in` | gl=in | 1 of 3 | none of 9 | 0.000 |
+  | `.com.au` | gl=us (production) | 2 of 2 | none of 15 | 0.000 |
+  | `.com.au` | gl=au | 2 of 2 | one rival's own domain | 0.200, status ok |
+
+- **Search: `services/serp.py` sent `gl=us` for every client.** Searched from the United States, neither client's results named a rival the model named; searched from Australia, the Australian client's did.
+- **The model: it was never told the client's domain.** `detect_from_facts` passed only the brand name. For the `.in` client, its two brand-anchored prompts named US packaged-waffle brands. With the brand and its domain in the subject line, all four prompts named Indian dessert chains. For the `.com.au` client the model named Australian banks either way.
+- **The market is not the whole of it.** The `.in` client's results under gl=us were publishers and noise; its "<niche> providers" query returned hashicorp.com and terraform.io. Under gl=in, two of its three queries got no answer.
+- **Nothing in the data model records a country.** There is no field on `Client`, on `Agency` or in the classification output, so the domain's country-code TLD is the only source.
+
+## 2. What changed
+
+- **`services/serp.py`:**
+  - `search_country(domain)` maps a domain's last label to Google's `gl`. The list is exactly au, nz, uk (`gl=uk`), ie, ca, us, za, in, sg, my, ph, hk, id and jp, and a row is added to extend it.
+  - Anything else (.com, .org, .io, .ai, .co, an unlisted label) searches the default, `au`, because the pilots are Australian agencies.
+  - `search` and `search_many` take `country=` and send it as `gl`. A value that is not one of the list's values is sent as `au`, so no arbitrary string reaches the request. `hl` stays `en`.
+- **`services/competitors.py` `detect_from_facts`:**
+  - It searches in `search_country(domain)`.
+  - The co-citation subject is "<brand> (<domain>)", or the domain alone when no name is known.
+  - `competitors.detected` now carries `country`.
+- **`scripts/verify_competitors.py`:** its `--serp-only` branch passes the same country, so the live check keeps measuring what the API runs.
+- **Unchanged:** the queries, the seed prompts, the search gate, the confidence and `FORMULA_VERSION` (v5). Detection's inputs change, not the scoring arithmetic, and no stored score is re-scored.
+- **Behaviour change to know about:** every client whose domain is not on the list, every `.com` included, is now searched in Australia rather than the United States. The brief decided this. Its effect on a US-facing `.com` client was not measured (no searches were left).
+
+## 3. The review
+
+- **Security review (opus): PASS WITH NITS**, nothing at Medium.
+  - Checked clean: no client-controlled string can reach `gl` or any other parameter; the key and URL are in no log line, and the new log field is one of fourteen fixed codes; nothing new is persisted; tenancy is unchanged; the per-detection bound is unchanged (at most 12 SerpApi requests, the same four model calls); `/privacy` stays true.
+  - **Taken (Low):** the two production clients' domains, which the first draft wrote into code comments and tests, are replaced by neutral examples. No client name is in committed text.
+  - **Left (Low), as found-not-fixed below:** intake does not check that a domain is a hostname.
+
+## Found, not fixed
+
+- **The query shapes.** "<niche> providers" built from a long comma-joined niche returns unrelated sites; the `.in` client's returned hashicorp.com and terraform.io.
+- **`NON_COMPETITOR_DOMAINS` lists US publishers only.** Local publishers and directories (news.com.au, whirlpool.net.au, canstar.com.au, infochoice.com.au, so.city, district.in, homegrown.co.in) pass as rivals; news.com.au took a top-five place in the `.com.au` reproduction.
+- **Intake accepts a domain without checking that every label is a hostname label.** The same string already went to the model in every scan's prompts; it now also goes in the co-citation subject line. The fix is a hostname check in `intake.parse_domain`.
+- **A business on a generic TLD searches Australia whatever its market.** A country field (on the agency or the client) would remove the guess.
+
+## Verified
+
+**API pytest 3074 → 3146 (+72); floor raised to match.** One test is skipped on macOS as before: it reads Linux's `/proc`.
+- `tests/test_search_country.py` (72):
+  - the TLD-to-country table, including the default and unlisted labels;
+  - `gl` on the wire from a `MockTransport`, with junk values sent as `au`;
+  - `search_many` forwarding the country;
+  - `detect_from_facts` searching in the client's country with the domain in the model's subject (`.in`, `.com.au`, `.com`, name-only, domain-only);
+  - the `competitors.detected` line's exact key set.
+- **Negative controls:**
+  - On this tree, with both source files put back to `main`: 71 of the 72 fail; the one guard that holds on both sides passes. Restored and checked against the patch with `cmp`.
+  - The implementer's eight single-line mutations each failed between 1 and 37 tests.
+- **SerpApi spend for the whole brief:** 12 requests, all in this investigation (10 queries; 2 were tried again after a read timeout). 8 were answered and 4 attempts timed out on the read. The account's month count went from 66 to 71: 5 counted.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 26, shared-types 53 (0 fail), design-system 935, web 1708, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`. They were run by hand on the bar's logs, because the local bar script split the repository's path at its spaces when it called the gate; the script is fixed for the next runs.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+  - The Mac slept on and off while this bar ran (18:04 to 20:03 by the clock), so the step times mean nothing; every step's own exit code was read from its file.
+- Exit codes were read from files.
+
+# Each competitor search SerpApi answers logs how long it took, and the code says when a search that got no answer is billed
+
+**2026-10-03, the fourteenth entry of the day; branch `pilot-fixes-4`, the founder's brief "search accuracy, guardrails and pilot hardening" (item S2).** One item, one commit.
+
+**Render: nothing to set. No endpoint, schema, dependency or outbound host change.** The API's logs gain one info line per answered search: 3 to 6 per detection.
+
+Drift check (north-star §8): Layer 2, Measurement (competitor search); lifecycle phase: Activation (Epic 9). It makes the searches Render makes measurable before any timeout is changed.
+
+## 1. What changed
+
+- **`serp.completed`** (`services/serp.py`):
+  - **One line for every search SerpApi answered**, whatever the answer said.
+  - **Its fields:** `elapsed_ms` (from the first attempt's start to the end of reading the answer), `attempts` (1, or 2 when the retry was answered), `hits`, `status` (the HTTP status) and `error_code` (`None`, or this module's code for an error answer).
+  - **Never in it:** the query, the market, the key, the URL, the body or an exception's text.
+  - **A search with no answer** keeps its `serp.attempts_failed` line, so every search that reached SerpApi logs exactly one of the two.
+  - **A missing key** sends nothing and logs neither.
+  - **How:** `_get` now returns the answer with its attempt count and start time (`_Answered`), and the old judging code moved unchanged into `_judge`.
+- **Billing, stated in the module's top comment and in `_get`'s and `search`'s docstrings:**
+  - **SerpApi's pricing page, read 2026-10-03:** "Only successful searches are counted toward your monthly searches. Cached, errored, and failed searches are not."
+  - **S1's measurement, the same day:** 12 requests, 8 answered and 4 attempts that timed out on the read.
+    - The account's month count went from 66 to 75 and then back to 71, and stayed there.
+    - So 5 were counted.
+    - The count rose by 4 more than it kept, the number of timed-out attempts.
+  - **Conclusion:**
+    - A failed connect never reaches SerpApi.
+    - A read failure was not billed when measured.
+    - A search SerpApi finished after we stopped waiting would be billed, and only the account's count would show it.
+  - **The retry:** in the 3 searches seen to time out on a read (production's and two in S1's run), the retry timed out on a read too, about 19.1 to 19.3 s each. The founder decided to keep retrying a read failure, so this is recorded and nothing changes.
+- **No timeout, retry count or pause changed.**
+- **`docs/runbook.md`, "Reading competitor-search lines":**
+  - each of the three lines, field by field;
+  - how to read the latency distribution from Render's logs (with R2's measurement from a development Mac earlier the same day to compare: 24 searches, median 1.54 s, 95th percentile 2.54 s, slowest 6.93 s);
+  - what the numbers would justify once they arrive. If answered searches cluster near the 9 s read budget, raise the read budget and the 10 s deadline together; the scan's worst case moves with them. If answered searches are fast and the failures are reads on both attempts, waiting longer will not help.
+
+## Found, not fixed
+
+- **A 200 whose JSON body is not an object** (a list, a string, or results that are not objects) makes `search` raise `AttributeError`, so neither line is logged. This predates the change and is in the judging code. `search` promises never to raise for an upstream failure; a guard returning `SERP_BAD_JSON` would close it.
+- **Two docs still describe the retry as possibly billed:** the docstring of `TestARescuedRetryIsLogged` in `tests/test_serp_search.py`, and this log's earlier R2 entry, which is history.
+
+## Verified
+
+**API pytest 3146 → 3201 (+55); floor raised to match.** One test is skipped on macOS as before: it reads Linux's `/proc`.
+- `tests/test_serp_completed.py` (55), each against a `MockTransport`:
+  - one line of exactly five facts for an answer;
+  - `hits` are the parsed hits;
+  - `elapsed_ms` runs from the first attempt to the end of parsing, retry and pause included;
+  - a retried search is one `serp.retried` line and one completed line with `attempts=2`;
+  - each error answer (401, 429, 500, 503, bad JSON, an `error` payload) is one completed line with no hits, its status and its code;
+  - a search with no answer logs the failure line alone (8 ways);
+  - every search that reached SerpApi logs exactly one of the two (12 ways);
+  - a missing key logs neither;
+  - no line names the key, the query, the market, a URL, a body or a message;
+  - `search_many` over six searches logs six lines.
+- **Negative controls:**
+  - **On this tree:** with `serp.py` put back to S1, 39 of the 55 fail. The 16 that pass are absence checks, each of which also asserts that the other line was logged. Restored and checked with `cmp`.
+  - **The implementer's twelve single mutations each failed between 1 and 39 tests.** They covered: no line, the query or the URL added, the time read too early or counted from the answer, attempts always 1, a line for a failed search, the status as text, the line twice, a line for a missing key, the warning level, and `serp.retried` renamed.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 26, shared-types 53 (0 fail), design-system 935, web 1708, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# Competitor detection from its route runs once per client per 24 hours; a scan's own detection is never limited
+
+**2026-10-03, the fifteenth entry of the day; branch `pilot-fixes-4`, the founder's brief "search accuracy, guardrails and pilot hardening" (launch checklist 3.53).** One item, one commit.
+
+**Render: nothing to set (no setting, schema, dependency or outbound host).** The route `POST /clients/{clientId}/competitors/detect` gains two answers: 429 `rate-limited` and 503 `service-unavailable`. Its request and response shapes are unchanged, and `docs/api-contracts.md` and the generated contract are updated.
+
+Drift check (north-star §8): Layer 1, Delivery (a route's limit); lifecycle phase: Activation (Epic 9). It protects the SerpApi plan the pilots share: 250 searches a month, used by production too.
+
+## 1. What changed
+
+- **The founder's decision:** once per client per day from the button, and always allowed as part of a scan.
+- **`services/rate_limit.py` `claim_detection`:**
+  - **The key:** one per client, `rl:detect_competitors:client:<digest>`, keyed with `APP_SECRET` like the other `rl:` keys, so no client id appears in Redis.
+  - **The claim is one Lua step:** `SET NX PX 86400000`, else the time left. A key that somehow has no expiry is given one, never kept for good.
+  - **A refusal:** 429 `rate-limited`, `Retry-After` in whole seconds (rounded up, at least 1), and the sentence "Competitor detection already ran for this client in the last 24 hours. It can run again in about N hours." N is rounded up, so nobody is sent back early. The last hour reads "in under an hour", and exactly one hour "in about an hour".
+  - **The words "ran" and not "were detected":** a counted run may have failed.
+  - **A Redis error:** 503 and no detection (fails closed: the route spends paid searches, and a signed-in request already needs Redis for its session).
+- **The route** claims after `get_client`, so another agency's client is still a 404 and cannot spend or see the day, and before any work.
+  - A run that then fails still counts, because its searches may already be spent.
+  - Its docstring (the OpenAPI description) states the limit and the errors (401, 404, 429, 503).
+- **Scans never call the claim:** a scan's detection neither waits for the day nor spends it.
+- **Logs:**
+  - a refusal logs `competitors.detect.rate_limited` with `client_id`, `agency_id` and `retry_after_s`, so a burst across one agency's clients shows as one agency;
+  - Redis failing logs `competitors.detect.rate_limit_unavailable` with no fields;
+  - an allowed run logs nothing new.
+- **Tests that press the route twice on purpose:** 11 now pass a day between presses (a new `a_day_passes` fixture deletes the client's key). Two of them would have passed without detecting a second time; both now assert the second run.
+- **`docs/runbook.md`:** rotating `APP_SECRET` renames every rate-limit key, which resets every login, sign-up, reset and change-password window and every client's detection day. A client's day cannot be cleared by hand without that secret.
+- **No web change.** No screen calls this route: from the web, detection runs only inside a scan. The 429's sentence is ready for a button, if the founder wants one.
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS.** Checked clean:
+  - tenancy, including the 404/429 order;
+  - the atomic claim, tested with 20 claims at once;
+  - fail-closed;
+  - the log fields;
+  - no collision with the login limiter's keys;
+  - `Retry-After`;
+  - the Origin check covering the POST;
+  - that only this route and a scan reach detection.
+- **Taken:** 401 added to the route's documented errors; `agency_id` on the refusal line; the runbook line on `APP_SECRET`.
+- **Medium, a recommendation beyond the founder's decision (for the founder):** the per-client day does not cap a whole agency. Clients can be added without a classification call, so one free account could still spend many searches in a day across many new clients. The smallest fix needs no new number: allow the route only to a user with a verified identity or an agency with an active plan, the same rule the free scan uses. A per-agency or platform-wide daily count is the alternative.
+- **Low:** a client's day lasts only as long as Redis keeps its key. The eviction policy is now `noeviction` (checklist 3.4), but the Free plan keeps no data across a restart.
+
+## Found, not fixed
+
+- **The agency-wide cap or identity gate** (the Medium above): the founder decides.
+- **A Redis error after the claim's script ran** leaves the day spent though nothing ran (fail-closed, no retry). Rare.
+- **`tests/test_answer_gaps.py`** presses the route once per scan to stand in for a scan's own detection; calling `ensure_set_for_scan` would be truer.
+
+## Verified
+
+**API pytest 3201 → 3234 (+33); floor raised to match.** One test is skipped on macOS as before: it reads Linux's `/proc`.
+- `tests/test_detect_rate_limit.py` (33):
+  - a second press is refused in plain words and runs nothing (no search, no scan opened);
+  - the day is one key with a real 24-hour expiry and a digest, not the client's id;
+  - the next day it runs again (the key really expires);
+  - a key with no expiry is given one;
+  - five presses at once run detection once, and 20 direct claims at once give exactly one winner;
+  - a run whose searches all fail, or that raises, still counts;
+  - another client of the same agency is not limited;
+  - another agency's client is a 404 and spends nothing;
+  - a scan detects though the client's day is spent, and does not spend it;
+  - Redis down is a 503 and runs nothing (4 kinds of failure);
+  - the refusal's log line carries exactly `client_id`, `agency_id` and `retry_after_s`;
+  - a burst across one agency's clients shows as one agency;
+  - the wait is rounded up, in the sentence and in `Retry-After`.
+- **Negative controls:**
+  - **On this tree:** with `rate_limit.py` and `routers/competitors.py` put back to the previous commit, 32 of the 33 fail. The other agency's 404 holds without any check; the ordering control below shows it bites. Restored and checked with `cmp`.
+  - **The implementer's controls, each restored:**
+    - no check: 15 fail;
+    - the check before `get_client`: 1 (the other agency's 404);
+    - the check after the work: 10;
+    - a scan's detection through the check: 2;
+    - read-then-write instead of one step: 6;
+    - fail open: 4;
+    - a failed run gives its day back: 1;
+    - hours rounded down: 4;
+    - `Retry-After` without its floor: 1;
+    - the raw client id in the key: 1;
+    - the key in the log line: 1;
+    - `agency_id` dropped or wrong: 2.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 26, shared-types 53 (0 fail), design-system 935, web 1708, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts`, regenerated in this commit for the route's description, regenerate with no further change.
+- Exit codes were read from files.
+
+# The report's reason for leaving out Citation Strength names the trusted sources the code counts
+
+**2026-10-03, the sixteenth entry of the day; branch `pilot-fixes-4`, the founder's brief "search accuracy, guardrails and pilot hardening" (item C1).** One item, one commit.
+
+**Render: nothing to set. No endpoint, schema, dependency or outbound host change.** One sentence of report copy changes, on screen and in the PDF.
+
+Drift check (north-star §8): Layer 1, Delivery (what the report says about a score); lifecycle phase: Activation (Epic 9), the report a pilot sends.
+
+## 1. What was found
+
+- **The scans.** Three production scans of 2026-10-03:
+  - two were scored with `excluded=['citation_strength']`: one whose competitor set was carried forward from an earlier scan, and the new `.in` client (`flags=['WEAK_COMPETITOR_SET']`);
+  - the new `.com.au` client was scored with `excluded=[]`.
+- **The rule, by elimination.** `compute_score` leaves Citation Strength out for one of three reasons, in this order:
+  1. `NO_AWARENESS_POPULATION`, no awareness answers;
+  2. `NO_AUTHORITY_DATA`, the awareness answers cite no domain with an authority tier;
+  3. `NO_COMPETITOR_SET`.
+
+  The `scoring.completed` line lists the dimensions left out, not the reason, so the reason was found by elimination:
+  - Share of Voice was measured on all three scans. It is left out under `NO_COMPETITOR_SET` from the same test (`no_competitors`), so that reason did not apply.
+  - Mention Rate was measured, so the scans had awareness answers.
+
+  So both exclusions were `NO_AUTHORITY_DATA`: nothing the engines cited in those scans' unprompted answers is on either tier. The `.com.au` scan's answers cited at least one domain that is.
+- **Not a bug.** The rule works as designed.
+  - The first tier is a fixed list (`services/domain_authority.py`): government, military and education domain suffixes, with their country forms such as `.gov.au` and `.edu.au`, which are handled; Wikipedia, Wikidata, the AP, Reuters, the BBB, Trustpilot, G2 and Capterra.
+  - The second tier is built from this platform's own history: domains cited across at least three client industries and five clients, market participants left out. In production that history is a few days of pilot scans; how many domains it holds there was not checked (no access to production's database).
+- **The report's words, sentence by sentence, against the code:**
+  - True: the dimension weighs the sources an answer cites when it names the brand; the three-industries, five-clients rule and the market participants left out; nothing cited in the unprompted answers is on either tier, so the weight is spread across the others; the second tier's uncalibrated classification; the citations are still shown in the evidence below (beat 03 on screen and in the PDF, under the exclusion note).
+  - **Not true:** the first tier was described as "government and university domains, Wikipedia, …". The list also holds military domains and Wikidata, and its education suffixes cover schools and other bodies, not only universities.
+
+## 2. What changed
+
+- **The enumeration,** in `report_narrative.EXCLUSION_DETAIL["NO_AUTHORITY_DATA"]` and its word-for-word twin in `strings.ts`, now reads "government, military and education domains, Wikipedia and Wikidata, the AP and Reuters wire services, and the cross-industry review platforms (Better Business Bureau, Trustpilot, G2, Capterra)". The shared fixture (`packages/shared-types/fixtures/report-copy.json`) is regenerated.
+- **A test ties the sentence to the code** (`tests/test_report_copy.py`). Every kind of suffix and every named domain on the curated list must be named in the sentence, and the sentence may name nothing that is no longer on the list. So a change to the list fails until the copy follows.
+
+## 3. The review
+
+- **UI review (sonnet): PASS WITH NITS**, no Blocker, Major or Minor.
+  - Checked: everything on the code's list is named and nothing that is not; the API string, the web string and the fixture are byte-identical; no other screen or document restates the list; `docs/scoring-spec.md` agrees.
+  - **Taken:** semicolons between the list's items, because three of them carry their own "and".
+
+## Found, not fixed
+
+- **`scoring.completed` logs which dimensions were left out but not why,** so a production question like this one needs elimination. A reason per dimension on that line would answer it directly. That is a small logging change, not a bug, so it was not made.
+- **The sentence's thresholds** ("three client industries and five clients") are not tied by a test to `MIN_PLATFORM_INDUSTRIES` and `MIN_PLATFORM_CLIENTS`.
+
+## Verified
+
+**API pytest 3234 → 3235 (+1); floor raised to match.** Web 1708, unchanged: the parity tests read the regenerated fixture. One test is skipped on macOS as before: it reads Linux's `/proc`.
+- `test_the_tier_a_list_in_the_sentence_is_the_list_in_the_code`.
+- **Negative controls:**
+  - The old sentence fails the new test, which names exactly what it lacks: education, military, Wikidata.
+  - The implementer's mutations, each restored, all fail:
+    - the copy dropping Wikidata or military;
+    - the code gaining a named domain or a suffix label the sentence does not cover;
+    - the code losing `mil` or `wikidata.org`.
+  - One mutation passes: a name added to the sentence that is on no list. That is a stated limit of the test, which knows only its own table of names.
+- **The web side:**
+  - The parity tests (`copyContract.test.ts` with `test_report_copy.py`) pass on the regenerated fixture.
+  - A PDF rendered with this exclusion carries the new enumeration and not "university domains".
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 26, shared-types 53 (0 fail), design-system 935, web 1708, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# The fix list, the PDF and the Technical screen say only what the audit read about robots.txt, the organisation markup and dates
+
+**2026-10-03, the seventeenth entry of the day; branch `pilot-fixes-4`, the founder's brief "search accuracy, guardrails and pilot hardening" (launch checklist 3.49).** One item, one commit.
+
+**Render: nothing to set. No endpoint, schema, dependency or outbound host change.** Report copy changes on screen and in the PDF, and on the client Technical screen.
+
+Drift check (north-star §8): Layer 4, Prescription (the fix list), and the Layer 1 surfaces that print it; lifecycle phase: Activation (Epic 9), the report a pilot sends.
+
+## 1. What changed
+
+The founder's standard: every sentence true, the same as 3.39. Each new sentence was checked by running `services/technical_audit.py`'s own functions, not only by reading them; those runs are now tests.
+
+- **`ROBOTS_TXT_DISALLOW`** (the fix table in `strings.ts` and `report_narrative.py`, and the PDF):
+  - **Title:** "Stop robots.txt from blocking the crawlers that build AI answers" → "Remove Disallow: / from the User-agent: * rules in robots.txt".
+  - **Detail:** "… Until that is lifted, nothing else on this list can take effect …" → "The audit found a Disallow: / rule under User-agent: * in the site's robots.txt. That rule asks crawlers that have no rule of their own to stay out of the whole site, except where another rule lets them in. A crawler that obeys it does not read the pages it covers. Removing it, or narrowing it to the paths that should stay private, clears this finding."
+  - **Why:** the check reads only the `*` group's `Disallow: /` lines. It ignores Allow lines and every named crawler's group, so a site that admits an AI crawler by name is still flagged.
+  - The finding also reaches reports where our crawler was let in and read the page, so the rest of the list could take effect.
+- **`NO_ORGANIZATION_OR_LOCALBUSINESS`:** "Nothing on the page states, in machine-readable form, what this organisation is …" → "The audit found none of Organization, Corporation, OnlineBusiness, LocalBusiness, Dentist, Restaurant, Store or MedicalBusiness in the audited page's JSON-LD or microdata. Adding Organization or LocalBusiness markup to the homepage clears this finding."
+  - A page marked up as `ProfessionalService` does state what it is, and still fails.
+  - A test runs the remedy through `build_checks`: fail before, pass after.
+- **`NO_DATE_SIGNAL_AVAILABLE`:** "No date could be found anywhere on the page …" → the audit read no date from the page's Last-Modified header or a JSON-LD `datePublished`/`dateModified`; dates printed on the page are not read; a JSON-LD `dateModified` (YYYY-MM-DD) or a Last-Modified header gives it one.
+  - This fix cannot reach a report's list today: the check is `not_applicable` whenever it carries this code. The copy is made true anyway.
+- **`CONTENT_STALE`,** found by the review: its title told the reader to "publish a visible updated date", which the audit cannot read. The new copy:
+  - **Title:** "Refresh the audited page and publish an updated dateModified in its JSON-LD".
+  - **Detail:** it states the real rule. The newest of the header and JSON-LD dates is more than 180 days old (a warning to 365 days, a failure after). Dates printed on the page are not read. A JSON-LD `dateModified` or a Last-Modified header from the last 180 days clears it.
+- **The Technical screen** (`apps/web/src/lib/client/technical.ts`):
+  - **The "Not in this score" card** said "The site publishes no date signal at all". The audit reads one page, so it now says what the audit read and that printed dates are not. It names the component the screen shows, "Content Freshness", whose weight was shared across the others: proven by scoring a page with no date (30/20/25 become 40.00/26.67/33.33).
+  - **The date check's sentence** said "structured data" where only JSON-LD is read.
+- **The fix list's own sentences** (`ReportView.tsx`, and the PDF where it has a twin):
+  - **The lead** said "Ordered by the points each one recovers" though the sort puts a noindex tag, a `Disallow: /` rule or a missing robots.txt first (`derive.ts`, `BLOCKING_FIX_IDS`, now exported). The old robots detail had been the only explanation.
+    - It now names that exception, and only when such a fix is in the list, so a site whose robots.txt was never read is never told about it.
+    - When no fix has a point figure (an unscored report, or all gaps under 2 points), it says "None of these changes has a point figure, so none is ranked by the points it recovers." and does not explain point figures that are not there.
+  - **The generated-wording note** said the order was "the same gap calculation that drew the chart". It now says "Which changes appear, their order, and the points beside them are computed, not written." (without "and the points beside them" when there are none). A test proves the order and the points do not move when wording is generated.
+  - **The heading** said "1 changes" and "N specific changes the audit named" (untrue of a list holding the citation fix, which is not an audit finding). It now reads "1 change" and "N specific changes from this scan", on screen and in the PDF.
+- **Comments only:** five developer comments that restated "nothing else on the list can take effect" (`report_narrative.py`, `derive.ts`, `fix_generator.py`, and two tests), and two in `technical_audit.py`. A check proves that module's code is unchanged apart from comments and docstrings.
+- **Parity.** No shared fixture held these codes, so `auditFixWording.test.ts` reads the API's table out of `report_narrative.py` and compares all 16 entries with `strings.ts`. `test_audit_fix_wording.py` pins the text and runs each claim against the audit. The eight type names are read back from `TRACKED_SCHEMA` on both sides, so widening that check (3.48) fails both suites until the copy follows.
+
+## 2. The review
+
+- **UI review (sonnet), three passes: PASS WITH NITS**, no Blocker or Major.
+- **Taken:**
+  - the robots title naming the `User-agent: *` group;
+  - `CONTENT_STALE`;
+  - "clears this finding" for the entity fix;
+  - the Technical card in one voice;
+  - the lead's exception, conditional, split in two, and the no-figure case;
+  - the generated-wording note;
+  - the heading's singular and "from this scan";
+  - the comments.
+- Each pass checked every new sentence against `technical_audit.py` and `derive.ts`: the 180 and 365-day thresholds, the newest-date rule, the blocking ids and the sort, and the `enrich` overlay.
+
+## Found, not fixed
+
+- **The landing page and the pricing card claim an ordering the code does not use:** "specific changes ordered by what they would move and what they would cost to do" (`LandingView.tsx`) and "Named fixes, ordered by what they would move and what they would cost you" (`PricingCard.tsx`). The order is by points; effort is shown, never sorted on. Proposed: "…ordered by the points each would recover, with the effort of each shown beside it." Marketing copy is the founder's to change.
+- **The fix generator's model inputs** still say that something which blocks the others outranks something worth more points (`SYSTEM_PROMPT` and the `priority` field description in `fix_generator.py`). That invites generated wording like "this blocks everything else". Changing model input is the founder's call.
+- **Checks that look wrong, not copy** (scoring inputs, so a `FORMULA_VERSION` question, with 3.48):
+  - the blanket robots check ignores Allow lines and reads only the start host's file;
+  - the entity check misses an IRI-form `@type` (`https://schema.org/Organization`);
+  - the fix list puts a missing robots.txt (a warning, which blocks nothing) above every measured gap.
+- **Three other fix entries carry softer versions of the same pattern** and were not in the item: `META_ROBOTS_NOINDEX`, `MULTIPLE_H1` ("Several competing", where the check fires at two) and `NO_PRODUCT_OR_SERVICE_SCHEMA`.
+
+## Verified
+
+**API pytest 3235 → 3284 (+49) and web vitest 1708 → 1738 (+30); floors raised to match.** One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **New tests:**
+  - `tests/test_audit_fix_wording.py` (39): the four entries pinned character for character; the claims run against the audit (eight robots.txt bodies, dated JSON-LD and Last-Modified, 180 passing and 181 stale, the page read containing no date reader, the entity remedy clearing the finding, the weight shared); the eight types read back; the order the lead describes.
+  - `tests/test_report_pdf.py` (+10): each entry's PDF text, with none of the old phrases and no code; the PDF heading's five cases.
+  - Web: `auditFixWording.test.ts` (the 16-entry parity, the types read back); `ReportView.test.tsx`, `technical.test.ts`, `ClientTechnicalView.test.tsx` and `derive.test.ts` (the new sentences per state, the lead's variants, the order, the heading, the note).
+- **Negative controls:**
+  - **On this tree:** with the eight source files put back to the previous commit, 18 API and 25 web tests fail. Restored and checked with `cmp`.
+  - **The implementer's controls,** over five rounds, each restored and checked:
+    - each old sentence put back on one side only, caught by its pin or by parity;
+    - a ninth entity type;
+    - the page read made to read `<time datetime>`;
+    - the robots check made to honour Allow lines;
+    - the stale threshold moved;
+    - newest-date replaced by oldest;
+    - a missing date scored as zero;
+    - promotion dropped from either sort;
+    - the lead always plain or always the exception;
+    - the singular heading and "the audit named" put back on each side;
+    - the note claiming points with none.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 26, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# The share bar says what is true of a link that is already live, and a copy is announced
+
+**2026-10-03, the eighteenth entry of the day; branch `pilot-fixes-4`, the founder's brief "search accuracy, guardrails and pilot hardening" (launch checklist 3.52).** One item, one commit.
+
+**Render: nothing to set. No endpoint, schema, dependency or outbound host change.** Web only: `ShareLinkBar.tsx`.
+
+Drift check (north-star §8): Layer 5, Distribution / Action (the share bar); lifecycle phase: Activation (Epic 9), the moment an agency gets the link it will send.
+
+## 1. What changed
+
+Since 3.28 a press of "Get shareable link" on a live link returns that link as it is. The bar still spoke as if it made one, and Copy changed only its button's name.
+
+- **The lead.** When the report loads with a live link, the lead read "Creates a link anyone can open without an account. …". It now reads "This report has a live link. Anyone with the link can open the report without an account. Links last 30 days from when they are created. Only share it with the client this report is about."
+  - With no link live it is unchanged.
+  - A press that returns the live link leaves the lead as it was, because any change to it would be read out on top of "Link ready".
+  - After the live link is withdrawn the lead goes back to "Creates a link…", as a NEW element (a key on whether a link was live to begin with). The change is not read out beside "Link withdrawn…", which already said what happened. A refusal keeps the key, so it is still announced.
+- **The busy label** on a press while a link is live is "Getting the link…", not "Creating…". With no link it stays "Creating…".
+- **A failed press** with a link live says "We could not get the link. Try again.", not that it could not be created. With no link it is unchanged. 3.33's focus stays: back to Get, which is described by the sentence.
+- **Copy:** a successful copy puts "Link copied." in a second visually hidden paragraph of the status region, which is now `aria-atomic="false"`.
+  - "Link ready. It works until …" is not read again.
+  - Each copy makes a new element, so a second copy is heard again.
+  - A refused copy says nothing, as before: the link is on screen and selectable.
+
+## 2. The review
+
+- **UI review (sonnet): FAIL on one Major, then PASS WITH NITS.**
+  - **The Major, fixed:** a failed press on a live link still said the link "could not be created".
+  - **Also taken:** the remount key on the lead, so a withdraw does not read the lead's change aloud beside "Link withdrawn…" (a Minor); and the plainer lead without "anyone with its address" (a Nit).
+  - **Left (Nit):** after a fresh mint the lead still says "Creates a link…" above the new link. It is true of the bar, and changing it would read the whole lead aloud on top of "Link ready".
+- **Checked clean:** the date still shows once (3.38); focus and selection after a mint (3.33); only `avp-visually-hidden` added; `aria-atomic="false"` overriding `role="status"`'s implicit atomic.
+
+## 3. In a browser: the founder's two checks
+
+These were verified, as the founder could not. The run used the real production build of the web app (`next build`, then `next start`) in Chromium. Every `/api/v1` call the pages made was answered from responses the real API produced: captured in-process by the suite's own fixtures against a test database (sign-up, a scored scan, the mint, the dashboard with one link, the withdraw, the dashboard again). No account was made on any running server. A recorder on the proxy target logged no server-side API call.
+
+- **(a) The link's date shows once.** After "Get shareable link", "02 Nov 2026, 12:44 UTC" (the API's `expiresAt`) is on screen exactly once, on "The link works until …". "Link ready. It works until …" is in the clipped status region. After Copy, the status region also holds "Link copied." and the date is still on screen once.
+  - Playwright's `is_visible()` and `innerText` both count clipped text, so the count walks the computed styles. Unhiding the status paragraph makes it 2, so the count can see a duplicate.
+- **(a2) A link live on load:** the new lead, the date once, and "Getting the link…" while a (delayed) press is in flight.
+- **(b) The dashboard's step goes dark after the only live link is withdrawn.**
+  - Before: "4/5, Four of five lit." with "Share a report" done ("Done: … One live link.", the lamp lit).
+  - The withdraw on the report page: the question, then "Link withdrawn. It no longer opens this report.".
+  - After: "3/5, Three of five lit." with the step to do ("To do: … Open a report and create its link.", the lamp dark).
+- **Screenshots:** `docs/screenshots/share-bar-2026-10-03/`, 13 bar and card crops, light and dark for (a). The token in the link field belongs to a test database that is now empty.
+
+## Found, not fixed
+
+- **A focused link field draws a ring inside a ring:** the global `input:focus-visible` shadow plus the field's own `:focus-within` ring. This is checklist 3.40, open.
+- **"Copied" does not go back to "Copy"** until the link changes, so "Link copied." stays in the status region as long. Pre-existing.
+- **Settings' invite link** (`SeatsPanel.tsx`, Copy link → Copied) has the same name-only pattern.
+- **No screen reader was run.** The structure is proven in jsdom and Chromium's accessibility tree, and the checklist's listening step stays the founder's.
+
+## Verified
+
+**Web vitest 1738 → 1781 (+43); floor raised to match.**
+- `ShareLinkBar.wording.test.tsx` (43): the lead per state, kept across a press and returned after a withdraw; the busy label per state; the failed-press sentence per state; the lead element kept across press, mint, Copy and a refusal and new after a withdraw; "Link copied." beside the untouched ready sentence, re-made on each copy; silence on a refused copy and with no clipboard; the date shown once in every state.
+- Updated in place for the new strings: `ShareLinkBar.linkReady.test.tsx` and `ShareLinkBar.liveLink.test.tsx`.
+- **Negative controls:**
+  - **On this tree:** with `ShareLinkBar.tsx` put back to the previous commit, 33 of the 165 of the five ShareLinkBar files' tests fail. Restored and checked with `cmp`.
+  - **The implementer's 18 single mutations** each failed at least one test. They covered:
+    - the lead or busy label stuck;
+    - no "Link copied." or no key on it;
+    - the region left atomic;
+    - the lead flipping on a press or stuck after a withdraw;
+    - the ready sentence drawn visibly (3.38);
+    - a refused copy announced;
+    - the live failed-press sentence wrong either way;
+    - the lead's key missing, following the state or flipping on a refusal.
+- **The rest of the bar** (this tree, one run):
+  - Counts: API 3284 (one test skipped on macOS as before), workers 26, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# The web app and the API send security headers on every response, with the full content security policy in report-only mode
+
+**2026-10-03, the nineteenth entry of the day; branch `pilot-fixes-4`, the founder's brief "search accuracy, guardrails and pilot hardening" (launch checklist 3.1).** One item, one commit.
+
+**Render: nothing to set. No endpoint, schema, dependency or outbound host change.**
+- The API's container start line gains `--no-server-header`, so its image changes.
+- After the deploy, check the headers on a served response (1.1f).
+- Use a GET: the API's GET routes answer HEAD with 405, so `curl -sI` misleads there. `curl -sS -D - -o /dev/null <url>` shows a GET's headers.
+
+Drift check (north-star §8): Layer 1, Delivery (how both hosts answer a browser); lifecycle phase: Activation (Epic 9), hardening before the first pilots.
+
+## 1. What changed
+
+- **The web app** (`apps/web/next.config.mjs`). Every route except the proxied `/api/v1/*` gets:
+  - `Strict-Transport-Security: max-age=63072000; includeSubDomains` (no `preload`);
+  - `X-Content-Type-Options: nosniff`;
+  - `Referrer-Policy: strict-origin-when-cross-origin`;
+  - `X-Frame-Options: DENY`;
+  - an enforced `Content-Security-Policy: frame-ancestors 'none'`, the anti-framing directive alone, which cannot break a script;
+  - `Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()`;
+  - and a `Content-Security-Policy-Report-Only` holding the full policy: `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'`.
+
+  More on the web side:
+  - `img-src` allows `https:` because an agency's logo may be on any https host: the column's constraint is `logo_url LIKE 'https://%'`.
+  - The token pages keep `Referrer-Policy: no-referrer` and `X-Robots-Tag: noindex, nofollow`: their entries come after the site-wide one, and Next lets a later value win.
+  - The site-wide pattern, `/((?!api/v1(?:/|$)).*)`, is the exact complement of the proxy rewrite, so `/api/v1` carries the API's own set once.
+  - `poweredByHeader: false` drops `X-Powered-By: Next.js`.
+- **The API:** a pure ASGI middleware (`avp_api/security_headers.py`).
+  - **The headers:** `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Content-Security-Policy: frame-ancestors 'none'`, `Referrer-Policy: no-referrer`, the same HSTS and the same Permissions-Policy, each unless the response already set that header.
+  - **Where it sits:** it is the outermost layer, so CORS preflights and the Origin check's 403 carry them too. CORS still sits outside everything that reads or answers a request; this layer reads and answers nothing.
+  - **What it touches:** only the response's start message, so a streamed response still streams and the PDF keeps its own `Content-Disposition` and `Cache-Control`.
+  - **The start line:** `docker-entrypoint.sh` adds `--no-server-header`, so there is no `Server: uvicorn`.
+- **Why the full CSP stays report-only:** Next inlines its own scripts, so dropping `'unsafe-inline'` needs a nonce per request, which means rendering every page per request. Google sign-in, Stripe and the signed-in pages could not be exercised here.
+- **Drift guards:** the HSTS and Permissions-Policy values sent by the web and the API are cross-checked by a test. Any page nested under a `[token]` route must carry its own no-referrer and noindex entry, or the web tests fail.
+- **`docs/api-contracts.md`:** a convention bullet listing the six headers.
+
+## 2. On a real build
+
+- **Setup:** `next build` and `next start` in a worktree, with the API on uvicorn behind it.
+- **`curl`:** every header once on public pages, the 404 and a static asset; `no-referrer` with `noindex, nofollow` on the seven token pages; the API's six on `/api/v1/health` directly and through the proxy, with no web set riding along; no `X-Powered-By` and no `Server` header anywhere.
+  - This also answers checklist 3.10 on a served response, locally: the seven token paths carry noindex and no-referrer.
+- **Playwright in Chromium, 17 page loads, report-only CSP: zero violations.**
+  - Public pages, the credential pages with and without a fragment, and the signed-out app shells.
+  - Positive controls show the probe sees violations: a `default-src 'none'` page gave 73, and an injected https logo gave one under `img-src 'self' data:` and none under the shipped policy.
+
+## 3. The review
+
+- **Security review (opus): PASS WITH NITS**, nothing at Medium.
+  - Checked clean:
+    - CORS: preflights, refused origins and credentials as before;
+    - the Origin check, unaffected;
+    - the exclusion pattern, matched against the same raw path as the rewrite (case, trailing slash, `/api/v10`, `%2F`);
+    - the token pages' override;
+    - Permissions-Policy, which keeps clipboard writing for the copy buttons;
+    - streaming and the PDF;
+    - nothing leaked.
+  - **Taken:** no `Server` and no `X-Powered-By`; the HSTS cross-check; a stale "CORS stays outermost" docstring; nested `[token]` pages caught.
+
+## Found, not fixed
+
+- **Responses built outside the middleware stack carry no security headers:** Starlette's 500 for an unhandled exception, uvicorn's own 400s, Next's 308 redirects, and Next's proxy error when the API is down. Each body is fixed text, and HSTS is already cached from other responses. An exception handler that sets the headers itself would cover the API's 500.
+- **HSTS is sent in every environment.** Browsers ignore it over http, so local development is unaffected unless someone serves localhost over https.
+- **Founder decisions:**
+  - **Enforcing the full CSP:** click through the live site signed in (Google sign-in, Checkout, the billing portal, a PDF download, a branded report) with the console open, and switch the header if no "[Report Only]" line appears. Enforcing as written adds no script protection while `'unsafe-inline'` stays. There is no endpoint collecting violations.
+  - **Framing is denied everywhere,** the share page included. That rules out embedding a share link, and the product spec's embeddable free-scan widget would need its own route left out.
+  - **`includeSubDomains`** is safe on today's two `onrender.com` hosts. Decide again when a custom domain is attached.
+
+## Verified
+
+**API pytest 3284 → 3310 (+26) and web vitest 1781 → 1841 (+60); floors raised to match.** One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **New tests:**
+  - `tests/test_security_headers.py` (25):
+    - each header's exact value, exactly once, on a 200, a 404, a 401, the Origin check's 403, allowed and refused preflights, a 429 with `Retry-After` kept, and the PDF;
+    - a sweep of all 59 method and path pairs;
+    - a route's own header kept, with mixed case counted;
+    - streaming;
+    - websocket and lifespan passed through;
+    - the web and API values compared.
+  - `tests/test_dockerfile.py` (+1): the entrypoint's real `exec uvicorn` line handed to uvicorn's own parser.
+  - `src/app/securityHeaders.test.ts` (57): effective headers for about 40 paths through Next's own route matcher and merge order, the complement of the proxy, the pinned config, nested token pages.
+  - `src/app/referrerPolicy.test.ts` (+3): the finder for nested token pages.
+- **Negative controls:**
+  - **On this tree:** with `main.py`, `next.config.mjs` and the entrypoint put back to the previous commit, 15 API and 43 web tests fail. Restored and checked with `cmp`.
+  - **The implementer's controls, each restored:**
+    - middleware not registered: 13 of 25 fail;
+    - inside CORS: the preflight and order tests;
+    - overwrite instead of keep;
+    - case-sensitive names;
+    - a buffering layer: the streaming test;
+    - Permissions-Policy or HSTS drift on either side;
+    - the site-wide rule moved last: 10 fail;
+    - the source `/:path*`: 10 fail;
+    - the enforced CSP grown: 24 fail;
+    - `--no-server-header` dropped or mistyped;
+    - `poweredByHeader: true`;
+    - a real nested token page with no entry: 5 fail.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 26, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# The API logs Redis's eviction policy at start and says when Redis has lost its data; every Redis key expires on its own, and a scan whose job vanished fails in plain words
+
+**2026-10-03, the twentieth entry of the day; branch `pilot-fixes-4`, the founder's brief "search accuracy, guardrails and pilot hardening" (item K1).** One item, one commit.
+
+**Render: nothing to set. No endpoint, schema, dependency or outbound host change.**
+- One new Redis key, `avp:sentinel`, with no expiry by design.
+- The first start after this deploy logs `redis.data_lost` once: expected, see 1.1f.
+
+Drift check (north-star §8): Layer 1, Delivery (the API's start-up and its sessions on Redis); lifecycle phase: Activation (Epic 9), pilots staying signed in and their scans telling the truth.
+
+## 1. What changed
+
+- **(a) `redis.eviction_policy`** (info, once, as the API starts, after `app.memory_at_start`):
+  - the instance's `maxmemory-policy`, from `CONFIG GET`;
+  - `unknown` when it cannot be had: a refused or renamed command, a timeout, nobody listening, or a reply that is not a policy name;
+  - it never fails the start and waits no longer than one Redis call's own timeouts.
+- **(b) `redis.data_lost`** (warning, no fields), from `avp_api/redis_watch.py`:
+  - `SET avp:sentinel <now> NX` at start and every 60 s in a background task. The process whose SET succeeds found the key missing and logs once, so two processes (a deploy's old and new instances) give one line.
+  - A Redis restart while the API keeps running is noticed within a minute. After a dead connection the check tries once more at once, so a restart is not noticed a tick late.
+  - Any Redis error, a full Redis under `noeviction` included, is skipped with at most a debug line holding the error's class.
+  - Shutdown cancels the task before it closes the pool.
+  - A fresh instance and a wiped one look the same, so the first start against any instance logs it once too.
+- **(c) Every key expires on its own,** now enforced by a test.
+
+  | Key family | Expiry | Where |
+  |---|---|---|
+  | `sess:<digest>` | 14 days | `sessions.py`, `SET … EX` |
+  | `user-sessions:<uid>` | 14 days, renewed on every new session | `sessions.py` |
+  | `rl:login:*`, `rl:change_password:*` | 15 minutes | `rate_limit.py`'s Lua, set on the first hit and repaired if missing |
+  | `rl:signup:*`, `rl:reset:*` | 1 hour | the same |
+  | `rl:detect_competitors:client:*` | 24 hours | `rate_limit.py` (3.53) |
+  | `google-state:*`, `google-ticket:*` | 10 minutes | `google_oauth.py` |
+  | Celery results | 24 hours (`result_expires`) | `apps/workers` |
+  | `avp:sentinel` | none, by design | `redis_watch.py` |
+
+  - **A session lasts 14 days from sign-in**, cookie and Redis alike, and is never extended: `SessionStore.touch` has no caller.
+  - **The Celery broker's own keys** (a queue list and a kombu binding set) cannot expire. They exist only once a task is sent, and nothing sends one: the API runs scans in its own process, and there is no workers service.
+- **(d) A scan whose job vanished.** Scans do not use Redis, so a Redis wipe cannot lose one. What can lose one is the API's process going away between accepting the scan and starting it. The never-started path covers that:
+  - a submitted scan still QUEUED more than 15 minutes after submission (strictly) is failed as `EXECUTOR_NEVER_STARTED`;
+  - this happens on the next `GET /dashboard`, `POST /clients/{id}/scans` or `GET /scans/{id}`. The scans list (`GET /clients/{id}/scans`) does not reap;
+  - an open dashboard re-reads every 5 s while a scan is unfinished, so the row turns within about 5 s of the 15-minute mark;
+  - the dashboard says "This scan did not start because our server restarted. It does not use up one of your scans.", with no code.
+- **`docs/runbook.md`, "Reading the Redis lines":**
+  - what the two lines mean;
+  - what a wipe loses: sessions, rate-limit windows, Google sign-ins in flight and detection days, not scans;
+  - the founder's trigger: upgrade during the pilot on `redis.data_lost` or memory above 50%, and do not change Key Value settings while pilots are signed in.
+
+## 2. Requeue instead of fail (for the founder; not built)
+
+- **Today,** a never-started scan spent nothing, and pressing Run again re-hands the same queued scan (it re-stamps `submitted_at`), so a manual requeue already exists.
+- **An automatic one would need:**
+  - the job's parameters on the row (`Scan` stores neither the engines nor the prompt limit), so a migration;
+  - a trigger that does not wait for someone to load a page;
+  - a retry cap, or a scan that kills the process loops;
+  - an allowance re-check, because the slot is released at minute 15.
+- **The conditional QUEUED → RUNNING claim already prevents a double run.** A requeued scan gets its full deadline from its claim, so the worst wait from Run to a result grows to about 55 minutes, against a clear "failed, free, run again" at 15.
+- **It earns its cost** if scans ever move onto Celery with a Redis that keeps nothing: the Postgres QUEUED rows would then be the recovery source.
+
+## Found, not fixed
+
+- **The scans list does not run the reaper,** so a client's scan history can show a never-started scan as queued until a dashboard or scan read reaps it.
+- **`policy=unknown` cannot say** whether the command was refused or Redis did not answer.
+- **Sessions never slide.** Whether a session should last 14 days from sign-in or from last use is the founder's call.
+
+## Verified
+
+**API pytest 3310 → 3382 (+72), workers pytest 26 → 27 (+1) and web vitest 1841 → 1842 (+1); floors raised to match.** One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **New tests:**
+  - `tests/test_redis_watch.py` (58):
+    - the policy read once and logged after the memory line;
+    - refusal, timeout, dead connection, malformed URL and odd replies give `unknown` and the start continues;
+    - an empty Redis gives one `redis.data_lost` with the key written with no expiry, a second check is silent, a deleted key gives exactly one more, and 2 and 10 racing clients give one line;
+    - a wipe is noticed on a later tick while the app runs;
+    - the task is cancelled before the pool closes;
+    - no error text reaches the log.
+  - `tests/test_redis_expiry.py` (11):
+    - every real writer driven, then every key's TTL checked within 30 s of its window, and the sentinel alone without one;
+    - an unknown key family fails, and a module importing Redis that is not classified fails;
+    - the session's lifetime, cookie and key, is never extended by use.
+  - `tests/test_scan_job_lost.py` (3): a scan whose job vanished is QUEUED at 14 minutes and FAILED `EXECUTOR_NEVER_STARTED` at 16, through the dashboard and through the scan's own read, never claimed, with no results; exactly 15:00 stays queued and a microsecond later fails.
+  - Web `DashboardView.test.tsx` (+1): the dashboard renders that sentence for such a row, with no code. Before, only the mapping was tested.
+  - Workers `test_celery_config.py` (+1): `result_expires` pinned.
+- **Negative controls:**
+  - **On this tree:** with `main.py` put back to the previous commit (no watcher at start), 7 of the 72 new API tests fail: the start-up ones. Restored and checked with `cmp`.
+  - **The implementer's controls, each restored:**
+    - a policy accepted unchecked, or able to raise;
+    - the lifespan skipping the watch;
+    - `SET` without `NX`;
+    - one check and no loop;
+    - a `stop` that does not cancel;
+    - the pool closed first;
+    - a field or error text on the line;
+    - no retry after a dead connection, or a retry on every error;
+    - each key family written without an expiry;
+    - `touch` wired into `get`;
+    - a 7-day default;
+    - an unregistered key family;
+    - `<=` for `<` at the window, or a 10-minute window;
+    - the dashboard not projecting the code;
+    - no lazy reap on the scan's read;
+    - the sentence removed;
+    - `result_expires=None`.
+- **The rest of the bar** (this tree, one run):
+  - Counts: shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- **Run for real:** uvicorn on a scratch Redis database logged `redis.eviction_policy policy=noeviction` then one `redis.data_lost`; deleting the sentinel while it ran gave a second about 55 s later; SIGTERM shut down cleanly.
+- Exit codes were read from files.
+
+# A migration takes every privilege in `public` away from Supabase's Data API roles, now and for tables added later
+
+**2026-10-04, the first entry of the day; branch `pilot-fixes-4`, the founder's brief "search accuracy, guardrails and pilot hardening" (item D1).** One item, one commit.
+
+**Render: nothing to set. One migration, `f45983cfa5e3`, runs in the API container before it serves, under `lock_timeout = '5s'`.** In Supabase it revokes the grants; on local and CI Postgres, where `anon` and `authenticated` do not exist, it does nothing. The founder's checks after the deploy are in `docs/runbook.md`, "Supabase grants check" (1.1f).
+
+Drift check (north-star §8): Layer 0, Trust substrate (no one reaches an agency's data except through the API); lifecycle phase: Activation (Epic 9), the database the pilots' data lives in.
+
+## 1. What changed
+
+The founder's facts (2026-10-03):
+- the Supabase Data API is now off;
+- `anon` and `authenticated` held REFERENCES, TRIGGER, TRUNCATE and MAINTAIN on all 25 public tables, with RLS on;
+- `postgres`'s default privileges in `public` gave both roles `Dxtm`.
+
+- **The revision** (`infra/db/migrations/versions/20261003_2302_f45983cfa5e3_revoke_data_api_grants.py`), one `DO` block, for each of `anon` and `authenticated` only if the role exists:
+  - **`REVOKE ALL … CASCADE` on every table, view, materialized view, partitioned or foreign table, sequence and routine in `public`** whose owner the migration user can act as. A REVOKE on anything else would fail the deploy, and no such object is AVP's: 24 model tables plus `alembic_version` is the founder's 25. Nothing is caught.
+  - **`ROUTINE`, not `FUNCTION`:** `ON FUNCTION` leaves a procedure's grant in place.
+  - **The migration user's own default privileges** in `public`, revoked for tables, sequences and functions (any role may change its own).
+  - **`postgres`'s default privileges** in `public`, revoked the same way when the migration user is a member of `postgres`, so a table Alembic adds later is not granted to either role.
+  - If the user is not a member, that step is skipped and `upgrade()` logs a warning through Alembic's logger, which reaches the deploy log. A Postgres NOTICE would not: `env.py` registers no listener, so asyncpg discards them.
+- **`downgrade()` does nothing,** on purpose: re-granting the Data API roles is never wanted.
+- **Left alone:** PUBLIC's default EXECUTE on routines (AVP has no function, view, trigger, sequence or extension in `public`), schema USAGE, `service_role`, other schemas, and the default privileges of any other owner role (`supabase_admin` among them).
+- **`docs/runbook.md`, "Supabase grants check":**
+  - **Before the deploy:** confirm the user part of `DATABASE_URL` is `postgres` (or `postgres.<project-ref>` through the pooler), and run a read-only query that lists objects in `public` whose owner `postgres` cannot act as. Expect none.
+  - **After it, three read-only queries:** the routines in `public` and whether each role can run them; every privilege either role, or PUBLIC, still holds on a relation or a column (expect none); and every default privilege naming either role (expect no `postgres` row for `public` or for every schema).
+  - **When to run them again:** after any change to the Data API settings, and after enabling an extension into `public`.
+  - The revision's docstring carries the same queries, and a test holds the two copies equal.
+- **Locks:** each per-object REVOKE takes an ACCESS SHARE lock on its object until the migration commits. It waits only behind an ACCESS EXCLUSIVE lock, bounded by the 5 s `lock_timeout`; app traffic neither waits nor blocks.
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS**, nothing at Medium.
+- **Taken:**
+  - only objects the migration user can act as are revoked, so a Supabase- or extension-owned object in `public` cannot fail every deploy (the `ALL … IN SCHEMA` form was measured failing outright on a stranger's table or sequence);
+  - the migration user's own defaults;
+  - the visible warning;
+  - query 3's reading, including every-schema defaults;
+  - query 2 reporting PUBLIC;
+  - the before-deploy step;
+  - CASCADE;
+  - a test of the production shape;
+  - a snapshot that nobody else's privileges change;
+  - a guard that no routine in `public` is left executable by PUBLIC;
+  - query 1's guidance.
+- **Checked clean:** the app's own role and `service_role` keep everything; schema USAGE is fine to leave; tenancy is not touched; the queries are read-only and carry no exploit detail; there is one Alembic head.
+
+## Found, not fixed
+
+- **`env.py` registers no asyncpg notice listener,** so any migration's NOTICE or WARNING never reaches the deploy log. This revision logs its one warning through Alembic instead.
+- **`tests/test_migrations.py` uses one fixed scratch database name per cluster,** so two worktrees running it at once can drop each other's.
+- **The library skill `supabase-ops` still says the revokes stay a founder step, not a revision.** This revision supersedes that.
+- **Not run on Postgres 17** (CI's version) on this Mac; all local runs were on 18.4. CI runs the suite and the migration on 17.
+
+## Verified
+
+**API pytest 3382 → 3406 (+24); floor raised to match.** One test is skipped on macOS as before: it reads Linux's `/proc`.
+- **`tests/test_supabase_grants.py` (23).** Each runs inside one transaction that is always rolled back, and a second connection confirms afterwards that no role was left behind. The tests:
+  - simulate Supabase (the roles, their table, sequence, routine and column grants, and `postgres`'s default ACLs, plus probe objects);
+  - after the revision, assert that neither role holds anything on any relation in `public` and that each app table was individually seen before and clear after;
+  - assert that nothing `postgres` creates later is granted to either role;
+  - assert that only existing roles are touched;
+  - cover a migration user that is not a member of `postgres` (only that step skipped, the warning logged);
+  - cover the production shape: a non-superuser `postgres` owning every table runs it silently and holds nothing afterwards;
+  - cover a stranger's table, sequence, function and procedure: skipped without error, and listed by the before-deploy query;
+  - assert that everyone else's privileges are unchanged;
+  - assert that `downgrade` re-grants nothing;
+  - assert that the runbook's queries equal the docstring's and find the grants before and none after;
+  - include a standing check on the test database as it is.
+- **`tests/test_migrations.py` (+1):** no routine in `public` is executable by PUBLIC on a freshly migrated database.
+- **Negative controls:**
+  - **On this tree:** with the per-object REVOKE replaced by `NULL;`, 14 of the 23 fail. Restored and checked with `cmp`.
+  - **The implementer's 23 mutations, each restored and checked by hash,** all fail at least one test. They covered:
+    - the ownership filter removed;
+    - tables, sequences or routines never revoked;
+    - `ROUTINE` changed to `FUNCTION`;
+    - the user's own defaults missing or partial;
+    - `service_role` revoked too;
+    - EXECUTE taken from PUBLIC;
+    - the default step needing a superuser, or removed;
+    - the warning at INFO, always logged, or run offline;
+    - the guards removed;
+    - `upgrade()` not running the SQL;
+    - `lock_timeout` dropped;
+    - `downgrade()` re-granting;
+    - three runbook queries broken.
+- **Alembic, on a freshly created empty database:**
+  - `upgrade head` (`3e8a5b7c9d14 -> f45983cfa5e3`), `check`, `downgrade -1`, `upgrade head` and `check` again all pass;
+  - an offline `upgrade head --sql` renders the block verbatim;
+  - the bar's own Alembic step ran it again on an empty database.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, web 1842, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `f45983cfa5e3`) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# A test proves the intake card says the crawler got no usable answer when a site's robots.txt does not answer, from the API's real response to the card
+
+**2026-10-04, the second entry of the day; branch `pilot-fixes-4`, the founder's brief "search accuracy, guardrails and pilot hardening" (item T1).** One item, one commit.
+
+**Render: nothing to set. Tests, a fixture and screenshots only; no product code.**
+
+Drift check (north-star §8): Layer 1, Delivery (the intake card), reading Layer 2's crawl; lifecycle phase: Activation (Epic 9), the first thing an agency sees after adding a client. It replaces the manual check in 1.1e step 5.
+
+## 1. What changed
+
+Both halves were tested, but separately. The API's tests (`test_robots_obeyed.py`) show intake of a site whose robots.txt does not answer returns `classificationReasonCode: ROBOTS_UNREACHABLE`. The card's test (`ClassificationResult.test.tsx`) renders the card given that code. Nothing tied the two: a change to the response's shape or code would have left both suites green while the card said something else.
+
+- **One fixture both suites read:** `packages/shared-types/fixtures/intake-robots-unreachable.json`, the real `POST /api/v1/clients` body for such a site.
+  - Its ids and times are replaced by fixed placeholders, after their shapes are checked.
+  - The API test writes it under `AVP_WRITE_FIXTURES=1`, because the API owns the body; a normal run asserts equality.
+- **The API test** (`tests/test_intake_robots_unreachable.py`, 10 tests):
+  - it signs up and posts `prospect-site.com`, with robots.txt timing out on the read (the suite's `robots_web` fake) and a browser stand-in that raises if the crawler starts one;
+  - it asserts 201, `unclassifiable`, `ROBOTS_UNREACHABLE`, no industry and only `/robots.txt` fetched;
+  - it asserts the normalised body equals the fixture;
+  - nine more prove the normaliser refuses a malformed id or time, so it cannot hide a shape change.
+- **The web test** (`src/app/intakeRobotsUnreachable.test.tsx`, 7 tests):
+  - it mounts the real intake page (`app/page.tsx`) in jsdom, with only `fetch` stubbed, the intake call answered with the fixture's bytes;
+  - it types the site and submits;
+  - it reads the card: the 3.41 heading, sentence and advice exactly (written out, not imported from the strings file), no upper-case code anywhere, not the "asks crawlers to stay out" wording, and no Run a scan.
+- **Screenshots:** `docs/screenshots/robots-unreachable-2026-10-03/card-light.png` and `card-dark.png`.
+  - The card from the real page, with the compiled design-system CSS and the real fonts.
+  - Visible text in both themes: "We could not read this site." / "The crawler tried to read the robots.txt of this site, or of an address the site sent it to, and did not get a usable answer. It obeys robots.txt, so without that answer it did not read the site. Check that the address is right and the site opens in a browser, then try again." / "Could not classify", with no code.
+
+## Found, not fixed
+
+- **A client whose crawl was refused still records `classifierModel` and `classifiedAt`,** though no model was called: `apply_outcome` copies the classifier's default model. No screen reads either field. A change of `CLASSIFIER_MODEL` will also need the fixture regenerated.
+- **The card shows "What we read: 0 pages · 0 words"** under "it did not read the site": true, and redundant (a copy decision).
+
+## Verified
+
+**API pytest 3406 → 3416 (+10) and web vitest 1842 → 1849 (+7); floors raised to match.** One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **Negative controls** (the implementer's, each restored and checked by hash):
+  - the fixture's code changed to `ROBOTS_DISALLOWED`: 3 web tests fail, and the API's equality test;
+  - the API made to return `ROBOTS_DISALLOWED` (`RobotsGate.refusal_code`): the API test fails;
+  - the fixture's field renamed (a shape change): 3 web tests fail;
+  - the card dropping its advice: 1 fails;
+  - the card printing `Reason: <code>`: 2 fail;
+  - another code printed: 1 fails;
+  - the page dropping the code between the request and the card: 1 fails (a bare-card render would not catch it, which is why the page is mounted);
+  - the API answering 500: the setup fails loudly, so no assertion passes on an empty card.
+- **On this tree:** the fixture's `classificationReasonCode` set to `ROBOTS_DISALLOWED` makes the API's equality test fail (1 of its 10) and 3 of the 7 web tests fail. Restored and checked with `cmp`.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# The launch checklist says what `pilot-fixes-4` closed, how to merge it, and every decision still open
+
+**2026-10-04, the third entry of the day; branch `pilot-fixes-4`, the founder's brief "search accuracy, guardrails and pilot hardening" (its finish).** One commit, `docs/launch-checklist.md` and this entry only.
+
+**Render: nothing to set.** This branch's one migration and its checks are in 1.1f.
+
+Drift check (north-star §8): no product layer; the launch plan. Lifecycle phase: Activation (Epic 9), what stands between the code and the first pilots.
+
+## 1. What changed
+
+- **Status and merge steps:**
+  - The status line says PRs #2 to #7 are merged (`main` at `942115a`).
+  - 1.1e is marked merged (PR #7). Its step 5 is now T1's automated test, and its steps 6 and 7 were checked in a browser on a local production build (3.52).
+  - **New 1.1f,** how to merge this branch: nothing to set, one migration (`f45983cfa5e3`), both services from one push. After the deploy:
+    - the Redis lines, including the one expected `redis.data_lost`;
+    - the Supabase grants check, before and after;
+    - the headers on served responses with a GET, which closes 3.10 on production;
+    - one scan's `serp.completed` lines and the `country` on `competitors.detected`;
+    - the report-only CSP clicked through signed in;
+    - the share bar listened to.
+- **Rows closed, each with its commit:**
+  - 3.1 (`f6e232d`);
+  - 3.3 (the founder's Data API switch, and D1 `c247ef9`);
+  - 3.4 (the founder's `noeviction`, with K1's facts);
+  - 3.10 (locally);
+  - 3.49 (`9d1b213`);
+  - 3.52 (`9760e1a`);
+  - 3.53 (`5a919c8`);
+  - 3.54 (the move);
+  - new 3.55 (S1, `596e403`), 3.57 (S2, `40c9a43`), 3.58 (C1, `3114aff`) and 3.59 (K1, `b3cdfb2`).
+- **The founder's decisions, recorded:**
+  - 3.2: after the pilots;
+  - 3.45: keep retrying reads;
+  - 3.46: accepted;
+  - 3.47: kept;
+  - 3.48: kept for a later formula version;
+  - 3.50: left until a pilot needs it;
+  - 3.51: kept going dark;
+  - 3.4: when to upgrade Redis, and not touching its settings while pilots are signed in.
+- **New rows, the decisions and follow-ups this brief found:**
+  - 3.56: detection's query shapes, US-only publisher list and missing country field;
+  - 3.60: sessions never slide;
+  - 3.61: an agency-wide cap or identity gate on the detect route;
+  - 3.62: no web button calls that route;
+  - 3.63: the landing and pricing copy's ordering claim;
+  - 3.64: the fix generator's model inputs;
+  - 3.65: audit checks that may read wrongly;
+  - 3.66: a search answer that is not a JSON object;
+  - 3.67: a hostname check at intake;
+  - 3.68: the header residuals;
+  - 3.69: D1's residuals;
+  - 3.70: the same announcement gap on Settings' invite link;
+  - 3.71: a refused crawl still recording a classifier model.
+
+## Verified
+
+**The final bar on this tree** (the commands of `ci.yml`, run locally; this commit changes no code, and no test reads either file it changes).
+- Counts: API 3416 (one test skipped on macOS: it reads Linux's `/proc`), workers 27, shared-types 53 (0 fail), design-system 935, web 1849, mypy 43 (ceiling 50).
+- Ruff is clean, all typechecks pass, the styleguide builds, and all six count gates pass through `assert_count.py`.
+- Both `uv lock --check` runs pass, and Alembic upgrade (through `f45983cfa5e3`) and check pass on an empty database.
+- The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+- OpenAPI and `api.gen.ts` regenerate with no change.
+- Over the branch:
+  - API 3074 → 3416;
+  - web 1708 → 1849;
+  - workers 26 → 27;
+  - design-system 935, shared-types 53 and mypy 43 unchanged.
+- SerpApi: 12 requests over the whole brief, all in S1's investigation; 5 counted against the plan.
+- Exit codes were read from files.

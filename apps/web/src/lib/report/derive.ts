@@ -68,6 +68,15 @@ const MAX_CITATION_FIXES = 1;
  */
 const MIN_GAP_POINTS = 2;
 
+/**
+ * The fixes that sort first, whatever their points: a finding on the `indexable` check (a
+ * `Disallow: /` rule under `*`, or a noindex) or on the `robots_txt_present` check (no
+ * robots.txt). `report_narrative.BLOCKING_FIX_IDS` and `fix_generator.BLOCKING_CHECK_KEYS`
+ * are the same rule, and the report's lead says it in words when the list has one
+ * (`FixBeat`).
+ */
+export const BLOCKING_FIX_IDS: readonly string[] = ['audit:indexable', 'audit:robots_txt_present'];
+
 export interface DerivedFix {
   id: string;
   title: string;
@@ -241,13 +250,15 @@ export function deriveNarrative(report: Report): DerivedNarrative {
  *
  * Ordered by recoverable points, because that is the only ranking the data
  * supports — a fix worth 19 points outranks one worth 4 regardless of how
- * satisfying either is to make. Audit fixes follow, ordered by the severity the
- * API already sorted them into, because they are concrete and cheap even where
- * their point value is not separately measurable.
+ * satisfying either is to make. The fixes with no point figure (the audit's
+ * findings and the citation fix) follow those that have one, in the alphabetical
+ * order of their ids: they are concrete and cheap even where their point value
+ * is not separately measurable.
  *
- * Blocking checks are the exception: a site telling crawlers to stay out is
- * promoted to the top whatever its point value, because nothing else on the
- * list can take effect until it is fixed.
+ * Crawl and indexing checks are the exception: a finding on the `indexable` or
+ * the `robots_txt_present` check sorts first, whatever its point value. The
+ * report's lead says so in words (`FixBeat`), and `report_narrative.py` and
+ * `fix_generator.py` apply the same rule.
  */
 export function deriveFixes(
   segments: readonly LedgerSegment[],
@@ -321,9 +332,9 @@ export function deriveFixes(
 
   const ordered = fixes.filter((f) => !notTheirProblem.has(f.id));
   ordered.sort((a, b) => {
-    // Crawl-blocking checks first: nothing else can take effect underneath one.
-    const blocking = (f: DerivedFix) =>
-      f.id === 'audit:indexable' || f.id === 'audit:robots_txt_present' ? 0 : 1;
+    // Crawl and indexing checks first (the `indexable` and `robots_txt_present` findings),
+    // then points, largest first, then id.
+    const blocking = (f: DerivedFix) => (BLOCKING_FIX_IDS.includes(f.id) ? 0 : 1);
     if (blocking(a) !== blocking(b)) return blocking(a) - blocking(b);
     if ((b.pointsUpside ?? 0) !== (a.pointsUpside ?? 0)) {
       return (b.pointsUpside ?? 0) - (a.pointsUpside ?? 0);

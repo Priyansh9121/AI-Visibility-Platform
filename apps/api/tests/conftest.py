@@ -29,7 +29,7 @@ from avp_api.config import Settings, get_settings
 from avp_api.deps import db_session, redis_client, scan_executor
 from avp_api.main import create_app
 from avp_api.models import Base
-from avp_api.services import audit_runner
+from avp_api.services import audit_runner, rate_limit
 from avp_api.services import competitors as detection
 from avp_api.services.cocitation import CoCitationHit, CoCitationResult
 from avp_api.services.scan_executor import InlineScanExecutor
@@ -328,6 +328,31 @@ def stub_discovery(monkeypatch):  # noqa: ANN001, ANN201
         monkeypatch.setattr(detection.cocitation_service, "run_seed_prompts", fake_run_prompts)
 
     return _install
+
+
+@pytest.fixture
+def a_day_passes(settings: Settings):  # noqa: ANN201
+    """Let every client's competitor-detection day run out, as it does after 24 hours.
+
+    `POST /clients/{clientId}/competitors/detect` runs once per client per 24 hours
+    (launch checklist 3.53). A test that re-detects a client on purpose (a corrected
+    set, a struck rival, a changed result) is a test of a LATER day, so it says so with
+    `await a_day_passes()` between the two runs, rather than the limit being switched
+    off for the whole suite. Without it the second press is a 429 and the test is not
+    testing what it names, and a test that does not check the second status can pass
+    without the second run ever happening.
+
+    Deleting the keys is what expiry does; `test_detect_rate_limit.py` lets a key expire
+    for real.
+    """
+
+    async def _pass() -> None:
+        redis = redis_module.get_redis(settings)
+        keys = [k async for k in redis.scan_iter(f"rl:{rate_limit.DETECT_ACTION}:client:*")]
+        if keys:
+            await redis.delete(*keys)
+
+    return _pass
 
 
 @pytest.fixture

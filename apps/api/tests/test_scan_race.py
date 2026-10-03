@@ -264,15 +264,19 @@ class TestTheDetectionPlaceholder:
         assert rows[0].started_at is None
 
     async def test_running_detection_twice_does_not_open_a_second_scan(
-        self, client: AsyncClient, session, stub_discovery
+        self, client: AsyncClient, session, stub_discovery, a_day_passes
     ) -> None:  # noqa: ANN001
         """Epic 3's intent, now enforced by the index rather than only hoped for."""
         await _sign_up(client)
         cid = await _make_client(client)
         stub_discovery(serp_domains=["zendesk.com"], cocit_brands=[("Zendesk", "zendesk.com")])
 
-        await client.post(f"{BASE}/clients/{cid}/competitors/detect")
-        await client.post(f"{BASE}/clients/{cid}/competitors/detect")
+        first = await client.post(f"{BASE}/clients/{cid}/competitors/detect")
+        # The button runs once per client per day; without this the second press is
+        # refused before it reaches `get_or_create_scan` and the test proves nothing.
+        await a_day_passes()
+        second = await client.post(f"{BASE}/clients/{cid}/competitors/detect")
+        assert (first.status_code, second.status_code) == (201, 201)
 
         total = (await session.execute(
             select(func.count()).select_from(Scan).where(Scan.client_id == cid)

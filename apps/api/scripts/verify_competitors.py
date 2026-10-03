@@ -110,7 +110,9 @@ async def run_case(case: Case, settings: Settings, serp_only: bool) -> dict:
             brand_name=case.brand, domain=case.domain,
             industry=case.industry, niche=case.niche,
         )
-        serp_results = await serp_service.search_many(queries, settings=settings)
+        serp_results = await serp_service.search_many(
+            queries, settings=settings, country=serp_service.search_country(case.domain)
+        )
         co_results: list[CoCitationResult] = []
         candidates = score_candidates(
             merge_candidates(

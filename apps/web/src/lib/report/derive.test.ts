@@ -21,6 +21,7 @@ import {
   scoreHeading,
   toLedgerDimensions,
 } from './derive';
+import { FIX_FOR_DETAIL_CODE } from './strings';
 import {
   failedAuditReport,
   generatedFixesReport,
@@ -218,12 +219,63 @@ describe('the fix list', () => {
         ...helpscoutReport.audit!.findings,
       ] as NonNullable<typeof helpscoutReport.audit>['findings'],
     );
-    // Nothing else on the list can take effect underneath a noindex.
+    // A noindex is a crawl and indexing finding, so it sorts first.
     expect(fixes[0]!.id).toBe('audit:indexable');
   });
 
   it('produces nothing to fix when there is nothing measured', () => {
     expect(deriveNarrative(insufficientDataReport).fixes).toEqual([]);
+  });
+});
+
+describe('the fix list is ordered as the report’s lead says — launch checklist 3.49', () => {
+  // `FixBeat` says: by points, except that a fix for a noindex tag, a Disallow: / rule in
+  // robots.txt or a missing robots.txt comes first when the audit names one; after it, changes
+  // with no point figure follow those that have one. The PDF prints the same order
+  // (`report_narrative.derive_fixes`): `test_audit_fix_wording.py` holds the same two lists.
+  type Findings = NonNullable<typeof helpscoutReport.audit>['findings'];
+  const finding = (checkKey: string, status: string, detailCode: string) =>
+    ({ id: `tchk_${checkKey}`, checkKey, status, value: null, detailCode }) as Findings[number];
+  const idsFor = (base: typeof helpscoutReport, findings: Findings) =>
+    deriveNarrative({ ...base, audit: { ...base.audit!, findings } }).fixes.map((f) => f.id);
+
+  it('puts the promoted fix first, then the figures largest first, then those without one', () => {
+    expect(
+      idsFor(helpscoutReport, [
+        finding('sitemap_present', 'warn', 'NO_SITEMAP_XML'),
+        finding('indexable', 'fail', 'META_ROBOTS_NOINDEX'),
+      ]),
+    ).toEqual([
+      'audit:indexable',
+      'gap:citation_strength',
+      'gap:share_of_voice',
+      'gap:sentiment',
+      'audit:sitemap_present',
+      'citation:eesel.ai',
+    ]);
+  });
+
+  it('promotes the robots.txt and noindex fixes over the alphabet, and no other crawlability fix', () => {
+    // `audit:canonical_present` sorts before both promoted ids, and a sitemap is about indexing
+    // too: neither is promoted.
+    expect(
+      idsFor(unscoredReport, [
+        finding('canonical_present', 'warn', 'NO_CANONICAL_LINK'),
+        finding('robots_txt_present', 'warn', 'NO_ROBOTS_TXT'),
+        finding('indexable', 'fail', 'ROBOTS_TXT_DISALLOW'),
+      ]),
+    ).toEqual([
+      'audit:indexable',
+      'audit:robots_txt_present',
+      'audit:canonical_present',
+      'citation:eesel.ai',
+    ]);
+  });
+
+  it('names the three promoted fixes in the words the lead uses', () => {
+    expect(FIX_FOR_DETAIL_CODE.META_ROBOTS_NOINDEX!.title).toContain('noindex');
+    expect(FIX_FOR_DETAIL_CODE.ROBOTS_TXT_DISALLOW!.title).toContain('Disallow: /');
+    expect(FIX_FOR_DETAIL_CODE.NO_ROBOTS_TXT!.title).toBe('Publish a robots.txt');
   });
 });
 

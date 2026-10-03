@@ -36,10 +36,19 @@ export const COMPONENT_LABEL: Record<string, string> = {
  *
  * The API sends a machine code; this is the only place it becomes prose, the
  * same split `EXCLUSION_REASON` uses on the report.
+ *
+ * `NO_DATE_SIGNAL_AVAILABLE` says what the audit read, in the terms of its row
+ * (`CHECK_DETAIL_SENTENCE`) and of the fix list's sentence (launch checklist 3.49). It used
+ * to say "The site publishes no date signal at all", which is untrue of a site: the audit
+ * reads one page, its Last-Modified header and the datePublished and dateModified in its
+ * JSON-LD, and no date printed on it (`technical_audit.py`). It then says why the component
+ * is left out, in one voice: a page with no readable date is not scored as stale, and the
+ * weight of Content Freshness (the name `COMPONENT_LABEL` gives it, which the card's own
+ * label uses) is shared across the components that could be measured (`effective_weights`).
  */
 export const EXCLUSION_COPY: Record<string, string> = {
   NO_DATE_SIGNAL_AVAILABLE:
-    'The site publishes no date signal at all — no Last-Modified header and no dated structured data. Scoring that as stale would punish a publishing convention rather than a visibility problem, so its weight was shared across the components that could be measured.',
+    'The audit read no date from the audited page’s Last-Modified header or from a datePublished or dateModified in its JSON-LD. It does not read dates printed on the page. Scoring a page with no readable date as stale would punish a publishing convention rather than a visibility problem, so the weight of Content Freshness was shared across the components that could be measured.',
 };
 
 /**
@@ -63,16 +72,22 @@ export const EXCLUSION_COPY: Record<string, string> = {
  *
  * Codes the fix list words, where that wording, standing alone on a row as the statement
  * of what the check found, says more than the check found or points at something that is
- * not on the row: "nothing else on this list" (`ROBOTS_TXT_DISALLOW`), "excluded from the
- * indexes these answers are drawn from" (`META_ROBOTS_NOINDEX`), "Without it"
- * (`NO_PRODUCT_OR_SERVICE_SCHEMA`), "anywhere on the page" (`NO_DATE_SIGNAL_AVAILABLE`,
- * which looks at the Last-Modified header and the structured data, not the page's text),
- * "Several competing" (`MULTIPLE_H1`, which is two or more) and "Nothing on the page
- * states … what this organisation is" (`NO_ORGANIZATION_OR_LOCALBUSINESS`, which looks
- * for eight type names only: `technical_audit.TRACKED_SCHEMA`, so `ProfessionalService`
- * or `Plumber` markup fails it). The fix table is left as it is: the report's fix beat
- * and the PDF (`report_narrative.py`) share it. Those six say what the check found, in
- * this screen's own words.
+ * not on the row: "excluded from the indexes these answers are drawn from"
+ * (`META_ROBOTS_NOINDEX`), "Without it" (`NO_PRODUCT_OR_SERVICE_SCHEMA`) and "Several
+ * competing" (`MULTIPLE_H1`, which is two or more). The fix table is left as it is for
+ * those: the report's fix beat and the PDF (`report_narrative.py`) share it.
+ *
+ * Three more said more than the check found until launch checklist 3.49 reworded them in
+ * the fix table and in `report_narrative.py`: "nothing else on this list"
+ * (`ROBOTS_TXT_DISALLOW`), "anywhere on the page" (`NO_DATE_SIGNAL_AVAILABLE`, which looks
+ * at the Last-Modified header and the dates in the JSON-LD, not the page's text) and "Nothing
+ * on the page states … what this organisation is" (`NO_ORGANIZATION_OR_LOCALBUSINESS`,
+ * which looks for eight type names only: `technical_audit.TRACKED_SCHEMA`, so
+ * `ProfessionalService` or `Plumber` markup fails it). The fix table now says what the
+ * audit read, and it also says what to change; their rows keep the sentences below, which
+ * say what the check found and no more.
+ *
+ * All six say what the check found, in this screen's own words.
  */
 export const CHECK_DETAIL_SENTENCE: Readonly<Record<string, string>> = {
   LCP_NOT_OBSERVED:
@@ -87,7 +102,8 @@ export const CHECK_DETAIL_SENTENCE: Readonly<Record<string, string>> = {
     'The robots.txt this depends on asks crawlers like ours not to load this, so it was not checked.',
   [ROBOTS_UNREACHABLE]:
     'The crawler could not get a usable answer from the robots.txt this depends on, so it was not checked.',
-  // The fix list's six whose wording, alone on a row, says more than the check found.
+  // Six of the fix list's sixteen, in this screen's own words: on a row, the fix wording of
+  // three said more than the check found (the fix table's three were reworded under 3.49).
   // `ROBOTS_TXT_DISALLOW` reaches a row only on an audit that was read, so AVPScanBot was let
   // in by its own group or an Allow: the rule is under `*` (`technical_audit.py`).
   ROBOTS_TXT_DISALLOW:
@@ -97,7 +113,7 @@ export const CHECK_DETAIL_SENTENCE: Readonly<Record<string, string>> = {
   NO_PRODUCT_OR_SERVICE_SCHEMA:
     'The audited page has no Product or Service markup, so what the business sells has to be inferred from page copy rather than read from the markup.',
   NO_DATE_SIGNAL_AVAILABLE:
-    'No usable Last-Modified header and no datePublished or dateModified in the page’s structured data was found, so its freshness cannot be established either way.',
+    'No usable Last-Modified header and no datePublished or dateModified in the page’s JSON-LD was found, so its freshness cannot be established either way.',
   MULTIPLE_H1:
     'More than one top-level heading leaves the page’s subject ambiguous to anything parsing it.',
   NO_ORGANIZATION_OR_LOCALBUSINESS:

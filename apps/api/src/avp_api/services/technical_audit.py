@@ -843,9 +843,9 @@ TWO_PLACES = Decimal("0.01")
 
 # Component weights inside the Technical Foundation sub-score.
 #
-# Indexation is heaviest because it is a precondition, not a nicety: a site
-# telling crawlers to stay out has no technical foundation for AI visibility
-# whatever its markup looks like. Schema presence and structured data are §6's
+# Indexation is heaviest because it is a precondition, not a nicety: a crawler
+# that obeys a request to stay out does not read the markup, whatever the markup
+# looks like. Schema presence and structured data are §6's
 # two named inputs and are kept separate — "has any markup at all" and "has the
 # RIGHT markup for this business" are different findings with different fixes.
 #
@@ -1130,12 +1130,11 @@ def _robots_refused_checks(signals: AuditSignals, code: str) -> list[CheckVerdic
     the site's OWN file did (`_robots_file_checks`), so a site whose file was a 404 keeps
     its `NO_ROBOTS_TXT` finding even when the host it redirected to did not answer.
 
-    A blanket `Disallow: /` under `*` is a site telling every crawler, AI
-    ones included, to stay out. That is known from the file, and it stays the
-    `indexable` finding (`ROBOTS_TXT_DISALLOW`) it has always been: being
-    blocked from measuring is no reason to hide that the site blocks the
-    crawlers that build AI answers. Anything else about indexing needs the
-    page's own meta tags, so it is `not_applicable`.
+    A blanket `Disallow: /` under `*` asks every crawler that has no group of its
+    own to stay out. That is known from the file, and it stays the `indexable`
+    finding (`ROBOTS_TXT_DISALLOW`) it has always been: being blocked from
+    measuring is no reason to hide what the file asks. Anything else about
+    indexing needs the page's own meta tags, so it is `not_applicable`.
     """
     if signals.robots_allows_crawl:
         indexable = CheckVerdict("indexable", "not_applicable", None, code)

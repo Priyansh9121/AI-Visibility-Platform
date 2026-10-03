@@ -253,6 +253,79 @@ def test_generated_wording_is_used_when_it_exists() -> None:
     assert "The wording of these items was drafted against this scan" in text
 
 
+def test_the_pdf_says_what_is_computed_and_not_written_only_when_wording_was_generated() -> None:
+    """The screen says it too (`ReportView.test.tsx`, launch checklist 3.49): which items appear,
+    their order and what each is worth are computed, not written. It is true of `derive_fixes`,
+    which lays the generated wording over the derived list and moves nothing else
+    (`test_generated_wording_never_moves_a_number`)."""
+    generated = _visible_text(_render("scored-with-generated-fixes"))
+    assert (
+        "The wording of these items was drafted against this scan's own figures. "
+        "Which items appear, their order, and what each is worth are computed, not written."
+    ) in generated
+    assert "computed, not written" not in _visible_text(_render("scored-no-generated-fixes"))
+
+
+def _fix_case(
+    base: str,
+    *,
+    findings: list[dict[str, Any]] | None = None,
+    unclaimed: list[Any] | None = None,
+    subscores: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """A fixture case with its fix list narrowed: its findings, its unclaimed domains, its gaps."""
+    case = json.loads(json.dumps(CASES[base]))
+    if findings is not None:
+        case["audit"]["findings"] = findings
+    if unclaimed is not None:
+        case["proof"]["unclaimedCitedDomains"] = unclaimed
+    for dimension in case["dimensions"]:
+        dimension["subscore"] = (subscores or {}).get(dimension["key"], dimension["subscore"])
+    return case
+
+
+_CANONICAL = {
+    "id": "tchk_canonical", "checkKey": "canonical_present", "status": "warn", "value": None,
+    "detailCode": "NO_CANONICAL_LINK",
+}
+
+
+@pytest.mark.parametrize(
+    ("case", "heading"),
+    [
+        # With points: "worth" is the sum of the figures the list carries.
+        (_fix_case("scored-no-generated-fixes"), "6 changes, worth 40.6 points."),
+        (
+            _fix_case(
+                "scored-no-generated-fixes", findings=[], unclaimed=[],
+                subscores={"share_of_voice": "100.00", "sentiment": "100.00"},
+            ),
+            "1 change, worth 19.3 points.",
+        ),
+        # Without: the audit's findings and the citation fix, which is not an audit finding.
+        (_fix_case("unscored"), "3 specific changes from this scan."),
+        (
+            _fix_case("unscored", findings=[_CANONICAL], unclaimed=[]),
+            "1 specific change from this scan.",
+        ),
+        (_fix_case("unscored", findings=[]), "1 specific change from this scan."),
+    ],
+    ids=["many-with-points", "one-with-points", "many-without", "one-finding", "citation-only"],
+)
+def test_the_fix_heading_counts_in_the_singular_and_is_true_of_every_list_it_heads(
+    case: dict[str, Any], heading: str
+) -> None:
+    """The screen's heading, word for word (`ReportView.test.tsx`, launch checklist 3.49).
+
+    "1 changes" was wrong, and "specific changes the audit named" was untrue of a list that is
+    only the citation fix.
+    """
+    text = _visible_text(render_report_pdf(ReportOut.model_validate(case)))
+    assert f"04 WHAT TO CHANGE {heading}" in text
+    for gone in ("1 changes", "1 specific changes", "the audit named"):
+        assert gone not in text, gone
+
+
 def test_a_fix_with_no_measurable_value_says_so_rather_than_inventing_one() -> None:
     text = _visible_text(_render("scored-no-generated-fixes"))
     assert "No measurable point value" in text
@@ -577,3 +650,60 @@ def test_a_failed_scans_report_says_it_has_no_score() -> None:
     assert "/ 100" not in text
     # Not the "run but not scored yet" prose, which is untrue of a failed scan.
     assert "composite is simply not computed yet" not in text
+
+
+# ---------------------------------------------------------------------------
+# four audit fixes said more than the audit read — launch checklist 3.49
+# ---------------------------------------------------------------------------
+
+# code -> (check, status a report lists it with, how the detail now opens, what it used to say).
+# `test_audit_fix_wording.py` pins the whole text and what it rests on; this holds the
+# document to it: the PDF prints the fix the narrative derives, and none of the old phrases.
+REWORDED_AUDIT_FIXES: dict[str, tuple[str, str, str, tuple[str, ...]]] = {
+    "ROBOTS_TXT_DISALLOW": (
+        "indexable",
+        "fail",
+        "The audit found a Disallow: / rule under User-agent: * in the site’s robots.txt.",
+        ("nothing else on this list", "can take effect", "tells crawlers to stay out",
+         "cannot cite", "stop robots.txt from blocking", "crawlers that build ai answers",
+         "rules for all crawlers"),
+    ),
+    "NO_DATE_SIGNAL_AVAILABLE": (
+        "content_freshness",
+        "warn",
+        "The audit read no date from the audited page’s Last-Modified header",
+        ("anywhere on the page", "no date could be found", "cannot be established either way"),
+    ),
+    "NO_ORGANIZATION_OR_LOCALBUSINESS": (
+        "schema_business_entity",
+        "fail",
+        "The audit found none of Organization, Corporation, OnlineBusiness, LocalBusiness,",
+        ("nothing on the page states", "what this organisation is", "entity marker"),
+    ),
+    "CONTENT_STALE": (
+        "content_freshness",
+        "warn",
+        "The newest date the audit read from the audited page, in its Last-Modified header",
+        ("visible updated date", "date signal", "one of the few signals"),
+    ),
+}
+
+
+@pytest.mark.parametrize("code", sorted(REWORDED_AUDIT_FIXES))
+def test_the_pdf_prints_the_reworded_audit_fix_and_none_of_what_it_used_to_say(code: str) -> None:
+    check_key, status, opening, overstated = REWORDED_AUDIT_FIXES[code]
+    case = json.loads(json.dumps(CASES["scored-no-generated-fixes"]))
+    case["audit"]["findings"] = [
+        {"id": "tchk_wording", "checkKey": check_key, "status": status, "value": None,
+         "detailCode": code}
+    ]
+    text = _visible_text(render_report_pdf(ReportOut.model_validate(case)))
+
+    title, detail, _ = narrative.FIX_FOR_DETAIL_CODE[code]
+    assert title in text
+    assert re.sub(r"\s+", " ", detail) in text
+    assert opening in text
+    for phrase in overstated:
+        assert phrase not in text.lower(), phrase
+    # A code is a machine's word for it: the PDF says the sentence and never the code.
+    assert code not in text

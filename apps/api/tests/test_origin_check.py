@@ -737,8 +737,8 @@ async def test_the_stripe_webhook_is_exempt_whatever_it_carries(
 async def test_a_preflight_is_answered_by_cors_not_refused(
     client: AsyncClient, settings: Settings
 ) -> None:
-    """OPTIONS is no write. CORS stays outermost, so it answers a preflight —
-    and refuses a foreign one — before the origin check is asked anything."""
+    """OPTIONS is no write. CORS stays outside the origin check, so it answers a
+    preflight — and refuses a foreign one — before the origin check is asked anything."""
     allowed = settings.cors_allow_origins[0]
     await _sign_up(client)
     ask = {
@@ -942,16 +942,24 @@ def _websocket_paths(app: FastAPI) -> list[str]:
     return [route.path for route in _all_routes(app.routes) if isinstance(route, WebSocketRoute)]
 
 
-def test_cors_stays_the_outermost_middleware(settings: Settings) -> None:
+def test_cors_stays_outside_everything_that_reads_or_answers_a_request(
+    settings: Settings,
+) -> None:
     """Starlette puts the LAST `add_middleware` outermost, so the origin check is
-    added first. CORS must see every request before it — it answers preflights —
-    and every response, the refusal's included, leaves through it."""
+    added before CORS. CORS must see every request before it — it answers
+    preflights — and every response, the refusal's included, leaves through it.
+
+    The one layer outside CORS is the security-headers layer (launch checklist
+    3.1). It reads no request and answers none, and it has to be outside: CORS
+    answers a preflight without calling what it wraps, so a layer inside CORS
+    would never put the headers on one (`test_security_headers.py`)."""
     from avp_api.origin_check import OriginCheckMiddleware
+    from avp_api.security_headers import SecurityHeadersMiddleware
 
     order = [m.cls for m in create_app(settings).user_middleware]
 
     assert OriginCheckMiddleware in order, "the origin check is not registered"
-    assert order[0] is CORSMiddleware
+    assert order[:2] == [SecurityHeadersMiddleware, CORSMiddleware]
     assert order.index(CORSMiddleware) < order.index(OriginCheckMiddleware)
 
 
