@@ -13,8 +13,10 @@ worker can call it for bulk and scheduled scans without going through the API.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 
+import idna
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,30 +39,153 @@ _STATUS_MAP = {
 
 
 class InvalidUrl(Conflict):
+    """The address is not a website a client could have (409). `parse_domain` raises it.
+
+    One problem type for both reasons, each with a plain sentence as its `detail`, no code,
+    and nothing the person typed in it: the host is not a valid hostname, or there is no
+    public domain name in it.
+    """
+
     problem_type = "invalid-url"
     title = "That does not look like a website address"
+
+
+# One label of a hostname as DNS carries it (RFC 1123): 1 to 63 letters, digits and hyphens,
+# none at either end (1 + 61 + 1 below). Matched whole with `fullmatch`, because `$` would
+# let a newline through.
+_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+_MAX_LABEL_LENGTH = 63
+# The longest whole name, without the root dot (RFC 1035, 2.3.4).
+_MAX_HOSTNAME_LENGTH = 253
+# Full stops that are not "." and still end a label: tldextract, `idna` and a browser all read
+# the ideographic, full-width and half-width ones that way.
+_OTHER_FULL_STOPS = re.compile(
+    "[\N{IDEOGRAPHIC FULL STOP}\N{FULLWIDTH FULL STOP}\N{HALFWIDTH IDEOGRAPHIC FULL STOP}]"
+)
+# Where an address's host ends.
+_AFTER_THE_HOST = re.compile(r"[/?#]")
+
+# The two sentences a person is shown. Neither quotes what was typed: the second one did,
+# and gave a user name and password written in front of the host back in the 409 body.
+_NOT_A_HOSTNAME = (
+    "That is not a valid website name. "
+    "Names can only contain letters, numbers and hyphens, with dots between the parts. "
+    "Enter an address such as example.com."
+)
+_NO_PUBLIC_DOMAIN = (
+    "That address does not contain a public domain name. "
+    "Enter a website address such as example.com."
+)
+
+
+def _ascii_label(label: str) -> str:
+    """One label of a name as DNS carries it, or `ValueError`."""
+    if len(label) > _MAX_LABEL_LENGTH:
+        # Encoding never shortens a label, so this one is refused without being encoded.
+        raise ValueError("label too long")
+    ascii_label = label if label.isascii() else idna.encode(label).decode("ascii")
+    if _LABEL.fullmatch(ascii_label) is None:
+        raise ValueError("not a hostname label")
+    if label.isascii() and ascii_label.startswith("xn--"):
+        # Typed as punycode, so it must BE punycode, for a label IDNA allows: decoding applies
+        # the rules that encoding the Unicode spelling applies, so a label with a symbol in
+        # it is refused spelled either way, and it must encode back to exactly what was
+        # typed. tldextract guards this same call against IndexError, so this does too.
+        try:
+            decoded = idna.decode(ascii_label)
+        except (UnicodeError, IndexError) as exc:
+            raise ValueError("not punycode for a label IDNA allows") from exc
+        if idna.encode(decoded).decode("ascii") != ascii_label:
+            raise ValueError("not the canonical spelling of its label")
+    return ascii_label
+
+
+def encode_hostname(host: str) -> str:
+    """`host` as DNS carries it: lower-case ASCII, each non-ASCII label IDNA-encoded.
+
+    A label with a non-ASCII character is encoded with the `idna` package (`bücher` ->
+    `xn--bcher-kva`). robots.txt is fetched with httpx, which encodes a name with that same
+    package, so a name that passes here is one httpx can encode
+    (`tests/test_intake_hostname.py` checks that the two agree). Pages are fetched by
+    Chromium from `https://{domain}`.
+
+    A label typed as punycode (`xn--...`) must decode, and encode back to exactly what was
+    typed. Every label, after that, is 1 to 63 characters of a-z, 0-9 and "-", with no hyphen
+    at either end, and the whole name is at most 253 characters. Both lengths are checked
+    BEFORE anything is encoded, because encoding never shortens a label or a name: what a
+    refusal costs does not grow with what was typed. One trailing dot, the root, names the
+    same host and is dropped; a second is an empty label.
+
+    Raises `ValueError` for anything else: a space, a quote, a bracket, a control
+    character, an empty label, a label too long, a name too long, an IPv6 literal (its
+    brackets and colons are not name characters). `UnicodeError`, which `idna` raises for a
+    label it will not encode, is a `ValueError`. An IPv4 literal is a well-formed name, and
+    is refused by `parse_domain` for having no public suffix.
+    """
+    name = _OTHER_FULL_STOPS.sub(".", host.lower()).removesuffix(".")
+    if len(name) > _MAX_HOSTNAME_LENGTH:
+        raise ValueError("hostname too long")  # and encoding would not make it shorter
+    encoded = ".".join(_ascii_label(label) for label in name.split("."))
+    if len(encoded) > _MAX_HOSTNAME_LENGTH:
+        raise ValueError("hostname too long")
+    return encoded
+
+
+def _host_of(url: str) -> str:
+    """The host of a normalised URL, as it was typed.
+
+    Scheme, userinfo, port, path, query and fragment are cut off at the places tldextract
+    cuts them, and this string is the one handed to it, so the name that is checked is the
+    name it splits. The text itself is not normalised in any way: a tab or a newline inside
+    it is still there to be refused (`urlsplit` would delete it).
+    """
+    authority = _AFTER_THE_HOST.split(url.partition("://")[2], maxsplit=1)[0]
+    return authority.rpartition("@")[2].partition(":")[0]
+
+
+def _require_hostname(name: str) -> None:
+    try:
+        encode_hostname(name)
+    except ValueError as exc:
+        raise InvalidUrl(detail=_NOT_A_HOSTNAME) from exc
 
 
 def parse_domain(raw_url: str) -> tuple[str, str]:
     """Validate a submitted URL and return (normalised_url, registrable_domain).
 
-    Rejects anything that does not resolve to a registrable domain — an IP
-    address, `localhost`, or a bare word. Those are not prospects, and letting
-    one through creates a client row that can never be scanned.
+    Refuses with `InvalidUrl` (409), before anything is stored or fetched, what cannot be a
+    prospect's website:
+
+    - an address whose host is not a valid hostname (`encode_hostname`): a space, a quote, a
+      bracket, a control character, an empty label, a label over 63 characters or with a
+      hyphen at either end, a name over 253. EVERY label of the host counts, subdomains
+      included, and the name that is stored is checked again, so what reaches `clients.domain`
+      and from there a model prompt is a name DNS would carry. The sentence says what a name
+      is made of.
+    - an address with no public domain name in it — an IP address, `localhost`, a bare
+      suffix such as `co.uk`, or a bare word. Letting one through creates a client row that
+      can never be scanned.
+
+    Neither sentence quotes anything the person typed, a user name and password in front of
+    the host included.
+
+    The domain comes back as it always has: lower-case, and Unicode for an internationalised
+    name (`bücher.de`). Its punycode form is what was checked, not what is kept.
     """
     try:
         url = normalise_url(raw_url)
     except ValueError as exc:
-        raise InvalidUrl(detail=str(exc)) from exc
+        # Empty, no host, or what `urlparse` raised ("Invalid IPv6 URL" for a bracket):
+        # the library's words are not a sentence for a person.
+        raise InvalidUrl(detail=_NOT_A_HOSTNAME) from exc
 
-    domain = registrable_domain(url)
+    host = _host_of(url)
+    _require_hostname(host)
+
+    domain = registrable_domain(host)
     if not domain or "." not in domain:
-        raise InvalidUrl(
-            detail=(
-                f"{raw_url!r} does not contain a public domain name. "
-                "Enter a website address such as example.com."
-            )
-        )
+        raise InvalidUrl(detail=_NO_PUBLIC_DOMAIN)
+    _require_hostname(domain)
     return url, domain
 
 

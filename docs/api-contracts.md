@@ -123,7 +123,7 @@ make it `unparsed`.
 | `/problems/invalid-invitation` | 400 | Invitation unknown, expired, accepted, revoked, or orphaned |
 | `/problems/invalid-google-ticket` | 400 | Google sign-up ticket unknown, used or expired |
 | `/problems/rate-limited` | 429 | Too many requests. The credential routes (each says its limit) and, since 2026-10-02, the three routes that read a site in the API's one browser (`POST /clients` with classification, `POST /clients/{clientId}/reclassify`, `POST /scans/{scanId}/audit`). `Retry-After` is `60` and `detail` is one of two sentences: "Your agency already has a site being read. Try again in a minute." (this agency's other read is still queued or running) or "The crawler is busy with other pages right now. Try again in a minute." (four agencies' reads are already inside, or this read waited its whole 60 s for the browser). Nothing is written in either case. Since 2026-10-03 also `POST /clients/{clientId}/competitors/detect`, once per client per 24 hours: there `Retry-After` is the whole seconds left in the 24 hours and `detail` is "Competitor detection already ran for this client in the last 24 hours. It can run again in about N hours." (the last hour reads "in under an hour"); no search is made and no scan is opened |
-| `/problems/invalid-url` | 409 | Submitted URL has no public domain |
+| `/problems/invalid-url` | 409 | Submitted URL has no public domain, or its host is not a valid hostname: a label with a space, quote, bracket or control character, an empty label, a label over 63 characters or starting or ending with a hyphen, a label typed as punycode (`xn--`) that is not valid punycode, or a whole name over 253 characters (2026-10-04, launch checklist 3.67). `detail` is a plain sentence with no code and quotes nothing the person typed; `POST /clients` gives both. Nothing is stored or fetched |
 | `/problems/invalid-webhook-signature` | 400 | Billing webhook signature missing, malformed or wrong |
 | `/problems/billing-not-configured` | 503 | A Stripe setting is unset. `detail` names the variable |
 | `/problems/google-sign-in-not-configured` | 503 | Google sign-in is not configured on this deployment |
@@ -1277,9 +1277,32 @@ names. Page text is never returned (the facts-only rule); the projection in
 `routers/clients.py:_crawl_summary` names every field explicitly so adding one
 to `CrawlSignals` cannot silently start returning it.
 
-**Errors:** `401`, `409 invalid-url`, `409 conflict` (domain already tracked by
+**Errors:** `401`, `409 invalid-url` (the address has no public domain, or its host is
+not a valid hostname: below), `409 conflict` (domain already tracked by
 this agency — carries `clientId`), `422 validation-failed`, and `429 rate-limited`
 (see below; only with `classify: true`).
+
+**The address must have a public domain and a valid hostname (2026-10-04, launch
+checklist 3.67).** Otherwise `409 invalid-url`, with nothing stored and nothing
+fetched. `detail` is one of two sentences, each plain, with no code, and neither quotes
+anything the person typed (not the address, and not a user name or password written in
+front of it). An address with no public domain name in it (an IPv4 address, `localhost`, a
+bare suffix such as `co.uk`) gets "That address does not contain a public domain name.
+Enter a website address such as example.com." An address whose host is not a valid
+hostname, or that has no host at all, gets "That is not a valid website name. Names can
+only contain letters, numbers and hyphens, with dots between the parts. Enter an address
+such as example.com." EVERY label of the host counts, subdomains included, once an
+internationalised label is encoded as punycode (IDNA 2008, with the `idna` package that
+httpx, which fetches robots.txt, encodes a name with): each is 1 to 63 characters of
+letters, digits and hyphens with no hyphen at either end, and the whole name is at most
+253. A space, quote, bracket (an IPv6 literal's too), control character or underscore
+fails it; so does an empty label (one trailing dot is the same name, a second is an
+empty label); so does an internationalised label that encoding refuses; and so does a
+label typed as punycode (`xn--...`) that is not valid punycode for a label IDNA allows,
+or that does not encode back to what was typed. An internationalised name is stored as
+it always was, lower-case Unicode (`bücher.de`, not `xn--bcher-kva.de`): the punycode
+form is what is checked, not what is kept, and a name typed as punycode is stored as
+typed. Pages are read by Chromium from `https://` and the stored domain.
 
 An unreachable site is **`201` with `classificationStatus: "unclassifiable"`**,
 not an error status. A site that will not load is a normal outcome for a tool
