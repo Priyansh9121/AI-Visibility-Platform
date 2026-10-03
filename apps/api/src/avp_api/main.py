@@ -10,7 +10,7 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import __version__
+from . import __version__, redis_watch
 from .config import Settings, get_settings
 from .db import dispose_engine
 from .errors import register_error_handlers
@@ -59,7 +59,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
     logger.info("api starting environment=%s", settings.environment)
     _log_memory_at_start()
-    yield
+    # `redis.eviction_policy` now, and `redis.data_lost` whenever the sentinel goes missing, for as
+    # long as the app runs (`redis_watch.py`). Neither can fail the start.
+    redis_watcher = await redis_watch.start(settings)
+    try:
+        yield
+    finally:
+        # Before the pool below is closed, so the watcher is never mid-call on a closed pool.
+        await redis_watch.stop(redis_watcher)
     # Return pooled connections deliberately, so a redeploy does not leave
     # Postgres holding sockets until they time out.
     await dispose_engine()

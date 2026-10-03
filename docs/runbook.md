@@ -332,6 +332,64 @@ last restart: the counters belong to the container, and a restart starts them
 again. The API image runs `tini` as PID 1, so the zombie `headless_shell`
 processes a browser run used to leave behind are reaped; they cost no memory.
 
+## Reading the Redis lines
+
+**When:** everyone was signed out at once, a pilot says "it logged me out", or
+you want to know how the instance is set. One Redis instance (Render Key Value)
+holds the sessions, the rate-limit windows and the Google sign-in state. On the
+Free plan (25 MB, nothing kept on disk) a restart empties it. The API writes two
+lines about it, from K1 (launch checklist 3.4 is the setting they check).
+
+**Where:** the Render dashboard → the **API** service → **Logs**. Search for the
+event name. Neither line carries a key, an address or an id; the first carries one
+word, the policy.
+
+**The lines**
+
+| Event | Level | When | Carries |
+|---|---|---|---|
+| `redis.eviction_policy` | info | once, when the API starts, just after `app.memory_at_start` | `policy`: the instance's `maxmemory-policy`, or `unknown` |
+| `redis.data_lost` | warning | the API looked for its marker key and Redis no longer had it | nothing |
+
+**`redis.eviction_policy`.** `noeviction` is what checklist 3.4 asks for: when
+Redis is full it refuses writes (a sign-in then fails with an error) and deletes
+nothing. Any `allkeys-…` or `volatile-…` policy means Redis may delete keys when
+it is full, without saying so: sessions (people are signed out), the list that
+lets a password change sign someone out everywhere, and rate-limit windows.
+`unknown` means the API could not read the policy: Render refused the command,
+or Redis could not be reached when the API started. The instance's settings page
+in Render says what it is.
+
+**`redis.data_lost`.** The API writes one small key, `avp:sentinel`, that never
+expires, and looks for it when it starts and every 60 seconds after. If it is
+missing, Redis was emptied since the last look. The one API process that finds it
+missing writes it back and logs this line, once, so it shows within about a
+minute of the wipe. A deploy alone never logs it: Redis keeps running through a
+deploy and the new API finds the key. **It is also logged once the first time an
+API starts against a Redis that has never held the key: the first deploy of this
+change, and any new instance. That one is not a loss.** The marker is the one key
+the API keeps with no expiry, on purpose. Every other key expires on its own (a
+session after 14 days, a rate-limit window when its window ends, a Google sign-in
+after 10 minutes), and `tests/test_redis_expiry.py` checks it for every key the API writes.
+
+**What a wipe costs.**
+
+- *Lost:* every session (everyone signs in again), every rate-limit window (a
+  login or sign-up count starts from zero, and competitor detection can be run
+  again for every client because its 24 hours start over), and any Google sign-in
+  in flight (the person lands back on the sign-in page with an error, or is told
+  the sign-in can no longer be used, and starts again).
+- *Not lost:* scans (they run in the API process and live in Postgres, not
+  Redis), clients, reports, share links, billing, accounts.
+- A session also ends on its own 14 days after sign-in, used or not, so someone
+  signed out after two weeks is not a wipe.
+
+**When to act (the founder's decision, 2026-10-03):** upgrade the Key Value plan
+during the pilot when `redis.data_lost` appears and no wipe was expected, or when
+the instance's memory is above 50%. Do not change the Key Value settings while
+pilots are signed in: a change may restart the instance, and a restart is the
+wipe.
+
 ## Reading competitor-search lines
 
 **When:** competitor detection lost a search (`competitors.serp_failed`), or you want

@@ -23403,3 +23403,115 @@ Drift check (north-star §8): Layer 1, Delivery (how both hosts answer a browser
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# The API logs Redis's eviction policy at start and says when Redis has lost its data; every Redis key expires on its own, and a scan whose job vanished fails in plain words
+
+**2026-10-03, the twentieth entry of the day; branch `pilot-fixes-4`, the founder's brief "search accuracy, guardrails and pilot hardening" (item K1).** One item, one commit.
+
+**Render: nothing to set. No endpoint, schema, dependency or outbound host change.**
+- One new Redis key, `avp:sentinel`, with no expiry by design.
+- The first start after this deploy logs `redis.data_lost` once: expected, see 1.1f.
+
+Drift check (north-star §8): Layer 1, Delivery (the API's start-up and its sessions on Redis); lifecycle phase: Activation (Epic 9), pilots staying signed in and their scans telling the truth.
+
+## 1. What changed
+
+- **(a) `redis.eviction_policy`** (info, once, as the API starts, after `app.memory_at_start`):
+  - the instance's `maxmemory-policy`, from `CONFIG GET`;
+  - `unknown` when it cannot be had: a refused or renamed command, a timeout, nobody listening, or a reply that is not a policy name;
+  - it never fails the start and waits no longer than one Redis call's own timeouts.
+- **(b) `redis.data_lost`** (warning, no fields), from `avp_api/redis_watch.py`:
+  - `SET avp:sentinel <now> NX` at start and every 60 s in a background task. The process whose SET succeeds found the key missing and logs once, so two processes (a deploy's old and new instances) give one line.
+  - A Redis restart while the API keeps running is noticed within a minute. After a dead connection the check tries once more at once, so a restart is not noticed a tick late.
+  - Any Redis error, a full Redis under `noeviction` included, is skipped with at most a debug line holding the error's class.
+  - Shutdown cancels the task before it closes the pool.
+  - A fresh instance and a wiped one look the same, so the first start against any instance logs it once too.
+- **(c) Every key expires on its own,** now enforced by a test.
+
+  | Key family | Expiry | Where |
+  |---|---|---|
+  | `sess:<digest>` | 14 days | `sessions.py`, `SET … EX` |
+  | `user-sessions:<uid>` | 14 days, renewed on every new session | `sessions.py` |
+  | `rl:login:*`, `rl:change_password:*` | 15 minutes | `rate_limit.py`'s Lua, set on the first hit and repaired if missing |
+  | `rl:signup:*`, `rl:reset:*` | 1 hour | the same |
+  | `rl:detect_competitors:client:*` | 24 hours | `rate_limit.py` (3.53) |
+  | `google-state:*`, `google-ticket:*` | 10 minutes | `google_oauth.py` |
+  | Celery results | 24 hours (`result_expires`) | `apps/workers` |
+  | `avp:sentinel` | none, by design | `redis_watch.py` |
+
+  - **A session lasts 14 days from sign-in**, cookie and Redis alike, and is never extended: `SessionStore.touch` has no caller.
+  - **The Celery broker's own keys** (a queue list and a kombu binding set) cannot expire. They exist only once a task is sent, and nothing sends one: the API runs scans in its own process, and there is no workers service.
+- **(d) A scan whose job vanished.** Scans do not use Redis, so a Redis wipe cannot lose one. What can lose one is the API's process going away between accepting the scan and starting it. The never-started path covers that:
+  - a submitted scan still QUEUED more than 15 minutes after submission (strictly) is failed as `EXECUTOR_NEVER_STARTED`;
+  - this happens on the next `GET /dashboard`, `POST /clients/{id}/scans` or `GET /scans/{id}`. The scans list (`GET /clients/{id}/scans`) does not reap;
+  - an open dashboard re-reads every 5 s while a scan is unfinished, so the row turns within about 5 s of the 15-minute mark;
+  - the dashboard says "This scan did not start because our server restarted. It does not use up one of your scans.", with no code.
+- **`docs/runbook.md`, "Reading the Redis lines":**
+  - what the two lines mean;
+  - what a wipe loses: sessions, rate-limit windows, Google sign-ins in flight and detection days, not scans;
+  - the founder's trigger: upgrade during the pilot on `redis.data_lost` or memory above 50%, and do not change Key Value settings while pilots are signed in.
+
+## 2. Requeue instead of fail (for the founder; not built)
+
+- **Today,** a never-started scan spent nothing, and pressing Run again re-hands the same queued scan (it re-stamps `submitted_at`), so a manual requeue already exists.
+- **An automatic one would need:**
+  - the job's parameters on the row (`Scan` stores neither the engines nor the prompt limit), so a migration;
+  - a trigger that does not wait for someone to load a page;
+  - a retry cap, or a scan that kills the process loops;
+  - an allowance re-check, because the slot is released at minute 15.
+- **The conditional QUEUED → RUNNING claim already prevents a double run.** A requeued scan gets its full deadline from its claim, so the worst wait from Run to a result grows to about 55 minutes, against a clear "failed, free, run again" at 15.
+- **It earns its cost** if scans ever move onto Celery with a Redis that keeps nothing: the Postgres QUEUED rows would then be the recovery source.
+
+## Found, not fixed
+
+- **The scans list does not run the reaper,** so a client's scan history can show a never-started scan as queued until a dashboard or scan read reaps it.
+- **`policy=unknown` cannot say** whether the command was refused or Redis did not answer.
+- **Sessions never slide.** Whether a session should last 14 days from sign-in or from last use is the founder's call.
+
+## Verified
+
+**API pytest 3310 → 3382 (+72), workers pytest 26 → 27 (+1) and web vitest 1841 → 1842 (+1); floors raised to match.** One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **New tests:**
+  - `tests/test_redis_watch.py` (58):
+    - the policy read once and logged after the memory line;
+    - refusal, timeout, dead connection, malformed URL and odd replies give `unknown` and the start continues;
+    - an empty Redis gives one `redis.data_lost` with the key written with no expiry, a second check is silent, a deleted key gives exactly one more, and 2 and 10 racing clients give one line;
+    - a wipe is noticed on a later tick while the app runs;
+    - the task is cancelled before the pool closes;
+    - no error text reaches the log.
+  - `tests/test_redis_expiry.py` (11):
+    - every real writer driven, then every key's TTL checked within 30 s of its window, and the sentinel alone without one;
+    - an unknown key family fails, and a module importing Redis that is not classified fails;
+    - the session's lifetime, cookie and key, is never extended by use.
+  - `tests/test_scan_job_lost.py` (3): a scan whose job vanished is QUEUED at 14 minutes and FAILED `EXECUTOR_NEVER_STARTED` at 16, through the dashboard and through the scan's own read, never claimed, with no results; exactly 15:00 stays queued and a microsecond later fails.
+  - Web `DashboardView.test.tsx` (+1): the dashboard renders that sentence for such a row, with no code. Before, only the mapping was tested.
+  - Workers `test_celery_config.py` (+1): `result_expires` pinned.
+- **Negative controls:**
+  - **On this tree:** with `main.py` put back to the previous commit (no watcher at start), 7 of the 72 new API tests fail: the start-up ones. Restored and checked with `cmp`.
+  - **The implementer's controls, each restored:**
+    - a policy accepted unchecked, or able to raise;
+    - the lifespan skipping the watch;
+    - `SET` without `NX`;
+    - one check and no loop;
+    - a `stop` that does not cancel;
+    - the pool closed first;
+    - a field or error text on the line;
+    - no retry after a dead connection, or a retry on every error;
+    - each key family written without an expiry;
+    - `touch` wired into `get`;
+    - a 7-day default;
+    - an unregistered key family;
+    - `<=` for `<` at the window, or a 10-minute window;
+    - the dashboard not projecting the code;
+    - no lazy reap on the scan's read;
+    - the sentence removed;
+    - `result_expires=None`.
+- **The rest of the bar** (this tree, one run):
+  - Counts: shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- **Run for real:** uvicorn on a scratch Redis database logged `redis.eviction_policy policy=noeviction` then one `redis.data_lost`; deleting the sentinel while it ran gave a second about 55 s later; SIGTERM shut down cleanly.
+- Exit codes were read from files.
