@@ -22906,3 +22906,68 @@ Drift check (north-star §8): Layer 2, Measurement (competitor detection); lifec
   - OpenAPI and `api.gen.ts` regenerate with no change.
   - The Mac slept on and off while this bar ran (18:04 to 20:03 by the clock), so the step times mean nothing; every step's own exit code was read from its file.
 - Exit codes were read from files.
+
+# Each competitor search SerpApi answers logs how long it took, and the code says when a search that got no answer is billed
+
+**2026-10-03, the fourteenth entry of the day; branch `pilot-fixes-4`, the founder's brief "search accuracy, guardrails and pilot hardening" (item S2).** One item, one commit.
+
+**Render: nothing to set. No endpoint, schema, dependency or outbound host change.** The API's logs gain one info line per answered search: 3 to 6 per detection.
+
+Drift check (north-star §8): Layer 2, Measurement (competitor search); lifecycle phase: Activation (Epic 9). It makes the searches Render makes measurable before any timeout is changed.
+
+## 1. What changed
+
+- **`serp.completed`** (`services/serp.py`):
+  - **One line for every search SerpApi answered**, whatever the answer said.
+  - **Its fields:** `elapsed_ms` (from the first attempt's start to the end of reading the answer), `attempts` (1, or 2 when the retry was answered), `hits`, `status` (the HTTP status) and `error_code` (`None`, or this module's code for an error answer).
+  - **Never in it:** the query, the market, the key, the URL, the body or an exception's text.
+  - **A search with no answer** keeps its `serp.attempts_failed` line, so every search that reached SerpApi logs exactly one of the two.
+  - **A missing key** sends nothing and logs neither.
+  - **How:** `_get` now returns the answer with its attempt count and start time (`_Answered`), and the old judging code moved unchanged into `_judge`.
+- **Billing, stated in the module's top comment and in `_get`'s and `search`'s docstrings:**
+  - **SerpApi's pricing page, read 2026-10-03:** "Only successful searches are counted toward your monthly searches. Cached, errored, and failed searches are not."
+  - **S1's measurement, the same day:** 12 requests, 8 answered and 4 attempts that timed out on the read.
+    - The account's month count went from 66 to 75 and then back to 71, and stayed there.
+    - So 5 were counted.
+    - The count rose by 4 more than it kept, the number of timed-out attempts.
+  - **Conclusion:**
+    - A failed connect never reaches SerpApi.
+    - A read failure was not billed when measured.
+    - A search SerpApi finished after we stopped waiting would be billed, and only the account's count would show it.
+  - **The retry:** in the 3 searches seen to time out on a read (production's and two in S1's run), the retry timed out on a read too, about 19.1 to 19.3 s each. The founder decided to keep retrying a read failure, so this is recorded and nothing changes.
+- **No timeout, retry count or pause changed.**
+- **`docs/runbook.md`, "Reading competitor-search lines":**
+  - each of the three lines, field by field;
+  - how to read the latency distribution from Render's logs (with R2's measurement from a development Mac earlier the same day to compare: 24 searches, median 1.54 s, 95th percentile 2.54 s, slowest 6.93 s);
+  - what the numbers would justify once they arrive. If answered searches cluster near the 9 s read budget, raise the read budget and the 10 s deadline together; the scan's worst case moves with them. If answered searches are fast and the failures are reads on both attempts, waiting longer will not help.
+
+## Found, not fixed
+
+- **A 200 whose JSON body is not an object** (a list, a string, or results that are not objects) makes `search` raise `AttributeError`, so neither line is logged. This predates the change and is in the judging code. `search` promises never to raise for an upstream failure; a guard returning `SERP_BAD_JSON` would close it.
+- **Two docs still describe the retry as possibly billed:** the docstring of `TestARescuedRetryIsLogged` in `tests/test_serp_search.py`, and this log's earlier R2 entry, which is history.
+
+## Verified
+
+**API pytest 3146 → 3201 (+55); floor raised to match.** One test is skipped on macOS as before: it reads Linux's `/proc`.
+- `tests/test_serp_completed.py` (55), each against a `MockTransport`:
+  - one line of exactly five facts for an answer;
+  - `hits` are the parsed hits;
+  - `elapsed_ms` runs from the first attempt to the end of parsing, retry and pause included;
+  - a retried search is one `serp.retried` line and one completed line with `attempts=2`;
+  - each error answer (401, 429, 500, 503, bad JSON, an `error` payload) is one completed line with no hits, its status and its code;
+  - a search with no answer logs the failure line alone (8 ways);
+  - every search that reached SerpApi logs exactly one of the two (12 ways);
+  - a missing key logs neither;
+  - no line names the key, the query, the market, a URL, a body or a message;
+  - `search_many` over six searches logs six lines.
+- **Negative controls:**
+  - **On this tree:** with `serp.py` put back to S1, 39 of the 55 fail. The 16 that pass are absence checks, each of which also asserts that the other line was logged. Restored and checked with `cmp`.
+  - **The implementer's twelve single mutations each failed between 1 and 39 tests.** They covered: no line, the query or the URL added, the time read too early or counted from the answer, attempts always 1, a line for a failed search, the status as text, the line twice, a line for a missing key, the warning level, and `serp.retried` renamed.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 26, shared-types 53 (0 fail), design-system 935, web 1708, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
