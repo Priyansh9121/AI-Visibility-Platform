@@ -367,9 +367,10 @@ async def test_shared_scan_count_follows_the_live_link(
 ) -> None:  # noqa: ANN001
     """Minting a share link completes the step; revoking it un-does it.
 
-    The count reads `share_token IS NOT NULL`, which is the column's own
-    meaning — a live link exists — and not a diary of links that ever
-    existed. The checklist describes the account as it is.
+    The count is the links that would open (`share.link_would_open`, checklist 3.42),
+    not a diary of links that ever existed. The checklist describes the account as it
+    is. What else takes a link out of it (an end date passed, a failed scan) and what
+    leaves it in (a cancelled scan) is `test_dashboard_shared_count.py`.
     """
     agency_id = await _agency(client)
     scan_id = await _scan_with_score(engine, agency_id, Decimal("38.35"), ScoreStatus.SCORED)

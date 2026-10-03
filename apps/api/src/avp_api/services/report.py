@@ -64,8 +64,13 @@ from ..schemas.report import (
 )
 from ..schemas.score import CompetitorScoreOut, ScoreDetailOut
 from . import divergence, scoring_runner
-from .failed_scan import score_is_withheld, served_fixes, withhold_technical_foundation
-from .scoring import ResultFacts
+from .failed_scan import (
+    score_is_withheld,
+    served_fixes,
+    withhold_score_like_proof,
+    withhold_technical_foundation,
+)
+from .scoring import ReadComparison, ResultFacts
 from .share import link_is_live
 
 # Heaviest dimension first. The Luminance Ledger stacks the heaviest segment at
@@ -131,7 +136,9 @@ async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:
     # score-derived competitor comparison are all absent. The fixes the generator
     # wrote from that score are not served either (3.30): `actionItems` is empty,
     # and the fix beat falls back to its own fixed wording, as it does for a scan
-    # with no fixes generated. The PDF renders this same `ReportOut`.
+    # with no fixes generated. The per-engine standings in the proof beat are built
+    # by the Mention Rate and Sentiment functions, so they are emptied too (3.37,
+    # below). The PDF renders this same `ReportOut`.
     failed = score_is_withheld(scan)
     score_row = (
         None
@@ -144,20 +151,29 @@ async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:
     prompts = await _load_prompts(session, results)
     action_items = await _load_action_items(session, scan.id)
 
-    # The competitor comparison is recomputed from persisted rows on read, the
-    # same way GET /scans/{id}/score does it — it is a pure function of data
-    # already stored, and a second stored copy could fall out of step.
-    comparisons: list[Any] = []
-    computed: Any = None
+    # The competitor comparison and the subject's average position are derived
+    # from persisted rows on read, by the same function GET /scans/{id}/score
+    # uses — a pure function of data already stored, and a second stored copy
+    # could fall out of step. It builds no Score and logs nothing as one:
+    # opening a report is a read, and `scoring.completed` is for a Score that
+    # was written.
+    computed: ReadComparison | None = None
     previous_versions: list[str] = []
     if score_row is not None:
-        _row, computed, comparisons = await scoring_runner.score_scan(session, scan, persist=False)
+        computed = await scoring_runner.compare_on_read(session, scan, score_row)
         # Whether this scan has been scored under an earlier definition. A
         # number that moved because the formula changed must not read as a
         # number that moved because the business did.
         previous_versions = await scoring_runner.prior_formula_versions(
             session, scan.id, score_row.formula_version
         )
+
+    proof = _proof(results, competitor_set, prompts)
+    if failed:
+        # The standings are computed by the same functions as two score dimensions, and
+        # the sentiment ones add up to the Sentiment sub-score this scan does not show
+        # (`failed_scan.withhold_score_like_proof`). The rows they read are not touched.
+        withhold_score_like_proof(proof)
 
     return ReportOut(
         scan_id=scan.id,
@@ -188,8 +204,10 @@ async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:
         ),
         score=_score_out(score_row, computed, previous_versions),
         dimensions=_dimensions(score_row),
-        competitor_set=_competitor_set_out(competitor_set, comparisons),
-        proof=_proof(results, competitor_set, prompts),
+        competitor_set=_competitor_set_out(
+            competitor_set, computed.competitors if computed is not None else []
+        ),
+        proof=proof,
         audit=_audit_out(audit, scored=not failed),
         action_items=served_fixes(scan, _action_items_out(action_items)),
     )
@@ -353,7 +371,7 @@ def _visibility_flags(
 
 
 def _score_out(
-    row: Score | None, computed: Any, previous_versions: list[str]
+    row: Score | None, computed: ReadComparison | None, previous_versions: list[str]
 ) -> ScoreDetailOut | None:
     if row is None:
         return None

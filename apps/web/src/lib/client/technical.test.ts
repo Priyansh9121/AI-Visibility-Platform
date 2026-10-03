@@ -8,8 +8,13 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
+  CHECK_DETAIL_SENTENCE,
   auditDimensions,
+  checkDetailSentence,
   checkLabel,
   excludedComponents,
   groupChecks,
@@ -18,6 +23,7 @@ import {
 } from './technical';
 import { compositeScore } from '@avp/design-system';
 import type { AuditCheck, TechnicalAudit } from '@avp/shared-types';
+import { FIX_FOR_DETAIL_CODE } from '@/lib/report/strings';
 
 /** plausible.io, exactly as the endpoint returns it. */
 const PLAUSIBLE = {
@@ -201,5 +207,140 @@ describe('num', () => {
     expect(num(null)).toBeNull();
     expect(num(undefined)).toBeNull();
     expect(num('not-a-number')).toBeNull();
+  });
+});
+
+describe('checkDetailSentence — launch checklist 3.39', () => {
+  const MACHINE_CODE = /\b[A-Z]{3,}_[A-Z0-9_]+\b/;
+
+  // The fix list's six whose wording does not stand on a row as the statement of what a
+  // check found (round 2 of 3.39), and the six codes no fix words.
+  const OVERRIDDEN = [
+    'META_ROBOTS_NOINDEX',
+    'MULTIPLE_H1',
+    'NO_DATE_SIGNAL_AVAILABLE',
+    'NO_ORGANIZATION_OR_LOCALBUSINESS',
+    'NO_PRODUCT_OR_SERVICE_SCHEMA',
+    'ROBOTS_TXT_DISALLOW',
+  ];
+  const NOT_IN_FIX = [
+    'CLS_NOT_OBSERVED',
+    'FIELD_METRIC_REQUIRES_REAL_USER_DATA',
+    'LAB_MEASUREMENT_NOT_FIELD_DATA',
+    'LCP_NOT_OBSERVED',
+    'ROBOTS_DISALLOWED',
+    'ROBOTS_UNREACHABLE',
+  ];
+
+  it('is the fix list’s sentence, word for word, for ten of its sixteen codes', () => {
+    const codes = Object.keys(FIX_FOR_DETAIL_CODE);
+    expect(codes).toHaveLength(16);
+    const verbatim = codes.filter((code) => !OVERRIDDEN.includes(code));
+    // Sixteen less the six below.
+    expect(verbatim).toHaveLength(10);
+    for (const code of verbatim) {
+      expect(checkDetailSentence(code), code).toBe(FIX_FOR_DETAIL_CODE[code]!.detail);
+    }
+  });
+
+  it('says its own sentence for the six whose fix wording does not stand on a row, looked up before the fix list', () => {
+    const OWN: Record<string, string> = {
+      ROBOTS_TXT_DISALLOW:
+        'The site’s robots.txt has a rule that asks crawlers to stay out of the whole site (Disallow: /), except where another rule lets them in.',
+      META_ROBOTS_NOINDEX:
+        'The page is marked noindex, which asks search engines to leave it out of their indexes.',
+      NO_PRODUCT_OR_SERVICE_SCHEMA:
+        'The audited page has no Product or Service markup, so what the business sells has to be inferred from page copy rather than read from the markup.',
+      NO_DATE_SIGNAL_AVAILABLE:
+        'No usable Last-Modified header and no datePublished or dateModified in the page’s structured data was found, so its freshness cannot be established either way.',
+      MULTIPLE_H1:
+        'More than one top-level heading leaves the page’s subject ambiguous to anything parsing it.',
+      NO_ORGANIZATION_OR_LOCALBUSINESS:
+        'The audited page’s JSON-LD and microdata name none of the types this check looks for: Organization, Corporation, OnlineBusiness, LocalBusiness, Dentist, Restaurant, Store or MedicalBusiness.',
+    };
+    expect(Object.keys(OWN).sort()).toEqual([...OVERRIDDEN].sort());
+    for (const [code, sentence] of Object.entries(OWN)) {
+      expect(checkDetailSentence(code), code).toBe(sentence);
+      // Still a code the fix list words, and worded differently there: the lookup order is
+      // what decides which of the two a row shows.
+      expect(FIX_FOR_DETAIL_CODE[code], code).toBeDefined();
+      expect(sentence, code).not.toBe(FIX_FOR_DETAIL_CODE[code]!.detail);
+    }
+    // What the fix wording said that a row cannot stand behind.
+    for (const [code, phrase] of [
+      ['ROBOTS_TXT_DISALLOW', 'nothing else on this list'],
+      ['META_ROBOTS_NOINDEX', 'excluded from the indexes these answers are drawn from'],
+      ['NO_PRODUCT_OR_SERVICE_SCHEMA', 'Without it'],
+      ['NO_DATE_SIGNAL_AVAILABLE', 'anywhere on the page'],
+      ['MULTIPLE_H1', 'Several competing'],
+      ['NO_ORGANIZATION_OR_LOCALBUSINESS', 'Nothing on the page states'],
+    ] as const) {
+      expect(FIX_FOR_DETAIL_CODE[code]!.detail, `${code}: the fix list is left as it was`).toContain(phrase);
+      expect(checkDetailSentence(code), code).not.toContain(phrase);
+    }
+  });
+
+  it('words the four lab and field codes, and the two a sitemap check can carry', () => {
+    expect(Object.keys(CHECK_DETAIL_SENTENCE).sort()).toEqual([...NOT_IN_FIX, ...OVERRIDDEN].sort());
+    for (const [code, sentence] of Object.entries(CHECK_DETAIL_SENTENCE)) {
+      expect(sentence, code).not.toContain(code);
+      expect(sentence, code).not.toMatch(MACHINE_CODE);
+      expect(sentence.endsWith('.'), code).toBe(true);
+      // Nothing the data cannot support: no figure, no verdict about the site.
+      expect(sentence, code).not.toMatch(/\d/);
+    }
+    // The six have no fix wording at all, so there is nothing for the lookup order to decide.
+    for (const code of NOT_IN_FIX) {
+      expect(FIX_FOR_DETAIL_CODE[code], code).toBeUndefined();
+    }
+    // The file that decides a sitemap check may be a redirect's, so it is "the robots.txt this depends on".
+    expect(CHECK_DETAIL_SENTENCE.ROBOTS_DISALLOWED).toBe(
+      'The robots.txt this depends on asks crawlers like ours not to load this, so it was not checked.',
+    );
+  });
+
+  it('is null for no code, an empty one, and one nothing words', () => {
+    expect(checkDetailSentence(null)).toBeNull();
+    expect(checkDetailSentence(undefined)).toBeNull();
+    expect(checkDetailSentence('')).toBeNull();
+    expect(checkDetailSentence('SOMETHING_NEW')).toBeNull();
+    // Inherited names are not codes.
+    expect(checkDetailSentence('constructor')).toBeNull();
+    expect(checkDetailSentence('toString')).toBeNull();
+  });
+
+  describe('every code the audit can put on a check has a sentence — read back from technical_audit.py', () => {
+    // The codes are read out of the API's own file, so a check that learns a new code
+    // without wording here fails this suite instead of printing the code on the screen.
+    const ROOT = fileURLToPath(new URL('../../../../../', import.meta.url));
+    const source = readFileSync(join(ROOT, 'apps/api/src/avp_api/services/technical_audit.py'), 'utf8');
+
+    // What the audit says went wrong with the CRAWL, not with a check: these ride on a
+    // failed audit, which this screen answers with `auditFailureSentence` and no rows.
+    const AUDIT_FAILURE = new Set(['FETCH_FAILED', 'BROWSER_ERROR', 'HTTP_']);
+    const literals = [...source.matchAll(/"([A-Z][A-Z0-9]*_[A-Z0-9_]*)"/g)]
+      .map((m) => m[1]!)
+      .filter((code) => !AUDIT_FAILURE.has(code));
+    // `ROBOTS_DISALLOWED` and `ROBOTS_UNREACHABLE` are imported constants, not literals: a
+    // sitemap check carries one when robots.txt stops it (`_robots_file_checks`).
+    const carried = new Set([...literals, 'ROBOTS_DISALLOWED', 'ROBOTS_UNREACHABLE']);
+
+    it('finds the codes it is meant to find, so an empty read cannot pass', () => {
+      for (const code of ['NO_CANONICAL_LINK', 'LCP_NOT_OBSERVED', 'FIELD_METRIC_REQUIRES_REAL_USER_DATA']) {
+        expect(carried.has(code), code).toBe(true);
+      }
+      expect(carried.size).toBeGreaterThanOrEqual(22);
+      expect(source).toContain('signals.sitemap_refusal');
+      expect(source).toContain('ROBOTS_UNREACHABLE)');
+    });
+
+    it('has a sentence for each', () => {
+      expect([...carried].filter((code) => checkDetailSentence(code) === null)).toEqual([]);
+    });
+
+    it('has no sentence for a code the audit no longer carries', () => {
+      const wordedCodes = new Set([...Object.keys(FIX_FOR_DETAIL_CODE), ...Object.keys(CHECK_DETAIL_SENTENCE)]);
+      expect([...wordedCodes].filter((code) => !carried.has(code))).toEqual([]);
+    });
   });
 });

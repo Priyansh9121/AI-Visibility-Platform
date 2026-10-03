@@ -68,6 +68,7 @@ from sqlalchemy import event, select  # noqa: E402
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
 
 from avp_api.config import Settings  # noqa: E402
+from avp_api.logs import configure_logging  # noqa: E402
 from avp_api.models import Agency, Client, EngineResult  # noqa: E402
 from avp_api.services import (  # noqa: E402  # noqa: E402  # noqa: E402  # noqa: E402
     audit_runner,
@@ -578,6 +579,9 @@ async def main() -> int:  # noqa: C901
     args = parser.parse_args()
 
     settings = Settings()
+    # Before any call to SerpApi: pins httpx and the SDKs quiet, so that no log line,
+    # whatever the shell exports (ANTHROPIC_LOG, say), prints the SerpApi key's URL.
+    configure_logging(settings)
     install_meters()
     install_token_meter()
 

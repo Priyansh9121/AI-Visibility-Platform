@@ -22274,3 +22274,557 @@ Drift check (north-star §8): no product layer; the launch plan. Lifecycle phase
 - OpenAPI and `api.gen.ts` regenerate with no change.
 - Over the branch: API 2367 → 2656, web 1473 → 1533, design-system 875 → 935, mypy 47 → 43; workers and shared-types unchanged.
 - Exit codes were read from files.
+
+# Opening a report or a score reads the stored score and no longer re-scores the scan
+
+**2026-10-03, the third entry of the day; branch `pilot-fixes-3`, the founder's brief "honest reports and the remaining pilot decisions" (item R1).** One item, one commit.
+
+**Render: nothing to set. No migration, no dependency or outbound host.** One route description changed (`GET /scans/{scanId}/score`; OpenAPI and `api.gen.ts` regenerated).
+
+Drift check (north-star §8): Layer 1, Delivery (the report, its PDF and the score route) and Layer 3, Insight (the comparison derived on read); lifecycle phase: Activation (Epic 9), a report an agency sends.
+
+## 1. What the investigation found
+
+- **The founder's production fact:** after a scan finished, `scoring.completed` (same `inputs_digest`, `status=scored`) was logged again every time its report was opened, signed in (`GET /scans/{id}/report`) and public (`POST /reports/shared`). The second pilot dry run had already noticed it ("Every report read re-scores… harmless", in "Second pilot dry run — the fixes hold, and the report still says things it cannot back").
+- **Why:** `build_report` (`services/report.py`) and `GET /scans/{scanId}/score` (`routers/scores.py`) called `scoring_runner.score_scan(session, scan, persist=False)`. With `persist=False` it loaded the results, the competitor facts, the audit's Technical Foundation and the platform-wide domain-authority aggregate, ran the whole `compute_score` with its inputs digest, wrote nothing (every write sits under `if persist:`), and logged `scoring.completed` unconditionally. The PDFs and the public routes go through `build_report`; `GET /clients/{id}/history` made the same call once per plotted scan.
+- **No write, proved:** opening the signed-in report and PDF, the public report and PDF, the score and the history three times each leaves every row of every table as it was, every column including `computed_at` and `updated_at`, and Postgres's `xmin`/`xmax` (which move even on a same-value UPDATE or a row lock); a SQL trace shows no INSERT, UPDATE, DELETE or lock. All 27 scans in the dev database were also read on a connection set read-only, which would have raised on any write. Scoring-spec rule 5 held; the log line said otherwise.
+- **What the report needs from a recompute:** only the subject's average position and position count and the per-competitor comparison (mention rate, share of voice, citation strength, positions). The Score row stores none of them, so a computation stays.
+
+## 2. What changed
+
+- **`scoring_runner.compare_on_read(session, scan, score)`** (with a pure `scoring.comparison_from_facts`) computes exactly that from the stored rows: no Score built, no inputs digest, no audit read, the platform tiers read once and only when there are rivals, nothing for a stored `insufficient_data` row, nothing logged. `build_report` and `GET /score` use it.
+- **`score_scan` logs `scoring.completed` only when it saves a Score.** The `persist=False` callers that remain (the history view, three scripts, one test) are silent.
+- **The bodies are unchanged:** the report and score bodies of all 27 dev scans are byte-identical before and after (54 documents, `generatedAt` aside); 800 random fact sets give the same comparison as `compute_score`; ten scan shapes (no competitor set, a struck rival, nothing answered, every dimension excluded…) give the same as the old call.
+- `docs/api-contracts.md`: the score route, the report route and the history note.
+
+## 3. Cost per report view, before → after
+
+On a platform-sized database (6,460 citations), a realistic scan (24 prompts × 3 engines, 392 citations, 5 rivals, an audit), 90 timed views each, while other agents loaded the machine (p95 is noise):
+
+| | before | after |
+|---|---|---|
+| `build_report` view: SQL statements | 22 | 21 |
+| `build_report` view: median / p95 | 31.2 / 78.6 ms | 26.4 / 64.2 ms |
+| `GET /score` view: SQL statements | 11 | 10 |
+| `GET /score` view: median / p95 | 19.2 / 65.5 ms | 16.9 / 59.7 ms |
+| `scoring.completed` lines per view | 1 | 0 |
+
+The replaced step itself: 16.6 → 14.8 ms. Scoring was never the main cost: loading the results (8.5 ms) and the tier aggregate (6.1 ms) are.
+
+## 4. The review
+
+- No security review: no write path changed (the brief asks for one only if a write path changes; the no-write test and the read-only replay say none does). No web change, so no UI review.
+
+## Found, not fixed
+
+- **A rival's Citation Strength in a report is measured when the report is opened, not when the scan was scored**, beside the subject's stored figure. It needs the platform-wide authority tiers, which move with every agency's scans; on one stored scan the rivals read 76.69 / 70.13 / 62.64 / 76.19 / 100.00 with an empty platform and 80.77 / 76.57 / 71.01 / 78.21 / 100.00 after 20 more clients, and a "leads by" gap went from 18.7 to 22.8 with nothing about the scan changed. Rivals are also always computed with the current formula: in the dev data 22 of 25 scored scans show rival figures beside a subject figure from an older definition. Shown on five surfaces (the report table, the "leads on Citation Strength" sentence, the client Competitors view, the PDF, the API). A test pins the drift as a characterisation. Options for the founder: store the comparison at scoring; show it only beside a current-formula score; say in the copy that rival figures are measured when the report is opened; or drop the rival column until the first ships.
+- **`GET /clients/{id}/history`** still runs a full `score_scan(persist=False)` per plotted scan on every view (about 17 ms and 8–9 statements each) and mixes the stored composite with a recomputed share of voice; it no longer logs.
+- **`build_report` loads the results and the competitor set twice** (once for the proof beat, once for the comparison), about 9 ms of 26.
+- **Two test files share one fixed database name** (`test_migrations.py`, `test_enum_constraints.py`: `avp_migration_check`), so two full API runs at once on one Postgres collide; seen while worktrees ran in parallel.
+
+## Verified
+
+**API pytest 2656 → 2680 (+24); floor raised to match.**
+- `tests/test_reads_are_reads.py` (24): the no-write test with two controls that show the snapshot and the trace can fail; no read path reaches scoring or reads the audit; the tier read happens once and only with rivals; the comparison equals what `compute_score` derives (800 fact sets) and what the old call returned (ten scenarios); the bodies are those a re-scoring read gave; no read path logs `scoring.completed`, and a scored scan still logs it once with the same fields.
+- **Negative controls:** on this tree, `scoring.completed` logged unconditionally again fails the two log tests; restored and checked with `cmp`. The implementer's, each restored: the original bug (the old call and the unconditional log) fails 3; the comparison ignoring the tiers, 7; a rival's Citation Strength always included, 3; `compare_on_read` writing and committing the Score, 5; reading the audit, 1.
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, shared-types 53 (0 fail), design-system 935, web 1533, mypy 43 (ceiling 50).
+- ruff clean; all typechecks clean; the styleguide builds; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+- OpenAPI and `api.gen.ts` regenerate with no change from the committed files (one route description changed in this item).
+- Exit codes were read from files.
+
+# A competitor search that hangs is tried once more on a new connection inside a real deadline, a failure says what kind it was, and no logger can print the search key
+
+**2026-10-03, the fourth entry of the day; branch `pilot-fixes-3`, the founder's brief "honest reports and the remaining pilot decisions" (item R2).** One item, one commit.
+
+**Render: nothing to set. No endpoint, schema, dependency or outbound host change.** New log events `serp.retried` (info) and `serp.attempts_failed` (warning). `ANTHROPIC_LOG` no longer changes what the API logs (below).
+
+Drift check (north-star §8): Layer 2, Measurement (competitor detection's search signal), and Layer 0, Trust (no secret in a log); lifecycle phase: Activation (Epic 9), a scan whose competitor set the report stands on.
+
+## 1. What the investigation found
+
+- **The founder's production fact:** a full scan on Standard logged `competitors.serp_failed error_code=SERP_TIMEOUT` for its search queries; detection then had only the co-citation signal and returned 5 competitors at confidence 0.000 (`weak_signal`), and scoring flagged `WEAK_COMPETITOR_SET` and excluded Citation Strength.
+- **The call** (`services/serp.py`): SerpApi's Google engine, `num=10`, `hl=en`, `gl=us`; a 25 s httpx timeout (per network step: connect, read, write, pool), no retry; `search_many` runs a detection's queries 3 at a time. `build_queries` makes 3 brand-anchored queries and up to 3 industry-seeded ones, so a detection sends 3 to 6.
+- **The account:** SerpApi's Free Plan, 250 searches a month shared with production (233 left before the measurement, 209 after).
+- **Measured** on 2026-10-03 from this Mac with the API's own `serp.search`: 4 real businesses (Help Scout, Allbirds, Blue Bottle Coffee, Mailchimp), the 6 queries `build_queries` makes for each, 3 at a time as production runs them; 24 searches, all billed (none served from SerpApi's cache), the timeout raised to 90 s for the measurement only. All 24 answered: minimum 1.03 s, median 1.54 s, p90 2.53 s, p95 2.54 s, maximum 6.93 s; none over 10 s; a business's 6 queries took 3.2 to 9.0 s in all.
+- **So:** our 25 s timeout is not too short and 3 at once is not too many. A provider that answers in about 1.5 s does not take 25 s on several queries at once unless connections hung or SerpApi, or the path to it from Render, was briefly down. The old code could not say which: one error code for both.
+
+## 2. What changed
+
+- **Each attempt** has a real 10 s deadline (`asyncio.timeout` around the whole attempt) over httpx step timeouts of 5 s to connect and 9 s for each read, write and pool wait. The step timeouts sit under the deadline so a connection that goes silent is named by its step; only a response that trickles, or several slow steps together, reach the deadline (kind `total`). 10 s is about 1.4× the slowest search measured and 4× its p95.
+- **One retry**, after a 1 s pause, on a new client and so a new connection, for a transport failure (every timeout, `total` included, a refused or reset connection, a name that does not resolve). An HTTP answer is never retried (401, 429, 5xx, bad JSON, an `error` payload, an undecodable body), and neither is a cancellation from the scan's own deadline. The final codes are unchanged (`SERP_TIMEOUT`, `SERP_UNREACHABLE`).
+- **The bound is now a ceiling:** 10 + 1 + 10 = 21 s per query (it was 25 s per step, and a trickling answer had no limit), so a detection's two waves of 3 take at most 42 s (it was 50, or unbounded), the synchronous `POST /clients/{clientId}/competitors/detect` is bounded the same way, and the scan's derived worst case falls from 2,202.5 s to 2,194.5 s.
+- **What a failure says:** `serp.attempts_failed` (`attempts`, `elapsed_ms`, `kinds`: one per attempt, `connect`, `read`, `write`, `pool`, `total` or the exception's class name) when every attempt failed; `serp.retried` (`attempts`, `kinds`, `elapsed_ms`) when a retry rescued the query, so searches spent on retries are visible. Never the exception's message, the request, the URL or the parameters: the URL carries the API key. The comments say that a read failure may already have been processed, and billed, by SerpApi; only a failure to connect certainly was not.
+- **No logger can print the key or a prompt** (`logs.py`, `QUIET_LOGGERS`): `configure_logging` pins the `httpx`, `httpcore` and `anthropic` loggers to WARNING on the loggers themselves. httpx writes every request's full URL at INFO, and SerpApi's carries `api_key`; the Anthropic SDK raises its loggers when `ANTHROPIC_LOG` is set and at DEBUG prints each request's options, prompt text included (client-site content, an engine's answer). Nothing enabled those levels before, so this was latent; the pins are applied last in the real import order, so `ANTHROPIC_LOG` now changes nothing in the API. The three scripts that reach SerpApi for real (`verify_competitors.py`, `verify_e2e.py`, `verify_scoring.py`) now configure logging before their first await, since their output gets pasted into this log.
+
+## 3. The review
+
+- **Security review (opus): PASS WITH NITS.** Checked clean: the key never reaches the failure line, a result, `redacted()`, an error code or a response; httpx exception text carries no URL here (no `raise_for_status`, no followed redirects); tracebacks are plain; the uvicorn access log shows only incoming paths; the retry's connection verifies TLS over https only; 401, 429, 5xx, bad JSON, an `error` payload, an undecodable body and a cancellation are not retried; the pins hide only the SDK's INFO "Retrying request" line and its DEBUG lines, while its warnings and auth failures still surface.
+  - **Taken:** L1, the scripts configure logging; L2, the per-step timeout replaced by a per-attempt deadline, so 21 s is a real ceiling; L3, the rescued retry is logged and the billing comment corrected; L4, the import-order test now imports only the app (a lazy SDK import would be caught) and the no-key tests also refuse any event carrying `exc_info`.
+  - **For the founder:** whether to retry only failures to connect, which never reach SerpApi and so are never billed. Kept: retry read failures too, because the kind that failed in production is not known yet; the next failure's `kinds` will say.
+
+## Found, not fixed
+
+- **`POST /clients/{clientId}/competitors/detect`** runs a fresh detection on every call with no allowance check or rate limit: 6 searches from the shared 250 a month each time, up to 12 with retries.
+- **A retry after a read failure may be billed twice:** at most one extra search per query, 6 per detection.
+- **`SERPAPI_KEY_MISSING` cannot happen:** with no key set, `Settings.provider_key` raises before `search` reaches that branch, so a missing key fails the phase instead of degrading it.
+- **18 other scripts do not call `configure_logging`** (most `verify_*` scripts, `tune_prompt`, `measure_citation_overlap`, `seed_dev`); none sends a key in a URL, but with `ANTHROPIC_LOG=debug` in a shell they would print prompt text.
+- **The founder's log** showed two `serp_failed` lines; a detection sends 3 to 6 queries, so either only some timed out or the view showed two of them. The new lines will say.
+
+## Verified
+
+**API pytest 2680 → 2791 (+111); floor raised to match.**
+- `tests/test_serp_search.py` (93): the bound is the measured one and every step's timeout sits under the deadline; a hung request is tried once more (eight failure types); when every attempt fails, the code, the attempts and the kinds; an answer is not retried; a rescued retry is logged with numbers and kinds only; an attempt is cut at its deadline and retried, and an outer cancellation is not; the key reaches no log line, no result and no `exc_info` (a sentinel key over every failure type); `search_many` still runs 3 at once; and five against real local sockets (a hung connection rescued by a second, both hanging, a refused port, a response trickling a byte every 30 ms cut at the deadline, a trickling first connection rescued).
+- `tests/test_secrets_stay_out_of_logs.py` (+18): httpx does write the URL when left alone (the premise); with logging configured as the app does it, at INFO or DEBUG in either order, no record names the key; the pins are on the loggers themselves; the SDK raising its loggers does not survive `configure_logging`; a fresh process with `ANTHROPIC_LOG=info` importing only the app ends with all three at WARNING; every script that reaches SerpApi configures logging before it awaits anything.
+- **Negative controls:** on this tree, no retry (one attempt) fails 62 of the 93; restored and checked with `cmp`. The implementer's, each restored: the attempt deadline removed, 4; the rescued-retry line removed, 20; `exc_info` in the failure line, 10; the key's parameters in the failure line, 9; the pins removed, 8; `anthropic` left unpinned, 4; a script's `configure_logging` removed, made conditional, or moved after its first await, each fails.
+
+**The rest of the bar** (this tree, one run).
+- Workers 26, shared-types 53 (0 fail), design-system 935, web 1533, mypy 43 (ceiling 50).
+- ruff clean; all typechecks clean; the styleguide builds; all six count gates through `assert_count.py` pass.
+- Both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change).
+- The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+- OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# A robots.txt that could not be read is no longer reported as one that keeps crawlers out, and the gate reads robots files within a size and a time it can afford
+
+**2026-10-03, the fifth entry of the day; branch `pilot-fixes-3`, the founder's brief "honest reports and the remaining pilot decisions" (launch checklist 3.41).** One item, one commit.
+
+**Render: nothing to set. No migration, dependency or outbound host.** New outcome code `ROBOTS_UNREACHABLE` (audit `errorCode`, classification reason, check `detailCode`) and exclusion reason `CRAWL_POLICY_UNREADABLE`; `FORMULA_VERSION` stays v5. New log events `crawl.robots_unreachable` and `audit.robots_unreachable` (the same fields as their `*_disallowed` siblings).
+
+Drift check (north-star §8): Layer 0, Trust (the product says only what is true about a site, and the crawler stays honest and bounded) through Layer 2's audit outcome, shown on Layer 1's report, Technical screen and intake card; lifecycle phase: Activation (Epic 9), a pilot's first scans of real sites. One defect's whole vertical, so one item.
+
+## 1. What changed
+
+- **Founder decision (final):** a robots.txt that could not be read gets its own outcome, distinct from one that disallows us; the crawl behaviour follows the existing policy (honest crawling first); every user-facing sentence must be true; the scoring exclusion code matches; `FORMULA_VERSION` unchanged unless the exclusion set changes.
+- **What was wrong:** the policy already told the two apart (`ai_crawlers.crawl_policy`: an unreadable file is `UNREACHABLE` and `CrawlPolicy.allows` says no to every path), but `crawl.py` and `technical_audit.py` stored every refusal as `ROBOTS_DISALLOWED`, so the report, the Technical screen and the intake card told an agency, and a prospect reading a shared report, that the site asks crawlers to stay out when it had not answered.
+- **Unchanged behaviour:** an unreadable robots.txt still means nothing is fetched (RFC 9309 §2.3.1.4; a 429 is treated as a 5xx). A 404, 410, 403 or other 4xx is still "no file, crawl freely".
+
+| robots.txt | the crawler | stored code, before → after |
+|---|---|---|
+| read, rules forbid the page | nothing fetched | `ROBOTS_DISALLOWED` → unchanged |
+| 404 / 410 / 403 / other 4xx but 429 | reads the site | none |
+| 429, any 5xx, no answer (timeout, refused, a name that does not resolve), a redirect loop, a 1xx or a 3xx with no Location, a body that cannot be decoded, a compression it does not undo | nothing fetched | `ROBOTS_DISALLOWED` → `ROBOTS_UNREACHABLE` |
+
+- **The codes:** `ROBOTS_UNREACHABLE` for the audit's failed status, the intake's classification reason and the checks; Technical Foundation excluded as `CRAWL_POLICY_UNREADABLE`. The excluded set (which dimension, in which cases) is identical, so `FORMULA_VERSION` stays v5; the reason enters the inputs digest only when set, so existing digests are unchanged and stored rows are untouched.
+- **The copy, one sentence everywhere:** "The crawler tried to read the robots.txt of this site, or of an address the site sent it to, and did not get a usable answer. It obeys robots.txt, so without that answer it did not read the site." The exclusion's label is "Could not read robots.txt" and its detail adds "Technical Foundation is left out of the score." The report card ("The site was not read", a neutral badge) lists any findings that do exist, as the disallowed card does; the Technical screen has its own state; the intake card adds "Check that the address is right and the site opens in a browser, then try again."; the PDF uses the same label and detail. No raw code on any of them.
+- **A related untruth removed:** an unreadable file used to leave `robots_txt_present` as a `NO_ROBOTS_TXT` warning, so the fix list told the client to "Publish a robots.txt" for a file that may exist. It is `not_applicable` now; only the site's OWN unreadable file does that, and a real 404 still warns.
+- **The gate reads what it can afford** (from the security reviews; the old reads loaded whole bodies with no overall deadline while holding an agency's read slot and a database connection):
+  - each robots.txt, redirect hop and sitemap request is one exchange under a 10 s total deadline, the address check included (`ROBOTS_REQUEST_DEADLINE_S`, `SIDE_FETCH_DEADLINE_S`); the run caps did not move, because their robots term already counted 6 × 10 s;
+  - bodies are streamed and stop at the cap (512,000 characters for robots.txt, 64 KiB for a sitemap, whose first characters decide "is it XML"); only a 2xx answer's body is read;
+  - a compressed body is undone through one zlib stream in bounded steps, so a small download can never inflate past the cap (a 64 MB gzip expansion stays under 12 MB); stacked or unsupported codings and a corrupt stream are "no answer"; the gate asks only for gzip and deflate;
+  - a body is decoded only in a text charset on a short list (utf-8, utf-16 and utf-32 and their byte orders, ascii, iso-8859-*, windows-125x), checked by name before a byte is read; any other is "no answer". Some codecs Python knows cost CPU that grows faster than the input (punycode: 2.4 s for 2 MB; utf-7 in small pieces: 3.2 s), on the API's one event loop, where no deadline can interrupt them;
+  - one budget for all of the gate's work before the browser starts, `PRE_BROWSER_BUDGET_S = 60` (one worst-case chain of six requests at their deadline); it used to have no total at all, about 780 s for a hostile chain of slow hosts; a spent budget ends the run `TIMEOUT` with no browser started;
+  - only http and https hops are made; the last address when redirects run out is checked against its robots.txt before it is handed on; the landing URL is read once.
+- `docs/api-contracts.md`: the codes, the exclusion, what the crawler does per robots.txt status, the deadlines, caps and budget.
+
+## 2. The review
+
+- **UI review (sonnet): PASS WITH NITS.** The sentence is true for every case that produces the code (it keeps a 404 out by "usable"); neutral badge right; design-system only. Taken: the sentence's clearer wording, the intake's advice, the title row's wrap.
+- **Security review (opus), round 1: PASS WITH NITS**, nothing introduced at Medium. Checked clean: no new fetch on any path, egress precedence, the logs, the exclusion set and digests. Taken: the landing URL read once; `unread` from the site's own file, not the final code (a site with no robots.txt of its own keeps that finding); the sentence's scope; a test that the code is read from the cached fetch; and the pre-existing availability Medium (whole bodies, no deadline).
+- **Re-review of round 2: PASS WITH NITS, conditional** on compressed bodies (expanded before the cap). Taken: the bounded inflate, the pre-browser budget, decoding errors as no answer, the last location checked, the scheme refused, 2xx bodies only, two more tests.
+- **Confirmation of round 3: PASS WITH NITS.** Round 3's claims hold: no call inflates past the cap and no unbounded body read remains; the budget cannot be swallowed or leave a browser started; the egress order and `EgressRefused` precedence are kept; pinning `Accept-Encoding` changes nothing on the wire today. Its one Medium, older than this item and narrowed by round 3, was the decoder accepting any charset Python knows; taken in round 4 (the allow-list above).
+
+## Found, not fixed
+
+- **Stored rows keep `ROBOTS_DISALLOWED`** for files that were really unreadable before today, so their reports and Technical screens still say the site asks crawlers to stay out. Nothing recorded which they were; failed audits' AI-crawler tables (all unknown when the site's own file was unreadable) would identify the own-host cases. Founder: relabel those, or accept.
+- **A budget that runs out inside the side fetches** keeps none of what they had read (they hand facts over only on return); the audit then records them as not measured.
+- **The `/crawler` page** does not state the 10 s and 60 s limits (legal copy).
+- **Content type vs obeyed rules:** a real `Disallow: /` served as `application/octet-stream` is obeyed but reported as no robots.txt.
+- **The Technical screen** shows the failed state but not the findings that exist for the mixed case (the report lists them).
+- **A robots.txt or sitemap in a legacy non-Latin charset** (Shift_JIS, EUC-JP, GBK, Big5, EUC-KR, KOI8-R, DOS or Mac code pages) is now "no answer", so such a site is not read. Those decoders measured linear and cheap (4–11 ms for 2 MB); allowing them is one line if pilots need them.
+
+## Verified
+
+**API pytest 2791 → 3009 (+218); web vitest 1533 → 1557 (+24); both floors raised to match.**
+- API (+218, mostly `test_robots_obeyed.py`): eleven unreadable arrangements, each for the intake crawl and the audit (connect and read timeouts, refused, a name that does not resolve, 500, 502, 503, 429, a redirect loop, a redirect to a non-URL, a 304) end `ROBOTS_UNREACHABLE` with no browser and no page; a real disallow stays `ROBOTS_DISALLOWED`; 404/410/403 still crawl; the gate's code per case; the four exclusion reasons give equal composites under v5 with the pinned digests; a missing own robots.txt stays a finding when the landing host's cannot be read; a robots.txt that never finishes ends by its deadline; a 10 MB robots.txt is read to the cap; a gzip bomb inflates to the cap and no further; stacked and unsupported codings, corrupt streams and non-text charsets are no answer, and a sitemap with one keeps the side facts; a chain of slow hosts ends by the pre-browser budget as `TIMEOUT`, and the budget is not swallowed; the last location is asked about before it is handed on; non-http hops are not requested or looked up; a slow 404 still crawls; an address check slower than the deadline sends nothing; a connect-time egress refusal propagates through the exchange; `refusal_code` sends nothing of its own; a page whose URL moves between reads cannot name another origin; a body in a charset off the list (23 codecs, punycode and utf-7 among them) is no answer with not one byte read, every listed family under its alias spellings is read as it says, a body that is not read may name any charset.
+- Web (+24): the report card, the Technical screen and the intake card for the new code, never "stay out" and never a raw code; the card's findings in the mixed case; the intake advice; the PDF and the shared copy fixture.
+- **Negative controls:** on this tree, the gate reporting every refusal as `ROBOTS_DISALLOWED` fails 69 of `test_robots_obeyed.py` (before round 4); the charset allow-list bypassed fails 33 of its 88 cases; each restored and checked with `cmp`. The implementer's, each restored: an unreadable file reported as missing, 13; the exclusion reason removed, 3; the web screens treating the new code as the old, 6; the deadline removed, 8; `unread` from the final code, 1; inflating without a bound, 2; the coding refusal removed, 10; no budget in the crawl, 1, in the audit, 3; bodies read whatever the status, 2; decoding errors escaping, 6; the last location unchecked, 4; the scheme check removed, 11.
+- **The rest of the bar** (this tree, one run): workers 26, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50); ruff clean; all typechecks clean; the styleguide builds; all six count gates through `assert_count.py` pass; both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change); the Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged); OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# A scan the reaper has failed stays failed: the final status is written only while the row is still running, and a chain that finds its scan failed stops
+
+**2026-10-03, the sixth entry of the day; branch `pilot-fixes-3`, the founder's brief "honest reports and the remaining pilot decisions" (launch checklist 3.36).** One item, one commit.
+
+**Render: nothing to set. No endpoint, schema, dependency or outbound host change.** New log events `scan.finalize_lost` and `scan.chain.stopped_not_running` (scan id and the status found, nothing else).
+
+Drift check (north-star §8): Layer 0, Trust (a scan's status is what happened to it); lifecycle phase: Activation (Epic 9), a failed scan's report and its share link staying what 3.24 and 3.29 made them.
+
+## 1. What changed
+
+- **The defect** (found by 3.28's security review, confirmed by reading the code): `finalize_scan` (`services/scan_runner.py`) checked only its in-memory copy of the scan and then wrote the final status through the ORM, an unconditional `UPDATE … WHERE id`. The chain is cancelled only when its next heartbeat (every 30 s) finds the row no longer running, so a finalize inside that window overwrote a reaper's FAILED with succeeded or partial, and a failed scan's kept share link opened again.
+- **The fix:** one Core `UPDATE scans SET status, finished_at[, error_code] WHERE id = :id AND status = RUNNING RETURNING id`, as the lease renewal is, after a flush of anything pending (so nothing dirty can be written after it by the commit). No row matched means somebody else decided the scan's fate: nothing is written, `scan.finalize_lost` is logged, and the scan is returned as stored.
+- **Two older gaps this change would otherwise have made permanent** (from the security review):
+  - **A chain could bring a failed scan back to running.** After a phase fails, `_attempt` refreshes the scan; if the reaper had failed it meanwhile, `run_scan`'s RUNNING write put it back, the next renewal matched, and the conditional finalize then stamped it. The chain now stops before the engine loop when its scan is no longer running (`scan.chain.stopped_not_running`). `run_scan`'s write itself was left as it is: the ORM writes only changed columns, so with a copy that already says running it writes no status, which a test shows on a real row.
+  - **An executor that never claimed a scan could fail another executor's live scan.** When two requests adopt one queued scan, the loser's claim matches nothing; if one of its database calls then raised, `_mark_failed`'s `status IN (QUEUED, RUNNING)` failed the winner's running scan, and now nothing would overwrite that. `execute_scan` tracks whether it holds the claim; an executor that does not can fail only a scan still queued (so one that raised before its claim does not leave the scan queued for 15 minutes).
+- **Every other writer of a final status was already conditional:** the deadline stamp (`WHERE RUNNING`), `_mark_failed`, the never-started fail (`WHERE QUEUED`, past the window), the reaper (`WHERE RUNNING`, lease expired), the claim and the renewal. `run_scan`'s own stamp, used only by scripts and tests on rows that hold no lease, cannot meet the reaper.
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS**, nothing at Medium. Checked clean: the race is closed in every order (the reaper's write committed before finalize: the statement sees FAILED; in flight: the UPDATE waits on the row lock and re-checks; after: the reaper's own condition skips the finished row); the commit is not new and commits nothing else; the refresh after a lost race leaves a consistent copy; a failed scan's link stays refused on both public routes; the allowance counts by final status, so a scan reaped while its chain was alive now stays failed and does not count, which matches the policy; the log lines carry an id and a status.
+  - **Taken:** both older Lows above, and the flush before the conditional write.
+
+## Found, not fixed
+
+- **A reaped chain runs on until its next heartbeat:** phases after the engine loop (audit, scoring, alerts, fixes) still run and spend for at most 30 seconds after the reaper, and `run_scan` still writes its counts and engine versions to a reaped row (not its status). 3.30 already keeps a failed scan's score and fixes from being served.
+- **A claim whose commit raises** is treated as not held, so the executor fails only a queued scan; if that commit had in fact gone through, the scan stays running until the reaper takes it, within one lease (180 s), instead of at once.
+
+## Verified
+
+**API pytest 3009 → 3035 (+26); floor raised to match.**
+- `tests/test_scan_finalize.py` (26): the reaper's committed FAILED is not overwritten (the whole row compared column by column, the log line); a FAILED that lands while finalize waits for the row lock is kept (real row locks, the wait seen in `pg_stat_activity`); whatever ended a scan (failed, partial, succeeded, cancelled) stays as it was; a running scan is finalized as before from its persisted results; a scan already final in memory is untouched; a second finalize writes nothing; a link minted while the scan ran stays dead after the chain finishes if the reaper failed it, and opens if nothing else wrote the row (the real chain and both public routes); a chain that finds its scan failed stops before the engine loop; a losing executor that raises leaves the winner's scan to finish; an executor that raises before its claim still fails a queued scan, and one that raises after its claim fails its own; pending state on the scan is written before the stamp, not after.
+- **Negative controls:** on this tree, the final write made unconditional again fails 8 of the 26; restored and checked with `cmp`. The implementer's, each restored: read-then-write in place of the conditional statement fails the in-flight test; the chain's stop disabled, 1 (the reaper's row ends succeeded); `_mark_failed` ignoring the claim, 2; the flush removed, 1
+- **The rest of the bar** (this tree, one run): workers 26, shared-types 53 (0 fail), design-system 935, web 1557, mypy 43 (ceiling 50); ruff clean; all typechecks clean; the styleguide builds; all six count gates through `assert_count.py` pass; both `uv lock --check` runs pass; Alembic upgrade and check pass on an empty database (no schema change); the Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged); OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# The intake card, the Technical screen's checks and the engine cards say what went wrong in a sentence true of the case and never print a code, and no screen promises a scan in under five minutes
+
+**2026-10-03, the seventh entry of the day; branch `pilot-fixes-3`, the founder's brief "honest reports and the remaining pilot decisions" (launch checklist 3.39).** One item, one commit.
+
+**Render: nothing to set. Web only: no endpoint, schema, dependency or outbound host change.** `docs/api-contracts.md` widens what `unclassifiable` means.
+
+Drift check (north-star §8): Layer 1, Delivery (what the intake card, the Clients list, the client's Technical and Prompts screens, the dashboard and the landing page say), reading Layer 2's outcome codes; lifecycle phase: Activation (Epic 9), a pilot's first site read and first scan. One rule across these screens (a failure is a true sentence, never a code), so one item.
+
+## 1. What changed
+
+- **Founder decision (final):** no raw code on these screens; a failure on our side never says the site "did not load"; reuse the 3.26/3.32 map; the Prompts screen's engine codes and the check rows' lab and field codes in words; remove "under five minutes" if it is untrue; the 429 moves to the form; UI review.
+- **The intake card** (`ClassificationResult.tsx`; the map is `classificationFailure` in `lib/report/strings.ts`): the `Reason: <code>` line and "usually means the site did not load" are gone. Each reason code has its own sentence under one of two headings: "We could not read this site." for the crawler's codes (`ADDRESS_NOT_PUBLIC`, `ROBOTS_DISALLOWED`, `ROBOTS_UNREACHABLE`, `BROWSER_ERROR`, `FETCH_FAILED`, and `HTTP_4xx`/`HTTP_5xx` through the audit's 3.26 sentence), and "We could not classify this site." for the rest (`TIMEOUT`, `INSUFFICIENT_CONTENT`, `NOT_A_BUSINESS_SITE`, the nine `PROVIDER_*`), whose sentences end "so nothing was classified". An unknown or missing code says "Nothing was classified, and we have no more specific reason to give." The badge says "Could not classify", true under both headings; the Clients list's badge and its tile say the same.
+  - The audit's `TIMEOUT`, `BROWSER_ERROR` and `FETCH_FAILED` sentences were not reused: they say "the home page" and "no response", which is untrue of the intake crawl (it reads up to three pages, and its `FETCH_FAILED` also covers a page that answered and could not be read). `TIMEOUT` is two failures under one code (the crawl's cap and the classifier's deadline), so its sentence names both.
+  - `BROWSER_BUSY` never reaches the card: `intake.run_classification` answers 429 before it classifies or writes (a test pins the order).
+  - `PROVIDER_AUTH_FAILED`, `PROVIDER_QUOTA_EXHAUSTED` and `PROVIDER_BAD_REQUEST` share one sentence, "We could not use the model that classifies sites because of a problem on our side, so nothing was classified.": our key or our credit is not the agency's to act on.
+- **The intake form** (`IntakeForm.tsx`): only a 409 and a 422 (about the address) stay on the field. A 429, 401, 403, any other 4xx and the shared "could not reach the server" sentence are an `ErrorState` above the form, titled "Could not start reading the site", with the field left clean. An empty submit clears an earlier form-level error.
+- **The Technical screen's check rows** (`ClientTechnicalView.tsx`, `checkDetailSentence` in `lib/client/technical.ts`): a row prints its code's sentence under the check instead of the code in mono. Ten of the fix list's sixteen codes show that list's `detail` word for word. Six are said in this screen's own words, because the fix wording, standing on a row, says more than the check found: `ROBOTS_TXT_DISALLOW`, `META_ROBOTS_NOINDEX`, `NO_PRODUCT_OR_SERVICE_SCHEMA`, `NO_DATE_SIGNAL_AVAILABLE`, `MULTIPLE_H1` and `NO_ORGANIZATION_OR_LOCALBUSINESS`. The four lab and field codes and the two robots codes a sitemap row can carry have sentences of their own; a code nothing words shows nothing. The fix table itself is unchanged (the report's fix beat and the PDF share it).
+- **The Prompts screen's engine cards** (`ClientPromptsView.tsx`, `engineFailureSentence` in `lib/client/engines.ts`): "This engine did not answer." is followed by a sentence for each of eleven engine codes instead of `(<errorCode>)`; the same three provider codes share "We could not get an answer from its provider because of a problem on our side." A fixture code nothing records (`ENGINE_TIMEOUT`) became `TIMEOUT`.
+- **"Under five minutes" is gone** from the intake hint, the dashboard's empty state, the getting-started step and the landing page. As a promise it was untrue: of 25 finished scans in the dev database (start to finish; these rows do not record the queue wait), 9 took more than five minutes, the median was 4.5 min and the longest 7.6, and nothing cuts a scan at 300 s (the deadline is 2,400 s). The first three now say "A scan usually takes a few minutes." (`SCAN_DURATION_SENTENCE`), and the landing page "A scan usually takes a few minutes — twenty questions, put to four AI answer engines. Your first scan is free with a Google sign-in. $160/month after that." (`TARGET_PROMPTS` 20, `DEFAULT_ENGINES` four, `FREE_SCAN_ALLOWANCE` 1 with a Google sign-in, `PLAN_PRICE_USD` 160). Its "one at a time" was dropped: the engines are asked together and twelve questions run at once.
+- `docs/api-contracts.md`: `unclassifiable`'s meaning names all three causes (the crawler could not read the site, it is not a business site, the classifying model could not answer) and says the web shows a sentence per code, never the code.
+
+## 2. The review
+
+- **UI review (sonnet), round 1: FAIL, narrowly**: three Mediums, no High.
+  - The "Could not read" badge contradicted "We could not classify this site." on twelve codes.
+  - Four reused fix sentences did not stand alone on a check row. One was untrue: `NO_DATE_SIGNAL_AVAILABLE` said no date was found "anywhere on the page", but the audit reads only the Last-Modified header and the structured data's dates.
+  - The landing page still promised "under five minutes".
+  - All three were taken in round 2, with four Lows: the three provider codes share one sentence, "usually", an empty submit clears the form error, and two wordings.
+- **Re-check of round 2: PASS WITH NITS**, nothing at High or Medium. It re-ran the duration query read-only and got the same figures. All four Lows were taken in round 3:
+  - "The whole site" on the Indexable row overstated. That row reaches the screen only when AVPScanBot was let in despite the `*` group's `Disallow: /`. It now reads "…stay out of the whole site (Disallow: /), except where another rule lets them in."
+  - The verbatim `NO_ORGANIZATION_OR_LOCALBUSINESS` sentence was broader than its check, which matches eight type names only. It now names them.
+  - The Clients tile says "Could not classify".
+  - A stale test comment was corrected.
+- **The reviewer's proposed entity sentence was not used.** It said the page has no "LocalBusiness type", which is untrue of `ProfessionalService` markup (a schema.org subtype the check does not match), and it added a claim about what the markup is for. Round 3 was not re-reviewed.
+
+## Found, not fixed
+
+- **Stored rows from before 3.41:** a client stored as `ROBOTS_DISALLOWED` for a robots.txt that could not be read now reads "asks crawlers like ours not to load its home page". This is the same limitation 3.41 recorded for the report and the Technical screen.
+- **The report's fix list and the PDF** still word three codes as before:
+  - `NO_ORGANIZATION_OR_LOCALBUSINESS`: "Nothing on the page states … what this organisation is".
+  - `NO_DATE_SIGNAL_AVAILABLE`: "anywhere on the page".
+  - `ROBOTS_TXT_DISALLOW`: "nothing else on this list can take effect".
+  - The fix table is mirrored in `report_narrative.py` and its fixture, so this is a larger change than this item.
+- **The entity check itself** accepts only Organization, Corporation, OnlineBusiness, LocalBusiness, Dentist, Restaurant, Store and MedicalBusiness. A page marked up as `ProfessionalService`, `LegalService` or `Plumber` fails it and loses Technical Foundation points. Widening it changes the score and needs a `FORMULA_VERSION` bump: a founder decision.
+- **The form's title over the away sentence** ("Could not start reading the site") is not known to be true when the answer is the proxy's timeout. A read that outlives the 150 s proxy may still finish and add the client. The other "Could not …" titles over that sentence share this.
+- **Not checked:** the Prompts screen's "This usually takes under a minute." (one prompt's re-run), and the intake's "usually takes a few seconds".
+- **Accessibility gaps older than this item, noted by the review:** the failure card's heading is a `<p>`, and a failed read is not announced (focus does not move).
+
+## Verified
+
+**Web vitest 1557 → 1693 (+136); floor raised to match.**
+- Per file, before → after:
+  - `ClassificationResult` 24 → 69:
+    - a row per reason code: its heading, its sentence once, no code, no `Reason:`, never "did not load";
+    - our-side codes never blame the site;
+    - the badge is "Could not classify" under every code;
+    - the API's codes are read back from `classify.py`, `crawl.py`, `egress.py` and `browser_slot.py`, so a code without wording fails, and so does wording for a code that is gone;
+    - `BROWSER_BUSY` is refused before any write;
+    - the started hint carries the shared sentence.
+  - `IntakeForm` 8 → 21:
+    - a 429, 401, 403 and the away sentence sit above the form with the field clean;
+    - a 409 and a 422 stay on the field;
+    - an empty submit clears an earlier alert.
+  - `ClientTechnicalView` 36 → 66: every code that can reach a row (22) shows its sentence under its own row and never the code; `technical_audit.py` is read back.
+  - `technical` 20 → 27: ten verbatim, six of its own, the lookup order, and the fix wording unchanged.
+  - `ClientPromptsView` 24 → 44: eleven engine codes, an unknown one and a missing one; `engines.py` is read back.
+  - `copyCoverage` 20 → 40.
+  - `scanOutcome` 10 → 11.
+  - Changed in place, same counts: `ClientsView` 21, `LandingView` 36, `DashboardView` 71, `gettingStarted` 14.
+- **Negative controls on this tree**, each restored and checked with `cmp`:
+  - The intake card printing `Reason: <code>` as its sentence fails 52 of 109 in `ClassificationResult` and `copyCoverage`.
+  - Dropping the entity sentence fails 3.
+  - The tile's old label fails 2.
+- **The implementer's negative controls**, each restored:
+  - `Reason:` back on the card, 40.
+  - Every intake error on the field again, 8.
+  - The code printed in the check row, 25.
+  - `(<errorCode>)` back on the engine card, 13.
+  - "Under five minutes" back on three screens, 5.
+  - The old badge and tile labels, 6.
+  - The fix list looked up first, 6.
+  - The empty submit's clear removed, 1.
+- **The rest of the bar** (this tree, one run):
+  - Counts: API 3035, workers 26, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass.
+  - Alembic upgrade and check pass on an empty database (no schema change).
+  - The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+  - One of round 3's sentences changed after that run, so the web suite, its typecheck and its count gate were run again: 1693, all pass.
+- Exit codes were read from files.
+
+# A scan's audit waits two minutes for the browser, not five, and the deadline's worst case is restated wherever it is written
+
+**2026-10-03, the eighth entry of the day; branch `pilot-fixes-3`, the founder's brief "honest reports and the remaining pilot decisions" (launch checklist 3.35).** One item, one commit.
+
+**Render: nothing to set. No endpoint shape, schema, dependency or outbound host change.** One constant (`browser_slot.SCAN_AUDIT_WAIT_S`, 300 → 120 s). The description of `POST /scans/{scanId}/audit` changed (OpenAPI and `api.gen.ts` regenerated, descriptions only).
+
+Drift check (north-star §8): Layer 2, Measurement (a scan's technical audit and the scan's deadline); lifecycle phase: Activation (Epic 9), a pilot's scan finishing in time with its audit.
+
+## 1. What changed
+
+- **Founder decision (final):** the scan audit's wait for the browser goes from 300 s to 120 s; the deadline arithmetic is restated in the code, the docs and the checklist.
+- **What 120 s covers:** a run ahead that finishes normally. The audits timed for M1 (2026-10-02, 29 runs on real sites and a local page, in and out of a container) took 42 s at the most.
+- **What it no longer covers:** one capped run ahead. A run that hangs holds the browser until its own cap cuts it: 266 s for the intake's three-page crawl, 244.5 s for another scan's audit. A scan's audit queued behind such a run, with more than 120 s of its cap still to run, now ends `BROWSER_BUSY` after 120 s. The scan goes on without a Technical Foundation (excluded, never a zero), as it does for any other failed audit. At 300 s it waited such a run out, at a cost of 180 s more in the worst case.
+- **A request's wait** (`REQUEST_WAIT_S`, 60 s) is unchanged.
+- **The deadline's worst case, from the constants**, as `test_scan_executor` adds it up:
+
+  | Term | Seconds |
+  |---|---|
+  | co-citation, 2 × 62 | 124 |
+  | SerpApi, 2 × `serp.QUERY_CEILING_S` 21 | 42 |
+  | prompt generation | 122 |
+  | engines, 3 waves × 370 (122 + 4 × 62) | 1,110 |
+  | the audit's work before the browser, `crawl.PRE_BROWSER_BUDGET_S` (3.41) | 60 |
+  | the scan audit's wait | **120** (was 300) |
+  | the audit's run at its cap | 244.5 |
+  | fix generation | 242 |
+  | **Total** | **2,064.5** |
+
+  - Against `MAX_SCAN_DURATION` (2,400 s), the slack is 335.5 s and the margin ×1.16.
+  - On this branch before the change it was 2,244.5 s (×1.07).
+  - The figure moved twice today: R2's per-query ceiling took 8 s off, and 3.41's pre-browser budget added 50 s (it had been counted as one 10 s request).
+  - The comment on `MAX_SCAN_DURATION` now carries the line `worst case 2,064.5s of 2,400s: slack 335.5s, margin ×1.16`.
+  - The deadline test now checks that the comment states the sum it computes, whole line, and prints the replacement line when it does not. A bound that moves without the comment fails there.
+- **Restated in:**
+  - `browser_slot.py`: what 120 s covers and what it does not, with the two caps.
+  - `scan_executor.py`: the deadline comment, with 3.41's budget and this change in order.
+  - The docstring of `POST /scans/{scanId}/audit`. It said a scan's audit is recorded `BROWSER_BUSY` "when it waits that long", right after "more than a minute"; it now says up to two minutes.
+  - `docs/api-contracts.md`: the bounds paragraph and the `BROWSER_BUSY` code.
+  - `docs/runbook.md`: "Reading the API's memory", items 4 and 6. A `browser.slot_busy` line with `waited_ms` near 120000 is an audit that queued behind a hung run.
+  - `docs/crawl-worker-design-note.md`.
+  - The web comments behind "A scan usually takes a few minutes" (`scanOutcome.ts`, `LandingView.tsx`), which cited the 300 s wait.
+  - The launch checklist (its own commit, at the end of this brief).
+
+## 2. The review
+
+- No review was run. The brief asked for none for this item: one constant and the text that states it, no route or tenancy change. The landing step checked every restated figure against the constants and the test's own computed line.
+- Two corrections were made at landing:
+  - The implementer's comment cited "the heaviest audits measured took about 15 s". The repo recorded no such figure. The timed runs above give 42 s at the most.
+  - The worst case it pinned, 2,014.5 s (×1.19), was computed before 3.41's budget landed. The test failed on this tree with the line to write, 2,064.5 s (×1.16), and that is the line in the code and the design note.
+
+## Found, not fixed
+
+- **A queue, not one run:** 120 s covers one normal run ahead, not several. Four request reads and other scans' audits can queue, so several runs of about 30 s each could end an audit `BROWSER_BUSY` though none hangs. This is the founder's decision as made. `browser.slot_busy` lines with `waited_ms` near 120000 will show how often it happens.
+- **History left as written:** an older paragraph of the deadline comment ("about 1,900s … about 1.26x") is M1's figure on the day, before the wait was counted.
+
+## Verified
+
+**API pytest 3035 → 3035 (no tests added; floors unchanged).**
+- The tests that pin the wait were changed in place:
+  - `test_browser_slot.py`: the scan bound is 120 s; it is shorter than either run a cap has to cut (60 < 120 < 244.5); a request gives up at no more than half a scan's wait; the audit asks for the scan's bound.
+  - `test_agency_page_reads.py`:
+    - a scan's audit asks for exactly 120 s;
+    - a scan whose audit cannot get the browser fails that phase and goes on, with the real bound now passed through (only the time waited is scaled). The old test patched the constant away, so it never touched the real number.
+  - `test_scan_executor.py`: the deadline test checks the pinned line against its own sum.
+- **Negative controls:**
+  - On this tree, `SCAN_AUDIT_WAIT_S = 300.0` put back fails 6 of 191, and the deadline test's message gives the 300 s line (`worst case 2,244.5s of 2,400s: slack 155.5s, margin ×1.07`); restored and checked with `cmp`.
+  - The implementer's, on its base: the same, 6 of 190. The deadline test's message gave the 300 s line.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 26, shared-types 53 (0 fail), design-system 935, web 1693, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass.
+  - Alembic upgrade and check pass on an empty database (no schema change).
+  - The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no diff against this tree, which carries the new route description.
+- Exit codes were read from files.
+
+# A failed scan's report no longer carries the per-engine figures that rebuilt its Sentiment sub-score
+
+**2026-10-03, the ninth entry of the day; branch `pilot-fixes-3`, the founder's brief "honest reports and the remaining pilot decisions" (launch checklist 3.37).** One item, one commit.
+
+**Render: nothing to set. No migration, dependency or outbound host.** One schema description changed (`CrossEngineOut`; OpenAPI and `api.gen.ts` regenerated, descriptions only).
+
+Drift check (north-star §8): Layer 1, Delivery (the report and its PDF) and Layer 3, Insight (the cross-engine reading); lifecycle phase: Activation (Epic 9), a report an agency sends.
+
+## 1. What changed
+
+- **Founder decision (final):** `proof.crossEngine.standings[]`, and anything else score-like the report still carries, is withheld for a FAILED scan, through `services/failed_scan.py`.
+- **Inventory first:** every number a failed scan's `ReportOut` carries was classified with its source. Already withheld by 3.24/3.30: the score, its dimensions and weights, the fixes and their points, Technical Foundation, the competitor comparison. Score-like and served until now: each standing's `mentionRate` (the Mention Rate function on one engine's answers) and `sentiment` (the Sentiment dimension's own function and population: on a test fixture, the standings' sentiments weighted by their mention counts gave 54.5464 against the stored, withheld 54.55). Facts, kept: answer, citation and mention counts per engine and in total, cited domains, observed positions, the prompt shelf, the audit's check tallies and measured values, the detection step's own numbers.
+- **Withheld:** `withhold_score_like_proof` empties `proof.crossEngine.standings` for a failed scan (`build_report` calls it when `score_is_withheld`). An empty list is the shape the web already draws as "no section"; nulls inside each entry would have changed the contract and left a section whose note speaks of "the score above" on a report with no score. Kept beside it: `splits`, `comparablePrompts`, `agreementRate`, `engineCoverage`. The PDF never drew `crossEngine`. The shared report already refuses a failed scan (3.29).
+- **A standing guard:** a test walks every number-typed path reachable from `ReportOut` (into models, lists, tuples, sets, dicts, unions; an untyped container must be classified; a shape it cannot read fails it) and fails on any path not classified as withheld or a served fact; a failed scan's payload carries no value at a withheld path, and its served facts equal a succeeded scan's built from the same rows.
+- **`withhold_technical_foundation`** now empties `components` on whatever audit carries them, not only the audit route's (from the security review).
+- `docs/api-contracts.md` and `failed_scan.py` say what "withheld" means (not computed and not shown, not "cannot be derived"), and name what the signed-in scan routes still serve for a failed scan (below).
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS.** Checked clean: with the standings gone, nothing in the report JSON or PDF rebuilds a withheld sub-score or the composite (the per-engine mention rate equals coverage counts kept as facts, which are not the awareness-only Mention Rate); tenancy unchanged; no row read differently or written; the empty list renders nothing false.
+  - **Taken:** the docs naming what other routes serve (its Medium, which is outside the report and is the founder's decision, below); the visibility flag named in the contract; the guard descending into every shape; `components` emptied whatever the class; a web test that a failed report draws no cross-engine section.
+
+## Found, not fixed
+
+- **For the founder (the review's Medium):** the signed-in `GET /scans/{scanId}`, `/results` and `/prompts` serve, for a failed scan, every input of Mention Rate, Share of Voice and Sentiment (each prompt's intent; each answer's status, mention flag, sentiment label, brand mentions, citations), and `GET /scans/{scanId}/audit` every fact Technical Foundation is computed from, so those sub-scores can be worked out from them. No web screen calls the scan routes. Options: keep them as facts (now stated), or withhold the per-answer sentiment labels for a failed scan (which closes Sentiment only).
+- **`NAMED_ONLY_WHEN_PROMPTED`** is kept as a finding; on a failed scan it says the withheld Mention Rate was 0 (now in the contract).
+
+## Verified
+
+**API pytest 3035 → 3056 (+21); web vitest 1693 → 1697 (+4); both floors raised to match.**
+- `tests/test_failed_scan_standings.py` (18): a failed scan's standings are empty and every fact beside them is served; failed is the only status whose standings are withheld (every status, the same rows); a succeeded and a partial scan keep them; the public builder withholds them too; the PDF is handed no standings and prints no Sentiment figure; the stored rows are unchanged column by column; the standings rebuild the sub-score until the scan fails and then nothing does; every number in the report is classified; the guard reads every shape and fails on one it cannot read; a dict-typed Decimal added to the report is caught. `test_failed_scan_fixes_and_audit.py` (+3): the Technical Foundation helper blanks the sub-score and any components, whatever the class. `CrossEngineReading.test.tsx` (+4): a failed payload with splits and an agreement rate and no standings draws no cross-engine section, signed in or public, and the same payload with standings does.
+- **Negative controls:** on this tree, the helper made a no-op fails 8 of the 47 in the two failed-scan files; restored and checked with `cmp`; the implementer's, each restored: the helper a no-op, 8 fail; a fact over-withheld, 3; the guard blind to dicts lets a dict-typed Decimal slip (and fails once it descends); the old class-bound helper, 1; the web section drawing on splits, 2.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 26, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass.
+  - Alembic upgrade and check pass on an empty database (no schema change).
+  - The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no diff against this tree, which carries the new `CrossEngineOut` description.
+- Exit codes were read from files.
+
+# After "Get shareable link" a sighted reader sees the link's end date once; a screen reader still hears "Link ready. It works until …"
+
+**2026-10-03, the tenth entry of the day; branch `pilot-fixes-3`, the founder's brief "honest reports and the remaining pilot decisions" (launch checklist 3.38, its date half).** One item, one commit.
+
+**Render: nothing to set. Web only.**
+
+Drift check (north-star §8): Layer 5, Distribution / Action (the share bar); lifecycle phase: Activation (Epic 9), the moment an agency gets the link it will send.
+
+## 1. What changed
+
+- **Founder decision (final):** keep the "Link ready. It works until <date>." announcement for screen readers but hide it visually, so sighted users see the date once.
+- `ShareLinkBar.tsx`: the message's paragraph carries the design system's `avp-visually-hidden` (absolute, 1×1 px, `clip-path: inset(50%)`; not `display: none` or `visibility: hidden`, which would silence the live region) instead of its visible classes. The `role="status"` region stays in the page and visible, its other message ("Link withdrawn. It no longer opens this report.") and the alerts stay on screen, and 3.33's focus to the link field and Get's description by a failed mint's sentence are unchanged. The end-date-less variant ("Link ready.") is hidden too; the API always sends an end date.
+- After a mint a sighted reader sees the standing "The link works until …" line and the focused, selected link field; the date appears once. In headless Chromium the accessibility tree reads `status > paragraph: Link ready. It works until 20 Nov 2026, 10:00 UTC.`, and the card is the height of a card with no message.
+- No 3.33 test changed: they read `textContent`, which carries no CSS.
+
+## 2. The review
+
+- **UI review (sonnet): PASS WITH NITS.** 4.1.3 met: the text is clipped, not removed, in a region present from the start; the repo already uses the same technique for a status message (the PDF button). Nothing material lost for a sighted user; the class is the design system's full clip pattern; 3.33 unchanged.
+  - **For the founder's deploy check:** a VoiceOver and NVDA pass on the deployed app would settle what no test can (some screen readers drop a polite message when focus moves in the same moment; the date is then still on the standing line). Checklist 1.1e, step 6, says what to look and listen for (the checklist commit at the end of this brief), and 1.1d's step 5 now says the sentence is announced, not shown.
+
+## Found, not fixed
+
+- **The second half of row 3.38:** for a link live on load, the lead still says "Creates a link…" and the busy label "Creating…", though a press now returns the existing link (3.28). Not in this decision.
+- **The date has one voice after a mint:** the polite region. If a screen reader drops that message when focus moves to the field, the person hears the field and the address but not the date, which is then only on the standing line. Describing the field by the standing line (`aria-describedby`) would be a fallback, at the cost of the date being read twice where both are spoken. Not needed for AA; from 3.33, not this change.
+- **Copy → "Copied"** changes only the button's name, which screen readers do not reliably announce; a visually hidden status beside it would.
+- **Two spellings of one thing:** `apps/web` uses Tailwind's `sr-only` in four places and the design system has `avp-visually-hidden`.
+
+## Verified
+
+**Web vitest 1697 → 1708 (+11); floor raised to match.**
+- `ShareLinkBar.linkReady.test.tsx` (+11): the message is carried by a visually hidden element inside a status region that is not hidden; from no link and from a live link the date is on screen once (the bar's text with every hidden element removed) and the announcement still carries it; the region is the same element before a mint, after it and after a withdrawal, never hidden; the withdrawn messages are on screen; only that message is hidden; a failed mint and a failed withdrawal are said on screen; with no end date "Link ready." is hidden too; a failed scan announces nothing; the class is not `display: none` or `visibility: hidden` (read from `components.css`).
+- **Negative controls:** on this tree, the message drawn visibly again (its old classes) fails 7 of the 41 in `ShareLinkBar.linkReady.test.tsx`; restored and checked with `cmp`; the implementer's, each restored: the region hidden instead of its text, 6 fail; the withdrawn message hidden too, 2; the CSS rule turned into `display: none`, `visibility: hidden` or left without `clip-path`, 1 each.
+- **The rest of the bar** (this tree, one run):
+  - Counts: API 3056, workers 26, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass.
+  - Alembic upgrade and check pass on an empty database (no schema change).
+  - The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# The dashboard's "Share a report" step counts only links that would open, by the same rule the public report uses
+
+**2026-10-03, the eleventh entry of the day; branch `pilot-fixes-3`, the founder's brief "honest reports and the remaining pilot decisions" (launch checklist 3.42).** One item, one commit.
+
+**Render: nothing to set. No endpoint shape, schema, dependency or outbound host change.** `sharedScanCount` on `GET /api/v1/dashboard` changes meaning.
+
+Drift check (north-star §8): Layer 1, Delivery (the dashboard's getting-started card); lifecycle phase: Activation (Epic 9), an agency's first shared report.
+
+## 1. What changed
+
+- **Founder decision (final):** count only links that would open: not a failed scan's, not an expired one. Leave cancelled scans as they are unless trivial.
+- **One rule, written once** (`services/share.py`): `link_would_open(now)` is the single SQL expression of a link that opens (a token, an end, the end after now, the scan not failed). The public report's lookup (`scan_for_share_token`, for `POST /reports/shared` and its PDF) and the new `count_links_that_open(session, agency_id)` both add it to their query and restate none of it, so the two cannot drift. The Python `link_is_live`, which a press and the signed-in report use, agrees with it to the microsecond. Its docstring says never to use it alone: it names no token and no agency (from the security review).
+- **The dashboard** (`routers/dashboard.py`) counts with it, scoped to the agency. It used to count `share_token IS NOT NULL`, which included expired links and a failed scan's dead one.
+- **Cancelled scans stay counted:** nothing writes CANCELLED today, and the public lookup serves them, so excluding them here would make the dashboard disagree with the report.
+- **The web copy stays true:** "One live link." for one, "N live links." for N, and the 0 wording unchanged. The step now goes dark again when the only link ends or its scan fails, and an undismissed "Up and running" card falls back to four of five.
+- `docs/api-contracts.md`: `sharedScanCount`'s definition.
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS**, nothing at Medium. Checked clean: the public lookup is exactly as strict as before for every real token (unknown, withdrawn, expired, end exactly now, a failed scan's, a cancelled scan's) and stricter for a missing one; it cannot match without the token equality; its refusal is unchanged; the added `IS NOT NULL` is the partial index's own condition, so the plan stays an index scan; the count is scoped to the caller's agency; no log line added.
+  - **Taken:** the docstring that `link_would_open` is half of a check.
+
+## Found, not fixed
+
+- **A database error inside the public lookup** would print the share token in an unhandled exception's traceback, because the engine does not hide SQL parameters: one more path for checklist 3.5 (`hide_parameters=True`).
+- **A token containing U+0000** would be a 500 rather than the documented 404 (the same for every token, so it reveals nothing); a 422 in the schema would make it tidy.
+- **Whether the step should stay lit once lit** is the founder's call.
+
+## Verified
+
+**API pytest 3056 → 3074 (+18); floor raised to match.**
+- `tests/test_dashboard_shared_count.py` (18): exactly the links that would open are counted (live, expired, withdrawn through the real route, a failed scan's live-dated token, a cancelled scan's); the end exactly now is not counted and a microsecond later is (the count, the lookup and `link_is_live` agree on both sides); another agency's links are never counted; for every status, live and ended, the dashboard counts a link exactly when the public lookup opens it; the lookup and the count read one expression; a link counts only while it would open, through the real mint and withdraw.
+- **Negative controls:** on this tree, the old count (`share_token IS NOT NULL`) put back fails 11 of the 34 in the two dashboard files, all 11 in the new file; restored and checked with `cmp`; the implementer's, each restored: the old `share_token IS NOT NULL` count, 11 of 18 fail (the 16 older dashboard tests did not notice); the rule restated inline in the lookup, 1; `>=`, 1; the status test dropped, 3.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 26, shared-types 53 (0 fail), design-system 935, web 1708, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass.
+  - Alembic upgrade and check pass on an empty database (no schema change).
+  - The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change: the schema change is a comment.
+- Exit codes were read from files.
+
+# The launch checklist says what `pilot-fixes-3` closed, how to merge it, and every decision still open
+
+**2026-10-03, the twelfth entry of the day; branch `pilot-fixes-3`, the founder's brief "honest reports and the remaining pilot decisions" (its finish).** One commit, `docs/launch-checklist.md` and this entry only.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): no product layer; the launch plan. Lifecycle phase: Activation (Epic 9), what stands between the code and the first pilots.
+
+## 1. What changed
+
+- **Status and merge steps:**
+  - The status line says PRs #2 to #6 are merged (`main` at `811f013`).
+  - 1.1d is marked merged (PR #6). Its step 5 now says that after this branch the "Link ready" sentence is announced to screen readers, not shown.
+  - New 1.1e, how to merge this branch: nothing to set, no migration, both services from one push. After the deploy:
+    - a report opened twice logs no `scoring.completed`;
+    - a failed or retried competitor search says its kind and carries no URL or key;
+    - what a `browser.slot_busy` near 120000 ms means;
+    - an unreadable robots.txt on the intake card;
+    - the share link, looked at and listened to;
+    - the dashboard step with one live link and none.
+- **Rows closed, each with its commit:**
+  - 3.35 (`6c06790`);
+  - 3.36 (`111045d`);
+  - 3.37 (`9d25c0a`);
+  - 3.38 (`6c3d981`);
+  - 3.39 (`504b9e2`);
+  - 3.41 (`24a139f`);
+  - 3.42 (`eac7a97`);
+  - new 3.44 for R1 (`3303deb`) and 3.45 for R2 (`652ba9b`, its entry completed in `313dff2`), with their findings.
+- **New rows, the decisions and follow-ups this brief found:**
+  - 3.46: stored `ROBOTS_DISALLOWED` rows that were really unreadable.
+  - 3.47: the signed-in scan routes serve every input of a failed scan's withheld sub-scores (3.37's Medium).
+  - 3.48: the business-entity check knows eight schema.org types (widening it is a formula change).
+  - 3.49: the report's fix list and PDF overstate three findings.
+  - 3.50: legacy non-Latin charsets for robots.txt and sitemaps, and the `/crawler` page's limits.
+  - 3.51: the dashboard step going dark when its link ends.
+  - 3.52: the share bar's lead and busy label for a live link, and Copy's announcement.
+  - 3.53: the detect route's searches have no limit.
+  - 3.54: the untracked `docs/skills-audit-2026-09-30/`, left untouched.
+
+## Verified
+
+**The final bar on this tree** (the commands of `ci.yml`, run locally; this commit changes no code, and no test reads either file it changes).
+- Counts: API 3074, workers 26, shared-types 53 (0 fail), design-system 935, web 1708, mypy 43 (ceiling 50).
+- Ruff is clean, all typechecks pass, the styleguide builds, and all six count gates pass through `assert_count.py`.
+- Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+- The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+- OpenAPI and `api.gen.ts` regenerate with no change.
+- Over the branch: API 2656 → 3074, web 1533 → 1708; design-system 935, workers 26, shared-types 53 and mypy 43 unchanged.
+- Exit codes were read from files.

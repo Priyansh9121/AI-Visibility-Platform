@@ -37,14 +37,14 @@ the audit).
 M1 bounds this inside the API: one browser per process at a time (so the peak is one
 browser run, about 0.4 GB above the server's own memory, however many scans and intakes
 meet), a cap on each run, a bound on the wait for the browser (a request that waits 60 s
-is refused with a `429` and writes nothing; a scan's audit that waits 300 s ends
+is refused with a `429` and writes nothing; a scan's audit that waits 120 s ends
 `BROWSER_BUSY` and the scan goes on), one site read per agency at a time and four
 agencies at once on the three routes that start one inside a request (more is a `429`),
 `tini` as PID 1 to reap Chromium's exited processes, memory logged per phase, and the
 Standard (2 GB) instance. On 2 GB that leaves about 1.4 GB free at the worst measured
 moment, even if the server itself has grown to about 200 MB as it had on Render. The
-wait counts against the scan's 40-minute deadline: the worst case is now 2,202.5 s of
-2,400 s. A worker would remove the browser from the API instead.
+wait counts against the scan's 40-minute deadline: the modelled worst case is now
+2,064.5 s of 2,400 s (×1.16). A worker would remove the browser from the API instead.
 
 ## The shape
 
@@ -95,6 +95,8 @@ wait counts against the scan's 40-minute deadline: the worst case is now 2,202.5
   limit leaves wide headroom).
 - Whether adding a client may become asynchronous in the web app (classification
   "pending"), which the worker makes natural.
-- The scan deadline, whichever way: with the browser wait inside the API the worst-case
-  scan uses 2,202.5 s of its 2,400 s (1.09×). Raise the deadline, shorten the scan
-  audit's wait, or move the browser out (a worker's queue wait would replace it).
+- The scan deadline (settled for now, launch checklist 3.35): the scan audit's wait for
+  the browser was shortened to 120 s, so with the browser wait inside the API the
+  modelled worst-case scan uses 2,064.5 s of its 2,400 s (×1.16; at 300 s it was
+  2,244.5 s and ×1.07, with launch checklist 3.41's 60 s pre-browser budget counted
+  whole). A worker's queue wait would replace that wait.

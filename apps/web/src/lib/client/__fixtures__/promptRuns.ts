@@ -56,13 +56,17 @@ const notNamed: PromptRunResult = {
   citations: [],
 } as PromptRunResult;
 
-/** Genuinely did not answer. A different fact from the one above. */
+/**
+ * Genuinely did not answer. A different fact from the one above. `TIMEOUT` is the code
+ * the API records for it (`services/engines.py`); this said `ENGINE_TIMEOUT`, which
+ * nothing records, until launch checklist 3.39 had the screen word the real ones.
+ */
 const errored: PromptRunResult = {
   id: 'prre_01CCC',
   engine: 'chatgpt',
   engineVersion: null,
   status: 'timeout',
-  errorCode: 'ENGINE_TIMEOUT',
+  errorCode: 'TIMEOUT',
   latencyMs: null,
   mentioned: false,
   position: null,

@@ -71,7 +71,9 @@ from .browser_slot import (
 )
 from .crawl import (
     MAX_REDIRECTS,
+    PRE_BROWSER_BUDGET_S,
     ROBOTS_DISALLOWED,
+    ROBOTS_UNREACHABLE,
     Followed,
     RobotsGate,
     crawler_user_agent,
@@ -84,6 +86,18 @@ logger = structlog.get_logger(__name__)
 
 PAGE_TIMEOUT_MS = 25_000
 SIDE_FETCH_TIMEOUT = 10.0
+# The most one request of the gate may take in total (robots.txt, a HEAD hop, the
+# sitemap): `crawl.ROBOTS_REQUEST_DEADLINE_S`'s reasoning applies word for word, and
+# it is the figure `audit_run_cap_s` adds up `(MAX_REDIRECTS + 1)` of for a landing
+# host's robots.txt. Equal to `SIDE_FETCH_TIMEOUT`, so the cap did not move.
+SIDE_FETCH_DEADLINE_S = 10.0
+# How much of the sitemap is read: the first 64 KiB, and no more is read, or inflated. The
+# audit keeps one boolean about a sitemap, "is it XML", and its first characters say
+# so (the content type, or an XML declaration after any blank lines). A BOM, blank
+# lines, the declaration, comments and a stylesheet instruction fit in a few hundred
+# characters; this is two orders of magnitude past that, and 1/800 of the sitemap
+# protocol's own 50 MB ceiling, so a sitemap of any size costs the same.
+SITEMAP_MAX_CHARS = 65_536
 # Time allowed after load for LCP/CLS observers to settle. LCP can still fire
 # late on lazy-loaded heroes; this is a lab approximation, not field data.
 SETTLE_MS = 2_500
@@ -128,11 +142,21 @@ class AuditSignals:
 
     # --- indexation / crawlability ---
     robots_txt_present: bool = False
+    # The audited site's OWN robots.txt could not be read (no answer by the deadline, an
+    # error, redirects that never reach a file): unknown, not missing, so it is no
+    # `NO_ROBOTS_TXT` finding (checklist 3.41). False when it was read, and when it was
+    # missing (a 404 is an answer). Another host's file that could not be read (a
+    # redirect's, where the browser landed) does not set it: the site's own stays what
+    # it read.
+    robots_unreadable: bool = False
     robots_allows_crawl: bool = True
     has_sitemap: bool = False
-    # robots.txt forbids /sitemap.xml to this crawler (2026-09-29): unknown,
-    # not absent. Transient — the sitemap check carries it.
-    sitemap_disallowed: bool = False
+    # robots.txt stopped /sitemap.xml: `ROBOTS_DISALLOWED` when the file forbids it
+    # (2026-09-29), `ROBOTS_UNREACHABLE` when the robots.txt that decides it (the
+    # site's, or the host a redirect led to) could not be read (checklist 3.41).
+    # Unknown either way, not absent. None when robots.txt did not stop it.
+    # Transient — the sitemap check carries it.
+    sitemap_refusal: str | None = None
     is_indexable: bool = True
 
     # --- AI crawler policy (Epic F) ---
@@ -218,11 +242,15 @@ class _SideFiles:
     """
 
     robots_present: bool = False
+    # The site's own robots.txt could not be read: see `AuditSignals.robots_unreadable`.
+    robots_unreadable: bool = False
     robots_allows_crawl: bool = True
     sitemap_present: bool = False
-    # 2026-09-29: robots.txt forbids /sitemap.xml to this crawler, so it was
-    # not fetched and whether one exists is unknown — not "no sitemap".
-    sitemap_disallowed: bool = False
+    # 2026-09-29: robots.txt stopped /sitemap.xml (it forbids it, or, since
+    # checklist 3.41, it could not be read: `ROBOTS_DISALLOWED` or
+    # `ROBOTS_UNREACHABLE`), so it was not fetched and whether one exists is
+    # unknown — not "no sitemap".
+    sitemap_refusal: str | None = None
     # Epic F. Per-agent AI crawler policy. Empty only if never evaluated.
     ai_access: list[AgentAccess] = field(default_factory=list)
 
@@ -254,6 +282,8 @@ async def _fetch_side_files(gate: RobotsGate, base: str) -> _SideFiles:
     found = _SideFiles()
 
     robots = await gate.file(base)
+    # The site's OWN file, from the same cached fetch the gate obeys.
+    found.robots_unreadable = not await gate.readable(base)
     if robots.status == 200 and "text" in robots.content_type:
         found.robots_present = True
         body = robots.body[:20_000]
@@ -282,7 +312,7 @@ async def _fetch_side_files(gate: RobotsGate, base: str) -> _SideFiles:
     if not found.sitemap_present:
         # Checked before it is requested, like every page (2026-09-29).
         try:
-            sitemap = await gate.follow("GET", f"{base}/sitemap.xml")
+            sitemap = await gate.follow("GET", f"{base}/sitemap.xml", max_chars=SITEMAP_MAX_CHARS)
         except EgressRefused as exc:
             # Refused before it was sent (the address, or a redirect hop): nothing
             # left this machine, and a sitemap that only resolves to a private
@@ -291,31 +321,34 @@ async def _fetch_side_files(gate: RobotsGate, base: str) -> _SideFiles:
             # answer (`Followed(url, None)`); the audit goes on and keeps its facts.
             logger.info("egress.request_refused", host=exc.host)
             sitemap = Followed(f"{base}/sitemap.xml", None)
-        if sitemap.disallowed:
-            found.sitemap_disallowed = True
+        if sitemap.refusal is not None:
+            found.sitemap_refusal = sitemap.refusal
         elif sitemap.response is not None:
-            response = sitemap.response
-            found.sitemap_present = response.status_code == 200 and (
-                "xml" in response.headers.get("content-type", "")
-                or response.text.lstrip().startswith("<?xml")
+            reply = sitemap.response
+            found.sitemap_present = reply.status == 200 and (
+                "xml" in reply.content_type or reply.body.lstrip().startswith("<?xml")
             )
 
     return found
 
 
-def _robots_disallowed(signals: AuditSignals) -> AuditSignals:
-    """The audit of a site whose robots.txt forbids its homepage to this crawler.
+def _robots_refused(signals: AuditSignals, code: str) -> AuditSignals:
+    """The audit of a site whose robots.txt kept this crawler off its homepage.
 
-    Nothing is loaded. What robots.txt itself says — the AI crawler table,
-    whether the file exists, the sitemap it names — is already on `signals`,
-    read from the one file this crawler may always fetch. A blanket
-    `Disallow: /` under `*` also settles indexing without the page, so that
-    stays a finding (`build_checks`).
+    `code` is `ROBOTS_DISALLOWED` (the file was read and forbids the page) or
+    `ROBOTS_UNREACHABLE` (it could not be read, so nothing may be fetched and the
+    site has said nothing: launch checklist 3.41). Nothing is loaded either way.
+    What robots.txt itself says — the AI crawler table, whether the file exists,
+    the sitemap it names — is already on `signals`, read from the one file this
+    crawler may always fetch; for an unreadable file it is the table of UNKNOWN
+    verdicts and nothing else. A blanket `Disallow: /` under `*` also settles
+    indexing without the page, so that stays a finding (`build_checks`).
     """
     signals.ok = False
-    signals.error_code = ROBOTS_DISALLOWED
+    signals.error_code = code
     signals.is_indexable = signals.robots_allows_crawl
-    logger.info("audit.robots_disallowed", domain=signals.domain)
+    event = "audit.robots_unreachable" if code == ROBOTS_UNREACHABLE else "audit.robots_disallowed"
+    logger.info(event, domain=signals.domain)
     return signals
 
 
@@ -325,7 +358,7 @@ def _address_not_public(signals: AuditSignals) -> AuditSignals:
     Nothing is kept. The refusal can arrive after the page's facts, or
     robots.txt's, were read, and `audit_runner` stores whatever it is handed, so
     this is a FRESH object: no schema types, counts, vitals or AI crawler table.
-    (`_robots_disallowed` keeps robots.txt's facts on purpose; this does not,
+    (`_robots_refused` keeps robots.txt's facts on purpose; this does not,
     because nothing read from an address that is not public is ours to keep.)
     Every check is `not_applicable` (`build_checks`) and Technical Foundation is
     excluded.
@@ -366,9 +399,10 @@ def _read_before_the_browser(signals: AuditSignals, error_code: str) -> AuditSig
         ok=False,
         error_code=error_code,
         robots_txt_present=signals.robots_txt_present,
+        robots_unreadable=signals.robots_unreadable,
         robots_allows_crawl=signals.robots_allows_crawl,
         has_sitemap=signals.has_sitemap,
-        sitemap_disallowed=signals.sitemap_disallowed,
+        sitemap_refusal=signals.sitemap_refusal,
         ai_crawler_access=list(signals.ai_crawler_access),
     )
 
@@ -392,7 +426,7 @@ def audit_run_cap_s(timeout_ms: int = PAGE_TIMEOUT_MS) -> float:
         the load, then the fallback          50   2 x `timeout_ms` (25 s each)
         robots.txt of a host the gate has
           not read (a redirect only the
-          browser was given)                 60   (MAX_REDIRECTS + 1) x SIDE_FETCH_TIMEOUT
+          browser was given)                 60   (MAX_REDIRECTS + 1) x SIDE_FETCH_DEADLINE_S
         the landing checks either side of
           the page read                       4   2 x egress.SETTLE_TIMEOUT_S
         the vitals wait                     2.5   SETTLE_MS
@@ -404,13 +438,22 @@ def audit_run_cap_s(timeout_ms: int = PAGE_TIMEOUT_MS) -> float:
                                           -----
         244.5 s for the default 25 s page timeout.
 
-    robots.txt and sitemap.xml are read before the browser starts, by the gate, with
-    timeouts of their own; they are not under this cap and do not hold the slot.
+    The robots.txt line is a real ceiling since 2026-10-03: each request of the gate
+    ends by `SIDE_FETCH_DEADLINE_S` in total, where the figure used to be httpx's
+    per-operation `SIDE_FETCH_TIMEOUT`, which a slow server never reaches (so the sum
+    was only ever true of a server that answered). The two are the same number, so the
+    cap did not move.
+
+    robots.txt and sitemap.xml are read before the browser starts, by the gate, each
+    request under that deadline and all of them under `PRE_BROWSER_BUDGET_S` together;
+    they are not under this cap and do not hold the slot. A scan's audit therefore costs,
+    at worst, that budget, then its wait for the browser (`SCAN_AUDIT_WAIT_S`), then this
+    cap: the sum `test_scan_executor.py` adds against the scan's deadline.
     """
     return (
         LAUNCH_ALLOWANCE_S
         + 2 * timeout_ms / 1000
-        + (MAX_REDIRECTS + 1) * SIDE_FETCH_TIMEOUT
+        + (MAX_REDIRECTS + 1) * SIDE_FETCH_DEADLINE_S
         + 2 * egress.SETTLE_TIMEOUT_S
         + SETTLE_MS / 1000
         + EVALUATE_ALLOWANCE_S
@@ -434,6 +477,12 @@ async def audit_site(
     process's one browser slot (`browser_slot`) and `audit_run_cap_s` cuts it if a
     step never returns. It ends as `TIMEOUT`, and the scan goes on (checklist 3.20).
 
+    **A budget for the reads before the browser** (launch checklist 3.41, round 3). robots.txt,
+    the sitemap and the homepage's redirects are read by the gate before any browser
+    starts, each request under its own deadline, and `PRE_BROWSER_BUDGET_S` bounds all of
+    them together. An audit that spends it is `ok=False` with `TIMEOUT` (a report about our
+    attempt, as the cap's is), keeps what was read when it ran out, and starts no browser.
+
     **A wait for the slot that runs out is a failed audit too** (M1 round 2). The wait
     is bounded by `slot_wait_s`: None, a request's `REQUEST_WAIT_S`, or a scan's
     `SCAN_AUDIT_WAIT_S` when `scan_executor` says so. Past it no browser is started
@@ -452,34 +501,55 @@ async def audit_site(
     origin_match = re.match(r"^(https?://[^/]+)", start_url)
     origin = origin_match.group(1) if origin_match else start_url
     user_agent = crawler_user_agent()
-    gate = RobotsGate(user_agent=user_agent, timeout=SIDE_FETCH_TIMEOUT)
+    gate = RobotsGate(
+        user_agent=user_agent, timeout=SIDE_FETCH_TIMEOUT, deadline=SIDE_FETCH_DEADLINE_S
+    )
 
+    # Every read before the browser, together, under ONE budget (launch checklist 3.41,
+    # round 3): each request of the gate has its own deadline, and a chain of hosts that
+    # each answer just inside it would otherwise hold the audit for ten minutes and more.
+    # The budget's `TimeoutError` comes out of the `async with`, not from inside it, so the
+    # broad `except Exception` below, which exists so a side file never fails an audit,
+    # cannot swallow it and carry on to the browser: it is caught outside, at the end.
     try:
-        side = await _fetch_side_files(gate, origin)
-        signals.robots_txt_present = side.robots_present
-        signals.robots_allows_crawl = side.robots_allows_crawl
-        signals.has_sitemap = side.sitemap_present
-        signals.sitemap_disallowed = side.sitemap_disallowed
-        signals.ai_crawler_access = side.ai_access
-    except EgressRefused:
-        # Before the broad handler below: a refusal ends the audit.
-        return _address_not_public(signals)
-    except Exception:  # noqa: BLE001 - side files must never fail the audit
-        logger.warning("audit.side_fetch_failed", domain=domain)
-        # The fetch raised outside its own handlers, so nothing about the
-        # policy is known. Say so explicitly rather than leaving the list
-        # empty, which downstream would read as "no agents to report".
-        signals.ai_crawler_access = unknown_access()
+        async with asyncio.timeout(PRE_BROWSER_BUDGET_S):
+            try:
+                side = await _fetch_side_files(gate, origin)
+                signals.robots_txt_present = side.robots_present
+                signals.robots_unreadable = side.robots_unreadable
+                signals.robots_allows_crawl = side.robots_allows_crawl
+                signals.has_sitemap = side.sitemap_present
+                signals.sitemap_refusal = side.sitemap_refusal
+                signals.ai_crawler_access = side.ai_access
+            except EgressRefused:
+                # Before the broad handler below: a refusal ends the audit.
+                return _address_not_public(signals)
+            except Exception:  # noqa: BLE001 - side files must never fail the audit
+                logger.warning("audit.side_fetch_failed", domain=domain)
+                # The fetch raised outside its own handlers, so nothing about the
+                # policy is known. Say so explicitly rather than leaving the list
+                # empty, which downstream would read as "no agents to report".
+                signals.ai_crawler_access = unknown_access()
 
-    # robots.txt decides whether the page is loaded at all — 2026-09-29. The
-    # homepage's redirects are followed by the gate, each hop checked on its
-    # own host, so the browser is handed an address robots.txt allows.
-    try:
-        home_url = await gate.resolve(start_url)
-    except EgressRefused:
-        return _address_not_public(signals)
-    if home_url is None:
-        return _robots_disallowed(signals)
+            # robots.txt decides whether the page is loaded at all — 2026-09-29. The
+            # homepage's redirects are followed by the gate, each hop checked on its
+            # own host, so the browser is handed an address robots.txt allows.
+            try:
+                home = await gate.resolve(start_url)
+            except EgressRefused:
+                return _address_not_public(signals)
+    except TimeoutError:
+        # The budget for all of them, not one request's deadline (those end inside the gate
+        # as "no answer"). A report about our attempt, never a finding about the site: it
+        # keeps what had been read when the budget ran out (the robots facts, if the side
+        # files had finished), and starts no browser.
+        logger.warning(
+            "audit.pre_browser_budget_spent", domain=domain, budget_s=PRE_BROWSER_BUDGET_S
+        )
+        return _read_before_the_browser(signals, "TIMEOUT")
+    if home.refusal is not None:
+        return _robots_refused(signals, home.refusal)
+    home_url = home.url
 
     guard = BrowserGuard()
     try:
@@ -578,9 +648,11 @@ async def audit_site(
                 # Every hop that led here, and where it ended, must be public
                 # before anything is read from it.
                 await guard.check_landing(response, page.url)
-                if not await gate.allows(page.url):
+                landed = page.url  # read ONCE: the same address is asked about and named
+                if not await gate.allows(landed):
+                    refusal = await gate.refusal_code(landed)
                     await guard.finish()
-                    return _robots_disallowed(signals)
+                    return _robots_refused(signals, refusal)
 
                 signals.http_status = response.status
                 signals.last_modified = _parse_http_date(
@@ -872,12 +944,22 @@ def build_checks(signals: AuditSignals) -> list[CheckVerdict]:
 
     **A THIRD KIND, 2026-09-29: the site's robots.txt forbids the page.** Not
     a failure — this crawler obeys the file. What the file itself says is
-    still reported (`_robots_disallowed_checks`), and everything that needs
+    still reported (`_robots_refused_checks`), and everything that needs
     the page is `not_applicable` with `ROBOTS_DISALLOWED`, which is never a
     finding.
+
+    **A FIFTH KIND, 2026-10-03 (checklist 3.41): robots.txt could not be read**
+    (`ROBOTS_UNREACHABLE`). The crawler fetches nothing then, as for a file that
+    forbids the page, but the site forbade nothing, so nothing is said about
+    robots.txt that was not read: only what was actually read is reported, and
+    the checks that needed the page are `not_applicable` with `ROBOTS_UNREACHABLE`,
+    never a finding. When it is the site's OWN file that could not be read,
+    `robots_txt_present` is not the `NO_ROBOTS_TXT` warning, which would tell a client
+    to publish a file that may well exist; when it is another host's (a redirect's, or
+    where the browser landed), the site's own file checks are what they were.
     """
-    if not signals.ok and signals.error_code == ROBOTS_DISALLOWED:
-        return _robots_disallowed_checks(signals)
+    if not signals.ok and signals.error_code in (ROBOTS_DISALLOWED, ROBOTS_UNREACHABLE):
+        return _robots_refused_checks(signals, signals.error_code)
     if not signals.ok and signals.error_code == ADDRESS_NOT_PUBLIC:
         return _address_not_public_checks()
     if not signals.ok:
@@ -1009,27 +1091,44 @@ PAGE_CHECKS: tuple[str, ...] = (
 
 
 def _robots_file_checks(signals: AuditSignals) -> list[CheckVerdict]:
-    """The two checks robots.txt answers on its own: the file, and the sitemap."""
+    """The two checks robots.txt answers on its own: the file, and the sitemap.
+
+    What was not found because the SITE'S OWN robots.txt could not be read
+    (`robots_unreadable`, checklist 3.41) is unknown, not absent: the file is not
+    "missing", because the request that would have said so was not answered. What
+    was found stays found, and a missing file (a 404) is still `NO_ROBOTS_TXT`,
+    whatever happened to another host's file after it.
+    """
     if signals.has_sitemap:
         sitemap = CheckVerdict("sitemap_present", "pass", None, None)
-    elif signals.sitemap_disallowed:
-        # Not fetched because robots.txt forbids it: unknown, so not a
-        # finding. Telling a client to publish a sitemap it may well have
-        # would be a claim this audit never checked.
-        sitemap = CheckVerdict("sitemap_present", "not_applicable", None, ROBOTS_DISALLOWED)
+    elif signals.sitemap_refusal is not None:
+        # Not fetched because robots.txt stopped it (it forbids it, or the file that
+        # decides it could not be read): unknown, so not a finding. Telling a client
+        # to publish a sitemap it may well have would be a claim this audit never
+        # checked.
+        sitemap = CheckVerdict("sitemap_present", "not_applicable", None, signals.sitemap_refusal)
     else:
         sitemap = CheckVerdict("sitemap_present", "warn", None, "NO_SITEMAP_XML")
-    return [
-        CheckVerdict(
-            "robots_txt_present", _verdict(signals.robots_txt_present, warn=True), None,
-            None if signals.robots_txt_present else "NO_ROBOTS_TXT",
-        ),
-        sitemap,
-    ]
+    if signals.robots_txt_present:
+        robots = CheckVerdict("robots_txt_present", "pass", None, None)
+    elif signals.robots_unreadable:
+        # "No robots.txt" would be a finding (a fix to publish one) about a file
+        # that may well exist and simply did not answer.
+        robots = CheckVerdict("robots_txt_present", "not_applicable", None, ROBOTS_UNREACHABLE)
+    else:
+        robots = CheckVerdict("robots_txt_present", "warn", None, "NO_ROBOTS_TXT")
+    return [robots, sitemap]
 
 
-def _robots_disallowed_checks(signals: AuditSignals) -> list[CheckVerdict]:
+def _robots_refused_checks(signals: AuditSignals, code: str) -> list[CheckVerdict]:
     """What an audit barred from the page can still say, from robots.txt alone.
+
+    `code` is why it was barred: `ROBOTS_DISALLOWED` (the file forbids the page) or
+    `ROBOTS_UNREACHABLE` (a robots.txt could not be read: the site's own, or another
+    host's that a redirect led to). Only what was actually read is reported: the page
+    checks and `indexable` are `not_applicable` with `code`; the file checks follow what
+    the site's OWN file did (`_robots_file_checks`), so a site whose file was a 404 keeps
+    its `NO_ROBOTS_TXT` finding even when the host it redirected to did not answer.
 
     A blanket `Disallow: /` under `*` is a site telling every crawler, AI
     ones included, to stay out. That is known from the file, and it stays the
@@ -1039,13 +1138,13 @@ def _robots_disallowed_checks(signals: AuditSignals) -> list[CheckVerdict]:
     page's own meta tags, so it is `not_applicable`.
     """
     if signals.robots_allows_crawl:
-        indexable = CheckVerdict("indexable", "not_applicable", None, ROBOTS_DISALLOWED)
+        indexable = CheckVerdict("indexable", "not_applicable", None, code)
     else:
         indexable = CheckVerdict("indexable", "fail", None, "ROBOTS_TXT_DISALLOW")
     return [
         indexable,
         *_robots_file_checks(signals),
-        *(CheckVerdict(key, "not_applicable", None, ROBOTS_DISALLOWED) for key in PAGE_CHECKS),
+        *(CheckVerdict(key, "not_applicable", None, code) for key in PAGE_CHECKS),
         CheckVerdict("cwv_inp", "not_applicable", None, "FIELD_METRIC_REQUIRES_REAL_USER_DATA"),
     ]
 

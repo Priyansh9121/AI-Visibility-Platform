@@ -26,6 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from avp_api.config import Settings  # noqa: E402
+from avp_api.logs import configure_logging  # noqa: E402
 from avp_api.services import competitors as detection  # noqa: E402
 from avp_api.services import serp as serp_service  # noqa: E402
 from avp_api.services.cocitation import CoCitationResult  # noqa: E402
@@ -167,6 +168,9 @@ async def run_case(case: Case, settings: Settings, serp_only: bool) -> dict:
 async def main() -> int:
     serp_only = "--serp-only" in sys.argv
     settings = Settings()
+    # Before any call to SerpApi: pins httpx and the SDKs quiet, so that no log line,
+    # whatever the shell exports (ANTHROPIC_LOG, say), prints the SerpApi key's URL.
+    configure_logging(settings)
     if serp_only:
         print("SERP ONLY — diagnostic. Does NOT verify the acceptance criterion.\n")
 

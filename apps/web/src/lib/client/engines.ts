@@ -65,6 +65,47 @@ export const ENGINE_SHORT: Readonly<Record<string, string>> = {
   gemini: 'Gemini',
 };
 
+/** What three of the provider's refusals share: a problem on our side, and no more than that. */
+const OUR_SIDE_SENTENCE = 'We could not get an answer from its provider because of a problem on our side.';
+
+/**
+ * Why an engine did not answer, in a sentence that follows "This engine did not answer."
+ * — launch checklist 3.39, in place of the code the Prompts screen used to print.
+ *
+ * The keys are the codes an engine result can carry: `services/engines.py`'s error
+ * mapping for the four vendors (`PROVIDER_*` and `TIMEOUT`), and its stop-reason
+ * vocabulary (`ANSWER_TRUNCATED`, `ANSWER_PAUSED`, `STOP_REASON_UNKNOWN`). A test reads
+ * that file back, so a code added there without wording here fails.
+ *
+ * Each sentence is true of every case that records its code, for every vendor, and
+ * blames nobody: not the person who asked, and not the brand. Where the cause is on our
+ * side it says so. "Its provider" is the company that runs the engine.
+ *
+ * `PROVIDER_AUTH_FAILED`, `PROVIDER_QUOTA_EXHAUSTED` and `PROVIDER_BAD_REQUEST` share one
+ * sentence: each is a problem on our side (a key the provider refused, an account with no
+ * credit or quota, a request it rejected), and which of the three it was is not something
+ * the person reading can act on. They keep an entry each so a test can read the API's
+ * codes back against them.
+ */
+export const ENGINE_FAILURE_SENTENCE: Readonly<Record<string, string>> = {
+  TIMEOUT: 'It did not respond in the time we allow.',
+  PROVIDER_RATE_LIMITED: 'Its provider asked us to slow down.',
+  PROVIDER_AUTH_FAILED: OUR_SIDE_SENTENCE,
+  PROVIDER_QUOTA_EXHAUSTED: OUR_SIDE_SENTENCE,
+  PROVIDER_BAD_REQUEST: OUR_SIDE_SENTENCE,
+  PROVIDER_UNREACHABLE: 'We could not reach its provider.',
+  PROVIDER_ERROR: 'The request to its provider failed.',
+  PROVIDER_REFUSED: 'It declined to answer this question.',
+  ANSWER_TRUNCATED: 'Its answer was cut off before it finished.',
+  ANSWER_PAUSED: 'It had not finished its answer when the response came back.',
+  STOP_REASON_UNKNOWN: 'It stopped for a reason we do not recognise.',
+};
+
+/** The sentence for an engine result's `errorCode`, or null: no code, or one nothing words. Never the code. */
+export function engineFailureSentence(code: string | null | undefined): string | null {
+  return code && Object.hasOwn(ENGINE_FAILURE_SENTENCE, code) ? ENGINE_FAILURE_SENTENCE[code]! : null;
+}
+
 export function engineLabel(engine: string): string {
   return ENGINE_LABEL[engine] ?? engine;
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { scanOutcomeSentence } from './scanOutcome';
+import { SCAN_DURATION_SENTENCE, scanOutcomeSentence } from './scanOutcome';
 
 const COUNTS = 'It counts as one of your scans.';
 const FREE = 'It does not use up one of your scans.';
@@ -67,5 +67,18 @@ describe('scanOutcomeSentence', () => {
         expect(scanOutcomeSentence(status, code)).not.toContain(code);
       }
     }
+  });
+});
+
+describe('SCAN_DURATION_SENTENCE — launch checklist 3.39', () => {
+  it('says a scan usually takes a few minutes, and names no figure a slow scan could break', () => {
+    // The 300-second promise the screens made was untrue: 9 of the 25 finished scans in the
+    // dev database took longer (read on 2026-10-03), and a scan's audit can wait up to 300
+    // seconds for the crawler's one browser. A number here is a promise the next slow scan
+    // breaks; "usually" is what keeps "a few minutes" true of the four scans outside the
+    // two-to-six-minute range the other 21 sit in.
+    expect(SCAN_DURATION_SENTENCE).toBe('A scan usually takes a few minutes.');
+    expect(SCAN_DURATION_SENTENCE).not.toMatch(/\d/);
+    expect(SCAN_DURATION_SENTENCE.toLowerCase()).not.toMatch(/five|ten|under|within|less than/);
   });
 });

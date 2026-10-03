@@ -1427,8 +1427,9 @@ export interface paths {
          *     after the scan is found, so another agency's scan is still a `404`. A read that
          *     waits more than a minute for the browser is refused with a `429` too, and the audit
          *     already stored for the scan is kept. A scan's own audit, part of the scan, is not
-         *     one of these reads and is never refused: it is recorded as `failed` with
-         *     `errorCode: BROWSER_BUSY` when it waits that long, and the scan goes on.
+         *     one of these reads and is never refused: it waits up to two minutes for the
+         *     browser, and if the browser is not free by then the audit is recorded as `failed`
+         *     with `errorCode: BROWSER_BUSY` and the scan goes on.
          *
          *     **Errors:** `401`; `404` (unknown scan, or another agency's); `429 rate-limited`
          *     (with `Retry-After: 60`).
@@ -1631,9 +1632,10 @@ export interface paths {
          * Get Scan Score
          * @description The most recent stored Score for a scan, with the competitor comparison.
          *
-         *     The comparison is recomputed from persisted rows on read rather than stored
-         *     — it is a pure function of data already in the database, and a second copy
-         *     could fall out of step with the first.
+         *     The comparison and the subject's average position are derived from
+         *     persisted rows on read rather than stored — they are a pure function of data
+         *     already in the database, and a second copy could fall out of step with the
+         *     first. Reading a score computes no score and writes nothing.
          *
          *     **A FAILED scan has no score** (3.30, extending 3.24): the same `404` as a scan
          *     not yet scored, with the detail "This scan failed, so it has no score.",
@@ -2666,6 +2668,13 @@ export interface components {
          *     reporting it as perfect consensus would make the strongest available claim
          *     from the weakest available evidence. `comparablePrompts` is the denominator
          *     every figure here is honest about.
+         *
+         *     **`standings` is `[]` for a scan whose status is `failed`** (checklist 3.37,
+         *     extending 3.24 and 3.30). A standing's mention rate and sentiment are
+         *     computed by the scoring functions, and the sentiments add up to the
+         *     Sentiment sub-score, which a failed scan does not show. `splits`,
+         *     `comparablePrompts` and `agreementRate` are facts about which engines named
+         *     the subject and are served as for any other status.
          */
         CrossEngineOut: {
             /** Agreementrate */

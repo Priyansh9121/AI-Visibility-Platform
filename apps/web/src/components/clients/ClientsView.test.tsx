@@ -106,7 +106,10 @@ describe('ready', () => {
   it('renders each classification status as its own state', () => {
     const html = render(READY);
     expect(html).toContain('Identified');
-    expect(html).toContain('Could not read');
+    // "Classify", as on the intake card: true whether the crawler could not read the site
+    // or the site was read and the model step then failed (round 2 of launch checklist 3.39).
+    expect(html).toContain('Could not classify');
+    expect(html).not.toContain('Could not read');
     expect(html).toContain('Needs review');
     expect(html).toContain('Pending');
   });
@@ -191,11 +194,16 @@ describe('the classification split in the header', () => {
   it('counts the states the rows already show', () => {
     // severalClients: one classified, one unclassifiable, one ambiguous, one
     // pending — so identified 1, awaiting review 2 (ambiguous + pending),
-    // unreadable 1.
+    // could not classify 1.
     const html = render(READY);
     expect(figure(html, 'Identified')).toBe('1');
     expect(figure(html, 'Awaiting review')).toBe('2');
-    expect(figure(html, 'Unreadable')).toBe('1');
+    expect(figure(html, 'Could not classify')).toBe('1');
+    // The tile says what its rows' badge says, as "Identified" does. It used to say
+    // "Unreadable", and then "Unclassified", which also reads as true of the clients
+    // awaiting review.
+    expect(figure(html, 'Unreadable')).toBeNull();
+    expect(figure(html, 'Unclassified')).toBeNull();
   });
 
   it('folds pending in with ambiguous rather than showing a fourth mostly-zero figure', () => {
@@ -212,8 +220,8 @@ describe('the classification split in the header', () => {
 
   it('agrees with the badge column rather than counting something else', () => {
     const html = render({ kind: 'ready', clients: [unreadableClient], more: false });
-    expect(html).toContain('Could not read');
-    expect(figure(html, 'Unreadable')).toBe('1');
+    expect(html).toContain('Could not classify');
+    expect(figure(html, 'Could not classify')).toBe('1');
     expect(figure(html, 'Identified')).toBe('0');
   });
 });

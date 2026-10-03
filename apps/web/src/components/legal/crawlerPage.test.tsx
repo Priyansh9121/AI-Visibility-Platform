@@ -24,7 +24,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { LandingView } from '@/components/marketing/LandingView';
 import { CRAWLER, crawlerUserAgent, requestOrigin } from '@/lib/legal/crawler';
-import { ROBOTS_DISALLOWED } from '@/lib/report/strings';
+import { ROBOTS_DISALLOWED, ROBOTS_UNREACHABLE } from '@/lib/report/strings';
 import { OPERATOR } from '@/lib/legal/operator';
 import { RETENTION } from '@/lib/legal/retention';
 import { CrawlerInfo } from './CrawlerInfo';
@@ -130,7 +130,9 @@ describe('what it fetches is what the code fetches', () => {
     const audit = read(AUDIT);
     expect(audit).toContain('robots = await gate.file(base)');
     expect(audit).toContain('if not found.sitemap_present:');
-    expect(audit).toContain('await gate.follow("GET", f"{base}/sitemap.xml")');
+    expect(audit).toContain(
+      'await gate.follow("GET", f"{base}/sitemap.xml", max_chars=SITEMAP_MAX_CHARS)',
+    );
     const runner = read(AUDIT_RUNNER);
     // One call, and for the client's own domain. What follows the address (how long it may
     // wait for the API's one browser, the scan's id for the log) is not what this page claims,
@@ -183,24 +185,38 @@ describe('what it fetches is what the code fetches', () => {
     };
     const crawl = read(CRAWL);
     const gateFollow = /async def follow\([\s\S]*?(?=\n    async def |\n\S)/.exec(crawl)?.[0] ?? '';
-    before(gateFollow, 'if not await self.allows(url):', 'await client.request(');
+    before(gateFollow, 'if not await self.allows(url):', 'await self._exchange(');
     const crawlSite = topLevel(crawl, 'crawl_site');
-    before(crawlSite, 'home_url = await gate.resolve(start_url)', 'await _crawl(');
+    before(crawlSite, 'home = await gate.resolve(start_url)', 'await _crawl(');
     const browser = topLevel(crawl, '_crawl');
     before(browser, 'if not await gate.allows(target):', '_fetch_page(page, target, timeout_ms, guard)');
-    before(browser, '_fetch_page(page, home_url, timeout_ms, guard)', 'if not await gate.allows(page.url):');
+    before(browser, '_fetch_page(page, home_url, timeout_ms, guard)', 'if not await gate.allows(landed):');
 
     const audit = read(AUDIT);
     const auditSite = topLevel(audit, 'audit_site');
-    before(auditSite, 'home_url = await gate.resolve(start_url)', 'async_playwright()');
-    before(auditSite, 'page.goto(\n                        home_url', 'if not await gate.allows(page.url):');
+    before(auditSite, 'home = await gate.resolve(start_url)', 'async_playwright()');
+    before(auditSite, 'page.goto(\n                        home_url', 'if not await gate.allows(landed):');
     // The browser is only ever handed the address the gate resolved.
     expect(auditSite).not.toMatch(/page\.goto\(\s*start_url/);
     expect(crawlSite + browser).not.toMatch(/_fetch_page\(page, start_url/);
   });
 
-  it('the reason code on the report and the technical screen is the API’s', () => {
+  it('the reason codes on the report and the technical screen are the API’s', () => {
     expect(ROBOTS_DISALLOWED).toBe(pythonString('ROBOTS_DISALLOWED'));
+    expect(ROBOTS_UNREACHABLE).toBe(pythonString('ROBOTS_UNREACHABLE'));
+  });
+
+  it('an unreachable robots.txt is the API’s own outcome, apart from a refusal by the site', () => {
+    // The page says nothing is fetched when the file cannot be read (above). The code that
+    // outcome is stored under is its own: the gate names `ROBOTS_UNREACHABLE` for the policy
+    // basis the status rule above produces, and `ROBOTS_DISALLOWED` only for a file it read.
+    const gate = read(CRAWL);
+    expect(gate).toMatch(
+      /return ROBOTS_DISALLOWED if await self\.readable\(origin_of\(url\)\) else ROBOTS_UNREACHABLE/,
+    );
+    expect(gate).toMatch(
+      /return \(await self\.policy\(origin\)\)\.basis is not PolicyBasis\.UNREACHABLE/,
+    );
   });
 
   it('says nothing runs it on a schedule, because nothing does', () => {

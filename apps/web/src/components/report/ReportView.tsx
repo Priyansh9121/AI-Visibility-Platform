@@ -58,6 +58,7 @@ import {
   ADDRESS_NOT_PUBLIC,
   auditFailureSentence,
   ROBOTS_DISALLOWED,
+  ROBOTS_UNREACHABLE,
   VISIBILITY_FLAG,
   checkLabel,
   dimensionLabel,
@@ -1112,6 +1113,32 @@ function AuditEvidence({ report }: { report: Report }) {
     );
   }
 
+  // robots.txt could not be read at all — 2026-10-03 (launch checklist 3.41). The
+  // crawler read nothing, as it does when the file forbids it, but the site forbade
+  // nothing: so none of the robots wording above applies. Not the failed-crawl card
+  // either: the page was never asked for. What WAS read can still be a finding (the
+  // site's own robots.txt a 404, its sitemap missing, when it was another host's file
+  // that could not be read), and is listed the way the refusal's card lists its own.
+  if (audit.status === 'failed' && audit.errorCode === ROBOTS_UNREACHABLE) {
+    return (
+      <div>
+        <Card elevation="flat">
+          <CardBody>
+            <p className="flex flex-wrap items-center gap-3 text-ui-base font-medium text-text-primary">
+              The site was not read
+              <Badge tone="neutral">{EXCLUSION_REASON.CRAWL_POLICY_UNREADABLE!.label}</Badge>
+            </p>
+            <p className="mt-2 text-ui-sm leading-prose text-text-secondary">
+              {EXCLUSION_REASON.CRAWL_POLICY_UNREADABLE!.detail}
+              {audit.findings.length > 0 && ' The checks that did not pass are below.'}
+            </p>
+          </CardBody>
+        </Card>
+        {audit.findings.length > 0 && <AuditFindingsTable findings={audit.findings} />}
+      </div>
+    );
+  }
+
   if (audit.status === 'failed' && !disallowed) {
     return (
       <Card elevation="flat">
@@ -1153,27 +1180,40 @@ function AuditEvidence({ report }: { report: Report }) {
           {audit.status === 'partial' && ` ${PARTIAL_AUDIT_NOTE}`}
         </p>
       )}
-      {audit.findings.length > 0 && (
-        <DataTable
-          className="mt-3"
-          caption="Checks that did not pass"
-          rows={audit.findings}
-          rowKey={(row) => row.checkKey}
-          columns={[
-            { key: 'check', header: 'Check', render: (row) => checkLabel(row.checkKey) },
-            {
-              key: 'status',
-              header: 'Result',
-              render: (row) => (
-                <Badge tone={row.status === 'fail' || row.status === 'error' ? 'danger' : 'warn'}>
-                  {row.status}
-                </Badge>
-              ),
-            },
-          ]}
-        />
-      )}
+      {audit.findings.length > 0 && <AuditFindingsTable findings={audit.findings} />}
     </div>
+  );
+}
+
+/**
+ * The checks that did not pass, as one table: for an audit that read the page, for one
+ * that read only a robots.txt that forbids it, and for one that could not read a
+ * robots.txt at all.
+ */
+function AuditFindingsTable({
+  findings,
+}: {
+  findings: NonNullable<Report['audit']>['findings'];
+}) {
+  return (
+    <DataTable
+      className="mt-3"
+      caption="Checks that did not pass"
+      rows={findings}
+      rowKey={(row) => row.checkKey}
+      columns={[
+        { key: 'check', header: 'Check', render: (row) => checkLabel(row.checkKey) },
+        {
+          key: 'status',
+          header: 'Result',
+          render: (row) => (
+            <Badge tone={row.status === 'fail' || row.status === 'error' ? 'danger' : 'warn'}>
+              {row.status}
+            </Badge>
+          ),
+        },
+      ]}
+    />
   );
 }
 

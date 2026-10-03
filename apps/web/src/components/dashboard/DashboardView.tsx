@@ -52,7 +52,7 @@ import { Layers, Users } from 'lucide-react';
 import { formatStamp } from '@/lib/dates';
 import { shownComposite } from '@/lib/dashboard/shownComposite';
 import { deriveGettingStarted } from '@/lib/dashboard/gettingStarted';
-import { scanOutcomeSentence } from '@/lib/scans/scanOutcome';
+import { SCAN_DURATION_SENTENCE, scanOutcomeSentence } from '@/lib/scans/scanOutcome';
 import { GettingStarted } from './GettingStarted';
 
 /**
@@ -654,7 +654,7 @@ function EmptyAgency({ withAction }: { withAction: boolean }): JSX.Element {
       eyebrow="Nothing measured yet"
       title="No scans yet"
       body="A scan starts with a website. We read the site the way a buyer would, work out who it competes with, then ask AI assistants the questions its buyers ask — and record who they name."
-      note="A full scan takes under five minutes. The five bars are the dimensions it fills in, sized by how much each is worth."
+      note={`${SCAN_DURATION_SENTENCE} The five bars are the dimensions it fills in, sized by how much each is worth.`}
       action={
         withAction ? (
           <Button variant="primary" onClick={() => window.location.assign('/')}>

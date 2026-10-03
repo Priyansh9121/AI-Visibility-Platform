@@ -21,7 +21,17 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { DEGRADATION_FLAG, EXCLUSION_REASON, VISIBILITY_FLAG } from './strings';
+import {
+  CLASSIFICATION_CLASSIFY_HEADING,
+  CLASSIFICATION_FAILURE_CODES,
+  CLASSIFICATION_FAILURE_GENERIC,
+  CLASSIFICATION_READ_HEADING,
+  DEGRADATION_FLAG,
+  EXCLUSION_REASON,
+  VISIBILITY_FLAG,
+  auditFailureSentence,
+  classificationFailure,
+} from './strings';
 
 /** `excluded[Dimension...] = "..."` in scoring.py, plus compute_score's total-failure case. */
 const EXCLUSION_CODES = [
@@ -34,6 +44,8 @@ const EXCLUSION_CODES = [
   // TECHNICAL_FOUNDATION_EXCLUSIONS in scoring.py — 2026-09-29.
   'CRAWL_DISALLOWED',
   'CRAWL_ADDRESS_NOT_PUBLIC',
+  // 2026-10-03, launch checklist 3.41: robots.txt could not be read.
+  'CRAWL_POLICY_UNREADABLE',
 ] as const;
 
 /** `flags.append("...")` in scoring.py and citation_strength. */
@@ -94,5 +106,58 @@ describe('no reason code reaches a reader as a raw identifier', () => {
       expect(sentence, `${code} sentence is the code`).not.toBe(code);
       expect(sentence).not.toContain(code);
     }
+  });
+});
+
+describe('no classification reason reaches a reader as a raw identifier — launch checklist 3.39', () => {
+  // The intake card used to print `Reason: <code>` under a sentence that guessed the site
+  // did not load. `classificationFailure` is what it says now; the codes are the API's
+  // (`ClassificationResult.test.tsx` reads them back from `crawl.py` and `classify.py`).
+  const MACHINE_CODE = /\b[A-Z]{3,}_[A-Z0-9_]+\b/;
+
+  it.each(CLASSIFICATION_FAILURE_CODES)('%s has a heading and a sentence, and neither is the code', (code) => {
+    const { heading, sentence } = classificationFailure(code);
+    expect([CLASSIFICATION_READ_HEADING, CLASSIFICATION_CLASSIFY_HEADING]).toContain(heading);
+    expect(sentence.length).toBeGreaterThan(0);
+    expect(sentence).not.toBe(code);
+    expect(sentence).not.toContain(code);
+    expect(sentence).not.toMatch(MACHINE_CODE);
+    expect(sentence).not.toMatch(/did not load|usually means/);
+  });
+
+  it('`HTTP_<status>` is the audit’s sentence, which says the site answered with an error', () => {
+    for (const code of ['HTTP_400', 'HTTP_404', 'HTTP_503']) {
+      expect(classificationFailure(code)).toEqual({
+        heading: CLASSIFICATION_READ_HEADING,
+        sentence: auditFailureSentence(code),
+      });
+      expect(classificationFailure(code).sentence).toContain(`HTTP ${code.slice(5)}`);
+    }
+  });
+
+  it('a code it does not know, an empty one, and none, get the one sentence that guesses nothing', () => {
+    for (const code of ['SOMETHING_NEW', 'HTTP_200', 'HTTP_600', 'BROWSER_BUSY', '', null, undefined, 'constructor']) {
+      expect(classificationFailure(code), String(code)).toEqual({
+        heading: CLASSIFICATION_CLASSIFY_HEADING,
+        sentence: CLASSIFICATION_FAILURE_GENERIC,
+      });
+    }
+    expect(CLASSIFICATION_FAILURE_GENERIC).not.toMatch(/site|load|read/i);
+  });
+
+  it('the crawler could not read the site only where it was the crawler that failed', () => {
+    const readSide = CLASSIFICATION_FAILURE_CODES.filter(
+      (code) => classificationFailure(code).heading === CLASSIFICATION_READ_HEADING,
+    );
+    expect(readSide.sort()).toEqual([
+      'ADDRESS_NOT_PUBLIC',
+      'BROWSER_ERROR',
+      'FETCH_FAILED',
+      'ROBOTS_DISALLOWED',
+      'ROBOTS_UNREACHABLE',
+    ]);
+    // `TIMEOUT` is the crawl's cap and the classifier's deadline under one code, so it
+    // does not claim the crawler is the one that could not read.
+    expect(classificationFailure('TIMEOUT').heading).toBe(CLASSIFICATION_CLASSIFY_HEADING);
   });
 });

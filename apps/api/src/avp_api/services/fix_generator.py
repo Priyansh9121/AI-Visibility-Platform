@@ -368,6 +368,7 @@ def build_candidates(
         # audit finding, below, and nothing else about it is known.
         if excluded.get(dim.key) in (
             "NOT_YET_MEASURED", "CRAWL_DISALLOWED", "CRAWL_ADDRESS_NOT_PUBLIC",
+            "CRAWL_POLICY_UNREADABLE",
         ):
             continue
         candidates.append(
