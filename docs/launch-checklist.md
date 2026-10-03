@@ -7,10 +7,10 @@ session can do it, on a branch, with the full bar and a build-log entry, and
 only after the founder says go. Nothing here is pushed to `main` without the
 founder's OK; Render deploys `main` before CI finishes.
 
-Status on 2026-10-03: PRs #2 to #5 are merged (`main` at `471a2b9`). This
-checklist was last updated on branch `pilot-fixes-2` (the founder's brief "memory
-and the rest of the open decisions"), whose PR targets `main`. Rows that branch
-closed say **Done** and name the commit; its merge steps are 1.1d.
+Status on 2026-10-03: PRs #2 to #6 are merged (`main` at `811f013`). This
+checklist was last updated on branch `pilot-fixes-3` (the founder's brief "honest
+reports and the remaining pilot decisions"), whose PR targets `main`. Rows that
+branch closed say **Done** and name the commit; its merge steps are 1.1e.
 
 ## 1. Merge and deploy what is built
 
@@ -80,7 +80,7 @@ After both deploys are live:
 8. Run 1.3 (it now goes through the web host).
 9. Google Cloud Console: remove the old API-host redirect URI.
 
-### 1.1d Merge `pilot-fixes-2`'s PR — Founder
+### 1.1d Merge `pilot-fixes-2`'s PR — Founder — **Merged 2026-10-03** (PR #6, `main` at `811f013`)
 Nothing to set on Render and no migration. The API's image changes (`tini` becomes
 its first process), so its deploy rebuilds it.
 
@@ -99,6 +99,38 @@ its first process), so its deploy rebuilds it.
    browser slot is per process), so it would be ignored.
 5. On the deployed app: get a share link (the bar says "Link ready. It works until
    …" and the link is selected); reload, press Get again: the same date (3.28).
+   After 1.1e that sentence is announced to screen readers and no longer shown
+   (3.38): step 6 there says what to look and listen for.
+
+### 1.1e Merge `pilot-fixes-3`'s PR — Founder
+Nothing to set on Render: no migration, no new dependency, outbound host or
+setting. Both services redeploy from the same push.
+
+1. Merge once CI is green. For the minutes between the two deploys, an old web app
+   prints a new `ROBOTS_UNREACHABLE` intake reason as the code itself (3.41, 3.39);
+   nothing else depends on the order.
+2. Render → **API** service → Logs: open one report twice (signed in, then its
+   share link). No `scoring.completed` line appears for either (R1, 3.44); one
+   appears only when a scan is scored.
+3. Run one scan. If a competitor search fails or is retried, its line is
+   `serp.attempts_failed` or `serp.retried`, with `kinds` saying how (`connect`,
+   `read`, `pool`, `total`); no line carries a URL or `api_key` (R2, 3.45). Both
+   queries of the production scan timing out on one run is what to compare
+   against.
+4. In the same scan's lines: a `browser.slot_busy` with `waited_ms` near 120000
+   is a scan's audit that queued behind a run that hung (3.35); `docs/runbook.md`,
+   "Reading the API's memory", item 6.
+5. On the deployed app: add a client whose robots.txt cannot be read (a host that
+   does not answer on `/robots.txt`): the card says the crawler did not get a usable
+   answer from it, not that the site asks crawlers to stay out, and prints no code
+   (3.41, 3.39).
+6. Get a share link. The date shows once (the standing line), and the link field
+   is focused and selected. With VoiceOver (macOS) or NVDA (Windows) on, "Link
+   ready. It works until …" is announced (3.38). Some screen readers drop a polite
+   message when focus moves in the same moment; the date is still on the standing
+   line.
+7. Dashboard: with one live link, the "Share a report" step says "One live
+   link."; withdraw it and reload: the step is no longer done (3.42).
 
 ### 1.2 `STRIPE_PRICE_ID` is the US$160 Price — Founder
 1. Stripe dashboard (Test mode until 2.2 is done) → Product catalogue → the
@@ -243,12 +275,23 @@ every one marked (sec).
 | 3.32 | **Done on `pilot-fixes-2`** (`5189273`): the client Technical screen says what happened to a failed audit in a sentence, not the code. Open: the other raw codes, 3.39. | — | — |
 | 3.33 | **Done on `pilot-fixes-2`** (`72797ae`): after "Get shareable link" the status region says "Link ready. It works until <date>." and focus is on the link, text selected; a failed mint gives focus back to Get, described by its error. A focused primary or danger button in the light theme, and the report's, keeps a 2px gap between its fill and the ring. Open: 3.38, 3.40. | — | — |
 | 3.34 | **API memory (M1). Done on `pilot-fixes-2`** (`1b6f109`): one browser per process at a time, each run capped and its wait bounded, one site read per agency and four agencies at once on the request routes (`429`), `tini` as PID 1, and memory in the logs per phase (`docs/runbook.md`, "Reading the API's memory"). Measured in the API's image: the idle server 97 MB; a heavy page's audit about 490 MB; a crawl and an audit at once 586 MB before, about 490 MB after (at 512 MB, before, the kernel killed the audit's browser); about 1.4 GB free on 2 GB at the worst moment. The resting rise after a deploy is page cache, which the kernel drops. Moving the browser to a worker: `docs/crawl-worker-design-note.md` (not built). | Founder | 1.1d steps 2 and 3 (the peak of a full scan on Standard); decide on the worker. |
-| 3.35 | **The scan deadline's margin.** The audit's cap and its wait for the browser take the worst-case scan to 2,202.5 s of the 2,400 s deadline (1.09×; it was 1.42×). | Founder | Raise the deadline, shorten a scan audit's 300 s wait, or move the browser into a worker (3.34). |
-| 3.36 | **A scan's final status can overwrite FAILED.** `finalize_scan` (`services/scan_runner.py`) checks only its in-memory copy, so if the reaper fails a scan whose chain is still alive, the chain can stamp it succeeded or partial within one heartbeat, and its share link (3.29) opens again. Found by 3.28's security review; confirmed by reading the code. | Claude (sec) | Make the final write conditional on the row still being RUNNING, as the lease renewal is, with a test. |
-| 3.37 | **A failed scan's per-engine figures are still in its report** (`proof.crossEngine.standings[]`: each engine's mention rate and sentiment). Sentiment there is computed like the Sentiment dimension, so a weighted sum may rebuild the failed scan's sub-score (unconfirmed on real data). | Founder | Withhold them for a failed scan, or keep. |
-| 3.38 | **The share bar's wording around a press.** After a mint the date shows twice (the standing line and the status line); the UI review and the implementer suggest hiding the status text visually (it stays announced). For a link live on load, the lead says "Creates a link" and the busy label "Creating…" though a press now returns it. | Founder | Keep, or have Claude make the change. |
-| 3.39 | **Raw codes and site-blaming copy left on screen:** the intake classification card ("usually means the site did not load" and `Reason: <code>`, for `TIMEOUT`, `BROWSER_ERROR` and provider states), the per-check codes on the Technical screen (`CheckRow`), and `(<errorCode>)` on an engine result (`ClientPromptsView`); also "under five minutes" on three screens, which a busy browser can now exceed, and the intake's 429 drawn on the address field. | Founder (wording), then Claude + ui-reviewer | A sentence per code, as the audit has. |
+| 3.35 | **Done on `pilot-fixes-3`** (`6c06790`): a scan's audit waits 120 s for the browser (it was 300 s), enough for a run ahead that finishes and not for one that hangs until its cap; the worst-case scan is 2,064.5 s of the 2,400 s deadline (×1.16; ×1.07 at 300 s with 3.41's pre-browser budget), stated in `scan_executor.py` and checked by its test. Was: 2,202.5 s (1.09×). | — | — |
+| 3.36 | **Done on `pilot-fixes-3`** (`111045d`): the final status is written only while the row is still RUNNING; a chain that finds its scan failed stops before the engine loop; an executor that never claimed a scan can fail only a queued one. Was: the reaper's FAILED could be overwritten within one heartbeat, and a failed scan's link opened again. | — | — |
+| 3.37 | **Done on `pilot-fixes-3`** (`9d25c0a`): a failed scan's report carries no standings (`withhold_score_like_proof` in `failed_scan.py`), and a test classifies every number the report can carry as withheld or a fact. Confirmed before the change: the standings rebuilt the withheld Sentiment (54.5464 against 54.55). Open: 3.47. | — | — |
+| 3.38 | **Done on `pilot-fixes-3`** (`6c3d981`): after a mint the date shows once; "Link ready. It works until …" stays in the status region for screen readers, visually hidden. Open: the lead and busy label for a link live on load, 3.52. | — | — |
+| 3.39 | **Done on `pilot-fixes-3`** (`504b9e2`): the intake card, the check rows and the engine cards say what went wrong in a sentence true of the case, never the code; our-side failures never say the site did not load; "Could not classify" on the card and the Clients list; the 429 is above the form; "A scan usually takes a few minutes." on all four screens that promised five. Open: 3.48, 3.49. | — | — |
 | 3.40 | **Focus visibility gaps found in 3.33:** in forced colours no non-filled control shows focus (a shadow with `outline: none`), and Firefox draws its own ring on them; a focused text field shows a ring inside a ring; the dark theme's ring against a primary fill is 1.8–2.0:1 (its outer edge passes); every primary button has a 1px rim of the gradient's other end. | Founder (go), then Claude + ui-reviewer | One transparent outline on the global focus rule; one line on `.avp-field__input:focus-visible`; the dark ring and the rim. |
-| 3.41 | **`ROBOTS_DISALLOWED` is stored when robots.txt could not be read at all** (no answer, a name that does not resolve, a timeout, 5xx, 429), so the screens say the site asks crawlers to stay out when it did not answer. | Founder | A distinct code (for example `ROBOTS_UNREACHABLE`), which also touches the scoring exclusion and the contract. |
-| 3.42 | **The dashboard's "Share a report" step counts dead links** (a failed scan's, an expired one), and "One live link." says otherwise; cancelled scans still mint and serve (nothing writes CANCELLED today). | Founder | Count only live links, or keep. |
+| 3.41 | **Done on `pilot-fixes-3`** (`24a139f`): an unreadable robots.txt is `ROBOTS_UNREACHABLE` (Technical Foundation excluded as `CRAWL_POLICY_UNREADABLE`, `FORMULA_VERSION` still v5) and every screen says the crawler did not get a usable answer; the crawler still reads nothing without one. The gate now reads within a size, a time per request and a 60 s budget before the browser, and decodes only a short list of text charsets. Open: 3.46, 3.50. | — | — |
+| 3.42 | **Done on `pilot-fixes-3`** (`eac7a97`): the step counts only links that would open, by the one rule the public report uses (`share.link_would_open`); cancelled scans stay counted, as the public report still serves them. Open: 3.51. | — | — |
 | 3.43 | **Smaller follow-ups.** The FastAPI cap (`<0.118`) also holds Starlette below 0.49: lift it, with a review, before the API serves files. The fix generator is told a failed audit's empty page fields. Two wall-clock tests (`test_call_bounds.py`, `test_scan_deadline.py`) fail under heavy CPU load. A 429 from the browser limits has no log line of its own. | Claude | Each its own small item. |
+| 3.44 | **Done on `pilot-fixes-3`** (`3303deb`, item R1): opening a report, its PDF or a score reads the stored score and no longer re-scores the scan; `scoring.completed` is logged only when a Score is saved. No read ever wrote (checked row by row, `xmin`/`xmax` included); a report view went from 22 to 21 statements. | — | — |
+| 3.45 | **Done on `pilot-fixes-3`** (`652ba9b`, item R2): a competitor search has a 10 s deadline per attempt and one retry on a new connection for a transport failure (21 s at most per query); a failure logs its kind; no logger can print the search key. Measured from here: 24 real searches, median 1.54 s, longest 6.93 s. | — | — |
+| 3.46 | **Stored rows from before 3.41 keep `ROBOTS_DISALLOWED`** for a robots.txt that was really unreadable, so their report, Technical screen and intake card say the site asks crawlers to stay out. Nothing recorded which they were; a failed audit's AI-crawler table (all unknown) identifies the cases where it was the site's own file. | Founder | Have Claude relabel those, or accept. |
+| 3.47 | **A failed scan's facts on the signed-in scan routes** (3.37's security review, Medium): `GET /scans/{scanId}`, `/results` and `/prompts` serve every input of Mention Rate, Share of Voice and Sentiment (intents, mention flags, sentiment labels, citations), and `/audit` every fact Technical Foundation is computed from, so the withheld sub-scores can be worked out. No web screen calls these routes. | Founder | Keep them as facts (as now documented), or have Claude withhold the per-answer sentiment labels for a failed scan (closes Sentiment only). |
+| 3.48 | **The business-entity check knows eight schema.org types** (Organization, Corporation, OnlineBusiness, LocalBusiness, Dentist, Restaurant, Store, MedicalBusiness), so a site marked up as `ProfessionalService`, `LegalService` or `Plumber` fails it and loses Technical Foundation points. | Founder | Widen it (a `FORMULA_VERSION` bump; history is not re-scored) or keep. |
+| 3.49 | **The report's fix list and the PDF still overstate three findings:** `NO_ORGANIZATION_OR_LOCALBUSINESS` ("Nothing on the page states … what this organisation is"), `NO_DATE_SIGNAL_AVAILABLE` ("anywhere on the page"; the audit reads only the Last-Modified header and the structured data's dates) and `ROBOTS_TXT_DISALLOW` ("nothing else on this list can take effect"). The Technical screen already says them truly (3.39). | Founder (go), then Claude + ui-reviewer | Reword the three in the fix table and `report_narrative.py` together, with the narrative fixture. |
+| 3.50 | **A robots.txt or sitemap in a legacy non-Latin charset** (Shift_JIS, EUC-JP, GBK, Big5, EUC-KR, KOI8-R, DOS or Mac code pages) is now "no answer", so such a site is not read (3.41's allow-list). Those decoders measured linear and cheap. Also: the `/crawler` page does not state the 10 s and 60 s limits. | Founder | Allow them if a pilot needs one (one line, with a test); the `/crawler` wording with the lawyer (2.4). |
+| 3.51 | **The dashboard's "Share a report" step goes dark again** when its only link ends or its scan fails (3.42 counts only links that would open). | Founder | Keep, or have it stay done once an agency has shared a report. |
+| 3.52 | **The share bar for a link live on load** still says "Creates a link…" and "Creating…", though a press returns the existing link (3.28); Copy → "Copied" changes only the button's name, which screen readers do not reliably announce. | Founder (go), then Claude + ui-reviewer | Word the lead and busy label for a live link; a visually hidden status for Copy. |
+| 3.53 | **`POST /clients/{clientId}/competitors/detect` has no allowance or rate limit** (R2): every call runs a fresh detection, 6 searches from the shared 250 a month, up to 12 with retries. | Founder | A limit (per agency per day, or only through a scan), then Claude (sec). |
+| 3.54 | **`docs/skills-audit-2026-09-30/`** is untracked in the main checkout (the skills audit of 2026-09-30) and has been left untouched. | Founder | Commit it, move it out of the repo, or delete it. |
