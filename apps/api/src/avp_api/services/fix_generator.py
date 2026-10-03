@@ -60,6 +60,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from ..config import Settings, get_settings
 from ..models.action_item import ActionItemSource, Effort, Priority
+from . import usage
 from .call_bounds import CallBound
 
 logger = structlog.get_logger(__name__)
@@ -665,15 +666,18 @@ async def generate_fixes(
     client = FIX_BOUND.client(settings)
 
     try:
-        async with FIX_BOUND.deadline():
-            response = await client.messages.parse(
-                model=FIX_MODEL,
-                max_tokens=FIX_MAX_TOKENS,
-                output_config={"effort": FIX_EFFORT},
-                system=SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": build_fix_prompt(facts, candidates)}],
-                output_format=GeneratedFixSet,
-            )
+        # Counted, not changed (`usage.py`): one `llm.call` line for each request.
+        with usage.track(usage.ANTHROPIC, usage.Purpose.FIXES, model=FIX_MODEL) as call:
+            async with FIX_BOUND.deadline():
+                response = await client.messages.parse(
+                    model=FIX_MODEL,
+                    max_tokens=FIX_MAX_TOKENS,
+                    output_config={"effort": FIX_EFFORT},
+                    system=SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": build_fix_prompt(facts, candidates)}],
+                    output_format=GeneratedFixSet,
+                )
+            call.read_anthropic(response)
     except anthropic.AuthenticationError:
         logger.error("fixes.auth_failed")
         return FixOutcome(status="failed", reason_code="PROVIDER_AUTH_FAILED")

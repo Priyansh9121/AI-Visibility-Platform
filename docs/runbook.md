@@ -526,6 +526,152 @@ returned. `competitors.serp_failed` (one for each search that failed, an error a
 included) names the query and its `error_code`, and `competitors.detected`, logged after
 the searches' lines, carries the `client_id` and the `country` the searches were made in.
 
+## Reading the usage lines
+
+**When:** you want to know what a scan used: how many requests each provider got, how many
+tokens they reported back, and how many requests were retries or got no answer; or what a scan
+cost to run. The API writes two lines about it, from U1 (2026-10-04): `llm.call`, one line for
+each paid HTTP request, and `scan.usage`, one total for each scan. Both carry counts and
+nothing else: no prompt, no answer, no brand, no domain, no error message and no key.
+
+**Where:** the Render dashboard → the **API** service → **Logs**. Search for the event name, or
+for `scan_id=<the scan's id>`, which finds a scan's `scan.usage` line and the `llm.call` lines
+it made. Both are INFO lines. **`LOG_LEVEL` must stay at `INFO` or be unset (unset is INFO on
+staging and production), or both lines disappear:** at `WARNING` or above neither is written.
+
+**The lines**
+
+| Event | Level | When | Carries |
+|---|---|---|---|
+| `llm.call` | info | a paid request has ended: one line for each HTTP request to Anthropic, OpenAI, Perplexity or Google (a request the SDK or the adapter sent again is a second line) | `scan_id`, `provider`, `model`, `purpose`, `engine`, the token and search counts, `retry`, `ok`, `error` |
+| `scan.usage` | info | once, when the executor that ran a scan is done with it, however the scan ended | `scan_id`, then counts for each line of the scan and for SerpApi, flat as `key=value` |
+
+A scan of twenty prompts on four engines writes up to about 170 `llm.call` lines, and a retry
+adds one: the engines (prompts times engines), a sentiment request for each answer that named
+the client, one for prompt generation, one for the fixes and, on a client's first scan, two to
+four for competitor detection (a later scan carries the competitor set forward and makes
+none). `scan.usage` is one line of about one and a half kilobytes for four engines.
+
+**`llm.call`, field by field**
+
+- `scan_id`: the scan the request was made for. `None` outside a scan (see below).
+- `provider`: `anthropic`, `openai`, `perplexity` or `google` (Gemini).
+- `model`: the model the provider's response says served the request. When the response names
+  none, or there was no response, it is the model the API asked for, so a request that failed
+  still says what was being called.
+- `purpose`: `engine`, `sentiment`, `prompt_generation`, `fixes`, `detection` (the co-citation
+  requests that find rivals) or `classification`.
+- `engine`: the engine's id (`claude`, `claude_search`, `chatgpt`, `perplexity`, `gemini`) for
+  an engine request, `None` otherwise.
+- `input_tokens`, `output_tokens`: as the provider reports them. Reasoning is inside the output
+  count, not on top of it.
+- `reasoning_tokens`: the part of the output that was reasoning, where the provider reports it.
+- `cache_read_tokens`, `cache_write_tokens`: cached tokens, as reported. Anthropic's input count
+  leaves them out and OpenAI's and Google's include the cached part. Nothing the API sends is
+  cacheable today, so they are 0.
+- `search_invocations`: web searches or grounding queries the request made (Claude's web search,
+  Perplexity's `web_search`, Gemini's grounding queries).
+- `retry`: this request sent an earlier one again for the same call. Two things do that: the
+  Anthropic SDK, which retries once inside a call, and Perplexity, which retries once after a
+  429 that names its wait. SerpApi's retry is not an `llm.call`: it is in `serpapi_attempted`.
+- `ok`: a response came back and its usage was read. `False` means no usage came back, so the
+  counts are 0: there was no response (a timeout, a refused connection, an error status) or the
+  SDK could not parse the response. A request that was answered and then did not count as an
+  answer (a truncated or refused answer) is `ok`: it was billed, and its usage is logged.
+- `error`: why `ok` is `False`, as one word: `http_<status>` for an error status (`http_429`,
+  `http_529`), otherwise the exception's class (`APITimeoutError`, `TimeoutError`,
+  `ValidationError`, `CancelledError`). It is never the message. `None` when `ok` is `True`.
+
+**`scan.usage`, field by field**
+
+`scan_id`, then these for each of `engines` (every engine added together), `engine_<id>` (each
+engine that was asked, such as `engine_claude_calls`), `sentiment`, `prompt_generation`, `fixes`
+and `detection`:
+
+- `<line>_calls`: requests made, retries included.
+- `<line>_unanswered`: of those, how many got no usage back (`ok=False`).
+- `<line>_retries`: of those, how many were sent again.
+- `<line>_input_tokens`, `<line>_output_tokens`, `<line>_reasoning_tokens` (inside the output),
+  `<line>_cache_read_tokens`, `<line>_cache_write_tokens`, `<line>_search_invocations`: the sums
+  of the `llm.call` lines of that line.
+- `<line>_model`: the model or models that served it, joined with `+`. **Only a request that
+  was answered names a model.** A request that failed carries the model the API asked for, which
+  can be an alias of the one that answers (`gpt-5.5` for `gpt-5.5-2026-04-23`) and would make one
+  model look like two.
+
+**A counter that is zero is left out: read an absent counter as zero.** The three every line
+carries are `_calls`, `_input_tokens` and `_output_tokens`. A `_model` that nobody named is left
+out too. `engines_*` is every engine added together: read the `engine_<id>_*` fields for one
+engine, and never add `engines_*` to them.
+
+SerpApi, for the scan's detection searches. The first four are always present:
+
+- `serpapi_attempted`: HTTP requests made, retries included.
+- `serpapi_ok`: answered with a result page. SerpApi bills it unless it served the search from its
+  cache.
+- `serpapi_error`: answered with an error (a 401, a 429, any other status, a body that was not
+  JSON, or an `error` in the body). Not billed.
+- `serpapi_no_answer`: requests that got no answer (a timeout or a transport failure). Nobody can
+  say whether SerpApi billed them.
+- `serpapi_billed_or_unknown`: `serpapi_ok` plus `serpapi_no_answer`. **An upper bound on what
+  SerpApi billed**: an answered search is billed unless SerpApi served it from its cache, an error
+  answer is not billed, and a search nobody answered may have been. Left out when it is zero.
+
+`serpapi_ok`, `serpapi_error` and `serpapi_no_answer` add up to `serpapi_attempted`.
+
+**One total for each scan, and what is not in it.** `scan.usage` is logged once for each scan an
+executor ran, whether it finished, ended partial or failed, stopped on an error of ours, was
+cancelled because its lease was lost, or ran out of time. An executor that did not claim the scan
+(a duplicate submission, a scan already finished) logs none: it spent nothing.
+
+These are never in a scan's total. Their `llm.call` lines carry `scan_id=None` and no
+`scan.usage` follows them:
+
+- the detect route, `POST /clients/{clientId}/competitors/detect` (`purpose=detection`);
+- the fixes route, `POST /scans/{scanId}/fixes` (`purpose=fixes`);
+- classification at intake, `POST /clients` and `POST /clients/{clientId}/reclassify`
+  (`purpose=classification`; it is left out of a scan's total even when it is logged inside one);
+- an ad-hoc prompt run, `POST /clients/{clientId}/prompt-runs`.
+
+A scan's own detection and fixes requests, made while the scan runs, are in its total.
+
+**What the lines undercount**
+
+- A response the SDK could not parse (it did not fit the schema) was billed and logs zero counts:
+  `ok=False error=ValidationError`. A run of these in a `_unanswered` count is the sign.
+- A request that timed out may have been billed with nothing to show for it: `ok=False`, `error`
+  `APITimeoutError` or `TimeoutError`, zero counts. A request cut by `CancelledError` is the same.
+- A scan's prompt slots that are still running after the scan has failed are not in its total.
+  When one slot raises, the others are not cancelled, so their paid requests go on and are logged
+  after `scan.usage`. Their `llm.call` lines carry the scan's `scan_id`: search for it.
+- Whether a SerpApi search with no answer was billed. Only the account's count says.
+
+**How to price a line**
+
+```
+cd apps/api && uv run python scripts/verify_e2e.py --price-usage '<pasted line>'
+```
+
+Paste the `scan.usage` line as Render shows it, with its timestamp and level, or just its
+`key=value` fields. Give `-` instead of the line to read it from standard input
+(`pbpaste | uv run python scripts/verify_e2e.py --price-usage -`). It needs no database and no
+key and calls no provider. A line from before `serpapi_billed_or_unknown` existed prices the same.
+
+`--serp-per-search <price>` is optional: what your SerpApi plan charges for one search, a finite
+number of 0 or more (anything else is refused with exit code 2). With it the command prices
+`serpapi_billed_or_unknown`, an upper bound, and says so; without it SerpApi is listed under
+missing rates.
+
+It prints each line of the scan (each engine, sentiment, prompt generation, fixes, detection)
+with its model, requests, tokens and what they come to at the rates in `RATES` in
+`scripts/verify_e2e.py`; the total; and every rate it used with the day it was read and the
+vendor page it came from. **The rates are perishable.** Each is a vendor's published rate on the
+date shown, and nothing the command prints is a quote or a bill. A line it cannot price (a model
+with no rate in the table, a line that more than one model with different rates served, no model
+at all) is listed under MISSING RATES and left out of the total, never priced at nothing. Cached
+tokens are not priced separately, since no cached-token rate is recorded, and the command says
+when a line has some.
+
 ## Supabase grants check
 
 **When:** before the deploy that ships revision `f45983cfa5e3` (which takes `anon` and
