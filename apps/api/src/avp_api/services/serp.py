@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 import httpx
@@ -80,6 +81,53 @@ PHASE_TIMEOUTS = httpx.Timeout(PHASE_TIMEOUT_S, connect=CONNECT_TIMEOUT_S)
 MAX_ATTEMPTS = 2
 RETRY_PAUSE_S = 1.0
 QUERY_CEILING_S = MAX_ATTEMPTS * ATTEMPT_TIMEOUT_S + (MAX_ATTEMPTS - 1) * RETRY_PAUSE_S
+
+# --- The market a search is made in (2026-10-03) -----------------------------------------
+# `search` used to send `gl=us` for every client. Production on 2026-10-03, two new clients:
+# an Indian business (a .in domain) logged `competitors.serp_gate_applied considered=44
+# eligible=27 gated_out=17` and `competitors.detected confidence=0.000 status=weak_signal
+# returned=5`; an Australian one (.com.au), with one query timed out, `considered=44
+# eligible=14 gated_out=30` and `confidence=0.000`. `decide_detection` takes confidence as the
+# share of the returned rivals that BOTH signals found, so 0.000 is five rivals and not one
+# found by search and the model.
+#
+# Reproduced the same day through this code path, with each client's own classification and
+# real searches, varying only `gl` and keeping the same co-citation answers in both arms.
+# The .in client under gl=us: 3 queries, 27 result domains, none a brand the model had
+# named, so 0 corroborated and 0.000. The .com.au client under gl=us: 2 queries, 17 domains,
+# none named, 0.000; under gl=au the same 2 queries returned one rival's own domain, that
+# rival was corroborated and the confidence was 0.200, status ok. Searched from the United
+# States, neither client's results named a rival the model named; searched from Australia,
+# the Australian client's did. The market is not the whole of it: under gl=in two of the .in
+# client's three queries got no answer (both read timeouts, twice each) and the third named
+# no rival the model named either.
+#
+# So a search is made in the client's own market. Nothing in the data model records a country
+# (no field on Client, Agency or the classification output), so the domain is the only source
+# there is, and a country-code TLD names it. Anything else (.com, .org, .net, .io, .ai, .co,
+# any label not listed) says nothing about where the business trades and searches the default,
+# Australia, because the pilots are Australian agencies. The list is extended by adding a row.
+# `hl` stays `en`: the queries are English. The scoring formula does not change (and so
+# `FORMULA_VERSION` does not): what changes is the input detection is given.
+DEFAULT_SEARCH_COUNTRY = "au"
+SEARCH_COUNTRY_BY_TLD: Mapping[str, str] = {
+    "au": "au",
+    "nz": "nz",
+    "uk": "uk",  # the United Kingdom's own TLD, and Google's `gl` for it (ISO's is "gb")
+    "ie": "ie",
+    "ca": "ca",
+    "us": "us",
+    "za": "za",
+    "in": "in",
+    "sg": "sg",
+    "my": "my",
+    "ph": "ph",
+    "hk": "hk",
+    "id": "id",
+    "jp": "jp",
+}
+# The only values `search` will send as `gl`: one this module could itself have chosen.
+_SEARCH_COUNTRIES = frozenset(SEARCH_COUNTRY_BY_TLD.values())
 
 # Domains that rank for "best X" queries but are never the competitor — they
 # are publishers, marketplaces, directories and social platforms writing ABOUT
@@ -203,6 +251,20 @@ def build_queries(
     return queries
 
 
+def search_country(domain: str) -> str:
+    """The Google country (`gl`) to search in for a client's domain.
+
+    The domain's last label if it is a country-code TLD in `SEARCH_COUNTRY_BY_TLD`, else
+    the default: `example.com.au` is `au`, `example.in` is `in`, `example.com` is the
+    default. Pure: no I/O, case does not matter, and a trailing dot is allowed.
+    """
+    host = domain.strip().lower().rstrip(".")
+    if "." not in host:
+        # A bare name has no TLD, whatever it is called.
+        return DEFAULT_SEARCH_COUNTRY
+    return SEARCH_COUNTRY_BY_TLD.get(host.rpartition(".")[2], DEFAULT_SEARCH_COUNTRY)
+
+
 _TIMEOUT_KINDS: tuple[tuple[type[httpx.TimeoutException], str], ...] = (
     (httpx.ConnectTimeout, "connect"),
     (httpx.ReadTimeout, "read"),
@@ -287,9 +349,17 @@ async def _get(query: str, params: dict[str, str]) -> httpx.Response | SerpResul
 
 
 async def search(
-    query: str, *, settings: Settings | None = None, num: int = RESULTS_PER_QUERY
+    query: str,
+    *,
+    settings: Settings | None = None,
+    num: int = RESULTS_PER_QUERY,
+    country: str = DEFAULT_SEARCH_COUNTRY,
 ) -> SerpResult:
     """Run one Google search via SerpApi. Never raises for an upstream failure.
+
+    The search is made in `country` (Google's `gl`; `search_country` picks it for a
+    client's domain). A value that is not one of `SEARCH_COUNTRY_BY_TLD`'s values is sent
+    as the default, so no arbitrary string ever reaches the request. `hl` stays `en`.
 
     A request that got no answer (a timeout, a refused or reset connection, an attempt
     that ran past its deadline) is made once more, after a pause; an answer never is.
@@ -306,7 +376,7 @@ async def search(
         "api_key": api_key,
         "num": str(num),
         "hl": "en",
-        "gl": "us",
+        "gl": country if country in _SEARCH_COUNTRIES else DEFAULT_SEARCH_COUNTRY,
     }
 
     got = await _get(query, params)
@@ -349,9 +419,13 @@ async def search(
 
 
 async def search_many(
-    queries: list[str], *, settings: Settings | None = None, concurrency: int = 3
+    queries: list[str],
+    *,
+    settings: Settings | None = None,
+    concurrency: int = 3,
+    country: str = DEFAULT_SEARCH_COUNTRY,
 ) -> list[SerpResult]:
-    """Run several queries concurrently, bounded.
+    """Run several queries concurrently, bounded, all in the one `country`.
 
     Bounded because SerpApi bills per search and rate-limits: firing an
     unbounded gather at a paid, rate-limited API is how a detection run turns
@@ -365,7 +439,7 @@ async def search_many(
 
     async def one(q: str) -> SerpResult:
         async with semaphore:
-            return await search(q, settings=settings)
+            return await search(q, settings=settings, country=country)
 
     return list(await asyncio.gather(*(one(q) for q in queries)))
 
