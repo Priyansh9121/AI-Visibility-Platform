@@ -18,6 +18,7 @@ from ..models import Agency, Client, Scan, ScanStatus, Score, ScoreStatus
 from ..schemas.auth import AgencyOut, SeatUsageOut
 from ..schemas.dashboard import DashboardOut, ScanSummaryOut
 from ..services import seats as seat_service
+from ..services import share as share_service
 from ..services.scan_executor import reap_stale_scans
 
 router = APIRouter(tags=["dashboard"])
@@ -123,12 +124,16 @@ async def dashboard(
     # lives, and cannot disagree with it. The cost is two indexed counts per
     # dashboard read, on the same `ix_scans_agency_created` the list uses.
     #
-    # `share_token IS NOT NULL` is "a live link exists". Mint sets it, revoke
-    # clears it, expiry leaves it — so revoking a report's only share link
-    # un-does the step, and letting one expire does not. That is the honest
-    # reading of the column: the checklist describes the account's present
-    # state, not its history, the same way `client_count` drops when a client
-    # is deleted.
+    # The shared count is "a link exists that would open" — checklist 3.42, the
+    # founder's decision. It was `share_token IS NOT NULL`, which also counted a
+    # link past its end and a failed scan's, neither of which opens for anyone, so
+    # "One live link." could be said of a link that was dead. It now asks the
+    # public lookup's own question (`share.link_would_open`, written once and
+    # read by both), so the two cannot drift. Mint adds to it; revoke takes a
+    # link off, and so does a link reaching its end or its scan failing. The
+    # checklist describes the account's present state, not its history, the
+    # same way `client_count` drops when a client is deleted. A cancelled
+    # scan's link opens, so it is counted (nothing writes CANCELLED today).
     scored_scan_count = int(
         (
             await db.execute(
@@ -143,15 +148,7 @@ async def dashboard(
             )
         ).scalar_one()
     )
-    shared_scan_count = int(
-        (
-            await db.execute(
-                select(func.count())
-                .select_from(Scan)
-                .where(Scan.agency_id == agency_id, Scan.share_token.is_not(None))
-            )
-        ).scalar_one()
-    )
+    shared_scan_count = await share_service.count_links_that_open(db, agency_id)
 
     return DashboardOut(
         agency=AgencyOut.model_validate(principal.agency),

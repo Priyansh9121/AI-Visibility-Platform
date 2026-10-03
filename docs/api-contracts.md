@@ -1067,9 +1067,15 @@ getting-started checklist rather than the server storing per-step flags:
   and is not counted. **A `failed` scan is not counted**, even if it kept a score
   row (a deadline that came after scoring): its score is never shown or counted
   (checklist 3.24).
-- `sharedScanCount` — scans with a live share link (`share_token IS NOT
-  NULL`). Minting sets it, revocation clears it, expiry does not: the count
-  describes the account as it is, not a history of links that once existed.
+- `sharedScanCount` — scans whose share link would open now: the test the
+  public report routes apply to a token (a token is set, its end is after
+  now, and the scan has not `failed`). **A link past its end is not
+  counted, and neither is a failed scan's**, even while the token is still
+  on the row for the agency to withdraw (checklist 3.42). Minting a link
+  adds to the count; withdrawing one, a link reaching its end and a scan
+  failing each take one off. The count describes the account as it is, not
+  a history of links that once existed. A `cancelled` scan's link opens, so
+  it is counted; nothing writes `cancelled` today.
 - `gettingStartedDismissed` — whether someone at the agency has closed the
   checklist. The one stored fact; the rest are derived on read.
 

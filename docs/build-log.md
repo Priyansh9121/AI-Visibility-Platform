@@ -22734,3 +22734,46 @@ Drift check (north-star §8): Layer 5, Distribution / Action (the share bar); li
   - The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# The dashboard's "Share a report" step counts only links that would open, by the same rule the public report uses
+
+**2026-10-03, the eleventh entry of the day; branch `pilot-fixes-3`, the founder's brief "honest reports and the remaining pilot decisions" (launch checklist 3.42).** One item, one commit.
+
+**Render: nothing to set. No endpoint shape, schema, dependency or outbound host change.** `sharedScanCount` on `GET /api/v1/dashboard` changes meaning.
+
+Drift check (north-star §8): Layer 1, Delivery (the dashboard's getting-started card); lifecycle phase: Activation (Epic 9), an agency's first shared report.
+
+## 1. What changed
+
+- **Founder decision (final):** count only links that would open: not a failed scan's, not an expired one. Leave cancelled scans as they are unless trivial.
+- **One rule, written once** (`services/share.py`): `link_would_open(now)` is the single SQL expression of a link that opens (a token, an end, the end after now, the scan not failed). The public report's lookup (`scan_for_share_token`, for `POST /reports/shared` and its PDF) and the new `count_links_that_open(session, agency_id)` both add it to their query and restate none of it, so the two cannot drift. The Python `link_is_live`, which a press and the signed-in report use, agrees with it to the microsecond. Its docstring says never to use it alone: it names no token and no agency (from the security review).
+- **The dashboard** (`routers/dashboard.py`) counts with it, scoped to the agency. It used to count `share_token IS NOT NULL`, which included expired links and a failed scan's dead one.
+- **Cancelled scans stay counted:** nothing writes CANCELLED today, and the public lookup serves them, so excluding them here would make the dashboard disagree with the report.
+- **The web copy stays true:** "One live link." for one, "N live links." for N, and the 0 wording unchanged. The step now goes dark again when the only link ends or its scan fails, and an undismissed "Up and running" card falls back to four of five.
+- `docs/api-contracts.md`: `sharedScanCount`'s definition.
+
+## 2. The review
+
+- **Security review (opus): PASS WITH NITS**, nothing at Medium. Checked clean: the public lookup is exactly as strict as before for every real token (unknown, withdrawn, expired, end exactly now, a failed scan's, a cancelled scan's) and stricter for a missing one; it cannot match without the token equality; its refusal is unchanged; the added `IS NOT NULL` is the partial index's own condition, so the plan stays an index scan; the count is scoped to the caller's agency; no log line added.
+  - **Taken:** the docstring that `link_would_open` is half of a check.
+
+## Found, not fixed
+
+- **A database error inside the public lookup** would print the share token in an unhandled exception's traceback, because the engine does not hide SQL parameters: one more path for checklist 3.5 (`hide_parameters=True`).
+- **A token containing U+0000** would be a 500 rather than the documented 404 (the same for every token, so it reveals nothing); a 422 in the schema would make it tidy.
+- **Whether the step should stay lit once lit** is the founder's call.
+
+## Verified
+
+**API pytest 3056 → 3074 (+18); floor raised to match.**
+- `tests/test_dashboard_shared_count.py` (18): exactly the links that would open are counted (live, expired, withdrawn through the real route, a failed scan's live-dated token, a cancelled scan's); the end exactly now is not counted and a microsecond later is (the count, the lookup and `link_is_live` agree on both sides); another agency's links are never counted; for every status, live and ended, the dashboard counts a link exactly when the public lookup opens it; the lookup and the count read one expression; a link counts only while it would open, through the real mint and withdraw.
+- **Negative controls:** on this tree, the old count (`share_token IS NOT NULL`) put back fails 11 of the 34 in the two dashboard files, all 11 in the new file; restored and checked with `cmp`; the implementer's, each restored: the old `share_token IS NOT NULL` count, 11 of 18 fail (the 16 older dashboard tests did not notice); the rule restated inline in the lookup, 1; `>=`, 1; the status test dropped, 3.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 26, shared-types 53 (0 fail), design-system 935, web 1708, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass.
+  - Alembic upgrade and check pass on an empty database (no schema change).
+  - The Python and JavaScript licence audits pass (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change: the schema change is a comment.
+- Exit codes were read from files.
