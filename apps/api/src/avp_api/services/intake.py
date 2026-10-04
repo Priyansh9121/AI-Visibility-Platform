@@ -238,13 +238,21 @@ def apply_outcome(client: Client, outcome: ClassificationOutcome) -> Client:
     database enforces the same rule via
     `ck_clients_industry_matches_classification_status`, so a bug here fails
     loudly rather than storing a guess.
+
+    **The model and the time are recorded together, and only when a model was asked**
+    (launch checklist 3.71). `outcome.model` is the model `classify` asked, or None when it
+    returned before asking one: a crawl that was refused or failed, a page with too little
+    text. Then neither is recorded, and what an earlier classification recorded is cleared
+    with the rest of it, since this outcome replaces that classification's industry and
+    status. A call that was made and failed names the model and gets the time of the write:
+    the attempt, with the status and reason code saying that nothing came back.
     """
     client.classification_status = _STATUS_MAP[outcome.status]
     client.classification_reason_code = outcome.reason_code
     client.industry_confidence = outcome.confidence
     client.industry_confidence_score = outcome.confidence_score
-    client.classified_at = datetime.now(UTC)
     client.classifier_model = outcome.model
+    client.classified_at = datetime.now(UTC) if outcome.model is not None else None
 
     if outcome.status == "classified":
         client.industry = outcome.industry

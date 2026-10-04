@@ -104,7 +104,10 @@ class Client(Base, TimestampMixin, SoftDeleteMixin):
         Numeric(4, 3), nullable=True
     )
 
-    # Provenance: which model produced the classification, and when.
+    # Provenance: which model was asked to classify the client, and when. Both are NULL until a
+    # model has been asked, and for a client whose latest classification asked none (its crawl
+    # was refused or failed, or the page had too little text). Written together, never one
+    # without the other (`intake.apply_outcome`, launch checklist 3.71).
     classified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     classifier_model: Mapped[str | None] = mapped_column(String(80), nullable=True)
     # The brand entity to match against in engine answers. A FACT about the

@@ -11,8 +11,8 @@
   "classificationReasonCode": "ROBOTS_UNREACHABLE",
   "industryConfidence": null,
   "industryConfidenceScore": null,
-  "classifiedAt": "2026-01-01T00:00:00Z",
-  "classifierModel": "claude-opus-5",
+  "classifiedAt": null,
+  "classifierModel": null,
   "createdAt": "2026-01-01T00:00:00Z",
   "updatedAt": "2026-01-01T00:00:00Z",
   "crawl": {

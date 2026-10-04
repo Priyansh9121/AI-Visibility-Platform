@@ -54,8 +54,12 @@ FIXTURE = (
 # prefix and a ULID of zeros (the smallest one, still a valid id); an instant is one
 # instant. Nothing else in the body is replaced, so a field added to the response, or one
 # that starts to vary, fails the comparison instead of being smoothed over.
+#
+# `classifiedAt` is not here since launch checklist 3.71: for this site no model was asked,
+# so the body carries no classification time, and `null` is what the file says. Replacing it
+# with an instant would hide the regression this fixture is there to show.
 IDS = {"id": ids.CLIENT, "agencyId": ids.AGENCY}
-INSTANTS = ("classifiedAt", "createdAt", "updatedAt")
+INSTANTS = ("createdAt", "updatedAt")
 PLACEHOLDER_ULID = "0" * 26
 PLACEHOLDER_INSTANT = "2026-01-01T00:00:00Z"
 
@@ -123,6 +127,10 @@ class TestTheBodyTheCardIsGiven:
         assert body["classificationStatus"] == "unclassifiable"
         assert body["classificationReasonCode"] == "ROBOTS_UNREACHABLE"
         assert body["industry"] is None
+        # No page was read, so no model was asked: the body names none and gives no time
+        # (launch checklist 3.71). It used to say `claude-opus-5` and an instant.
+        assert body["classifierModel"] is None
+        assert body["classifiedAt"] is None
         # Nothing but robots.txt was asked for: no page, no HEAD, no sitemap.
         assert set(robots_web.fetched()) == {ROBOTS}
 
@@ -145,7 +153,7 @@ class TestTheNormalisationHidesNothing:
     GOOD = {
         "id": f"clnt_{PLACEHOLDER_ULID}",
         "agencyId": f"agcy_{PLACEHOLDER_ULID}",
-        "classifiedAt": "2026-10-03T12:34:56.789012Z",
+        "classifiedAt": None,
         "createdAt": "2026-10-03T12:34:55Z",
         "updatedAt": "2026-10-03T12:34:56.789012Z",
         "domain": "prospect-site.com",
@@ -160,6 +168,13 @@ class TestTheNormalisationHidesNothing:
         assert out["agencyId"] == f"agcy_{PLACEHOLDER_ULID}"
         assert {out[field] for field in INSTANTS} == {PLACEHOLDER_INSTANT}
         assert out["domain"] == "prospect-site.com"
+        assert out["classifiedAt"] is None
+
+    def test_a_classification_time_is_left_as_it_is_not_tidied_into_a_placeholder(self) -> None:
+        # No model is asked for this site (3.71), so a time on this body is a regression.
+        # Left alone, it differs from the fixture's `null` and the comparison fails on it.
+        when = "2026-10-03T12:34:56.789012Z"
+        assert normalised({**self.GOOD, "classifiedAt": when})["classifiedAt"] == when
 
     @pytest.mark.parametrize(
         ("field", "value"),
@@ -168,7 +183,6 @@ class TestTheNormalisationHidesNothing:
             ("id", "scan_" + "0" * 26),
             ("id", "clnt_not-a-ulid"),
             ("agencyId", ""),
-            ("classifiedAt", None),
             ("createdAt", "yesterday"),
             ("updatedAt", "2026-13-45T00:00:00Z"),
             ("updatedAt", "2026-10-03T12:34:56+02:00"),

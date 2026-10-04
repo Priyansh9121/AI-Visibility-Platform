@@ -1201,6 +1201,16 @@ spending an LLM call (used by tests and by Epic 10's bulk upload).
 }
 ```
 
+**`classifierModel` and `classifiedAt`** (2026-10-04, launch checklist 3.71) name the
+model that was asked to classify the client, and when. Both are `null` unless a model
+was asked: for a `pending` client, and for one whose site was never shown to a model
+(the crawl was refused or failed: `ROBOTS_DISALLOWED`, `ROBOTS_UNREACHABLE`,
+`ADDRESS_NOT_PUBLIC`, `FETCH_FAILED`, `HTTP_*`, `BROWSER_ERROR`, the crawl's own
+`TIMEOUT`; or the page had too little text, `INSUFFICIENT_CONTENT`). A call that was
+made and failed (`PROVIDER_*`, the model's own `TIMEOUT`) still names the model, with
+the time of the attempt. Classifying again replaces both with the new outcome's, `null`
+included. Rows stored before 2026-10-04 carry both for refused and failed crawls too.
+
 **`classificationStatus` is the field to branch on.** It has four values, and
 three of them mean `industry` is `null`:
 
