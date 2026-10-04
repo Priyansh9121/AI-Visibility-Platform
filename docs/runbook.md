@@ -500,7 +500,12 @@ logs none of the three. The three quota lines are not searches and are not in th
   `SERP_AUTH_FAILED` (401: the key is wrong or revoked; a `serp.auth_failed` error line
   comes with it), `SERP_RATE_LIMITED` (429), `SERP_HTTP_<n>` (any other status; a
   `serp.http_error` warning with the status comes with it), `SERP_BAD_JSON` (a 200 whose
-  body was not JSON) or `SERP_API_ERROR` (a 200 whose body carried an `error`).
+  body could not be read as a page of results: it was not JSON or was nested too deeply to
+  read, or it was JSON of another shape, such as a list, a string, a number or `null`, an
+  `organic_results` that is not a list, or a list of results of which none is an object) or
+  `SERP_API_ERROR` (a 200 whose body carried an `error`). A page in which only some results
+  can be used is read: the others are skipped (a result that is not an object, or whose link
+  is not a string, is one of them), and `hits` counts what was kept.
 
 **`serp.retried` and `serp.attempts_failed`, field by field**
 
@@ -679,13 +684,17 @@ SerpApi, for the scan's detection searches. The first four are always present:
 - `serpapi_attempted`: HTTP requests made, retries included.
 - `serpapi_ok`: answered with a result page. SerpApi bills it unless it served the search from its
   cache.
-- `serpapi_error`: answered with an error (a 401, a 429, any other status, a body that was not
-  JSON, or an `error` in the body). Not billed.
+- `serpapi_error`: answered with an error (a 401, a 429, any other status, a body that could not
+  be read as a page of results, or an `error` in the body). Counted as not billed, which holds for
+  all but one kind: a 200 whose body could not be read was a 200 to SerpApi, which may have counted
+  it as a search. This count cannot tell that kind from the rest (see "What the lines undercount").
 - `serpapi_no_answer`: requests that got no answer (a timeout or a transport failure). Nobody can
   say whether SerpApi billed them.
 - `serpapi_billed_or_unknown`: `serpapi_ok` plus `serpapi_no_answer`. **An upper bound on what
-  SerpApi billed**: an answered search is billed unless SerpApi served it from its cache, an error
-  answer is not billed, and a search nobody answered may have been. Left out when it is zero.
+  SerpApi billed, but for one kind of answer**: an answered search is billed unless SerpApi served
+  it from its cache, an error answer is not billed, and a search nobody answered may have been. The
+  exception is a 200 whose body could not be read: it is counted in `serpapi_error`, so it is not
+  in this number, and SerpApi may have billed it. Left out when it is zero.
 
 `serpapi_ok`, `serpapi_error` and `serpapi_no_answer` add up to `serpapi_attempted`.
 
@@ -715,6 +724,12 @@ A scan's own detection and fixes requests, made while the scan runs, are in its 
   When one slot raises, the others are not cancelled, so their paid requests go on and are logged
   after `scan.usage`. Their `llm.call` lines carry the scan's `scan_id`: search for it.
 - Whether a SerpApi search with no answer was billed. Only the account's count says.
+- A SerpApi search answered with a 200 whose body could not be read as a page of results. It is
+  counted in `serpapi_error`, which is not billed, and it is not in `serpapi_billed_or_unknown`;
+  but SerpApi sent it as a 200 and may have counted it as a search. How many there were is in the
+  `serp.completed` lines with `error_code=SERP_BAD_JSON`: they carry no scan id and also cover the
+  searches the detect route makes, so read them over the same period. Whether any was billed, only
+  the account's count says.
 
 **How to price a line**
 

@@ -24610,3 +24610,72 @@ While production sends no email, Settings shows the owner an invitation link to 
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# A competitor search answered with a page of an unexpected shape is SERP_BAD_JSON or skipped item by item, and never raises out of a detection
+
+**2026-10-04, the fifteenth entry of the day; branch `pilot-fixes-5`, the founder's brief "free trial, US$150, usage visibility and pilot guardrails" (item 3.66).** One item, one commit.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 2, Measurement (competitor search); lifecycle phase: Activation (Epic 9), the competitor set a pilot's first report compares against.
+
+## 1. What changed
+
+Launch checklist 3.66 (found on `pilot-fixes-4`): a 200 whose JSON body was not an object raised out of `search` instead of returning `SERP_BAD_JSON`, so neither of S2's lines was logged for it, and the detection failed after its searches were spent. `services/serp.py`'s `_judge` now checks the body's shape before it reads it:
+
+- **A body that is not an object,** or that is nested too deeply to parse (`RecursionError`, which is not a `ValueError`), is `SERP_BAD_JSON`, judged before the `error` test. It gives one `serp.completed` line (status 200, 0 hits, `SERP_BAD_JSON`), is not retried, and counts as an answered error in `scan.usage`.
+  - A list or string that happens to contain the word "error" used to read as `SERP_API_ERROR`; it is now `SERP_BAD_JSON`.
+- **`organic_results`:**
+  - absent or `null` is an empty page, as before;
+  - any other value that is not a list is `SERP_BAD_JSON`. The old `or []` also took `{}`, `""`, `0` and `false` as empty;
+  - a list with no object in it is `SERP_BAD_JSON`, so an unreadable page is never counted as "SerpApi ran and found nothing" (that would make a detection's confidence 0.000 instead of none).
+- **One stray item does not cost the page.** An item that is not an object is skipped. So is an item whose `link` is not a string, like an item with no usable link. Each keeps its place in the position numbering.
+- **`position`** is used only when it is a whole number from 1 to 1000 (a whole float such as `4.0` counts). Anything else falls back to the item's place on the page, as a missing position already did.
+  - The ceiling exists because the weighting in `competitors._position_weight` raises `OverflowError` for a number of 309 digits or more, and JSON allows far longer.
+  - It is a technical bound, not a product limit: a search asks for 10 results.
+- **Through detection:**
+  - one odd page among six still gives a normal detection on the other five;
+  - six unreadable pages give no confidence, where six genuinely empty pages give 0.000;
+  - a page whose items carry odd links and positions scores exactly as its clean twin does.
+- **`docs/runbook.md`:**
+  - `SERP_BAD_JSON` is described in "Reading competitor-search lines".
+  - "Reading the usage lines" no longer says an error answer is never billed. A 200 whose body could not be read was a 200 to SerpApi, which may have counted it. It is counted under `serpapi_error`, so it is outside `serpapi_billed_or_unknown`, and the runbook says how to count such searches from the `serp.completed` lines.
+
+## Found, not fixed
+
+- **Billing claims for an unreadable 200** still say "not billed" in `usage.py`'s docstring, a comment in `serp.py`, and `verify_e2e.py`'s printed labels. The runbook now carries the caveat.
+- **A junk domain from a string `link`** (for example `%zz.com`) is returned by `registrable_domain`. How far it reaches downstream was not traced.
+
+## Verified
+
+**API pytest 4422 → 4571 (+149); floor raised to match.** One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **`test_serp_body_shapes.py` (149):**
+  - 13 bodies that are not objects;
+  - 8 `organic_results` that are not lists, and 5 lists with no object;
+  - mixed lists and the position numbering;
+  - 11 odd links and 22 odd positions (each kind kept or replaced as above, and the ceiling pinned);
+  - three nested-body shapes, refused at once;
+  - `search_many` with one odd page among six;
+  - the scan's counts;
+  - no key or URL in any line when a bad body echoes them;
+  - five detections through the real `search_many` and `detect_from_facts`.
+- **The implementer's negative controls,** each restored and checked:
+  - the unfixed `_judge`: 91 of 100 fail;
+  - the shape check after the `error` test: 24;
+  - no rule for a list with no object: 15;
+  - the old `or []`: 12;
+  - one bad item condemning the page: 4;
+  - the position taken from the hit count: 1;
+  - the link guard reverted: 9;
+  - the position rule reverted: 17;
+  - the ceiling removed: 5, with `OverflowError` out of the detection;
+  - the `RecursionError` catch reverted: 10.
+- **On this tree:** `serp.py` back to `HEAD`, and 135 of the 149 new tests fail. Restored and checked with `cmp`.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, web 2017, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7106cadcd0ed`) and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
