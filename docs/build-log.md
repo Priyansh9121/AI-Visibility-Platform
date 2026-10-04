@@ -24225,3 +24225,89 @@ T1 found the problem. For a site whose robots.txt does not answer, `POST /client
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# Each competitor detection logs how many SerpApi searches the plan has left, with a warning below 50
+
+**2026-10-04, the tenth entry of the day; branch `pilot-fixes-5`, the founder's brief "free trial, US$150, usage visibility and pilot guardrails" (item U2).** One item, one commit.
+
+**Render: nothing to set.** The read uses `SERPAPI_KEY`, which is already set. SerpApi does not count it as a search.
+
+Drift check (north-star §8): Layer 2, Measurement (competitor detection's search budget); lifecycle phase: Activation (Epic 9). It protects the SerpApi plan the pilots share: 250 searches a month, used by production too.
+
+## 1. What changed
+
+- **`serp.quota_left(settings)`** reads `https://serpapi.com/account.json` with the key and returns `plan_searches_left`, or `None`. It never raises.
+  - It reads `plan_searches_left`, not `total_searches_left`: the plan's own remaining searches, of which `searches_per_month` is the size. The two differ only if one-time credits are bought; none are recorded.
+  - It is bounded at 5 s in all, 4 s for each phase, so a hung connection names itself rather than reading as the overall timeout. It does not retry.
+  - It returns `None` on a missing key, any timeout or transport error, a non-200, bad JSON, or a missing or non-integer count (a bool is not a count).
+- **Called once per detection** (`competitors.detect_from_facts`).
+  - It starts right after the searches, so the figure reflects them, though SerpApi's count can lag a minute or two.
+  - It runs beside the model's calls, so its 5 s hides inside them and the scan's worst-case time is unchanged.
+  - A failing model call or a cancelled detection cancels it. Its outcome is always retrieved, so an error could never reach asyncio's "Task exception was never retrieved" report on stderr, with its text.
+  - A read that failed cannot fail a detection.
+  - Through the detect route and a client's first scan it runs once; a scan that carries the set forward reads nothing.
+- **The lines:**
+  - `serp.quota_left left=<n> plan_searches=<m>` (info), always written;
+  - `serp.quota_low` (warning) with the same fields, written as well when `left` is below 50;
+  - `serp.quota_unavailable kind=<kind>` (info) when the read failed: `http_<status>`, `bad_json`, `no_count`, `no_key`, `connect`, `read`, `write`, `pool`, `total`, or an exception's class name, never its text. It is INFO, not DEBUG, so nobody has to turn DEBUG on in production to see a failed read; DEBUG would also print `classify.result` and `fixes.reasoning`.
+  - The figure is account state, not what the scan used, so it is not in U1's `scan.usage`.
+- **The key, the account's owner email and the URL** are in no line on any channel: structlog's events, its printed output, and the standard library's records at INFO and DEBUG.
+  - `httpx` and `httpcore` stay pinned at WARNING (`logs.py`).
+  - `quota_left` joins the script entry points that `test_secrets_stay_out_of_logs.py` makes configure logging first.
+- **Tests stand in for it everywhere.** The suite's autouse stub (`tests/conftest.py`, `stub_chain_externals`) now also stands in for `quota_left`.
+- **`docs/runbook.md`, "Reading competitor-search lines":** the three lines, and what to do below 50. The free plan is 250 a month, shared with production; a larger plan is the founder's decision.
+
+## 2. The review
+
+**Security review: passed with nits** (no Critical, High or Medium). Fixed in a second round:
+- **L1:** an unretrieved task error, which can carry the URL and so the key, could reach stderr. A test reproduces the one path where it could, a read still in flight when the model fails, and the callback closes it.
+- **L2:** `quota_left` joins the script logging guard.
+- **The failed-read line moved from DEBUG to INFO.** The reviewer recommended it, and the orchestrator decided it: it is at most one line per detection and carries a fixed word.
+
+## Found, not fixed
+
+- **Nothing in the suite stops a real outbound call.** A test that falls back to `get_settings()` reads `apps/api/.env`, which holds the live key, and a missed stub would make a real request that is swallowed by design.
+  - The implementer's control proved it. With the conftest stand-in removed, 8 existing detection tests made account requests that a scratch guard refused at name resolution, so no request was sent.
+  - The reviewer recommends an autouse guard on httpx's transports that refuses any host but loopback.
+- **`search()` with no key raises** `RuntimeError` from `provider_key`. The `SERPAPI_KEY_MISSING` result code, and the runbook's sentence about it, are reachable only with an empty key.
+- **The live scripts** (`verify_competitors.py`, `verify_e2e.py`, `verify_scoring.py`) now make one free account read for each detection.
+- **`serp.quota_low` notifies nobody;** a Render log alert would be the founder's.
+
+## Verified
+
+**API pytest 4128 → 4263 (+135); floor raised to match.** One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **`test_serp_quota.py` (135):**
+  - the field and the boundary at 49 and 50;
+  - all 22 failure shapes, each one INFO line;
+  - the key, email, URL, `@` and `api_key` on every channel;
+  - 6 searches and 1 account request, and only one read even when every search retries;
+  - the overlap with the model, shown by event order with no clock;
+  - three real-socket tests (a silent server, a trickle, a refused connection);
+  - cancellation not swallowed;
+  - the unretrieved-error paths;
+  - a run through `POST /clients/{clientId}/competitors/detect`.
+- **No real SerpApi request was made.** Every run had a scratch guard that refuses any `serpapi` name resolution, and it recorded no refusal.
+- **The implementer's negative controls,** each restored and checked:
+  - `total_searches_left` read: 21 fail;
+  - `<=` at 50: 1;
+  - exception text in the line: 26;
+  - the owner's email on the line: 24;
+  - the URL on the failure line: 82;
+  - the key on the line: 24;
+  - a retry after an httpx error: 17;
+  - no deadline: 4;
+  - a second read: 35;
+  - the read started before the searches: 36;
+  - the read waiting for the model: 4;
+  - `except BaseException`: 1;
+  - the callback removed: 1, or 6 with the cancel removed too;
+  - the line at DEBUG or WARNING: 59.
+- **On this tree:** `competitors.py` back to `HEAD`, so no detection starts a read. 34 of the first 127 tests in `test_serp_quota.py` failed. The 128th waits for a read that never starts and hung, so the run was stopped and the file restored and checked with `cmp`. A runbook sentence was corrected while landing: `bad_json` also means a JSON body that is not an object.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, web 1859, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `f45983cfa5e3`) and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

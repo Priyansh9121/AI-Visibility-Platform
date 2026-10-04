@@ -430,9 +430,10 @@ wipe.
 ## Reading competitor-search lines
 
 **When:** competitor detection lost a search (`competitors.serp_failed`), or you want
-to know how long SerpApi takes from Render and whether the retry ever helps. A
-detection makes 3 to 6 Google searches through SerpApi, three at a time, and the API
-logs a line for each search that reached SerpApi.
+to know how long SerpApi takes from Render and whether the retry ever helps, or how many
+of the month's searches are left. A detection makes 3 to 6 Google searches through
+SerpApi, three at a time, and the API logs a line for each search that reached SerpApi,
+and one more for what the account has left.
 
 **Where:** the Render dashboard → the **API** service → **Logs**. Search for the event
 name. Every line below carries numbers, our own codes and the HTTP status, and nothing
@@ -445,11 +446,14 @@ else: no query, no client, no domain, no URL, no key.
 | `serp.completed` | info | SerpApi answered the search, whatever it said | `elapsed_ms`, `attempts`, `hits`, `status`, `error_code` |
 | `serp.retried` | info | the first attempt got no answer and the retry did; logged before that search's `serp.completed` | `attempts` (always 2), `kinds` (how the first attempt failed), `elapsed_ms` |
 | `serp.attempts_failed` | warning | no attempt got an answer, so the search failed | `attempts`, `kinds` (how each attempt failed), `elapsed_ms` |
+| `serp.quota_left` | info | once for each detection, after its searches, when SerpApi's account said how many searches are left | `left`, and `plan_searches` when the account gave the plan's size |
+| `serp.quota_low` | warning | the same moment, in addition, when `left` is under 50 | the same two fields |
+| `serp.quota_unavailable` | info | the account could not be read: written instead of the two lines above, one for the detection | `kind` |
 
 **Every search that reached SerpApi logs exactly one of `serp.completed` and
 `serp.attempts_failed`**, and `serp.retried` besides when a retry answered, so those two
 add up to the number of searches made. A search that was never sent (no `SERPAPI_KEY`)
-logs none of the three.
+logs none of the three. The three quota lines are not searches and are not in that count.
 
 **`serp.completed`, field by field**
 
@@ -504,6 +508,42 @@ measured (2026-10-03, against the account's monthly count), and SerpApi bills on
 search it records as successful, so a search it finished after we stopped waiting would
 be billed and only the account's count would show it, not these lines (the evidence is
 in the comment at the top of `services/serp.py`).
+
+**How many searches are left: `serp.quota_left` and `serp.quota_low`.** A detection reads
+SerpApi's account once, after its searches and while the model is still answering, and logs
+what it says. The read is free (it is not a search and does not count against the month),
+it is not retried, and it is cut off after 5 s. The model's calls take far longer, so the
+read does not lengthen a detection (if they took less, it would add at most the rest of
+its 5 s). Only a detection that searches reads it: a client's first scan, and a press of
+Detect competitors (once per client per 24 hours). A repeat scan carries the client's set
+forward, searches nothing and reads nothing.
+
+- `left`: the searches the plan still allows this month (SerpApi's `plan_searches_left`).
+  `plan_searches`: the plan's size (`searches_per_month`), left out when the account does
+  not give one, so `left=184 plan_searches=250` is 184 of 250. The Free plan is 250 a
+  month, and the account is shared with production, so a development run spends from the
+  same count. Only these two numbers are logged: the account's body also carries the API
+  key and the owner's address, and neither is ever written.
+- **It lags.** SerpApi's count trails the searches by a minute or two, and a search that
+  failed can be counted for a moment and then dropped (measured 2026-10-03). The line
+  written right after a detection can be off by that detection's own searches, and the next
+  detection's line is the settled one. Read the trend, not one line.
+- **`serp.quota_low` is `left` under 50.** A detection makes up to six searches, so under 50
+  is at most eight more detections. Open SerpApi's account page for the figure and the
+  renewal date, then decide: wait for the renewal, or move from the Free plan to SerpApi's
+  Starter plan.
+  **That is the founder's decision.** If the searches stop being answered (`serp.completed`
+  lines with an `error_code`, `competitors.serp_failed`), a detection runs on the model's
+  answers alone and its set says so (`weak_signal`, or `no_signal` if the model names no one
+  either).
+- **`serp.quota_unavailable` instead of `serp.quota_left`** means the read did not work. It
+  is one line at INFO, `kind` and nothing else, so it is in the logs Render keeps and nobody
+  has to turn DEBUG on to see it. `kind` says why: `http_<status>` (SerpApi answered with that
+  status); `connect`, `read`, `write`, `pool` or `total` (no answer within 5 s, and which part
+  ran out); `bad_json` or `no_count` (it answered, and the body was not a JSON object, or had no
+  whole-number `plan_searches_left`, which would mean SerpApi changed it); `no_key`; or an error's class
+  name. A detection with neither line did not get as far as the read: its searches raised,
+  as they do with no `SERPAPI_KEY`.
 
 **What would justify a change.** The timeouts and the retry are unchanged until there is
 data. This is what the numbers would mean.

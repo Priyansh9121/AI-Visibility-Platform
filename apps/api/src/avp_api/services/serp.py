@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass, field
 
 import httpx
@@ -154,6 +155,43 @@ SEARCH_COUNTRY_BY_TLD: Mapping[str, str] = {
 }
 # The only values `search` will send as `gl`: one this module could itself have chosen.
 _SEARCH_COUNTRIES = frozenset(SEARCH_COUNTRY_BY_TLD.values())
+
+# --- What is left of the month (2026-10-04) ---------------------------------------------------
+# The plan is 250 searches a month, shared with production (Free Plan, read from `account.json`:
+# build log, the AI Overview investigation), and nothing said how many were left until someone
+# opened SerpApi's account page. `quota_left` asks the account endpoint once for each detection
+# (`competitors.detect_from_facts`, which says why where it does) and writes the answer.
+#
+#   * A free read: an `account.json` call does not count as a search (build log, the same
+#     investigation). It is not a search and never goes through `search`.
+#   * The field is `plan_searches_left`, what the plan still allows this month. It is what
+#     `searches_per_month` is the size of, which is why the line carries both (`left=184
+#     plan_searches=250`). `total_searches_left` is that plus any one-time extra credits. The two
+#     are equal unless credits were bought (none are recorded for this account, a Free Plan), and
+#     then a warning on the plan's figure alone fires while credits remain.
+#   * It lags. SerpApi's counts trail the searches by a minute or two, and a search that failed
+#     can be counted for a moment and then dropped (measured 2026-10-03: the account's month
+#     count read 66, then 75, then 71, where it stayed). A figure read right after a detection is
+#     therefore good to within that detection's own searches, and the next detection's line is the
+#     settled one. It is a reading, not a ledger.
+#   * The bound is 5 s for the whole read, a deadline (`asyncio.timeout`, as `_get`'s is), with
+#     each httpx phase (connect, write, read, pool) at 4 s, a second under it so that a hung
+#     connect ends on its own phase's timeout and the line names the phase. No retry: the figure
+#     is a convenience, and a second wait would be a cost to the detection it is read in.
+#   * A read that failed writes `serp.quota_unavailable` at INFO, the kind and nothing else, one
+#     line for the detection. Not DEBUG: DEBUG is off in staging and production, and turning it on
+#     there prints `classify.result` and `fixes.reasoning` as well (`logs.py`), so a read that had
+#     stopped working would be invisible, or visible only at the price of printing the model's
+#     reasoning about client sites.
+#   * Under 50 is low: a detection makes up to six searches, so under 50 is at most eight more
+#     detections.
+#   * The body also carries the API key and the account owner's address. Two counts are taken
+#     from it and the rest is dropped; never the body, the URL or an exception's text goes into a
+#     line, for the reason `_failure_kind` gives.
+ACCOUNT_URL = "https://serpapi.com/account.json"
+QUOTA_TIMEOUT_S = 5.0
+QUOTA_PHASE_TIMEOUTS = httpx.Timeout(4.0)
+QUOTA_LOW_BELOW = 50
 
 # Domains that rank for "best X" queries but are never the competitor — they
 # are publishers, marketplaces, directories and social platforms writing ABOUT
@@ -519,6 +557,97 @@ async def search_many(
             return await search(q, settings=settings, country=country)
 
     return list(await asyncio.gather(*(one(q) for q in queries)))
+
+
+def _whole_count(value: object) -> int | None:
+    """A count from a JSON body: a whole number of at least zero, and None for anything else.
+
+    A string (`"184"`), a float (`184.0`), a bool (`True` is an `int` to Python) and a negative
+    are not counts. A provider that changes its body's shape costs a line, never a detection.
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _quota_unavailable(kind: str) -> int | None:
+    """What `quota_left` returns when it could not read: one info line, and None.
+
+    The kind and nothing else, so that the line is as safe as `_failure_kind`'s word is. INFO,
+    so that it is in the logs Render keeps (the reason is at the top of the module). The line is
+    written inside `suppress`: a logger that fails must not turn a read that was never going to
+    be used into an exception. (It is typed `int | None`, not `None`, so that `quota_left` can
+    `return` it.)
+    """
+    with suppress(Exception):
+        logger.info("serp.quota_unavailable", kind=kind)
+    return None
+
+
+async def quota_left(settings: Settings | None = None) -> int | None:
+    """How many searches the plan still allows this month, or None when that could not be read.
+
+    One request to SerpApi's account endpoint, which is free and is not a search; bounded by
+    `QUOTA_TIMEOUT_S` and never retried. The bound, the field read and why are at the top of
+    the module, with how far behind SerpApi's own count can be. Never raises for anything that
+    can go wrong in the read: no key, a timeout, a transport failure, an answer that is not a
+    200, a body that is not a JSON object, a count that is missing or not a whole number of at
+    least zero. A cancellation is not one of those and goes on as it was, because a scan's
+    deadline cancels what it is running.
+
+    Written (the three lines are read in docs/runbook.md, "Reading competitor-search lines"):
+
+    * `serp.quota_left`, info: `left`, and `plan_searches` (the plan's size, `searches_per_month`)
+      when the account gives one;
+    * `serp.quota_low`, warning, as well and with the same fields, when `left` is under
+      `QUOTA_LOW_BELOW`. Both, not either: the info line is the reading, so a search for it finds
+      every figure, the lowest included, and the warning is the alert;
+    * `serp.quota_unavailable`, info, when None is returned, instead of the two lines above, so
+      one line for the detection: `kind` and nothing else. `no_key`, `http_<status>`, `bad_json`
+      (a body that is not a JSON object), `no_count`, the phase of a timeout (`connect`, `read`,
+      `write`, `pool`, or `total` for the deadline), or the class name of any other error.
+
+    Facts only, and no secret: two counts are taken from the body and the rest is dropped (it
+    carries the API key and the owner's address), and NEVER the URL, the params, the body or an
+    exception's text goes into a line: the URL carries the key.
+    """
+    try:
+        settings = settings or get_settings()
+        try:
+            api_key = settings.provider_key("serpapi_key")
+        except RuntimeError:  # the key is unset: `provider_key` says so by raising
+            api_key = ""
+        if not api_key:
+            return _quota_unavailable("no_key")
+
+        # The deadline is inside the client, so that a cut read closes its client in the
+        # ordinary way and not under a cancellation (as `_get` does).
+        async with httpx.AsyncClient(timeout=QUOTA_PHASE_TIMEOUTS) as client:
+            async with asyncio.timeout(QUOTA_TIMEOUT_S):
+                response = await client.get(ACCOUNT_URL, params={"api_key": api_key})
+        if response.status_code != 200:
+            return _quota_unavailable(f"http_{response.status_code}")
+
+        try:
+            body = response.json()
+        except ValueError:
+            return _quota_unavailable("bad_json")
+        if not isinstance(body, dict):
+            return _quota_unavailable("bad_json")
+        left = _whole_count(body.get("plan_searches_left"))
+        if left is None:
+            return _quota_unavailable("no_count")
+
+        line: dict[str, int] = {"left": left}
+        plan = _whole_count(body.get("searches_per_month"))
+        if plan is not None:
+            line["plan_searches"] = plan
+        logger.info("serp.quota_left", **line)
+        if left < QUOTA_LOW_BELOW:
+            logger.warning("serp.quota_low", **line)
+        return left
+    except Exception as exc:  # noqa: BLE001 - never raises; a cancellation is not an Exception
+        return _quota_unavailable(_failure_kind(exc))
 
 
 def is_plausible_competitor(domain: str, *, subject_domain: str) -> bool:
