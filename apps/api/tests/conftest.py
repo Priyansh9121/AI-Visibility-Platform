@@ -14,14 +14,23 @@ doing that to DB 0 would sign out every local development session.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
+import secrets
 from collections.abc import AsyncIterator, Callable
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from avp_api import db as db_module
 from avp_api import redis_client as redis_module
@@ -109,6 +118,65 @@ async def session(engine) -> AsyncIterator[AsyncSession]:  # noqa: ANN001
     factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
     async with factory() as s:
         yield s
+
+
+class ScratchDatabases:
+    """Databases a test makes for itself, each under a name no other run shares.
+
+    Postgres allows one database per name in a cluster. A fixed name is shared by every run on
+    the cluster (two worktrees, or two CI jobs on one server), and the run that dropped it
+    `WITH (FORCE)` ended the other's connections and deleted what it had built. So a name here is
+    the caller's prefix and 8 random hex digits, and the database is dropped in a `finally`: a
+    failed test leaves nothing behind. A run killed outright (SIGKILL, a lost machine) still
+    leaves its database; drop it by name. Nothing sweeps them, because a sweep could drop a
+    database that another run is using.
+
+        async with scratch_databases.database("avp_something_check_") as url:
+            ...  # `url` is an empty database that exists only inside the block
+    """
+
+    def __init__(self, base_url: str) -> None:
+        parts = urlsplit(base_url)
+        self._server = f"{parts.scheme}://{parts.netloc}"
+
+    def _url(self, database: str) -> str:
+        return f"{self._server}/{database}"
+
+    def _admin_engine(self) -> AsyncEngine:
+        return create_async_engine(self._url("postgres"), isolation_level="AUTOCOMMIT")
+
+    @contextlib.asynccontextmanager
+    async def database(self, prefix: str) -> AsyncIterator[str]:
+        """Create `<prefix><8 random hex digits>`, yield its URL, drop it (with its connections)."""
+        name = f"{prefix}{secrets.token_hex(4)}"
+        admin = self._admin_engine()
+        try:
+            async with admin.connect() as conn:
+                await conn.execute(text(f'CREATE DATABASE "{name}"'))
+            try:
+                yield self._url(name)
+            finally:
+                async with admin.connect() as conn:
+                    await conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+        finally:
+            await admin.dispose()
+
+    async def exists(self, name: str) -> bool:
+        admin = self._admin_engine()
+        try:
+            async with admin.connect() as conn:
+                found = await conn.execute(
+                    text("SELECT 1 FROM pg_database WHERE datname = :name"), {"name": name}
+                )
+                return found.first() is not None
+        finally:
+            await admin.dispose()
+
+
+@pytest.fixture(scope="session")
+def scratch_databases() -> ScratchDatabases:
+    """Where a test makes a database of its own, on the test cluster (see `ScratchDatabases`)."""
+    return ScratchDatabases(TEST_DATABASE_URL)
 
 
 # Fixtures that mean a test actually touched a datastore. `client` and

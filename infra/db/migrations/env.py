@@ -9,15 +9,27 @@ the dependency-licensing rule puts on the stop-and-ask list. Rather than seek an
 exception for a dependency used only by migrations, this environment drives
 migrations through asyncpg (Apache-2.0), which the service already depends on.
 One driver, one licence, no exception needed.
+
+**What the server says reaches the deploy log.** A migration can make Postgres talk:
+`RAISE NOTICE`, `RAISE WARNING`, "relation already exists, skipping". asyncpg throws every
+such message away unless a listener is registered on the connection, so a migration's own
+warning used to vanish. `run_migrations_online` registers `_forward_server_message` on the
+migration's connection, which hands each message to Alembic's own logger
+(`alembic.runtime.migration`, the one that prints "Running upgrade ..."): a WARNING at WARNING,
+anything else (NOTICE, INFO) at INFO, as `Postgres <SEVERITY>: <message text>`. The text is what
+the migration wrote and the deploy log keeps it, so a migration must never RAISE a secret, a
+token or an email address.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import sys
 from logging.config import fileConfig
 from pathlib import Path
+from typing import Any
 
 from alembic import context
 from sqlalchemy.engine import Connection
@@ -120,13 +132,43 @@ def _do_run_migrations(connection: Connection) -> None:
         context.run_migrations()
 
 
+# The logger Alembic reports through ("Running upgrade X -> Y"), which the deploy log shows.
+MIGRATION_LOGGER = logging.getLogger("alembic.runtime.migration")
+
+
+def _forward_server_message(_connection: object, message: Any) -> None:
+    """Pass one message the server sent (a NOTICE, a WARNING, an INFO) to Alembic's logger.
+
+    asyncpg calls this on the event loop, with its `PostgresLogMessage`, for each message the
+    server sends outside a query's result: a migration's own `RAISE NOTICE`, the server's
+    "already exists, skipping". A WARNING is logged at WARNING and every other severity at INFO,
+    as `Postgres <severity>: <message text>`.
+
+    The text is a migration's own words (or the server's) and the deploy log keeps it: a migration
+    must never put a secret, a token or an email address in a RAISE. A message's DETAIL and HINT
+    are not forwarded, because the server fills them from the data it was working on. The severity
+    is the unlocalised one (`severity_en`), so `lc_messages` cannot change the label or the level.
+    """
+    severity = message.severity_en or message.severity
+    level = logging.WARNING if severity == "WARNING" else logging.INFO
+    MIGRATION_LOGGER.log(level, "Postgres %s: %s", severity, message.message)
+
+
 async def run_migrations_online() -> None:
     section = config.get_section(config.config_ini_section, {})
     section["sqlalchemy.url"] = _database_url(force_async=True)
     connectable = async_engine_from_config(section, prefix="sqlalchemy.")
 
     async with connectable.connect() as connection:
-        await connection.run_sync(_do_run_migrations)
+        # asyncpg's own connection, under SQLAlchemy's adapter: the listener goes on that one.
+        # It comes off again when the migrations end, so nothing that reuses the pooled
+        # connection afterwards gets its messages logged as migration output.
+        driver_connection: Any = (await connection.get_raw_connection()).driver_connection
+        driver_connection.add_log_listener(_forward_server_message)
+        try:
+            await connection.run_sync(_do_run_migrations)
+        finally:
+            driver_connection.remove_log_listener(_forward_server_message)
     await connectable.dispose()
 
 

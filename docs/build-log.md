@@ -24441,3 +24441,59 @@ The founder's decision (2026-10-04): a 30-day free trial with a card at checkout
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts`, regenerated in this commit, regenerate again with no change.
 - Exit codes were read from files.
+
+# A migration's NOTICEs and WARNINGs reach the deploy log, and the two migration test files each make a scratch database of their own
+
+**2026-10-04, the twelfth entry of the day; branch `pilot-fixes-5`, the founder's brief "free trial, US$150, usage visibility and pilot guardrails" (item 3.69).** One item, one commit.
+
+**Render: nothing to set.** From the next deploy that runs a migration which raises something, the deploy log shows it.
+
+Drift check (north-star §8): no product layer; the deploy and the test harness (§4.3); lifecycle phase: Activation (Epic 9), the database the pilots' data lives in.
+
+## 1. What changed
+
+D1 (`c247ef9`) found the gap. asyncpg drops a server message when no listener is registered, so a migration's `RAISE NOTICE` never reached the deploy log. D1 logged its one warning through Alembic instead.
+
+- **`infra/db/migrations/env.py`** registers an asyncpg log listener on the migration connection and removes it in a `finally`.
+  - Each server message goes to `alembic.runtime.migration` as `Postgres <SEVERITY>: <message>`: a WARNING at WARNING, everything else at INFO.
+  - Only the message is forwarded, never DETAIL or HINT, which can quote data.
+  - A comment says a migration must never raise a secret, a token or an email address.
+- **On a cluster where D1's branch is taken,** the log now shows the server's own notice, then the revision's warning:
+  - `Postgres NOTICE: revoke_data_api_grants: this user is not a member of role postgres, so its default privileges in schema public were left as they are`
+  - Across all 27 revisions, that notice is the only server message any of them prints.
+- **A scratch database per run.**
+  - `test_migrations.py` used one fixed name, `avp_migration_check`; `test_enum_constraints.py` used another, `avp_migrationcheck`.
+  - Two runs at once on one Postgres therefore dropped each other's database. The build log's earlier note that the two files shared one name was wrong: each collided with a second run of itself.
+  - A new session fixture in `tests/conftest.py`, `scratch_databases`, makes `<prefix><8 random hex>` and drops it `WITH (FORCE)` in a `finally`. Both files use it, and every existing assertion is kept.
+- **`docs/runbook.md`.** Its sentence "The server's own notice never reaches the log" now says what the log shows. It adds that the revision's own warning is the one to rely on, since nobody has checked that Supabase's pooler passes a notice through.
+
+## Found, not fixed
+
+- **The D1 revision's own docstring and a comment** still say the notice never reaches the log. It is an applied migration, so it is left alone.
+- **A run killed outright** leaves its scratch database behind (the fixture's docstring says so). Nothing sweeps them, because a sweep could drop one another run is using.
+- **Whether Supabase's pooler passes server notices to the client** is not testable here.
+
+## Verified
+
+**API pytest 4398 → 4407 (+9); floor raised to match.** One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **New tests:** `test_migrations.py` 4 → 9 and `test_enum_constraints.py` 32 → 36:
+  - each run has its own name, and the database is gone afterwards;
+  - a second run does not drop the first's while it holds a connection;
+  - the database is dropped when the run fails;
+  - a notice and a warning from a one-revision script, run through the real `env.py`, reach the log, and a warning before a failure does too.
+- **The implementer's negative controls,** each restored and checked:
+  - the listener not registered: both log tests fail;
+  - a WARNING logged at INFO: both fail;
+  - one fixed name with drop-before-create: the name tests fail, and the second run's connection dies (`InterfaceError: connection is closed`), the real collision;
+  - the drop outside a `finally`: the failure-path tests fail;
+  - the old fixed name: the name test fails.
+- **On this tree:** `env.py` back to `HEAD`, and the two log tests in `test_migrations.py` fail (2 of 9). Restored and checked with `cmp`.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, web 1999, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7106cadcd0ed`) and check pass on an empty database, through the new `env.py`.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+  - No `avp_migration_check_…` or `avp_migrationcheck_…` database was left on the server afterwards.
+- Exit codes were read from files.
