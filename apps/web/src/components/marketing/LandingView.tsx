@@ -17,7 +17,15 @@
  *   - the five weighted dimensions         — scoring-spec.md, Epic 5.2
  *   - per-answer ordinality (Answer Shelf) — Epic 7.1
  *   - facts-only storage, test-enforced    — test_facts_only.py
- *   - named fixes with priority + effort   — Epic 8.0
+ *   - named fixes with priority + effort   — Epic 8.0. The step 07 sentence (and the pricing
+ *                                            card's), "ordered by the points each would
+ *                                            recover, with the effort of each shown beside
+ *                                            it", is the SHORT FORM of the rule in
+ *                                            `deriveFixes` (launch checklist 3.49, 3.63): a
+ *                                            fix for a noindex tag, a `Disallow: /` rule or a
+ *                                            missing robots.txt leads and carries no figure,
+ *                                            and fixes with no figure follow those that have
+ *                                            one. The report's own lead states both
  *   - four vendors, one of them searching  — Epic 21 (five engines) narrowed to four
  *                                            defaults on 2026-09-12 (build log)
  *   - PDF export and a share link          — Epic 9.8 and 9.14, both shipped
@@ -32,6 +40,37 @@
  *                                            the pricing card, which reads it. This page
  *                                            types no length, so it cannot say a trial
  *                                            that checkout would not give
+ *
+ * SENTENCES CORRECTED AGAINST THE CODE — launch checklist 3.63, 2026-10-04
+ * ----------------------------------------------------------------------
+ * Every sentence here and on the pricing card was read against the code. These were not true,
+ * and the tests pin the new wording and assert the old is gone:
+ *
+ *   - fixes "ordered by what they would move and what they would cost": they are ordered by the
+ *     points each would recover, and the effort of each is shown beside it (`deriveFixes` in
+ *     `lib/report/derive.ts`, `FixList`); the cost of a fix never ranks anything. The new
+ *     sentence is the short form of that rule, as the list of claims above says
+ *   - a hand-corrected rival list "survives every later re-detection": no screen starts a
+ *     re-detection, and a later scan carries the list forward (`carry_forward_set`)
+ *   - rivals found from "the AI engines": one model is asked, not the four engines
+ *     (`services/cocitation.py`)
+ *   - rivals found from who "ranks for the niche in search": three of the six search queries
+ *     name the prospect and three name its field (`services/serp.py`, `build_queries`)
+ *   - what the business sells "and to whom": the classifier returns an industry, a niche and a
+ *     name, and no audience (`services/classify.py`)
+ *   - "the questions buyers actually ask": a model writes the questions (`services/prompts.py`)
+ *   - engines that "disagree more often than you would expect": nothing measures how often
+ *   - the site "checked for what the engines need", by signals that "decide whether a page can
+ *     be quoted at all" and would otherwise be "a separate audit nobody reads": the audit loads
+ *     one page, the homepage, reads robots.txt and looks for a sitemap (`services/audit_runner.py`,
+ *     `technical_audit.py`), and nothing measures that its signals decide anything about
+ *     quoting. Structured data, crawlability and freshness are the inputs to Technical
+ *     Foundation, one of the five weighted dimensions: the report's own sentence about it
+ *   - tests that "walk every table and every response shape", and then cover "every field the
+ *     report can show": `test_facts_only.py` covers a named list of the tables that hold anything
+ *     taken from an engine or a site, and sweeps the schemas the report module defines. The
+ *     report also shows two free-text fields by design, a fix's title and detail, which are the
+ *     product's own wording
  *
  * NOTHING ELSE IS CLAIMED. There are no testimonials, no customer logos, no
  * user counts, no press mentions and no funding line on this page, because
@@ -227,7 +266,7 @@ export function LandingView({
           <Reveal animate={animate}>
           <PageSection
             eyebrow="What a scan does"
-            heading="It asks the questions your client's buyers actually ask."
+            heading="It asks the questions your client's buyers would ask."
             lead={
               <>
                 You give it a website. It reads the site the way a buyer would, works out what
@@ -248,28 +287,28 @@ export function LandingView({
                 n="01"
                 animate={animate}
                 title="One URL in, and nothing else to fill in"
-                body="You paste the website. It fetches the homepage and a few key pages, reads the structure and the copy, and works out for itself what the business sells and to whom — so the first thing you do is not a form about your prospect's industry."
+                body="You paste the website. It fetches the homepage and a few key pages, reads the structure and the copy, and works out for itself what the business sells — so the first thing you do is not a form about your prospect's industry."
               />
               <Step
                 index={1}
                 n="02"
                 animate={animate}
                 title="Rivals found rather than guessed at"
-                body="Two independent signals: who ranks for the niche in search, and which brands the AI engines name in the same breath as your prospect. Both, deduplicated and ranked — and you can overrule the result, which then survives every later re-detection."
+                body="Two independent signals: who ranks in search, and which brands an AI model names in the same breath as your prospect. Both, deduplicated and ranked — and you can overrule the result, which then stays in place for every later scan."
               />
               <Step
                 index={2}
                 n="03"
                 animate={animate}
                 title="Twenty questions, tagged by buying stage"
-                body="Generated for that specific business — awareness, comparison and bottom-of-funnel — so the result is not one lucky prompt but a spread across how people actually shop."
+                body="Generated for that specific business — awareness, comparison and bottom-of-funnel — so the result is not one lucky prompt but a spread across the buying stages."
               />
               <Step
                 index={3}
                 n="04"
                 animate={animate}
                 title="Each question, put to AI answer engines"
-                body="Today that is Claude, ChatGPT and Gemini answering from what they recall, and Perplexity searching the live web and citing sources. They disagree more often than you would expect, and the disagreement is itself a finding."
+                body="Today that is Claude, ChatGPT and Gemini answering from what they recall, and Perplexity searching the live web and citing sources. They do not always agree, and where they differ is itself a finding."
               />
               <Step
                 index={4}
@@ -278,19 +317,41 @@ export function LandingView({
                 title="Every answer read for facts, never stored as prose"
                 body="Was the brand named? Where in the answer? Which sources were cited, and who owns them? Which rivals appeared instead?"
               />
+              {/*
+                Launch checklist 3.63, round two. This said "The site itself checked for what the
+                engines need" and that these signals "decide whether a page can be quoted at all,
+                scored as one of the five dimensions rather than filed as a separate audit nobody
+                reads". The audit loads ONE page, the homepage (`audit_runner`, `https://{domain}`),
+                and reads robots.txt and looks for a sitemap (`technical_audit._fetch_side_files`).
+                Nothing measures that its signals decide whether anything can be quoted, and
+                nothing shows the audit would be unread. What the code supports is the report's
+                own sentence about the dimension (`FIX_FOR_DIMENSION.technical_foundation`):
+                structured data, crawlability and freshness are its inputs. It is one of the five
+                weighted dimensions (10% of the score, `scoring-spec.md`).
+              */}
               <Step
                 index={5}
                 n="06"
                 animate={animate}
-                title="The site itself checked for what the engines need"
-                body="Structured data, page structure, indexability — the technical signals that decide whether a page can be quoted at all, scored as one of the five dimensions rather than filed as a separate audit nobody reads."
+                title="The homepage checked for structured data, crawlability and freshness"
+                body="It loads the homepage, reads the site's robots.txt and checks for a sitemap. The result is Technical Foundation, one of the five weighted dimensions of the score."
               />
+              {/*
+                "Ordered by the points each would recover, with the effort of each shown beside
+                it" — launch checklist 3.63. This said "ordered by what they would move and what
+                they would cost to do", which is not the order: the report ranks its fixes by the
+                points each recovers (a fix for a noindex tag, a `Disallow: /` rule or a missing
+                robots.txt first) and shows an effort of S, M or L beside each, which ranks
+                nothing. This sentence is the short form of that rule, as the header says.
+                `deriveFixes` and `FixList` are the authority, and
+                `claimsAgainstCode.test.tsx` holds this sentence and the pricing card's to them.
+              */}
               <Step
                 index={6}
                 n="07"
                 animate={animate}
                 title="A score, a gap, and a fix list"
-                body="Five weighted dimensions into one number out of 100, the biggest gap named in points, and specific changes ordered by what they would move and what they would cost to do."
+                body="Five weighted dimensions into one number out of 100, the biggest gap named in points, and specific changes ordered by the points each would recover, with the effort of each shown beside it."
               />
             </RevealGroup>
           </PageSection>
@@ -378,8 +439,9 @@ export function LandingView({
                 those facts out of it, and never reaches the database, the API, or the report.
               </p>
               <p className="max-w-measure text-ui-base leading-prose text-text-secondary">
-                That is not a policy paragraph. It is enforced by tests that walk every table
-                and every response shape in the system, so a field that could carry someone
+                That is not a policy paragraph. It is enforced by tests over the tables that
+                hold anything taken from an engine&apos;s answer or a website, and over the
+                report&apos;s own response schemas, so a field that could carry someone
                 else&apos;s prose fails the build rather than reaching a client&apos;s report.
               </p>
             </div>

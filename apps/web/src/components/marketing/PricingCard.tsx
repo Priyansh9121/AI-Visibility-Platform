@@ -39,7 +39,9 @@
  * WHAT THE CARD MAY CLAIM
  * -----------------------
  * Only capabilities this codebase ships today, the same bar `LandingView`'s
- * header comment sets for every sentence on the public page. Note in particular
+ * header comment sets for every sentence on the public page (and the list there of what was
+ * corrected against the code on 2026-10-04, launch checklist 3.63, covers this card's fix-list
+ * line too). Note in particular
  * what is NOT written here: "unlimited scans". Scan volume is genuinely not
  * metered yet — north-star.md §5.2 argues metering the scan is the right model
  * and §5.4 records that none of it is built — so the absence of a cap is an
@@ -220,7 +222,15 @@ export function PricingCard({
             <Includes text="Every prospect you want to scan, with industry and competitors detected for you rather than typed in." />
             <Includes text="Twenty intent-tagged questions per scan, put to four AI answer engines and read for facts." />
             <Includes text="The full narrative report — on screen, as a share link, and as a PDF." />
-            <Includes text="Named fixes, ordered by what they would move and what they would cost you." />
+            {/*
+              Launch checklist 3.63. This said "ordered by what they would move and what they
+              would cost you", which is not the order: the report ranks its fixes by the points
+              each recovers (a fix for a noindex tag, a `Disallow: /` rule or a missing
+              robots.txt first) and shows an effort of S, M or L beside each, which ranks
+              nothing. `deriveFixes` and `FixList` are the authority, and
+              `claimsAgainstCode.test.tsx` holds this sentence and the landing page's to them.
+            */}
+            <Includes text="Named fixes, ordered by the points each would recover, with the effort of each shown beside it." />
           </ul>
 
           {/*

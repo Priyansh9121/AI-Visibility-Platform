@@ -24721,3 +24721,82 @@ Drift check (north-star §8): no product layer; the commercial architecture (§5
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# The landing page and the pricing card say fixes are ordered by the points each would recover, with the effort beside each, and other claims the code does not support are corrected
+
+**2026-10-04, the seventeenth entry of the day; branch `pilot-fixes-5`, the founder's brief "free trial, US$150, usage visibility and pilot guardrails" (item 3.63).** One item, one commit.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 1, Delivery (the public landing page and pricing card), describing Layer 4's fix list; lifecycle phase: Activation (Epic 9), the page a pilot agency reads first.
+
+## 1. What changed
+
+The founder approved the wording on 2026-10-04: fixes are ordered by points, not by cost, with the effort of each shown beside it (3.49, `9d1b213`).
+
+| Where | Old | New |
+|---|---|---|
+| Landing, step 07 | "…and specific changes ordered by what they would move and what they would cost to do." | "…and specific changes ordered by the points each would recover, with the effort of each shown beside it." |
+| Pricing card | "Named fixes, ordered by what they would move and what they would cost you." | "Named fixes, ordered by the points each would recover, with the effort of each shown beside it." |
+| Landing, step 02 (3.61's review) | "…and you can overrule the result, which then survives every later re-detection." | "…which then stays in place for every later scan." No screen starts a re-detection, and a later scan carries the list forward. |
+
+Checking the rest of both components against the code found more claims that were not true. Each was corrected, and each new sentence is pinned:
+- **Step 02.** "which brands the AI engines name" became "which brands an AI model names". Co-citation asks one model (`cocitation.py`). And "who ranks for the niche in search" became "who ranks in search": three of the six queries name the brand (`serp.py`).
+- **Step 01.** "…works out for itself what the business sells and to whom" lost "and to whom". The classifier returns no audience.
+- **The heading and step 03.** "the questions your client's buyers actually ask" and "how people actually shop" became "would ask" and "the buying stages". A model writes the questions; nothing sees real ones.
+- **Step 04.** "They disagree more often than you would expect" became "They do not always agree". Nothing measures how often.
+- **Step 06.** Its title, "The site itself checked for what the engines need", and its claim that technical signals "decide whether a page can be quoted at all" became:
+  - title: "The homepage checked for structured data, crawlability and freshness";
+  - body: "It loads the homepage, reads the site's robots.txt and checks for a sitemap. The result is Technical Foundation, one of the five weighted dimensions of the score."
+- **The facts-only paragraph.** It said the tests "walk every table and every response shape". It now names what they cover: the tables that hold anything from an answer or a website, and the report's own response schemas.
+
+Other changes:
+- **A stale comment** in `ClientCompetitorsView.tsx` said a set is re-detected per scan; a new scan copies the most recent set.
+- **`claimsAgainstCode.test.tsx`** (new) holds the page to the code:
+  - it builds fix lists with the report's own `deriveFixes()`. Figures come in descending order, fixes without a figure follow, effort does not rank, and a noindex tag, a `Disallow: /` rule or a missing robots.txt leads with no figure;
+  - it renders the real report to check effort is shown beside each fix;
+  - it checks that the API tests proving the carry-forward and facts-only claims still exist by name.
+
+## 2. The review
+
+**UI review: passed with nits.** All the edited sentences are true against the code and plain. The diff changes strings and comments only.
+
+Taken in a second round:
+- step 06, a Medium;
+- "for the niche" and "every field";
+- the stale comment;
+- a less brittle claims test: no pins on Python source text, ordering cases built from literals, and the boundary case added.
+
+The reviewer recommended keeping the founder's short wording rather than a longer exact one, since the report's own lead gives the exceptions.
+
+**For the founder** (launch checklist 3.86):
+- the hero's "Buyers increasingly ask an assistant before they ask a search engine." has no source;
+- the pricing card's "Viewing, sharing and exporting reports is never limited." (and the terms' copy of it), while a share link ends after 30 days;
+- two "What it does not do yet" lines that understate the product;
+- "A page like this usually stops before this section";
+- the on-screen fix list's bare "effort S/M/L".
+
+## Found, not fixed
+
+- **The same stale premise ("re-detected per scan")** is still in `ClientDetailView.tsx`, `lib/client/trends.ts`, `lib/client/competitors.ts`, `docs/design-system.md` and the styleguide's visible text.
+
+## Verified
+
+**Web vitest 2017 → 2046 (+29); floor raised to match.** The marketing suite went from 78 to 107: `LandingView.test.tsx` 42 → 53, `PricingCard.test.tsx` 33 → 35, `claimsAgainstCode.test.tsx` 16.
+- **The implementer's negative controls,** each restored and checked:
+  - the old sentences put back: every new pin fails;
+  - `derive.ts` sorted by effort: 3 or 5 fail;
+  - the blocking list emptied: the 3 boundary tests fail;
+  - sorted by id: 7;
+  - the effort tag removed from the fix list: 1;
+  - the named API tests renamed: 3;
+  - a harmless rename inside `ensure_set_for_scan`: round one's version of the file failed and this one passes, which is why the source-text pins went.
+- **On this tree:** `LandingView.tsx` and `PricingCard.tsx` back to `HEAD`, and 16 of the 107 marketing tests fail. Restored and checked with `cmp`.
+- **The rest of the bar** (this tree, one run):
+  - Counts: API 4571 (one skipped on macOS), workers 27, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7106cadcd0ed`) and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

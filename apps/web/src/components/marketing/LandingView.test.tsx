@@ -87,7 +87,7 @@ describe('the page explains the product', () => {
     // question.
     expect(out).toContain('One URL in, and nothing else to fill in');
     expect(out).toContain('Rivals found rather than guessed at');
-    expect(out).toContain('The site itself checked for what the engines need');
+    expect(out).toContain('The homepage checked for structured data, crawlability and freshness');
   });
 
   it('leads with a call to action that reaches the sign-up surface', () => {
@@ -294,6 +294,139 @@ describe('the free trial — 2026-10-04, and only when the API says there is one
       expect(out, `found "${tell}"`).not.toContain(tell);
     }
     expect(out).not.toMatch(/\d[\d,]*\s*\+?\s*(brands|agencies|customers|users|companies|teams)/i);
+  });
+});
+
+describe('the fix list is described as the report orders it — launch checklist 3.63', () => {
+  // The report ranks its fixes by the points each would recover (a fix for a noindex tag, a
+  // `Disallow: /` rule or a missing robots.txt first, and fixes with no point figure after those
+  // that have one) and draws an effort of S, M or L beside each. The page said "ordered by what
+  // they would move and what they would cost to do", and the pricing card, which this page
+  // contains, said "ordered by what they would move and what they would cost you". Cost ranks
+  // nothing. `claimsAgainstCode.test.tsx` reads the report back to hold these words to it.
+  const CLAUSE = 'ordered by the points each would recover, with the effort of each shown beside it';
+
+  it('says it in the last pipeline step, word for word', () => {
+    expect(html()).toContain(
+      'Five weighted dimensions into one number out of 100, the biggest gap named in points, and specific changes ' +
+        `${CLAUSE}.`,
+    );
+  });
+
+  it('says it again on the pricing card the page carries, so the two agree', () => {
+    const out = html();
+    expect(out).toContain(`Named fixes, ${CLAUSE}.`);
+    expect(out.split(CLAUSE).length - 1).toBe(2);
+  });
+
+  it('no longer says they are ordered by what they would move or what they would cost', () => {
+    for (const out of [html(), renderToStaticMarkup(<LandingView animate={false} initialTrialDays={30} />)]) {
+      for (const old of ['what they would move', 'what they would cost', 'cost to do', 'would cost you']) {
+        expect(out, `found "${old}"`).not.toContain(old);
+      }
+      // The only ordering the page names is by points.
+      expect(out).not.toMatch(/ordered by what/i);
+    }
+  });
+});
+
+describe('sentences corrected against the code — launch checklist 3.63', () => {
+  // Each of these was read against the code and was not true; the new wording says less, and
+  // each old claim is asserted gone so it cannot come back unnoticed. React escapes the
+  // apostrophe, so the text is compared with it put back.
+  const text = () => html().replaceAll('&#x27;', "'");
+
+  it('says a hand-corrected rival list stays in place for later scans, and names no re-detection', () => {
+    // No screen starts a re-detection, and a later scan carries the list forward rather than
+    // detecting again (`services/competitors.py`, `carry_forward_set`; proved by
+    // `tests/test_scan_chain.py::TestCompetitorSetsCarryForward`).
+    const out = text();
+    expect(out).toContain('and you can overrule the result, which then stays in place for every later scan.');
+    expect(out).not.toContain('re-detection');
+    expect(out).not.toContain('survives every later');
+  });
+
+  it('names one AI model, not the four engines, as the second signal that finds rivals', () => {
+    // `services/cocitation.py` asks one model; the four engines are what a scan measures.
+    const out = text();
+    expect(out).toContain('which brands an AI model names in the same breath as your prospect.');
+    expect(out).not.toContain('which brands the AI engines name');
+  });
+
+  it('does not say the search signal is about the niche alone', () => {
+    // Three of the six queries are about the prospect by name ("<brand> alternatives",
+    // "<brand> competitors", "<brand> vs"), and three are about its field (`services/serp.py`,
+    // `build_queries`). The sentence says who ranks in search, and not for what.
+    const out = text();
+    expect(out).toContain(
+      'Two independent signals: who ranks in search, and which brands an AI model names in the same breath as your prospect.',
+    );
+    expect(out).not.toContain('who ranks for the niche');
+    expect(out).not.toContain('for the niche');
+  });
+
+  it('says the audit loads the homepage and reads robots.txt and a sitemap, with no claim about quoting', () => {
+    // `services/audit_runner.py` audits `https://{client.domain}`, and `technical_audit.py` reads
+    // its robots.txt and looks for a sitemap: one page, not "the site". Structured data,
+    // crawlability and freshness are the inputs to Technical Foundation (the report's own
+    // sentence, `FIX_FOR_DIMENSION`), one of the five weighted dimensions. Nothing measures that
+    // these signals "decide whether a page can be quoted", and nothing shows the audit would
+    // otherwise be one "nobody reads".
+    const out = text();
+    expect(out).toContain('The homepage checked for structured data, crawlability and freshness');
+    expect(out).toContain(
+      'It loads the homepage, reads the site\'s robots.txt and checks for a sitemap. The result is Technical Foundation, one of the five weighted dimensions of the score.',
+    );
+    for (const old of [
+      'The site itself checked',
+      'what the engines need',
+      'decide whether a page can be quoted',
+      'quoted at all',
+      'nobody reads',
+      'a separate audit',
+      'page structure',
+    ]) {
+      expect(out, `found "${old}"`).not.toContain(old);
+    }
+  });
+
+  it('says it works out what the business sells, and not who it sells to', () => {
+    // `services/classify.py` returns an industry, a niche and a brand name, and no audience.
+    const out = text();
+    expect(out).toContain(
+      'works out for itself what the business sells — so the first thing you do is not a form about your prospect\'s industry.',
+    );
+    expect(out).not.toContain('and to whom');
+  });
+
+  it('says the questions are what buyers would ask, not what they actually ask', () => {
+    // A model writes them (`services/prompts.py`); nothing here has seen what buyers type.
+    const out = text();
+    expect(out).toContain('It asks the questions your client\'s buyers would ask.');
+    expect(out).toContain('a spread across the buying stages.');
+    expect(out).not.toContain('actually ask');
+    expect(out).not.toContain('actually shop');
+  });
+
+  it('claims no frequency for the engines disagreeing, only that they do not always agree', () => {
+    // Nothing measures how often. The report has a "Where the engines disagree" section.
+    const out = text();
+    expect(out).toContain('They do not always agree, and where they differ is itself a finding.');
+    expect(out).not.toContain('more often than you would expect');
+  });
+
+  it('says what the facts-only tests cover, and not every table, every response or every field', () => {
+    // `tests/test_facts_only.py` covers a named list of the tables that hold anything taken from
+    // an engine's answer or a website, and sweeps the schemas the report module defines. The
+    // report does show two free-text fields, a fix's title and detail, by design: they are the
+    // product's own wording, and `ActionItem` is the documented exception to the rule.
+    const out = text();
+    expect(out).toContain(
+      'It is enforced by tests over the tables that hold anything taken from an engine\'s answer or a website, and over the report\'s own response schemas, so a field that could carry someone else\'s prose fails the build rather than reaching a client\'s report.',
+    );
+    expect(out).not.toContain('every table');
+    expect(out).not.toContain('every response shape');
+    expect(out).not.toContain('every field');
   });
 });
 
