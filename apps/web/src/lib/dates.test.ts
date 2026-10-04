@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { formatDay, formatStamp } from './dates';
+import { formatDay, formatDayTime, formatStamp } from './dates';
 
 describe('formatStamp', () => {
   it('renders UTC with a padded day, for a column that lines up', () => {
@@ -69,5 +69,40 @@ describe('formatDay', () => {
     // Deliberately different from formatStamp. An invitation always HAS an
     // expiry, so a dash would disguise a real defect as ordinary missing data.
     expect(formatDay('not-a-date')).toBe('not-a-date');
+  });
+});
+
+describe('formatDayTime', () => {
+  // A deadline that sits mid-sentence and is acted on to the hour: "Free trial until 3 Nov 2026,
+  // 09:05 UTC, then $150 a month". The day is unpadded for the reason `formatDay` gives (a leading
+  // zero mid-sentence reads as a typo); the time is `formatStamp`'s, in UTC.
+  it('renders the day unpadded and the time padded, in UTC', () => {
+    expect(formatDayTime('2026-11-03T09:05:00Z')).toBe('3 Nov 2026, 09:05 UTC');
+    expect(formatDayTime('2026-10-21T14:13:20Z')).toBe('21 Oct 2026, 14:13 UTC');
+    expect(formatDayTime('2026-09-04T00:00:00Z')).toBe('4 Sep 2026, 00:00 UTC');
+  });
+
+  it('never opens the day with a zero: not for any day from the 1st to the 9th', () => {
+    for (let day = 1; day <= 9; day += 1) {
+      const out = formatDayTime(`2026-10-0${day}T09:05:00Z`);
+      expect(out).toBe(`${day} Oct 2026, 09:05 UTC`);
+      expect(out).not.toMatch(/^0/);
+    }
+  });
+
+  it('is `formatDay` with the time after it, so the two never disagree about the day', () => {
+    for (const iso of ['2026-09-04T09:12:00Z', '2026-09-14T23:59:00Z', '2026-12-31T23:30:00Z']) {
+      expect(formatDayTime(iso).startsWith(formatDay(iso))).toBe(true);
+    }
+  });
+
+  it('is unmoved by an offset in the input, and crosses a date boundary by UTC, not by the host', () => {
+    expect(formatDayTime('2026-09-04T09:12:00Z')).toBe(formatDayTime('2026-09-04T11:12:00+02:00'));
+    // 23:30 UTC is already the 5th in Sydney and still the 4th in New York: the 4th.
+    expect(formatDayTime('2026-09-04T23:30:00Z')).toBe('4 Sep 2026, 23:30 UTC');
+  });
+
+  it('passes an unparseable value through, as `formatDay` does: a deadline always has one', () => {
+    expect(formatDayTime('not-a-date')).toBe('not-a-date');
   });
 });

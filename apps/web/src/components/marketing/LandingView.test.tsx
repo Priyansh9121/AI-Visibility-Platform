@@ -235,6 +235,68 @@ describe('the price is published, deliberately', () => {
   });
 });
 
+describe('the free trial — 2026-10-04, and only when the API says there is one', () => {
+  // The pricing card reads the trial's length from the API (`GET /billing/plan`) when it
+  // mounts. A static render never runs the request, so `html()` is the page while the API has
+  // not answered (and so is the page when the request fails, or says 0): no trial, anywhere.
+  // `initialTrialDays` renders the page as it is once the API has said so; the mounted
+  // behaviour, one request for the whole page and every failure, is `lib/billing/trial.test.tsx`.
+  const SENTENCE =
+    'The first 30 days after you subscribe are free. You enter your card at checkout, and it is charged on day\u00a031 unless you cancel first. One free trial per agency.';
+  const on = () => renderToStaticMarkup(<LandingView animate={false} initialTrialDays={30} />);
+
+  it('off: says nothing about a trial, or about free days, anywhere on the page', () => {
+    for (const out of [html(), renderToStaticMarkup(<LandingView animate={false} initialTrialDays={0} />)]) {
+      expect(out.toLowerCase()).not.toContain('trial');
+      expect(out).not.toContain('after you subscribe');
+      expect(out).not.toContain('charged on day');
+    }
+  });
+
+  it('on: the pricing card says it, in the pricing section, once, word for word', () => {
+    const out = on();
+    expect(out).toContain(SENTENCE);
+    expect(out.indexOf(SENTENCE)).toBeGreaterThan(out.indexOf(`One plan. $${PLAN_PRICE_USD} a month.`));
+    expect(out.indexOf(SENTENCE)).toBeLessThan(out.indexOf('Signing up is free.'));
+    expect(out.split('after you subscribe').length - 1).toBe(1);
+  });
+
+  it('the pricing lead no longer says the plan is "not a trial", whatever the state', () => {
+    // That clause sat beside a card that may now say the first days after you subscribe are free.
+    // What the plan is is still said: the whole product, and not a cut-down tier.
+    for (const out of [html(), on()]) {
+      expect(out.toLowerCase()).not.toContain('not a trial');
+      expect(out).toContain('It buys the whole product as described above, and not a cut-down tier');
+    }
+  });
+
+  it('the hero’s sentence is the same on or off: its price is still true with a trial', () => {
+    for (const out of [html(), on()]) {
+      expect(out).toContain(
+        'twenty questions, put to four AI answer engines. Your first scan is free with a Google sign-in.',
+      );
+      expect(out).toContain(`$${PLAN_PRICE_USD}/month after that.`);
+    }
+  });
+
+  it('on, the page still agrees with itself about money: one price, no figure of its own', () => {
+    const out = on();
+    const prices = out.match(/\$\d[\d,]*/g) ?? [];
+    expect(new Set(prices)).toEqual(new Set([`$${PLAN_PRICE_USD}`]));
+    expect(out).not.toContain('$0');
+    expect(out.toLowerCase()).not.toContain('no card');
+    expect(out.toLowerCase()).not.toContain('no credit card');
+  });
+
+  it('on, it is still a page that invents nothing: no scale, no testimonial', () => {
+    const out = on().toLowerCase();
+    for (const tell of ['trusted by', 'customers say', 'join thousands', 'most popular', 'best value']) {
+      expect(out, `found "${tell}"`).not.toContain(tell);
+    }
+    expect(out).not.toMatch(/\d[\d,]*\s*\+?\s*(brands|agencies|customers|users|companies|teams)/i);
+  });
+});
+
 describe('nothing on this page is fabricated', () => {
   it('carries no testimonial, logo wall, user count or press mention', () => {
     const out = html();

@@ -24,6 +24,18 @@ export const noSubscription: BillingStatus = {
   periodResetsAt: null,
   freeScanRequiresGoogle: false,
   cancelAtPeriodEnd: false,
+  trialEndsAt: null,
+  trialEligible: false,
+};
+
+/**
+ * No subscription, and the free trial is on: the API says `trialEligible`, so Settings may
+ * promise it — 2026-10-04, round two. The fixture above is the same agency with the trial
+ * off, or after it has had its one trial.
+ */
+export const noSubscriptionTrialOffered: BillingStatus = {
+  ...noSubscription,
+  trialEligible: true,
 };
 
 /** Free, and the one free scan already started. */
@@ -51,6 +63,8 @@ export const activeSubscription: BillingStatus = {
   periodResetsAt: '2026-10-01T00:00:00Z',
   freeScanRequiresGoogle: false,
   cancelAtPeriodEnd: false,
+  trialEndsAt: null,
+  trialEligible: false,
 };
 
 /**
@@ -60,6 +74,26 @@ export const activeSubscription: BillingStatus = {
  */
 export const activeEnding: BillingStatus = {
   ...activeSubscription,
+  cancelAtPeriodEnd: true,
+};
+
+/**
+ * Inside the free trial — 2026-10-04. `trialing` is paid-up (`isActive`, the plan's full
+ * forty a month), the card has not been charged, and `trialEndsAt` is the day it will be;
+ * the API sets it only in this state. `currentPeriodEnd` is the same instant, as Stripe
+ * ends a trial's period with the trial.
+ */
+export const trialingSubscription: BillingStatus = {
+  ...activeSubscription,
+  subscriptionStatus: 'trialing',
+  currentPeriodEnd: '2026-10-21T14:13:20Z',
+  trialEndsAt: '2026-10-21T14:13:20Z',
+  scansUsedThisPeriod: 3,
+};
+
+/** Cancelled during the trial: it stays `trialing` to its end, and will not renew. */
+export const trialingEnding: BillingStatus = {
+  ...trialingSubscription,
   cancelAtPeriodEnd: true,
 };
 
@@ -87,6 +121,8 @@ export const canceledSubscription: BillingStatus = {
   periodResetsAt: null,
   freeScanRequiresGoogle: false,
   cancelAtPeriodEnd: false,
+  trialEndsAt: null,
+  trialEligible: false,
 };
 
 /**
@@ -105,6 +141,8 @@ export const pastDueSubscription: BillingStatus = {
   periodResetsAt: null,
   freeScanRequiresGoogle: false,
   cancelAtPeriodEnd: false,
+  trialEndsAt: null,
+  trialEligible: false,
 };
 
 /** A status this screen has no wording for — Stripe's vocabulary can grow. */
@@ -118,4 +156,6 @@ export const unknownStatusSubscription: BillingStatus = {
   periodResetsAt: null,
   freeScanRequiresGoogle: false,
   cancelAtPeriodEnd: false,
+  trialEndsAt: null,
+  trialEligible: false,
 };

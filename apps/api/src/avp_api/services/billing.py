@@ -76,6 +76,28 @@ customer's receipt. `price_watch.py` runs it, on a DEPLOYED API only, at start a
 every hour after; it is one READ, it writes nothing at Stripe, and it cannot fail or
 delay a start. (`price_check` itself does not look at the environment: a local start
 never reaches it, because the task that calls it is not started.)
+
+THE FREE TRIAL (2026-10-04)
+---------------------------
+Founder decision: a 30-day free trial, the card taken at checkout, charged on day
+31 unless the agency cancels. `STRIPE_TRIAL_DAYS` is the length, and 0, the
+default, is no trial: then checkout is exactly what it was. Above 0,
+`create_checkout_session` asks Stripe for `subscription_data.trial_period_days`
+and `payment_method_collection="always"` for an agency that has never had a
+subscription, and Stripe does the rest: it creates the subscription `trialing`,
+sends `customer.subscription.trial_will_end` shortly before the end (here a log
+line, `billing.trial_will_end`, and nothing more), and charges when the trial
+ends, so the `customer.subscription.updated` that says `active` is the first
+payment. A trial that is cancelled ends `canceled` and one whose first charge
+fails is `past_due`, through the same events as any other subscription.
+
+One trial per agency, ever: `_has_had_a_subscription` (the agency's own row) and
+the customer's subscription list, which checkout already asks Stripe for. The
+public pages read the length from `GET /billing/plan` (`trial_days_offered`), so
+it is stated in one place. `subscription_trial_end` mirrors Stripe's `trial_end`
+(`trial_end_of`); `GET /billing` shows it only while the status is `trialing`.
+The one ordering trap a trial adds, `checkout.session.completed`'s optimistic
+`active` landing after the real `trialing`, is closed in `_blocked_by_state_machine`.
 """
 
 from __future__ import annotations
@@ -84,7 +106,7 @@ import asyncio
 import enum
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import stripe
 import structlog
@@ -103,6 +125,11 @@ from ..errors import (
     SubscriptionNeedsAttention,
 )
 from ..models import Agency, StripeWebhookEvent, StripeWebhookOutcome
+
+if TYPE_CHECKING:
+    # Only to type the session's params below: built in two steps, a trial adds to them, so
+    # they are no longer an inline literal at the call. Never imported at run time.
+    from stripe.params.checkout import SessionCreateParams
 
 logger = structlog.get_logger(__name__)
 
@@ -159,10 +186,12 @@ _SUBSCRIPTION_CHECK_FAILED_DETAIL = (
 
 # Which of Stripe's statuses mean "this agency is paid up".
 #
-# `trialing` counts. No trial is configured on the Price today, so in practice
-# nothing produces it — but if a trial is ever added in the dashboard, an agency
-# inside one is a customer in good standing, and a product that told them
-# otherwise would be wrong on the day it mattered most.
+# `trialing` counts. A free trial exists since 2026-10-04 (`STRIPE_TRIAL_DAYS`, 0 by
+# default), and an agency inside one is a customer in good standing: it has the
+# whole plan, the full forty scans a month included (`scan_allowance`), and a
+# product that told it otherwise would be wrong on the day it mattered most. (It
+# was counted before this app started one, so that a trial added by hand in the
+# Stripe dashboard could not make an agency in good standing look unpaid.)
 #
 # Everything else — past_due, unpaid, incomplete, incomplete_expired, canceled,
 # paused — is NOT active. Note especially that `past_due` is not active: north
@@ -181,6 +210,10 @@ ACTIVE_STATUSES = frozenset({"active", "trialing"})
 # 4, and security review L1): see `is_live_at_stripe` for why.
 TERMINAL_STATUSES = frozenset({"canceled", "incomplete_expired"})
 
+# Stripe sends this a few days before a trial ends. It changes nothing here: it is
+# logged (`billing.trial_will_end`) and nothing else — see `apply_event`.
+TRIAL_WILL_END_EVENT = "customer.subscription.trial_will_end"
+
 # The events this service acts on. Anything else is acknowledged and ignored —
 # see `apply_event`.
 HANDLED_EVENT_TYPES = frozenset(
@@ -189,6 +222,7 @@ HANDLED_EVENT_TYPES = frozenset(
         "customer.subscription.created",
         "customer.subscription.updated",
         "customer.subscription.deleted",
+        TRIAL_WILL_END_EVENT,
     }
 )
 
@@ -510,6 +544,84 @@ async def price_check(settings: Settings) -> None:
 
 
 # ---------------------------------------------------------------------------
+# the free trial — 2026-10-04
+# ---------------------------------------------------------------------------
+
+
+def trial_days_offered(settings: Settings) -> int:
+    """How many days of free trial a NEW agency is offered here; 0 is none.
+
+    `STRIPE_TRIAL_DAYS`, but 0 wherever checkout cannot start a subscription
+    (`is_configured`): a deployment with the trial set and the Stripe key or the
+    Price unset answers every checkout with a 503, and a trial nobody can start is
+    not one to promise. The ONE definition of "a trial is on", read by checkout
+    (which asks Stripe for it) and by `GET /billing/plan` (which tells the public
+    pages), so what a page says and what checkout does cannot disagree.
+
+    It is the offer, not a promise to a particular agency: whether this agency
+    still gets it is its own history (`_has_had_a_subscription`, and the
+    customer's subscription list in `create_checkout_session`).
+    """
+    return settings.stripe_trial_days if is_configured(settings) else 0
+
+
+def _has_had_a_subscription(agency: Agency) -> bool:
+    """Whether this agency's own row shows a subscription, of any status, EVER.
+
+    One trial per agency, and the row is where the agency's history is: a
+    subscription id is written the first time Stripe tells us of one and is never
+    cleared (a cancelled subscription keeps its id), a status is Stripe's last
+    word on it (`canceled` and `incomplete_expired` included), and the watermark is
+    stamped by every `customer.subscription.*` event this agency has had. Any one
+    of the three is enough; a row with none of them has never had a subscription.
+    Checkout does not write any of them (the webhook does), so opening a checkout
+    and leaving it is not having had a subscription.
+    """
+    return (
+        agency.stripe_subscription_id is not None
+        or agency.subscription_status is not None
+        or agency.stripe_event_at is not None
+    )
+
+
+def trial_days_for(agency: Agency, settings: Settings) -> int:
+    """The days of free trial this agency's OWN RECORD would be given at checkout today; 0 is none.
+
+    The trial on offer (`trial_days_offered`) unless the agency's row has had a subscription
+    (`_has_had_a_subscription`). The ONE row test: `create_checkout_session` reads it to decide
+    whether to ask Stripe for a trial, and `GET /billing` reads it to say `trialEligible`, so
+    what Settings promises and what checkout gives cannot be decided by two different rules.
+
+    It is the row's half of eligibility only. Checkout's other half is the customer's
+    subscription list at Stripe, which a read cannot ask (`GET /billing` never calls Stripe), so
+    a True here means "nothing in our own record says no", and checkout can still say no: to a
+    customer Stripe remembers an ended subscription for that our row never recorded (a webhook
+    that did not land). The one case Settings can be wrong in, and a rare one.
+    """
+    return 0 if _has_had_a_subscription(agency) else trial_days_offered(settings)
+
+
+def trial_end_of(subscription: Any) -> datetime | None:
+    """When the subscription's trial ends: Stripe's `trial_end`, in Unix seconds, or None.
+
+    A top-level field of the Subscription (unlike `current_period_end`, which
+    moved onto the items; see `period_end_of`), null or absent on a subscription
+    that never had a trial and still there, in the past, after one that
+    converted. Anything that is not a whole number of seconds is no date: a
+    boolean is not one (Python counts `True` as an int), and a number no
+    calendar holds is not either, which is read as none rather than failing the
+    webhook, where a failure is retried for days.
+    """
+    value = _get(subscription, "trial_end")
+    if not isinstance(value, int) or isinstance(value, bool):
+        return None
+    try:
+        return datetime.fromtimestamp(value, tz=UTC)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+# ---------------------------------------------------------------------------
 # customer + checkout
 # ---------------------------------------------------------------------------
 
@@ -580,6 +692,18 @@ async def create_checkout_session(
     purpose and redundantly: the Checkout Session, the Customer and the
     Subscription are three different objects arriving in three different events,
     and each one should be able to answer "whose is this?" without a join.
+
+    **The free trial (2026-10-04).** With `STRIPE_TRIAL_DAYS` above 0, a checkout
+    for an agency that has never had a subscription carries
+    `subscription_data.trial_period_days` and `payment_method_collection="always"`:
+    Stripe takes the card now and charges when the trial ends. Eligibility is the
+    agency's own row (`_has_had_a_subscription`, read from the row locked below)
+    AND, when it already has a customer, that Stripe lists no subscription of ANY
+    status for that customer: the same single list call that refuses a double
+    subscription, so a trial costs no extra round trip. Either one ends the
+    trial; the checkout itself still works, as it always did. With 0, or an
+    ineligible agency, the params are exactly what they were before trials
+    existed.
     """
     # BOTH settings are read before anything is created, and the order matters.
     # `ensure_customer` creates a Stripe customer as a side effect, so checking
@@ -636,6 +760,12 @@ async def create_checkout_session(
         raise SubscriptionAlreadyActive(_ALREADY_ACTIVE_DETAIL)
     if is_live_at_stripe(agency.subscription_status):
         raise SubscriptionNeedsAttention(_NEEDS_ATTENTION_DETAIL)
+
+    # The trial, if there is to be one: the length on offer, unless this agency's own
+    # row has had a subscription (`trial_days_for`, the same test `GET /billing` reads for
+    # `trialEligible`). The customer's subscription list, asked for below, has the other say.
+    # Decided from the row LOCKED above, so a webhook that has just landed is seen.
+    trial_days = trial_days_for(agency, settings)
 
     had_customer = bool(agency.stripe_customer_id)
     customer_id = await ensure_customer(db, agency, settings=settings)
@@ -724,25 +854,37 @@ async def create_checkout_session(
                 customer_id=customer_id,
             )
             raise ServiceUnavailable(_SUBSCRIPTION_CHECK_FAILED_DETAIL)
+        # Reached with nothing live and no truncation, so what is listed is ended
+        # subscriptions (any status counts: `status: all`). The customer has had one,
+        # so it has had its trial. An empty list is a customer that never subscribed
+        # (it opened a checkout and left): it still gets one.
+        if subs.data:
+            trial_days = 0
 
-    session = await client.v1.checkout.sessions.create_async(
-        params={
-            "mode": "subscription",
-            "customer": customer_id,
-            "line_items": [{"price": price_id, "quantity": 1}],
-            "client_reference_id": agency.id,
-            "metadata": {"agency_id": agency.id},
-            # Copied onto the Subscription itself, so that every
-            # `customer.subscription.*` event names its agency directly rather
-            # than relying on a customer-id lookup.
-            "subscription_data": {"metadata": {"agency_id": agency.id}},
-            "success_url": f"{base}/settings?checkout=success",
-            "cancel_url": f"{base}/settings?checkout=cancelled",
-            # Whole Unix seconds, as Stripe takes them. Read per call, so every
-            # link gets its own hour.
-            "expires_at": int((datetime.now(UTC) + CHECKOUT_LINK_LIFETIME).timestamp()),
-        }
-    )
+    params: SessionCreateParams = {
+        "mode": "subscription",
+        "customer": customer_id,
+        "line_items": [{"price": price_id, "quantity": 1}],
+        "client_reference_id": agency.id,
+        "metadata": {"agency_id": agency.id},
+        # Copied onto the Subscription itself, so that every
+        # `customer.subscription.*` event names its agency directly rather
+        # than relying on a customer-id lookup.
+        "subscription_data": {"metadata": {"agency_id": agency.id}},
+        "success_url": f"{base}/settings?checkout=success",
+        "cancel_url": f"{base}/settings?checkout=cancelled",
+        # Whole Unix seconds, as Stripe takes them. Read per call, so every
+        # link gets its own hour.
+        "expires_at": int((datetime.now(UTC) + CHECKOUT_LINK_LIFETIME).timestamp()),
+    }
+    if trial_days > 0:
+        # A trial, and the card taken at checkout. Stripe may skip the card for a
+        # session whose first payment is nothing (`if_required`); "always" is what makes
+        # the trial end in a charge on day 31 and not in nothing to charge.
+        params["subscription_data"]["trial_period_days"] = trial_days
+        params["payment_method_collection"] = "always"
+
+    session = await client.v1.checkout.sessions.create_async(params=params)
 
     if not session.url:
         # Stripe returns a URL for every hosted session; this would mean the API
@@ -752,7 +894,13 @@ async def create_checkout_session(
             detail="Stripe returned a checkout session with no URL to send the browser to."
         )
 
-    logger.info("billing.checkout_created", agency_id=agency.id, session_id=session.id)
+    logger.info(
+        "billing.checkout_created",
+        agency_id=agency.id,
+        session_id=session.id,
+        # 0 when there was no trial: the setting is off or this agency has had its one.
+        trial_days=trial_days,
+    )
     return session.url
 
 
@@ -916,6 +1064,7 @@ class WebhookResult(str, enum.Enum):
     STALE = "stale"  # older than the agency's stored state
     UNMATCHED = "unmatched"  # no agency: NOT recorded, nothing changed
     DUPLICATE = "duplicate"  # this event id was already recorded
+    LOGGED = "logged"  # handled by a log line alone (`trial_will_end`): nothing changed or recorded
 
     @property
     def writes(self) -> bool:
@@ -928,7 +1077,11 @@ class WebhookResult(str, enum.Enum):
 
 
 def _blocked_by_state_machine(
-    agency: Agency, subscription_id: str | None, new_status: str | None
+    agency: Agency,
+    subscription_id: str | None,
+    new_status: str | None,
+    *,
+    optimistic: bool = False,
 ) -> bool:
     """Whether this event would move ONE subscription backwards. True = ignore it.
 
@@ -942,7 +1095,36 @@ def _blocked_by_state_machine(
       by a different status, including checkout's optimistic `active`;
     * `incomplete` is never written over any status but `incomplete`, because
       Stripe only enters it when the subscription is created, so a later
-      `incomplete` is a retried or reordered `created`.
+      `incomplete` is a retried or reordered `created`;
+    * checkout's optimistic `active` is never written over `trialing`
+      (`optimistic=True`, which only `checkout.session.completed` sets).
+
+    THE LAST RULE, AND WHY IT HOLDS IN BOTH ARRIVAL ORDERS (2026-10-04, free trial).
+    `checkout.session.completed` carries no subscription status, so
+    `_apply_checkout_completed` writes a guess: `active`, because a completed
+    session usually means a payment. A trial's checkout pays nothing and the
+    subscription is `trialing`, so for a trial the guess is wrong by
+    construction. Stripe does not order the session's event against the
+    subscription's `customer.subscription.created`, and the two orders meet it
+    differently:
+
+    * `created` (`trialing`) first, then checkout: the agency is already
+      `trialing` for this subscription id, and the guess would overwrite it, so
+      Settings would say "Renews" for a plan that has not been charged and
+      `GET /billing` would drop the trial's end. This rule stops it: the checkout
+      event is `stale`, recorded and applied to nothing. It loses nothing, because
+      what checkout would also write, the customer and subscription ids, the
+      subscription event has already written.
+    * checkout first, then `created`: there is nothing to guard. Checkout never
+      moves the watermark, so `created` is not stale on its account, whichever
+      second each is stamped with, and it overwrites the guess with the truth,
+      `trialing` and the trial's end. Until it arrives the agency reads `active`,
+      which has the same allowance and no trial date: briefly too generous in its
+      label, and gone within seconds.
+
+    Only `trialing` is kept off the guess. Every other status it still overwrites,
+    as it did before trials existed: `incomplete` → `active` after a payment is the
+    case that needs it. A different subscription id is a new life, as above.
     """
     if not subscription_id or subscription_id != agency.stripe_subscription_id:
         return False
@@ -950,6 +1132,8 @@ def _blocked_by_state_machine(
     if new_status is None or current is None or new_status == current:
         return False
     if current in TERMINAL_STATUSES:
+        return True
+    if optimistic and current == "trialing":
         return True
     return new_status == "incomplete"
 
@@ -1022,6 +1206,16 @@ async def apply_event(db: AsyncSession, event: Any) -> WebhookResult:
     Answering non-2xx to an event we do not care about makes Stripe retry it,
     back off, and eventually mark the endpoint unhealthy.
 
+    **`customer.subscription.trial_will_end` is handled by a log line alone**
+    (`billing.trial_will_end`: the agency id and the subscription id, nothing
+    else). It changes no state, does not move `stripe_event_at`, and leaves no
+    ledger row, which is how the ledger treats every event that changes nothing
+    (an unhandled type, a non-subscription checkout, an event with no `created`):
+    its rows are for events that were applied, or were stale and so must not be
+    applied on a retry, and `LOGGED` is neither. A redelivery logs the line
+    again, which costs nothing. An event for an agency we do not know is
+    `UNMATCHED`, as for any other type.
+
     The caller commits when `result.writes`.
     """
     event_type = str(_get(event, "type") or "")
@@ -1074,9 +1268,22 @@ async def apply_event(db: AsyncSession, event: Any) -> WebhookResult:
         logger.warning("stripe.webhook.unmatched", event_id=event_id, event_type=event_type)
         return WebhookResult.UNMATCHED
 
+    if event_type == TRIAL_WILL_END_EVENT:
+        # A log line and nothing else: no state, no watermark, no ledger row (see the
+        # docstring). Ids only. The row was locked by the lookup; the router lets it go.
+        trial_subscription_id = _get(obj, "id")
+        logger.info(
+            "billing.trial_will_end",
+            agency_id=agency.id,
+            subscription_id=str(trial_subscription_id) if trial_subscription_id else None,
+        )
+        return WebhookResult.LOGGED
+
     sub_id, new_status = _incoming_state(event_type, obj)
     older = agency.stripe_event_at is not None and created_at < agency.stripe_event_at
-    if older or _blocked_by_state_machine(agency, sub_id, new_status):
+    if older or _blocked_by_state_machine(
+        agency, sub_id, new_status, optimistic=event_type == "checkout.session.completed"
+    ):
         outcome = StripeWebhookOutcome.STALE
     else:
         outcome = StripeWebhookOutcome.APPLIED
@@ -1162,6 +1369,12 @@ def _apply_checkout_completed(agency: Agency, session: Any) -> None:
     event that follows overwrites this with the truth within seconds, and the
     worst case is a screen that was briefly too generous — not a screen that
     denied somebody something they had paid for.
+
+    For a trial's checkout nothing was paid and `active` is the wrong guess, so
+    when `customer.subscription.created` (`trialing`) has already been applied
+    this is never reached: `_blocked_by_state_machine` makes the event `stale`.
+    When it comes first, the subscription event that follows overwrites the
+    guess, as above.
     """
     customer_id = _get(session, "customer")
     subscription_id = _get(session, "subscription")
@@ -1185,6 +1398,12 @@ def _apply_subscription_event(agency: Agency, subscription: Any, *, deleted: boo
     Every status Stripe sends is stored verbatim, including ones this codebase
     has never seen. `models/tenancy.py` explains why the column is a string
     rather than an enum, and this is the write that would otherwise raise.
+
+    The trial's end is stored from every one of these events too, as Stripe's
+    own `trial_end` (`trial_end_of`), whatever the status: the column mirrors the
+    Subscription, so it is still there after a trial that converted and for a
+    cancelled one, and `GET /billing` decides that a trial is under way by the
+    status being `trialing`, not by this being set.
     """
     subscription_id = _get(subscription, "id")
     if subscription_id:
@@ -1211,3 +1430,6 @@ def _apply_subscription_event(agency: Agency, subscription: Any, *, deleted: boo
     agency.subscription_cancel_at_period_end = (
         False if deleted else bool(_get(subscription, "cancel_at_period_end"))
     )
+
+    # Free trial, 2026-10-04. A mirror of Stripe's `trial_end`; see the docstring.
+    agency.subscription_trial_end = trial_end_of(subscription)

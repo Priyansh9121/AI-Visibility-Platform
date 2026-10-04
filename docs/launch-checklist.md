@@ -227,7 +227,8 @@ The old literal key sat in `.claude/settings.local.json` as `env.API_KEY_21ST`
    webhook endpoint
    `https://ai-visibility-platform-5gk4.onrender.com/api/v1/billing/webhook`
    with exactly `checkout.session.completed`, `customer.subscription.created`,
-   `customer.subscription.updated`, `customer.subscription.deleted`; set the
+   `customer.subscription.updated`, `customer.subscription.deleted` and
+   `customer.subscription.trial_will_end` (the fifth only writes a log line); set the
    Customer portal (cancel at period end, update payment method) as in the
    runbook's step 5.
 3. On Render (API service), replace `STRIPE_SECRET_KEY` with the live secret

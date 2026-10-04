@@ -45,6 +45,19 @@ export type SettingsState =
       /** Null when the caller may not read billing — a member gets a 403. */
       billing: BillingStatus | null;
       billingError: string | null;
+      /**
+       * The free trial's length, which the route asked the API for while it loaded the rest and
+       * waited for at its draw point (`within`): a number, 0 for none, or undefined when the answer
+       * did not come within the wait. Handed down to the plan card so it is drawn with its
+       * sentence and does not ask; undefined, the card awaits `trialPlan`. A reload whose plan
+       * call is slow keeps the previous value. Round two, 2026-10-04.
+       */
+      trialDays?: number | undefined;
+      /**
+       * The route's own request for the plan: when it could not tell the card in time
+       * (`trialDays` undefined) the card awaits this and does not ask again. Round three.
+       */
+      trialPlan?: Promise<number> | undefined;
     }
   | { kind: 'error'; title: string; detail: string };
 
@@ -249,6 +262,8 @@ export function SettingsView({
                 agencyId={state.me.agency.id}
                 billing={state.billing}
                 billingError={state.billingError}
+                initialTrialDays={state.trialDays}
+                trialPlan={state.trialPlan}
               />
             </PageSection>
           </div>

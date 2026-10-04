@@ -708,6 +708,27 @@ Stripe, in **TEST MODE**: the keys are
 `sk_test_…` and `price_…` with `livemode: false`, and **no code anywhere behaves
 differently on a live key.** Going live is swapping two environment variables.
 
+**A free trial — 2026-10-04** (founder decision: a 30-day free trial with the card
+entered at checkout, charged on day 31 unless the agency cancels). The length is
+the setting `STRIPE_TRIAL_DAYS`, **0 by default, which is no trial**, and with 0
+checkout sends exactly the parameters it did before the setting existed (what is new
+besides is additive: `trialEndsAt`, null unless an agency is trialing, and
+`GET /billing/plan`, answering 0). The setting takes
+0 to 730 whole days (Stripe's own limit; any other value stops the API from
+starting). Above 0:
+- checkout sends Stripe `subscription_data.trial_period_days` and
+  `payment_method_collection: "always"` for an agency that has never had a
+  subscription, and Stripe charges at the trial's end (below, under the checkout);
+- the webhook handles `customer.subscription.trial_will_end` as a log line only, and
+  stores the trial's end (below);
+- `GET /agencies/{agencyId}/billing` says when it ends (`trialEndsAt`), and
+  `GET /billing/plan` tells the public pages how long it is.
+A trialing agency is `isActive` and has the plan's **full allowance**: forty scans a
+month, counted by calendar month (UTC) like any paid agency, so a trial has forty in
+each calendar month it touches (up to three): a 30-day trial touches two, or three when
+it starts on 30 or 31 January (or on 31 January in a leap year). **One trial per
+agency, ever.**
+
 **These endpoints gate nothing themselves; the status they record gates two things.**
 Since 2026-09-28 the scan allowance reads `subscription_status` (one free scan per
 agency, then 40 a month while it is `active` or `trialing`; `services/scan_allowance.py`
@@ -749,9 +770,40 @@ one.
   "scanLimit": 40,
   "periodResetsAt": "2026-10-01T00:00:00Z",
   "freeScanRequiresGoogle": false,
-  "cancelAtPeriodEnd": false
+  "cancelAtPeriodEnd": false,
+  "trialEndsAt": null,
+  "trialEligible": false
 }
 ```
+
+**`trialEndsAt` — 2026-10-04.** When the free trial ends and the card is first
+charged, **set only while `subscriptionStatus` is `trialing`** and null in every other
+state: for a trial that converted (the date is history), a cancelled or failed one,
+and an agency that never had one. The column behind it
+(`agencies.subscription_trial_end`) mirrors Stripe's `trial_end`, written by the
+webhook from every `customer.subscription.*` event, so it outlives the trial; the
+status is what says whether one is under way. Settings says "Free trial until
+<day and time, UTC>, then $150 a month" from it (the time, because the instant it
+ends is the cancel-by deadline, and the day unpadded, as a date is mid-sentence: for
+example "Free trial until 3 Nov 2026, 09:05 UTC, then $150 a month"). A trialing agency is `isActive` and reads `scanLimit: 40` like
+any paid agency.
+
+**`trialEligible` — 2026-10-04, round two.** Whether Settings may promise this
+agency a free trial: **true only when a trial is on and this agency's own record has
+never had a subscription.** "A trial is on" is `STRIPE_TRIAL_DAYS` above 0 with billing
+configured, the same reading `GET /billing/plan` gives (0 wherever the Stripe key or the
+Price is unset). "Has never had a subscription" is the row test checkout applies
+(`services.billing.trial_days_for`): no `stripe_subscription_id`, no
+`subscription_status` and no `stripe_event_at` on the agency row (any of the three
+means a subscription has existed, `canceled` and `incomplete_expired` included). So it
+is false for an agency that is subscribed or trialing, for one that has had its
+subscription or its trial, and for every agency while no trial is on. **It cannot see
+Stripe's side of checkout's test, the customer's own subscription list**, because this
+endpoint never calls Stripe: a read makes no round trip. So `true` means "nothing in our
+record says no", and checkout can still refuse the trial to a customer for whom Stripe
+remembers an ended subscription that our row never recorded (a webhook that did not land).
+That is the one case Settings can be wrong in, and a rare one; checkout never gives more
+than it promises. The web promises the trial only on a `true` and never works it out itself.
 
 **`cancelAtPeriodEnd` — 2026-09-29.** True when the subscription was cancelled
 in Stripe's portal and runs to the end of the period already paid for. Stripe
@@ -811,10 +863,50 @@ customer and subscription ids are withheld because the browser has no use for
 them and a response body is a place they would be logged by a proxy and kept in
 a network panel.
 
-The four subscription fields and `cancelAtPeriodEnd` are `null`/`false` for
-every agency that has not subscribed, which today is all of them.
+The four subscription fields, `cancelAtPeriodEnd` and `trialEndsAt` are
+`null`/`false` for every agency that has not subscribed. (`trialEligible` is the other
+way round: it is `true` for an agency that has not subscribed, while a trial is on.)
 
 **Errors:** `401`, `403` (member role), `404` (another agency's id).
+
+#### `GET /api/v1/billing/plan`
+**No auth.** What the plan offers the public: the length of its free trial
+(2026-10-04). Read by the pricing card and the landing page before anybody has
+signed up.
+
+**Response `200`**
+```json
+{ "trialDays": 30 }
+```
+
+`trialDays` is `STRIPE_TRIAL_DAYS`, **0 meaning there is no trial**, so the length is
+stated in one place and a page says "the first N days after you subscribe are free"
+only for an N above 0 (while the page is still asking, if the request fails, and for 0,
+it says nothing about a trial at all). It is **0 wherever checkout cannot start a subscription**
+(`STRIPE_SECRET_KEY` or `STRIPE_PRICE_ID` unset): a trial nobody can start is not one
+to promise. It describes the offer to a *new* agency; whether a particular agency
+still gets it is its own history, which checkout decides (and `GET
+/agencies/{agencyId}/billing` says in advance, as `trialEligible`).
+
+**When the web asks (rounds two and three).** At the top of the home page's and Settings'
+loaders, in parallel with their first calls, so the pricing card is drawn with its sentence
+and does not grow a line a moment later. The page keeps that request and waits for it only
+at its **draw point**, when everything else it needs is in: an answer that has already come
+wins at once, however slow the other calls were, and one that has not is waited for 0.5 s
+(the landing page, whose card sits far below the fold) or 1.5 s (Settings), and only where
+the landing page or Settings is what it is about to draw: a slow plan call cannot hold a
+page. If it has not answered by then the page is drawn without a trial sentence and the
+card awaits the page's own request, so the whole page makes one request, never a second. A
+card that was told the answer does not ask. A Settings reload (a seat change) whose plan
+call is slow keeps the previous answer, so the sentence never blinks off and on.
+
+**No session, no agency, nothing secret**, and it touches no database and no Stripe,
+so it is as cheap as `/health` and has nothing to rate-limit. **Never cached**
+(`Cache-Control: no-store`): a cache would keep a page saying "30 days free" after a
+deploy turned the trial off, and checkout would not give one. A `GET` is not checked
+by the Origin check; CORS is unchanged (the web app reads it same-origin through its
+`/api/v1` proxy, and a page on another origin is not let read the answer). **Errors:**
+none of its own.
 
 #### `POST /api/v1/agencies/{agencyId}/billing/checkout`
 **Auth required (owner/admin).** Start a subscription. No request body.
@@ -854,6 +946,31 @@ lands on reads the database.
 
 **This endpoint does not subscribe anybody.** It returns a URL. The subscription
 begins when Stripe says so, over the webhook.
+
+**The free trial — 2026-10-04.** With `STRIPE_TRIAL_DAYS` above 0, a checkout for an
+agency that is **eligible** carries two more parameters, and nothing else about the
+session changes:
+
+| | `STRIPE_TRIAL_DAYS` = 0, or not eligible | `STRIPE_TRIAL_DAYS` = N, eligible |
+|---|---|---|
+| `subscription_data` | `{"metadata": {"agency_id": …}}` | `{"metadata": {"agency_id": …}, "trial_period_days": N}` |
+| `payment_method_collection` | not sent | `"always"` |
+
+`"always"` makes Stripe take the card at checkout, and Stripe charges when the trial
+ends unless the agency cancels first (without it Stripe may skip the card for a
+session that costs nothing now, and there would be nothing to charge on day 31). With
+0 the session params are exactly what they were before the setting existed.
+
+**Eligible = the agency has never had a subscription**, in both places that could
+say so: its own row has no `stripe_subscription_id`, no `subscription_status` and no
+`stripe_event_at` (any of the three means a subscription has existed, `canceled` and
+`incomplete_expired` included), **and**, when it already has a Stripe customer, that
+customer's subscription list, the single call checkout already makes (`status=all`),
+is empty: an ended subscription on it counts. No extra Stripe call is made. An
+ineligible agency still checks out, to the plain session. An agency that opened a
+checkout and left has never had a subscription and still gets the trial. Every
+refusal below is unchanged: a trial never gets round a live subscription. The log
+line `billing.checkout_created` carries `trial_days` (the days sent, 0 when none).
 
 **A subscription that is live at Stripe refuses a new checkout** (founder
 decision 4, 2026-10-01). A second Checkout Session would create a second
@@ -1002,14 +1119,33 @@ unconfigured path is a message nobody receives; here it would be believing a
 stranger about money.
 
 **Handled types:** `checkout.session.completed` (only with `mode == "subscription"`
-and a `subscription` id; any other checkout is ignored) and
-`customer.subscription.created|updated|deleted`. Any other type is ignored.
+and a `subscription` id; any other checkout is ignored),
+`customer.subscription.created|updated|deleted` and, since 2026-10-04,
+`customer.subscription.trial_will_end`. Any other type is ignored. (Stripe sends
+`trial_will_end` only if the endpoint is subscribed to it; nothing depends on it.)
 
 **The response is now the typed `WebhookAck`,** always 200 after a valid signature:
 - applied → `{"received": true, "handled": true}`;
 - duplicate → `{"received": true, "handled": false, "duplicate": true}`;
 - stale → `{"received": true, "handled": false, "stale": true}`;
-- ignored or unmatched → `{"received": true, "handled": false}`.
+- ignored or unmatched → `{"received": true, "handled": false}`;
+- `customer.subscription.trial_will_end` for a known agency →
+  `{"received": true, "handled": true}`, see below.
+
+**`customer.subscription.trial_will_end` — 2026-10-04.** Stripe sends it a few days
+before a trial ends. It is **a log line and nothing else**: `billing.trial_will_end`
+with `agency_id` and `subscription_id` (ids only). It changes no state, does **not**
+move the `stripe_event_at` watermark, and leaves **no ledger row**, which is how the
+ledger treats every event that changes nothing (an unhandled type, a non-subscription
+checkout, an event with no `created`): its rows are for events that were applied, or
+were stale and so must not be applied on a retry. A redelivery logs the line again. For
+an agency this database does not know it is `unmatched`, as for any type.
+
+**The trial's end is stored from every `customer.subscription.*` event**, as Stripe's
+`trial_end` (`agencies.subscription_trial_end`), whatever the status: a trial that
+converts, is cancelled, or fails its first charge goes through the same events as any
+other subscription (`trialing` → `active` is the `customer.subscription.updated` that is
+the first payment; `trialing` → `canceled`/`incomplete_expired`/`past_due` likewise).
 
 **Once:** each handled event id is recorded in `stripe_webhook_events` in the
 same transaction as the change it makes. A redelivery is answered `duplicate`
@@ -1023,9 +1159,21 @@ and changes nothing. An event that matches no agency is not recorded, so Stripe'
   because it carries no subscription state of its own.
 - Events in the same second apply in arrival order, except for a state-machine
   guard on the same subscription id: a `canceled` or `incomplete_expired` status
-  is never overwritten, and `incomplete` is never written over another status.
-  A guarded event is also `stale`.
+  is never overwritten, `incomplete` is never written over another status, and
+  `checkout.session.completed`'s `active` is never written over `trialing`
+  (2026-10-04). A guarded event is also `stale`.
 - An event without a numeric `created` is ignored.
+
+**Why checkout's `active` is kept off `trialing`.** `checkout.session.completed`
+carries no subscription status, so it writes a guess, `active`; for a trial's checkout
+nothing was paid and that guess is wrong by construction. Stripe does not order it
+against `customer.subscription.created` (`trialing`). If `created` lands first the agency
+is already `trialing`, and the guard makes the checkout event `stale` (it has nothing to
+add: the ids are already stored). If checkout lands first it writes `active` for the moment
+until `created`, which is never stale on its account (checkout does not move the
+watermark) and overwrites it with `trialing` and the trial's end. Either order ends
+`trialing`. Only `trialing` is protected: the guess still overwrites every other
+status, as before.
 
 **Response `200` with the typed `WebhookAck`:**
 ```json

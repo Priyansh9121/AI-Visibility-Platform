@@ -155,6 +155,22 @@ class Agency(Base, TimestampMixin, SoftDeleteMixin):
         Boolean, nullable=False, default=False, server_default=text("false")
     )
 
+    # When the subscription's free trial ends — 2026-10-04 (founder decision: a trial,
+    # the card taken at checkout, charged on the day it ends unless cancelled). Stripe's
+    # `trial_end` on the Subscription, stored from every `customer.subscription.*` event, so
+    # this MIRRORS Stripe: it is still there after a trial that converted, and NULL for a
+    # subscription that never had one. It is NOT "the trial is on": `GET /billing` says
+    # `trialEndsAt` only while `subscription_status` is `trialing`.
+    #
+    # Its own column, and not `subscription_current_period_end`, because nothing in this
+    # repo shows that the two are the same instant (the SDK documents `trial_end` as "the end
+    # of that trial" and says nothing of the period), and Settings quotes this one as the day
+    # the card is charged. Nullable, no default, no backfill: every existing agency has no
+    # trial. Written by the webhook only, like every column in this block.
+    subscription_trial_end: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     # `event.created` of the newest Stripe event applied to this agency's
     # billing state above. An event strictly older than this is stale and
     # changes nothing (`services/billing.apply_event`); equal applies, because

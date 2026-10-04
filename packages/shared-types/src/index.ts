@@ -90,6 +90,8 @@ export type InviteSeatResponse = Schemas['InviteSeatResponse'];
 
 // --- billing (Epic 9.15) ------------------------------------------------
 export type BillingStatus = Schemas['BillingStatusOut'];
+/** What the plan offers the public: the length of its free trial, 0 for none (2026-10-04). */
+export type BillingPlan = Schemas['BillingPlanOut'];
 export type CheckoutSession = Schemas['CheckoutSessionOut'];
 export type PortalSession = Schemas['PortalSessionOut'];
 

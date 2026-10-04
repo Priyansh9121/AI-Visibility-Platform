@@ -29,6 +29,11 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 Environment = Literal["local", "test", "staging", "production"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
+# The longest trial Stripe accepts (`subscription_data.trial_period_days` takes 1 to 730). The
+# setting below bounds itself by it, so a value Stripe would refuse fails the start and not the
+# first checkout after it.
+MAX_STRIPE_TRIAL_DAYS = 730
+
 # Every setting that names or unlocks an outside provider. ONE rule for all of
 # them, in `_blank_provider_setting_is_unset` below: a present-but-empty value
 # is unset. Until 2026-09-29 only the three Google settings had it, and a blank
@@ -257,6 +262,23 @@ class Settings(BaseSettings):
     # what the webhook does when a request arrives and this is unset. It does
     # NOT fall back to trusting the payload.
     stripe_webhook_secret: SecretStr | None = None
+    # The free trial — 2026-10-04, founder decision: "30-day free trial with a card at
+    # checkout, charged on day 31 unless cancelled". This is its length in days.
+    #
+    # 0, the DEFAULT, is no trial, and then checkout is exactly what it was before this
+    # setting existed. Above 0, a checkout for an agency that has never had a subscription
+    # asks Stripe for a trial of this many days and for the card up front, and Stripe
+    # charges at the trial's end unless the agency cancels first (`services/billing.py`,
+    # `create_checkout_session`). One trial per agency, ever: an agency that has had any
+    # subscription, or whose Stripe customer has, is sent to the plain checkout.
+    #
+    # The public pages read this number from the API (`GET /billing/plan`) and say "the
+    # first N days after you subscribe are free" only when it is above 0, so the length is
+    # stated in one place.
+    # Bounded at boot by Stripe's own limit: 0 to 730. A blank value is 0, like every other
+    # blank setting, and any other value that is not a whole number in range stops the API
+    # from starting, where somebody sees it.
+    stripe_trial_days: int = Field(default=0, ge=0, le=MAX_STRIPE_TRIAL_DAYS)
 
     # --- Google sign-in (Epic 20) ------------------------------------------
     # All three optional, like every provider above: with any of them unset
@@ -292,6 +314,16 @@ class Settings(BaseSettings):
         # provider with an empty credential. One rule, applied once.
         if isinstance(value, str) and not value.strip():
             return None
+        return value
+
+    @field_validator("stripe_trial_days", mode="before")
+    @classmethod
+    def _a_blank_trial_length_is_no_trial(cls, value: object) -> object:
+        # `STRIPE_TRIAL_DAYS=` is what `cp .env.example .env` and a cleared Render variable
+        # leave behind. It is no trial, the safe direction: a blank must never be a reason to
+        # claim one. Whitespace around a number is not part of it.
+        if isinstance(value, str):
+            return value.strip() or 0
         return value
 
     @field_validator("log_level", mode="before")

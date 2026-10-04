@@ -181,9 +181,102 @@ describe('what the card is not allowed to say', () => {
   });
 });
 
+describe('the free trial — 2026-10-04', () => {
+  // The API says how long the trial is (`GET /billing/plan`); the card says so only for a
+  // positive number of days. A static render never runs the request, so what it shows is the
+  // card while the API has not answered (nothing about a trial) and, through `initialTrialDays`
+  // (the seam BillingPanel's `initialError` is the precedent for), the card once it has.
+  // `lib/billing/trial.test.tsx` mounts the card and drives the request itself.
+  const SENTENCE =
+    'The first 30 days after you subscribe are free. You enter your card at checkout, and it is charged on day\u00a031 unless you cancel first. One free trial per agency.';
+
+  it('says nothing about a trial before the API has answered, signed in or out', () => {
+    for (const out of [render(), render({ signedIn: false }), render({ signedIn: true })]) {
+      expect(out.toLowerCase()).not.toContain('trial');
+      expect(out).not.toContain('after you subscribe');
+      expect(out).not.toContain('charged on day');
+      expect(out).not.toContain('unless you cancel');
+    }
+  });
+
+  it('says it, word for word, once the API has said 30 days', () => {
+    expect(render({ initialTrialDays: 30 })).toContain(SENTENCE);
+  });
+
+  it('says it on the signed-in card for an agency that can still have the trial', () => {
+    expect(render({ signedIn: true, initialTrialDays: 30 })).toContain(SENTENCE);
+    expect(render({ signedIn: true, trialEligible: true, initialTrialDays: 30 })).toContain(
+      SENTENCE,
+    );
+  });
+
+  it('does not say it to an agency that cannot have it: checkout gives one trial per agency', () => {
+    const out = render({ signedIn: true, trialEligible: false, initialTrialDays: 30 });
+    expect(out).not.toContain('after you subscribe');
+    expect(out.toLowerCase()).not.toContain('trial');
+    // The plan is still offered, at its price.
+    expect(out).toContain('Subscribe');
+    expect(out).toContain(`$${PLAN_PRICE_USD}`);
+  });
+
+  it('takes every number in it from the days the API gave', () => {
+    const out = render({ initialTrialDays: 14 });
+    expect(out).toContain('The first 14 days after you subscribe are free.');
+    expect(out).toContain('charged on day\u00a015 unless you cancel first');
+    // No 30 left over from anywhere: the length is not typed on this card.
+    expect(out).not.toContain('30 days');
+    expect(out).not.toContain('day\u00a031');
+    expect(out).not.toContain('day 31');
+  });
+
+  it('a single day is a day, not "1 days"', () => {
+    const out = render({ initialTrialDays: 1 });
+    expect(out).toContain('The first day after you subscribe is free.');
+    expect(out).toContain('charged on day\u00a02 unless you cancel first');
+    expect(out).not.toContain('1 days');
+  });
+
+  it('says nothing for 0, or for anything that is not a positive whole number', () => {
+    for (const days of [0, -1, -30, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const out = render({ initialTrialDays: days });
+      expect(out.toLowerCase(), `${days}`).not.toContain('trial');
+      expect(out, `${days}`).not.toContain('after you subscribe');
+    }
+  });
+
+  it('puts the terms with the price, above the footnote and the button', () => {
+    const out = render({ initialTrialDays: 30 });
+    expect(out.indexOf('per month')).toBeLessThan(out.indexOf(SENTENCE));
+    expect(out.indexOf(SENTENCE)).toBeLessThan(out.indexOf('Get started'));
+  });
+
+  it('is exactly as true as it sounds: nothing is charged at checkout, and no card number here', () => {
+    const out = render({ initialTrialDays: 30 });
+    // The card is "entered", not "taken": nothing is charged until the day after the trial.
+    expect(out).not.toMatch(/charged (now|today|at checkout|immediately)/i);
+    expect(out).not.toMatch(/\bcard (is|will be) taken\b/i);
+    expect(out.toLowerCase()).not.toContain('no card');
+    expect(out.toLowerCase()).not.toContain('no credit card');
+    expect(out.toLowerCase()).not.toContain('cancel anytime');
+  });
+
+  it('adds no figure with a dollar sign: the price is still PLAN_PRICE_USD alone', () => {
+    for (const out of [render({ initialTrialDays: 30 }), render({ signedIn: true, initialTrialDays: 30 })]) {
+      const prices = out.match(/\$\d[\d,]*/g) ?? [];
+      expect(new Set(prices)).toEqual(new Set([`$${PLAN_PRICE_USD}`]));
+    }
+  });
+});
+
 describe('no ad hoc styling', () => {
   it('is built from the shared Card', () => {
     expect(render()).toContain('avp-card');
+  });
+
+  it('emits no arbitrary-value and no raw-palette class with the trial on', () => {
+    const out = render({ signedIn: true, error: 'x', initialTrialDays: 30 });
+    expect(out).not.toMatch(/class="[^"]*\b(bg|text|border|max-w)-\[/);
+    expect(out).not.toMatch(/class="[^"]*\b(slate|gray|zinc|blue|red|green)-\d{3}\b/);
   });
 
   it('emits no arbitrary-value and no raw-palette class', () => {

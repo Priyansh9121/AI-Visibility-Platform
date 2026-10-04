@@ -64,6 +64,42 @@ class BillingStatusOut(ApiModel):
     # case a scan start answers `402 SCAN_LIMIT_VERIFY_REQUIRED`. The web reads
     # it and never works it out itself.
     free_scan_requires_google: bool
+    # When the free trial ends and the card is first charged — 2026-10-04. Set
+    # ONLY while the status is `trialing`, and null in every other state: after
+    # the trial converts the date is history, and an agency that never had one
+    # has none. The web says "Free trial until <day and time, UTC>, then <price> a
+    # month" from it and nothing else, so a trial is never claimed for an agency
+    # that is not in one.
+    trial_ends_at: datetime | None
+    # Whether Settings may promise this agency a free trial — 2026-10-04, round two. True only
+    # when a trial is on (`STRIPE_TRIAL_DAYS` above 0, with billing configured: the same
+    # reading `GET /billing/plan` gives) AND this agency's own row has never had a
+    # subscription, the row test checkout applies. It CANNOT see the other half of checkout's
+    # test, the customer's subscription list at Stripe: a read never calls Stripe. So true
+    # means nothing in our record says no, and checkout can still refuse the trial to a
+    # customer Stripe remembers an ended subscription for. The web promises a trial only on
+    # a true and never works it out itself.
+    trial_eligible: bool
+
+
+class BillingPlanOut(ApiModel):
+    """What the plan offers the public — today, only the length of its free trial.
+
+    `GET /billing/plan`, with no session, no agency and nothing secret in it:
+    it is read by the public pricing card and landing page, before anybody has
+    signed up. `trialDays` is `STRIPE_TRIAL_DAYS`, the one place the length of
+    the trial is stated, so what a page says and what checkout does cannot
+    disagree. **0 means there is no trial**, and is also the answer on a
+    deployment where checkout is not configured (a trial nobody can start is
+    not one to promise). A page says "the first N days after you subscribe are
+    free" only for an N above 0.
+
+    It describes the offer to a NEW agency. Whether a particular agency still
+    gets the trial is not here: that is the agency's own history, and checkout
+    decides it (`services/billing.create_checkout_session`).
+    """
+
+    trial_days: int
 
 
 class CheckoutSessionOut(ApiModel):
