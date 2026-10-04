@@ -268,6 +268,42 @@ describe('the free trial — 2026-10-04', () => {
   });
 });
 
+describe('the fix list is described as the report orders it — launch checklist 3.63', () => {
+  // The card said "Named fixes, ordered by what they would move and what they would cost you".
+  // The report ranks its fixes by the points each would recover and draws an effort of S, M or L
+  // beside each; cost ranks nothing. `claimsAgainstCode.test.tsx` reads the report back to hold
+  // these words to it, and `LandingView.test.tsx` holds the landing page's own sentence to the
+  // same clause.
+  const SENTENCE =
+    'Named fixes, ordered by the points each would recover, with the effort of each shown beside it.';
+  const states = () => [
+    render(),
+    render({ signedIn: true }),
+    render({ signedIn: true, trialEligible: false }),
+    render({ initialTrialDays: 30 }),
+    render({ signedIn: true, busy: true, error: 'x' }),
+  ];
+
+  it('says it as one line of what the plan includes, word for word, signed in or out', () => {
+    for (const out of states()) {
+      expect(out).toContain(SENTENCE);
+      expect(out).toMatch(
+        /<li[^>]*>Named fixes, ordered by the points each would recover, with the effort of each shown beside it\.<\/li>/,
+      );
+      expect(out.split('Named fixes').length - 1).toBe(1);
+    }
+  });
+
+  it('no longer says they are ordered by what they would move or what they would cost you', () => {
+    for (const out of states()) {
+      for (const old of ['what they would move', 'what they would cost', 'would cost you']) {
+        expect(out, `found "${old}"`).not.toContain(old);
+      }
+      expect(out).not.toMatch(/ordered by what/i);
+    }
+  });
+});
+
 describe('no ad hoc styling', () => {
   it('is built from the shared Card', () => {
     expect(render()).toContain('avp-card');

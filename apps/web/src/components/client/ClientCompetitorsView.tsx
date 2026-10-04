@@ -310,9 +310,12 @@ function Field({
         </div>
 
         {intermittent.length > 0 && (
-          // The set is re-detected per scan, and a rival missing from an
-          // earlier one is a real event. Said here the way Rankings says it
-          // under its chart, so the two screens agree about the same rivals.
+          // A new scan copies the client's most recent competitor set
+          // (`carry_forward_set`), so a rival is missing from some scans when
+          // the list changed in between: an operator corrected it, or a
+          // re-detection ran (the API's detect route; no screen calls it).
+          // That is a real event. Said here the way Rankings says it under
+          // its chart, so the two screens agree about the same rivals.
           <p className="max-w-measure text-ui-sm leading-prose text-text-tertiary">
             {intermittent.length === 1
               ? `${intermittent[0]} was not in every scan's competitor set. Each card says how many scans carried its rival.`
