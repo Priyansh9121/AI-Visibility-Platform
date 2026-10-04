@@ -29,6 +29,18 @@ export interface paths {
          *     renewing. It is still `active` until then, so `isActive` stays true and
          *     the scan allowance stays the plan's.
          *
+         *     `trialEndsAt` (2026-10-04) is when the free trial ends and the card is first
+         *     charged, and is set ONLY while the status is `trialing`: null for every other
+         *     status, for a trial that converted (the date is history) and for an agency that
+         *     never had one. A trialing agency is `isActive` and has the plan's full allowance.
+         *
+         *     `trialEligible` (2026-10-04, round two) is whether Settings may promise this agency a free
+         *     trial: true only when a trial is on (`STRIPE_TRIAL_DAYS` above 0 and billing configured) and
+         *     the agency's own row has never had a subscription, the same row test checkout applies. **It
+         *     cannot see Stripe's side of that test** (the customer's subscription list: a read never
+         *     asks Stripe), so true means "nothing in our record says no": checkout can still refuse the
+         *     trial to a customer Stripe remembers an ended subscription for.
+         *
          *     Every field comes off the `agencies` row the webhook maintains. A settings
          *     screen that called a payment processor on page load would be slower, would
          *     fail whenever Stripe was slow, and would put a third party in the render
@@ -73,6 +85,12 @@ export interface paths {
          *
          *     **This endpoint does not subscribe anybody.** It returns a URL. The
          *     subscription begins when Stripe says it did, over the webhook below.
+         *
+         *     **A free trial, when `STRIPE_TRIAL_DAYS` is above 0** (2026-10-04): the session
+         *     asks Stripe for that many trial days and for the card at checkout, and Stripe
+         *     charges when the trial ends unless the agency cancels. One trial per agency, ever:
+         *     an agency that has had any subscription, or whose Stripe customer has, gets the
+         *     plain checkout. The response is the same either way, a URL.
          *
          *     **Errors:**
          *
@@ -683,6 +701,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/billing/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Billing Plan
+         * @description What the plan offers the public: the length of its free trial. **No auth, no agency, no
+         *     secrets.**
+         *
+         *     `trialDays` is `STRIPE_TRIAL_DAYS` (2026-10-04), 0 meaning there is no trial. The public
+         *     pricing card and landing page read it and say "the first N days after you subscribe are
+         *     free" only for an N above 0, so the number is stated in one place and a page never claims
+         *     a trial that checkout would not give. It is 0 wherever checkout cannot start a subscription (the
+         *     Stripe key or the Price unset), and while the page is still asking, or the answer fails,
+         *     the page says nothing about a trial at all.
+         *
+         *     It touches no database and no Stripe, so it is as cheap as `/health`, and there is nothing
+         *     in it to limit or to guess. It describes the offer to a NEW agency: whether a particular
+         *     agency still gets the trial is its own history, decided by checkout.
+         *
+         *     **Never cached** (`Cache-Control: no-store`): a short cache would keep a page saying
+         *     "30 days free" for its length after a deploy turned the trial off. A GET is not checked by
+         *     the Origin check, and CORS is unchanged: the web app reads it same-origin through its
+         *     `/api/v1` proxy, and a page on any other origin is not let read the answer.
+         *
+         *     **Errors:** none of its own.
+         */
+        get: operations["read_billing_plan_api_v1_billing_plan_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/billing/webhook": {
         parameters: {
             query?: never;
@@ -727,6 +784,10 @@ export interface paths {
          *     and applies nothing. An event older than the agency's newest applied one
          *     answers `{"received": true, "handled": false, "stale": true}` and applies
          *     nothing. Unmatched and unhandled events answer `handled: false` alone.
+         *
+         *     **`customer.subscription.trial_will_end`** (2026-10-04) answers `handled: true`
+         *     and does nothing but log (`billing.trial_will_end`, ids only): no state, no
+         *     watermark, no ledger row.
          *
          *     **Errors:** `400 invalid-webhook-signature` for a missing, malformed or
          *     wrong signature, and for a body that is not JSON. `503
@@ -2185,6 +2246,27 @@ export interface components {
          */
         AuditStatus: "ok" | "partial" | "failed";
         /**
+         * BillingPlanOut
+         * @description What the plan offers the public — today, only the length of its free trial.
+         *
+         *     `GET /billing/plan`, with no session, no agency and nothing secret in it:
+         *     it is read by the public pricing card and landing page, before anybody has
+         *     signed up. `trialDays` is `STRIPE_TRIAL_DAYS`, the one place the length of
+         *     the trial is stated, so what a page says and what checkout does cannot
+         *     disagree. **0 means there is no trial**, and is also the answer on a
+         *     deployment where checkout is not configured (a trial nobody can start is
+         *     not one to promise). A page says "the first N days after you subscribe are
+         *     free" only for an N above 0.
+         *
+         *     It describes the offer to a NEW agency. Whether a particular agency still
+         *     gets the trial is not here: that is the agency's own history, and checkout
+         *     decides it (`services/billing.create_checkout_session`).
+         */
+        BillingPlanOut: {
+            /** Trialdays */
+            trialDays: number;
+        };
+        /**
          * BillingStatusOut
          * @description An agency's subscription, as recorded — never as freshly asked of Stripe.
          *
@@ -2220,6 +2302,10 @@ export interface components {
             scansUsedThisPeriod: number;
             /** Subscriptionstatus */
             subscriptionStatus: string | null;
+            /** Trialeligible */
+            trialEligible: boolean;
+            /** Trialendsat */
+            trialEndsAt: string | null;
         };
         /** BrandMentionOut */
         BrandMentionOut: {
@@ -4768,6 +4854,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_billing_plan_api_v1_billing_plan_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingPlanOut"];
                 };
             };
         };

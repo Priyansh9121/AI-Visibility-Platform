@@ -19,7 +19,14 @@ THE ALLOWANCE
   (2026-09-29, below). Viewing reports, share links and PDFs stays free
   forever.
 * **Paid** (`services/billing.is_active`: `active` or `trialing`):
-  `PAID_SCANS_PER_MONTH` per agency per calendar month, UTC.
+  `PAID_SCANS_PER_MONTH` per agency per calendar month, UTC. **A free trial
+  (2026-10-04) is paid for this purpose**: a `trialing` agency has the plan's
+  whole forty, not a smaller one, and they are counted exactly as for `active`,
+  by the calendar month, so a trial has forty in each calendar month it touches
+  (up to three): a 30-day trial touches two, or three when it starts on 30 or 31
+  January (or on 31 January in a leap year). Scans started before the trial in the
+  same month count against that month's forty, as they would for an agency that
+  had paid.
 * A `canceled`, `past_due`, `unpaid` or `paused` subscription is free.
 * Existing agencies are grandfathered nothing: completed scans already in the
   table count, so an agency that has scanned is at "free scan used". That is

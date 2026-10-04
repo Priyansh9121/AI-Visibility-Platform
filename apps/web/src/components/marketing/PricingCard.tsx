@@ -45,6 +45,25 @@
  * and §5.4 records that none of it is built — so the absence of a cap is an
  * absence, not a feature, and the card says exactly that.
  *
+ * THE FREE TRIAL — 2026-10-04
+ * ---------------------------
+ * When the API says the plan has a trial (`GET /billing/plan`, `lib/billing/trial`),
+ * the card says so, in one paragraph under the price: how many days after you subscribe
+ * are free, that the card is entered at checkout and charged on the day after, unless the
+ * agency cancels first, and that it is one trial per agency. The length is the API's, so
+ * this file carries no copy of it. While the request is out, if it fails, and when the API
+ * says 0, the card says NOTHING about a trial: never a trial that may not exist.
+ *
+ * The page that draws the card asks early and tells it (`initialTrialDays`), so the card is
+ * drawn with its sentence and not a line taller a moment later; a card that was told does not
+ * ask. A card the page could not tell in time awaits the page's own request (`trialPlan`), and
+ * one that was handed nothing asks for itself when it mounts.
+ *
+ * Signed out, the card describes the offer to somebody who has not subscribed. Signed in,
+ * in Settings, it describes it only where the billing response says this agency would get
+ * it (`trialEligible`, which is the API's word: a trial is on and this agency has never had a
+ * subscription): one that cancelled would be told of a trial checkout will not give it.
+ *
  * The no-competitor-reference and no-borrowed-copy rules: derived from product-spec.md §3's core loop,
  * §5.4's pipeline and the seat model in `models/tenancy.py`. No competitor's
  * pricing page was opened, referenced or paraphrased while writing this.
@@ -52,6 +71,7 @@
 
 import type { JSX } from 'react';
 import { Button, Card, CardBody } from '@avp/design-system';
+import { trialSentence, usePlanTrial } from '@/lib/billing/trial';
 
 /**
  * The published price, in whole dollars.
@@ -126,6 +146,30 @@ export interface PricingCardProps {
   disabled?: boolean | undefined;
   /** A failure from the checkout call, in a sentence. */
   error?: string | null | undefined;
+  /**
+   * Whether the free trial may be offered on THIS card at all: false for an agency that
+   * has had a subscription, which checkout gives no trial to. Settings passes the billing
+   * response's `trialEligible`; the public card is always offered it. Default true. Even
+   * when true, nothing is said unless the API says the plan has a trial.
+   */
+  trialEligible?: boolean | undefined;
+  /**
+   * The trial's length, when the page already knows it: the page loaders ask the API early
+   * (`loadTrialDays`), wait for it at their draw point (`within`) and pass the answer down, so the
+   * card is drawn with its sentence and does not ask. 0 is "no trial", and also does not ask. Left
+   * out, the card awaits `trialPlan` if it was handed one, and otherwise asks for itself when it
+   * mounts. A static render never runs a request, so this is also how a test renders the card as
+   * it is once the API has said the trial is this many days.
+   */
+  initialTrialDays?: number | undefined;
+  /**
+   * The page's own request for the plan, for a card drawn UNTOLD (no `initialTrialDays`): the page
+   * asked early, gave up waiting for the answer, and hands the card the promise it asked with, so
+   * the card awaits that instead of asking again. One request for the whole page, however slow
+   * the plan is, and the sentence appears when it answers. Ignored when `initialTrialDays` is
+   * given. Round three.
+   */
+  trialPlan?: Promise<number> | undefined;
 }
 
 export function PricingCard({
@@ -135,7 +179,13 @@ export function PricingCard({
   busy = false,
   disabled = false,
   error = null,
+  trialEligible = true,
+  initialTrialDays,
+  trialPlan,
 }: PricingCardProps): JSX.Element {
+  // What the page told it, or what the page's own request answers, or (with neither) what it asks
+  // for itself: 0 until the API has answered, and for every failure: no sentence then.
+  const trialDays = usePlanTrial(initialTrialDays, trialPlan);
   return (
     <Card elevation="seated">
       <CardBody>
@@ -155,6 +205,14 @@ export function PricingCard({
               there is no tier above this one to be upsold to, and no annual
               commitment to sign.
             </p>
+            {trialEligible && trialDays > 0 && (
+              // The terms of the free trial, beside the price they end in. Stronger than
+              // the paragraph above on purpose: when the card is charged is the one thing
+              // here nobody should miss.
+              <p className="mt-3 max-w-measure text-ui-base leading-prose text-text-primary">
+                {trialSentence(trialDays)}
+              </p>
+            )}
           </div>
 
           <ul className="flex flex-col gap-3">

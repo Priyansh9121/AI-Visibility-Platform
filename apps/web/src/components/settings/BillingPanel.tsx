@@ -39,8 +39,9 @@
  * over — the subscription ended, or never began — so an agency in either can
  * come back from here, with the same plan card, at the same price, beneath its
  * status. Every other status already has a subscription, and the API answers a
- * Checkout for it with a 409: `active` and `trialing` because the agency is
- * paying, `past_due`, `unpaid`, `paused` and `incomplete` because Stripe still
+ * Checkout for it with a 409: `active` and `trialing` because the agency has a
+ * current subscription (paying, or inside its free trial), `past_due`, `unpaid`,
+ * `paused` and `incomplete` because Stripe still
  * holds that subscription open and a second Checkout would create a second one
  * beside it. Those get their status and Manage billing, and no Subscribe, so
  * the panel never shows a button that can only fail.
@@ -55,6 +56,28 @@
  * well, but it says to try again in a moment and nothing about a subscription,
  * so it shows its sentence and nothing else (`lib/billing/subscriptionRefusal`).
  *
+ * THE FREE TRIAL — 2026-10-04
+ * ---------------------------
+ * While the agency is `trialing`, and the trial is not being cancelled, the status card
+ * says "Free trial until <the trial's end, with its time, UTC>, then $<price> a month", from
+ * the billing response's `trialEndsAt` and `PLAN_PRICE_USD`, in place of "Renews <date>": the
+ * card has not been charged, and that instant is the one it will be, and so the cancel-by
+ * deadline (`formatDayTime`: a day alone is hours of doubt, and the day is unpadded, as a
+ * date is mid-sentence).
+ * Under it, what to do: "Nothing has been charged yet. Cancel in Manage billing before then
+ * and nothing will be."
+ *
+ * Cancelled during the trial, "then $<price> a month" would be untrue, and so would "it won’t
+ * renew" (a trial was going to be charged, not renewed): the "Ends <day>" line takes over, with
+ * "Cancelled — you keep full access until then, and you will not be charged." A cancelled PAID
+ * plan keeps "…and it won’t renew." In every other state the panel says nothing about a trial.
+ *
+ * The plan card, where it is offered, describes the trial's terms only where the billing
+ * response says this agency would get it (`trialEligible`: the API's word, a trial is on AND
+ * the agency's record has never had a subscription). Checkout gives one trial per agency, so a
+ * cancelled agency is not promised another. The length arrives as `initialTrialDays` from the
+ * route, which asked early; left out, the card asks for itself.
+ *
  * The no-competitor-reference rules: derived from the API's own `BillingStatus` shape and
  * the states it can actually be in. No competitor's billing screen was opened
  * or referenced.
@@ -67,8 +90,8 @@ import type { BillingStatus } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
 import { canCheckout, freeScanUsed } from '@/lib/billing/allowance';
 import { isSubscriptionRefusal } from '@/lib/billing/subscriptionRefusal';
-import { formatDay } from '@/lib/dates';
-import { PricingCard } from '@/components/marketing/PricingCard';
+import { formatDay, formatDayTime } from '@/lib/dates';
+import { PLAN_PRICE_USD, PricingCard } from '@/components/marketing/PricingCard';
 
 // WHICH SUBSCRIPTIONS CAN START A CHECKOUT is `canCheckout`, in
 // `lib/billing/allowance` — founder decision 4, 2026-10-01 — and not a set kept
@@ -97,7 +120,9 @@ const STATUS_COPY: Record<string, { label: string; tone: BadgeTone; sentence: st
   trialing: {
     label: 'Trial',
     tone: 'success',
-    sentence: 'You are inside a trial period. Nothing has been charged yet.',
+    // "before then" is the trial's end, in the line above it. Said as a thing to do: the
+    // person has a card on file and a date, and what they need is how not to be charged.
+    sentence: 'Nothing has been charged yet. Cancel in Manage billing before then and nothing will be.',
   },
   past_due: {
     label: 'Payment failed',
@@ -142,6 +167,19 @@ export interface BillingPanelProps {
   /** Why `billing` is null, in a sentence. */
   billingError?: string | null;
   /**
+   * The free trial's length, when the page already asked for it: `app/settings/page.tsx` asks at
+   * the top of its loader and passes the answer down through `SettingsView`, so the plan card
+   * is drawn with its sentence and does not ask (`PricingCard`). Left out, the card asks for
+   * itself. 0 is "no trial".
+   */
+  initialTrialDays?: number | undefined;
+  /**
+   * The page's own request for the plan, when it asked early and gave up waiting for the answer:
+   * a card drawn untold awaits THIS rather than asking again, so there is one request for the
+   * whole page, however slow it is (round three). Ignored when `initialTrialDays` is given.
+   */
+  trialPlan?: Promise<number> | undefined;
+  /**
    * Set in tests to render a state a static render cannot reach: a failed
    * Subscribe, shown beside the plan card when there is one and in the status
    * card when there is not.
@@ -159,6 +197,8 @@ export function BillingPanel({
   billing,
   billingError = null,
   initialError = null,
+  initialTrialDays,
+  trialPlan,
 }: BillingPanelProps): JSX.Element {
   // Which call is in flight. Both buttons are disabled while either is, but
   // only the one that was clicked says "Opening…": they can share a screen now.
@@ -251,6 +291,14 @@ export function BillingPanel({
       busy={opening === 'checkout'}
       disabled={opening !== null}
       error={checkoutError}
+      // The API's word, not this file's: a trial is on AND this agency's record has never had
+      // a subscription (the row test checkout applies, `trialEligible` on the billing response).
+      // It used to be `status === null`, which cannot see a record that says otherwise.
+      // `canceled` and `incomplete_expired` are offered the plan, and no trial. Only a true is a
+      // promise: a response without the field (an API not yet deployed with it) promises nothing.
+      trialEligible={billing.trialEligible === true}
+      initialTrialDays={initialTrialDays}
+      trialPlan={trialPlan}
     />
   ) : null;
 
@@ -327,6 +375,22 @@ export function BillingPanel({
   // Cancelled in the portal but still paid up. Manage billing stays below, so
   // the plan can be resumed before it ends.
   const ending = billing.isActive && billing.cancelAtPeriodEnd;
+  // A trial under way and not being cancelled: when the card is first charged, and what it is
+  // charged. Read off the STATUS, so a leftover date on any other state says nothing. With
+  // the TIME, in UTC: the end is the cancel-by deadline, and a day alone leaves "until the 21st"
+  // open to a reading that is hours wrong. The day is unpadded (`formatDayTime`): it sits
+  // mid-sentence, where a leading zero reads as a typo.
+  const trialLine =
+    status === 'trialing' && !ending && billing.trialEndsAt != null
+      ? `Free trial until ${formatDayTime(billing.trialEndsAt)}, then $${PLAN_PRICE_USD} a month`
+      : null;
+  // What a cancelled plan says. A cancelled TRIAL was never going to renew: it was going to be
+  // charged, so "it won’t renew" would be the wrong thing to say, and what the person wants to
+  // know is that they will not be charged. A cancelled paid plan keeps its own sentence.
+  const endingSentence =
+    status === 'trialing'
+      ? 'Cancelled — you keep full access until then, and you will not be charged.'
+      : 'Cancelled — you keep full access until then, and it won’t renew.';
 
   const statusCard = (
     <Card elevation="seated">
@@ -334,19 +398,24 @@ export function BillingPanel({
         <div className="flex flex-col gap-4">
           <div className="flex flex-wrap items-center gap-3">
             <Badge tone={copy?.tone ?? 'neutral'}>{copy?.label ?? status}</Badge>
-            {billing.isActive && billing.currentPeriodEnd != null && (
-              // "Ends", not "Renews", once it has been cancelled — 2026-09-29.
-              // Stripe's portal cancels at the end of the period, so the
-              // subscription stays active (and the plan applies) until then.
-              <p className="text-ui-base text-text-primary">
-                {ending ? 'Ends' : 'Renews'} {formatDay(billing.currentPeriodEnd)}
-              </p>
+            {trialLine !== null ? (
+              <p className="text-ui-base text-text-primary">{trialLine}</p>
+            ) : (
+              billing.isActive &&
+              billing.currentPeriodEnd != null && (
+                // "Ends", not "Renews", once it has been cancelled — 2026-09-29.
+                // Stripe's portal cancels at the end of the period, so the
+                // subscription stays active (and the plan applies) until then.
+                <p className="text-ui-base text-text-primary">
+                  {ending ? 'Ends' : 'Renews'} {formatDay(billing.currentPeriodEnd)}
+                </p>
+              )
             )}
           </div>
 
           <p className="max-w-measure text-ui-base leading-prose text-text-secondary">
             {ending
-              ? 'Cancelled — you keep full access until then, and it won’t renew.'
+              ? endingSentence
               : (copy?.sentence ??
                 `Stripe reports this subscription as “${status}”, which this screen does not have wording for yet. Starting a scan is on the free allowance until it is active again; every report you already have stays open.`)}
           </p>

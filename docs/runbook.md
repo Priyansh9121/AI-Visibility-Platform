@@ -84,7 +84,10 @@ All of this happens in Stripe's **Test mode**. Never use a live key.
    The URL is
    `https://ai-visibility-platform-5gk4.onrender.com/api/v1/billing/webhook`. Select exactly these
    events: `checkout.session.completed`, `customer.subscription.created`,
-   `customer.subscription.updated`, `customer.subscription.deleted`. Save,
+   `customer.subscription.updated`, `customer.subscription.deleted` and
+   `customer.subscription.trial_will_end`. The fifth only writes a log line
+   (`billing.trial_will_end`, a few days before a free trial ends); it changes
+   nothing, and the endpoint works without it. Save,
    reveal the endpoint's Signing secret (`whsec_…`), set it as
    `STRIPE_WEBHOOK_SECRET` on the Render API service, and save.
 
@@ -102,7 +105,9 @@ All of this happens in Stripe's **Test mode**. Never use a live key.
    - (a) Settings shows the plan as active, with "Renews" and a date.
    - (b) In Stripe → Webhooks → your endpoint → Event deliveries, each of the
      four event types answered 200. The subscription events answer
-     `{"received":true,"handled":true}`.
+     `{"received":true,"handled":true}`. (The fifth, `customer.subscription.trial_will_end`,
+     is sent only for a free trial, a few days before it ends; it answers the same and
+     writes only a log line.)
    - (c) Press **Resend** on one delivered `customer.subscription.updated`. It
      answers `{"received":true,"handled":false,"duplicate":true}` and changes
      nothing.
@@ -130,6 +135,26 @@ All of this happens in Stripe's **Test mode**. Never use a live key.
 
 8. **Stop.** Nothing is ever switched to live mode from this runbook. Going
    live is the founder's key swap after Stripe's business verification.
+
+## The free trial, and what it depends on in Stripe
+
+`STRIPE_TRIAL_DAYS` on the Render API service is the trial's length; 0, the default, is no
+trial. It is the founder's to turn on, in test mode first. Two settings in the Stripe
+dashboard decide how it behaves, and the code cannot see either:
+
+- **Trial-ending reminder email.** Stripe can email a customer before a trial ends. AVP
+  sends no email of its own (Resend is off), so that reminder, if wanted, is Stripe's: a
+  Billing setting in the Stripe dashboard, and the founder's decision.
+- **How the portal cancels** (Settings → Billing → Customer portal, step 5 above): at the
+  end of the billing period, or at once. Either way a trial cancelled before its end is not
+  charged. At the period's end the agency keeps the plan until the trial ends and Settings
+  shows "Ends" and the day; cancelled at once, it loses the plan, and the allowance with it,
+  at that moment.
+
+To rehearse the first charge, use a Stripe test clock in the dashboard (Test mode) to move
+the clock past the trial's end: the subscription goes from `trialing` to `active`, and
+Settings drops "Free trial until" for "Renews". Do it with the test card, as in the steps
+above.
 
 ## Confirm how Render passes the client IP (rate limits)
 
@@ -255,6 +280,11 @@ new session. If two subscriptions still end up on one customer, the API logs
    a metadata key); Stripe sends a new `customer.subscription.updated`, which
    AVP applies as the newest event. Re-check Billing. Rehearse this in test
    mode before relying on it.
+
+Never clear an agency's Stripe columns by hand (`stripe_customer_id`,
+`stripe_subscription_id`, `subscription_status`, `stripe_event_at`) to start it
+again or to make Settings look right: a row with none of them reads as an agency
+that has never had a subscription, and checkout will offer it a second free trial.
 
 ## Reading the API's memory
 

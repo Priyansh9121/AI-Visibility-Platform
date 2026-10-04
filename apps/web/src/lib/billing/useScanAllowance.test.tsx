@@ -65,6 +65,8 @@ const BILLING: BillingStatus = {
   periodResetsAt: null,
   freeScanRequiresGoogle: false,
   cancelAtPeriodEnd: false,
+  trialEndsAt: null,
+  trialEligible: false,
 };
 
 const FREE_USED = {

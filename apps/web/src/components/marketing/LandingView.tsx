@@ -27,6 +27,11 @@
  *                                            has existed since 2026-09-23; a $150
  *                                            one is the founder's to create (see
  *                                            `PLAN_PRICE_USD`)
+ *   - a free trial                         — 2026-10-04, ONLY when the API says the plan
+ *                                            has one (`GET /billing/plan`), and only in
+ *                                            the pricing card, which reads it. This page
+ *                                            types no length, so it cannot say a trial
+ *                                            that checkout would not give
  *
  * NOTHING ELSE IS CLAIMED. There are no testimonials, no customer logos, no
  * user counts, no press mentions and no funding line on this page, because
@@ -129,12 +134,29 @@ export interface LandingViewProps {
   onLogIn?: (() => void) | undefined;
   /** Disable chart motion in tests and static renders. */
   animate?: boolean | undefined;
+  /**
+   * The free trial's length, when the page already asked the API: the home route asks early,
+   * beside its session check, and passes the answer down, so the pricing card is drawn with its
+   * sentence and does not ask (0 is "no trial"). Left out, the card asks for itself when it
+   * mounts. A static render never runs a request, so this is also how a test renders the page
+   * as it is once the API has said the trial is this many days. See `PricingCard`.
+   */
+  initialTrialDays?: number | undefined;
+  /**
+   * The home route's own request for the plan, handed to the pricing card for the case where the
+   * route gave up waiting (it waits half a second at the draw point, as the card sits far below
+   * the fold): the card awaits it rather than asking again. Ignored when `initialTrialDays` is
+   * given. Round three.
+   */
+  trialPlan?: Promise<number> | undefined;
 }
 
 export function LandingView({
   onGetStarted,
   onLogIn,
   animate = true,
+  initialTrialDays,
+  trialPlan,
 }: LandingViewProps): JSX.Element {
   return (
     <div id="top" className="flex flex-col">
@@ -397,12 +419,17 @@ export function LandingView({
             lead={
               <>
                 One price, published, with no &ldquo;contact us&rdquo; between you and it. It
-                buys the product as described above — not a trial of it, and not a
-                cut-down tier with the useful part held back.
+                buys the whole product as described above, and not a cut-down tier with
+                the useful part held back.
               </>
             }
           >
-            <PricingCard signedIn={false} onGetStarted={onGetStarted} />
+            <PricingCard
+              signedIn={false}
+              onGetStarted={onGetStarted}
+              initialTrialDays={initialTrialDays}
+              trialPlan={trialPlan}
+            />
           </PageSection>
           </Reveal>
         </div>

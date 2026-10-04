@@ -24311,3 +24311,133 @@ Drift check (north-star §8): Layer 2, Measurement (competitor detection's searc
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# A free trial at checkout, off until `STRIPE_TRIAL_DAYS` is set: one per agency, the plan's allowance while it runs, and every page offers it only when it is on
+
+**2026-10-04, the eleventh entry of the day; branch `pilot-fixes-5`, the founder's brief "free trial, US$150, usage visibility and pilot guardrails" (item P1).** One item, one commit.
+
+**Render: nothing has to be set for this to be safe.**
+- `STRIPE_TRIAL_DAYS` defaults to 0, and with 0 checkout sends exactly the parameters it sent before.
+- One migration, `7106cadcd0ed` (a nullable `agencies.subscription_trial_end`), runs as the API starts, under `lock_timeout`.
+- Turning the trial on is launch checklist 1.1g, and it waits on two things: the US$150 Price being named, and the founder's decision on 3.72 (a trial needs no verified identity).
+
+Drift check (north-star §8): no product layer; the commercial architecture (§5.3, how the plan starts), across Layer 1's checkout, Settings and pricing card; lifecycle phase: Activation (Epic 9), how a pilot agency starts paying.
+
+## 1. What changed
+
+The founder's decision (2026-10-04): a 30-day free trial with a card at checkout, charged on day 31 unless cancelled; one trial per agency.
+
+- **The setting.** `STRIPE_TRIAL_DAYS` takes whole days from 0 to 730 (Stripe's own limit). Blank is 0, and any other value stops the API from starting. It is documented in `.env.example`.
+- **Checkout** (`create_checkout_session`). With N above 0 and an eligible agency, it adds `subscription_data.trial_period_days = N` and `payment_method_collection = "always"`, and nothing else changes. Otherwise the parameters are today's.
+  - Eligible (`trial_days_for`) has two halves, both decided under the agency row's existing lock:
+    - the row has no `stripe_subscription_id`, no `subscription_status` and no `stripe_event_at`;
+    - for an agency that already has a Stripe customer, Stripe lists no subscription of any status for it. Checkout already makes that call, so there is no new round trip.
+  - `billing.checkout_created` carries `trial_days`, 0 when none.
+- **The webhook.**
+  - `trialing` → `active` (the first charge) and `trialing` → `canceled` or `incomplete_expired` go through the usual events.
+  - **The trap a trial adds:** `checkout.session.completed` writes an optimistic `active`. Arriving after the real `trialing`, it would have hidden the trial. `_blocked_by_state_machine(…, optimistic=True)`, passed only for that event, refuses to replace `trialing` for the same subscription id. Both arrival orders end `trialing` with its end date.
+  - `customer.subscription.trial_will_end` logs `billing.trial_will_end` with `agency_id` and `subscription_id`, and does nothing else: no state, no watermark, no ledger row. A redelivery logs again.
+- **Storage.** `agencies.subscription_trial_end` mirrors Stripe's `trial_end` from every `customer.subscription.*` event.
+- **Reads.**
+  - `GET /agencies/{agencyId}/billing` gains two fields:
+    - `trialEndsAt`, set only while `trialing`;
+    - `trialEligible`, true only when the trial is on and the row passes checkout's row test. It cannot see Stripe's list, and the contract says so.
+  - A new public `GET /api/v1/billing/plan` answers `{"trialDays": N}`, 0 when billing is not configured. It needs no session and reads no database and no Stripe. It sends `Cache-Control: no-store`, and its body is the same for every caller.
+- **The allowance.** A trialing agency has the plan's 40 scans a month, by calendar month (UTC). A 30-day trial touches two months, or three when it starts on 30 or 31 January, and has forty in each.
+- **The web reads the trial from that one source.** Each page asks for the plan beside its first call and waits for it only at the moment it draws: at most 500 ms on the landing page (the card is far below the fold) and 1.5 s on Settings. That is one request per page. A slower answer arrives later on the same request, and a reload keeps the previous answer, so the sentence never blinks.
+- **The sentences:**
+  - **Pricing card,** on the landing page and in Settings when `trialEligible`: "The first 30 days after you subscribe are free. You enter your card at checkout, and it is charged on day 31 unless you cancel first. One free trial per agency."
+    - N comes from the API, and "day 31" is joined by a no-break space.
+    - There is no sentence while it loads, if it fails, or with 0.
+  - **Settings, trialing:** the badge "Trial", then "Free trial until 3 Nov 2026, 09:05 UTC, then $150 a month" (a new `formatDayTime`: UTC, the day unpadded), then "Nothing has been charged yet. Cancel in Manage billing before then and nothing will be."
+  - **Settings, a trial being cancelled:** "Ends <day>" and "Cancelled — you keep full access until then, and you will not be charged."
+  - **The landing page's pricing lead** said the plan "buys the product as described above — not a trial of it". It now says "It buys the whole product as described above, and not a cut-down tier with the useful part held back."
+- **Docs:**
+  - `docs/api-contracts.md`: the trial, both fields and the plan endpoint.
+  - `docs/runbook.md`:
+    - the webhook endpoint's fifth event, `customer.subscription.trial_will_end`, which writes only a log line;
+    - never clear an agency's Stripe columns by hand, because a cleared row is offered a second trial;
+    - a new section, "The free trial, and what it depends on in Stripe": the reminder email, and whether the portal cancels at once or at the period's end. Either way, a trial cancelled before its end is not charged.
+  - The `stripe-billing-ops` skill and the launch checklist's live-mode event list.
+- **OpenAPI and `api.gen.ts`** are regenerated, and `BillingPlan` is exported from shared-types.
+
+## 2. The reviews
+
+**Security review: passed with nits. Safe to merge with the trial off.**
+- **H1, for the founder, before `STRIPE_TRIAL_DAYS` goes above 0** (launch checklist 3.72). A trial gives the paid allowance with no verified identity. Agencies cost nothing to make and need no verified email, so throwaway agencies could take 40 scans in each calendar month their trial touches, at provider cost. Options:
+  - offer the trial only to a user with a linked Google identity, the free scan's rule;
+  - make a trial worth one allowance counted from its start;
+  - a Stripe Radar rule against one card on many customers;
+  - accept it and watch `billing.checkout_created trial_days>0`.
+- **Fixed in round two:**
+  - L2: the docs said two calendar months, and it can be three;
+  - L3: Settings promised a trial on `status === null`, a weaker rule than checkout's. It now uses `trialEligible`.
+- **L1, not built** (3.83): `trialing` is not bounded by its end date, so a lost end-of-trial event would leave the plan on. The same is true of `active`.
+- **L4, for the founder:** Stripe's trial-ending reminder email, and the portal's cancel behaviour. Production sends no email of its own.
+- **Checked and clean:** both arrival orders; one trial per agency (a cancelled trial, two checkouts at once, a failed or full Stripe list fails closed); the plan endpoint's CORS, Origin and caching; ids-only logs; the migration.
+
+**UI review: passed with nits twice.** Fixed in rounds two and three:
+- M1: the cancel-by deadline was a UTC day with no time, so someone west of UTC could read a day later than their charge;
+- M2: the trial sentence arrived after load and moved the card and its button by 57 px on a desktop and 102 px on a phone;
+- the plan request pinned by a test;
+- three sentences taken as proposed;
+- one request per page, even when the session check is slower than the wait;
+- the shorter wait on the landing page;
+- the reload blink;
+- the padded day.
+
+**Not built, for the founder** (3.84):
+- the hero's "$150/month after that." does not mention the trial;
+- the scan-limit notice's Subscribe buttons carry no trial terms;
+- a cancelled agency is not told why it gets no trial.
+
+**For the lawyer** (2.4). These sentences are not untrue, but a trial leaves them incomplete:
+- the terms' "The plan" says nothing of a free trial or of the charge on its last day;
+- their cancellation sentence does not say a trial cancelled before its end is not charged;
+- their fair-use example names extra accounts for free scans, not for trials;
+- the privacy page's "Billing." does not list the stored trial end.
+
+## Found, not fixed
+
+- **The legal pages ship the API client.** `/terms` and `/privacy` import their constants from `PricingCard`, which now imports the trial loader and so `lib/api`. Only the bundle grows.
+- **The landing page asks for the plan on every signed-in visit too,** and the answer is never used: one small public GET, an accepted trade-off.
+- **Right after Stripe returns** to `/settings?checkout=success`, and until the webhook lands, Settings can still show the offer. This was already so. A second checkout is refused.
+
+## Verified
+
+**API pytest 4263 → 4398 (+135) and web vitest 1859 → 1999 (+140); floors raised to match.** One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **New API tests:**
+  - `test_trial_setting.py` (19);
+  - `test_billing.py` and `test_scan_allowance.py` (+116). They cover:
+    - checkout with the trial off (byte-for-byte today's parameters), on and eligible, and each ineligible row shape and Stripe list;
+    - both arrival orders at several offsets and six concurrent pairs;
+    - each trial transition;
+    - `trial_will_end` writing nothing even before the router decides;
+    - `trialEndsAt` and `trialEligible` per state;
+    - the plan endpoint signed out, cross-origin and uncached;
+    - 40 a month while trialing, including a three-month trial.
+- **New web tests:**
+  - `lib/billing/trial.test.tsx`, `lib/api.billingPlan.test.ts` and `app/settings/page.test.tsx`;
+  - stepwise fake-clock timelines in `app/home.test.tsx`;
+  - the panel, Settings, card, landing and date tests.
+- **The implementer's negative controls,** each restored and checked by hash: 21 on the API side and 12 on the web side in round one. Two were first not caught (the router's rollback hid a write), so a service-level test was added.
+  - Round two:
+    - `trialEligible`: 6 mutations;
+    - the deadline: 2;
+    - the early plan call: 7, one of which first escaped and got its own test;
+    - the copy: 4.
+  - Round three:
+    - the wait counted from the call: 5 mutations;
+    - the two waits swapped: 3 and 4 fail;
+    - the reload dropping its answer: 1;
+    - the padded day: 6.
+- **Alembic, on an empty scratch database:** `upgrade head` (`f45983cfa5e3 -> 7106cadcd0ed`), `check`, `downgrade -1` and `upgrade` again all pass, with one head. The bar's own Alembic step ran it again.
+- **On this tree:** `services/billing.py`, `routers/billing.py`, `schemas/billing.py`, `config.py`, `BillingPanel.tsx` and `PricingCard.tsx` back to `HEAD`. `test_billing.py` and `test_trial_setting.py` give 79 failed and 36 errors of 283, and the panel's and card's tests fail 18 of 139. Restored and checked with `cmp`.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (`f45983cfa5e3 -> 7106cadcd0ed`) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts`, regenerated in this commit, regenerate again with no change.
+- Exit codes were read from files.

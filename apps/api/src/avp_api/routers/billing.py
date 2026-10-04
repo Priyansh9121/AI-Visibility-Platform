@@ -22,6 +22,14 @@ the shape of the one above it, and copies the wrong one. `report.py` is the
 precedent for a router spanning two path families with no prefix, so that is
 the shape used here — `/agencies/{id}/billing/...` and `/billing/webhook`.
 
+A FIFTH ROUTE, WITH NO SESSION FOR A DIFFERENT REASON (2026-10-04)
+-----------------------------------------------------------------
+`GET /billing/plan` is public: it tells the pricing card and the landing page
+how long the free trial is, before anybody has signed up. It has no session, no
+agency and nothing secret in it, touches no datastore, and is never cached. The
+webhook is authenticated by a signature; this needs no authentication because
+there is nothing in it to protect, and it is not a way to ask about anybody.
+
 WHY ALL THREE AUTHENTICATED ROUTES ARE OWNER/ADMIN
 ---------------------------------------------------
 Epic 9.14 set owner-or-admin for seat management on the argument that a member
@@ -48,10 +56,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Header, Path, Request, status
+from fastapi import APIRouter, Header, Path, Request, Response, status
 
 from ..deps import DbDep, RequireAdmin, SettingsDep, assert_own_agency
 from ..schemas.billing import (
+    BillingPlanOut,
     BillingStatusOut,
     CheckoutSessionOut,
     PortalSessionOut,
@@ -61,6 +70,33 @@ from ..services import billing as billing_service
 from ..services import scan_allowance
 
 router = APIRouter(tags=["billing"])
+
+
+@router.get("/billing/plan", response_model=BillingPlanOut)
+async def read_billing_plan(settings: SettingsDep, response: Response) -> Any:
+    """What the plan offers the public: the length of its free trial. **No auth, no agency, no
+    secrets.**
+
+    `trialDays` is `STRIPE_TRIAL_DAYS` (2026-10-04), 0 meaning there is no trial. The public
+    pricing card and landing page read it and say "the first N days after you subscribe are
+    free" only for an N above 0, so the number is stated in one place and a page never claims
+    a trial that checkout would not give. It is 0 wherever checkout cannot start a subscription (the
+    Stripe key or the Price unset), and while the page is still asking, or the answer fails,
+    the page says nothing about a trial at all.
+
+    It touches no database and no Stripe, so it is as cheap as `/health`, and there is nothing
+    in it to limit or to guess. It describes the offer to a NEW agency: whether a particular
+    agency still gets the trial is its own history, decided by checkout.
+
+    **Never cached** (`Cache-Control: no-store`): a short cache would keep a page saying
+    "30 days free" for its length after a deploy turned the trial off. A GET is not checked by
+    the Origin check, and CORS is unchanged: the web app reads it same-origin through its
+    `/api/v1` proxy, and a page on any other origin is not let read the answer.
+
+    **Errors:** none of its own.
+    """
+    response.headers["Cache-Control"] = "no-store"
+    return BillingPlanOut(trial_days=billing_service.trial_days_offered(settings))
 
 
 @router.get("/agencies/{agencyId}/billing", response_model=BillingStatusOut)
@@ -85,6 +121,18 @@ async def read_billing(
     cancelled in Stripe's portal and runs to `currentPeriodEnd` without
     renewing. It is still `active` until then, so `isActive` stays true and
     the scan allowance stays the plan's.
+
+    `trialEndsAt` (2026-10-04) is when the free trial ends and the card is first
+    charged, and is set ONLY while the status is `trialing`: null for every other
+    status, for a trial that converted (the date is history) and for an agency that
+    never had one. A trialing agency is `isActive` and has the plan's full allowance.
+
+    `trialEligible` (2026-10-04, round two) is whether Settings may promise this agency a free
+    trial: true only when a trial is on (`STRIPE_TRIAL_DAYS` above 0 and billing configured) and
+    the agency's own row has never had a subscription, the same row test checkout applies. **It
+    cannot see Stripe's side of that test** (the customer's subscription list: a read never
+    asks Stripe), so true means "nothing in our record says no": checkout can still refuse the
+    trial to a customer Stripe remembers an ended subscription for.
 
     Every field comes off the `agencies` row the webhook maintains. A settings
     screen that called a payment processor on page load would be slower, would
@@ -113,6 +161,13 @@ async def read_billing(
         period_resets_at=current.period_resets_at,
         free_scan_requires_google=current.free_scan_requires_google,
         cancel_at_period_end=agency.subscription_cancel_at_period_end,
+        # Only while a trial is under way: the column mirrors Stripe's `trial_end`, which
+        # outlives the trial, so it is the status that says whether there is one.
+        trial_ends_at=(
+            agency.subscription_trial_end if agency.subscription_status == "trialing" else None
+        ),
+        # Whether checkout would give this agency the trial, by its own row (no Stripe call).
+        trial_eligible=billing_service.trial_days_for(agency, settings) > 0,
     )
 
 
@@ -155,6 +210,12 @@ async def start_checkout(
 
     **This endpoint does not subscribe anybody.** It returns a URL. The
     subscription begins when Stripe says it did, over the webhook below.
+
+    **A free trial, when `STRIPE_TRIAL_DAYS` is above 0** (2026-10-04): the session
+    asks Stripe for that many trial days and for the card at checkout, and Stripe
+    charges when the trial ends unless the agency cancels. One trial per agency, ever:
+    an agency that has had any subscription, or whose Stripe customer has, gets the
+    plain checkout. The response is the same either way, a URL.
 
     **Errors:**
 
@@ -275,6 +336,10 @@ async def stripe_webhook(
     answers `{"received": true, "handled": false, "stale": true}` and applies
     nothing. Unmatched and unhandled events answer `handled: false` alone.
 
+    **`customer.subscription.trial_will_end`** (2026-10-04) answers `handled: true`
+    and does nothing but log (`billing.trial_will_end`, ids only): no state, no
+    watermark, no ledger row.
+
     **Errors:** `400 invalid-webhook-signature` for a missing, malformed or
     wrong signature, and for a body that is not JSON. `503
     billing-not-configured` when `STRIPE_WEBHOOK_SECRET` is unset.
@@ -291,7 +356,8 @@ async def stripe_webhook(
 
     return WebhookAck(
         received=True,
-        handled=result is billing_service.WebhookResult.APPLIED,
+        handled=result
+        in (billing_service.WebhookResult.APPLIED, billing_service.WebhookResult.LOGGED),
         duplicate=True if result is billing_service.WebhookResult.DUPLICATE else None,
         stale=True if result is billing_service.WebhookResult.STALE else None,
     )
