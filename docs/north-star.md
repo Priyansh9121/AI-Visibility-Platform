@@ -642,6 +642,56 @@ Two consequences for the CI definition in §4.3, both concrete:
 | **Provider spend per scan, 24 prompts × 5 engines** | **$6.19** | 2026-09-11, `groovehq.com`, `verify_e2e.py`'s token meter reading each vendor's own `usage` (build log, "the cost split"): grounded Claude $3.99 (64%), parametric Claude $1.13, ChatGPT $0.71, Gemini $0.10, Perplexity $0.09, all analysis calls $0.17 |
 | **Provider spend per scan, 20 prompts × 4 engines — the default since 2026-09-12** | **$1.70** | 2026-09-12, `reamaze.com`, same meter (build log, "dropping grounded Claude and cutting to 20 prompts"): Claude $0.85, ChatGPT $0.49, Perplexity $0.08, Gemini $0.07, sentiment $0.05 (37 calls on Haiku 4.5), the four other analysis calls $0.17. Wall clock 135.3s |
 
+**The 2026-10-03 cost analysis, re-stated at the US$150 price (recorded 2026-10-04).**
+Provider spend only, from the two measured rows above. Every token rate in
+`verify_e2e.py`'s `RATES` table was re-read on the vendors' own pages on 2026-10-03 and
+matched (Anthropic `platform.claude.com/docs/en/about-claude/pricing`, OpenAI
+`developers.openai.com/api/docs/pricing`, Google `ai.google.dev/gemini-api/docs/pricing`,
+Perplexity `docs.perplexity.ai/docs/agent-api/models`); SerpApi's plans were read at
+`serpapi.com/pricing` the same day. No model, effort setting, token cap or prompt count
+had changed since the 2026-09-12 run.
+
+| Line (20 prompts × 4 engines) | Model | Calls per scan | Cost | Share |
+|---|---|---|---|---|
+| Claude answers | `claude-opus-5` | 20 | $0.85 | 52% |
+| ChatGPT answers | `gpt-5.5` | 20 | $0.49 | 30% |
+| Perplexity answers | `perplexity/sonar` | 20 | $0.08 | 5% |
+| Gemini answers | `gemini-3.8-flash` | 20 | $0.07 | 4% |
+| Sentiment | `claude-haiku-4-5` | one per answer naming the client (37 in the measured run) | $0.05 | 3% |
+| Prompt generation and fixes | `claude-opus-5` | 1 + 1 | ~$0.08 | 5% |
+| A client's first scan only: classification and co-citation | `claude-opus-5` | 1 + 4 | ~$0.09 | — |
+
+- **Per scan:** about **$1.63** for a repeat scan and **$1.72** for a client's first.
+  Two-thirds is output; each answer is capped at 4,000 output tokens
+  (`services/engines.py`), and if every call used its full cap a scan would cost about
+  **$6.28** (a typical scan is about 26% of that).
+- **Against $150 a month:** an agency using all 40 scans costs about **$65–69**, which is
+  **43–46%** of the price (it was 41–43% of $160). $150 covers about **87–92** typical
+  scans. The worst case, 40 scans at the $6.28 ceiling, is **$251.20**, more than the
+  price; nothing in the code prevents it.
+- **SerpApi is a cost per new client, not per scan:** `ensure_set_for_scan` carries a
+  client's competitor set forward (`services/competitors.py`), so the 6 detection
+  searches (up to 12 with R2's retry) run once per client. The Free plan's 250 searches
+  a month allow about 41 new clients across the platform (about 20 if every search is
+  retried); the $25 Starter plan's 1,000 allow about 166 (about 83).
+- **The free trial (from `pilot-fixes-5`, off until `STRIPE_TRIAL_DAYS` is set):** a
+  trialing agency has the plan's allowance, forty scans in each calendar month the trial
+  touches: two months for a 30-day trial, three when it starts on 30 or 31 January. A
+  trial that ends in a cancellation therefore costs up to about $130–138 in provider
+  spend at typical cost (80 scans), or $196–206 over three months ($502.40 and $753.60
+  at the ceiling), plus 6–12 searches per new client, and earns nothing. Nothing ties a
+  trial to a verified identity yet (launch checklist 3.72, a founder decision).
+- **Already scheduled:** Gemini 3.8 Flash's price doubles on 2027-01-01, adding about
+  $0.07–0.08 a scan.
+- **Not included:** Render hosting and the audit's browser (fixed costs), Stripe fees,
+  Supabase, and failed scans (a failed scan spends most of its cost but does not count
+  against the agency's 40).
+- **How it becomes measured:** until `pilot-fixes-5` no production code read the
+  providers' usage. Since its U1, every paid call logs its counts and every scan ends with
+  one `scan.usage` line, which `verify_e2e.py` prices with its dated rates; since its U2,
+  every detection logs the SerpApi plan's remaining searches (`serp.quota_left`). These
+  figures stay estimates from two development runs until production lines replace them.
+
 **NOT MEASURED — [UNVERIFIED]:** *(the block below predates the two rows above
 and is kept as the record of why they were needed)*
 
@@ -667,8 +717,11 @@ and is kept as the record of why they were needed)*
 2. **SerpApi stays on the Free tier for now — a decision, not an oversight.**
    The Free Plan (250 searches/month, $0) is what the project is on, and it is
    what the founder has chosen to stay on while there are no customers: 250
-   searches ÷ 6 per scan ≈ **41 scans per month across the entire platform**
-   — not per agency, *total* — and today every scan run is the founder's own,
+   searches ÷ 6 per new client ≈ **41 new clients per month across the entire
+   platform** (≈20 if every search is retried, 12 a client, since R2's retry of
+   2026-10-03) — not per agency, *total*. A client's later scans reuse its
+   competitor set and spend no search (corrected 2026-10-04: this line said
+   "≈41 scans per month" until then) — and today every scan run is the founder's own,
    against subjects picked to test the product, so the ceiling is being spent
    on development and nothing else. Upgrading now would buy capacity nobody
    is using. **The trigger for upgrading is "before the first real prospect or
@@ -746,12 +799,14 @@ change is that nobody has yet paid it or argued about it.
 > **Going live is a key swap, not a code change**, by deliberate design: Epic
 > 9.15 ships no branch that behaves differently on a live key.
 
-**There is no paywall, and adding one is a separate decision nobody has made.**
-Sign-up, the onboarding wizard, scanning, scoring and reporting are all exactly
-as free as they were before this price existed. Subscribing is how an agency
-pays for the product; it is not how an agency unlocks it. Any brief that wants
-to gate a feature behind `subscription_status` is proposing a new product
-decision and must say so.
+**The plan gates two things, each by a founder decision** (this paragraph said
+"there is no paywall" until 2026-10-04, which stopped being true on 2026-09-28).
+Since 2026-09-28, starting a scan: one free scan per agency, then 40 a month on the
+plan (`services/scan_allowance.py`). Since `pilot-fixes-5` (2026-10-04), running
+competitor detection on its own (`POST /clients/{clientId}/competitors/detect`);
+a scan's own detection is not gated. Sign-up, the onboarding wizard, and opening
+scores and reports are free. Any brief that wants to gate another feature behind
+`subscription_status` is proposing a new product decision and must say so.
 
 #### 5.3.2 What is still a placeholder — [HYPOTHESIS, unchanged]
 
