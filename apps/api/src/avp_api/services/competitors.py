@@ -990,7 +990,8 @@ async def carry_forward_set(
       brief assumed. It leaves the new scan with nothing, because the set it
       is skipping on account of belongs to a different scan.
     * **Re-detect on every scan** — which spends six SerpApi searches against a
-      250/month quota (north-star.md §5.1: ~41 scans/month platform-wide), and,
+      250/month quota (≈41 scans a month platform-wide if every scan detected,
+      250 ÷ 6; north-star.md §5.1 counts the same quota in new clients), and,
       worse, DISCARDS THE OPERATOR'S CORRECTION. `persist_detection` preserves
       manual overrides only within the set it is writing; a brand-new set on a
       brand-new scan has no manual rows to preserve, so the hand-corrected list

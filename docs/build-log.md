@@ -24679,3 +24679,45 @@ Launch checklist 3.66 (found on `pilot-fixes-4`): a 200 whose JSON body was not 
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# North-star §5.1 counts the SerpApi quota in new clients, not scans, and records the 2026-10-03 cost analysis at the US$150 price
+
+**2026-10-04, the sixteenth entry of the day; branch `pilot-fixes-5`, the founder's brief "free trial, US$150, usage visibility and pilot guardrails" (item U3).** One commit, docs and two code comments.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): no product layer; the commercial architecture (§5.1, unit economics, and §5.3, what the plan gates); lifecycle phase: Activation (Epic 9), what each pilot costs to run.
+
+## 1. What changed
+
+- **§5.1's quota line.** It said "250 searches ÷ 6 per scan ≈ **41 scans per month across the entire platform**". Detection's searches are spent once per client: `ensure_set_for_scan` carries a client's competitor set forward, so its later scans search nothing. The line now says ≈41 **new clients** a month, ≈20 if every search is retried (12 a client, since R2's retry of 2026-10-03), and is dated.
+- **A new block in §5.1: the 2026-10-03 cost analysis, re-stated at US$150.** It is provider spend only, from the two measured development runs.
+  - **The rates.** Every token rate in `verify_e2e.py`'s `RATES` matched the vendors' own pages on 2026-10-03, and the pages are named. SerpApi's plans were read the same day.
+  - **The table.** Each line of a 20-prompt, four-engine scan, with its model, calls, cost and share: Claude answers $0.85 (52%), ChatGPT $0.49 (30%), Perplexity $0.08, Gemini $0.07, sentiment $0.05, prompt generation and fixes about $0.08, and a first scan's classification and co-citation about $0.09.
+  - **Per scan:** about $1.63 for a repeat scan and $1.72 for a client's first. The output-cap ceiling is about $6.28.
+  - **Against $150:** 40 scans cost about $65–69, which is 43–46% of the price. $150 covers about 87–92 typical scans. The worst case, 40 scans at the ceiling, is $251.20.
+  - **SerpApi per new client:** the Free plan's 250 a month allow about 41 (about 20 with every search retried). The $25 Starter plan's 1,000 allow about 166 (about 83).
+  - **The trial.** A trialing agency has forty scans in each calendar month the trial touches, two or three. A trial that ends in a cancellation can cost about $130–138 (or $196–206 over three months) at typical cost and earns nothing. Nothing ties a trial to a verified identity yet (launch checklist 3.72).
+  - **Gemini 3.8 Flash's price doubles on 2027-01-01.**
+  - **What is not included:** hosting, Stripe fees, Supabase, and failed scans.
+  - **How the figures become measured:** U1's `llm.call` and `scan.usage` lines, priced by `verify_e2e.py --price-usage`, and U2's `serp.quota_left`. The figures stay estimates until production lines replace them.
+- **The "There is no paywall" paragraph** had been untrue since the scan allowance of 2026-09-28. It now says the plan gates two things, each by a founder decision: starting a scan (one free, then 40 a month) and, since this branch, running competitor detection on its own. A scan's own detection is not gated, and the paragraph is dated.
+- **Two code comments repeated the "≈41 scans" figure:**
+  - `scan_allowance.py`'s module docstring now says a client's first scan spends the searches, about 41 new clients a month (about 20 with retries);
+  - `competitors.py`'s note on the re-detect-every-scan alternative now says ≈41 scans only "if every scan detected", and that §5.1 counts the quota in new clients.
+
+## Verified
+
+**Counts unchanged:** API 4571, web 2017. Docs and comments only; no test reads either changed passage.
+- **The figures were checked against their source.** That is the cost analysis written on 2026-10-03 (two sessions; the table follows the later one, 17:15 AEST, which re-checked the morning's against the code). The $150 arithmetic was recomputed:
+  - 40 × $1.63 to $1.72 = $65.20 to $68.80;
+  - $150 ÷ $1.72 to $1.63 = 87 to 92 scans;
+  - 80 × $1.63 to $1.72 = $130.40 to $137.60.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7106cadcd0ed`) and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

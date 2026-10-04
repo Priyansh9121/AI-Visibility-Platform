@@ -5,10 +5,12 @@ WHY A GATE EXISTS AT ALL
 Until this date nothing in the product was behind the plan, and the pricing
 card said so. Stripe is wired to a $160 Price (repriced to $150 on 2026-10-04,
 founder decision); no rational agency pays for what it already gets free. And
-a scan is not free to run: about **$1.70 in engine calls** each, plus 6 of the
-**250 SerpApi searches** the Free tier allows per month — about 41 scans
-platform-wide before every user's competitor detection stops at once. An
-unmetered free tier is an open cost line with a shared fuse. So: the plan
+a scan is not free to run: about **$1.70 in engine calls** each, plus, on a
+client's first scan, 6 of the **250 SerpApi searches** the Free tier allows per
+month (up to 12 when searches are retried; a later scan carries the client's
+competitor set forward and spends none) — about 41 new clients platform-wide,
+about 20 if every search is retried, before every user's competitor detection
+stops at once. An unmetered free tier is an open cost line with a shared fuse. So: the plan
 gates STARTING a scan and, since 2026-10-04, pressing the competitor-detection
 button (DETECTION FROM THE BUTTON, below), and nothing else.
 
