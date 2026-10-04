@@ -24497,3 +24497,51 @@ D1 (`c247ef9`) found the gap. asyncpg drops a server message when no listener is
   - OpenAPI and `api.gen.ts` regenerate with no change.
   - No `avp_migration_check_…` or `avp_migrationcheck_…` database was left on the server afterwards.
 - Exit codes were read from files.
+
+# The scoring line says why each dimension was left out
+
+**2026-10-04, the thirteenth entry of the day; branch `pilot-fixes-5`, the founder's brief "free trial, US$150, usage visibility and pilot guardrails" (item 3.58).** One item, one commit.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 3, Insight (the score's exclusions), read through its log line; lifecycle phase: Activation (Epic 9). C1 (`3114aff`) found that the line said which dimensions a production scan left out, but not why.
+
+## 1. What changed
+
+- **`scoring.completed`'s `excluded`** (`services/scoring_runner.py`) was a sorted list of dimension names. It is now a mapping from each dimension left out to its reason code, sorted by dimension, and the same mapping the scan's `Score` row stores.
+  - C1's case: `excluded={'citation_strength': 'NO_AUTHORITY_DATA'}` where it said `excluded=['citation_strength']`.
+  - Nothing left out: `excluded={}`.
+  - Several left out at once: `excluded={'citation_strength': 'NO_AUTHORITY_DATA', 'sentiment': 'NO_POPULATION', 'share_of_voice': 'NO_COMPETITOR_SET', 'technical_foundation': 'CRAWL_DISALLOWED'}`.
+- **The values come from a closed set:** a dimension's name and a reason code. Technical Foundation's reason is checked against `TECHNICAL_FOUNDATION_EXCLUSIONS` in `compute_score`, so no text from an answer or a page can reach the line.
+- **Nothing parses the old list.** A search of every tracked file finds only five historic pasted lines in this log. The runbook has no description of the line to change.
+
+## Found, not fixed
+
+- **`audit.completed` has the same shape** (`services/audit_runner.py` ~203): it logs the excluded components' names, though it holds a reason for each.
+- **For the founder:** an audit that failed with a code scoring does not single out (`TIMEOUT`, `BROWSER_BUSY`) is stored and logged as `NOT_YET_MEASURED`, the same as a scan never audited. The new field only makes that visible. A reason of its own would change the stored reason, the inputs digest and the report's copy.
+
+## Verified
+
+**API pytest 4407 → 4422 (+15); floor raised to match.** One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **`test_scoring_log.py` (15):** real rows seeded and run through `score_scan`.
+  - One case per reason: `NO_AWARENESS_POPULATION`, `NO_AUTHORITY_DATA`, `NO_COMPETITOR_SET`, `NO_POPULATION`, `NO_ANSWERED_RESULTS`, and all four Technical Foundation reasons.
+  - `{}` when nothing is left out.
+  - The logged mapping equals the stored `Score` row.
+  - Dimension order.
+  - The line's exact field set.
+  - A guard that fails if a fifth Technical Foundation reason is added without a case here.
+- **The implementer's negative controls,** each restored and checked:
+  - the old line back: 12 fail (the 3 that pass are the field-set tests and the guard);
+  - the sort removed: 1;
+  - an extra field: 2;
+  - a fifth reason in `scoring.py`: the guard.
+- **On this tree:** `scoring_runner.py` back to `HEAD`, and 12 of the 15 new tests fail (the 3 that pass are the field-set tests and the guard). Restored and checked with `cmp`.
+- **The first full run had one failure outside this item.** `test_call_bounds.py`'s generate-fixes bound ran 1.39 s against its 1.0 s allowance while the Mac was on battery under load (load average 6 to 7). The file passes alone (28 of 28), and the whole bar was run again.
+- **The rest of the bar** (this tree, the second run):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, web 1999, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7106cadcd0ed`) and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
