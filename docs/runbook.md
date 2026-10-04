@@ -863,9 +863,13 @@ it is: the fix is a new revision, because a grant changed by hand is invisible t
   before-the-deploy query listed: the revision skipped it.
 - If query 3 still shows `postgres` rows for `public`, the likeliest cause is that the deploy
   ran as a user that is neither `postgres` nor a member of it. The revision then skips that
-  step and logs a warning from `alembic.runtime.migration` that starts with
-  `revoke_data_api_grants`; search the deploy log for it. The server's own notice never
-  reaches the log.
+  step, and the deploy log says so in two lines from `alembic.runtime.migration`, both
+  containing `revoke_data_api_grants`: first the server's own notice, logged as
+  `Postgres NOTICE: revoke_data_api_grants: this user is not a member of role postgres, ...`
+  and then the revision's own warning. Search the deploy log for `revoke_data_api_grants`.
+  The warning is the one to rely on: the revision writes it itself, while the notice has to
+  come through the connection from the database, and it has not been checked that Supabase's
+  pooler passes it on.
 - A `postgres` row whose schema is `(every schema)` is a default that applies to every schema.
   A per-schema revoke cannot remove it, so the revision leaves it; removing it takes a
   revision of its own, and whether to write one is the founder's call.
