@@ -24162,3 +24162,66 @@ Fixed in a third round:
   - The Python licence audits pass in both environments (65 and 80 distributions; `idna` BSD-3-Clause), and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# A client whose site was never shown to a model records no classifier model and no classification time
+
+**2026-10-04, the ninth entry of the day; branch `pilot-fixes-5`, the founder's brief "free trial, US$150, usage visibility and pilot guardrails" (item 3.71).** One item, one commit.
+
+**Render: nothing to set.** Rows stored before this change are left as they are (below).
+
+Drift check (north-star §8): Layer 0, Trust (a record says only what happened), in Layer 1's intake; lifecycle phase: Activation (Epic 9), the client record a pilot's first scan starts from.
+
+## 1. What changed
+
+T1 found the problem. For a site whose robots.txt does not answer, `POST /clients` stored `classifierModel: "claude-opus-5"` and a `classifiedAt`, though no model was called. The cause: `ClassificationOutcome.model` defaulted to `CLASSIFIER_MODEL`, and `apply_outcome` copied it with a time.
+
+- **`services/classify.py`:**
+  - `ClassificationOutcome.model` defaults to `None`.
+  - Every return after the model was asked names it. That is `decide()`'s three outcomes and, through a new `_no_answer`, every way a call can come back with nothing: nine kinds of exception, a refusal, and no parsed output.
+  - The guards that return before any call name none.
+- **`services/intake.py`:** `apply_outcome` writes the model it is given, and a time only when there is one.
+- **No model is asked, so both fields are now `null`, for:**
+  - a crawl that is not ok: robots.txt disallowed or unreachable, an address that is not public, a fetch failure, an HTTP error, a browser error, the crawl's own timeout;
+  - a page under 40 words (`INSUFFICIENT_CONTENT`).
+- **Two choices:**
+  - **A call that was made and failed keeps today's record:** the model asked and the time of the attempt. A request naming that model was sent then, and no field claims it classified anything; the status and reason code say nothing came back.
+  - **A reclassification that is refused clears both fields,** as it already replaces the industry, confidence and status. An old model and time would describe a classification that no longer exists.
+- **T1's shared fixture** (`packages/shared-types/fixtures/intake-robots-unreachable.json`) was regenerated with `AVP_WRITE_FIXTURES=1`. Only `classifierModel` and `classifiedAt` changed, both now `null`, and T1's API test asserts that.
+  - The build log's note under T1 that "a change of `CLASSIFIER_MODEL` will also need the fixture regenerated" stops being true: the fixture no longer holds a model.
+- **Docs:** `docs/api-contracts.md` says what the two fields mean and when they are `null`. Comments in `models/client.py` and `schemas/client.py` say the same. No screen reads either field, and the OpenAPI document is unchanged.
+
+## Found, not fixed
+
+- **Rows stored before this change** still carry a model and a time for refused or failed crawls. Nothing reads them. A backfill would have to treat `TIMEOUT` with care: it is both a crawl code (no model) and the classifier's own timeout (a model was asked).
+- **Without `ANTHROPIC_API_KEY`, `classify` raises** (`Settings.provider_key`, as documented), so `POST /clients` with classification on answers 500 and records nothing.
+- **No database constraint** ties the two columns to be both null or both set. The code now writes them together, and a CHECK would need a migration.
+
+## Verified
+
+**API pytest 4084 → 4128 (+44); floor raised to match.** Web is unchanged at 1859. One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **`test_intake_classifier_provenance.py` (44):**
+  - what `classify` returns on each path;
+  - `apply_outcome` alone;
+  - real `POST /clients` runs, with only the network edges faked, read back from the database: robots.txt unreachable and disallowed, an address that is not public, crawl failures, too little text, a normal classification, a failed call, and a refused reclassification.
+- **Changed tests:**
+  - T1's API test asserts both fields `null` and is otherwise unchanged in count;
+  - `test_intake.py`'s stub of a real classification now names its model;
+  - T1's web test passes on the new fixture.
+- **The implementer's negative controls,** each restored and checked by hash:
+  - the old default back: 26 fail;
+  - a time written with no model: 13;
+  - `_no_answer` not naming the model: 12;
+  - the ambiguous outcome forgetting it: 1;
+  - a refused reclassification keeping the old record: 2;
+  - the too-little-text guard naming the model: 3;
+  - T1's old fixture back: 1.
+- **The first full run caught what the item's own runs missed.** The web's `ClassificationResult.test.tsx` reads every `reason_code="<CODE>"` literal out of `classify.py`, to check the intake card has a sentence for each code. The new `_no_answer("<CODE>")` calls hid nine `PROVIDER_*` codes from it, so 2 web tests failed. `_no_answer`'s argument is now keyword-only, so every call writes `reason_code="<CODE>"`, and its docstring says why. The web file passes (69), and the whole bar was run again.
+- **On this tree:** `classify.py` and `intake.py` back to `HEAD`, and 26 of the 54 tests in the new file and T1's API test fail. Restored and checked with `cmp`.
+- **The rest of the bar** (this tree, the second run):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `f45983cfa5e3`) and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

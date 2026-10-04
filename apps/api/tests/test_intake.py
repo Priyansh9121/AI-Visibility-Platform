@@ -15,7 +15,7 @@ from httpx import AsyncClient
 from avp_api.errors import Conflict
 from avp_api.models import ClassificationStatus
 from avp_api.services import intake as intake_service
-from avp_api.services.classify import ClassificationOutcome
+from avp_api.services.classify import CLASSIFIER_MODEL, ClassificationOutcome
 from avp_api.services.crawl import CrawlResult, CrawlSignals
 from avp_api.services.intake import InvalidUrl, apply_outcome, parse_domain
 
@@ -68,6 +68,9 @@ def stub_classification(monkeypatch):  # noqa: ANN001, ANN201
     return _install
 
 
+# What `classify` returns after asking the model. An outcome records the model only when a
+# path that asked one says so (launch checklist 3.71), so a stub of a real classification
+# says it, and `test_submitting_a_url_returns_a_classified_industry` reads it back.
 CLASSIFIED = ClassificationOutcome(
     status="classified",
     industry="dental practice",
@@ -75,6 +78,7 @@ CLASSIFIED = ClassificationOutcome(
     brand_name="Northaven Dental",
     confidence="high",
     confidence_score=Decimal("0.920"),
+    model=CLASSIFIER_MODEL,
 )
 
 

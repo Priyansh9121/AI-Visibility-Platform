@@ -205,7 +205,30 @@ class ClassificationOutcome(BaseModel):
     confidence: str | None = None
     confidence_score: Decimal | None = None
     reason_code: str | None = None
-    model: str = CLASSIFIER_MODEL
+    # The model that was ASKED, and None when `classify` returned before asking one: a crawl
+    # that did not succeed (robots.txt, an address that is not public, a failed fetch, a busy
+    # or timed-out browser) or a page with too little text. `apply_outcome` records it, with
+    # the time of the write, so a default here named a model, and gave a time, for a client
+    # whose site no model was shown; it defaulted to `CLASSIFIER_MODEL` until launch checklist
+    # 3.71. Only a path that asks the model names it, a call that failed included (`_no_answer`).
+    model: str | None = None
+
+
+def _no_answer(*, reason_code: str) -> ClassificationOutcome:
+    """The outcome of a call that was made and gave no classification.
+
+    The model was asked, so it is named, and `apply_outcome` records the time with it: this is
+    the ATTEMPT, as it was recorded before launch checklist 3.71. The model is not said to
+    have classified anything: the status and the reason code say what came back. The call
+    failed or was refused, or its answer was empty or did not fit the schema.
+
+    `reason_code` is keyword-only, so every caller writes `reason_code="<CODE>"`: the web's
+    `ClassificationResult.test.tsx` reads those literals out of this file to check the intake
+    card has a sentence for every code the API can record.
+    """
+    return ClassificationOutcome(
+        status="unclassifiable", reason_code=reason_code, model=CLASSIFIER_MODEL
+    )
 
 
 def build_prompt(crawl: CrawlResult) -> str:
@@ -231,6 +254,12 @@ async def classify(
     system_prompt: str | None = None,
 ) -> ClassificationOutcome:
     """Classify a crawled site. Never raises for an unclassifiable input.
+
+    The outcome's `model` is the model that was asked. It is None on the two paths that
+    return before asking one: a crawl that did not succeed (whatever `error_code` says) and a
+    page with fewer than `MIN_WORDS_FOR_CLASSIFICATION` words. From the call on, every path
+    names `CLASSIFIER_MODEL`: an answer, a refusal, an empty or malformed one, and a call that
+    failed (launch checklist 3.71).
 
     `system_prompt` overrides SYSTEM_PROMPT. It exists for the prompt-tuning
     harness (scripts/tune_prompt.py), which compares variants against a fixed
@@ -271,10 +300,10 @@ async def classify(
             call.read_anthropic(response)
     except anthropic.AuthenticationError:
         logger.error("classify.auth_failed")
-        return ClassificationOutcome(status="unclassifiable", reason_code="PROVIDER_AUTH_FAILED")
+        return _no_answer(reason_code="PROVIDER_AUTH_FAILED")
     except anthropic.RateLimitError:
         logger.warning("classify.rate_limited")
-        return ClassificationOutcome(status="unclassifiable", reason_code="PROVIDER_RATE_LIMITED")
+        return _no_answer(reason_code="PROVIDER_RATE_LIMITED")
     except anthropic.BadRequestError as exc:
         # The API returns 400 for an exhausted credit balance, which is an
         # operational problem, not a malformed request. Conflating the two
@@ -284,23 +313,21 @@ async def classify(
         message = str(exc)
         if "credit balance" in message.lower():
             logger.error("classify.quota_exhausted")
-            return ClassificationOutcome(
-                status="unclassifiable", reason_code="PROVIDER_QUOTA_EXHAUSTED"
-            )
+            return _no_answer(reason_code="PROVIDER_QUOTA_EXHAUSTED")
         logger.error("classify.bad_request", error=message[:200])
-        return ClassificationOutcome(status="unclassifiable", reason_code="PROVIDER_BAD_REQUEST")
+        return _no_answer(reason_code="PROVIDER_BAD_REQUEST")
     except (anthropic.APITimeoutError, TimeoutError):
         # BEFORE APIConnectionError, which APITimeoutError subclasses — the
         # other order reports every timeout as an unreachable provider. The
         # builtin TimeoutError is the outer deadline (`CallBound.deadline`).
         logger.warning("classify.timeout")
-        return ClassificationOutcome(status="unclassifiable", reason_code="TIMEOUT")
+        return _no_answer(reason_code="TIMEOUT")
     except anthropic.APIConnectionError:
         logger.warning("classify.connection_error")
-        return ClassificationOutcome(status="unclassifiable", reason_code="PROVIDER_UNREACHABLE")
+        return _no_answer(reason_code="PROVIDER_UNREACHABLE")
     except anthropic.APIError as exc:
         logger.error("classify.api_error", status=getattr(exc, "status_code", None))
-        return ClassificationOutcome(status="unclassifiable", reason_code="PROVIDER_ERROR")
+        return _no_answer(reason_code="PROVIDER_ERROR")
     except ValidationError as exc:
         # The model answered and its answer did not fit the schema — a
         # pydantic error raised inside the SDK's `parse`, not an
@@ -317,19 +344,17 @@ async def classify(
             for err in exc.errors()[:5]
         ]
         logger.error("classify.schema_violation", errors=errors)
-        return ClassificationOutcome(
-            status="unclassifiable", reason_code="PROVIDER_SCHEMA_VIOLATION"
-        )
+        return _no_answer(reason_code="PROVIDER_SCHEMA_VIOLATION")
 
     # A refusal is not a classification. Surfacing it as one would store an
     # empty industry as though it were a finding.
     if response.stop_reason == "refusal":
         logger.warning("classify.refused")
-        return ClassificationOutcome(status="unclassifiable", reason_code="PROVIDER_REFUSED")
+        return _no_answer(reason_code="PROVIDER_REFUSED")
 
     parsed = response.parsed_output
     if parsed is None:
-        return ClassificationOutcome(status="unclassifiable", reason_code="PROVIDER_NO_OUTPUT")
+        return _no_answer(reason_code="PROVIDER_NO_OUTPUT")
 
     # Debug-only. Model-authored reasoning, never persisted, never returned.
     logger.debug(
@@ -349,6 +374,9 @@ def decide(parsed: IndustryClassification) -> ClassificationOutcome:
     Split out from `classify` so the threshold policy is unit-testable without
     a network call — the branch that matters most is the one that refuses to
     store a guess.
+
+    Every outcome here is a model's answer, whatever it says of the site, so each names the
+    model that gave it.
     """
     # Quantised so the stored value round-trips exactly against NUMERIC(4,3).
     score = Decimal(str(parsed.confidence_score)).quantize(Decimal("0.001"))
@@ -360,6 +388,7 @@ def decide(parsed: IndustryClassification) -> ClassificationOutcome:
             confidence=parsed.confidence,
             confidence_score=score,
             reason_code="NOT_A_BUSINESS_SITE",
+            model=CLASSIFIER_MODEL,
         )
 
     if score < CONFIDENCE_THRESHOLD:
@@ -371,6 +400,7 @@ def decide(parsed: IndustryClassification) -> ClassificationOutcome:
             confidence=parsed.confidence,
             confidence_score=score,
             reason_code="LOW_CONFIDENCE",
+            model=CLASSIFIER_MODEL,
         )
 
     return ClassificationOutcome(
@@ -380,4 +410,5 @@ def decide(parsed: IndustryClassification) -> ClassificationOutcome:
         brand_name=parsed.brand_name,
         confidence=parsed.confidence,
         confidence_score=score,
+        model=CLASSIFIER_MODEL,
     )
