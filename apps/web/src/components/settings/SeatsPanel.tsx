@@ -38,6 +38,15 @@
  * could not email it, and this screen shows it once, with a Copy link button,
  * for the owner to send themselves. Its presence is the API saying email is
  * off; the screen never works that out for itself.
+ *
+ * A copy is said as well as shown (3.70). The button's new name ("Copied") is
+ * not reliably announced by a screen reader, so a copy that worked also says
+ * "Link copied." in a status region, visually hidden with the design system's
+ * own `avp-visually-hidden`, as the share bar's Copy does (3.52). A copy that
+ * is refused says nothing: the link is on screen and selectable, and nothing
+ * here claims a copy that did not happen. So one that is refused after a copy
+ * that worked takes "Link copied." away and puts the button back to "Copy
+ * link", as the share bar's does.
  */
 
 import { useState, type FormEvent, type JSX } from 'react';
@@ -81,11 +90,22 @@ const STATUS_TONE: Record<string, BadgeTone> = {
   suspended: 'warn',
 };
 
+/**
+ * Said in a status region once a copy has worked (3.70). The button's new name ("Copied") is not
+ * reliably announced, and a copy that is refused says nothing: the link is on screen and
+ * selectable, and nothing on the panel claims a copy that did not happen.
+ */
+const LINK_COPIED_SENTENCE = 'Link copied.';
+
 /** An invitation link the API handed back because it could not email it. */
 interface HandedLink {
   email: string;
   url: string;
-  copied: boolean;
+  // How many times Copy has worked on this link in a row (3.70): 0 until it has, and again once a
+  // copy of it is refused. Above 0 the button says "Copied" and the status region says "Link
+  // copied.". The count is that sentence's key, so each copy is a new element in the region, which
+  // a screen reader announces, where the same words in the same element are no change.
+  copies: number;
 }
 
 export interface SeatsPanelProps {
@@ -141,7 +161,7 @@ export function SeatsPanel({
             ? `${result.user.email} already had a pending invitation. The old link no longer works — send them the new one.`
             : `${result.user.email} already had a pending invitation. A new link has been sent and the old one no longer works.`,
       );
-      setLink(handed != null ? { email: result.user.email, url: handed, copied: false } : null);
+      setLink(handed != null ? { email: result.user.email, url: handed, copies: 0 } : null);
       setEmail('');
       await onChanged();
     } catch (err) {
@@ -152,13 +172,29 @@ export function SeatsPanel({
   }
 
   async function copy(handed: HandedLink) {
+    // A copy that worked adds one, and that puts "Link copied." in the status region (3.70). One
+    // that is refused sets the count back to 0: the sentence goes and the button says Copy link
+    // again, so the panel never claims a copy that did not happen, as the share bar's does (3.52).
+    //
+    // The answer is applied to the link that is on the page now, and to nothing else: the clipboard
+    // can answer after an invite or a removal has replaced or cleared it, and the answer is not
+    // about that link. `handed` is the link as it was when Copy was pressed, so it says only which.
+    const mark = (worked: boolean) =>
+      setLink((now) =>
+        now !== null && now.url === handed.url
+          ? { ...now, copies: worked ? now.copies + 1 : 0 }
+          : now,
+      );
     try {
       await navigator.clipboard.writeText(handed.url);
-      setLink({ ...handed, copied: true });
+      mark(true);
     } catch {
       // As in `ShareLinkBar`: clipboard access is refused in some browsers and
       // over plain HTTP. The link is on screen and selectable, so it gets
-      // copied by hand instead — nothing worth interrupting anyone over.
+      // copied by hand instead — nothing worth interrupting anyone over. Said
+      // nowhere (3.70): "Link copied." is only for a copy that happened, and a
+      // refusal takes back what an earlier copy of this link said.
+      mark(false);
     }
   }
 
@@ -383,11 +419,33 @@ export function SeatsPanel({
                     />
                   </div>
                   <Button variant="secondary" onClick={() => void copy(link)}>
-                    {link.copied ? 'Copied' : 'Copy link'}
+                    {link.copies > 0 ? 'Copied' : 'Copy link'}
                   </Button>
                 </div>
               </div>
             )}
+
+            {/*
+              Where a copy is said (3.70), because the button's new name is not reliably read out.
+              The region is on the page before there is a link and gains its sentence when a copy
+              works, as the share bar's does (3.52): a message made together with its region is
+              often never read. It is not inside the block above, which is a flex column with a
+              gap: a region with no height of its own would still add one gap under the field.
+              It holds this one paragraph and no other, so it is left atomic, and reading it
+              whole is reading the sentence.
+
+              The key is the number of copies, so a second copy takes the sentence out and puts a
+              new one in. The same words in the same element would be no change to the region, and
+              nothing would be read. A copy that is refused takes the sentence away and adds
+              nothing, so it says nothing.
+            */}
+            <div role="status" data-testid="invite-link-status">
+              {link !== null && link.copies > 0 && (
+                <p key={link.copies} className="avp-visually-hidden">
+                  {LINK_COPIED_SENTENCE}
+                </p>
+              )}
+            </div>
           </CardBody>
         </Card>
       )}

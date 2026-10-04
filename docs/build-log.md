@@ -24545,3 +24545,68 @@ Drift check (north-star §8): Layer 3, Insight (the score's exclusions), read th
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# Settings' invitation link says "Link copied." to a screen reader, as the share bar does
+
+**2026-10-04, the fourteenth entry of the day; branch `pilot-fixes-5`, the founder's brief "free trial, US$150, usage visibility and pilot guardrails" (item 3.70).** One item, one commit.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 1, Delivery (Settings' seat management); lifecycle phase: Activation (Epic 9), an agency inviting its team while email is off.
+
+## 1. What changed
+
+While production sends no email, Settings shows the owner an invitation link to send by hand, with a Copy link button. A copy changed only the button's name, to "Copied", and a screen reader does not reliably announce a button's new name. 3.52 fixed the same gap on the share bar.
+
+- **An always-present polite status region** (`role="status"`) sits after the link block in `SeatsPanel.tsx`, outside its flex column, so it adds no height or gap.
+- **A copy that worked** puts a visually hidden "Link copied." in it (`avp-visually-hidden`). The paragraph's key is the number of copies, so a repeat copy is a new element and is announced again.
+- **A refused copy says nothing.** After a copy that worked, a refused one puts the button back to "Copy link" and takes the sentence away, as the share bar does, so the panel never claims a copy that did not happen.
+- **A late clipboard answer** applies only to the link still on the page. Before, it could bring back a link that a new invitation or a removal had cleared.
+
+## 2. The review
+
+**UI review: passed with nits.**
+- The pattern matches 3.52 and works as built, and nothing visible changed.
+- Two nits were taken: share-bar parity on a refused copy, and a test that pins the region as polite. The round-one test asserted only "not assertive", which an `aria-live="off"` region also passes.
+
+**For later** (launch checklist 3.85), the same family on the same screens, all older than this item:
+- the invitation link arrives with no status and no focus move, and the new-seat notice says "has been invited", not that nothing was sent;
+- the seat panel's notice and the password panel's success message are each mounted together with their text.
+
+**For the founder:** whether "Copied" should go back to "Copy link" after a few seconds, here and on the share bar, with one wording for both buttons ("Copy" against "Copy link").
+
+## Found, not fixed
+
+- **A removal that fails also clears the invitation link shown once.** `remove()` clears it before the request, so the owner would have to invite again.
+- **No browser or screen reader was run.** A repeat-copy announcement belongs in the founder's listening step: press Copy twice.
+
+## Verified
+
+**Web vitest 1999 → 2017 (+18); floor raised to match.**
+- **`SeatsPanel.test.tsx` 30 → 48.** The tests cover:
+  - the empty region present before any link;
+  - a copy that worked: the sentence, the button, the same polite region before and after, and the notice untouched;
+  - the sentence visually hidden, and only the button's name changing for a sighted reader;
+  - a repeat copy as a new element;
+  - a refused first copy, no clipboard, and a refused copy after one that worked;
+  - late answers after a re-invite and after a removal;
+  - a removal clearing the link and the region.
+- **The implementer's negative controls,** each restored and checked:
+  - a constant key: 2 fail;
+  - a refused copy counted: 4;
+  - the late-answer guard removed: 3;
+  - the reset removed: 1;
+  - the class removed: 2;
+  - the region inside the flex block: 5;
+  - the region mounted only with a link: 4;
+  - `aria-live` set to assertive or off: 2 each;
+  - `role="alert"`: 7.
+- **On this tree:** `SeatsPanel.tsx` back to `HEAD`, and 18 of the 48 tests in its file fail (all the new ones). Restored and checked with `cmp`.
+- **The rest of the bar** (this tree, one run):
+  - Counts: API 4422 (one skipped on macOS), workers 27, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7106cadcd0ed`) and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
