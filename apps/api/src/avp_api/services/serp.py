@@ -493,11 +493,55 @@ async def search(
     return result
 
 
+# The highest rank a result is taken to have. Google answers at most 100 results to a request (the
+# ceiling of `num`) and `search` asks for 10, so no real rank is near it. It is here so that an
+# absurd number cannot get as far as scoring, which takes `1 / sqrt(position)`: that raises
+# `OverflowError` for an integer of 309 digits or more, and a rank that high would weigh nothing.
+MAX_POSITION = 1000
+
+
+def _position(value: object) -> int | None:
+    """A result's own `position`, if it is one: a whole number from 1 to `MAX_POSITION`, else None.
+
+    JSON has one kind of number and Python two, so `2.0` is the whole number 2 and comes out as an
+    `int`. A bool is an `int` to Python and is not a rank; nor is a string (`"1"`), a list, an
+    object, a fraction, NaN, infinity, zero or a negative. `_judge` gives such an item its place
+    on the page, which is what an item with no `position` has always had, so that
+    `competitors._position_weight` is only ever handed an int that it can take.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, float):
+        if not value.is_integer():
+            return None
+        value = int(value)
+    if isinstance(value, int) and 1 <= value <= MAX_POSITION:
+        return value
+    return None
+
+
 def _judge(query: str, response: httpx.Response) -> SerpResult:
     """What an answer says: its hits, or this module's code for what went wrong.
 
-    A 401, a 429, any other status that is not a 200, a body that is not JSON and one that
-    carries an `error` are each an error, and none of them is asked for twice.
+    A 401, a 429, any other status that is not a 200, a body that is not a page of results and
+    one that carries an `error` are each an error, and none of them is asked for twice. A body
+    that is not a page of results is `SERP_BAD_JSON`: not JSON (or nested so deeply that the
+    parser gives up), JSON that is not an object (a list, a string, a number, `true`, `false` or
+    `null`), an `organic_results` that is not a list (absent or `null` is a page with nothing on
+    it), or a list that is not empty and has no object in it. It is an answer like any other, so
+    `search` logs and counts it as one.
+
+    A list of results with SOME items that are not objects keeps the objects and skips the rest,
+    as an item with no usable link has always been skipped: a hit is a fact taken from one item
+    alone, and the search was answered, so one stray item does not throw away its page. A skipped
+    item keeps its place in the page's numbering. But a list with no object in it at all is an
+    error and not an `ok` search with no hits, because `decide_detection` counts the `ok`
+    searches, and "could not be read" must not become "SerpApi ran and found nothing".
+
+    Inside an item that is an object, a `link` that is not a string is no usable link and the item
+    is skipped as one with none is, and a `position` that is not a whole number from 1 to
+    `MAX_POSITION` is not a position and the item has its place on the page instead, as an item
+    with no `position` always had.
     """
     if response.status_code == 401:
         logger.error("serp.auth_failed")
@@ -512,23 +556,62 @@ def _judge(query: str, response: httpx.Response) -> SerpResult:
 
     try:
         payload = response.json()
-    except ValueError:
+    except (ValueError, RecursionError):
+        # Not JSON, or nested so deeply that the parser gives up (9,997 levels on Python 3.12):
+        # `RecursionError` is a `RuntimeError`, not a `ValueError`, and would otherwise leave here.
+        return SerpResult(query=query, ok=False, error_code="SERP_BAD_JSON")
+
+    # JSON that parses is not always an object: a list, a string, a number, `true`, `false` and
+    # `null` do too. This is asked before anything else is asked of the payload, because what
+    # follows is answered, or raises, according to what it is: `"error" in payload` is a substring
+    # test on a string, a membership test on a list (both true for the word `error`, which would
+    # be a `SERP_API_ERROR` SerpApi never sent) and a `TypeError` on a number, a bool or `null`.
+    if not isinstance(payload, dict):
         return SerpResult(query=query, ok=False, error_code="SERP_BAD_JSON")
 
     if "error" in payload:
         return SerpResult(query=query, ok=False, error_code="SERP_API_ERROR")
 
+    # Absent or `null` is a page with nothing on it. Anything else has to be the list it is called:
+    # not `or []`, which would also take `{}`, `""`, `0` and `false` for an empty page.
+    results = payload.get("organic_results")
+    if results is None:
+        results = []
+    if not isinstance(results, list):
+        return SerpResult(query=query, ok=False, error_code="SERP_BAD_JSON")
+
     hits: list[SerpHit] = []
     titles: list[str] = []
-    for index, item in enumerate(payload.get("organic_results") or [], start=1):
-        link = item.get("link") or ""
-        domain = registrable_domain(link)
+    unreadable = 0
+    for index, item in enumerate(results, start=1):
+        if not isinstance(item, dict):
+            # Not a result at all. Skipped, as an item with no usable link is below, and still a
+            # place in the page: a `position` that falls back to `index` does not shift for the
+            # items after it.
+            unreadable += 1
+            continue
+        link = item.get("link")
+        # A `link` that is not a string is one nobody can read, which is no usable link: skipped
+        # as an item with none is, and still a place in the page. `registrable_domain` takes a
+        # string and raises `AttributeError` for a number, a list, an object or a bool.
+        domain = registrable_domain(link) if isinstance(link, str) else ""
         if not domain:
             continue
-        hits.append(SerpHit(domain=domain, position=item.get("position") or index, query=query))
+        # The provider's own rank when it is one (a whole number from 1 to `MAX_POSITION`), else the
+        # item's place on the page: the same number an item with no `position` always had.
+        position = _position(item.get("position")) or index
+        hits.append(SerpHit(domain=domain, position=position, query=query))
         title = item.get("title")
         if title:
             titles.append(str(title))
+
+    if results and unreadable == len(results):
+        # A list with things in it and not one of them an object is not a page of results, and an
+        # `ok` search with no hits would say that it was. `decide_detection` counts the `ok`
+        # searches, so that would be "SerpApi ran and found nothing" where the truth is that we
+        # could not tell. One object, however empty, makes it a list of results; `[]` is a page
+        # with nothing on it.
+        return SerpResult(query=query, ok=False, error_code="SERP_BAD_JSON")
 
     return SerpResult(query=query, hits=hits, titles=titles)
 
