@@ -544,8 +544,11 @@ class TestThePinsComeLastInTheRealImportOrder:
 # ---------------------------------------------------------------------------
 
 SCRIPTS_DIR = Path(avp_api.__file__).resolve().parents[2] / "scripts"
-# The calls that reach SerpApi: the search itself, and the detections that run it.
-SERPAPI_ENTRY_POINTS = frozenset({"search_many", "detect_for_client", "detect_from_facts"})
+# The calls that reach SerpApi: the search itself, the account read (`quota_left`: free, and it
+# carries the key in its URL as a search does), and the detections that run both.
+SERPAPI_ENTRY_POINTS = frozenset(
+    {"search_many", "quota_left", "detect_for_client", "detect_from_facts"}
+)
 _FUNCTIONS = ast.FunctionDef | ast.AsyncFunctionDef
 
 

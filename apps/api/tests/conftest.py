@@ -426,6 +426,15 @@ def stub_chain_externals(monkeypatch, request):  # noqa: ANN001, ANN201
     monkeypatch.setattr(detection.serp_service, "search_many", fake_search_many)
     monkeypatch.setattr(detection.cocitation_service, "run_seed_prompts", fake_run_seed_prompts)
 
+    # And SerpApi's account endpoint (U2, 2026-10-04). Reading it is free, but it is a real call
+    # made with whatever key the settings hold, and every detection a test runs makes one. It
+    # reads nothing here. `test_serp_quota.py` puts the real one back where it is the thing under
+    # test, and checks that nothing else reaches it.
+    async def fake_quota_left(settings=None):  # noqa: ANN001, ANN202, ARG001
+        return None
+
+    monkeypatch.setattr(detection.serp_service, "quota_left", fake_quota_left)
+
     # --- Epic 6: the audit, without launching a browser ---------------------
     #
     # A deliberately GOOD-ENOUGH site: indexable, one schema type, a sitemap.

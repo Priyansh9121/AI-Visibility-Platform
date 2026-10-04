@@ -21,6 +21,8 @@ solid its comparison base is.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import math
 import re
 from dataclasses import dataclass, field
@@ -434,6 +436,23 @@ def decide_detection(
     )
 
 
+def _retrieved(task: asyncio.Task[int | None]) -> None:
+    """Retrieve a finished task's outcome, so that asyncio can never report it as unseen.
+
+    A task that ends with an exception nobody asked for is reported when it is collected:
+    `Task exception was never retrieved`, the traceback and the exception's text, on stderr.
+    The exception of `serp.quota_left` is an httpx error's, whose text can carry the request's
+    URL, and the URL carries the API key. `quota_left` never raises, so this is for the day it
+    does, and for the ways out of `detect_from_facts` that never reach its `await`: the model's
+    call failed, or the detection was cancelled, after the read had begun. A read that is
+    cancelled while it is in flight can still end with an exception of its own, after
+    `cancel()` was called, and nothing else asks for that one. A cancelled task has no
+    exception to retrieve (asking raises).
+    """
+    if not task.cancelled():
+        task.exception()
+
+
 async def detect_from_facts(
     *,
     brand_name: str | None,
@@ -461,6 +480,9 @@ async def detect_from_facts(
     Both signals run in the client's own market: the search in the country its
     domain's TLD names (`serp.search_country`), and the model told the domain as
     well as the brand.
+
+    It also reads how many SerpApi searches are left, once, for the log
+    (`serp.quota_left`; see the call below for when, and why there).
 
     `client_id` is for the log line only and is optional for exactly that
     reason: a caller with no Client row still gets a real detection.
@@ -495,9 +517,30 @@ async def detect_from_facts(
     subject_brand = f"{brand} ({domain})" if brand else domain
 
     serp_results = await serp_service.search_many(queries, settings=settings, country=country)
-    co_citation_results = await cocitation_service.run_seed_prompts(
-        prompts, subject_brand=subject_brand, settings=settings
-    )
+    # How many searches are left (U2, 2026-10-04): ONE read of SerpApi's account endpoint for the
+    # detection, AFTER the searches so that the figure is what they left (SerpApi's count lags a
+    # minute or two, so it can still miss them: `serp.py` says how far), and BESIDE the model's
+    # calls, which take tens of seconds, so that it costs the detection nothing it was not already
+    # waiting for. It runs no longer than `serp.QUOTA_TIMEOUT_S` (5 s, far under the model's
+    # `CO_CITATION_BOUND` ceiling, so the worst case `test_scan_executor.py` adds up does not
+    # move), it never raises, and a model call that fails or a detection that is cancelled takes
+    # it down with them. Read before the searches it would cost nothing either (they take longer
+    # than it does), but it would report the month as it stood before this detection spent
+    # anything. However it ends, its outcome is retrieved (`_retrieved`), so that a read that
+    # ever raised is never reported by asyncio as an exception nobody asked about.
+    quota = asyncio.create_task(serp_service.quota_left(settings), name="serp.quota_left")
+    quota.add_done_callback(_retrieved)
+    try:
+        co_citation_results = await cocitation_service.run_seed_prompts(
+            prompts, subject_brand=subject_brand, settings=settings
+        )
+    except BaseException:
+        quota.cancel()
+        raise
+    # `quota_left` never raises; this is for the day it does. A line about the quota is not worth
+    # a competitor set.
+    with contextlib.suppress(Exception):
+        await quota
 
     for result in serp_results:
         if not result.ok:
