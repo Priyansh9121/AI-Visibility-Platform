@@ -24800,3 +24800,73 @@ The reviewer recommended keeping the founder's short wording rather than a longe
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# The launch checklist says what `pilot-fixes-5` closed, how to merge it with the Stripe steps in order, and every decision still open
+
+**2026-10-04, the eighteenth entry of the day; branch `pilot-fixes-5`, the founder's brief "free trial, US$150, usage visibility and pilot guardrails" (its finish).** One commit: `docs/launch-checklist.md` and this entry only.
+
+**Render: the steps are 1.1g's.** Nothing has to be set for the code to be safe.
+
+Drift check (north-star §8): no product layer; the launch plan. Lifecycle phase: Activation (Epic 9), what stands between the code and the first pilots.
+
+## 1. What changed
+
+- **Status and merge steps:**
+  - The status line says PRs #2 to #8 are merged (`main` at `fc11f02`), and in what order the founder's Stripe and Render steps fall.
+  - **1.1f** is marked merged (PR #8), with the founder's results from production:
+    - the migration ran;
+    - Redis' policy and its one `data_lost`;
+    - the Supabase grants queries, with `rls_auto_enable()` left as it is by the founder's decision;
+    - the headers, which close 3.10 on production;
+    - the first Australian client's searches.
+
+    Steps 6 and 7 are not reported yet.
+  - **New 1.1g,** how to merge this branch:
+    - before the merge, create the US$150 test-mode Price;
+    - after the deploy, read the price-mismatch line, set `STRIPE_PRICE_ID` and expect `billing.price_check ok=True`, then check one scan's usage, quota and scoring lines;
+    - the trial, only after 3.72 is decided: the fifth webhook event, Stripe's reminder email, then `STRIPE_TRIAL_DAYS=30`.
+  - **1.2** is now the US$150 Price.
+  - **2.2** creates the US$150 Price in live mode and decides 3.73 before the key swap. It also says how a test purchase behaves with a trial on.
+  - **2.4** gives the lawyer the sentences a trial leaves incomplete.
+- **Rows closed, each with its commit:** 3.58 (`bcdab98`), 3.61 (`4a0466d`), 3.63 (`8bafd3d`), 3.66 (`8153e5b`), 3.67 (`3c1223f`), 3.69 (`64a6010`), 3.70 (`f450775`), 3.71 (`c9e6043`).
+- **The founder's decisions, recorded:**
+  - 3.56: after the pilots, with the new evidence;
+  - 3.59: keep failing a lost scan;
+  - 3.60: sessions do not slide;
+  - 3.62: no Detect button;
+  - 3.64: leave the fix generator's input;
+  - 3.65: with 3.48;
+  - 3.68: enforce the CSP after the click-through, share links never embeddable, HSTS with a custom domain;
+  - `rls_auto_enable()`: leave it;
+  - the price, US$150 a month;
+  - the trial, 30 days with a card.
+- **New rows, the decisions and follow-ups this brief found:**
+  - 3.72: a trial needs no verified identity. It blocks setting `STRIPE_TRIAL_DAYS`;
+  - 3.73: test-mode billing state survives the live-key swap. It blocks 2.2;
+  - 3.74: refuse checkout on a price mismatch;
+  - 3.75: keep usage in the database;
+  - 3.76 and 3.77: a schema miss, and spending after a scan failed;
+  - 3.78 and 3.79: the empty competitor set, and its copy;
+  - 3.80 and 3.81: internationalised names, and domains still unchecked;
+  - 3.82: a guard against real outbound calls in tests;
+  - 3.83: `trialing` with no end bound;
+  - 3.84: trial copy;
+  - 3.85: the remaining Settings announcements;
+  - 3.86: landing and pricing claims;
+  - 3.87: small leftovers.
+
+## Verified
+
+**The final bar on this tree** (the commands of `ci.yml`, run locally; this commit changes no code, and no test reads either file it changes).
+- Counts: API 4571 (one test skipped on macOS: it reads Linux's `/proc`), workers 27, shared-types 53 (0 fail), design-system 935, web 2046, mypy 43 (ceiling 50).
+- Ruff is clean, all typechecks pass, the styleguide builds, and all six count gates pass through `assert_count.py`.
+- Both `uv lock --check` runs pass, and Alembic upgrade (through `7106cadcd0ed`) and check pass on an empty database.
+- The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+- OpenAPI and `api.gen.ts` regenerate with no change.
+- Over the branch:
+  - API 3416 → 4571;
+  - web 1849 → 2046;
+  - design-system 935, workers 27, shared-types 53 and mypy 43 unchanged.
+- **SerpApi: no real request in the whole brief**, searches and account reads alike. Every SerpApi test fakes its transport, and U2's and 3.66's runs had a scratch guard that refused any `serpapi` name resolution and recorded none.
+- **Stripe: no real call.** Every billing test patches the client.
+- Exit codes were read from files.

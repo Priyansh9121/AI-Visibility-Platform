@@ -7,10 +7,12 @@ session can do it, on a branch, with the full bar and a build-log entry, and
 only after the founder says go. Nothing here is pushed to `main` without the
 founder's OK; Render deploys `main` before CI finishes.
 
-Status on 2026-10-03: PRs #2 to #7 are merged (`main` at `942115a`). This
-checklist was last updated on branch `pilot-fixes-4` (the founder's brief "search
-accuracy, guardrails and pilot hardening"), whose PR targets `main`. Rows that
-branch closed say **Done** and name the commit; its merge steps are 1.1f.
+Status on 2026-10-04: PRs #2 to #8 are merged (`main` at `fc11f02`). This
+checklist was last updated on branch `pilot-fixes-5` (the founder's brief "free
+trial, US$150, usage visibility and pilot guardrails"), whose PR targets `main`. Rows
+that branch closed say **Done** and name the commit; its merge steps are 1.1g, and the
+founder's Stripe and Render steps are in the order they must happen: before the merge
+(1.1g), after the deploy (1.1g), and before the first pilot pays (2.2).
 
 ## 1. Merge and deploy what is built
 
@@ -136,7 +138,7 @@ setting. Both services redeploy from the same push.
 7. Dashboard: with one live link, the "Share a report" step says "One live
    link."; withdraw it and reload: the step is no longer done (3.42).
 
-### 1.1f Merge `pilot-fixes-4`'s PR — Founder
+### 1.1f Merge `pilot-fixes-4`'s PR — Founder — **Merged 2026-10-04** (PR #8, `main` at `fc11f02`)
 Nothing to set on Render. One migration, `f45983cfa5e3` (D1), runs in the API container
 before it serves, under `lock_timeout = '5s'`: in Supabase it removes the Data API roles'
 grants; where those roles do not exist it does nothing. The API's image changes (its start
@@ -179,13 +181,102 @@ skips it, and the checks in step 3 show what it holds.
    copied." on every press without reading "Link ready…" again, and withdrawing
    announces "Link withdrawn…" and not the lead (3.52).
 
-### 1.2 `STRIPE_PRICE_ID` is the US$160 Price — Founder
-1. Stripe dashboard (Test mode until 2.2 is done) → Product catalogue → the
-   product with a recurring monthly Price of US$160. Copy its id (`price_…`).
-2. Render → API service (`ai-visibility-platform-5gk4`) → Environment → set
-   `STRIPE_PRICE_ID` to it. Save (Render redeploys).
-3. Done when Settings → Subscribe opens a Stripe checkout page showing US$160
-   per month.
+**Checked on production on 2026-10-04 (the founder's results): steps 2 to 5 passed.**
+- Step 2: the migration `f45983cfa5e3` ran. `redis.eviction_policy policy=unknown`,
+  because Render refuses `CONFIG GET`; the founder set `noeviction` in Render's
+  dashboard. One `redis.data_lost` came at the first start, as expected.
+- Step 3: query 2 returned no rows. Query 3 had no `postgres` row for `public` or for
+  every schema (only `storage` for `postgres`, and `supabase_admin`'s own rows). Query 1
+  listed only `rls_auto_enable()` (owner `postgres`, `SECURITY DEFINER`, returns
+  `event_trigger`), Supabase's own helper that turns row-level security on for new
+  tables. **Founder decision: leave it.**
+- Step 4: every 3.1 header came once on `/` and `/share/x`. The share page sends
+  `no-referrer` and `noindex`, which closes 3.10 on production. The app sends no
+  `server` or `x-powered-by`; Render's edge adds `server: cloudflare`.
+- Step 5, a new Australian client: `competitors.detected country=au confidence=0.200
+  status=ok`.
+  - 5 searches were answered in 1.1 to 1.8 s.
+  - 1 was rescued by the retry (14.3 s, `attempts=2`).
+  - 1 failed both reads (19.1 s), on a long descriptive industry query. Long
+    descriptive industry queries are the ones that time out; it was also seen on a
+    bank client (3.56).
+- Steps 6 (the CSP click-through) and 7 (the screen-reader check) are not reported yet.
+  3.68's decision waits on step 6.
+
+### 1.1g Merge `pilot-fixes-5`'s PR — Founder
+**Nothing has to be set for the code to be safe.**
+- The free trial is off until `STRIPE_TRIAL_DAYS` is set.
+- A deployed API only logs when its Stripe Price is not the plan.
+- One migration, `7106cadcd0ed` (a nullable `agencies.subscription_trial_end`), runs in
+  the API container before it serves, under `lock_timeout`.
+- Both services deploy from the same push.
+- Stripe stays in **Test mode** through this section; live mode is 2.2.
+
+The founder's decisions this branch carries: the price is US$150 a month (it was
+$160), and a 30-day free trial with a card at checkout, charged on day 31 unless
+cancelled.
+
+**Before merging:**
+1. Stripe dashboard, **Test mode** → Product catalogue → the AVP product → add a
+   Price: US$150.00, recurring, monthly, standard (licensed) pricing. Copy its id
+   (`price_…`).
+   - Do not set it on Render yet: until the deploy, the pages still say $160.
+
+**After the deploy** (Render → **API** service → Logs):
+2. Check the start:
+   - `entrypoint: alembic upgrade head` (to `7106cadcd0ed`), then `entrypoint: serving
+     on :<port>`;
+   - then `billing.price_mismatch` (warning) with `expected_amount=15000` and
+     `actual_amount=16000`. That is expected: `STRIPE_PRICE_ID` still names the $160
+     test Price;
+   - a `billing.half_configured` line names a Stripe variable that is not set; set it
+     (`docs/runbook.md`, "Reading the billing price lines").
+3. Render → API service → Environment → `STRIPE_PRICE_ID` = the $150 Price's id from
+   step 1. Save (Render redeploys).
+   - Expect `billing.price_check ok=True price_id=price_…` at the start.
+   - A `billing.price_mismatch` here means the Price is not an active, licensed US$150
+     a month Price. Fix it in Stripe before going on.
+   - Between the deploy and this step the pages say $150 while Checkout shows $160.
+     Test mode, so nobody is charged.
+4. Run one scan on a new client, then read its lines (`docs/runbook.md`, "Reading the
+   usage lines" and "Reading competitor-search lines"):
+   - one `llm.call` per paid request;
+   - one `scan.usage` at the end;
+   - `serp.quota_left left=<n> plan_searches=250` from its detection;
+   - `scoring.completed` with each left-out dimension's reason in `excluded`.
+
+   To price the scan, run `cd apps/api && uv run python scripts/verify_e2e.py
+   --price-usage '<the scan.usage line>'` on your machine (no key needed). Send
+   Claude anything that looks wrong.
+
+**Turning the free trial on: only after the founder has decided 3.72.** Until then
+leave `STRIPE_TRIAL_DAYS` unset: the pages say nothing about a trial, and checkout is
+exactly what it was.
+
+5. Stripe (Test mode) → Developers → Webhooks → the endpoint → add the event
+   `customer.subscription.trial_will_end`. That makes five in all; it only writes a log
+   line.
+6. Stripe → Settings → Billing:
+   - turn on the reminder email Stripe sends before a free trial ends (production sends
+     no email of its own);
+   - check the Customer portal's cancel setting. At once or at the period's end are both
+     safe: a trial cancelled before its end is not charged.
+7. Render → API service → Environment → `STRIPE_TRIAL_DAYS=30`. Save. Then check:
+   - signed out, the pricing card says "The first 30 days after you subscribe are
+     free…";
+   - on an agency that has never subscribed, Settings → Subscribe opens Checkout with a
+     30-day trial, then US$150 a month;
+   - pay with Stripe's test card. Settings shows "Trial" and "Free trial until <date,
+     time> UTC, then $150 a month", and the API logs `billing.checkout_created …
+     trial_days=30`;
+   - a Stripe test clock in the dashboard can rehearse the end of a trial.
+
+### 1.2 `STRIPE_PRICE_ID` is the US$150 Price — Founder
+The price is US$150 a month since 2026-10-04 (founder decision; it was $160). This is
+1.1g steps 1 and 3, in Test mode until 2.2 is done.
+- Done when the API logs `billing.price_check ok=True`, and Settings → Subscribe opens
+  a Stripe checkout page showing US$150 per month (with a trial only once
+  `STRIPE_TRIAL_DAYS` is set).
 
 ### 1.3 Confirm how Render passes the client IP — Founder, after 1.1c
 Run `docs/runbook.md` → "Confirm how Render passes the client IP (rate
@@ -223,21 +314,28 @@ The old literal key sat in `.claude/settings.local.json` as `env.API_KEY_21ST`
 ### 2.2 Stripe verification and live keys — Founder
 1. Stripe → Activate account: business details (sole trader, ABN), identity,
    bank account for payouts. Wait for `charges_enabled`.
-2. In **live** mode: create the product and the US$160 monthly Price; add the
-   webhook endpoint
+2. In **live** mode: create the product and the US$150 monthly Price (standard,
+   licensed); add the webhook endpoint
    `https://ai-visibility-platform-5gk4.onrender.com/api/v1/billing/webhook`
    with exactly `checkout.session.completed`, `customer.subscription.created`,
    `customer.subscription.updated`, `customer.subscription.deleted` and
    `customer.subscription.trial_will_end` (the fifth only writes a log line); set the
    Customer portal (cancel at period end, update payment method) as in the
    runbook's step 5.
-3. On Render (API service), replace `STRIPE_SECRET_KEY` with the live secret
-   key, `STRIPE_WEBHOOK_SECRET` with the live endpoint's signing secret and
-   `STRIPE_PRICE_ID` with the live Price id, in one save. Live keys go on
-   Render only, never in the repo or a chat.
-4. Buy one subscription with your own card, check Settings shows it active and
-   the four webhook deliveries answered 200, then cancel and refund it from
-   the Stripe dashboard.
+   Also in live mode: the trial reminder email and the portal's cancel setting, as in
+   1.1g step 6.
+3. **Before the swap, decide 3.73.** Every agency's stored subscription state is test
+   mode's, and no live webhook will ever change it. Then, on Render (API service),
+   replace `STRIPE_SECRET_KEY` with the live secret key, `STRIPE_WEBHOOK_SECRET` with
+   the live endpoint's signing secret and `STRIPE_PRICE_ID` with the live Price id, in
+   one save. Live keys go on Render only, never in the repo or a chat.
+   - Expect `billing.price_check ok=True` with the live Price's id.
+   - `STRIPE_TRIAL_DAYS` is not tied to a mode: it stays as 1.1g left it.
+4. Buy one subscription with your own card, on an agency that has never subscribed.
+   - Check Settings shows it and the webhook deliveries answered 200, then cancel it.
+   - With `STRIPE_TRIAL_DAYS` set it starts a trial and charges nothing before its
+     end. To see a real charge, do this before setting it, then cancel and refund from
+     the Stripe dashboard.
 
 ### 2.3 Email through Resend — Founder, then Claude
 Production sends no email today (`RESEND_API_KEY` unset); the product says so
@@ -255,6 +353,13 @@ The pages are drafts written by an agent from the code's own facts
 (`apps/web/src/components/legal/`). The founder sends them to a lawyer and
 returns the wording; Claude applies it verbatim, keeping the constants the
 tests read back from the API (`lib/legal/retention.ts`, `PricingCard.tsx`).
+Since `pilot-fixes-5`, also for the lawyer: the sentences a free trial leaves
+incomplete. They are listed in the build log's entry for P1:
+- the terms' "The plan", their cancellation sentence and their fair-use example;
+- the privacy page's "Billing." line, now that the trial's end is stored;
+- 3.86's "never limited".
+
+Both pages say they were last updated on 2026-10-04.
 
 ### 2.5 Deletion endpoint and the data-retention decision — Founder decides, Claude builds
 There is no way to delete an account or agency today.
@@ -344,19 +449,35 @@ every one marked (sec).
 | 3.53 | **Done on `pilot-fixes-4`** (`5a919c8`): `POST /clients/{clientId}/competitors/detect` runs once per client per 24 hours (a 429 that says in a sentence how many hours are left); a scan's own detection is never limited and never spends the day. Open: 3.61, 3.62. | — | — |
 | 3.54 | **Done** (2026-10-03): `docs/skills-audit-2026-09-30/` (104 files) was moved to `~/Skills-archive/skills-audit-2026-09-30/`; nothing committed. | — | — |
 | 3.55 | **Done on `pilot-fixes-4`** (`596e403`, S1): competitor detection searched every client as `gl=us` and told the model only the brand name. Both signals now work in the client's market (the domain's country-code TLD, else Australia), and the model is told the domain. Reproduced on 2026-10-03: a `.com.au` client's confidence went from 0.000 under `gl=us` to 0.200 under `gl=au`. Open: 3.56. | — | — |
-| 3.56 | **Detection is still weak for some clients** (S1's findings): queries built from a long niche phrase return unrelated sites; `NON_COMPETITOR_DOMAINS` lists US publishers only, so local news, comparison and city-guide sites pass as rivals; and nothing records a client's country, so a `.com` business is searched in Australia whatever its market. | Founder | Decide whether Claude reshapes the queries, adds local publisher lists, or adds a country field. |
+| 3.56 | **Detection is still weak for some clients** (S1's findings): queries built from a long niche phrase return unrelated sites; `NON_COMPETITOR_DOMAINS` lists US publishers only, so local news, comparison and city-guide sites pass as rivals; and nothing records a client's country, so a `.com` business is searched in Australia whatever its market. | — | **Founder decision 2026-10-04: after the pilots.** 1.1f's check on production adds the evidence: long descriptive industry queries are the ones that time out (an Australian client's failed both reads at 19.1 s; also seen on a bank client). |
 | 3.57 | **Done on `pilot-fixes-4`** (`40c9a43`, S2): every answered competitor search logs `serp.completed` (`elapsed_ms`, `attempts`, `hits`, `status`, `error_code`). SerpApi counts only successful searches, and a read failure was not billed when measured. The timeouts are unchanged until production data says otherwise. | Founder | 1.1f step 5; after the pilot's first week, send Claude the lines. |
-| 3.58 | **Done on `pilot-fixes-4`** (`3114aff`, C1): Citation Strength was left out of two production scans under `NO_AUTHORITY_DATA` (no cited source had an authority tier), as designed; the report's sentence about the first tier now names what the code counts. `scoring.completed` logs which dimensions were left out but not why. | Claude | Optional: add the reason to that log line. |
-| 3.59 | **Done on `pilot-fixes-4`** (`b3cdfb2`, K1): `redis.eviction_policy` at start; `redis.data_lost` when Redis has lost its data; every key family expires on its own (a test sweeps them); a scan whose job vanished fails within its 15 minutes with a plain reason. Requeuing such a scan automatically was not built; the build log has the trade-off, and pressing Run again already requeues it. | Founder | Decide whether to requeue automatically. |
-| 3.60 | **Sessions never slide:** a session lasts 14 days from sign-in, in the cookie and in Redis (`SessionStore.touch` has no caller). | Founder | Keep, or have Claude extend a session on use. |
-| 3.61 | **The detect route caps each client, not each agency** (3.53's security review, Medium): an account can add clients without a classification call and detect once on each. | Founder | Allow the route only to a user with a verified identity or an agency with an active plan (the free scan's rule, no new number), or set a per-agency daily count. |
-| 3.62 | **No web screen calls the detect route,** so the brief's "message in the UI" has no screen today; the 429's sentence is ready for one. | Founder | Decide whether to add a "Detect again" button. |
-| 3.63 | **The landing page and the pricing card say fixes are ordered by what they would cost;** they are ordered by points, with effort shown beside each. Proposed: "…ordered by the points each would recover, with the effort of each shown beside it." | Founder | Approve the wording; Claude changes both. |
-| 3.64 | **The fix generator's model inputs** still say that something which blocks the others outranks something worth more points (`fix_generator.py`), which invites generated wording like "this blocks everything else". | Founder | Decide whether to change the model's input. |
-| 3.65 | **Audit checks that may read wrongly** (scoring inputs, so a `FORMULA_VERSION` question, with 3.48): the blanket robots check ignores Allow lines and reads only the start host's file; the entity check misses an IRI-form `@type`; the fix list puts a missing robots.txt (a warning) above every measured gap. | Founder | Decide with 3.48. |
-| 3.66 | **A competitor search answered 200 with a JSON body that is not an object** raises instead of returning `SERP_BAD_JSON`, so neither of S2's lines is logged for it. | Claude | A guard, with a test. |
-| 3.67 | **Intake accepts a domain without checking that every label is a hostname label** (S1's security review, Low). | Claude (sec) | A check in `intake.parse_domain`, with tests. |
-| 3.68 | **Header residuals** (3.1's review): an unhandled 500, uvicorn's own 400s, Next's redirects and its proxy error carry no security headers; framing is denied everywhere, so a share link cannot be embedded (the product spec's embeddable widget would need its route left out); and `includeSubDomains` needs a second look when a custom domain is attached. | Founder, then Claude | Claude can make the API's 500 carry the headers; the rest are decisions. |
-| 3.69 | **D1's residuals:** `infra/db/migrations/env.py` registers no asyncpg notice listener, so any migration's NOTICE or WARNING never reaches the deploy log (D1 logs its one warning through Alembic instead); PUBLIC keeps its default EXECUTE on routines in `public` (AVP has none; query 1 lists any); other owners' default privileges (such as `supabase_admin`'s) are left alone; and `tests/test_migrations.py` uses one fixed scratch database name per cluster, so two runs at once can collide. | Claude | A notice listener in `env.py`, and a per-run scratch database name; each small. |
-| 3.70 | **The same announcement gap elsewhere:** Settings' invite link (Copy link → Copied) changes only the button's name; and the share bar's "Copied" never goes back to "Copy". | Claude + ui-reviewer | 3.52's pattern. |
-| 3.71 | **A client whose crawl was refused still records a classifier model and a classification time,** though no model was called (`apply_outcome` copies the default model; T1). Nothing on screen reads either field. | Claude | Record neither when no model ran, with a test. |
+| 3.58 | **Done on `pilot-fixes-4`** (`3114aff`, C1): Citation Strength was left out of two production scans under `NO_AUTHORITY_DATA` (no cited source had an authority tier), as designed; the report's sentence about the first tier now names what the code counts. `scoring.completed` logs which dimensions were left out but not why. **Done on `pilot-fixes-5`** (`bcdab98`): it maps each one to its reason. Left: `audit.completed` logs component names only, and an audit that failed is logged as `NOT_YET_MEASURED` (3.87). | — | — |
+| 3.59 | **Done on `pilot-fixes-4`** (`b3cdfb2`, K1): `redis.eviction_policy` at start; `redis.data_lost` when Redis has lost its data; every key family expires on its own (a test sweeps them); a scan whose job vanished fails within its 15 minutes with a plain reason. Requeuing such a scan automatically was not built; the build log has the trade-off, and pressing Run again already requeues it. | — | **Founder decision 2026-10-04: keep failing a lost scan; pressing Run requeues it.** |
+| 3.60 | **Sessions never slide:** a session lasts 14 days from sign-in, in the cookie and in Redis (`SessionStore.touch` has no caller). | — | **Founder decision 2026-10-04: sessions do not slide.** |
+| 3.61 | **Done on `pilot-fixes-5`** (`4a0466d`): detection from the button (`POST /clients/{clientId}/competitors/detect`) is for an agency that is `active` or `trialing` and for the exempt operator; everyone else gets a plain 402. The per-client day stays, and a scan's own detection is unchanged. It holds for real only once Stripe is live: on test keys anyone becomes `active` with a test card (2.2, 3.73). Left: 3.78, 3.79. | — | — |
+| 3.62 | **No web screen calls the detect route,** so the brief's "message in the UI" has no screen today; the 429's sentence is ready for one. | — | **Founder decision 2026-10-04: no Detect button.** |
+| 3.63 | **Done on `pilot-fixes-5`** (`8bafd3d`): the landing page and the pricing card say fixes are ordered by the points each would recover, with the effort of each shown beside it. Checking both against the code corrected the other claims it does not support; the rest are 3.86. | — | — |
+| 3.64 | **The fix generator's model inputs** still say that something which blocks the others outranks something worth more points (`fix_generator.py`), which invites generated wording like "this blocks everything else". | — | **Founder decision 2026-10-04: leave the fix generator's ordering input.** |
+| 3.65 | **Audit checks that may read wrongly** (scoring inputs, so a `FORMULA_VERSION` question, with 3.48): the blanket robots check ignores Allow lines and reads only the start host's file; the entity check misses an IRI-form `@type`; the fix list puts a missing robots.txt (a warning) above every measured gap. | — | **Founder decision 2026-10-04: with 3.48, as a later formula version.** |
+| 3.66 | **Done on `pilot-fixes-5`** (`8153e5b`): a 200 whose body is not an object, or is nested too deeply, is `SERP_BAD_JSON`. A stray item, a link that is not text, or a position that is not a whole number is skipped or replaced, never raised out of a detection. | — | — |
+| 3.67 | **Done on `pilot-fixes-5`** (`3c1223f`): intake refuses a host that is not a valid hostname (IDNs encoded with `idna`, punycode checked, lengths bounded before encoding), and neither refusal quotes what was typed. Left: 3.80, 3.81. | — | — |
+| 3.68 | **Header residuals** (3.1's review): an unhandled 500, uvicorn's own 400s, Next's redirects and its proxy error carry no security headers; framing is denied everywhere, so a share link cannot be embedded (the product spec's embeddable widget would need its route left out); and `includeSubDomains` needs a second look when a custom domain is attached. | Founder, then Claude | **Founder decisions 2026-10-04:** enforce the CSP once the founder's console click-through (1.1f step 6) shows no violation, and Claude switches it; share links are never embeddable; revisit HSTS `includeSubDomains` with a custom domain. Claude can still make the API's 500 carry the headers. |
+| 3.69 | **Done on `pilot-fixes-5`** (`64a6010`): a migration's NOTICEs and WARNINGs reach the deploy log, and both migration test files make a scratch database of their own per run. Unverified: whether Supabase's pooler passes a notice through (D1's own warning is the line to rely on). | — | — |
+| 3.70 | **Done on `pilot-fixes-5`** (`f450775`): Settings' invitation link says "Link copied." in a status region, as the share bar does, and a refused copy takes it back. Left: 3.85. | Founder | Decide whether "Copied" goes back after a few seconds, on both buttons, with one wording ("Copy" against "Copy link"). |
+| 3.71 | **Done on `pilot-fixes-5`** (`c9e6043`): a client whose site no model saw records no classifier model or time. Rows stored before are not backfilled (nothing reads them). | — | — |
+| 3.72 | **A trial needs no verified identity** (P1's security review, H1). Agencies cost nothing to make and need no verified email, so throwaway agencies could each take a trial: 40 scans in each calendar month it touches (two, or three from 30–31 January), at provider cost, before any charge. | Founder, **before `STRIPE_TRIAL_DAYS` is set** | Pick: the trial only for a user with a linked Google identity (the free scan's rule; Claude builds it); a trial worth one allowance counted from its start; a Stripe Radar rule against one card on many customers; or accept and watch `billing.checkout_created trial_days>0`. |
+| 3.73 | **Billing state from Stripe's test mode survives the switch to live keys.** An agency that subscribed on Render's test keys keeps its test-mode `subscription_status`, customer id and subscription id, and no live webhook will ever change them. It stays `active` (the plan's allowance and detection) for free, its checkout fails with a 503 (the customer does not exist in live mode), and it is never offered a trial. | Founder, before 2.2 step 3 | Pick: a one-off SQL at the key swap that clears every agency's Stripe columns and watermark (Claude writes it into the runbook; the founder runs it in Supabase), or Claude records each subscription's `livemode` from the verified webhook and treats test-mode state as none on a live key. |
+| 3.74 | **Checkout still opens on a Price that fails the price check** (P2's security review). | Founder | Decide whether checkout refuses with a 503 on a definite mismatch, read fresh in `create_checkout_session`. The reviewer recommends it before live keys. |
+| 3.75 | **Usage is in the logs only** (U1). Keeping it would be one table, `scan_usage_lines`: about 8 rows and 3 KB a scan, written after the scan ends so it can never fail one. | Founder | Decide whether to keep usage in the database (U1's build-log entry has the shape, the cost and the alternatives). |
+| 3.76 | **A schema miss fails a whole scan after it was paid for** (U1): `classify_sentiment`, `generate_prompts` and `run_seed_prompt` do not catch pydantic's `ValidationError` from `messages.parse`. | Claude | Catch it as `classify` and `fix_generator` do, with tests. |
+| 3.77 | **A failed scan's other prompt slots keep spending** (U1): `asyncio.gather` does not cancel the others when one raises (also in `cocitation.py` and `serp.py`). | Claude | Cancel them (a task group), with tests. |
+| 3.78 | **An empty competitor set is permanent** (3.61): a later scan carries it forward, the report's editor is drawn only under a table of rivals, and detection from the button is for paying agencies. | Founder | Pick: carry forward only a set with rivals; an editor for an empty set; or allow one re-detect. |
+| 3.79 | **Copy in the competitor family still not true** (3.61): the editor's "Saving an empty list clears the set … until the scan is run again" (a later scan carries the empty set forward); the report's empty card shows the `no_signal` wording for any empty list, one emptied by hand included. | Claude + ui-reviewer | Reword both to what the code does. |
+| 3.80 | **Internationalised names** (3.67's security review): mixed-script look-alikes are accepted (D1); one site can be two clients in its two spellings, matched by exact string (D2); Tier B's authority list excludes every agency's competitor rows, manual and suppressed ones included (D4); subdomain labels are held to the strict rule (D6). | Founder | Decide each. |
+| 3.81 | **Domains still unchecked** (3.67): a competitor domain typed through `PUT /clients/{clientId}/competitors` and one a model proposes in co-citation; clients stored before 3.67 are never re-checked. | Claude (sec) | The same hostname check on both paths, after a read-only count of stored clients that fail it. |
+| 3.82 | **Nothing in the API suite stops a real outbound call** (U2's review): a test that falls back to `get_settings()` reads `apps/api/.env`, which holds live keys, and a missed stub makes a real request that is swallowed by design. | Claude | An autouse guard on httpx's transports that refuses any host but loopback, asserted empty at teardown. |
+| 3.83 | **`trialing` is not bounded by its end date** (P1's review, L1): if the event that ends a trial is lost, the agency keeps the plan. The same is true of `active` past its period. | Founder, then Claude | Decide whether `trialing` counts only until its end plus a grace period, or a runbook check instead. |
+| 3.84 | **Trial copy decisions** (P1's UI review): the hero's "$150/month after that." does not mention a trial; the scan-limit notice's Subscribe buttons carry no trial terms; a cancelled agency is not told why it gets no trial. | Founder | Decide each. |
+| 3.85 | **Announcements still missing on Settings** (3.70's UI review): the invitation link arrives with no status and no focus move, and the new-seat notice says "has been invited", not that nothing was sent; the seat panel's notice and the password panel's success message are mounted with their text; a removal that fails also clears the invitation link. | Claude + ui-reviewer | The invitation link first (a focus move or a sentence), then the two statuses, as 3.52 did. |
+| 3.86 | **Landing and pricing claims for the founder** (3.63's UI review): the hero's "Buyers increasingly ask an assistant before they ask a search engine." has no source; the pricing card's "Viewing, sharing and exporting reports is never limited." (and the terms' copy of it) against share links that end after 30 days; "What it does not do yet" says logo and colour control are not built (an API sets them; no screen does) and that nothing re-measures (a new scan does); "A page like this usually stops before this section"; the on-screen fix list's bare "effort S/M/L". | Founder (the lawyer for the terms) | Decide each; Claude rewords. |
+| 3.87 | **Small leftovers from `pilot-fixes-5`** (each in its build-log entry): `STRIPE_LOG` is unset only in the container; `redis_watch.stop` waits without a bound; code comments and `verify_e2e.py`'s labels still call an unreadable 200 "not billed"; `audit.completed` logs component names only; an audit that failed is stored as `NOT_YET_MEASURED`; `SERPAPI_KEY_MISSING` is reachable only with an empty key; 20 comment lines under `src` carry provider dollar figures. | Claude | One small commit each, when convenient. |
