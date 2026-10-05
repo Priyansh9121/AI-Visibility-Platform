@@ -25443,3 +25443,61 @@ The founder's decision (2026-10-05, 3.73): test-mode billing state must not surv
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# Perplexity's web searches are counted from the key its API really returns, so the usage lines and `--price-usage` include the search fee
+
+**2026-10-05, the seventh entry of the day; branch `pilot-fixes-6`, the founder's brief "clear the board, harden billing, and four pilot features" (item U4).** One item, one commit.
+
+**Render: nothing to set.** From the next deploy, Perplexity's `llm.call` lines and `scan.usage` count its searches. Lines from before it say 0 searches for every Perplexity call.
+
+Drift check (north-star §8): §5, Commercial architecture (unit economics), through the usage lines; lifecycle phase: Activation (Epic 9), what a pilot's scans cost against its price.
+
+## 1. What changed
+
+- **The finding.** Production's `llm.call` lines for Perplexity said `search_invocations=0`, although every Perplexity answer is grounded.
+  - One real call, made on 2026-10-05 with production's exact request (model `perplexity/sonar` with the `web_search` tool), came back with `tool_calls_details: {"search_web": {"cost_usd": 0.0025, "invocation": 1}}`. The probe printed only the HTTP status, the output item types and the `usage` block.
+  - `services/usage.py` read `tool_calls_details.web_search.invocation`, a key that never appeared.
+- **`services/usage.py`:** `counts_from_perplexity` reads `search_web.invocation`.
+  - When `search_web` is absent, it falls back to `web_search`, the key the vendor's API reference names. It never adds the two.
+  - A `search_web` that is present without a number counts 0, and does not fall back.
+  - Other tools (`fetch_url`) are not web searches and are not counted.
+  - The vendor's own dollar figures (`usage.cost`, `cost_usd`) are still never read.
+- **`scripts/verify_e2e.py`:** its own meter reads the same way. `--price-usage` already prices each search at the `perplexity web_search` fee, US$0.0025, on top of the tokens, so the fee is now in its total.
+- **`docs/runbook.md`,** "Reading the usage lines":
+  - Perplexity's `search_invocations` comes from `search_web`.
+  - Lines from before this change show 0 for every Perplexity call.
+  - An old line can be priced by hand: answered Perplexity calls (calls minus unanswered) × US$0.0025, on top of the tokens. That is a lower bound, because one measured call made one search.
+- **Test fixtures** that used the `web_search` shape now use the observed `search_web` shape (`test_llm_call_lines.py`, `test_scan_usage.py`, `test_usage.py`).
+
+No review: no auth, billing, tenancy or user-visible change.
+
+## Found, not fixed
+
+- **`verify_e2e.py`'s own meter (`install_token_meter`) has no test.** It was changed the same way, but nothing exercises it.
+- **Hand-pricing an old line gives a lower bound.** A prompt could make more than one search.
+- **Cached input is priced at the full input rate.** The meter ignores the cache-read discount, so a call with cache reads is priced slightly high. The measured call had none.
+- **The per-search rate is from 2026-09-11.** `verify_e2e.py` cites that day's read of the vendor's docs. The `cost_usd` of 0.0025 seen today agrees.
+
+## Verified
+
+**API pytest 4682 → 4698 (+16); floor raised to match.** Web is unchanged at 2070. One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **New: `test_perplexity_search_count.py` (16).** It covers:
+  - the observed body gives 1 search, with 3424 tokens in and 323 out;
+  - `web_search` alone gives its count, and both keys give `search_web`'s, not the sum;
+  - neither key gives 0;
+  - seven junk values give 0 and do not fall back;
+  - `fetch_url` is not counted;
+  - the adapter, through a faked transport, writes an `llm.call` line with `search_invocations=1` and no vendor dollar figure;
+  - `scan.usage` sums the searches per engine and in all;
+  - `--price-usage` prices 4 searches at 4 × US$0.0025 on top of the tokens.
+  - Before the fix, 11 of the 16 failed (the implementer's count).
+- **Negative control, the implementer's and mine on this tree:** with the reader forced back to `web_search` only (`key = "web_search"`), 15 tests fail and 132 pass across the four files: 11 in the new file, 2 in `test_llm_call_lines.py`, 1 in `test_scan_usage.py` and 1 in `test_usage.py`. Restored and checked with `cmp`.
+- **Real calls:** this item made one Perplexity call (2026-10-05, about 12:42, US$0.004 by the vendor's own figure). It made no SerpApi, Stripe or email call.
+- **The rest of the bar** (this tree, one run, 14:04 to 14:10):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7106cadcd0ed`) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

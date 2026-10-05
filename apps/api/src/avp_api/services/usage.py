@@ -244,16 +244,25 @@ def counts_from_openai(payload: object) -> Counts:
 def counts_from_perplexity(payload: object) -> Counts:
     """From an Agent API body: `model`, and `usage.input_tokens`, `.output_tokens`,
     `.input_tokens_details.cache_read_input_tokens` and
-    `.tool_calls_details.web_search.invocation`: the fields `verify_e2e.py`'s meter has read
-    off the real API since Epic 21. The vendor also reports a figure of its own for the call
-    (`usage.cost`); it is a dollar amount and this module never reads it."""
+    `.tool_calls_details.search_web.invocation`. The tokens are the fields `verify_e2e.py`'s
+    meter has read off the real API since Epic 21. The search count is keyed by the tool's name
+    as it ran: a real call on 2026-10-05 (model `perplexity/sonar`, tool `web_search`) came back
+    with `tool_calls_details: {"search_web": {"cost_usd": 0.0025, "invocation": 1}}`, and the
+    `web_search` this module read before never appears, so every line said 0 searches. The
+    vendor's API reference names the keys after the tool ("web_search"), so that key is the
+    fallback when `search_web` is absent. Never both: a present `search_web` is the answer, even
+    when it holds no number (0). Other tools (`fetch_url`) are not web searches. The vendor also
+    reports a figure of its own for the call (`usage.cost`); it is a dollar amount and this
+    module never reads it."""
     usage = _dig(payload, "usage")
+    tools = _dig(usage, "tool_calls_details")
+    key = "search_web" if isinstance(tools, dict) and "search_web" in tools else "web_search"
     return Counts(
         model=_model(_dig(payload, "model")),
         input_tokens=_count(_dig(usage, "input_tokens")),
         output_tokens=_count(_dig(usage, "output_tokens")),
         cache_read_tokens=_count(_dig(usage, "input_tokens_details", "cache_read_input_tokens")),
-        search_invocations=_count(_dig(usage, "tool_calls_details", "web_search", "invocation")),
+        search_invocations=_count(_dig(tools, key, "invocation")),
     )
 
 

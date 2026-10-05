@@ -85,7 +85,7 @@ class TestReadingAUsageBlock:
             "usage": {
                 "input_tokens": 1758, "output_tokens": 432,
                 "input_tokens_details": {"cache_read_input_tokens": 5},
-                "tool_calls_details": {"web_search": {"invocation": 2}},
+                "tool_calls_details": {"search_web": {"invocation": 2}},
                 "cost": {"total_cost": 0.5},
             },
         })

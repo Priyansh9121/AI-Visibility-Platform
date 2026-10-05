@@ -564,7 +564,7 @@ class TestPerplexity:
         install_httpx(monkeypatch, lambda r: httpx.Response(200, json=perplexity_payload(
             input_tokens=1758, output_tokens=432,
             input_tokens_details={"cache_read_input_tokens": 5},
-            tool_calls_details={"web_search": {"invocation": 2}},
+            tool_calls_details={"search_web": {"invocation": 2}},
             cost={"total_cost": VENDOR_COST},
         )))
 
@@ -596,7 +596,7 @@ class TestPerplexity:
                 return httpx.Response(429, json={}, headers={"Retry-After": "1"})
             return httpx.Response(200, json=perplexity_payload(
                 input_tokens=100, output_tokens=50,
-                tool_calls_details={"web_search": {"invocation": 1}}))
+                tool_calls_details={"search_web": {"invocation": 1}}))
 
         install_httpx(monkeypatch, handler)
 
