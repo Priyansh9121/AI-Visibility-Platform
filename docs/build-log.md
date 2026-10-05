@@ -26136,3 +26136,36 @@ Drift check (north-star §8): Layer 2, Measurement (competitor detection); lifec
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# Provider dollar figures leave the code comments, which point to north-star §5.1 instead
+
+**2026-10-06, the fifth entry of the day; branch `pilot-fixes-6`, launch checklist 3.87 (a leftover of `pilot-fixes-5`).** API comments only, one of five small commits, with its own bar.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): no product layer (code comments); lifecycle phase: none.
+
+## 1. What changed
+
+Provider prices change, and the measured ones live in north-star §5.1 and the runbook. Twenty comment lines under `apps/api/src` still carried dollar figures, which go stale without anyone noticing.
+
+- **`engines.py`, `scan_allowance.py`, `extraction.py`, `classify.py`, `prompts.py`:** each figure is replaced with a pointer to north-star §5.1 or the build log, or dropped where the sentence stands without it (in `engines.py`, a "64% of $6.19" figure too). Comments only: no code and no docstring that reaches OpenAPI changed.
+- **`tests/test_no_prices_in_src.py`:** its docstring named two of the old figures; it no longer does.
+- **What is left:** `grep -rnE '\$ ?[0-9]|USD|cents' apps/api/src` finds 37 lines before and 13 after, none in the five files. Ten are the plan's own price and its history (`billing.py`, `price_watch.py`), which the price check uses; one is a "cents" unit comment in `billing.py`; two are cost figures outside the row's list (`cocitation.py` "six cents", `fix_generator.py` "five cents").
+
+## Found, not fixed
+
+- **`cocitation.py` and `fix_generator.py` each keep one cost figure in a comment.** The row named five files; these two can go the same way.
+
+## Verified
+
+**API pytest 4858 → 4858 (unchanged count); the floor stays.** No test was added: the change is to comments. `test_no_prices_in_src.py`, `test_scan_allowance.py` and `test_prompts_extraction.py` pass in the bar.
+- **On this tree:** comments only, so there is no behaviour to revert and no negative control. On this tree the grep finds 37 lines before the change and 13 after.
+- **The rest of the bar** (this tree, one run, 08:30 to 08:36):
+  - Counts: API 4858, workers 27, shared-types 53 (0 fail), design-system 935, web 2116, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7945e69b06e5`) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

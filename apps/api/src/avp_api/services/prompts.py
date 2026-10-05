@@ -53,8 +53,8 @@ logger = structlog.get_logger(__name__)
 # online", "all on four implants explained"). Sonnet 5 was closer but named
 # the brand in 11–13 of 24 on four of eight sets and put knowledge questions
 # in awareness too. Neither is zero loss on the instrument every score is a
-# statement about. One call a scan at three cents; the saving on offer was
-# two and a half.
+# statement about. One call a scan, and the saving on offer was a fraction
+# of it (figures in the build log).
 GENERATOR_MODEL = "claude-opus-5"
 GENERATOR_EFFORT = "medium"
 GENERATOR_MAX_TOKENS = 8_000
@@ -76,7 +76,7 @@ MIN_PROMPTS = 20
 MAX_PROMPTS = 30
 # 20 SINCE 2026-09-12 — THE FOUNDER'S DECISION, not a tuning. It was 24 from
 # Epic 4.1 to then. The spec's floor and this target now coincide: the four
-# default engines cost about $0.25 a prompt (build log, "the cost split"),
+# default engines cost a measured amount a prompt (build log, "the cost split"),
 # and the founder took the spec's own minimum rather than a number below it.
 # What it changes for a customer is the sample: the 45/35/20 quotas of 20
 # round to 9 awareness / 7 comparison / 4 bottom-funnel prompts (against
