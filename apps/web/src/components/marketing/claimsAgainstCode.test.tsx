@@ -185,9 +185,15 @@ describe('the fix list as the real report draws it', () => {
 describe('a hand-corrected rival list stays in place for every later scan', () => {
   it('is what the editor says, on the screen where the list is corrected', () => {
     const editor = renderToStaticMarkup(
-      <CompetitorEditor clientId="cli_1" competitors={[]} onSaved={() => undefined} />,
+      <CompetitorEditor
+        clientId="cli_1"
+        competitors={helpscoutReport.competitorSet!.competitors}
+        onSaved={() => undefined}
+      />,
     );
-    expect(editor).toContain('A rival you add or keep by hand stays in place when the scan is run again.');
+    expect(editor).toContain(
+      'A list you correct here is saved for later scans, and a rival you add or keep by hand stays in place on them.',
+    );
   });
 
   it('is proved by the API suite, and the proofs are still there', () => {

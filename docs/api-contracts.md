@@ -1574,6 +1574,13 @@ report reads through `scoring_runner.compare_on_read` (a test holds the two
 equal), so a figure here cannot disagree with the same figure on the report for
 the same scan. Nothing is persisted, and so no `scoring.completed` is logged.
 
+**The subject's own `shareOfVoice` is the stored Score's, as `composite` is**
+(2026-10-05, the founder's decision), and is not recomputed on read: a figure derived from
+the scan's competitor set as it stood on the day of the read could move after the scan,
+beside a composite that had not. It is null when the scan was never scored or the score
+left the dimension out. The rivals' figures stay derived on read, from the scan's own
+competitor set, which nothing writes once the scan has started.
+
 Scans that produced no reading (queued, running, failed, cancelled) are excluded
 from `scans` and counted in `scansWithoutData`, so a client with four scans and
 one usable one does not look like a client with one scan.
@@ -1612,11 +1619,25 @@ implicit in intake.
 
 **Since Epic 9.17 it is no longer the only way a set gets created.**
 `POST /clients/{clientId}/scans` guarantees the scan it starts has one: reusing
-the scan's own set, else carrying the client's most recent set forward, else
-running this detection. This endpoint remains the way to *re-run* detection
+the scan's own set, else adopting the client's next list, else carrying the client's
+most recent set forward, else running this detection. This endpoint remains the way to *re-run* detection
 deliberately — the chain never re-detects for a client that already has a set,
 precisely so it cannot spend quota or overwrite an operator's correction on its
 own.
+
+**Where the result goes** (launch checklist 3.78/3.79, 2026-10-05). Into the client's
+**next list**, not a scan's set: the response is that list, with `scanId` null because it
+belongs to no scan yet, and the next scan that starts adopts it (`POST
+/clients/{clientId}/scans`, below). **A scan's own set never changes once the scan has
+started**, so a run touches neither a finished scan's set nor a running one's. It used to
+write the open scan's set, which a running scan had already read. With no next list yet,
+one is made as a copy of the client's latest set (rows, hand edits and struck rivals
+included) and detection merges into the copy, so rivals an operator named or struck stay
+named and struck. Before this, a run for a client whose latest scan had finished started
+a fresh set on the new open scan, and the hand edits in the finished scan's set were not
+in it. A client with no set at all starts from an empty list. The scan this route opens,
+or reuses, is unchanged: an open QUEUED row a later scan reuses, carrying no set until it
+runs. The plan, the 24-hour day and every refusal below are unchanged.
 
 **For paying agencies since 2026-10-04** (launch checklist 3.61). The founder's
 decision: the route is allowed for an agency whose subscription is `active` or
@@ -1671,7 +1692,7 @@ run unmetered, because a run spends paid searches. Nothing to set on Render.
 ```json
 {
   "id": "cset_01J...",
-  "scanId": "scan_01J...",
+  "scanId": null,
   "status": "ok",
   "detectionConfidence": "0.800",
   "serpQueriesRun": 6,
@@ -1690,6 +1711,11 @@ run unmetered, because a run spends paid searches. Nothing to set on Render.
   ]
 }
 ```
+
+**`scanId` is null** for the client's next list, which is what this route, `GET` and `PUT`
+answer with while the client has one: it belongs to no scan until the next scan adopts it.
+It is a scan's id only for a set that belongs to a scan, which `GET` returns when the client
+has no next list.
 
 **`detectionConfidence` is null, not zero, when only one signal ran.** Zero means
 "two independent signals looked and agreed on nothing"; null means agreement was
@@ -1737,10 +1763,14 @@ and `retry_after_s` and nothing else, and none for an allowed run),
 detail "This is temporarily unavailable. Please try again shortly.").
 
 #### `GET /api/v1/clients/{clientId}/competitors`
-**Auth required.** The client's most recent set, competitors in rank order.
+**Auth required.** The client's **current list**, competitors in rank order: its next
+list if it has one (what a save or the button's detection last wrote, which the next scan
+will use; `scanId` null), else the set of its most recent scan (`scanId` that scan's).
+A scan's own set never changes once the scan has started, so the next list is the only one
+`PUT` and `detect` write (launch checklist 3.78/3.79, 2026-10-05).
 
 **Errors:** `401`; `404` for an unknown client or another agency's, and for a client
-with no competitor set on any scan — detail: *"No competitor set for this client yet.
+with neither a next list nor a competitor set on any scan — detail: *"No competitor set for this client yet.
 A scan runs detection for a client that has none."* (2026-10-04, launch checklist 3.61;
 it used to end "Run detection first."). The sentence is the same for every caller, so
 it tells nobody to call `POST /clients/{clientId}/competitors/detect`, which is for
@@ -1749,18 +1779,40 @@ for a client that has none, and does not promise that a scan will be allowed to 
 or will succeed.
 
 #### `PUT /api/v1/clients/{clientId}/competitors`
-**Auth required.** Replace the set by hand.
+**Auth required.** Replace the client's competitor list by hand.
 
 ```json
 { "competitors": [ { "name": "Zendesk", "domain": "zendesk.com" } ] }
 ```
+
+**It writes the client's next list, never a scan's own set** (launch checklist 3.78/3.79,
+the founder's decision of 2026-10-05). The saved list is for later scans: the next scan that
+starts adopts it whole, and **a scan's own set never changes once the scan has started**.
+So a save moves nothing a finished scan shows: not its list, its report, its score, its
+client-history figure (`GET /clients/{clientId}/history`) or an explicit
+`POST /scans/{scanId}/score`. A rival named after a scan finished counts only for later
+scans. A scan that is `queued` when the list is saved adopts it when it runs. `scanId` is
+null in the response: the list belongs to no scan until one adopts it.
+
+Where a save lands, in order:
+
+1. the client's next list, if it has one: edited in place, under a row lock that an
+   adopting scan takes too, so a save that arrives while a scan is adopting the list either
+   finishes first or waits, and never writes the set once it is a scan's (it then starts
+   a new next list from what is now that scan's set);
+2. else a **copy of the client's latest set** (the copy a scan carries forward: rows, hand
+   edits and struck rivals), with the replacement applied to the copy;
+3. else, for a client with no set on any scan, an empty next list that a non-empty
+   replacement fills.
+
+Two first saves at once leave one next list: the second finds the first's and writes that.
 
 Replaces wholesale rather than patching rows: an operator correcting a bad
 detection is asserting "these are the rivals", and reconciling that against
 auto-detected rows invites a half-applied state.
 
 Everything supplied is marked `isManualOverride: true` and **survives later
-re-detection**, keeping the top ranks. An empty array clears the set and returns
+re-detection**, keeping the top ranks. An empty array clears the list and returns
 `status: "no_signal"`.
 
 **Anything currently in the set and not sent back is STRUCK, and stays struck.**
@@ -1784,10 +1836,22 @@ part-detected and part-hand-set. Changing this means redefining what the field
 measures, which is a scoring-semantics decision rather than a UI one. Recorded
 in build-log Epic 3.6.
 
+**A client with no set on any scan** (launch checklist 3.78, 2026-10-05). A non-empty list
+now makes the client's next list, recorded as every hand edit is: each row `manual` and
+`isManualOverride: true`, `status: "ok"`, `detectionConfidence: null`, no `detectedAt` (no
+detection ran). The scan that starts next adopts it, so detection does not run for that
+client. Two cases are still the `404` and write nothing: a client with no scan at all, and
+an empty list (a set with no rivals would be copied by every later scan and stop detection
+ever running for the client; there is nothing to clear).
+
+**`409 conflict` while the client's most recent scan is `running`**, on every path,
+detail "A scan of this client is running. Name the rivals after it finishes." A running scan
+may or may not have taken the client's list yet, and a save cannot say which, so nothing is
+written. A `queued`, `succeeded`, `partial`, `failed` or `cancelled` latest scan is no reason
+to refuse. The scan the check reads is scoped to the client's own agency.
+
 Max 10 competitors. **Errors:** `401`; `404` for an unknown client or another agency's,
-and for a client with no competitor set on any scan yet, with the same sentence as `GET`
-above (reworded 2026-10-04): there is nothing to replace, and naming rivals by hand does
-not start a set, so a refused `PUT` writes nothing; `422`.
+and for the two cases above, with the same sentence as `GET` above; `409` (above); `422`.
 
 **CORS:** `PUT` was missing from `allow_methods` until Epic 3.6. This is the only
 PUT in the API, nothing in a browser called it until the override UI shipped, and
@@ -1859,7 +1923,7 @@ The chain, in `services/scan_executor.py::execute_scan`:
 
 | # | Phase | Notes |
 |---|---|---|
-| 1 | **Competitor set** | `existing` → carry forward from the client's last scan → detect. Detection, the only branch that spends SerpApi quota, runs **once per client**. |
+| 1 | **Competitor set** | the scan's own set (`existing`) → **adopt the client's next list** (`adopted`: what `PUT` or the button's detection wrote since the last scan) → carry forward the client's latest set (`carried_forward`) → detect (`detected`). Detection, the only branch that spends SerpApi quota, runs **once per client**. |
 | 2 | **Prompt generation + engine loop** | Unchanged. |
 | 3 | **Technical audit** | Needs only the client's domain. |
 | 4 | **Scoring** | Reads the audit, so Technical Foundation is now included rather than excluded as `NOT_YET_MEASURED`. |
@@ -1873,12 +1937,20 @@ a set does not fail; it reports `succeeded` with the subject at position 1 of 1
 in every answer. A set written afterwards would be a set nothing had used.
 
 **A competitor set is carried forward onto each new scan rather than
-re-detected.** `CompetitorSet` hangs off a *scan*, so a client's second scan
+re-detected; detection runs only for a client with no set on any scan** (in practice its
+first scan; a set emptied by hand is carried forward empty). `CompetitorSet` hangs off a *scan*, so a client's second scan
 would otherwise start with no rivals. Re-detecting instead would spend six
 SerpApi searches per scan against a 250/month quota **and** discard an
 operator's `PUT /clients/{clientId}/competitors` correction, because
 `persist_detection` preserves manual rows only within the set it is writing.
 Suppressed tombstones are carried too, so a struck rival stays struck.
+
+**A list saved or detected since the client's last scan is adopted instead** (launch checklist
+3.78/3.79): the client's next list becomes the scan's own set whole, not a copy, under a row
+lock, and is logged as `competitors.adopted`. From then on it is that scan's set, and
+**nothing writes it again**: everything the scan shows (its score, its report, its
+client-history figure, an explicit re-score) reads it by the scan's id, so a rival named
+afterwards counts only for later scans.
 
 **One phase failing does not stop the others.** Each is attempted
 independently and commits on its own; the report renders whatever is missing

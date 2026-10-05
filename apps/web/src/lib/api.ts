@@ -633,13 +633,30 @@ export const api = {
     }),
 
   /**
-   * Replace a client's competitor set by hand — Epic 3.
+   * The client's current competitor list: its next list (what a save or a detection run last
+   * wrote, and what the next scan will use), else the set of its most recent scan. It is what a
+   * save replaces, which on an older scan is not the list that scan shows. Null when the client
+   * has neither: the API answers 404 for that.
+   */
+  competitorSet: async (clientId: string): Promise<CompetitorSet | null> => {
+    try {
+      return await request<CompetitorSet>(`/clients/${clientId}/competitors`);
+    } catch (err) {
+      if (err instanceof ApiProblem && err.status === 404) return null;
+      throw err;
+    }
+  },
+
+  /**
+   * Replace a client's competitor list by hand — Epic 3. The list is saved for the client's LATER
+   * scans: the API writes its next list, and a scan that has started keeps the list it started
+   * with (launch checklist 3.78, 3.79).
    *
-   * A PUT, not a PATCH, because the endpoint replaces the set wholesale: an
+   * A PUT, not a PATCH, because the endpoint replaces the list wholesale: an
    * operator correcting a bad detection is asserting "these are the rivals",
    * and every competitor supplied is marked `isManualOverride` so a later
    * re-detection cannot silently undo the correction. Callers must send the
-   * full intended set, not a delta.
+   * full intended list, not a delta.
    */
   replaceCompetitors: (clientId: string, competitors: CompetitorInput[]) =>
     request<CompetitorSet>(`/clients/${clientId}/competitors`, {

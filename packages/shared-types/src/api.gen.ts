@@ -1013,12 +1013,28 @@ export interface paths {
         };
         /**
          * Get Competitors
-         * @description The client's most recent competitor set.
+         * @description The client's current competitor list: its next list, else its latest scan's set.
+         *
+         *     The next list is what a save or the button's detection last wrote and what the next scan
+         *     will use (launch checklist 3.78/3.79), so it is ahead of the latest scan's own set, which
+         *     never changes once the scan has started. It belongs to no scan: its `scanId` is null.
          */
         get: operations["get_competitors_api_v1_clients__clientId__competitors_get"];
         /**
          * Replace Competitors
-         * @description Replace the competitor set by hand.
+         * @description Replace the client's competitor list by hand: the list its later scans use.
+         *
+         *     Writes the client's NEXT LIST, never a scan's own set (launch checklist 3.78/3.79). The next
+         *     scan that starts adopts it, and a scan that has started keeps the list it started with, so
+         *     a save moves nothing a finished scan shows: not its score, its report, its client-history
+         *     figure, or an explicit re-score. With no next list yet, one is made as a copy of the
+         *     client's latest set and the replacement applied to the copy; for a client with no set on
+         *     any scan, a non-empty list makes one. An empty list for a client
+         *     with no set, or a client with no scan at all, is the `404`, and nothing is written.
+         *
+         *     While the client's most recent scan is RUNNING the answer is `409` and nothing is written,
+         *     on every path: a running scan may or may not have taken the client's list yet, and a save
+         *     cannot say which.
          *
          *     This matters more than a normal CRUD override. `Client.industry` confidence
          *     is uncalibrated (build-log Epic 2.6/2.8, Finding 2 — open), so a wrong
@@ -1081,6 +1097,15 @@ export interface paths {
          *     limit and does not use the day up; neither does replacing the set by hand with `PUT`.
          *
          *     Competitors an operator marked as overrides are preserved across runs.
+         *
+         *     **Where the result goes (launch checklist 3.78/3.79).** Into the client's NEXT LIST: the list
+         *     the next scan that starts will adopt, which is what this answers (`scanId` is null, because it
+         *     belongs to no scan yet). A scan's own set never changes once the scan has started, so a run
+         *     does not touch a finished scan's set and does not touch a running scan's either. With no next
+         *     list yet, one is made as a copy of the client's latest set and detection merges into the
+         *     copy, so rivals an operator named or struck stay named and struck; a client with no set at all
+         *     starts from an empty list. The open scan this route opens (or reuses, as before) carries no
+         *     set until it runs.
          *
          *     **Errors:** `401 authentication-required`; `402 subscription-required` ("Running
          *     competitor detection on its own needs an active subscription. A scan still finds a
@@ -2655,7 +2680,7 @@ export interface components {
             /** Id */
             id: string;
             /** Scanid */
-            scanId: string;
+            scanId?: string | null;
             /** Serpqueriesrun */
             serpQueriesRun: number;
             status: components["schemas"]["DetectionStatus"];

@@ -3,7 +3,7 @@
  *
  * The assertions that carry weight are all about the SHAPE of the data
  * changing between scans, because that is where a trend built from a
- * re-detected competitor set quietly lies. A rival missing from one scan is not
+ * competitor set that changes between scans quietly lies. A rival missing from one scan is not
  * a rival at zero, and neither is a domain that fell below what a scan
  * recorded.
  */

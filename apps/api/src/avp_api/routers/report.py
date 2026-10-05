@@ -61,7 +61,8 @@ def _pdf_response(report: ReportOut) -> Response:
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
             # A report is a snapshot of one scan and its content can change when
-            # the competitor set is corrected or the scan is re-scored, so it is
+            # the scan is re-scored (a competitor list saved since moves nothing in it:
+            # a scan's own set never changes once the scan has started), so it is
             # deliberately not cacheable by a shared proxy.
             "Cache-Control": "private, no-store",
         },

@@ -17,6 +17,7 @@ from sqlalchemy import func, select
 from avp_api.models.engine_result import Citation, Engine, EngineResult, Sentiment
 from avp_api.models.prompt import PromptIntent
 from avp_api.models.scan import Scan
+from avp_api.models.score import Score
 from avp_api.services import scan_runner
 from avp_api.services.engines import CitedSource, EngineAnswer
 from avp_api.services.prompts import GeneratedPrompt
@@ -150,6 +151,17 @@ async def _run_scan(client: AsyncClient, cid: str) -> str:
     return resp.json()["id"]
 
 
+async def _score(client: AsyncClient, scan_id: str) -> None:
+    """Store the scan's Score, as the chain's scoring phase does and these scans skip.
+
+    The history reads the subject's Share of Voice from the stored Score, as it reads the
+    composite, so a scan that was never scored has none to show. These scans stop after the engine
+    phase (`scan_executor_factory` above), so a test that reads the figure scores the scan first.
+    """
+    resp = await client.post(f"{BASE}/scans/{scan_id}/score")
+    assert resp.status_code == 201, resp.text
+
+
 class TestHistoryShape:
     async def test_a_client_with_no_scans_has_an_empty_series_not_an_error(
         self, client: AsyncClient
@@ -174,6 +186,7 @@ class TestHistoryShape:
         await _detect(client, cid, stub_discovery, ("Zendesk", "Freshdesk"))
         stub_engines()
         sid = await _run_scan(client, cid)
+        await _score(client, sid)
 
         body = (await client.get(f"{BASE}/clients/{cid}/history")).json()
         assert [s["scanId"] for s in body["scans"]] == [sid]
@@ -284,7 +297,8 @@ class TestRankingsMaterial:
         cid = await _client_id(client)
         await _detect(client, cid, stub_discovery, ("Zendesk", "Freshdesk"))
         stub_engines()
-        await _run_scan(client, cid)
+        sid = await _run_scan(client, cid)
+        await _score(client, sid)
 
         point = (await client.get(f"{BASE}/clients/{cid}/history")).json()["scans"][0]
         total = float(point["shareOfVoice"]) + sum(
@@ -318,6 +332,54 @@ class TestRankingsMaterial:
         for scan_names, scan in zip(names, body["scans"], strict=True):
             for rival in scan["competitors"]:
                 assert rival["name"] in scan_names
+
+
+class TestShareOfVoiceIsTheStoredOne:
+    """The subject's Share of Voice is read from the stored Score, as the composite is (2026-10-05).
+
+    It used to be recomputed on every read from the scan's competitor set as that set stood now,
+    so anything that changed the set moved a finished scan's point on the Rankings chart beside a
+    composite that had not moved. The rivals' figures are still derived on read, from the scan's
+    own set, which no longer changes once the scan has started.
+    """
+
+    SENTINEL = Decimal("7.77")
+
+    async def test_the_figure_shown_is_the_stored_one(
+        self, client: AsyncClient, stub_engines, stub_discovery, session  # noqa: ANN001
+    ) -> None:
+        await _sign_up(client)
+        cid = await _client_id(client)
+        await _detect(client, cid, stub_discovery, ("Zendesk", "Freshdesk"))
+        stub_engines()
+        sid = await _run_scan(client, cid)
+        await _score(client, sid)
+        url = f"{BASE}/clients/{cid}/history"
+        computed = (await client.get(url)).json()["scans"][0]["shareOfVoice"]
+        assert computed is not None and Decimal(computed) != self.SENTINEL
+
+        # Overwrite the stored figure. A read that recomputed it would not notice.
+        stored = (await session.execute(select(Score).where(Score.scan_id == sid))).scalar_one()
+        stored.share_of_voice = self.SENTINEL
+        await session.commit()
+
+        point = (await client.get(url)).json()["scans"][0]
+        assert Decimal(point["shareOfVoice"]) == self.SENTINEL
+        # The rivals' figures are not the stored ones, and did not move with it.
+        assert point["competitors"] and point["competitors"][0]["shareOfVoice"] is not None
+
+    async def test_a_scan_with_no_stored_score_shows_no_figure_but_still_compares_its_rivals(
+        self, client: AsyncClient, stub_engines, stub_discovery  # noqa: ANN001
+    ) -> None:
+        await _sign_up(client)
+        cid = await _client_id(client)
+        await _detect(client, cid, stub_discovery, ("Zendesk", "Freshdesk"))
+        stub_engines()
+        await _run_scan(client, cid)
+
+        point = (await client.get(f"{BASE}/clients/{cid}/history")).json()["scans"][0]
+        assert point["composite"] is None and point["shareOfVoice"] is None
+        assert point["competitors"], "the rivals are derived from the scan's own set on read"
 
 
 class TestScopingAndSafety:

@@ -241,8 +241,8 @@ async def score_scan(
     **A report does not call this to read a score.** `build_report` and
     `GET /scans/{id}/score` take the comparison from `compare_on_read`, which
     builds no Score. Callers that still pass `persist=False` are
-    `client_history` (it also reads the subject's recomputed share of voice),
-    the `scripts/` measurements and one test.
+    `client_history` (it reads only the per-rival comparison from it; the subject's
+    share of voice there is the stored Score's), the `scripts/` measurements and one test.
 
     **`scoring.completed` says a Score was written, so it is logged only when
     `persist` is true.** It used to be logged for `persist=False` as well, so

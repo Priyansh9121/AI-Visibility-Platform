@@ -80,8 +80,10 @@ class HistoryScanOut(ApiModel):
     # The STORED composite, so it matches the report and the dashboard. Null
     # when the scan was never scored or scored INSUFFICIENT_DATA — never zero.
     composite: Decimal | None = None
-    # The subject's own share of voice, on the same axis as every rival's: both
-    # are appearances over the same total brand mentions.
+    # The subject's own share of voice, the STORED Score's (as the composite is), so it
+    # cannot move after the scan. On the same axis as every rival's: both are appearances
+    # over the same total brand mentions. Null when the scan was never scored or the
+    # dimension was left out of the score.
     share_of_voice: Decimal | None = None
     # Required rather than defaulted: `build_history` always supplies both,
     # and a defaulted list is emitted as OPTIONAL in the OpenAPI schema —

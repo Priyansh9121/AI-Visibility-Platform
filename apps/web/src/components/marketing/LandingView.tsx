@@ -51,7 +51,8 @@
  *     `lib/report/derive.ts`, `FixList`); the cost of a fix never ranks anything. The new
  *     sentence is the short form of that rule, as the list of claims above says
  *   - a hand-corrected rival list "survives every later re-detection": no screen starts a
- *     re-detection, and a later scan carries the list forward (`carry_forward_set`)
+ *     re-detection, and a later scan takes the saved list, or carries the previous one forward
+ *     (`ensure_set_for_scan`)
  *   - rivals found from "the AI engines": one model is asked, not the four engines
  *     (`services/cocitation.py`)
  *   - rivals found from who "ranks for the niche in search": three of the six search queries

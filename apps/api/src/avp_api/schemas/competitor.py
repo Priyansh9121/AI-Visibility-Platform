@@ -33,7 +33,10 @@ class CompetitorOut(ApiModel):
 
 class CompetitorSetOut(ApiModel):
     id: str
-    scan_id: str
+    # The scan this set belongs to, or null for the client's NEXT LIST: the list a save or the
+    # button's detection wrote, which belongs to no scan until the next scan adopts it. A scan's
+    # own set never changes once the scan has started; the next list is the only one that does.
+    scan_id: str | None = None
     status: DetectionStatus
 
     # Cross-signal agreement, 0-1, or null when it could not be measured

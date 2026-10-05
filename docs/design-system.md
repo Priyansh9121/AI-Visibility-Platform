@@ -696,10 +696,12 @@ lines.
 
 ### A null is a gap, never a zero
 
-The single load-bearing rule. A competitor set is re-detected per scan, so a
-rival can be present, absent, then present again. Joining through zero asserts a
-collapse that was never measured; dropping the series shows fewer rivals than
-the client has, silently. So `trendLayout.segments()` breaks the line into runs
+The single load-bearing rule. A scan's competitor set is the client's list as it
+stood when the scan started: the list someone saved or ran detection for since the
+previous scan, else the previous scan's, carried forward. Someone can save a new
+list or run detection again between scans, so a rival can be present, absent, then
+present again. Joining through zero asserts a collapse that was never measured;
+dropping the series shows fewer rivals than the client has, silently. So `trendLayout.segments()` breaks the line into runs
 of consecutive readings, a lone run draws as a dot, and the hidden data table
 prints **"not measured"** rather than a blank cell.
 
