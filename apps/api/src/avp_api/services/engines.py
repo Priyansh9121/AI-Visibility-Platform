@@ -186,10 +186,10 @@ PERPLEXITY_BASE_URL = "https://api.perplexity.ai"
 # Perplexity's own model, named explicitly. The API's `preset: "fast"` — the
 # documented replacement for plain Sonar — is `openai/gpt-5.6-luna` behind a
 # Perplexity search, and a row recorded as "Perplexity named you" must mean
-# Perplexity's model did. `perplexity/sonar` is $0.25 in / $2.50 out per
-# million (agent-api/models, read 2026-09-11) plus $0.0025 per web_search
-# invocation; the search-context size below is the knob on the retrieved
-# tokens that fill the input side.
+# Perplexity's model did. `perplexity/sonar` is billed per token plus per
+# web_search invocation (rates: north-star §5.1 and the runbook); the
+# search-context size below is the knob on the retrieved tokens that fill
+# the input side.
 PERPLEXITY_ANSWER_MODEL = "perplexity/sonar"
 PERPLEXITY_MAX_OUTPUT_TOKENS = 4_000
 PERPLEXITY_SEARCH_CONTEXT = "low"
@@ -209,13 +209,14 @@ PERPLEXITY_TIMEOUT = 45.0
 # minute. The real account answers every call with `x-ratelimit-limit: 1`,
 # `x-ratelimit-remaining: 0` and a reset one second out, and three calls
 # started together drew two `429 request_rate_limit_exceeded` with
-# `Retry-After: 1` (a $0 probe; refused requests are not billed). That is a
+# `Retry-After: 1` (a probe that cost nothing; refused requests are not billed). That is a
 # bucket of ONE START PER SECOND, and how many are in flight does not
 # matter to it. So this engine spaces its starts instead: 1.25s apart is 48
 # a minute, under the documented 50 and under the observed 1/s, and at the
 # measured 6–15s a call it still puts eight to twelve in flight — which is
-# why there is no in-flight cap here at all. At Tier 1 (150/min, $50
-# cumulative spend) this could be 0.4s; the header says which tier applies.
+# why there is no in-flight cap here at all. At Tier 1 (150/min; the spend that
+# unlocks it is on Perplexity's rate-limit page) this could be 0.4s; the header
+# says which tier applies.
 #
 # WHAT THE FULL SCAN THEN SHOWED, AND WHAT IT DID NOT SETTLE. At this
 # spacing the 24-prompt scan still had 6 of 24 Perplexity calls answered
@@ -248,8 +249,8 @@ GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 # `gemini-3.8-flash` is the current stable Flash (gemini-api/docs/models, read
 # 2026-09-11): the brief's `gemini-2.5-flash` is two generations back, and
 # "what Gemini answers today" has to mean the model Google ships today. It is
-# $0.75 in / $3.75 out per million through 2026-12-31, thinking billed as
-# output — and it is PAID TIER ONLY: the free tier serves `gemini-3-flash-
+# billed per token, thinking as output (rates and their end date: north-star
+# §5.1 and the runbook) — and it is PAID TIER ONLY: the free tier serves `gemini-3-flash-
 # preview` at 10 requests a minute and 1,500 a day, which a 24-prompt scan
 # would spend a fifth of. A billed Google AI account is the founder's to
 # create, and this module cannot pretend otherwise; see build-log Epic 21.
@@ -523,8 +524,8 @@ class _ClaudeBase:
             # This tool version filters search results through code execution
             # by default, and measured twice (build log, "dynamic filtering"
             # and "what a citation is") that path saves nothing — 22,326
-            # input tokens a call against 20,977 direct, $0.174 against
-            # $0.161 — is slower (p90 50.7s against 23.1s), and, the reason
+            # input tokens a call against 20,977 direct, and a dearer call
+            # — is slower (p90 50.7s against 23.1s), and, the reason
             # that decided it, returns NO inline citations: on the filtered
             # path the text blocks carry none, so "cited" and "retrieved"
             # cannot be told apart. Direct calls carry the answer's own
@@ -1177,11 +1178,11 @@ ENGINE_REGISTRY: dict[Engine, EngineAdapter] = {
 #
 # `CLAUDE_SEARCH` LEFT THIS TUPLE ON 2026-09-12 — THE FOUNDER'S DECISION, not
 # a tuning. It was five from Epic 21 to then. The grounded Claude engine was
-# 64% of a measured $6.19 scan (build log, "the cost split": $3.99 of it,
-# about 21,000 input tokens of retrieved pages a call plus the per-search
-# fee), and the founder chose to stop measuring how a Claude session that
-# can search the web treats the brand rather than carry that cost into a
-# $29 plan. The adapter, its key handling and its tests are untouched and it
+# most of a measured scan's cost (build log, "the cost split": about 21,000
+# input tokens of retrieved pages a call plus the per-search fee), and the
+# founder chose to stop measuring how a Claude session that can search the
+# web treats the brand rather than carry that cost into the plan. The
+# adapter, its key handling and its tests are untouched and it
 # stays in `ENGINE_REGISTRY`: a scan that names `claude_search` in its
 # `engines` list still runs it (`routers/scans.py`, `payload.engines`), and
 # stored `claude_search` rows still render. What a customer loses is the

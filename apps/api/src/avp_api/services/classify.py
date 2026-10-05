@@ -50,12 +50,12 @@ logger = structlog.get_logger(__name__)
 # `scripts/verify_classifier_models.py` fed one crawl of each of the nine
 # `tune_prompt.py` sites to this model and to Haiku 4.5, twice each. Haiku's
 # `industry` was defensible on all nine, at a seventh of the cost per call
-# ($0.0039 against $0.0270) — but its `niche` was thinner: none at all for
+# (measured in the build log) — but its `niche` was thinner: none at all for
 # Basecamp on both runs where Opus named one, and shorter everywhere else.
 # The niche is the FIRST seed competitor detection tries (`cocitation.py`,
 # `niche or industry`), so a thinner niche changes which rivals a scan finds.
 # Against that, this is one call per CLIENT, not per scan: the saving is about
-# two cents per onboarding, under half a percent of one scan. Sentiment, the
+# a small part of one scan's cost per onboarding (build log has the figure). Sentiment, the
 # per-answer call, is where the brief's saving was and where it was taken
 # (`extraction.py`).
 CLASSIFIER_MODEL = "claude-opus-5"
