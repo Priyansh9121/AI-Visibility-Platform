@@ -26007,3 +26007,38 @@ Drift check (north-star §8): Layer 2, Measurement (the rival list a scan compar
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# The Stripe SDK prints nothing to stderr in any process that loads the app, not only inside the container
+
+**2026-10-06, the first entry of the day; branch `pilot-fixes-6`, launch checklist 3.87 (a leftover of `pilot-fixes-5`).** API only, one of five small commits, with its own bar.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): no product layer (logging hygiene, CLAUDE.md "No secret, token or email in a log"); lifecycle phase: none.
+
+## 1. What changed
+
+With `STRIPE_LOG` set to `info` or `debug` (or `stripe.log` set in code), the Stripe SDK prints each request's method and URL, each error message and, at `debug`, the bodies, to stderr, past every logger level. `docker-entrypoint.sh` unsets the variable before Alembic and uvicorn start, so the container was safe; a developer who exported it and ran `uvicorn` directly still got the printing.
+
+- **`services/billing.py`,** the only module that imports the SDK, sets `stripe.log = None` and `stripe._util.STRIPE_LOG = None` as it is imported. The SDK reads both at each call, so this holds in every process that loads the app.
+- **`docker-entrypoint.sh` keeps its `unset STRIPE_LOG`:** Alembic runs without importing billing.
+- **`logs.py`'s** docstring and comment say where the printing is switched off.
+
+## Found, not fixed
+
+- **`stripe._util.STRIPE_LOG` is a private name of the SDK.** An SDK upgrade could rename it; the new tests would then fail, because they set the variable and look for the printed sentinel.
+
+## Verified
+
+**API pytest 4851 → 4855 (+4); floor raised to match.**
+- **`test_secrets_stay_out_of_logs.py` 63 → 67,** a new class run in a fresh Python each time, without the entrypoint: with `STRIPE_LOG` at `info` and at `debug`, importing billing and then calling the SDK's own print functions prints no sentinel; building the app with `create_app()` and `STRIPE_LOG=debug` prints none; a `stripe.log = 'debug'` set before billing is imported is cleared. Before the fix, its 4 cases failed.
+- **The implementer's negative control:** the clearing removed, 3 fail.
+- **On this tree:** in `test_secrets_stay_out_of_logs.py` (67 tests): billing no longer clearing the SDK's printing, 4 fail. The file was restored and the tree's checksums matched.
+- **The rest of the bar** (this tree, one run, 08:00 to 08:06):
+  - Counts: API 4855, workers 27, shared-types 53 (0 fail), design-system 935, web 2116, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7945e69b06e5`) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

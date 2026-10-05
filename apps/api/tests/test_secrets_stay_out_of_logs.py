@@ -706,6 +706,54 @@ class TestTheStripeSdkPrintsWhenToldTo:
         assert "price_PRINTSENTINEL" in done.stderr
 
 
+class TestTheAppSwitchesTheSdkPrintingOffItself:
+    """Without the entrypoint: a developer who exports `STRIPE_LOG` and runs `uvicorn` directly.
+
+    `stripe._util` reads the variable into a module global as it is imported, and decides at each
+    call whether to print (`_console_log_level`), so billing, the only module here that imports
+    the SDK, clears that global and `stripe.log` as it is imported.
+    """
+
+    PRINT_ALL = (
+        "from stripe._util import log_info, log_debug\n"
+        f"{SDK_LINE}\n"
+        "log_debug('Stripe API response', body='price_PRINTSENTINEL')\n"
+    )
+
+    @pytest.mark.parametrize("level", ["info", "debug"])
+    def test_importing_billing_makes_the_sdk_print_nothing_whatever_the_variable_says(
+        self, tmp_path: Path, level: str
+    ) -> None:
+        done = _python(
+            f"import avp_api.services.billing\n{self.PRINT_ALL}", tmp_path, STRIPE_LOG=level
+        )
+
+        assert done.returncode == 0, done.stderr[-1500:]
+        assert "PRINTSENTINEL" not in done.stderr
+
+    def test_building_the_app_makes_the_sdk_print_nothing_with_debug_set(
+        self, tmp_path: Path
+    ) -> None:
+        done = _python(
+            f"from avp_api.main import create_app\ncreate_app()\n{self.PRINT_ALL}",
+            tmp_path,
+            STRIPE_LOG="debug",
+        )
+
+        assert done.returncode == 0, done.stderr[-1500:]
+        assert "PRINTSENTINEL" not in done.stderr
+
+    def test_a_module_level_stripe_log_setting_is_cleared_too(self, tmp_path: Path) -> None:
+        done = _python(
+            "import stripe\nstripe.log = 'debug'\nimport avp_api.services.billing\n"
+            f"{self.PRINT_ALL}",
+            tmp_path,
+        )
+
+        assert done.returncode == 0, done.stderr[-1500:]
+        assert "PRINTSENTINEL" not in done.stderr
+
+
 def _run_entrypoint(script: Path, tmp_path: Path, **env: str) -> dict[str, str]:
     """Run an entrypoint script with `alembic` and `uvicorn` replaced by stubs; what each saw.
 
