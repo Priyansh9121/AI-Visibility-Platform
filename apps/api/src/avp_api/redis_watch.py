@@ -61,6 +61,10 @@ SENTINEL_KEY = "avp:sentinel"
 CHECK_INTERVAL_S = 60.0
 # The watcher task's name, so a test (or a thread dump) can find it.
 TASK_NAME = "redis-sentinel"
+# How long `stop` waits for the cancelled task to be gone. The watcher never swallows a
+# cancellation, so in practice this is a few turns of the loop; the bound is for the day something
+# does, so that a deploy's shutdown cannot wait for ever on the watcher and leave the pools open.
+STOP_TIMEOUT_S = 5.0
 # What the policy line says when it cannot say.
 UNKNOWN = "unknown"
 
@@ -154,12 +158,19 @@ async def start(settings: Settings) -> asyncio.Task[None] | None:
 
 
 async def stop(task: asyncio.Task[None] | None) -> None:
-    """Cancel the watcher and wait for it to be gone. Safe with None.
+    """Cancel the watcher and wait for it to be gone, at most `STOP_TIMEOUT_S`. Safe with None.
 
-    `gather(..., return_exceptions=True)` and not a bare `await` under a `suppress`: it waits for
-    the cancelled task without also swallowing a cancellation of the caller.
+    `asyncio.wait` and not a bare `await` under a `suppress`: it waits for the cancelled task
+    without also swallowing a cancellation of the caller, and it gives up after the bound, which
+    a `gather` would not. A task that is still running after that is let go of, so the shutdown
+    goes on to close the pools.
     """
     if task is None:
         return
     task.cancel()
-    await asyncio.gather(task, return_exceptions=True)
+    done, _still_running = await asyncio.wait({task}, timeout=STOP_TIMEOUT_S)
+    for finished in done:
+        if not finished.cancelled():
+            # Read, so that a failure of the loop itself is not reported a second time, by the
+            # event loop, when the task is collected.
+            finished.exception()

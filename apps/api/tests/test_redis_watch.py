@@ -753,3 +753,37 @@ class TestTheLifespanWatchesAndLetsGo:
         await redis_watch.stop(None)
 
         assert task.cancelled()
+
+    async def test_stop_does_not_wait_for_ever_on_a_watcher_that_will_not_stop(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A shutdown that waited for a task that ignores its cancellation would never finish:
+        the pools would stay open and the deploy would hang. `stop` waits `STOP_TIMEOUT_S` and
+        then lets go."""
+        monkeypatch.setattr(redis_watch, "STOP_TIMEOUT_S", 0.05)
+        release = asyncio.Event()
+
+        async def stubborn() -> None:
+            while True:
+                try:
+                    await release.wait()
+                    return
+                except asyncio.CancelledError:
+                    continue  # told to stop, and does not
+
+        task = asyncio.create_task(stubborn())
+        await asyncio.sleep(0)  # let it start waiting
+        # `stop` runs as a task of its own and is waited on with `asyncio.wait`, which gives up
+        # after the watchdog: a `stop` that never returns would hang this test, not fail it.
+        stopping = asyncio.create_task(redis_watch.stop(task))
+        try:
+            finished, _ = await asyncio.wait({stopping}, timeout=WATCHDOG)
+
+            assert finished, "`stop` is still waiting on a task that ignores its cancellation"
+            assert not task.done(), "the premise: this task ignored the cancellation"
+        finally:
+            release.set()
+            await asyncio.gather(stopping, task, return_exceptions=True)
+
+    def test_stop_waits_a_bounded_few_seconds(self) -> None:
+        assert 0 < redis_watch.STOP_TIMEOUT_S <= 10
