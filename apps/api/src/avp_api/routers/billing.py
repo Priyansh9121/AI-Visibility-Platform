@@ -244,6 +244,10 @@ async def start_checkout(
       still the `409`. Nothing is created in any of these.
     - `503 billing-not-configured` when `STRIPE_SECRET_KEY` or `STRIPE_PRICE_ID`
       is unset, carrying a detail that names the variable.
+    - `503 plan-price-mismatch` when the latest price check found the Price is not
+      the plan (amount, currency, interval or archived) and a fresh read made for
+      this request confirms it. Checked after the two `409` refusals and before
+      anything is created at Stripe. A price read that fails never refuses.
     """
     assert_own_agency(principal.agency_id, agency_id)
 

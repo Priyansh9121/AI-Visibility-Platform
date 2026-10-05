@@ -25031,3 +25031,90 @@ Drift check (north-star §8): §5, Commercial architecture (unit economics); lif
 ## Verified
 
 **This commit changes only `docs/north-star.md` and `docs/build-log.md`, which no test reads.** The code is the branch's base `7fbde03`, and the base bar of the first entry of the day stands for it: API 4571, workers 27, shared-types 53, design-system 935, web 2046, mypy 43 (ceiling 50), every gate and audit passing. Exit codes were read from files.
+
+# Checkout refuses when a fresh read confirms the plan's Stripe Price is wrong, and never because a price read failed
+
+**2026-10-05, the third entry of the day; branch `pilot-fixes-6`, the founder's brief "clear the board, harden billing, and four pilot features" (item B3, launch checklist 3.74).** One item, one commit.
+
+**Render: nothing to set.** The guard reads the same `STRIPE_PRICE_ID` the hourly price check already reads. Production's check said `billing.price_check ok=True` on 2026-10-05, so with the Price as it is, no checkout is refused.
+
+Drift check (north-star §8): no product layer; the commercial architecture (§5.3, how the plan starts), checkout only; lifecycle phase: Activation (Epic 9), how a pilot agency starts paying.
+
+## 1. What changed
+
+The founder's decision (2026-10-05): checkout refuses when the latest price check found a CONFIRMED mismatch (amount, currency, interval, or an archived Price), with a plain sentence to the user and an error log line. A failed or missing read never blocks checkout.
+
+- **The record.** `price_check` (P2's check, run at start and hourly by `price_watch.py`) now keeps what it found in the process:
+  - `ok` or `mismatch` replaces the record;
+  - a read that fails or times out leaves the record as it was;
+  - Stripe not configured clears it.
+  - It also returns what this call found: `"ok"`, `"mismatch"`, or None (not configured, or the read failed).
+- **Checkout** (`create_checkout_session`):
+  - Only when the record says `mismatch` does it read the Price again. The read happens before the agency row lock (`SET LOCAL lock_timeout`, `FOR UPDATE`), so no Stripe read is made while the row is held. It updates the record, so a Price fixed since the last hourly check blocks no one.
+  - The answer is acted on after the two existing `409` refusals (already subscribed, needs attention), so a subscribed agency still hears its `409`. It is checked before `ensure_customer` and every Stripe write, so a refusal leaves no customer and no session.
+  - The refusal is `503 plan-price-mismatch`, titled "The plan's price is not set up correctly", with the detail "Subscribing is not available right now because the plan's price is not set up correctly. Please try again later." It names no amount, Price id or setting.
+  - It logs `billing.checkout_refused_price_mismatch` (error) with `agency_id` and `price_id` only.
+  - No check yet, an `ok` record, a failed read and a timeout all proceed, and the normal path makes no extra read.
+- **The web is unchanged.** Settings' billing panel and the scan-limit notice already show a problem's `detail` as it comes. Neither offers "Manage billing" for this type, because `isSubscriptionRefusal` matches only the two subscription refusals.
+- **The three price-check lines gain `trigger`.** It is `watch` from the hourly task and `checkout` from a click made while a mismatch is recorded. Every existing field stays.
+- **Docs and contracts:**
+  - `docs/api-contracts.md`: the problem table and the checkout endpoint's errors.
+  - `docs/runbook.md`, "Reading the billing price lines": what `trigger=checkout` means, and the refusal line.
+  - The route's docstring lists the new `503`. It feeds OpenAPI, so `openapi.json` and `api.gen.ts` are regenerated.
+- **Tests:** an autouse fixture in `conftest.py` resets the record before every test, so no file hands another a stale one.
+
+## 2. The review
+
+**Security review: nothing above Low.** Round two took every finding:
+- **L1:** a failed read used to clear the record. One timed-out read, even one user's click, turned the guard off for the whole process until the next hourly check. Now only a definite answer replaces the record.
+- **L2:** the fresh read ran while the agency row was locked. For up to the read's 60 s timeout it held that agency's scan starts, webhooks and seat changes. It now runs before the lock.
+- **The nits:**
+  - N1: a test that a subscribed agency hears its `409`, not the `503`;
+  - N2: the autouse reset;
+  - N3: a 15 s watchdog on the test of a read that never answers;
+  - N4: the new `503` documented;
+  - N5: `trigger`, so an alert keyed on the hourly lines can tell checkout clicks apart;
+  - N6: three stray blank lines.
+- **Checked and clean:**
+  - the refusal rests on this request's own read;
+  - tenancy: the route checks the agency first, and the guard adds no query;
+  - the log line's key set;
+  - the web's display of the detail.
+- The round-two fixes were not sent back for a second review. Each one is pinned by a test, and four of them have a negative control below.
+
+## Found, not fixed
+
+- **The record is per process.** With several API processes, each refreshes its record on its own hourly check or at a checkout click. Production runs one (`--workers 1`).
+- **While Stripe cannot be read and a mismatch is recorded,** each checkout click waits for one read before it proceeds. That wait is bounded by `PRICE_CHECK_TIMEOUT_S` (60 s), and the Stripe client's own limit usually ends it sooner. It is now outside the row lock. A shorter limit for this read is the founder's call.
+
+## Verified
+
+**API pytest 4571 → 4593 (+22); floor raised to match.** The other counts are unchanged. One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **`test_billing_price_guard.py` (new, 22 tests).** It covers:
+  - no check yet, and an `ok` record: checkout proceeds with no read;
+  - a confirmed mismatch on each of amount, currency, interval and archived:
+    - a `503` with the sentence;
+    - one error line with exactly `agency_id` and `price_id`;
+    - nothing created at Stripe;
+  - a Price fixed since the last check does not block;
+  - a failed or timed-out fresh read never blocks;
+  - a failed read leaves the record, so the next checkout reads again and refuses;
+  - the fresh read comes before the row lock;
+  - active, trialing, past-due and unpaid agencies hear their `409`;
+  - an `ok` check and unconfigured Stripe clear the record;
+  - every line carries its trigger, and the call returns its outcome.
+- **`test_price_check.py`:** its three line helpers now expect `trigger="watch"`.
+- **The implementer's negative controls** (round two), each restored and checked with `cmp`:
+  - a failed read clearing the record: 4 fail;
+  - the read moved under the lock: 1 fail (the order test);
+  - the refusal raised before the `409`s: 4 fail;
+  - the guard passing `trigger="watch"`: 3 fail.
+- **On this tree:** with the refusal switched off (`if False and price_mismatch_now:`), 6 of the 22 fail: the four mismatch cases, the read-again case and the order test. Restored and checked with `cmp`.
+- **The rest of the bar** (this tree, one run, 12:47 to 12:55):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, web 2046, mypy 43 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7106cadcd0ed`) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts`, regenerated in this commit, regenerate again with no change.
+- Exit codes were read from files.
