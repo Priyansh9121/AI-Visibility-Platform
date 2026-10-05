@@ -301,13 +301,16 @@ at Stripe, whatever its `.env` holds. The check is a read; it changes nothing at
   service to its id. The line repeats every hour until then.
 - Each of the three lines above carries `trigger`: `watch` is the hourly task, and
   `checkout` is a checkout click made while a mismatch is recorded (that click reads the
-  Price again before deciding). A `trigger=checkout` line therefore means a customer tried
-  to subscribe while the Price was wrong. If that read confirms the mismatch, the click is
-  refused and `billing.checkout_refused_price_mismatch` (error, `agency_id` and `price_id`)
-  follows it.
+  Price again before deciding, and waits at most 10 seconds for Stripe to answer). A
+  `trigger=checkout` line therefore means a customer tried to subscribe while the Price was
+  wrong. If that read confirms the mismatch, the click is refused and
+  `billing.checkout_refused_price_mismatch` (error, `agency_id` and `price_id`) follows it.
 - `billing.price_check_failed error_type=…` (warning): Stripe could not be read (a wrong
   key, the network, a timeout, or an answer that is not a Price). Only the error's class
-  is logged, never its message.
+  is logged, never its message. With `trigger=checkout` and `error_type=TimeoutError`, the
+  click's 10 seconds ran out: the click went on without a price answer (a read that fails
+  never refuses), and the mismatch stays recorded, so the next click reads again. The
+  hourly task waits longer, up to 60 seconds.
 - `billing.half_configured missing=…` (error, once at start, deployed only): billing is
   only part set up. `missing` names the one variable that is not set, and never a value.
   - `STRIPE_SECRET_KEY` or `STRIPE_PRICE_ID`: only one of the two is set. Billing then
