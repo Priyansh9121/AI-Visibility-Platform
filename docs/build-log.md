@@ -26169,3 +26169,51 @@ Provider prices change, and the measured ones live in north-star §5.1 and the r
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# Settings announces a new invitation link and its notices, says no email was sent when none was, and keeps a link a failed request did not replace
+
+**2026-10-06, the sixth entry of the day; branch `pilot-fixes-6`, launch checklist 3.85 (found in 3.70's UI review).** Web only, with a UI review and its own bar.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): no product layer (the Settings screen's team and password panels); lifecycle phase: Activation (an agency inviting its team).
+
+## 1. What changed
+
+3.70 gave the invitation link's Copy button an always-present status region. The rest of the family on the same screen was left: the link arrived silently, the new-seat notice implied an email was sent, two notices were mounted together with their text (so some screen readers miss them), and a removal or invite that failed wiped a link that was still good. The API facts: the link (`acceptUrl`) is handed back only when email is not set up, and then nothing is sent; with email set up the API tries to send, logs and swallows a failed send, and answers the same.
+
+- **The link's arrival** (`SeatsPanel.tsx`): a visually hidden sentence in the link's existing polite region, "Invitation link ready, in the field below the form. It works once and expires in 7 days." (the days from `RETENTION.invitationDays`). A sentence, not a focus move: 3.52's pattern decides ties, the Invite button stays on the page, and a focus move would be a visible change. The region is no longer atomic, so a copy's "Link copied." is not read with it, and each new link's sentence is a new element, so a second link is announced too. The field is below the form at every width measured (320 to 1328 px), and a test pins its place.
+- **The new-seat notice, when the API handed a link back:** "<email> has been invited. They hold a seat from now, before they accept. No email was sent. Send them the invitation link yourself." With email set up it is unchanged and says nothing about an email.
+- **A re-invite with email set up:** "A new link has been sent and the old one no longer works." could be false. It now says "<email> already had a pending invitation. The old link no longer works. We tried to email a new one; if it does not arrive, invite the same address again." Re-inviting is the API's own stated recovery.
+- **The Team section's lead** (`SettingsView.tsx`) said invitations hold a seat "from the moment they are sent", false while email is off. It now says "Every seat, including invitations nobody has accepted yet — those hold a seat from the moment someone is invited."
+- **Two notices announced reliably:** the seat panel's notice and the password panel's success message ("Your password has been changed. Every other device has been signed out; this one is still signed in.", unchanged) now change the text of always-present polite regions instead of mounting with their text. Each region sits outside its panel's gap, so an empty one adds no space; measured in Chromium at 1280 and 390 px, every state's height is unchanged except the longer notice wrapping once more at 390.
+- **A link a failed request did not replace stays:** a removal clears it only after it worked, and an invite the API refuses or never answers leaves it, its "Copied" and its region as they were. An invite that works replaces it.
+
+## 2. The review
+
+**UI review: no Blocker; three Should-fix, all taken in round 2.** The re-invite sentence and the Team lead above (both claimed an email), and the refused invite that wiped a good link. Two nits taken: a stale comment, and the ready sentence saying where the link is. The round was not sent back for review; its negative controls are below.
+- **Recorded, a founder decision (launch checklist 3.91):** removing an unrelated seat still clears the invitation link, as 3.70 decided and tested.
+
+## Found, not fixed
+
+- **A failed roster re-read after a good invite or removal** shows "The change did not go through" beside the success notice (`await onChanged()` sits inside the request's `try`). Older than this item.
+- **The two panels' error alerts are still mounted with their text.** An alert is widely announced on insertion, so the risk is lower; the share bar keeps its alert region always present.
+- **No screen reader was run.** For the founder's listening step: invite with email off and expect "Invitation link ready…" and then the notice. Some readers drop one of two messages that arrive together.
+
+## Verified
+
+**Web vitest 2116 → 2156 (+40); floor raised to match.** API is unchanged at 4858.
+- **`SeatsPanel.test.tsx` 48 → 77:** the ready sentence in its region (hidden, polite, not atomic, a new element per link, no focus move); the handed-link notice and its "No email was sent" only on that branch; "only" never appears (a Google sign-in also accepts an invited seat); the re-invite sentence pinned and "sent" absent; the notice in its region; a removal that fails, and an invite refused with each of 409 (seat limit, address registered), 422 and no answer, leave the link, "Copied" and the region alone; an invite held open keeps the old link until the new one replaces it; the field's place after the form.
+- **`SettingsView.test.tsx` 56 → 59:** the lead pinned exactly, without "sent", with a roster that failed to load too.
+- **`PasswordChangePanel.test.tsx` 15 → 16 and `PasswordChangePanel.announce.test.tsx` (new, 7):** the success message in its always-present polite region, which adds no gap.
+- **Before the fixes,** round 1's new tests failed 46 of 94 and round 2's 32 of 136.
+- **The implementer's negative controls,** each restored and checked with `cmp`: round 1, 21 controls, among them the arrival sentence removed (23 fail), the notice mounted with its text again (13), the removal clearing before its request (4) and the password message mounted with its text (9), all reverted at once 46; round 2, the re-invite sentence back (1), the lead back (3), the clear-at-start back (5), the key removed (2), the field moved above the form (1), both files back to round 1 (32).
+- **On this tree:** in `src/components/settings` (284 tests): the ready sentence no longer keyed on its link, 2 fail; the Team lead saying "sent" again, 3 fail; the no-email sentence dropped, 2 fail. Each file was restored and the tree's checksums matched.
+- **The rest of the bar** (this tree, one run, 09:25 to 09:34):
+  - Counts: API 4858, workers 27, shared-types 53 (0 fail), design-system 935, web 2156, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7945e69b06e5`) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
