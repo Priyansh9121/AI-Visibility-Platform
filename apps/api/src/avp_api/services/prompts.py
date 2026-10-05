@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import anthropic
 import structlog
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from ..config import Settings, get_settings
 from ..models.prompt import PromptIntent
@@ -329,6 +329,24 @@ async def generate_prompts(
             call.read_anthropic(response)
     except (anthropic.APIError, TimeoutError) as exc:
         logger.warning("prompts.generation_failed", error=type(exc).__name__)
+        return fallback_prompts(
+            brand_name=brand_name, domain=domain, industry=industry
+        ), "fallback"
+    except ValidationError as exc:
+        # The model answered and its answer did not fit the schema: pydantic's error, raised
+        # inside the SDK's `parse`, is not an `anthropic.APIError`, so the clause above never saw
+        # it and it escaped into a scan that had been paid for (checklist 3.76). Same handling as
+        # `classify.py` and `fix_generator.py`; the call is still counted (`llm.call`, `ok=False`).
+        errors = [
+            {
+                "field": ".".join(str(part) for part in err.get("loc", ())),
+                "type": err.get("type"),
+                # The LENGTH of the offending value, never the value: it is model-authored.
+                "length": len(v) if isinstance(v := err.get("input"), str) else None,
+            }
+            for err in exc.errors()[:5]
+        ]
+        logger.error("prompts.schema_violation", errors=errors)
         return fallback_prompts(
             brand_name=brand_name, domain=domain, industry=industry
         ), "fallback"

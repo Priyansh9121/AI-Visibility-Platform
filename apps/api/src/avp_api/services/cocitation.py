@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 
 import anthropic
 import structlog
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from ..config import Settings, get_settings
 from . import usage
@@ -224,6 +224,22 @@ async def run_seed_prompt(
         return CoCitationResult(prompt=prompt, ok=False, error_code="PROVIDER_UNREACHABLE")
     except anthropic.APIError:
         return CoCitationResult(prompt=prompt, ok=False, error_code="PROVIDER_ERROR")
+    except ValidationError as exc:
+        # The model answered and its answer did not fit the schema: pydantic's error, raised
+        # inside the SDK's `parse`, is not an `anthropic.APIError`, so the clause above never saw
+        # it and it escaped into a scan that had been paid for (checklist 3.76). Same handling as
+        # `classify.py` and `fix_generator.py`; the call is still counted (`llm.call`, `ok=False`).
+        errors = [
+            {
+                "field": ".".join(str(part) for part in err.get("loc", ())),
+                "type": err.get("type"),
+                # The LENGTH of the offending value, never the value: it is model-authored.
+                "length": len(v) if isinstance(v := err.get("input"), str) else None,
+            }
+            for err in exc.errors()[:5]
+        ]
+        logger.error("cocitation.schema_violation", errors=errors)
+        return CoCitationResult(prompt=prompt, ok=False, error_code="PROVIDER_SCHEMA_VIOLATION")
 
     if response.stop_reason == "refusal":
         return CoCitationResult(prompt=prompt, ok=False, error_code="PROVIDER_REFUSED")
