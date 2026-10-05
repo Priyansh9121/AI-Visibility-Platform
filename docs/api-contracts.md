@@ -126,7 +126,7 @@ make it `unparsed`.
 | `/problems/invalid-url` | 409 | Submitted URL has no public domain, or its host is not a valid hostname: a label with a space, quote, bracket or control character, an empty label, a label over 63 characters or starting or ending with a hyphen, a label typed as punycode (`xn--`) that is not valid punycode, or a whole name over 253 characters (2026-10-04, launch checklist 3.67). `detail` is a plain sentence with no code and quotes nothing the person typed; `POST /clients` gives both. Nothing is stored or fetched |
 | `/problems/invalid-webhook-signature` | 400 | Billing webhook signature missing, malformed or wrong |
 | `/problems/billing-not-configured` | 503 | A Stripe setting is unset. `detail` names the variable |
-| `/problems/plan-price-mismatch` | 503 | Checkout refused: the latest price check found the Stripe Price is not the plan (amount, currency, interval or archived) and a fresh read made for this request confirms it. `detail` is one plain sentence: "Subscribing is not available right now because the plan's price is not set up correctly. Please try again later." It names no amount, Price id or setting. Nothing is created at Stripe. A price read that fails never refuses |
+| `/problems/plan-price-mismatch` | 503 | Checkout refused: the latest price check found the Stripe Price is not the plan (amount, currency, interval or archived) and a fresh read made for this request confirms it. `detail` is one plain sentence: "Subscribing is not available right now because the plan's price is not set up correctly. Please try again later." It names no amount, Price id or setting. Nothing is created at Stripe. The fresh read waits at most 10 s; a read that fails or takes longer never refuses |
 | `/problems/google-sign-in-not-configured` | 503 | Google sign-in is not configured on this deployment |
 | `/problems/service-unavailable` | 503 | A dependency the request needs is down |
 | `/problems/scan-limit-reached` | 402 | A scan cannot start on the allowance. Carries `code` (`SCAN_LIMIT_FREE_USED`, `SCAN_LIMIT_MONTHLY`, or since 2026-09-29 `SCAN_LIMIT_VERIFY_REQUIRED` — the free scan, asked for by a user with no linked Google identity), `scansUsed`, `scanLimit`, `periodResetsAt` (monthly only) |
@@ -1082,7 +1082,8 @@ billing-not-configured` when
 variable, the same courtesy `provider_key()` gives every other integration,
 `503 plan-price-mismatch` when the latest price check found the Price is not the
 plan and a fresh read for this request confirms it (after the two 409s, before
-anything is created at Stripe).
+anything is created at Stripe; that read waits at most 10 s, and one that fails or
+takes longer never refuses).
 
 #### `POST /api/v1/agencies/{agencyId}/billing/portal`
 **Auth required (owner/admin).** Stripe's hosted billing portal. No request body.

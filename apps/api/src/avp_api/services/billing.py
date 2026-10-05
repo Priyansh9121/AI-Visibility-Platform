@@ -155,10 +155,19 @@ PLAN_USAGE_TYPE = "licensed"
 # Stripe states an amount in the currency's smallest unit, which for US dollars is the cent.
 # Derived, so the price is typed once; a change of currency changes this line too.
 PLAN_UNIT_AMOUNT_CENTS = PLAN_PRICE_USD * 100
-# The longest one `price_check` waits for Stripe. The client's own bounds (15 s a call, one
-# retry) give up well inside this; it is here for a call that is stuck past them, so a hang is a
-# `billing.price_check_failed` line and not a check that never reports.
+# How long `price_check` waits for Stripe unless the caller gives another limit, which is the
+# hourly watch's (`price_watch.py`: nobody is waiting on it). The client's own bounds (15 s a
+# call, one retry) give up well inside this; it is here for a call that is stuck past them, so a
+# hang is a `billing.price_check_failed` line and not a check that never reports.
 PRICE_CHECK_TIMEOUT_S = 60.0
+# How long the ONE fresh read made for a checkout click waits for Stripe (founder decision,
+# 2026-10-05), and the only read given this limit: `create_checkout_session` passes it to
+# `price_check` as `timeout_s`. A person is waiting on the click, so it is far shorter than the
+# watch's, and shorter than the client's own 15 s a call, so for this read it is the limit that
+# applies and not a backstop. A read that outlasts it is a failed read like any other:
+# `billing.price_check_failed` with `error_type` `TimeoutError` and `trigger` `checkout`, the
+# price record left as it was, and the checkout goes on.
+CHECKOUT_PRICE_READ_TIMEOUT_S = 10.0
 
 # How long a checkout waits for another checkout of the same agency.
 CHECKOUT_LOCK_TIMEOUT = "3s"
@@ -497,7 +506,9 @@ def price_mismatch_confirmed() -> bool:
     return _latest_price_check == _PRICE_MISMATCH
 
 
-async def price_check(settings: Settings, *, trigger: str = "watch") -> str | None:
+async def price_check(
+    settings: Settings, *, trigger: str = "watch", timeout_s: float | None = None
+) -> str | None:
     """Read the Price `STRIPE_PRICE_ID` names and log whether it is the plan. Never raises.
 
     One READ (`prices.retrieve`) through `_client`: it writes nothing at Stripe. It
@@ -518,7 +529,7 @@ async def price_check(settings: Settings, *, trigger: str = "watch") -> str | No
       archived, billed every two months or metered, is not a mismatch whose fields all
       read the same.
     * `billing.price_check_failed`, warning, `error_type` only: Stripe answered with
-      an error, did not answer in `PRICE_CHECK_TIMEOUT_S`, or answered with
+      an error, did not answer within `timeout_s` (`TimeoutError`), or answered with
       something that is not a Price. `error_type` is the exception's CLASS NAME and
       never its message, which can carry request details (an authentication error
       quotes the key it refused). The key is never logged, and of the response only
@@ -534,6 +545,13 @@ async def price_check(settings: Settings, *, trigger: str = "watch") -> str | No
     or the read failed). Every line it logs also carries `trigger`: `"watch"` for the
     hourly task (the default) and `"checkout"` for a checkout click while a mismatch
     is recorded. Otherwise the lines are as above.
+
+    **How long it waits** is `timeout_s`. None, the default and what the hourly task
+    uses, is `PRICE_CHECK_TIMEOUT_S`, read when the check runs. The checkout's one fresh
+    read passes `CHECKOUT_PRICE_READ_TIMEOUT_S`, so that read waits no longer than that
+    (the click's other Stripe calls keep their own limits). The limit belongs to the
+    caller and not to `trigger`, which only labels
+    the lines: a read that outlasts it is the same failed read as any other.
     """
     global _latest_price_check  # noqa: PLW0603
     if not is_configured(settings):
@@ -541,7 +559,7 @@ async def price_check(settings: Settings, *, trigger: str = "watch") -> str | No
         return None
     try:
         price_id = settings.provider_key("stripe_price_id")
-        async with asyncio.timeout(PRICE_CHECK_TIMEOUT_S):
+        async with asyncio.timeout(PRICE_CHECK_TIMEOUT_S if timeout_s is None else timeout_s):
             price = await _client(settings).v1.prices.retrieve_async(price_id)
         found = _price_terms(price)
     except Exception as exc:  # noqa: BLE001 - a check that fails is reported, never raised
@@ -811,10 +829,15 @@ async def create_checkout_session(
     # agency that is already subscribed hears its 409, not a price problem) and before
     # `ensure_customer` and every other Stripe write, so a refusal leaves no customer
     # and no session. A failed read, a timeout, no check yet or an `ok` record all
-    # proceed, with no extra read on the normal path.
+    # proceed, with no extra read on the normal path. A person is waiting on the click, so
+    # the read has its own short limit, `CHECKOUT_PRICE_READ_TIMEOUT_S` (10 s, founder
+    # decision 2026-10-05), and not the hourly watch's: one that is slower is a failed read.
     price_mismatch_now = False
     if price_mismatch_confirmed():
-        price_mismatch_now = (await price_check(settings, trigger="checkout")) == _PRICE_MISMATCH
+        found = await price_check(
+            settings, trigger="checkout", timeout_s=CHECKOUT_PRICE_READ_TIMEOUT_S
+        )
+        price_mismatch_now = found == _PRICE_MISMATCH
 
     key_share = bool(agency.stripe_customer_id)
     await db.execute(text(f"SET LOCAL lock_timeout = '{CHECKOUT_LOCK_TIMEOUT}'"))

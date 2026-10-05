@@ -13,7 +13,11 @@ that has not run, an `ok`, and a read that fails or times out never block. Pinne
   clears it, and so does Stripe being unconfigured;
 * the fresh read is made before the agency row lock, and an agency that is already subscribed
   (or needs attention) hears its 409, not the 503;
-* `price_check`'s log lines carry `trigger`: `watch` from the hourly task, `checkout` from here.
+* `price_check`'s log lines carry `trigger`: `watch` from the hourly task, `checkout` from here;
+* the one fresh read at checkout waits 10 s (`CHECKOUT_PRICE_READ_TIMEOUT_S`, founder decision
+  2026-10-05) and the hourly watch keeps its 60 s (`PRICE_CHECK_TIMEOUT_S`): each trigger gets
+  its own limit, and a checkout read that outlasts its own is a failed read, so checkout goes on
+  and the record stays as it was.
 
 Stripe is a fake: `GuardStub` is `test_billing.py`'s stub with the one Price read added.
 """
@@ -22,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any
 
@@ -29,6 +34,7 @@ import pytest
 import structlog
 from httpx import AsyncClient
 
+from avp_api import price_watch
 from avp_api.services import billing as billing_service
 
 # Fixtures and helpers from test_billing.py. The two autouse guards are imported so they apply here.
@@ -141,6 +147,43 @@ def _nothing_created(stub: GuardStub) -> None:
     assert stub.subscriptions_listed == []
 
 
+async def _until(predicate: Callable[[], bool], *, seconds: float = 5.0) -> None:
+    """Wait for `predicate()`. A test that waits for something that never comes fails, not hangs."""
+    try:
+        async with asyncio.timeout(seconds):
+            while not predicate():
+                await asyncio.sleep(0.005)
+    except TimeoutError:
+        pytest.fail(f"still waiting after {seconds}s")
+
+
+def _failed_line(trigger: str) -> dict[str, str]:
+    """`billing.price_check_failed` for a read that outlasted its limit: the class, nothing more."""
+    return {
+        "event": "billing.price_check_failed",
+        "log_level": "warning",
+        "error_type": "TimeoutError",
+        "trigger": trigger,
+    }
+
+
+class _SpiedAsyncio:
+    """`asyncio` as `services/billing.py` sees it, noting every limit it is asked to wait.
+
+    Patched over that module's own name for it, so nothing else in the process is affected.
+    """
+
+    def __init__(self, limits: list[float | None]) -> None:
+        self._limits = limits
+
+    def timeout(self, delay: float | None) -> Any:
+        self._limits.append(delay)
+        return asyncio.timeout(delay)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(asyncio, name)
+
+
 async def test_with_no_check_yet_checkout_proceeds_and_reads_no_price(
     client: AsyncClient, stub: GuardStub
 ) -> None:
@@ -212,7 +255,8 @@ async def test_a_price_fixed_since_the_last_check_does_not_block(
 async def test_a_failed_fresh_read_never_blocks_checkout(
     client: AsyncClient, stub: GuardStub, settings, monkeypatch, failure: Any  # noqa: ANN001
 ) -> None:
-    monkeypatch.setattr(billing_service, "PRICE_CHECK_TIMEOUT_S", 0.05)
+    # The limit THIS read waits on is the checkout's own, not the hourly watch's.
+    monkeypatch.setattr(billing_service, "CHECKOUT_PRICE_READ_TIMEOUT_S", 0.05)
     await _record(settings, stub, a_price(amount=9900))
     stub.outcomes = [failure]
     resp, _, events = await asyncio.wait_for(_checkout(client), WATCHDOG)
@@ -343,3 +387,76 @@ async def test_a_checkout_that_reads_the_price_logs_trigger_checkout(
     _, _, events = await _checkout(client)
     lines = [e for e in events if e["event"] == "billing.price_mismatch"]
     assert [e["trigger"] for e in lines] == ["checkout"]
+
+
+# ---------------------------------------------------------------------------
+# how long each read waits for Stripe (founder decision 2026-10-05)
+# ---------------------------------------------------------------------------
+# The one fresh read a checkout click makes waits 10 s. A person is at the screen, and a read
+# that is slower than that is a failed read, which never blocks. The hourly watch has nobody
+# waiting and keeps its 60 s. The numbers are written out here and not imported, so editing the
+# code cannot quietly edit the decision these pin.
+
+
+def test_the_checkout_read_waits_ten_seconds() -> None:
+    assert billing_service.CHECKOUT_PRICE_READ_TIMEOUT_S == 10.0
+
+
+def test_the_hourly_watch_read_keeps_its_sixty_seconds() -> None:
+    assert billing_service.PRICE_CHECK_TIMEOUT_S == 60.0
+
+
+async def test_a_checkout_read_that_outlasts_the_checkout_limit_is_a_failed_read(
+    client: AsyncClient, stub: GuardStub, settings, monkeypatch  # noqa: ANN001
+) -> None:
+    # Only the CHECKOUT's limit is short. The watch's stays its real 60 s, so a checkout that
+    # waited on that one would still be waiting when the watchdog ends the test.
+    monkeypatch.setattr(billing_service, "CHECKOUT_PRICE_READ_TIMEOUT_S", 0.05)
+    await _record(settings, stub, a_price(amount=9900))
+    stub.outcomes = ["hang"]
+
+    resp, _, events = await asyncio.wait_for(_checkout(client), WATCHDOG)
+
+    assert resp.status_code == 201, resp.text  # a failed read never blocks
+    assert stub.price_reads == 1
+    assert len(stub.sessions_created) == 1  # checkout went on and made its session
+    assert [e for e in events if e["event"] == "billing.price_check_failed"] == [
+        _failed_line("checkout")
+    ]
+    assert not [e for e in events if e["event"] == "billing.checkout_refused_price_mismatch"]
+    # Nothing was confirmed, so the record is as the last check left it: the next click reads again.
+    assert billing_service.price_mismatch_confirmed() is True
+
+
+async def test_the_hourly_watch_read_still_ends_at_the_watch_limit(
+    stub: GuardStub, settings, monkeypatch  # noqa: ANN001
+) -> None:
+    # Only the WATCH's limit is short. The checkout's stays its real 10 s, so a watch that took
+    # that one would still be waiting after the 5 s this test gives it.
+    monkeypatch.setattr(billing_service, "PRICE_CHECK_TIMEOUT_S", 0.05)
+    stub.outcomes = ["hang"]
+    with structlog.testing.capture_logs() as events:
+        task = asyncio.create_task(price_watch.watch_price(settings, interval_s=3600.0))
+        try:
+            await _until(lambda: bool(events))
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+    assert events == [_failed_line("watch")]
+
+
+async def test_each_trigger_waits_the_limit_that_is_its_own(
+    client: AsyncClient, stub: GuardStub, settings, monkeypatch  # noqa: ANN001
+) -> None:
+    limits: list[float | None] = []
+    monkeypatch.setattr(billing_service, "asyncio", _SpiedAsyncio(limits))
+    stub.outcomes = [a_price(amount=9900)]
+
+    await billing_service.price_check(settings, trigger="watch")
+    assert limits == [60.0]
+    assert billing_service.price_mismatch_confirmed() is True
+
+    limits.clear()
+    resp, _, _ = await _checkout(client)
+    assert resp.status_code == 503, resp.text  # the click's own read confirmed the mismatch
+    assert limits == [10.0]

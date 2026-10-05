@@ -25501,3 +25501,73 @@ No review: no auth, billing, tenancy or user-visible change.
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# Checkout's fresh price read gives up after 10 seconds and proceeds; the hourly price check keeps its 60
+
+**2026-10-05, the eighth entry of the day; branch `pilot-fixes-6`, the founder's answer of 2026-10-05 to the question B3's entry left open (item B3, launch checklist 3.74).** A small follow-up, with its own bar.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): no product layer; the commercial architecture (§5.3, how the plan starts), checkout only; lifecycle phase: Activation (Epic 9), how a pilot agency starts paying.
+
+## 1. What changed
+
+The founder's decision (2026-10-05): the one fresh price read that checkout makes while a mismatch is recorded gets a 10 s limit, and still proceeds on timeout. B3's entry left this open ("a shorter limit for this read is the founder's call"), and where it says that read is bounded by `PRICE_CHECK_TIMEOUT_S` (60 s), this supersedes it.
+
+- **`services/billing.py`:**
+  - A new constant, `CHECKOUT_PRICE_READ_TIMEOUT_S = 10.0`, sits beside `PRICE_CHECK_TIMEOUT_S` (60 s).
+  - `price_check` gains a `timeout_s` keyword. Without it, the read gets `PRICE_CHECK_TIMEOUT_S`, read at call time, so tests that shorten that constant still work.
+  - `create_checkout_session` passes the checkout limit.
+  - **A read that takes longer is a failed read.** Checkout proceeds, and the record keeps its `mismatch`, so the next click reads again. The line is `billing.price_check_failed error_type=TimeoutError trigger=checkout`.
+  - The hourly watch still waits up to 60 s.
+  - The 10 s limit is shorter than the Stripe client's own 15 s per request, so for this read it is the bound that applies.
+  - No log line or field changed.
+- **`docs/runbook.md`,** "Reading the billing price lines":
+  - a checkout click waits at most 10 s for the Price;
+  - a `trigger=checkout` line with `error_type=TimeoutError` means that read gave up and the click went on;
+  - the watch waits up to 60 s.
+- **`docs/api-contracts.md`:** the `plan-price-mismatch` row and the checkout endpoint's errors say that a price read taking longer than 10 s counts as failed.
+
+## 2. The review
+
+**Security review: nothing above Nit.**
+- **The timeout path is clean.**
+  - The 10 s limit wraps only the price read, a GET.
+  - The Stripe SDK's async code lets the cancellation through, so it arrives as `TimeoutError`.
+  - `price_check` logs it and returns None, and a recorded mismatch stays.
+  - Checkout goes on. The `503` still comes only from this request's own confirmed read, and nothing is written at Stripe before the decision.
+- **The watch keeps 60 s.** It is the only other caller, and it passes no limit.
+- **Nit 1, accepted as decided:** the limit is below the client's own 15 s per request.
+  - So the SDK's one retry happens only after a fast failure. A first attempt that stalls is cut at 10 s with no retry; before, the retry could still confirm a mismatch by about 30.5 s.
+  - A stalled read now lets such a checkout go on at the wrong Price. That is within the founder's fail-open decision.
+- **Nit 2, taken:** a docstring said a click waits for Stripe no longer than the limit. Only this read is bounded; the click's other Stripe calls keep their own limits.
+  - The wording was corrected after the bar. Ruff and the two price test files were run again: 153 passed.
+- **Nit 3, not taken:** the spy test's watch half calls `price_check` directly rather than through the watch loop. A change in `price_watch.py` is still caught by the watch-loop test.
+- **Not from this diff, recorded:** the checkout route has no rate limit, and by B3's design a failed read lets checkout go on.
+
+## Verified
+
+**API pytest 4698 → 4703 (+5); floor raised to match.** Web is unchanged at 2070. One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **`test_billing_price_guard.py`, 22 → 27.** It covers:
+  - the checkout limit is 10.0 and the watch's is 60.0;
+  - a checkout read that outlasts its limit (shortened to 0.05 s, the watch's left at 60):
+    - it proceeds with a 201 and a session, under a 15 s watchdog;
+    - it logs exactly the failed line, with `trigger=checkout` and `TimeoutError`;
+    - it leaves the record at `mismatch`;
+  - the real watch loop, with only its own limit shortened, ends its read at that limit with `trigger=watch`;
+  - a spy on the value passed to `asyncio.timeout`, with the real constants: the watch gets 60.0 and the checkout click gets 10.0;
+  - the existing "a failed fresh read never blocks checkout" cases now shorten the checkout limit, the one checkout uses.
+  - Before the change, 5 of the 27 failed (the implementer's count).
+- **The implementer's negative controls,** each restored by checksum:
+  - checkout no longer passing its limit, so it waits 60 s again: 3 fail;
+  - the watch taking the checkout limit: 2 fail;
+  - either constant changed to 30.0: 2 fail each.
+- **On this tree:** with checkout no longer passing its limit, 3 of the 27 fail: the timed-out "never blocks" case, the 0.05 s-limit test and the spy test. Restored and checked with `cmp`.
+- **The rest of the bar** (this tree, one run, 14:31 to 14:37):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7106cadcd0ed`) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
