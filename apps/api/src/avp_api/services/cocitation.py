@@ -36,6 +36,7 @@ from pydantic import BaseModel, Field, ValidationError
 from ..config import Settings, get_settings
 from . import usage
 from .call_bounds import CallBound
+from .concurrency import gather_cancelling
 from .crawl import registrable_domain
 
 logger = structlog.get_logger(__name__)
@@ -278,4 +279,4 @@ async def run_seed_prompts(
         async with semaphore:
             return await run_seed_prompt(p, subject_brand=subject_brand, settings=settings)
 
-    return list(await asyncio.gather(*(one(p) for p in prompts)))
+    return list(await gather_cancelling(*(one(p) for p in prompts)))

@@ -25861,3 +25861,48 @@ Drift check (north-star §8): Layer 1, Collection (the model calls a scan makes)
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# When one of a group of paid calls fails, the others are cancelled instead of spending on answers nobody reads
+
+**2026-10-05, the thirteenth entry of the day; branch `pilot-fixes-6`, launch checklist 3.77 (found in U1).** API only, with its own bar.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 1, Collection (the model and search calls a scan makes); lifecycle phase: Activation and Retention (every scan).
+
+## 1. What changed
+
+`asyncio.gather` hands the first exception to its caller and leaves every other task running. The caller moves on (a scan is marked failed, a detection ends) while the siblings keep making paid calls whose answers are thrown away.
+
+- **New `services/concurrency.py`, `gather_cancelling(*coros)`:** results in the order given; the first exception cancels the siblings still going, waits until they have stopped, and is raised to the caller as itself, of its own type. If the awaiting task is cancelled (the scan's deadline, a lost lease), every child is cancelled too and `CancelledError` reaches the caller, as from `gather`. With nothing to run it returns `[]`, as `gather` does.
+- **Why not `asyncio.TaskGroup`:** on Python 3.12 a group whose child fails cancels its parent task and leaves that cancellation counted, and the failure arrives wrapped in an `ExceptionGroup`. The scan deadline is an `asyncio.timeout`, which reads the count, and every caller's `except` clauses expect the exception itself.
+- **The four groups changed:** the scan's per-prompt loop (`scan_runner.run_scan`: one task per prompt, four engine calls and sentiment each), `engines.ask_all` (one paid call per engine, used by scans and ad hoc runs), co-citation's `run_seed_prompts` (Anthropic calls) and `serp.search_many` (SerpApi searches).
+- **Left as it is:** `redis_watch.py` collects one already-cancelled watcher with `return_exceptions=True`, by design.
+- **How rare a raise is:** each task already turns its own provider errors into a result (the engine adapters, `serp.search`, and since 3.76 `run_seed_prompt`), so a raise in these groups is a bug in our code or a cancellation. In the scan loop the realistic ones are bugs in fact extraction or sentiment.
+- **What a cancelled call logs:** `llm.call ok=False error="CancelledError"` with zero tokens and no model; `scan.usage` counts it among the engine's calls and unanswered. A cancelled call may still have been billed, at an unknown cost, as `usage.py` already says of a timeout.
+
+## 2. The review
+
+The orchestrator read the helper and found one defect: called with nothing to run, it raised `ValueError` (from `asyncio.wait` on an empty set) where `gather` returned `[]`. A scan with no prompts, a search with no queries or a run with no engines would have failed where it used to return nothing. It returns `[]` now, with a test and a negative control. No other review: no route, tenancy, billing or log of an identifier changed.
+
+## Found, not fixed
+
+- **A cancelled or schema-missed call is logged with zero tokens,** so a scan's cost figure is low by those calls (3.76 says the same).
+- **The suite fakes `run_seed_prompts` and `search_many` for every test** (an autouse fixture in `conftest.py`); a test of the real ones undoes it first, as these do.
+
+## Verified
+
+**API pytest 4764 → 4774 (+10); floor raised to match.** Web is unchanged at 2107.
+- **`test_gather_cancels.py` (new, 9):** the helper returns results in order, raises the first failure as itself after cancelling and awaiting the siblings, passes a cancellation of the awaiting task to every child (and stays a cancellation when it lands while a child is failing), and returns `[]` with nothing to run; one test per changed group (co-citation, search, engines), each holding the siblings on an event nobody sets (no sleeps), asserting they were cancelled and the caller saw the original error; and a cancelled engine call is logged `ok=False`, `error="CancelledError"`, with zero tokens and no model, and counted unanswered.
+- **`test_scan_deadline.py` 44 → 45:** a failed prompt ends the scan's other prompts.
+- **The implementer's runs:** 27 covering files, 1256 passed; after the empty-input fix, the helper and deadline files 54 passed; ruff clean; mypy 43 on its base.
+- **The implementer's negative controls,** each restored and checked with `cmp`: each group back on `asyncio.gather`: co-citation 1 fail, search 1, engines 2, the scan loop 1; the helper itself turned into plain `gather`: 6 fail; the empty-input return removed: 1 fail. (The tests were written with the fix, so there is no before-count; these controls stand in for it.)
+- **On this tree:** in `test_gather_cancels.py` and `test_scan_deadline.py` (54 tests): the scan loop back on `asyncio.gather`, 1 fails; `ask_all` back on it, 2 fail. Each file was restored and the tree's checksums matched.
+- **The rest of the bar** (this tree, one run, 21:43 to 21:52):
+  - Counts: API 4774, workers 27, shared-types 53 (0 fail), design-system 935, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7945e69b06e5`) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

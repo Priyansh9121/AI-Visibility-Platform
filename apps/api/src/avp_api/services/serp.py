@@ -31,6 +31,7 @@ import structlog
 
 from ..config import Settings, get_settings
 from . import usage
+from .concurrency import gather_cancelling
 from .crawl import registrable_domain
 
 logger = structlog.get_logger(__name__)
@@ -639,7 +640,7 @@ async def search_many(
         async with semaphore:
             return await search(q, settings=settings, country=country)
 
-    return list(await asyncio.gather(*(one(q) for q in queries)))
+    return list(await gather_cancelling(*(one(q) for q in queries)))
 
 
 def _whole_count(value: object) -> int | None:

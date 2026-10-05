@@ -109,6 +109,7 @@ import structlog
 from ..config import Settings, get_settings
 from ..models.engine_result import Engine, EngineResultStatus
 from . import usage
+from .concurrency import gather_cancelling
 from .crawl import registrable_domain
 
 logger = structlog.get_logger(__name__)
@@ -1308,6 +1309,4 @@ async def ask_all(
 ) -> list[EngineAnswer]:
     """Ask one prompt of every engine, concurrently — gated per vendor."""
     settings = settings or get_settings()
-    return list(
-        await asyncio.gather(*(_ask_gated(e, prompt, settings) for e in engines))
-    )
+    return await gather_cancelling(*(_ask_gated(e, prompt, settings) for e in engines))
