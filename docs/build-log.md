@@ -25906,3 +25906,41 @@ The orchestrator read the helper and found one defect: called with nothing to ru
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# The API suite refuses any call to a host that is not this machine, and never reads `apps/api/.env`
+
+**2026-10-05, the fourteenth entry of the day; branch `pilot-fixes-6`, launch checklist 3.82 (found in U2's review).** Tests only, with its own bar.
+
+**Render: nothing to set.** Nothing under `src` changed.
+
+Drift check (north-star §8): the verification bar (north-star §4.3), no product layer; lifecycle phase: none (it guards every phase's tests).
+
+## 1. What changed
+
+Before: a test that fell back to `get_settings()` read `apps/api/.env`, which holds live provider keys, and a missed stub made a real request that our own code then swallowed by design (provider errors become statuses). Nothing in the suite would have noticed.
+
+- **Every outbound path is httpx,** so one guard covers them: the engine adapters (Anthropic, the OpenAI-compatible ones, Perplexity, Gemini), the Anthropic SDK (co-citation, classification, prompts, extraction, fixes), SerpApi, email (Resend), Google sign-in, the crawler's egress-guarded client, and Stripe's SDK (`stripe.HTTPXClient`). Playwright (the crawler's browser, the technical audit) is not httpx and is not covered; Postgres and Redis are not HTTP.
+- **The guard** (`tests/conftest.py`, autouse): `httpx.HTTPTransport.handle_request` and `httpx.AsyncHTTPTransport.handle_async_request` are wrapped once per session. A request to any host but `127.0.0.1`, `::1` or `localhost` raises `OutboundCallRefused` (an `AssertionError`, so provider code that catches transport errors does not swallow it) and is recorded. Per test, the record is cleared at the start and must be empty at teardown, so an attempt our own code swallowed still fails the test that made it. The app's ASGI transport and `httpx.MockTransport` never reach these methods.
+- **No `.env`:** a session fixture sets `Settings.model_config["env_file"]` to `None`, so neither `Settings()` nor `get_settings()` reads the file in any test. No test called them bare; the risk was code under test falling back to `get_settings()` (for example `redis_client.get_redis()`).
+- **One exemption:** five egress tests (`TestTheClientTheGateBuildsIsReallyGuarded`) use made-up hostnames (`internal.test`, `public.test`) with the TCP connect stubbed below httpx, so no packet leaves. They carry a new `stubbed_connect` marker (registered in `pyproject.toml`), under which the guard stands aside.
+
+## Found, not fixed
+
+- **Playwright is not guarded.** No test was checked for launching a real browser.
+- **The `stubbed_connect` marker** turns the guard off for a test; it is visible in review, and only the five egress tests carry it.
+
+## Verified
+
+**API pytest 4774 → 4783 (+9); floor raised to match.** Web is unchanged at 2107.
+- **`test_outbound_guard.py` (new, 9):** a sync and an async request to a public host are refused and recorded; an attempt that the caller swallows still fails at teardown; loopback (`127.0.0.1`, `::1`, `localhost`), the ASGI transport and `MockTransport` record nothing; and a sentinel `.env` in the working directory is never read by `Settings()` or `get_settings()` (the test compares the secret values, since `SecretStr` masks them when dumped).
+- **The whole API suite under the guard** (the implementer's run on its base, 27900b1): before the egress marker, the five egress tests failed and errored; after it, all passed. The patch was merged three-way onto this head (B4 had changed `conftest.py` beside it); a comment that said no test launches a real browser, which nobody checked, now says only that Playwright is not covered.
+- **The implementer's negative controls,** each restored and checked with `cmp`: the guard's patch removed, 3 fail; the teardown check removed, 1 fails; the `.env` protection removed, 1 fails.
+- **On this tree:** in `test_outbound_guard.py` and `test_egress.py` (98 tests): the guard refusing nothing, 3 fail; the `.env` protection removed, 1 fails. Each file was restored and the tree's checksums matched. The bar's API run is the first full suite under the guard on this branch's head (B4, 3.76 and 3.77 included): no test reached the network.
+- **The rest of the bar** (this tree, one run, 21:55 to 22:01):
+  - Counts: API 4783, workers 27, shared-types 53 (0 fail), design-system 935, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass (`pyproject.toml` changed only its pytest markers), and Alembic upgrade (to `7945e69b06e5`) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
