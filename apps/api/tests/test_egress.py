@@ -233,6 +233,7 @@ class TestGuardedNetworkBackend:
         assert inner.connected == []
 
 
+@pytest.mark.stubbed_connect
 class TestTheClientTheGateBuildsIsReallyGuarded:
     """Pins the swap into httpx's transport.
 

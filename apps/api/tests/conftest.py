@@ -17,7 +17,7 @@ import asyncio
 import contextlib
 import os
 import secrets
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterator
 from urllib.parse import urlsplit
 
 import httpx
@@ -57,6 +57,109 @@ TEST_REDIS_URL = os.environ.get("AVP_TEST_REDIS_URL", "redis://127.0.0.1:6379/15
 # client built in a test that signs in and then writes must send it too:
 # `headers={"Origin": client.headers["Origin"]}`.
 TEST_ORIGIN = "http://localhost:3000"
+
+
+# ---------------------------------------------------------------------------
+# Hermetic network and settings (checklist 3.82).
+#
+# Every outbound path in the API is httpx: the provider adapters in `engines.py`, `serp.py`,
+# `email.py`, `google_oauth.py`, the crawler's `guarded_transport()` (an
+# `httpx.AsyncHTTPTransport` subclass), the anthropic SDK (httpx underneath) and Stripe's
+# `HTTPXClient`. So refusing at `HTTPTransport.handle_request` and
+# `AsyncHTTPTransport.handle_async_request` covers all of them; `ASGITransport` and
+# `httpx.MockTransport` are other classes and never reach it. Playwright (the audit's
+# browser) is not httpx and is not covered by this guard.
+# Postgres and Redis are not httpx.
+#
+# A refusal is raised AND recorded. Our own code maps provider errors to statuses by
+# design, so a raised error alone can be swallowed; the autouse fixture below asserts the
+# record is empty at teardown, so the test that made the attempt still fails.
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+REFUSED_OUTBOUND: list[str] = []
+
+
+class OutboundCallRefused(AssertionError):  # noqa: N818 - an assertion, not a runtime error
+    """A test tried to reach a host that is not loopback."""
+
+
+# Set per test by the marker below; read by the transport guard.
+_STANDING_ASIDE = [False]
+
+
+def _check_outbound(request: httpx.Request) -> None:
+    host = request.url.host
+    if host not in LOOPBACK_HOSTS and not _STANDING_ASIDE[0]:
+        REFUSED_OUTBOUND.append(f"{request.method} {host}")
+        raise OutboundCallRefused(
+            f"the test suite refuses outbound HTTP to {host!r}: stub the provider "
+            "(httpx.MockTransport or monkeypatch the adapter) instead of reaching the network"
+        )
+
+
+def assert_no_refused_outbound() -> None:
+    if REFUSED_OUTBOUND:
+        attempts = ", ".join(REFUSED_OUTBOUND)
+        REFUSED_OUTBOUND.clear()
+        pytest.fail(f"a test attempted outbound HTTP (swallowed or not): {attempts}")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _refuse_non_loopback_httpx() -> Iterator[None]:
+    """Session-scoped: the transports are patched once; per-test recording is below."""
+    sync_original = httpx.HTTPTransport.handle_request
+    async_original = httpx.AsyncHTTPTransport.handle_async_request
+
+    def sync_guard(self: httpx.HTTPTransport, request: httpx.Request) -> httpx.Response:
+        _check_outbound(request)
+        return sync_original(self, request)
+
+    async def async_guard(self: httpx.AsyncHTTPTransport, request: httpx.Request) -> httpx.Response:
+        _check_outbound(request)
+        return await async_original(self, request)
+
+    httpx.HTTPTransport.handle_request = sync_guard  # type: ignore[method-assign]
+    httpx.AsyncHTTPTransport.handle_async_request = async_guard  # type: ignore[method-assign]
+    try:
+        yield
+    finally:
+        httpx.HTTPTransport.handle_request = sync_original  # type: ignore[method-assign]
+        httpx.AsyncHTTPTransport.handle_async_request = async_original  # type: ignore[method-assign]
+
+
+@pytest.fixture(autouse=True)
+def _no_outbound_attempts(request: pytest.FixtureRequest) -> Iterator[None]:
+    REFUSED_OUTBOUND.clear()
+    # `stubbed_connect`: the test replaces the TCP connect beneath httpx (test_egress.py), so a
+    # named host reaches its own stub and never the network; the transport guard stands aside.
+    _STANDING_ASIDE[0] = request.node.get_closest_marker("stubbed_connect") is not None
+    try:
+        yield
+    finally:
+        _STANDING_ASIDE[0] = False
+    assert_no_refused_outbound()
+
+
+@pytest.fixture
+def outbound_guard():  # noqa: ANN201
+    """The guard's pieces for its own tests (`tests/` is not a package)."""
+    import types
+
+    return types.SimpleNamespace(
+        refused=REFUSED_OUTBOUND,
+        error=OutboundCallRefused,
+        check=assert_no_refused_outbound,
+    )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _never_read_dotenv() -> Iterator[None]:
+    """`get_settings()` and `Settings()` fall back to `apps/api/.env` (live keys). Never here."""
+    original = Settings.model_config.get("env_file")
+    Settings.model_config["env_file"] = None
+    try:
+        yield
+    finally:
+        Settings.model_config["env_file"] = original
 
 
 @pytest.fixture(scope="session")
@@ -222,7 +325,6 @@ async def _clean_state(request: pytest.FixtureRequest) -> AsyncIterator[None]:
     await redis.aclose()
 
 
-
 class EnginesOnlyScanExecutor:
     """Runs the engine phase and stops — the product's behaviour before 9.17.
 
@@ -261,8 +363,12 @@ class EnginesOnlyScanExecutor:
             await detection.adopt_next_list(session, scan, client)
             await session.commit()
             await scan_runner.run_scan(
-                session, scan, client,
-                settings=settings, engines=job.engines, prompt_limit=job.prompt_limit,
+                session,
+                scan,
+                client,
+                settings=settings,
+                engines=job.engines,
+                prompt_limit=job.prompt_limit,
             )
 
 
@@ -284,6 +390,7 @@ def scan_executor_factory():  # noqa: ANN201
     a test asserting otherwise should have to say so.
     """
     return InlineScanExecutor
+
 
 @pytest_asyncio.fixture
 async def client(  # noqa: ANN001
@@ -441,6 +548,7 @@ def signup_payload() -> dict[str, str]:
         "password": "correct-horse-battery-staple",
     }
 
+
 # ---------------------------------------------------------------------------
 # The chained scan's external boundaries — Epic 9.17
 # ---------------------------------------------------------------------------
@@ -556,8 +664,7 @@ def stub_chain_externals(monkeypatch, request):  # noqa: ANN001, ANN201
             # against a client with no policy at all, which is the one state
             # that reveals nothing.
             ai_crawler_access=evaluate_robots(
-                "User-agent: *\nAllow: /\nDisallow: /admin/\n\n"
-                "User-agent: CCBot\nDisallow: /\n"
+                "User-agent: *\nAllow: /\nDisallow: /admin/\n\nUser-agent: CCBot\nDisallow: /\n"
             ),
         )
 
@@ -631,9 +738,7 @@ def stub_chain_externals(monkeypatch, request):  # noqa: ANN001, ANN201
     # marker rather than by file name, so the opt-out is visible where it is
     # used and registered in pyproject where it is defined.
     if request.node.get_closest_marker("real_parse") is None:
-        monkeypatch.setattr(
-            anthropic.resources.messages.AsyncMessages, "parse", dispatching_parse
-        )
+        monkeypatch.setattr(anthropic.resources.messages.AsyncMessages, "parse", dispatching_parse)
 
 
 @pytest.fixture(autouse=True)
@@ -714,16 +819,18 @@ class FakeWeb:
         self.resolutions: dict[str, list[str] | Exception] = {}
         self.lookups: list[str] = []
         self.routes: dict[str, tuple[int, str, dict[str, str]]] = {}
-        self.streams: dict[
-            str, tuple[int, dict[str, str], Callable[[], AsyncIterator[bytes]]]
-        ] = {}
+        self.streams: dict[str, tuple[int, dict[str, str], Callable[[], AsyncIterator[bytes]]]] = {}
         self.hangs: set[str] = set()
         self.delays: dict[str, float] = {}
         self.failures: dict[str, Exception] = {}
         self.requests: list[tuple[str, str, str]] = []
 
     def serve(
-        self, url: str, *, status: int = 200, body: str = "",
+        self,
+        url: str,
+        *,
+        status: int = 200,
+        body: str = "",
         headers: dict[str, str] | None = None,
     ) -> None:
         self.routes[url] = (status, body, headers or {"content-type": "text/plain"})
@@ -732,7 +839,11 @@ class FakeWeb:
         self.failures[url] = exc
 
     def serve_stream(
-        self, url: str, chunks: Callable[[], AsyncIterator[bytes]], *, status: int = 200,
+        self,
+        url: str,
+        chunks: Callable[[], AsyncIterator[bytes]],
+        *,
+        status: int = 200,
         headers: dict[str, str] | None = None,
     ) -> None:
         self.streams[url] = (status, headers or {"content-type": "text/plain"}, chunks)
@@ -759,7 +870,10 @@ class FakeWeb:
         return [
             (
                 socket.AF_INET6 if ":" in address else socket.AF_INET,
-                socket.SOCK_STREAM, 6, "", (address, port),
+                socket.SOCK_STREAM,
+                6,
+                "",
+                (address, port),
             )
             for address in found
         ]
