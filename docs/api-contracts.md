@@ -773,7 +773,8 @@ one.
   "freeScanRequiresGoogle": false,
   "cancelAtPeriodEnd": false,
   "trialEndsAt": null,
-  "trialEligible": false
+  "trialEligible": false,
+  "trialRequiresGoogle": false
 }
 ```
 
@@ -805,6 +806,28 @@ record says no", and checkout can still refuse the trial to a customer for whom 
 remembers an ended subscription that our row never recorded (a webhook that did not land).
 That is the one case Settings can be wrong in, and a rare one; checkout never gives more
 than it promises. The web promises the trial only on a `true` and never works it out itself.
+
+**A trial needs a Google sign-in — 2026-10-05 (launch checklist 3.72).** A free trial
+is given only when the **user who starts the checkout** has a verified Google identity
+(`User.google_sub`, `scan_allowance.has_verified_identity`: the free scan's rule, reused). The
+rule is on the user and not the agency: a password-only admin of an agency whose owner has
+Google gets the plain checkout. So both trial fields are about **the requesting user**, and two
+seats of one agency can read them differently:
+
+- `trialEligible` is true only when everything above holds **and** this user has a linked
+  Google identity: it is what a Subscribe from this sign-in would get (subject to the Stripe-side
+  caveat above). Its meaning is therefore narrower than it was: false for a user without Google.
+- `trialRequiresGoogle` is true exactly when the agency's record and the configuration would
+  give a trial **and the only thing missing is the Google identity**: checkout would give this
+  user no trial, and continuing with Google on the same address would. False when no trial is on,
+  when the agency has had a subscription, and for a user who has Google. The two are never both
+  true. Settings says, from it, that subscribing now starts the paid plan at once with no free
+  trial and offers Continue with Google.
+
+Checkout for a user without Google is **not refused**: it creates the same session a no-trial
+checkout does (no `trial_period_days`, no `payment_method_collection`), returns the same `201`
+and URL, and logs `billing.checkout_created` with `trial_withheld_no_google: true` (ids and
+booleans only: `agency_id`, `session_id`, `user_id`, `trial_days`).
 
 **`cancelAtPeriodEnd` — 2026-09-29.** True when the subscription was cancelled
 in Stripe's portal and runs to the end of the period already paid for. Stripe
@@ -888,6 +911,8 @@ it says nothing about a trial at all). It is **0 wherever checkout cannot start 
 to promise. It describes the offer to a *new* agency; whether a particular agency
 still gets it is its own history, which checkout decides (and `GET
 /agencies/{agencyId}/billing` says in advance, as `trialEligible`).
+
+`trialDays` is the offer to an account that qualifies: since 2026-10-05 a trial needs a Google sign-in on the user who subscribes, which this public read cannot know, so the signed-out pricing card says the trial is for an account signed in with Google.
 
 **When the web asks (rounds two and three).** At the top of the home page's and Settings'
 loaders, in parallel with their first calls, so the pricing card is drawn with its sentence

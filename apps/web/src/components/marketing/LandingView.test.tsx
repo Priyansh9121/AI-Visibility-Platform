@@ -242,7 +242,7 @@ describe('the free trial — 2026-10-04, and only when the API says there is one
   // `initialTrialDays` renders the page as it is once the API has said so; the mounted
   // behaviour, one request for the whole page and every failure, is `lib/billing/trial.test.tsx`.
   const SENTENCE =
-    'The first 30 days after you subscribe are free. You enter your card at checkout, and it is charged on day\u00a031 unless you cancel first. One free trial per agency.';
+    'The first 30 days after you subscribe are free, if you subscribe from an account signed in with Google. You enter your card at checkout, and it is charged on day\u00a031 unless you cancel first. One free trial per agency.';
   const on = () => renderToStaticMarkup(<LandingView animate={false} initialTrialDays={30} />);
 
   it('off: says nothing about a trial, or about free days, anywhere on the page', () => {

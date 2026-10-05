@@ -73,7 +73,7 @@
 
 import type { JSX } from 'react';
 import { Button, Card, CardBody } from '@avp/design-system';
-import { trialSentence, usePlanTrial } from '@/lib/billing/trial';
+import { trialSentence, trialSentenceSignedOut, usePlanTrial } from '@/lib/billing/trial';
 
 /**
  * The published price, in whole dollars.
@@ -212,7 +212,7 @@ export function PricingCard({
               // the paragraph above on purpose: when the card is charged is the one thing
               // here nobody should miss.
               <p className="mt-3 max-w-measure text-ui-base leading-prose text-text-primary">
-                {trialSentence(trialDays)}
+                {signedIn ? trialSentence(trialDays) : trialSentenceSignedOut(trialDays)}
               </p>
             )}
           </div>

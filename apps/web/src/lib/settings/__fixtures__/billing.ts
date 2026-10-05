@@ -26,6 +26,7 @@ export const noSubscription: BillingStatus = {
   cancelAtPeriodEnd: false,
   trialEndsAt: null,
   trialEligible: false,
+  trialRequiresGoogle: false,
 };
 
 /**
@@ -36,6 +37,17 @@ export const noSubscription: BillingStatus = {
 export const noSubscriptionTrialOffered: BillingStatus = {
   ...noSubscription,
   trialEligible: true,
+  trialRequiresGoogle: false,
+};
+
+/**
+ * No subscription, the trial is on, and THIS sign-in has no linked Google identity: the API
+ * says `trialRequiresGoogle` (and `trialEligible` is false for them) — 2026-10-05.
+ */
+export const noSubscriptionTrialNeedsGoogle: BillingStatus = {
+  ...noSubscription,
+  trialEligible: false,
+  trialRequiresGoogle: true,
 };
 
 /** Free, and the one free scan already started. */
@@ -65,6 +77,7 @@ export const activeSubscription: BillingStatus = {
   cancelAtPeriodEnd: false,
   trialEndsAt: null,
   trialEligible: false,
+  trialRequiresGoogle: false,
 };
 
 /**
@@ -123,6 +136,7 @@ export const canceledSubscription: BillingStatus = {
   cancelAtPeriodEnd: false,
   trialEndsAt: null,
   trialEligible: false,
+  trialRequiresGoogle: false,
 };
 
 /**
@@ -143,6 +157,7 @@ export const pastDueSubscription: BillingStatus = {
   cancelAtPeriodEnd: false,
   trialEndsAt: null,
   trialEligible: false,
+  trialRequiresGoogle: false,
 };
 
 /** A status this screen has no wording for — Stripe's vocabulary can grow. */
@@ -158,4 +173,5 @@ export const unknownStatusSubscription: BillingStatus = {
   cancelAtPeriodEnd: false,
   trialEndsAt: null,
   trialEligible: false,
+  trialRequiresGoogle: false,
 };

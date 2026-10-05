@@ -125,7 +125,7 @@ from ..errors import (
     SubscriptionAlreadyActive,
     SubscriptionNeedsAttention,
 )
-from ..models import Agency, StripeWebhookEvent, StripeWebhookOutcome
+from ..models import Agency, StripeWebhookEvent, StripeWebhookOutcome, User
 
 if TYPE_CHECKING:
     # Only to type the session's params below: built in two steps, a trial adds to them, so
@@ -640,6 +640,27 @@ def trial_days_for(agency: Agency, settings: Settings) -> int:
     return 0 if _has_had_a_subscription(agency) else trial_days_offered(settings)
 
 
+def has_verified_identity(user: User | None) -> bool:
+    """The free scan's rule (`scan_allowance.has_verified_identity`), not a second copy of it.
+
+    Imported at the call: `scan_allowance` imports this module, so a top-level import
+    would be a cycle.
+    """
+    from .scan_allowance import has_verified_identity as rule
+
+    return rule(user)
+
+
+def trial_days_for_user(agency: Agency, settings: Settings, user: User | None) -> int:
+    """`trial_days_for`, for the user who would start the checkout: 0 unless they have Google.
+
+    A trial needs the agency's record to allow it AND a verified Google identity on the
+    requesting user (`has_verified_identity`, the free scan's rule). `GET /billing` reads
+    this for `trialEligible`, so Settings promises exactly what checkout will give.
+    """
+    return trial_days_for(agency, settings) if has_verified_identity(user) else 0
+
+
 def trial_end_of(subscription: Any) -> datetime | None:
     """When the subscription's trial ends: Stripe's `trial_end`, in Unix seconds, or None.
 
@@ -712,7 +733,7 @@ _PLAN_PRICE_MISMATCH_DETAIL = (
 
 
 async def create_checkout_session(
-    db: AsyncSession, agency: Agency, *, settings: Settings
+    db: AsyncSession, agency: Agency, *, settings: Settings, user: User | None
 ) -> str:
     """Start a subscription. Returns the URL to send the browser to.
 
@@ -926,6 +947,15 @@ async def create_checkout_session(
         if subs.data:
             trial_days = 0
 
+    # The last word on the trial is the USER who starts this checkout (founder decision
+    # 2026-10-05): a trial needs a verified Google identity, the same rule as the free scan
+    # (`has_verified_identity`). Without one the checkout is the plain, no-trial one. Decided
+    # after every other test, so `trial_withheld_no_google` is true only when the trial was
+    # otherwise going to be given.
+    trial_withheld_no_google = trial_days > 0 and not has_verified_identity(user)
+    if trial_withheld_no_google:
+        trial_days = 0
+
     params: SessionCreateParams = {
         "mode": "subscription",
         "customer": customer_id,
@@ -965,6 +995,9 @@ async def create_checkout_session(
         session_id=session.id,
         # 0 when there was no trial: the setting is off or this agency has had its one.
         trial_days=trial_days,
+        # True when a trial was due but the user starting checkout has no linked Google identity.
+        trial_withheld_no_google=trial_withheld_no_google,
+        user_id=user.id if user is not None else None,
     )
     return session.url
 
