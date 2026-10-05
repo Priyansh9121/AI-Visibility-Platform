@@ -57,10 +57,12 @@ every line carries; so is a `_model` nobody named. READ AN ABSENT COUNTER AS ZER
 full the line of a four-engine scan is four kilobytes; this way it is about one and a half.)
 Then SerpApi, four counts that are always present: `serpapi_attempted` (HTTP requests, retries
 included), `serpapi_ok` (answered; billed unless SerpApi served it from its cache),
-`serpapi_error` (answered with an error; not billed) and `serpapi_no_answer` (nobody can say).
+`serpapi_error` (answered with an error; not billed, except a 200 whose body could not be read,
+which was a 200 to SerpApi and may have been) and `serpapi_no_answer` (nobody can say).
 And `serpapi_billed_or_unknown`, which is `serpapi_ok` + `serpapi_no_answer`: an UPPER BOUND on
-what SerpApi billed, since an answered search is billed unless SerpApi served it from its cache,
-an error answer is not billed, and a search nobody answered may have been. It is left out when it
+what SerpApi billed, but for that one kind of answer, which is counted in `serpapi_error`: an
+answered search is billed unless SerpApi served it from its cache, an error answer is not billed
+(an unreadable 200 aside), and a search nobody answered may have been. It is left out when it
 is zero, as every counter above that is. Classification happens at intake and is not part of a
 scan, so it has its own `llm.call` lines and is never in this one.
 
@@ -445,7 +447,8 @@ class ScanUsage:
         out["serpapi_no_answer"] = self._serp_no_answer
         # What SerpApi may have billed, at most: the answered searches (billed unless SerpApi
         # served them from its cache) and the ones nobody answered (which may have been). An error
-        # answer is not billed. Left out when zero, like every counter that is.
+        # answer is not billed, but for a 200 whose body could not be read (it is in `serpapi_error`
+        # and may have been). Left out when zero, like every counter that is.
         billed_or_unknown = self._serp_ok + self._serp_no_answer
         if billed_or_unknown:
             out["serpapi_billed_or_unknown"] = billed_or_unknown

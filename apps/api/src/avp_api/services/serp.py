@@ -484,8 +484,9 @@ async def search(
     )
     # Into the scan's total, if this is one (`usage.py`): the requests that got no answer before
     # the one that did, and what that one said. An answer that is an error is not billed (the
-    # pricing page, quoted at the top of this module); an `ok` one is, unless SerpApi's cache
-    # served it.
+    # pricing page, quoted at the top of this module), except a 200 whose body could not be read:
+    # SerpApi sent it as a 200 and may have counted it, and it lands here as an error too. An `ok`
+    # one is billed, unless SerpApi's cache served it.
     usage.record_serp_search(
         attempts=answered.attempts,
         no_answer=answered.attempts - 1,
