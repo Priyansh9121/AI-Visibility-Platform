@@ -42,10 +42,8 @@
  * header comment sets for every sentence on the public page (and the list there of what was
  * corrected against the code on 2026-10-04, launch checklist 3.63, covers this card's fix-list
  * line too). Note in particular
- * what is NOT written here: "unlimited scans". Scan volume is genuinely not
- * metered yet — north-star.md §5.2 argues metering the scan is the right model
- * and §5.4 records that none of it is built — so the absence of a cap is an
- * absence, not a feature, and the card says exactly that.
+ * what is NOT written here: "unlimited scans". A plan has a monthly scan allowance
+ * (`PLAN_SCANS_PER_MONTH`), and the card states it.
  *
  * THE FREE TRIAL — 2026-10-04
  * ---------------------------
@@ -73,6 +71,7 @@
 
 import type { JSX } from 'react';
 import { Button, Card, CardBody } from '@avp/design-system';
+import { counted, RETENTION } from '@/lib/legal/retention';
 import { trialSentence, trialSentenceSignedOut, usePlanTrial } from '@/lib/billing/trial';
 
 /**
@@ -241,8 +240,9 @@ export function PricingCard({
             `PLAN_SCANS_PER_MONTH` above, which a test holds to the API's.
           */}
           <p className="max-w-measure text-ui-sm leading-prose text-text-tertiary">
-            {PLAN_SCANS_PER_MONTH} scans a month. Viewing, sharing and exporting reports is never
-            limited.
+            {PLAN_SCANS_PER_MONTH} scans a month. Viewing a report or exporting it as a PDF
+            does not use a scan. A shared link works for {counted(RETENTION.shareLinkDays, 'day')}{' '}
+            and can be withdrawn sooner.
           </p>
 
           {error != null && (

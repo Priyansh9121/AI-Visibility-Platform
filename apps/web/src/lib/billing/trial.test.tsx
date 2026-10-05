@@ -449,7 +449,9 @@ describe('the pricing card asks the API, and says a trial only for a positive an
       'The first 14 days after you subscribe are free, if you subscribe from an account signed in with Google.',
     );
     expect(el.textContent).toContain('charged on day\u00a015');
-    expect(el.textContent).not.toContain('30');
+    // The share link's 30 days (launch checklist 3.86) is not the trial's number.
+    expect(el.textContent).toContain('A shared link works for 30 days');
+    expect((el.textContent ?? '').replace('A shared link works for 30 days', '')).not.toContain('30');
   });
 });
 

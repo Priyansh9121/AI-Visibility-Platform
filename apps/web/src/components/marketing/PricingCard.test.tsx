@@ -150,7 +150,11 @@ describe('what the card is not allowed to say', () => {
     // The plan gates STARTING a scan: forty a month, one free for life. It
     // never gates reading. The card says both, and claims nothing unlimited.
     expect(out).toContain('40 scans a month');
-    expect(out).toContain('Viewing, sharing and exporting reports is never limited');
+    expect(out).toContain(
+      'Viewing a report or exporting it as a PDF does not use a scan. A shared link works for 30 days and can be withdrawn sooner.',
+    );
+    expect(out).not.toContain('never limited');
+    expect(out).not.toContain('Viewing, sharing and exporting');
     expect(out.toLowerCase()).not.toContain('unlimited');
     expect(out).not.toContain('not metered');
   });
@@ -229,8 +233,11 @@ describe('the free trial — 2026-10-04', () => {
       'The first 14 days after you subscribe are free, if you subscribe from an account signed in with Google.',
     );
     expect(out).toContain('charged on day\u00a015 unless you cancel first');
-    // No 30 left over from anywhere: the length is not typed on this card.
-    expect(out).not.toContain('30 days');
+    // No 30 left over from anywhere: the length is not typed on this card. The one
+    // 30 days it does carry is the share link's, a different number (3.86), so that
+    // sentence is taken out before the trial's is checked.
+    expect(out).toContain('A shared link works for 30 days');
+    expect(out.replace('A shared link works for 30 days', '')).not.toContain('30 days');
     expect(out).not.toContain('day\u00a031');
     expect(out).not.toContain('day 31');
   });
