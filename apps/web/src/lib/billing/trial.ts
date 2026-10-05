@@ -91,6 +91,28 @@ export function trialSentence(days: number): string {
   );
 }
 
+/**
+ * What the pricing card says about the trial to someone who is NOT signed in — 2026-10-05.
+ *
+ * A trial needs a verified Google identity on the user who starts checkout (founder decision,
+ * launch checklist 3.72: the free scan's rule), and the signed-out card cannot know whether the
+ * visitor will have one. So it says the condition, in plain words, and nothing it cannot back:
+ * the days after you subscribe are free if you subscribe from an account signed in with Google. The rest is
+ * `trialSentence`'s, unchanged: the card is entered at checkout, charged on day N + 1 unless you
+ * cancel first, one trial per agency. The signed-in card keeps `trialSentence`: Settings shows
+ * it only where the API says THIS user's checkout would give the trial (`trialEligible`).
+ */
+export function trialSentenceSignedOut(days: number): string {
+  const first =
+    days === 1
+      ? 'The first day after you subscribe is free, if you subscribe from an account signed in with Google.'
+      : `The first ${days} days after you subscribe are free, if you subscribe from an account signed in with Google.`;
+  return (
+    `${first} You enter your card at checkout, and it is charged on day${NO_BREAK_SPACE}${days + 1} ` +
+    'unless you cancel first. One free trial per agency.'
+  );
+}
+
 let inflight: Promise<number> | null = null;
 
 /**

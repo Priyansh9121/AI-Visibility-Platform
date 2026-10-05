@@ -41,6 +41,15 @@ export interface paths {
          *     asks Stripe), so true means "nothing in our record says no": checkout can still refuse the
          *     trial to a customer Stripe remembers an ended subscription for.
          *
+         *     **Both trial fields are about the REQUESTING user** (2026-10-05, founder decision 3.72): a
+         *     trial needs a verified Google identity on the user who starts checkout, so two seats of
+         *     one agency can read them differently. `trialEligible` is true only when the agency's
+         *     record allows a trial (above) AND this user has a linked Google identity: it is what a
+         *     Subscribe from this sign-in would get. `trialRequiresGoogle` is true exactly when the
+         *     record allows a trial and the ONLY thing missing is that identity: checkout would give
+         *     this user no trial, and continuing with Google on the same address would. The two are
+         *     never both true.
+         *
          *     Every field comes off the `agencies` row the webhook maintains. A settings
          *     screen that called a payment processor on page load would be slower, would
          *     fail whenever Stripe was slow, and would put a third party in the render
@@ -90,7 +99,10 @@ export interface paths {
          *     asks Stripe for that many trial days and for the card at checkout, and Stripe
          *     charges when the trial ends unless the agency cancels. One trial per agency, ever:
          *     an agency that has had any subscription, or whose Stripe customer has, gets the
-         *     plain checkout. The response is the same either way, a URL.
+         *     plain checkout. **And only for a user with a linked Google identity** (2026-10-05):
+         *     the rule is on the user who starts the checkout, not the agency, so a password-only
+         *     user gets the plain checkout (no trial, the same session otherwise). The response is
+         *     the same either way, a URL.
          *
          *     **Errors:**
          *
@@ -2310,6 +2322,8 @@ export interface components {
             trialEligible: boolean;
             /** Trialendsat */
             trialEndsAt: string | null;
+            /** Trialrequiresgoogle */
+            trialRequiresGoogle: boolean;
         };
         /** BrandMentionOut */
         BrandMentionOut: {

@@ -25226,3 +25226,96 @@ The founder's decision (2026-10-05): a failed audit gets its own exclusion reaso
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# A free trial needs the Google identity of the user who starts checkout; without one, checkout still works with no trial, and every screen that mentions the trial says so
+
+**2026-10-05, the fifth entry of the day; branch `pilot-fixes-6`, the founder's brief "clear the board, harden billing, and four pilot features" (item B1, launch checklist 3.72).** One item, one commit.
+
+**Render: nothing to set, and set `STRIPE_TRIAL_DAYS` only after this is deployed.** The trial is off in production (`STRIPE_TRIAL_DAYS` unset). Under the code before this change, any password user's checkout would carry the trial, and a checkout link stays payable for an hour (`CHECKOUT_LINK_LIFETIME`). Launch checklist 1.1h says so.
+
+Drift check (north-star §8): no product layer; the commercial architecture (§5.3, how the plan starts), across checkout, Settings and the pricing card; lifecycle phase: Activation (Epic 9), how a pilot agency starts paying.
+
+## 1. What changed
+
+The founder's decision (2026-10-05, 3.72): a free trial requires a verified Google identity on the user starting checkout, the same rule as the free scan. Without one, checkout still works but with no trial, and every screen that mentions the trial says so in plain words.
+
+- **Checkout** (`create_checkout_session`) now takes the user who started it.
+  - The trial is withheld when `has_verified_identity(user)` is false: no linked Google identity (`google_sub`).
+  - The rule is the free scan's own function, imported from `scan_allowance`, so it is reused rather than copied.
+  - It applies to whoever starts checkout, owner or admin.
+  - It only ever lowers the trial. It runs after the agency row's test and after Stripe's subscription list, so it says it withheld a trial only when a trial was otherwise due.
+  - `billing.checkout_created` gains `trial_withheld_no_google` and `user_id` (the requester's id, no email).
+- **`GET /agencies/{agencyId}/billing`:**
+  - `trialEligible` is now about the requesting user: false for a user without Google.
+  - A new required boolean, `trialRequiresGoogle`, is true when the agency's record allows a trial and this user has no Google identity.
+  - The two are never both true.
+- **The words:**
+  - **The pricing card on the landing page** (signed out): "The first 30 days after you subscribe are free, if you subscribe from an account signed in with Google." The one-day form says "The first day…". The unchanged tail follows: "You enter your card at checkout, and it is charged on day 31 unless you cancel first. One free trial per agency."
+  - **Signed in,** the card in Settings keeps the old sentence, shown only when `trialEligible`. A user with Google sees no change.
+  - **Settings, for a user without Google** (`trialRequiresGoogle`), above the plan card: "Subscribing now starts the paid plan at once, with no free trial: a free trial needs a Google sign-in. Continue with Google using the same address you sign in with here; a subscription started after that begins with the free trial, unless this agency has subscribed before. A different Google account would start a new agency instead."
+    - It sits with the existing "Continue with Google" button, which goes to `/auth/google/start` with no `next`.
+  - No trial terms were added anywhere else. 3.84's items (the hero's "$150/month after that." and the scan-limit notice's Subscribe buttons) are untouched.
+- **Docs and contracts:** `docs/api-contracts.md` has the example JSON, both fields and the Google rule, and a line on `/billing/plan`. OpenAPI and `api.gen.ts` are regenerated.
+
+## 2. The reviews
+
+**Security review: nothing above Low.** No path gives a trial to a user without a Google identity:
+- checkout has one caller, which always passes the requester;
+- members and suspended, invited or deleted users are refused before checkout;
+- a Google identity sits in one agency only;
+- the webhook and the billing portal cannot create a trial.
+
+What was taken and what was not:
+- **L1, for the founder (3.72):** a trial now costs one Google account and one card, and Google accounts are cheap in bulk (Workspace users each pass `email_verified`). The options already on 3.72's list: watch `billing.checkout_created trial_days>0`, or a Stripe Radar rule against one card on many customers.
+- **L2, taken:** a test that proves a trial is not offered without a Stripe key now signs up with Google. Before, it passed for the wrong reason.
+- **N1, not taken:** re-reading the user's Google link under the agency lock. The reviewer showed that neither way the link can change lets an unverified user get a trial.
+- **N2, taken:** the log test asserts `user_id` is the requester's, for an owner and for an admin.
+- **N3, taken (the UI review's nit 1 too):** the Settings sentence promised the trial unconditionally. Our row cannot see a subscription that Stripe remembers and we never recorded. "Unless this agency has subscribed before" is true in that case too.
+- **N4:** the deploy order, above and in 1.1h.
+
+**UI review: no Blocker and no Should-fix.** Every screen that mentions the trial is true for a signed-in user without Google, and the design-system and accessibility checks were clean. Two cosmetic nits were not taken: a one-anchor flex wrapper, as `ScanLimitNotice` has, and a long doc comment.
+
+## Found, not fixed
+
+- **`trialEligible` and `trialRequiresGoogle` read our row, not Stripe's list.** A customer Stripe remembers a subscription for can see the offer and still get no trial at checkout. This was documented before; the new sentence's "unless this agency has subscribed before" covers it.
+- **One Google account per trial (L1):** the founder's call, above.
+
+## Verified
+
+**API pytest 4626 → 4646 (+20) and web vitest 2060 → 2070 (+10); floors raised to match.** One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **New API tests: `test_billing_trial_identity.py` (20).** They cover:
+  - a Google-linked owner gets the trial, and a password-only owner gets a plain checkout;
+  - the rule is on the admin who starts checkout, not the owner, both ways, and a Google owner is not held back by a password-only admin;
+  - with the trial off, or for an agency that had a subscription, checkout is unchanged with or without Google;
+  - a customer Stripe remembers a subscription for is not called withheld;
+  - the log line:
+    - says withheld;
+    - carries no email;
+    - names the admin who started checkout, not the owner;
+    - logs a trial that was given as not withheld;
+  - `GET /billing`:
+    - says what this user's checkout would give, per user and not per agency;
+    - with the trial off, or for an agency that had a subscription, promises nothing and asks for no Google.
+- **`test_billing.py`:**
+  - a helper that signs up with Google;
+  - the trial tests that asserted the old rule now use a Google-linked owner;
+  - the log's field set;
+  - `GET /billing`'s dictionary.
+- **Web tests:**
+  - `PricingCard.test.tsx`, `BillingPanel.test.tsx`, `lib/billing/trial.test.tsx`, `app/home.test.tsx`, `LandingView.test.tsx`, `ScanLimitNotice.audience.test.tsx` and `useScanAllowance.test.tsx`;
+  - a new fixture, `noSubscriptionTrialNeedsGoogle`.
+- **The implementer's negative controls,** each restored and checked with `cmp`:
+  - checkout ignoring identity: 3 of 19 fail;
+  - `GET /billing` using the agency-only test: 2 of 19 fail;
+  - the pricing card always using the old sentence: 17 web tests fail in 4 files;
+  - the Settings notice removed: 2 web tests fail;
+  - round two: the log's `user_id` set to the agency's id, 2 of 20 fail.
+- **On this tree:** with checkout ignoring identity (`trial_withheld_no_google = False`), 4 of the 20 fail: the password-only owner, the admin without Google, and both log tests. Restored and checked with `cmp`.
+- **The rest of the bar** (this tree, one run, 13:17 to 13:23):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7106cadcd0ed`) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts`, regenerated in this commit, regenerate again with no change.
+- Exit codes were read from files.

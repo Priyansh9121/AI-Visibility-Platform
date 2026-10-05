@@ -134,6 +134,15 @@ async def read_billing(
     asks Stripe), so true means "nothing in our record says no": checkout can still refuse the
     trial to a customer Stripe remembers an ended subscription for.
 
+    **Both trial fields are about the REQUESTING user** (2026-10-05, founder decision 3.72): a
+    trial needs a verified Google identity on the user who starts checkout, so two seats of
+    one agency can read them differently. `trialEligible` is true only when the agency's
+    record allows a trial (above) AND this user has a linked Google identity: it is what a
+    Subscribe from this sign-in would get. `trialRequiresGoogle` is true exactly when the
+    record allows a trial and the ONLY thing missing is that identity: checkout would give
+    this user no trial, and continuing with Google on the same address would. The two are
+    never both true.
+
     Every field comes off the `agencies` row the webhook maintains. A settings
     screen that called a payment processor on page load would be slower, would
     fail whenever Stripe was slow, and would put a third party in the render
@@ -166,8 +175,13 @@ async def read_billing(
         trial_ends_at=(
             agency.subscription_trial_end if agency.subscription_status == "trialing" else None
         ),
-        # Whether checkout would give this agency the trial, by its own row (no Stripe call).
-        trial_eligible=billing_service.trial_days_for(agency, settings) > 0,
+        # Whether checkout would give THIS user the trial, by the agency's row and their Google
+        # identity (no Stripe call).
+        trial_eligible=billing_service.trial_days_for_user(agency, settings, principal.user) > 0,
+        trial_requires_google=(
+            billing_service.trial_days_for(agency, settings) > 0
+            and not scan_allowance.has_verified_identity(principal.user)
+        ),
     )
 
 
@@ -215,7 +229,10 @@ async def start_checkout(
     asks Stripe for that many trial days and for the card at checkout, and Stripe
     charges when the trial ends unless the agency cancels. One trial per agency, ever:
     an agency that has had any subscription, or whose Stripe customer has, gets the
-    plain checkout. The response is the same either way, a URL.
+    plain checkout. **And only for a user with a linked Google identity** (2026-10-05):
+    the rule is on the user who starts the checkout, not the agency, so a password-only
+    user gets the plain checkout (no trial, the same session otherwise). The response is
+    the same either way, a URL.
 
     **Errors:**
 
@@ -252,7 +269,7 @@ async def start_checkout(
     assert_own_agency(principal.agency_id, agency_id)
 
     url = await billing_service.create_checkout_session(
-        db, principal.agency, settings=settings
+        db, principal.agency, settings=settings, user=principal.user
     )
     # The customer id `ensure_customer` may have written is flushed, not
     # committed, until here. Committing after the Stripe call rather than before

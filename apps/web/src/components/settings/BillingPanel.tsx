@@ -72,6 +72,11 @@
  * "Cancelled — you keep full access until then, and you will not be charged." A cancelled PAID
  * plan keeps "…and it won’t renew." In every other state the panel says nothing about a trial.
  *
+ * A free trial needs a verified Google identity on the user who subscribes (2026-10-05, the free
+ * scan's rule). `trialEligible` is therefore about THIS user, and where the API says the trial
+ * is withheld only for want of one (`trialRequiresGoogle`) a sentence above the plan card says
+ * subscribing now starts the paid plan at once and that Continue with Google gives the trial.
+ *
  * The plan card, where it is offered, describes the trial's terms only where the billing
  * response says this agency would get it (`trialEligible`: the API's word, a trial is on AND
  * the agency's record has never had a subscription). Checkout gives one trial per agency, so a
@@ -84,10 +89,10 @@
  */
 
 import { useEffect, useState, type JSX } from 'react';
-import { Badge, Button, Card, CardBody } from '@avp/design-system';
+import { Badge, Button, Card, CardBody, GoogleSignInButton } from '@avp/design-system';
 import type { BadgeTone } from '@avp/design-system';
 import type { BillingStatus } from '@avp/shared-types';
-import { api, ApiProblem } from '@/lib/api';
+import { api, ApiProblem, GOOGLE_SIGN_IN_URL } from '@/lib/api';
 import { canCheckout, freeScanUsed } from '@/lib/billing/allowance';
 import { isSubscriptionRefusal } from '@/lib/billing/subscriptionRefusal';
 import { formatDay, formatDayTime } from '@/lib/dates';
@@ -284,7 +289,7 @@ export function BillingPanel({
   // its signed-in state, so the price a customer was quoted on the way in is the
   // price they see on the way to paying it. The same card in every state that
   // offers it (see `canCheckout`).
-  const plan = canCheckout(status) ? (
+  const planCard = canCheckout(status) ? (
     <PricingCard
       signedIn
       onSubscribe={subscribe}
@@ -301,6 +306,37 @@ export function BillingPanel({
       trialPlan={trialPlan}
     />
   ) : null;
+
+  // A free trial needs a Google sign-in on the user who subscribes (2026-10-05, the free scan's
+  // rule). For a user without one, where the API says the trial is the ONLY thing Google would
+  // change (`trialRequiresGoogle`), say so beside the plan, with the same Continue with Google
+  // the scan-limit notice carries: on the same address it links this account. A user with Google
+  // sees nothing new. Only a true says it: a response without the field says nothing.
+  const trialNeedsGoogle = planCard !== null && billing.trialRequiresGoogle === true;
+  const plan =
+    planCard !== null && trialNeedsGoogle ? (
+      <div className="flex flex-col gap-4">
+        <Card elevation="flat">
+          <CardBody>
+            <div className="flex flex-col gap-4" data-testid="trial-needs-google">
+              <p className="max-w-measure text-ui-base leading-prose text-text-primary">
+                Subscribing now starts the paid plan at once, with no free trial: a free trial
+                needs a Google sign-in. Continue with Google using the same address you sign in
+                with here; a subscription started after that begins with the free trial, unless
+                this agency has subscribed before. A different Google account would start a new
+                agency instead.
+              </p>
+              <div className="flex flex-wrap items-center gap-3">
+                <GoogleSignInButton href={GOOGLE_SIGN_IN_URL} label="Continue with Google" />
+              </div>
+            </div>
+          </CardBody>
+        </Card>
+        {planCard}
+      </div>
+    ) : (
+      planCard
+    );
 
   // Offered whenever a subscription exists and a Stripe customer does, which is
   // a wider condition than `isActive` on purpose. A cancelled or past-due

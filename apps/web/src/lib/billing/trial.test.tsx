@@ -45,6 +45,7 @@ const {
   SETTINGS_PLAN_WAIT_MS,
   loadTrialDays,
   trialSentence,
+  trialSentenceSignedOut,
   usePlanTrial,
   wholeTrialDays,
   within,
@@ -63,6 +64,10 @@ const { noSubscriptionTrialOffered } = await import('@/lib/settings/__fixtures__
 const SENTENCE_30 =
   'The first 30 days after you subscribe are free. You enter your card at checkout, and it is charged on day\u00a031 unless you cancel first. One free trial per agency.';
 // Words only the trial sentence carries: what a page must not contain while it says no trial.
+// The signed-out card's sentence: the trial is for an account signed in with Google (2026-10-05).
+const SENTENCE_30_SIGNED_OUT =
+  'The first 30 days after you subscribe are free, if you subscribe from an account signed in with Google. You enter your card at checkout, and it is charged on day\u00a031 unless you cancel first. One free trial per agency.';
+
 const PROBE = 'after you subscribe';
 
 let root: Root | null = null;
@@ -162,6 +167,25 @@ describe('the sentence', () => {
   it('says what the days are counted from: subscribing, not signing up or opening checkout', () => {
     expect(trialSentence(30)).toContain('after you subscribe');
     expect(trialSentence(30)).not.toMatch(/sign(ing)? up|after (you )?(sign|open|start)/i);
+  });
+});
+
+describe('the signed-out sentence — the trial needs a Google sign-in, 2026-10-05', () => {
+  it('is the same offer with its condition said in plain words', () => {
+    expect(trialSentenceSignedOut(30)).toBe(SENTENCE_30_SIGNED_OUT);
+    expect(trialSentenceSignedOut(1)).toContain(
+      'The first day after you subscribe is free, if you subscribe from an account signed in with Google.',
+    );
+    expect(trialSentenceSignedOut(1)).toContain('charged on day\u00a02');
+  });
+
+  it('keeps every other clause of the signed-in sentence, and only the condition differs', () => {
+    for (const days of [1, 14, 30, 730]) {
+      const tail = trialSentence(days).replace(/^[^.]*\./, '');
+      expect(trialSentenceSignedOut(days).endsWith(tail)).toBe(true);
+      expect(trialSentenceSignedOut(days).split('\u00a0').length - 1).toBe(1);
+    }
+    expect(trialSentence(30)).not.toContain('Google');
   });
 });
 
@@ -353,7 +377,7 @@ describe('the pricing card asks the API, and says a trial only for a positive an
   it('says it once the API has said 30 days — and asks once', async () => {
     billingPlan.mockResolvedValue({ trialDays: 30 });
     const el = await mount(<PricingCard />);
-    expect(el.textContent).toContain(SENTENCE_30);
+    expect(el.textContent).toContain(SENTENCE_30_SIGNED_OUT);
     expect(billingPlan).toHaveBeenCalledTimes(1);
   });
 
@@ -393,7 +417,7 @@ describe('the pricing card asks the API, and says a trial only for a positive an
   it('told 30 by its page, it says so at once and does not ask: no second request', async () => {
     billingPlan.mockResolvedValue({ trialDays: 0 });
     const el = await mount(<PricingCard initialTrialDays={30} />);
-    expect(el.textContent).toContain(SENTENCE_30);
+    expect(el.textContent).toContain(SENTENCE_30_SIGNED_OUT);
     expect(billingPlan).not.toHaveBeenCalled();
   });
 
@@ -414,14 +438,16 @@ describe('the pricing card asks the API, and says a trial only for a positive an
       pending.resolve({ trialDays: 30 });
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
-    expect(el.textContent).toContain(SENTENCE_30);
+    expect(el.textContent).toContain(SENTENCE_30_SIGNED_OUT);
     expect(billingPlan).toHaveBeenCalledTimes(1);
   });
 
   it('follows the API’s number, not a number of its own', async () => {
     billingPlan.mockResolvedValue({ trialDays: 14 });
     const el = await mount(<PricingCard />);
-    expect(el.textContent).toContain('The first 14 days after you subscribe are free.');
+    expect(el.textContent).toContain(
+      'The first 14 days after you subscribe are free, if you subscribe from an account signed in with Google.',
+    );
     expect(el.textContent).toContain('charged on day\u00a015');
     expect(el.textContent).not.toContain('30');
   });
@@ -433,9 +459,9 @@ describe('the landing page says the trial from the same single source', () => {
     const el = await mount(<LandingView animate={false} />);
     expect(billingPlan).toHaveBeenCalledTimes(1);
     const text = el.textContent ?? '';
-    expect(text).toContain(SENTENCE_30);
+    expect(text).toContain(SENTENCE_30_SIGNED_OUT);
     expect(text.split(PROBE).length - 1).toBe(1);
-    expect(text.indexOf(SENTENCE_30)).toBeGreaterThan(text.indexOf('One plan. $150 a month.'));
+    expect(text.indexOf(SENTENCE_30_SIGNED_OUT)).toBeGreaterThan(text.indexOf('One plan. $150 a month.'));
   });
 
   it('says nothing about a trial when the API says 0', async () => {
@@ -555,7 +581,7 @@ describe('the trial paragraph is not a live region — it is read where it is, n
     billingPlan.mockResolvedValue({ trialDays: 30 });
     const el = await mount(<LandingView animate={false} />);
     const paragraph = trialParagraph(el);
-    expect(paragraph.textContent).toBe(SENTENCE_30);
+    expect(paragraph.textContent).toBe(SENTENCE_30_SIGNED_OUT);
     expect(paragraph.closest(LIVE)).toBeNull();
     expect(paragraph.querySelector(LIVE)).toBeNull();
   });

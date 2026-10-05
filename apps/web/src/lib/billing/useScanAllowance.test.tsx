@@ -67,6 +67,7 @@ const BILLING: BillingStatus = {
   cancelAtPeriodEnd: false,
   trialEndsAt: null,
   trialEligible: false,
+  trialRequiresGoogle: false,
 };
 
 const FREE_USED = {
