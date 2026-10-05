@@ -25118,3 +25118,111 @@ The founder's decision (2026-10-05): checkout refuses when the latest price chec
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts`, regenerated in this commit, regenerate again with no change.
 - Exit codes were read from files.
+
+# A technical audit that failed leaves Technical Foundation out as `AUDIT_FAILED`, "Technical check failed", in a sentence true of every failure, and `NOT_YET_MEASURED` now means the scan has no audit
+
+**2026-10-05, the fourth entry of the day; branch `pilot-fixes-6`, the founder's brief "clear the board, harden billing, and four pilot features" (item B6, launch checklist 3.87, with two of 3.87's leftovers: what `audit.completed` says about a failed audit, and a failed audit recorded as `NOT_YET_MEASURED`).** One theme, one commit.
+
+**Render: nothing to set.** No migration: the reason lives in the score row's `excluded_dimensions` JSON, not in a database enum. Scoring is unchanged, and `FORMULA_VERSION` stays `v5`.
+
+Drift check (north-star §8): Layer 3, Insight (the score's exclusions), shown on the report, the shared report, the PDF and the client's Technical screen, and read through two log lines; lifecycle phase: Activation (Epic 9).
+
+## 1. What changed
+
+The founder's decision (2026-10-05): a failed audit gets its own exclusion reason, shown in plain words. Until now a technical audit that failed for any reason but the three crawl codes left Technical Foundation excluded as `NOT_YET_MEASURED`, which a report words "Not yet checked".
+
+- **The reason.** `AUDIT_FAILED` is used when the scan's audit failed with any code other than `ROBOTS_DISALLOWED`, `ADDRESS_NOT_PUBLIC` and `ROBOTS_UNREACHABLE`. That covers `TIMEOUT`, `BROWSER_BUSY`, `BROWSER_ERROR`, `FETCH_FAILED`, `HTTP_<status>`, and a failed audit with no code.
+  - `NOT_YET_MEASURED` now means only that the scan has no audit row.
+  - The three crawl reasons are unchanged.
+  - The mapping lives in one function, `technical_foundation_reason(status, error_code)` in `scoring_runner.py`. Scoring and the audit's log line both use it, so they cannot disagree.
+- **Scoring did not move.**
+  - The reason is a label. The dimension is excluded either way, and the composite, sub-scores and weights are the same under every reason.
+  - The reason enters `inputsDigest`, as a set reason always has. A new failed-audit score therefore has a different digest from an old one.
+  - Stored scores are not re-scored (scoring-spec rule 5). A row stored before 2026-10-05 keeps `NOT_YET_MEASURED` for an audit that had failed, and its report still says "Not yet checked".
+- **No fix and no false flag.** Like the other Technical Foundation reasons, `AUDIT_FAILED` gives the client no fix to make (the API's `fix_generator` and `derive_fixes`, the web's `derive.ts`). It does not raise `TECHNICAL_FOUNDATION_NOT_MEASURED` ("had not been audited"), which would be false.
+- **The words** are the same in the web's `strings.ts`, the PDF's `report_narrative.py` and the shared fixture `report-copy.json`:
+  - the label "Technical check failed";
+  - the detail "The technical check of the site could not be completed for this scan. Technical Foundation is left out of the score."
+  - The sentence is true of every code that maps here: for `BROWSER_BUSY` the check never started, and an `HTTP_<status>` page did answer. It names no cause and blames no one.
+  - It ends as the three other Technical Foundation reasons do.
+  - No code reaches the page: the report, the shared report and the PDF show only the words.
+- **The client's Technical screen.**
+  - Its failed state for a non-crawl code was titled "The site could not be read", which blamed the site even when our crawler was busy. It is now titled with the reason's label, "Technical check failed".
+  - The per-code sentence under the title and the three crawl-code states are unchanged.
+- **The log lines** (3.87's leftovers):
+  - `audit.completed` already carried `status` and `error_code`. It gains `technical_foundation_reason`, the reason the dimension will be left out under; it is empty when the audit did not fail.
+  - `scoring.completed`'s `excluded` records `AUDIT_FAILED` for a failed audit, where it said `NOT_YET_MEASURED`.
+- **Docs:**
+  - `docs/scoring-spec.md`: the reasons paragraph.
+  - `docs/api-contracts.md`:
+    - the reasons table gains `AUDIT_FAILED`;
+    - the `NOT_YET_MEASURED` row says "no audit row" and notes the older rows;
+    - the prose on Technical Foundation's reasons names all five, and says the digest records the reason;
+    - the failed-codes paragraph names `AUDIT_FAILED`.
+  - `docs/runbook.md`: a new step 8, how to read the two lines for a scan.
+  - The comment in `schemas/report.py` lists the reason. OpenAPI is unchanged.
+
+## 2. The review
+
+**UI review: no Blocker. Two Should-fix items, both taken; the sentence took three rounds.**
+- **The sentence.**
+  - Round one said the check "ran but could not read the site's page (it did not load, took too long, or could not be completed)". That was untrue for `BROWSER_BUSY`, where the check never started. "Did not load" was untrue for an HTTP error, and blamed the site for failures on our side.
+  - Round two said "could not read the site's page this time", ending "…left out of the score rather than counted as zero." The first half still claimed something untrue of a page that answered with an error status. The second half ended unlike the other three reasons.
+  - Round three is the founder's wording brief of 2026-10-05: the sentence above.
+  - The code comments that said the audit ran now say that an audit exists and failed. They are in `strings.ts`, `report_narrative.py`, `scoring.py`, `docs/scoring-spec.md`, the web fixture and three test files.
+- **`docs/api-contracts.md` had not been updated.** It is now (above).
+- **Nits:**
+  - taken: the Technical screen's title, and a test for each code;
+  - recorded, not re-scored: scores stored before 2026-10-05 still say "Not yet checked".
+- **No second review.** Rounds two and three were not sent back for review. The sentence and the title are pinned by tests, and both have negative controls below.
+
+## Found, not fixed
+
+- **An explicit re-score of an old failed scan changes its stored reason and digest.**
+  - `POST /scans/{scanId}/score` on a scan scored before 2026-10-05 whose audit had failed now stores `AUDIT_FAILED` and a new digest under the same `v5`. The composite does not change.
+  - This is the existing behaviour: a re-score under the same formula version replaces that version's row (`scoring_runner.py`, "one row per (scan, formula_version)"). It is not history being re-scored.
+- **The Technical screen's failed-state body** still begins "A site the crawler could not read is not a site with a bad technical foundation". That is loose for `BROWSER_BUSY`, where the check never started, and for an HTTP error, where the page answered. It is older than this item and outside the sentence the founder asked for.
+- **`audit.completed` logs the client's own site `url` and `domain`**, as it did before (`signals.redacted()`). They are the client's own, not a third party's. Untouched.
+- **A stale web fixture:** `failedAuditReport` shows Technical Foundation as included despite a failed audit. The new `auditFailedExcludedReport` is coherent. The old one is left as it is for the tests that use it.
+- Launch checklist rows 3.58 and 3.87 are updated in this brief's checklist commit.
+
+## Verified
+
+**API pytest 4593 → 4626 (+33) and web vitest 2046 → 2060 (+14); floors raised to match.** One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **New API tests: `test_failed_audit_reason.py` (32).** They cover:
+  - each unmapped code (`TIMEOUT`, `BROWSER_BUSY`, `BROWSER_ERROR`, `FETCH_FAILED`, `HTTP_404`, `HTTP_503`) and no code give `AUDIT_FAILED`;
+  - the three crawl codes keep their reasons, and no audit row gives `NOT_YET_MEASURED`;
+  - the composite, sub-scores and weights are the same for a failed audit and for none, and `compute_score` gives the same composite under every reason;
+  - `audit.completed` carries the status, the error code and the reason, codes only, and a good audit logs none;
+  - the PDF has the label and the exact sentence, and every code maps to the reason with those words.
+  - In round one, 20 of the file's tests failed before the fix (the implementer's count).
+- **Existing API tests:** `test_scoring_log.py` gains one parametrized case (`TIMEOUT` gives `AUDIT_FAILED`). `test_audit_endpoints.py` and `test_robots_obeyed.py` are updated for the new reason.
+- **Web tests.** They cover:
+  - `ReportView.test.tsx`: the exact words on the report and the shared report, and no code or "Not yet checked";
+  - `ClientTechnicalView.test.tsx`:
+    - the title for `TIMEOUT`, `BROWSER_BUSY`, `BROWSER_ERROR`, `FETCH_FAILED`, `HTTP_503` and no code;
+    - the crawl-code states keeping their own titles;
+    - the exact words;
+  - `copyCoverage.test.ts`: the new code;
+  - a new fixture, `auditFailedExcludedReport`.
+- **Negative controls,** each restored and checked:
+  - Round one (the implementer's):
+    - the mapping returning None: 14 of the new file's tests fail;
+    - the log field removed: 10 fail;
+    - the `AUDIT_FAILED` entry removed from `strings.ts`: 7 web tests fail.
+  - Round two (the implementer's): the old title back, 14 of the 76 `ClientTechnicalView` tests fail.
+  - Round three (mine, in the worktree, restored and checked with `cmp`):
+    - round two's sentence back in `strings.ts`: 3 of 229 web tests fail (the copy contract and the two exact pins);
+    - the same in `report_narrative.py`: 9 of 43 API tests fail (the exact pin, the seven per-code cases and the copy contract).
+- **Targeted runs after round three,** in the worktree:
+  - the six API files: 430 passed;
+  - `vitest run src/components src/lib/report`: 1550 passed;
+  - ruff is clean.
+- **The rest of the bar** (this tree, one run, 13:09 to 13:15):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7106cadcd0ed`) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

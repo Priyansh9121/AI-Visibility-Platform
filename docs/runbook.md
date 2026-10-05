@@ -399,6 +399,14 @@ for this reason.
    four-agency cap and the browser slot are per process AND per instance, and the
    API runs one worker per instance: during a deploy's overlap an agency can have
    one read on each instance.
+8. To see why a scan's Technical Foundation was left out, read two lines for the
+   `scan_id`. `audit.completed` carries the audit's `status`, its `error_code` (for
+   example `TIMEOUT`, `BROWSER_BUSY`, `HTTP_503`) and `technical_foundation_reason`, the
+   reason the dimension will be left out under (`AUDIT_FAILED`, or one of the three
+   crawl reasons; empty when the audit did not fail). `scoring.completed` carries the
+   reason it stored for each dimension in `excluded`. `NOT_YET_MEASURED` there means
+   the scan has no audit row; a scan scored before 2026-10-05 whose audit had failed
+   also says it. Launch checklist 3.87.
 
 **Not in the logs:** a number for any one request, and nothing from before the
 last restart: the counters belong to the container, and a restart starts them

@@ -176,6 +176,23 @@ async def load_competitor_facts(
     return facts, competitor_set
 
 
+def technical_foundation_reason(status: AuditStatus, error_code: str | None) -> str | None:
+    """Why a FAILED audit leaves Technical Foundation out; None for an audit that did not fail.
+
+    The one place the mapping lives, so `scoring.completed` and `audit.completed` cannot
+    disagree. A label only: the dimension is excluded whatever it says.
+    """
+    if status is not AuditStatus.FAILED:
+        return None
+    if error_code == ROBOTS_DISALLOWED:
+        return "CRAWL_DISALLOWED"
+    if error_code == ADDRESS_NOT_PUBLIC:
+        return "CRAWL_ADDRESS_NOT_PUBLIC"
+    if error_code == ROBOTS_UNREACHABLE:
+        return "CRAWL_POLICY_UNREADABLE"
+    return "AUDIT_FAILED"
+
+
 async def load_technical_foundation(
     session: AsyncSession, scan_id: str
 ) -> tuple[Decimal | None, str | None]:
@@ -185,8 +202,9 @@ async def load_technical_foundation(
     site we could not read is not a site with a bad technical foundation, and
     the two must not collapse into the same number.
 
-    The reason is None (NOT_YET_MEASURED, `compute_score`'s default) except
-    for an audit that robots.txt kept off the page: CRAWL_DISALLOWED
+    The reason is None (NOT_YET_MEASURED, `compute_score`'s default: no audit row)
+    except for an audit that FAILED (`technical_foundation_reason`: AUDIT_FAILED unless
+    one of the three below), and for an audit that robots.txt kept off the page: CRAWL_DISALLOWED
     (2026-09-29). Stored as a failed audit with `ROBOTS_DISALLOWED`, it is
     excluded like any failed one — its reason is the only difference. So is an
     audit the egress guard refused (`ADDRESS_NOT_PUBLIC`): CRAWL_ADDRESS_NOT_PUBLIC. And
@@ -206,13 +224,7 @@ async def load_technical_foundation(
     if audit is None:
         return None, None
     if audit.status is AuditStatus.FAILED:
-        if audit.error_code == ROBOTS_DISALLOWED:
-            return None, "CRAWL_DISALLOWED"
-        if audit.error_code == ADDRESS_NOT_PUBLIC:
-            return None, "CRAWL_ADDRESS_NOT_PUBLIC"
-        if audit.error_code == ROBOTS_UNREACHABLE:
-            return None, "CRAWL_POLICY_UNREADABLE"
-        return None, None
+        return None, technical_foundation_reason(audit.status, audit.error_code)
     return audit.technical_foundation, None
 
 

@@ -2142,7 +2142,8 @@ interchangeable:
 
 | Reason | Meaning | How a report should word it |
 |---|---|---|
-| `NOT_YET_MEASURED` | The capability does not exist yet (Technical Foundation, pending Epic 6) | "not yet checked" |
+| `NOT_YET_MEASURED` | Technical Foundation: the scan has no audit row. (Scores stored before 2026-10-05 also carry it for an audit that had failed; stored scores are not re-scored.) | "not yet checked" |
+| `AUDIT_FAILED` | Technical Foundation: the scan's audit failed with a code the three `CRAWL_*` reasons below do not cover (`TIMEOUT`, `BROWSER_BUSY`, `BROWSER_ERROR`, `FETCH_FAILED`, `HTTP_<status>`, or no code), 2026-10-05 | "Technical check failed" |
 | `NO_POPULATION` | Nothing to measure for this brand (no mentions → no sentiment) | "nothing to measure" |
 | `NO_COMPETITOR_SET` | Competitor detection returned nothing | "no comparison was made" |
 | `NO_AWARENESS_POPULATION` | The prompt set had no unprompted questions (v2) | "nothing unprompted to measure" |
@@ -2356,7 +2357,7 @@ guard could not verify), `FETCH_FAILED` (the home page returned no response),
 about the site, while `HTTP_<status>` (the home page answered 400 or above) is the
 site's own answer. Each leaves one `site_reachable` check with the code as its
 `detailCode`, `error` for ours and `fail` for an HTTP status, and excludes
-Technical Foundation as `NOT_YET_MEASURED`.
+Technical Foundation as `AUDIT_FAILED` (`NOT_YET_MEASURED` before 2026-10-05).
 
 - `TIMEOUT`: one browser run is cut at **244.5 s** (`audit_run_cap_s`, the sum of
   every step at its own limit, so only a hang reaches it; 2026-10-02). Since then it
@@ -2443,14 +2444,17 @@ Once an audit exists, `POST /scans/{scanId}/score` includes Technical Foundation
 instead of excluding it as `NOT_YET_MEASURED`, and the effective weights return
 to §6's table exactly (30/25/20/15/10). A **failed** audit leaves the dimension
 excluded — an unreadable site is not a measured zero.
-The exclusion reason is `NOT_YET_MEASURED`, except `CRAWL_DISALLOWED` for an
-audit failed with `ROBOTS_DISALLOWED`, `CRAWL_ADDRESS_NOT_PUBLIC` for one
+The exclusion reason is `NOT_YET_MEASURED` when the scan has no audit row, and
+`AUDIT_FAILED` for a failed audit with any code but the three below (2026-10-05),
+except `CRAWL_DISALLOWED` for an audit failed with `ROBOTS_DISALLOWED`, `CRAWL_ADDRESS_NOT_PUBLIC` for one
 failed with `ADDRESS_NOT_PUBLIC` and `CRAWL_POLICY_UNREADABLE` for one failed with
-`ROBOTS_UNREACHABLE`. All four give the same composite, with the same dimensions
+`ROBOTS_UNREACHABLE`. All five give the same composite, with the same dimensions
 excluded in the same cases; only the reason differs, so `FORMULA_VERSION` did not change
 for any. The reason enters `inputsDigest` when it is set (a score read as
 `CRAWL_POLICY_UNREADABLE` has its own digest), so a stored score keeps the digest and the
-reason it was computed with.
+reason it was computed with. `inputsDigest` therefore records the reason: a score
+computed for a failed audit now carries `AUDIT_FAILED` (and a different digest from
+before), while rows stored earlier keep `NOT_YET_MEASURED`.
 
 ---
 

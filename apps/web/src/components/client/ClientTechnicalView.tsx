@@ -226,7 +226,7 @@ function Audited({ audit }: { audit: TechnicalAudit }): JSX.Element {
     return (
       <EmptyState
         eyebrow="Technical"
-        title="The site could not be read"
+        title={EXCLUSION_REASON.AUDIT_FAILED!.label}
         body="A site the crawler could not read is not a site with a bad technical foundation, so nothing here is scored. The audit records what went wrong rather than guessing."
         note={auditFailureSentence(audit.errorCode)}
       />

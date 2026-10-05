@@ -195,7 +195,7 @@ describe('a partial audit says what the audit read about dates, in the card and 
 describe('a failed audit is the only unreadable one', () => {
   it('says the site could not be read, with what happened in a sentence and no figures', () => {
     const html = render(FAILED);
-    expect(html).toContain('The site could not be read');
+    expect(html).toContain(EXCLUSION_REASON.AUDIT_FAILED!.label);
     // The body is true of every failure, a busy crawler and a cut run included: it says
     // the crawler could not read the site, never that the site was unreachable.
     expect(html).toContain(
@@ -297,7 +297,7 @@ describe('a failed audit says what happened in a sentence, and never the code', 
 
   it.each(cases)('%s: the sentence, once, and not the code', (code, sentence) => {
     const html = render({ ...FAILED, errorCode: code });
-    expect(html).toContain('The site could not be read');
+    expect(html).toContain(EXCLUSION_REASON.AUDIT_FAILED!.label);
     expect(html).not.toMatch(/unreachable/i);
     expect(occurrences(html, sentence)).toBe(1);
     expect(html).not.toContain(code);
@@ -308,7 +308,7 @@ describe('a failed audit says what happened in a sentence, and never the code', 
 
   it('a failed audit that carries no code says the generic sentence, as the report does', () => {
     const html = render({ ...FAILED, errorCode: null });
-    expect(html).toContain('The site could not be read');
+    expect(html).toContain(EXCLUSION_REASON.AUDIT_FAILED!.label);
     expect(occurrences(html, AUDIT_FAILURE_GENERIC)).toBe(1);
     expect(html).not.toContain('Reason:');
   });
@@ -582,5 +582,39 @@ describe('a check says what its code means, in a sentence under the check, and n
     });
     expect(html).not.toContain('HTTP_503');
     expect(html).not.toContain('Every check');
+  });
+});
+
+describe('a technical audit that failed for any other reason — launch checklist 3.87', () => {
+  it.each(['TIMEOUT', 'BROWSER_BUSY', 'BROWSER_ERROR', 'FETCH_FAILED', 'HTTP_503', null])(
+    '%s: titled with the reason’s label, not blaming the site, no code',
+    (errorCode) => {
+      const html = render({ ...FAILED, errorCode });
+      expect(html).toContain(EXCLUSION_REASON.AUDIT_FAILED!.label);
+      expect(html).not.toContain('The site could not be read');
+      expect(html).not.toContain('Not yet checked');
+      expect(html).toContain(auditFailureSentence(errorCode));
+      for (const code of [errorCode ?? 'x_none', 'AUDIT_FAILED', 'NOT_YET_MEASURED', 'Reason:']) {
+        expect(html, code).not.toContain(code);
+      }
+    },
+  );
+
+  it('the crawl-code states keep their own titles', () => {
+    expect(render({ ...FAILED, errorCode: 'ROBOTS_UNREACHABLE' })).not.toContain(
+      EXCLUSION_REASON.AUDIT_FAILED!.label,
+    );
+    expect(render({ ...FAILED, errorCode: 'ADDRESS_NOT_PUBLIC' })).not.toContain(
+      EXCLUSION_REASON.AUDIT_FAILED!.label,
+    );
+  });
+
+  it('the reason’s words are the agreed sentence, with no code in them', () => {
+    expect(EXCLUSION_REASON.AUDIT_FAILED).toEqual({
+      label: 'Technical check failed',
+      detail:
+        'The technical check of the site could not be completed for this scan. Technical Foundation is left out of the score.',
+    });
+    expect(EXCLUSION_REASON.AUDIT_FAILED!.detail).not.toMatch(/[A-Z]{3,}_[A-Z_]+/);
   });
 });

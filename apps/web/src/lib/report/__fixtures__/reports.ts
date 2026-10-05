@@ -1041,6 +1041,27 @@ export const addressNotPublicReport: Report = {
 };
 
 /**
+ * An audit that failed (a timeout here) — launch checklist 3.87. Technical Foundation
+ * is left out under AUDIT_FAILED, the reason a failed audit records since 2026-10-05; the
+ * same scan with no audit row at all is `notYetMeasuredReport`.
+ */
+export const auditFailedExcludedReport: Report = {
+  ...failedAuditReport,
+  score: {
+    ...helpscoutReport.score!,
+    technicalFoundation: null,
+    excludedDimensions: { technical_foundation: 'AUDIT_FAILED' },
+    degradationFlags: ['NO_AUTHORITY_DATA'],
+  },
+  dimensions: helpscoutReport.dimensions.map((d) =>
+    d.key === 'technical_foundation'
+      ? { ...d, subscore: null, included: false, exclusionReason: 'AUDIT_FAILED' }
+      : d,
+  ),
+  audit: { ...failedAuditReport.audit!, errorCode: 'TIMEOUT' },
+};
+
+/**
  * robots.txt could not be read at all — 2026-10-03 (launch checklist 3.41): no
  * answer, a 5xx, a 429, redirects that never reach a file. The crawler read nothing,
  * as when the file forbids it, but the site forbade nothing. Technical Foundation is

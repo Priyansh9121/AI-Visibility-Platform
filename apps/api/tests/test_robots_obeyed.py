@@ -774,8 +774,10 @@ class TestScoring:
         assert await scoring_runner.load_technical_foundation(_Session(), "scan_x") == (
             None, "CRAWL_ADDRESS_NOT_PUBLIC"
         )
-        audit.error_code = "BROWSER_ERROR"  # any other failure keeps the default reason
-        assert await scoring_runner.load_technical_foundation(_Session(), "scan_x") == (None, None)
+        audit.error_code = "BROWSER_ERROR"  # any other failure: AUDIT_FAILED (2026-10-05)
+        assert await scoring_runner.load_technical_foundation(_Session(), "scan_x") == (
+            None, "AUDIT_FAILED"
+        )
 
     def test_a_measured_value_ignores_an_exclusion_reason(self) -> None:
         measured = _score(technical_foundation=Decimal("80"))
@@ -3160,8 +3162,8 @@ class TestAnUnreadableRobotsTxtInTheScore:
             ("ROBOTS_DISALLOWED", "CRAWL_DISALLOWED"),
             ("ROBOTS_UNREACHABLE", "CRAWL_POLICY_UNREADABLE"),
             ("ADDRESS_NOT_PUBLIC", "CRAWL_ADDRESS_NOT_PUBLIC"),
-            ("BROWSER_ERROR", None),
-            (None, None),
+            ("BROWSER_ERROR", "AUDIT_FAILED"),
+            (None, "AUDIT_FAILED"),
         ],
     )
     async def test_a_failed_audit_excludes_technical_foundation_under_its_own_reason(

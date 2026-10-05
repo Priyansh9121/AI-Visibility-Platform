@@ -146,7 +146,7 @@ class ReportDimensionOut(ApiModel):
     # Null exactly when `included` is false.
     subscore: Decimal | None = None
     included: bool
-    # NOT_YET_MEASURED | NO_POPULATION | NO_COMPETITOR_SET | NO_ANSWERED_RESULTS
+    # NOT_YET_MEASURED | AUDIT_FAILED | NO_POPULATION | NO_COMPETITOR_SET | NO_ANSWERED_RESULTS
     exclusion_reason: str | None = None
 
 

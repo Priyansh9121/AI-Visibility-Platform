@@ -46,6 +46,8 @@ const EXCLUSION_CODES = [
   'CRAWL_ADDRESS_NOT_PUBLIC',
   // 2026-10-03, launch checklist 3.41: robots.txt could not be read.
   'CRAWL_POLICY_UNREADABLE',
+  // 2026-10-05, launch checklist 3.87: a failed audit the three crawl reasons do not name.
+  'AUDIT_FAILED',
 ] as const;
 
 /** `flags.append("...")` in scoring.py and citation_strength. */
