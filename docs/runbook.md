@@ -681,10 +681,11 @@ the searches' lines, carries the `client_id` and the `country` the searches were
 ## Reading the usage lines
 
 **When:** you want to know what a scan used: how many requests each provider got, how many
-tokens they reported back, and how many requests were retries or got no answer; or what a scan
-cost to run. The API writes two lines about it, from U1 (2026-10-04): `llm.call`, one line for
-each paid HTTP request, and `scan.usage`, one total for each scan. Both carry counts and
-nothing else: no prompt, no answer, no brand, no domain, no error message and no key.
+tokens they reported back, how many requests were retries and how many prompts never got an
+answer; or what a scan cost to run. The API writes two lines about it, from U1 (2026-10-04):
+`llm.call`, one line for each paid HTTP request, and `scan.usage`, one total for each scan. Both
+carry counts and nothing else: no prompt, no answer, no brand, no domain, no error message and no
+key.
 
 **Where:** the Render dashboard → the **API** service → **Logs**. Search for the event name, or
 for `scan_id=<the scan's id>`, which finds a scan's `scan.usage` line and the `llm.call` lines
@@ -726,7 +727,9 @@ none). `scan.usage` is one line of about one and a half kilobytes for four engin
   `tool_calls_details.search_web` (U4, 2026-10-05; `web_search` is the fallback key). **Lines
   written before that change show 0 for every Perplexity call.** Each answered Perplexity call
   made one search in the measured call, billed at US$0.0025, so to price an old line by hand:
-  answered Perplexity calls (calls minus unanswered) x US$0.0025, on top of the tokens.
+  answered Perplexity requests (`calls` minus `unanswered`) x US$0.0025, on top of the tokens.
+  That sum is right for those lines, which all come from before U5, when `unanswered` counted
+  every request that got no usage back (see `<line>_unanswered` below).
 - `retry`: this request sent an earlier one again for the same call. Two things do that: the
   Anthropic SDK, which retries once inside a call, and Perplexity, which retries once after a
   429 that names its wait. SerpApi's retry is not an `llm.call`: it is in `serpapi_attempted`.
@@ -744,9 +747,13 @@ none). `scan.usage` is one line of about one and a half kilobytes for four engin
 engine that was asked, such as `engine_claude_calls`), `sentiment`, `prompt_generation`, `fixes`
 and `detection`:
 
-- `<line>_calls`: requests made, retries included.
-- `<line>_unanswered`: of those, how many got no usage back (`ok=False`).
-- `<line>_retries`: of those, how many were sent again.
+- `<line>_calls`: REQUESTS made, retries included. Every request counts, answered or not.
+- `<line>_unanswered`: CALLS that never got an answer (from U5, 2026-10-06). A call is the
+  requests it takes to get one answer: for an engine, one prompt asked of one engine; for the
+  other lines, one request of that kind and any retry of it. A call is unanswered when its LAST
+  request got no usage back (`ok=False`), and counts once however many requests it made. A call
+  that a retry answered is not unanswered.
+- `<line>_retries`: REQUESTS that were sent again: every request of a call but its first.
 - `<line>_input_tokens`, `<line>_output_tokens`, `<line>_reasoning_tokens` (inside the output),
   `<line>_cache_read_tokens`, `<line>_cache_write_tokens`, `<line>_search_invocations`: the sums
   of the `llm.call` lines of that line.
@@ -754,6 +761,29 @@ and `detection`:
   was answered names a model.** A request that failed carries the model the API asked for, which
   can be an alias of the one that answers (`gpt-5.5` for `gpt-5.5-2026-04-23`) and would make one
   model look like two.
+
+**Reading `_calls`, `_retries` and `_unanswered` together.** A prompt that Perplexity refused with
+a 429 and answered on the retry is `_calls` 2 and `_retries` 1, and no `_unanswered`. One refused
+twice (the retry too) is `_calls` 2, `_retries` 1 and `_unanswered` 1: one prompt with no answer,
+not two. One refused and not sent again is `_calls` 1 and `_unanswered` 1. So:
+
+- Prompts asked of an engine: `_calls` less `_retries`. Prompts answered: that, less `_unanswered`.
+- Requests that got no usage back: `_retries` plus `_unanswered`. What they cost is not in the
+  tokens: a request that timed out may have been billed.
+- Against the `llm.call` lines of the same scan with that line's purpose (and, for an engine,
+  that engine): `_calls` is how many there are, `_retries` how many have `retry=True`, and
+  `_unanswered` how many have `ok=False` less how many have `retry=True`.
+- A call that was cancelled (a sibling failed, or the scan ran out of time) logs
+  `error=CancelledError` and never got an answer: one unanswered call. If it had been refused
+  once before, that refusal is its retry.
+
+**A line from before U5 counts `_unanswered` differently.** Then every request that got no usage
+back was counted, one that a retry rescued included: a scan on 2026-10-05 in which one Perplexity
+request was refused with a 429, sent again and answered, and every result was there (80 results,
+no failures), logged `engine_perplexity_unanswered=1`. That is what such a request reads as from
+U5 on: `engine_perplexity_retries=1` and no `_unanswered`. To read an older line as a current one,
+take `_retries` away from `_unanswered`. Nothing else about the lines changed, and
+`--price-usage` prices the two kinds of line the same way, from tokens and searches alone.
 
 **A counter that is zero is left out: read an absent counter as zero.** The three every line
 carries are `_calls`, `_input_tokens` and `_output_tokens`. A `_model` that nobody named is left
@@ -770,7 +800,9 @@ SerpApi, for the scan's detection searches. The first four are always present:
   all but one kind: a 200 whose body could not be read was a 200 to SerpApi, which may have counted
   it as a search. This count cannot tell that kind from the rest (see "What the lines undercount").
 - `serpapi_no_answer`: requests that got no answer (a timeout or a transport failure). Nobody can
-  say whether SerpApi billed them.
+  say whether SerpApi billed them. SerpApi's counts are per request, unlike `<line>_unanswered`:
+  a request that got no answer and was asked again and answered still counts here, because it
+  may have been billed.
 - `serpapi_billed_or_unknown`: `serpapi_ok` plus `serpapi_no_answer`. **An upper bound on what
   SerpApi billed, but for one kind of answer**: an answered search is billed unless SerpApi served
   it from its cache, an error answer is not billed, and a search nobody answered may have been. The
@@ -801,9 +833,12 @@ A scan's own detection and fixes requests, made while the scan runs, are in its 
   `ok=False error=ValidationError`. A run of these in a `_unanswered` count is the sign.
 - A request that timed out may have been billed with nothing to show for it: `ok=False`, `error`
   `APITimeoutError` or `TimeoutError`, zero counts. A request cut by `CancelledError` is the same.
-- A scan's prompt slots that are still running after the scan has failed are not in its total.
-  When one slot raises, the others are not cancelled, so their paid requests go on and are logged
-  after `scan.usage`. Their `llm.call` lines carry the scan's `scan_id`: search for it.
+  In `scan.usage` such a request is in `_retries` when its call went on after it and in
+  `_unanswered` when it was the call's last request, so the requests whose cost the tokens do not
+  show are `_retries` plus `_unanswered`: read the two together.
+- Since 3.77, when one of a scan's prompt slots raises, the scan cancels the others and waits for
+  them to stop before it ends, so their lines are in its total: a request cut short logs
+  `ok=False error=CancelledError` with zero counts, and may still have been billed (above).
 - Whether a SerpApi search with no answer was billed. Only the account's count says.
 - A SerpApi search answered with a 200 whose body could not be read as a page of results. It is
   counted in `serpapi_error`, which is not billed, and it is not in `serpapi_billed_or_unknown`;

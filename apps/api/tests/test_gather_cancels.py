@@ -15,6 +15,7 @@ usage lines say of it. The engine-loop group of `scan_runner.run_scan` is in
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 
 import pytest
 import structlog
@@ -189,3 +190,46 @@ class TestACancelledCallIsNotAnAnsweredOne:
         assert line["engines_calls"] == 2
         assert line["engines_unanswered"] == 2
         assert "engines_model" not in line, "a cancelled call named a model that served it"
+
+    async def test_a_sibling_cancelled_on_its_second_request_is_one_unanswered_call(
+        self, settings, monkeypatch  # noqa: ANN001
+    ) -> None:
+        """U5: a sibling that had been refused once and was waiting on its retry made two requests
+        and is ONE call that never got an answer, counted once for its prompt and not once for
+        each request. Each request keeps its own line."""
+        fan = Fanout(2)
+
+        async def ask_gated(engine, prompt, settings):  # noqa: ANN001, ARG001, ANN202
+            if engine is Engine.CHATGPT:
+                return await fan.fail()
+            with usage.track(
+                usage.PERPLEXITY, usage.Purpose.ENGINE, model="m", engine=engine.value
+            ) as call:
+                call.begin_attempt()
+                call.attempt_failed("http_429")
+                call.begin_attempt()  # the retry is in flight when the sibling fails
+                return await fan.wait(engine.value)
+
+        monkeypatch.setattr(engines, "_ask_gated", ask_gated)
+        others = [e for e in engines.DEFAULT_ENGINES if e is not Engine.CHATGPT][:2]
+        with (
+            structlog.testing.capture_logs() as events,
+            usage.scan_scope("scan_1") as scan,
+            pytest.raises(Boom),
+        ):
+            await engines.ask_all(
+                "q", engines=(others[0], Engine.CHATGPT, others[1]), settings=settings
+            )
+
+        calls = [e for e in events if e["event"] == "llm.call"]
+        assert Counter((c["error"], c["retry"]) for c in calls) == {
+            ("http_429", False): 2, ("CancelledError", True): 2,
+        }
+        assert all(c["ok"] is False for c in calls)
+        line = scan.log_fields()
+        assert line["engines_calls"] == 4
+        assert line["engines_retries"] == 2
+        assert line["engines_unanswered"] == 2
+        for engine in others:
+            assert (line[f"engine_{engine.value}_calls"], line[f"engine_{engine.value}_retries"],
+                    line[f"engine_{engine.value}_unanswered"]) == (2, 1, 1)

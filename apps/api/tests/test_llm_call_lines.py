@@ -428,6 +428,58 @@ class TestAnthropicFailures:
         assert (second["ok"], second["error"], second["retry"]) == (False, "APITimeoutError", True)
         assert_counts_only(events)
 
+    async def test_an_sdk_retry_that_answers_is_a_retry_in_the_total_and_not_an_unanswered_call(
+        self, keyed: Settings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """U5: the 529 the SDK retried was a request with no usage, and the call it belonged to
+        was answered. The scan's total says two requests and one retry, and no call went
+        unanswered, though one of its two lines says `ok=False`."""
+        answered = {"n": 0}
+
+        def overloaded_then_answers(request: httpx.Request) -> httpx.Response:
+            answered["n"] += 1
+            if answered["n"] == 1:
+                return httpx.Response(
+                    529, headers={"retry-after-ms": "1"},
+                    json={"type": "error", "error": {"type": "overloaded_error",
+                                                     "message": ERROR_SENTINEL}},
+                )
+            return httpx.Response(200, json=message(input_tokens=11, output_tokens=22))
+
+        install_anthropic(monkeypatch, overloaded_then_answers)
+
+        with structlog.testing.capture_logs() as events, usage.scan_scope("scan_1"):
+            answer = await ClaudeParametricAdapter().ask(PROMPT_SENTINEL, settings=keyed)
+
+        assert answer.status is EngineResultStatus.OK
+        assert [c["ok"] for c in lines(events)] == [False, True]
+        (total,) = lines(events, "scan.usage")
+        assert (total["engine_claude_calls"], total["engine_claude_retries"]) == (2, 1)
+        assert "engine_claude_unanswered" not in total
+        assert (total["engines_calls"], total["engines_retries"]) == (2, 1)
+        assert "engines_unanswered" not in total
+        assert total["engine_claude_input_tokens"] == 11
+
+    async def test_every_attempt_timing_out_is_one_unanswered_call_and_one_retry_in_the_total(
+        self, keyed: Settings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """U5: two requests with no usage, and ONE call that never got an answer."""
+        def times_out(request: httpx.Request) -> httpx.Response:
+            raise httpx.ReadTimeout(ERROR_SENTINEL, request=request)
+
+        install_anthropic(monkeypatch, times_out)
+
+        with structlog.testing.capture_logs() as events, usage.scan_scope("scan_1"):
+            answer = await ClaudeParametricAdapter().ask(PROMPT_SENTINEL, settings=keyed)
+
+        assert answer.error_code == "TIMEOUT"
+        assert [c["ok"] for c in lines(events)] == [False, False]
+        (total,) = lines(events, "scan.usage")
+        assert (total["engine_claude_calls"], total["engine_claude_retries"]) == (2, 1)
+        assert total["engine_claude_unanswered"] == 1
+        assert (total["engines_calls"], total["engines_unanswered"], total["engines_retries"]) == (
+            2, 1, 1)
+
     async def test_a_call_cut_by_its_own_deadline_is_one_line_naming_the_timeout(
         self, keyed: Settings, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -616,7 +668,7 @@ class TestPerplexity:
             retry=True,
         )
 
-    async def test_a_second_429_is_two_unanswered_lines_and_one_retry(
+    async def test_a_second_429_is_two_lines_with_no_usage_and_one_retry(
         self, keyed: Settings, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         async def no_wait(seconds: float) -> None:
@@ -634,6 +686,62 @@ class TestPerplexity:
         assert [(c["ok"], c["error"], c["retry"]) for c in (first, second)] == [
             (False, "http_429", False), (False, "http_429", True),
         ]
+
+    async def test_a_429_then_an_answer_is_a_retry_in_the_total_and_not_an_unanswered_call(
+        self, keyed: Settings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """U5, the production case: one Perplexity request refused with a 429, sent again and
+        answered. The scan's total says two requests and one retry. It used to say one prompt
+        went unanswered, of a prompt that was answered."""
+        async def no_wait(seconds: float) -> None:
+            return None
+
+        monkeypatch.setattr(engines.asyncio, "sleep", no_wait)
+        sent = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            sent["n"] += 1
+            if sent["n"] == 1:
+                return httpx.Response(429, json={}, headers={"Retry-After": "1"})
+            return httpx.Response(200, json=perplexity_payload(
+                input_tokens=100, output_tokens=50,
+                tool_calls_details={"search_web": {"invocation": 1}}))
+
+        install_httpx(monkeypatch, handler)
+
+        with structlog.testing.capture_logs() as events, usage.scan_scope("scan_1"):
+            answer = await PerplexityAdapter().ask(PROMPT_SENTINEL, settings=keyed)
+
+        assert answer.status is EngineResultStatus.OK
+        assert [c["ok"] for c in lines(events)] == [False, True]
+        (total,) = lines(events, "scan.usage")
+        assert (total["engine_perplexity_calls"], total["engine_perplexity_retries"]) == (2, 1)
+        assert "engine_perplexity_unanswered" not in total
+        assert (total["engines_calls"], total["engines_retries"]) == (2, 1)
+        assert "engines_unanswered" not in total
+        assert total["engine_perplexity_search_invocations"] == 1
+
+    async def test_a_second_429_is_one_unanswered_call_and_one_retry_in_the_total(
+        self, keyed: Settings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """U5: two requests with no usage, and ONE call that never got an answer."""
+        async def no_wait(seconds: float) -> None:
+            return None
+
+        monkeypatch.setattr(engines.asyncio, "sleep", no_wait)
+        install_httpx(monkeypatch, lambda r: httpx.Response(
+            429, json={}, headers={"Retry-After": "1"}))
+
+        with structlog.testing.capture_logs() as events, usage.scan_scope("scan_1"):
+            answer = await PerplexityAdapter().ask(PROMPT_SENTINEL, settings=keyed)
+
+        assert answer.status is EngineResultStatus.RATE_LIMITED
+        assert [c["ok"] for c in lines(events)] == [False, False]
+        (total,) = lines(events, "scan.usage")
+        assert (total["engine_perplexity_calls"], total["engine_perplexity_unanswered"],
+                total["engine_perplexity_retries"]) == (2, 1, 1)
+        assert (total["engines_calls"], total["engines_unanswered"], total["engines_retries"]) == (
+            2, 1, 1)
 
     async def test_a_429_that_names_no_wait_is_not_retried_and_is_one_line(
         self, keyed: Settings, monkeypatch: pytest.MonkeyPatch

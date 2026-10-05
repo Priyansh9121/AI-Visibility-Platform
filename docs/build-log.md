@@ -26217,3 +26217,40 @@ Drift check (north-star §8): no product layer (the Settings screen's team and p
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# A scan's `unanswered` counts the calls that never got an answer; a refused request that a retry rescued is a retry
+
+**2026-10-06, the seventh entry of the day; branch `pilot-fixes-6`, the founder's brief item U5.** API usage counting, with its own bar.
+
+**Render: nothing to set.** From the next deploy, `scan.usage`'s `<line>_unanswered` has the new meaning; lines from before it can be read as `_unanswered` minus `_retries` (runbook).
+
+Drift check (north-star §8): Layer 1, Collection (what a scan's usage line says it spent); lifecycle phase: none.
+
+## 1. What changed
+
+Production, 2026-10-05: one Perplexity request was refused with a 429, re-sent and answered (80 results, no failures), yet `scan.usage` said `engine_perplexity_unanswered=1`. `unanswered` added one for every request that ended without an answer, the refused first try included.
+
+- **The unit is a call,** one `track(...)`: for the engines, one prompt asked of one engine in one scan (`ask_all` asks each once); for the other lines, one logical call each.
+- **`services/usage.py`:** the tracker marks only a call's final request as its last (`CallUsage.last`, which is not on the `llm.call` line), and `unanswered` counts a call only when its last request got no answer. `calls` still counts every request (each may have been billed) and `retries` every request after a call's first; neither changes.
+- **What holds now:** requests with no usage = `retries` + `unanswered`; `unanswered` = lines with `ok=False` minus lines with `retry=True`. A sibling cancelled by 3.77 on its second request counts once.
+- **The `llm.call` line is byte for byte the same.** SerpApi's counters stay per request: `serpapi_no_answer` feeds the billing upper bound.
+- **`docs/runbook.md`,** "Reading the usage lines": what the three counters mean, how to read them together, and how to read a line from before this change. "What the lines undercount" said a raising scan slot leaves the others running, stale since 3.77: it now says the others are cancelled, their lines are in the scan's total, and a request cut short may still have been billed. The production line is described from the rule; it was not checked against the line itself.
+- **`scripts/verify_e2e.py`:** a docstring only. `--price-usage` prices tokens, searches and models, never `unanswered` or `retries`.
+
+## Verified
+
+**API pytest 4858 → 4885 (+27); floor raised to match.**
+- **27 new tests:** `test_usage.py` 86 → 103, `test_scan_usage.py` 10 → 12, `test_llm_call_lines.py` 35 → 39, `test_price_usage.py` 77 → 80, `test_gather_cancels.py` 9 → 10. The production case (a 429, then an answer: 2 calls, 1 retry, 0 unanswered) at the tracker, through the real Perplexity adapter, through the Claude SDK's own retry and in the whole scan chain; one to four failed requests and no answer (unanswered 1); each engine counted apart, and the engines' total their sum; a sibling cancelled on its second request; a rescued 429 and an unanswered call both priced on their tokens.
+- **Two existing expectations were the bug** and changed: `test_scan_usage.py`'s expected total counted every `ok=False` line, and a test expected `sentiment_unanswered == 1` for a 529 the SDK retried and answered.
+- **Before the fix,** 25 of the 244 tests in the five files failed.
+- **The implementer's negative controls:** the old per-request counting back, 25 fail; every request marked last, 24 fail.
+- **On this tree:** in the five files (244 tests): every failed request counted as unanswered again, 25 fail. The file was restored and the tree's checksums matched.
+- **The first bar was red** (09:35-09:45), in a web test this item does not touch: `src/app/settings/page.test.tsx`'s "a plan that answers before the other loads are done costs the page no wait at all" expects the page still loading 20 ms in, and the machine's load average was about 10 while an implementer ran its own suites. Run alone, the file passed three times out of three, and the bar was run again.
+- **The rest of the bar** (this tree, the second run, 09:46 to 09:52):
+  - Counts: API 4885, workers 27, shared-types 53 (0 fail), design-system 935, web 2156, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7945e69b06e5`) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

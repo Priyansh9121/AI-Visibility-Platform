@@ -611,7 +611,14 @@ _USAGE_FIELD = re.compile(r"(?<![\w.])([a-z][a-z0-9_]*)=(\S+)")
 
 @dataclass
 class PricedLine:
-    """One line of the scan, priced, or not priced and why (`missing`)."""
+    """One line of the scan, priced, or not priced and why (`missing`).
+
+    `calls` counts requests, `retries` the requests that were sent again, and `unanswered` the
+    CALLS that never got an answer (from U5, 2026-10-06; a line logged before that counted every
+    request that got no usage back: `services/usage.py` and the runbook say how to read one).
+    They are shown and never priced: tokens and searches are, and only an answered request has
+    either.
+    """
 
     name: str
     model: str | None
