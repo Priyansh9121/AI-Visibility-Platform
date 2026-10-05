@@ -293,6 +293,19 @@ score 100 — the v1 Share of Voice defect, given the v1.1 answer. Population,
 then input, then comparison: each later question presumes the earlier had
 an answer.
 
+**Technical Foundation's exclusion reasons (labels, not formula).** When the dimension
+is left out, the reason says why, and every reason leaves out the same dimension in the
+same cases: `NOT_YET_MEASURED` (no audit row for the scan), `AUDIT_FAILED` (2026-10-05,
+launch checklist 3.87: an audit exists and failed for a reason the next three do not
+name: a timeout, a busy browser that never started the check, a broken browser, a page
+that did not respond, or an error status from a page that did answer),
+`CRAWL_DISALLOWED` (robots.txt forbids the page), `CRAWL_ADDRESS_NOT_PUBLIC` (the
+address is not a public one) and `CRAWL_POLICY_UNREADABLE` (robots.txt could not be
+read). The reason feeds no computation, so adding `AUDIT_FAILED` did not bump
+`FORMULA_VERSION`: the composite is identical under any of them. Stored scores are not
+re-scored (rule 5), so a row stored before 2026-10-05 keeps `NOT_YET_MEASURED` for an
+audit that had failed.
+
 **The tiers are inputs and are in the digest.** Tier B moves as scans
 accumulate, so the same results re-scored later can score differently under
 the same formula; `inputs_digest` records the tier of every cited domain

@@ -27,6 +27,7 @@ import {
 } from '@/lib/report/strings';
 import {
   addressNotPublicReport,
+  auditFailedExcludedReport,
   crawlDisallowedReport,
   failedAuditReport,
   generatedFixesReport,
@@ -1402,5 +1403,56 @@ describe('the signed-in report says how its scan ended — checklist 3.15', () =
     expect(html.indexOf('class="avp-report')).toBeLessThan(html.indexOf(OUTCOME));
     // Not a Badge or a live dot: a finished measurement carries no motion.
     expect(header(html)).not.toContain('avp-badge__pulse');
+  });
+});
+
+/**
+ * A technical audit that failed — launch checklist 3.87. It used to leave Technical
+ * Foundation excluded as NOT_YET_MEASURED, which reads "Not yet checked" of a scan whose
+ * audit exists and failed. It has its own words now, and no code reaches the page.
+ */
+describe('a site whose technical audit failed — launch checklist 3.87', () => {
+  const html = render(auditFailedExcludedReport);
+  const publicHtml = renderToStaticMarkup(
+    <ReportView report={auditFailedExcludedReport} animate={false} publicView />,
+  );
+
+  it('has its own label and sentence in the shared map', () => {
+    expect(EXCLUSION_REASON.AUDIT_FAILED).toEqual({
+      label: 'Technical check failed',
+      detail:
+        'The technical check of the site could not be completed for this scan. Technical Foundation is left out of the score.',
+    });
+  });
+
+  it('shows the reason’s words on the report and the shared report', () => {
+    for (const page of [html, publicHtml]) {
+      expect(page).toContain(EXCLUSION_REASON.AUDIT_FAILED!.label);
+      expect(page).toContain(EXCLUSION_REASON.AUDIT_FAILED!.detail);
+    }
+  });
+
+  it('never says “Not yet checked” of an audit that failed, and shows no machine code', () => {
+    for (const page of [html, publicHtml]) {
+      expect(page).not.toContain('Not yet checked');
+      expect(page).not.toContain(EXCLUSION_REASON.NOT_YET_MEASURED!.detail);
+      for (const code of ['AUDIT_FAILED', 'NOT_YET_MEASURED', 'TIMEOUT']) {
+        expect(page, code).not.toContain(code);
+      }
+    }
+  });
+
+  it('derives the exclusion under its own reason, and no fix telling the client to change anything', () => {
+    const narrative = deriveNarrative(auditFailedExcludedReport);
+    expect(narrative.exclusions.map((e) => [e.key, e.reason])).toEqual([
+      ['technical_foundation', 'AUDIT_FAILED'],
+    ]);
+    expect(narrative.fixes.map((f) => f.id)).not.toContain('gap:technical_foundation');
+  });
+
+  it('a scan with no audit row keeps its own words', () => {
+    const none = render(notYetMeasuredReport);
+    expect(none).toContain(EXCLUSION_REASON.NOT_YET_MEASURED!.label);
+    expect(none).not.toContain(EXCLUSION_REASON.AUDIT_FAILED!.label);
   });
 });

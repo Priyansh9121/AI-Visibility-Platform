@@ -366,6 +366,17 @@ export const EXCLUSION_REASON: Record<string, { label: string; detail: string }>
     label: 'Could not read robots.txt',
     detail: `${ROBOTS_UNREACHABLE_SENTENCE} Technical Foundation is left out of the score.`,
   },
+  // 2026-10-05 (launch checklist 3.87). Any failed audit the three above do not name: a
+  // timeout, a browser that was busy (the check never started) or broke, a page that did
+  // not respond, an error status (the page did answer). The words claim only what is true
+  // of all of them, and blame no one: the check could not be completed. Not
+  // NOT_YET_MEASURED: an audit exists and failed. Mirrored word for word in
+  // `report_narrative.EXCLUSION_LABEL` / `EXCLUSION_DETAIL`.
+  AUDIT_FAILED: {
+    label: 'Technical check failed',
+    detail:
+      'The technical check of the site could not be completed for this scan. Technical Foundation is left out of the score.',
+  },
 };
 
 /**

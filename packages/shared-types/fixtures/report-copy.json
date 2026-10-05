@@ -45,6 +45,10 @@
     "CRAWL_POLICY_UNREADABLE": {
       "label": "Could not read robots.txt",
       "detail": "The crawler tried to read the robots.txt of this site, or of an address the site sent it to, and did not get a usable answer. It obeys robots.txt, so without that answer it did not read the site. Technical Foundation is left out of the score."
+    },
+    "AUDIT_FAILED": {
+      "label": "Technical check failed",
+      "detail": "The technical check of the site could not be completed for this scan. Technical Foundation is left out of the score."
     }
   },
   "degradationFlag": {

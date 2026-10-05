@@ -90,6 +90,7 @@ TECHNICAL_FOUNDATION_CASES: list[tuple[str | None, str]] = [
     (ROBOTS_DISALLOWED, "CRAWL_DISALLOWED"),
     (ADDRESS_NOT_PUBLIC, "CRAWL_ADDRESS_NOT_PUBLIC"),
     (ROBOTS_UNREACHABLE, "CRAWL_POLICY_UNREADABLE"),
+    ("TIMEOUT", "AUDIT_FAILED"),
 ]
 
 # The line's fields as they were before this item, plus nothing: `event` and `log_level` are
