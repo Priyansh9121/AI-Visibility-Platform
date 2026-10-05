@@ -25821,3 +25821,43 @@ The founder's decisions (2026-10-05): remove the hero's unsourced sentence; make
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# An answer that does not fit its schema no longer fails a paid scan: sentiment, prompt generation and co-citation treat it as they treat a provider error
+
+**2026-10-05, the twelfth entry of the day; branch `pilot-fixes-6`, launch checklist 3.76 (found in U1).** API only, with its own bar.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 1, Collection (the model calls a scan makes); lifecycle phase: Activation (the first scan) and Retention (every scan after it).
+
+## 1. What changed
+
+`messages.parse` raises pydantic's `ValidationError` when the model's answer does not fit the schema. That error is not an `anthropic.APIError`, so three functions that caught only provider errors and timeouts let it escape into a scan that had already been paid for. `classify` and `fix_generator` already caught it; these three now do the same.
+
+- **`extraction.classify_sentiment`:** returns no sentiment, `(None, None)`, as a provider error does. Log: `extraction.schema_violation`.
+- **`prompts.generate_prompts`:** returns the deterministic fallback prompts, marked `generated_by="fallback"`, as a provider error does. Log: `prompts.schema_violation`.
+- **`cocitation.run_seed_prompt`:** returns a failed result with the code `PROVIDER_SCHEMA_VIOLATION` (a provider error's is `PROVIDER_ERROR`), so the cause stays visible. The code already exists for the classifier in `docs/api-contracts.md`. One malformed seed answer now leaves the other seed prompts' results in place.
+- **Each log line** carries, for at most five errors, the field path, the error type and the length of the offending value, never the value: it is model-authored (facts-only rule). This is `classify.py`'s shape.
+- **The call is still counted:** the `llm.call` line says `ok=False error="ValidationError"`.
+- No new outcome type, endpoint, setting or dependency.
+
+## Found, not fixed
+
+- **A schema miss is logged with zero tokens.** The SDK's error carries no usage, so a scan's cost figure is low by each missed call. `test_llm_call_lines.py` already pins the same limit for the fix generator.
+- **`run_seed_prompts` gathers its calls without cancelling the others when one raises.** That is 3.77, the next entry.
+
+## Verified
+
+**API pytest 4760 → 4764 (+4); floor raised to match.** Web is unchanged at 2107.
+- **`test_schema_miss_helpers.py` (new, 4):** for each of the three functions, a fake `parse` raises a real pydantic `ValidationError` (built with `TypeAdapter(model).validate_json` on a bad payload, as `test_classify.py` does): the outcome equals the provider-error outcome, the log line has the field path and length and no model text, and the `llm.call` line is `ok=False`. The fourth runs `run_seed_prompts` over three prompts with the middle one malformed: the results are ok, failed, ok, and the first one's hits are intact. Before the fix, 4 of 4 failed.
+- **The implementer's runs:** 14 covering files, 547 passed; ruff clean; mypy 43, the base's.
+- **The implementer's negative controls** (each `except ValidationError` turned into an exception that never happens, then restored): sentiment, 1 fail; prompts, 1 fail; co-citation, 2 fail.
+- **On this tree:** each `except ValidationError` turned into an exception that never happens, in `test_schema_miss_helpers.py`, `test_prompts_extraction.py` and `test_competitors.py` (106 tests): sentiment 1 fails, prompt generation 1, co-citation 2. Each file was restored and the tree's checksums matched.
+- **The rest of the bar** (this tree, one run, 21:36 to 21:42):
+  - Counts: API 4764, workers 27, shared-types 53 (0 fail), design-system 935, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7945e69b06e5`) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
