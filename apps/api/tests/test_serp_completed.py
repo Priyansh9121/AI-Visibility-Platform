@@ -589,21 +589,34 @@ class TestAMissingKeyLogsNeitherLine:
         assert fake.requests == []
         assert serp_events(events) == []
 
-    async def test_an_unset_key_is_refused_before_any_request_and_logs_no_serp_line(
+    async def test_an_unset_key_is_serpapi_key_missing_sends_nothing_and_logs_no_serp_line(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """No key at all is the same answer as an empty one: a result, not an exception, so a
+        deployment without the key degrades the detection and does not fail it."""
         settings = settings_with_key("")
         assert settings.serpapi_key is None
         fake = FakeSerpApi().install(monkeypatch)
 
-        with (
-            structlog.testing.capture_logs() as events,
-            pytest.raises(RuntimeError, match="SERPAPI_KEY"),
-        ):
-            await search("q", settings=settings)
+        with structlog.testing.capture_logs() as events:
+            result = await search("q", settings=settings)
 
+        assert result.ok is False
+        assert result.error_code == "SERPAPI_KEY_MISSING"
         assert fake.requests == []
         assert serp_events(events) == []
+
+    async def test_search_many_with_no_key_returns_one_missing_key_result_per_query(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings = settings_with_key("")
+        fake = FakeSerpApi().install(monkeypatch)
+
+        results = await search_many(["a", "b", "c"], settings=settings)
+
+        assert [r.error_code for r in results] == ["SERPAPI_KEY_MISSING"] * 3
+        assert [r.query for r in results] == ["a", "b", "c"]
+        assert fake.requests == []
 
 
 # ---------------------------------------------------------------------------

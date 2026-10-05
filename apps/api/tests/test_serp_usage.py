@@ -202,12 +202,10 @@ class TestOneQuery:
             database_url="postgresql+asyncpg://unused/unused", redis_url="redis://unused",
             app_secret="test-secret-not-used-in-any-real-environment", serpapi_key=None,
         )
-        with (
-            usage.scan_scope("scan_1") as scan,
-            pytest.raises(RuntimeError, match="SERPAPI_KEY is not configured"),
-        ):
-            await search("q", settings=no_key)
+        with usage.scan_scope("scan_1") as scan:
+            result = await search("q", settings=no_key)
 
+        assert result.error_code == "SERPAPI_KEY_MISSING"
         assert script.requests == []
         assert counts(scan) == (0, 0, 0, 0)
         assert billed_or_unknown(scan) is None
