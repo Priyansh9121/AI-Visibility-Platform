@@ -114,6 +114,7 @@ from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
+from stripe import _util as _stripe_util
 
 from ..config import Settings
 from ..errors import (
@@ -131,6 +132,14 @@ if TYPE_CHECKING:
     # Only to type the session's params below: built in two steps, a trial adds to them, so
     # they are no longer an inline literal at the call. Never imported at run time.
     from stripe.params.checkout import SessionCreateParams
+
+# The SDK PRINTS each request's method and URL, each error message and, at `debug`, the bodies, to
+# stderr when `STRIPE_LOG` (read into `stripe._util.STRIPE_LOG` as the SDK is imported) or
+# `stripe.log` is `info` or `debug`, past every logger level. It checks both at each call, so
+# clearing them here holds in every process that imports this module, with or without the
+# entrypoint's `unset STRIPE_LOG` (which stays, for the processes that never import it).
+stripe.log = None
+_stripe_util.STRIPE_LOG = None
 
 logger = structlog.get_logger(__name__)
 
