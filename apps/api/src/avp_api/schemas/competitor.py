@@ -10,9 +10,11 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import Field
+from pydantic import Field, field_validator
+from pydantic_core import PydanticCustomError
 
 from ..models import DetectionSource, DetectionStatus
+from ..services.intake import InvalidUrl, rival_domain
 from .common import ApiModel
 
 
@@ -80,6 +82,23 @@ class CompetitorInput(ApiModel):
 
     name: str = Field(min_length=1, max_length=200)
     domain: str | None = Field(default=None, max_length=253)
+
+    @field_validator("domain")
+    @classmethod
+    def _domain_is_the_rivals_own(cls, value: str | None) -> str | None:
+        """The rival's own domain, checked as a client's is and never reduced (checklist 3.81).
+
+        Blank is no domain, as it always was. Anything else goes through `rival_domain`: a page, a
+        path or a subdomain is refused and not cut down to another site's domain. The error is a
+        `PydanticCustomError`, so `errors[].message` is the plain sentence and not pydantic's
+        "Value error, " in front of it.
+        """
+        if value is None or not value.strip():
+            return None
+        try:
+            return rival_domain(value)
+        except InvalidUrl as exc:
+            raise PydanticCustomError("invalid_domain", exc.detail) from exc
 
 
 class ReplaceCompetitorsRequest(ApiModel):

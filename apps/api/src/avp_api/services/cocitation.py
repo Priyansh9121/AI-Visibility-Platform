@@ -27,6 +27,7 @@ abstraction, and Epic 4 is free to replace this signal without touching ranking.
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass, field
 
 import anthropic
@@ -37,7 +38,7 @@ from ..config import Settings, get_settings
 from . import usage
 from .call_bounds import CallBound
 from .concurrency import gather_cancelling
-from .crawl import registrable_domain
+from .intake import InvalidUrl, rival_domain
 
 logger = structlog.get_logger(__name__)
 
@@ -133,6 +134,9 @@ class CoCitationResult:
     subject_named: bool = False
     ok: bool = True
     error_code: str | None = None
+    # How many brands came back with a domain that failed the hostname check (3.81). A count
+    # only: the domain is model-authored and is neither kept nor logged.
+    domains_dropped: int = 0
 
     def redacted(self) -> dict[str, object]:
         return {
@@ -142,6 +146,20 @@ class CoCitationResult:
             "ok": self.ok,
             "error_code": self.error_code,
         }
+
+
+_SCHEME = re.compile(r"^https?://", re.IGNORECASE)
+
+
+def _model_domain(raw: str | None) -> str | None:
+    """A domain the model proposed, as `rival_domain` accepts it; None for none or a refusal."""
+    if not raw or not raw.strip():
+        return None
+    text = _SCHEME.sub("", raw.strip(), count=1).removesuffix("/")
+    try:
+        return rival_domain(text)
+    except InvalidUrl:
+        return None
 
 
 def build_seed_prompts(
@@ -250,19 +268,28 @@ async def run_seed_prompt(
         return CoCitationResult(prompt=prompt, ok=False, error_code="PROVIDER_NO_OUTPUT")
 
     hits: list[CoCitationHit] = []
+    dropped = 0
     for position, brand in enumerate(parsed.brands[:MAX_BRANDS_PER_PROMPT], start=1):
         name = brand.name.strip()
         if not name:
             continue
-        # Normalise a returned domain through the Public Suffix List so it can
-        # be compared with SERP domains. A model may return "www.Stripe.com/"
-        # or a full URL; SERP returns a registrable domain.
-        domain = registrable_domain(brand.domain) if brand.domain else None
+        # The same check as a typed rival's domain (launch checklist 3.81): a model's domain is
+        # the rival's own or it is dropped. One `http(s)://` and one trailing `/` are what a model
+        # puts round a bare domain; a path or a subdomain is not reduced (`apps.shopify.com/acme`
+        # would become `shopify.com`, another site, and re-type that site's citations as the
+        # rival's), it is dropped. The brand is kept: the name is still a fact detection can match
+        # on (`merge_candidates` merges a hit with no domain by name), and the prompt already tells
+        # the model a wrong domain is worse than none.
+        domain = _model_domain(brand.domain)
+        if brand.domain and brand.domain.strip() and domain is None:
+            dropped += 1
         hits.append(
             CoCitationHit(name=name, domain=domain or None, position=position, prompt=prompt)
         )
 
-    return CoCitationResult(prompt=prompt, hits=hits, subject_named=parsed.subject_named)
+    return CoCitationResult(
+        prompt=prompt, hits=hits, subject_named=parsed.subject_named, domains_dropped=dropped
+    )
 
 
 async def run_seed_prompts(

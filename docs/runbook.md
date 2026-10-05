@@ -837,6 +837,40 @@ at all) is listed under MISSING RATES and left out of the total, never priced at
 tokens are not priced separately, since no cached-token rate is recorded, and the command says
 when a line has some.
 
+## Count the stored domains that fail the hostname check
+
+**When:** once after the deploy that ships launch checklist 3.81, and whenever you want to know
+whether any stored client or competitor domain is not one DNS would carry. 3.67 checks a
+client's domain at intake and 3.81 checks a competitor's (typed, or proposed by the model), but
+nothing re-checks what was stored before; this counts them. It only reads.
+
+**Where:** the Render dashboard, the **API** service, **Shell**. Run:
+
+```bash
+cd /app/apps/api && .venv/bin/python scripts/count_unchecked_domains.py
+```
+
+The shell already has the service's `DATABASE_URL`.
+
+**What it prints:** counts only, never a domain, name or id:
+
+```
+clients.domain: checked=N empty=N not_a_hostname=N no_public_domain=N not_in_checked_form=N
+competitors.domain: checked=N empty=N not_a_hostname=N no_public_domain=N not_in_checked_form=N
+failing the check: N; would be rewritten: N
+```
+
+`not_a_hostname` and `no_public_domain` fail the check. `not_in_checked_form` passes but is not
+the form intake would store (upper case, a `www.` or other subdomain, a scheme or path).
+`empty` is a competitor with no domain, which is allowed. The counts cover every row: clients
+that were soft-deleted, and the competitor sets of past scans (and any next list), not only the
+live ones. The script declares its transaction read only before it reads anything.
+
+**If a count is not zero:** report it to the founder, with the numbers and nothing else. Nothing
+is changed automatically and the script has no option to change anything; which rows to correct
+is a decision, and finding them means reading production domains, which this step does not do.
+All zeros needs no action.
+
 ## Supabase grants check
 
 **When:** before the deploy that ships revision `f45983cfa5e3` (which takes `anon` and

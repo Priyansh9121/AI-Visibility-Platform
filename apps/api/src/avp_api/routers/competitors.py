@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from ..deps import DbDep, PrincipalDep, RedisDep, SettingsDep
-from ..errors import Conflict, NotFound
+from ..errors import Conflict, NotFound, ValidationProblem
 from ..models import Client, CompetitorSet, ScanStatus
 from ..schemas.competitor import (
     CompetitorOut,
@@ -21,7 +21,7 @@ from ..schemas.competitor import (
 )
 from ..services import competitors as detection
 from ..services import rate_limit, scan_allowance
-from ..services.intake import get_client
+from ..services.intake import checked_domain, encode_hostname, get_client
 
 router = APIRouter(prefix="/clients", tags=["competitors"])
 
@@ -82,6 +82,37 @@ async def _next_list_to_replace(
     if source is None and not naming_rivals:
         raise _no_set()
     return await detection.create_next_list(db, client, source=source)
+
+
+def _refuse_the_clients_own_domain(client: Client, payload: ReplaceCompetitorsRequest) -> None:
+    """`422` for a rival whose domain is the client's own (3.81), before anything is written.
+
+    The same shape as a schema refusal, `errors[].field` being `competitors.<i>.domain`. The
+    payload's domains are already in the stored form; the client's is compared as DNS carries it.
+    """
+    try:
+        # In its checked form: a client stored before 3.67 as `www.acme.com` is `acme.com`.
+        own = encode_hostname(checked_domain(client.domain) or client.domain)
+    except ValueError:
+        return  # a client stored before 3.67 whose own name is not one: nothing to compare with
+    errors = [
+        {
+            "field": f"competitors.{index}.domain",
+            "message": "That is this client's own domain.",
+            "type": "invalid_domain",
+        }
+        for index, item in enumerate(payload.competitors)
+        if item.domain and _same_host(item.domain, own)
+    ]
+    if errors:
+        raise ValidationProblem(detail="One or more fields were invalid.", errors=errors)
+
+
+def _same_host(domain: str, own: str) -> bool:
+    try:
+        return encode_hostname(domain) == own
+    except ValueError:
+        return False
 
 
 def _sorted(competitor_set: CompetitorSet) -> CompetitorSetOut:
@@ -240,6 +271,7 @@ async def replace_competitors(
     value would attach a corroboration claim to rows that were never corroborated.
     """
     client = await get_client(db, agency_id=principal.agency_id, client_id=client_id)
+    _refuse_the_clients_own_domain(client, payload)
     latest_scan = await detection.latest_scan_for_client(db, client.id, client.agency_id)
     if latest_scan is None:
         # A client that has never been scanned has nothing a list could be for yet.

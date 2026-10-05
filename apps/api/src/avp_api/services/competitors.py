@@ -549,6 +549,12 @@ async def detect_from_facts(
     for result in co_citation_results:
         if not result.ok:
             logger.warning("competitors.cocitation_failed", **result.redacted())
+    # One line per detection, a count and the client: the domains are model-authored and stay out.
+    dropped = sum(r.domains_dropped for r in co_citation_results)
+    if dropped:
+        logger.info(
+            "competitors.cocitation_domains_dropped", client_id=client_id, dropped=dropped
+        )
 
     candidates = merge_candidates(
         serp_results,

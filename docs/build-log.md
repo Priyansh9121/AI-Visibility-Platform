@@ -25944,3 +25944,66 @@ Before: a test that fell back to `get_settings()` read `apps/api/.env`, which ho
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# A competitor domain typed into the report's editor, or proposed by a model, is checked as a client's website is, and a pasted page or subdomain is refused, never reduced
+
+**2026-10-05, the fifteenth entry of the day; branch `pilot-fixes-6`, launch checklist 3.81.** API and the report's competitor editor, with a security review, a UI review and its own bar.
+
+**Render: nothing to set.** After the deploy, the founder can count the stored domains that fail the check (runbook, "Count the stored domains that fail the hostname check").
+
+Drift check (north-star §8): Layer 2, Measurement (the rival list a scan compares against), with the editor on the report; lifecycle phase: Activation and Retention.
+
+## 1. What changed
+
+3.67 checked a client's website as a real public hostname. A competitor's domain was not checked on either way it enters: typed into `PUT /clients/{clientId}/competitors`, or proposed by a model in co-citation.
+
+- **Typed (PUT):** a validator on each competitor's `domain` (`intake.rival_domain`) lower-cases it and drops one trailing dot and one leading `www.`. It accepts the result only if it already is its own registrable domain under 3.67's check, and stores that. Anything else is refused with `422 validation-failed` before anything is written, `errors[].field` naming the row (`competitors.<i>.domain`). A blank or missing domain is still allowed.
+  - **Refused, never reduced** (the security review's Medium): reducing a pasted `https://www.g2.com/products/rival/reviews` to `g2.com`, or `shop.acme.com` to the client's own `acme.com`, would have turned junk that matched nothing into a live key: that platform's citations would be typed as the rival's, and since Tier B leaves out every agency's competitor domains, the platform would leave Tier B for every agency.
+  - **The client's own domain** is refused too, in any spelling of case, trailing dot or `www.`.
+  - **The sentences**, each a plain sentence with no echo of the input: "Enter just the domain, like rival.com: no https://, page path or subdomain." for a page, path, scheme, port, userinfo, query, fragment or subdomain; "That is this client's own domain."; and intake's two, unchanged ("That is not a valid website name. …", "That address does not contain a public domain name. …"). The own-domain check compares against the client's domain in its checked form, so a client stored before 3.67 as `www.acme.com` or `shop.acme.com` does not let `acme.com` through, and either spelling of an internationalised client domain is caught.
+- **The editor** (`CompetitorEditor.tsx`): a failed save names the row: "<the rival's name>: <the sentence>" in the existing error paragraph (an alert), instead of "One or more fields were invalid.". Add refuses a domain containing `/`, `:`, `@`, `?`, `#` or a space with the same sentence, marks the Domain field invalid, describes it with the sentence and puts focus back on it; it is a shape check only, since the browser has no public-suffix list and the server stays the authority. Brand is described by an error only when the error is about Brand, and Remove clears a stale error.
+- **Proposed by a model (co-citation):** a domain that fails the check is dropped and the brand kept with no domain; the detection merges a brand by its name, so the name is still a fact it can match on, and the prompt already tells the model a wrong domain is worse than none. Detection logs `competitors.cocitation_domains_dropped` with `client_id` and the count, only when it is above 0, never the domain (it is model-authored).
+- **Not checked, on purpose:** search-result domains (the host of a real result URL), rows copied by the next list or carried forward (stored rows), and the dev scripts' own constants. Nothing crawls, searches or links to a competitor domain; `crawl_site` takes only the client's domain.
+- **The read-only count:** `apps/api/scripts/count_unchecked_domains.py` counts stored `clients.domain` and `competitors.domain` values that fail the check, by kind (not a hostname, no public domain, not in the checked form). It opens a read-only transaction, prints counts only (no domain, name or id), and rolls back. In `avp_dev` before this change: 27 client domains, 1 with no public domain; 125 competitor domains, none failing. The runbook says how the founder runs it on production and that a non-zero count is reported, not changed; the counts include soft-deleted clients and the sets of past scans.
+- **`docs/api-contracts.md`:** the PUT paragraph lists the refusals and says a domain is never reduced; an internationalised name is kept in the spelling it was typed in (3.80).
+
+## 2. The reviews
+
+**Security review: no Blocker or High.**
+- **Medium, fixed:** the reduction above. The orchestrator chose refusing over reducing; whether to refuse platform domains typed on purpose (`g2.com`, `linkedin.com`), as detection's plausibility filter already does, is the founder's decision (launch checklist 3.90). Today they are accepted.
+- **Low, fixed:** the 422's message carried pydantic's "Value error, " prefix. The validator raises a custom error now, so the message is the sentence.
+- **Low, fixed:** the editor showed only "One or more fields were invalid.", so an operator could not tell which row failed, and a bad domain copied from an older list blocked every save. It names the row now.
+- **Nits, fixed:** the contract's sentence on internationalised names; the count script's read-only transaction.
+- **Recorded:** `competitors.detected` logs the client's own domain (older than this item).
+- **The re-check of round 2:** no Blocker or High; the PUT fix closes the Medium (no input shape is stored as a different domain; the own-domain check holds for case, a trailing dot, `www.`, both spellings of an internationalised name and a subdomain of the client; it runs after the client is found in the caller's agency and before any write). It found one more Medium, older than this item: co-citation still reduced a model's domain, so a brand proposed with `apps.shopify.com/acme` would be stored as `shopify.com`, the same mechanism. Fixed in round 3: a model's domain loses one `http(s)://` and one trailing `/` and must then pass the same check, or it is dropped. A Low (a client stored before 3.67 as `www.acme.com` let `acme.com` through) and nits (a docstring, tests for the other spelling, userinfo and a fragment) were fixed in round 3. Round 3 was not sent back for review; its negative controls are below.
+
+**UI review of round 2: no Blocker; two Should-fix, taken in round 3.**
+- **Should-fix, taken:** a pasted page was accepted into the drafts and failed only after Save, and a draft cannot be edited in place; Add now refuses the obvious shapes, above.
+- **Should-fix, taken:** the editor's fields say "Brand" and "Domain (optional)", so "the rival's own domain" was a third word; the sentence now says "Enter just the domain, like rival.com: no https://, page path or subdomain."
+- **Nits, taken:** Brand is no longer described by an error about a row's domain; Remove clears a stale error. **Recorded:** only the first bad row is named.
+
+## Found, not fixed
+
+- **Only the first refused row is named.** A second bad row costs another save.
+- **A bad domain stored before this change,** copied into the client's next list, blocks that list's save until the operator corrects the row; the editor names it.
+- **`competitors.detected` logs the client's own domain** (older than this item). Whether a client's domain may appear in a log line is a policy for the founder; the new script treats it as unfit for a terminal.
+- **Platform domains typed on purpose are accepted** (3.90).
+
+## Verified
+
+**API pytest 4783 → 4851 (+68); web vitest 2107 → 2116 (+9); floors raised to match.**
+- **`test_competitor_domain_check.py` (new, 57):** every class of bad domain from 3.67's tests and bad punycode, through PUT, refused with nothing written and no echo; each pasted shape (a page, a path, a scheme, a port, userinfo, a query, a fragment, a subdomain, `www.www.`) refused with the exact sentence and `{field, message, type}`; `www.Rival.com` and `Other.COM.` stored as `rival.com` and `other.com`; an internationalised name kept in its typed spelling; the client's own domain refused in each spelling, a client stored in an older form included; co-citation dropping a path-, subdomain- or scheme-shaped model domain with the brand kept and counted, and keeping `https://Rival.com/` as `rival.com`; the log line carrying `client_id` and the count only. Before the fixes, 23 of the 57 failed (the pins of a sentence that changed included).
+- **`test_count_unchecked_domains.py` (new, 11):** counts by kind on planted rows, no domain or id printed, nothing written, and a write after the count fails as read-only.
+- **Fixtures:** `test_competitor_next_list.py` built a domain with a space and `test_origin_check.py` used one with no public suffix; the check refused both, so the fixtures changed, not the check.
+- **`CompetitorEditor.interaction.test.tsx` 17 → 26:** a 422 naming a row shows "<name>: <sentence>" and marks no field invalid; seven pasted shapes refused at Add; Remove clears the error. Before the fixes, 10 failed.
+- **The implementer's negative controls,** each restored and checked with `cmp`: round 1: the PUT validator replaced by a plain lower-case, 14 of 29 fail; the co-citation check removed, 1 of 29; the count script printing domains, 1 of 10. Round 2: the reduction guard removed, 16 of 48; the own-domain check removed, 3 of 48; the read-only transaction removed, 1 of 11; the editor's row naming removed, 1 of 18. Round 3: co-citation back to the reducing check, 1 of 57; the own-domain check against the stored form, 2 of 57; the Add shape check off, 8 of 26; Remove not clearing the error, 1 of 26.
+- **On this tree:** in the two new API files (68 tests) and the editor's interaction file (26): the PUT validator replaced by a plain lower-case, 35 fail; the own-domain refusal removed, 8 fail; co-citation keeping any model domain, 1 fails; Add's shape check matching nothing, 8 fail. Each file was restored and the tree's checksums matched. (A first try of the last control used a pattern that matches an empty domain and failed 19 for that reason; it was re-run with one that matches nothing.)
+- **The first bar was red** (22:12-22:18): the web suite's outside-host guard (`providers.test.ts`) found an example page address in a new comment in `intake.py`; the comment now describes the page in words, and the bar was run again.
+- **The rest of the bar** (this tree, the second run, 22:19 to 22:25):
+  - Counts: API 4851, workers 27, shared-types 53 (0 fail), design-system 935, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7945e69b06e5`) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

@@ -75,6 +75,30 @@ export interface CompetitorEditorProps {
   onSaved?: () => void | Promise<void>;
 }
 
+/**
+ * The line for a 422 that names a row's domain (`competitors.<i>.domain`): "<that row's name>:
+ * <the API's sentence>". The operator cannot otherwise tell which row failed. The first such error
+ * is enough. Empty when the problem names no row's domain.
+ */
+/** The server's sentence for a domain that is not just a domain (`NOT_THE_RIVALS_OWN_DOMAIN`). */
+const DOMAIN_SHAPE_SENTENCE =
+  'Enter just the domain, like rival.com: no https://, page path or subdomain.';
+
+/**
+ * Shape only: a character no bare domain has. The public-suffix check stays the server's, which is
+ * the authority; this only spares the person a round trip for a pasted page.
+ */
+const NOT_A_BARE_DOMAIN = /[/:@?#\s]/;
+
+function domainProblem(err: ApiProblem, drafts: readonly Draft[]): string {
+  for (const [field, message] of Object.entries(err.fieldErrors())) {
+    const match = /^competitors\.(\d+)\.domain$/.exec(field);
+    const row = match ? drafts[Number(match[1])] : undefined;
+    if (row) return `${row.name}: ${message}`;
+  }
+  return '';
+}
+
 function toDraft(competitor: Competitor): Draft {
   return { name: competitor.name, domain: competitor.domain ?? '' };
 }
@@ -172,13 +196,23 @@ export function CompetitorEditor({
   // The Brand field is refocused after an Add (the Add button disables itself when the field
   // empties, which would strand focus) and marked invalid only for an error add() raised.
   const [addFailed, setAddFailed] = useState(false);
+  // An error add() raised on the Domain field: it is the one marked invalid, and focused.
+  const [domainFailed, setDomainFailed] = useState(false);
 
   function add() {
     const trimmed = name.trim();
     if (!trimmed) return;
+    if (NOT_A_BARE_DOMAIN.test(domain.trim())) {
+      setError(DOMAIN_SHAPE_SENTENCE);
+      setAddFailed(false);
+      setDomainFailed(true);
+      addRow.current?.querySelectorAll('input')[1]?.focus(); // the Domain field, second in the row
+      return;
+    }
     if (drafts.length >= MAX_COMPETITORS) {
       setError(`A set carries at most ${MAX_COMPETITORS} competitors.`);
       setAddFailed(true);
+      setDomainFailed(false);
       return;
     }
     if (drafts.some((d) => d.name.toLowerCase() === trimmed.toLowerCase())) {
@@ -186,6 +220,7 @@ export function CompetitorEditor({
       // round trip is a worse way to learn it.
       setError(`${trimmed} is already on the list.`);
       setAddFailed(true);
+      setDomainFailed(false);
       return;
     }
     setDrafts([...drafts, { name: trimmed, domain: domain.trim() }]);
@@ -193,6 +228,7 @@ export function CompetitorEditor({
     setDomain('');
     setError(null);
     setAddFailed(false);
+    setDomainFailed(false);
     addRow.current?.querySelector('input')?.focus(); // the Brand field, first in the row
   }
 
@@ -200,6 +236,7 @@ export function CompetitorEditor({
     setSaving(true);
     setError(null);
     setAddFailed(false);
+    setDomainFailed(false);
     try {
       const payload: CompetitorInput[] = drafts.map((d) => ({
         name: d.name,
@@ -217,7 +254,7 @@ export function CompetitorEditor({
       if (mounted.current) {
         setError(
           err instanceof ApiProblem
-            ? err.problem.detail || err.problem.title
+            ? domainProblem(err, drafts) || err.problem.detail || err.problem.title
             : 'The change could not be saved.',
         );
       }
@@ -312,7 +349,13 @@ export function CompetitorEditor({
               variant="ghost"
               size="sm"
               aria-label={`Remove ${draft.name}`}
-              onClick={() => setDrafts(drafts.filter((_, i) => i !== index))}
+              onClick={() => {
+                setDrafts(drafts.filter((_, i) => i !== index));
+                // An error from before is about a list that has changed.
+                setError(null);
+                setAddFailed(false);
+                setDomainFailed(false);
+              }}
             >
               Remove
             </Button>
@@ -332,13 +375,15 @@ export function CompetitorEditor({
           onChange={(e) => setName(e.target.value)}
           maxLength={200}
           aria-invalid={error && addFailed ? true : undefined}
-          aria-describedby={error ? errorId : undefined}
+          aria-describedby={error && addFailed ? errorId : undefined}
         />
         <TextField
           label="Domain (optional)"
           value={domain}
           onChange={(e) => setDomain(e.target.value)}
           maxLength={253}
+          aria-invalid={error && domainFailed ? true : undefined}
+          aria-describedby={error && domainFailed ? errorId : undefined}
         />
         <Button variant="secondary" size="md" onClick={add} disabled={!name.trim()}>
           Add
