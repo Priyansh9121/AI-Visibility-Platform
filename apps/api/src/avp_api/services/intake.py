@@ -189,6 +189,45 @@ def parse_domain(raw_url: str) -> tuple[str, str]:
     return url, domain
 
 
+NOT_THE_RIVALS_OWN_DOMAIN = (
+    "Enter just the domain, like rival.com: no https://, page path or subdomain."
+)
+
+
+def rival_domain(raw: str) -> str:
+    """A competitor's domain typed by a person, in the form it is stored, or `InvalidUrl`.
+
+    Accepted only when, after lower-casing, dropping ONE trailing dot and ONE leading `www.`, it
+    equals its own registrable domain as `parse_domain` checks it. It is never reduced: a pasted
+    page (a review site's product page), a path, a port or a subdomain would reduce to some
+    OTHER site's domain (a review platform, the client's own), and what is stored there re-types
+    that site's citations as the rival's. Refused with `InvalidUrl`: intake's own sentence when the
+    name is not a hostname or has no public domain, else `NOT_THE_RIVALS_OWN_DOMAIN`. No sentence
+    quotes what was typed.
+    """
+    candidate = raw.strip().lower().removesuffix(".").removeprefix("www.")
+    _url, domain = parse_domain(candidate)
+    if domain != candidate:
+        raise InvalidUrl(detail=NOT_THE_RIVALS_OWN_DOMAIN)
+    return domain
+
+
+def checked_domain(raw: str) -> str | None:
+    """The registrable domain `parse_domain` would store for `raw`, or None if it refuses it.
+
+    Reduces what it is given (`docs.example.com/x` is `example.com`), which is right for the
+    client's OWN domain, compared in its checked form by `PUT /clients/{clientId}/competitors`.
+    It is NOT what a competitor's domain goes through: a typed domain, and a model's, go through
+    `rival_domain`, which refuses a page, path or subdomain, because reducing one names some
+    other site (a review platform, the client's own) and re-types that site's citations as the
+    rival's. It does not say which way `raw` failed; `parse_domain` does.
+    """
+    try:
+        return parse_domain(raw)[1]
+    except InvalidUrl:
+        return None
+
+
 async def create_client_from_url(
     session: AsyncSession,
     *,

@@ -41,6 +41,10 @@ const rival = (name: string, domain: string | null = null) =>
 const setOf = (...names: string[]) =>
   ({ competitors: names.map((n) => rival(n)) }) as unknown as CompetitorSet;
 
+const DOMAIN_SENTENCE = 'Enter just the domain, like rival.com: no https://, page path or subdomain.';
+const fieldFor = (label: string) =>
+  [...host.querySelectorAll('label')].find((l) => l.textContent === label)!.getAttribute('for')!;
+
 let host: HTMLDivElement;
 let root: Root;
 const text = () => (host.textContent ?? '').replace(/\s+/g, ' ');
@@ -210,8 +214,79 @@ describe('focus', () => {
     const labelEl = [...host.querySelectorAll('label')].find((l) => l.textContent === 'Brand')!;
     const brand = host.querySelector(`#${CSS.escape(labelEl.getAttribute('for')!)}`)!;
     expect(brand.getAttribute('aria-invalid')).toBeNull();
-    expect(brand.getAttribute('aria-describedby')).toBe(alert.id);
-    expect(alert.id).not.toBe('');
+    // A save error is announced by its own role=alert: Brand does not point at it (only an
+    // error add() raised on Brand does).
+    expect(brand.getAttribute('aria-describedby')).toBeNull();
+  });
+
+  it('a 422 on one row’s domain names that row and says what is wrong with its domain', async () => {
+    competitorSet.mockResolvedValue(setOf('Zendesk', 'Intercom'));
+    replaceCompetitors.mockRejectedValue(
+      new ApiProblem({
+        type: '/problems/validation-failed',
+        title: 'Request validation failed',
+        status: 422,
+        instance: '/api/v1/clients/cli_1/competitors',
+        detail: 'One or more fields were invalid.',
+        errors: [
+          { field: 'competitors.1.domain', message: DOMAIN_SENTENCE, type: 'invalid_domain' },
+        ],
+      } as never),
+    );
+    await mount({ competitors: [rival('Zendesk'), rival('Intercom')] });
+    await click(button('Correct this list'));
+    await type('Brand', 'Other');
+    await click(button('Add'));
+    await click(button('Save the list'));
+
+    const alert = host.querySelector('p[role="alert"]')!;
+    expect(alert.textContent).toBe(`Intercom: ${DOMAIN_SENTENCE}`);
+    const domainField = (host.querySelector(`#${CSS.escape(fieldFor('Domain (optional)'))}`))!;
+    expect(domainField.getAttribute('aria-invalid')).toBeNull();
+    const brandField = host.querySelector(`#${CSS.escape(fieldFor('Brand'))}`)!;
+    expect(brandField.getAttribute('aria-describedby')).toBeNull();
+    expect(text()).not.toContain('One or more fields were invalid.');
+  });
+
+  it.each(['https://www.g2.com/products/x', 'g2.com/x', 'rival.com:80', 'a@rival.com', 'rival.com?x', 'rival.com#x', 'riv al.com'])(
+    'a domain shaped like a page (%s) is refused by Add with the sentence, marks Domain invalid, and focuses it',
+    async (pasted) => {
+      competitorSet.mockResolvedValue(setOf('Zendesk'));
+      await mount({ competitors: [rival('Zendesk')] });
+      await click(button('Correct this list'));
+      await type('Brand', 'Rival');
+      await type('Domain (optional)', pasted);
+      await click(button('Add'));
+
+      const alert = host.querySelector('p[role="alert"]')!;
+      expect(alert.textContent).toBe(DOMAIN_SENTENCE);
+      const domain = host.querySelector(`#${CSS.escape(fieldFor('Domain (optional)'))}`) as HTMLInputElement;
+      expect(domain.getAttribute('aria-invalid')).toBe('true');
+      expect(domain.getAttribute('aria-describedby')).toBe(alert.id);
+      const brand = host.querySelector(`#${CSS.escape(fieldFor('Brand'))}`)!;
+      expect(brand.getAttribute('aria-invalid')).toBeNull();
+      expect(document.activeElement).toBe(domain);
+      expect(text()).not.toContain('Rival rival');
+      expect(host.querySelectorAll('ol li').length).toBe(1); // only Zendesk: nothing was added
+    },
+  );
+
+  it('a bare domain is added, and Remove clears an error left from before', async () => {
+    competitorSet.mockResolvedValue(setOf('Zendesk'));
+    await mount({ competitors: [rival('Zendesk')] });
+    await click(button('Correct this list'));
+    await type('Brand', 'Rival');
+    await type('Domain (optional)', 'g2.com/x');
+    await click(button('Add'));
+    expect(host.querySelector('p[role="alert"]')).not.toBeNull();
+
+    await click(button('Remove'));
+    expect(host.querySelector('p[role="alert"]')).toBeNull();
+
+    await type('Domain (optional)', 'rival.com');
+    await click(button('Add'));
+    expect(host.querySelector('p[role="alert"]')).toBeNull();
+    expect(text()).toContain('rival.com');
   });
 
   it('a duplicate name marks the Brand field invalid, and Cancel clears the error: it is not announced again on the closed editor', async () => {

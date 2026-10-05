@@ -143,7 +143,9 @@ async def _next_list_ids(session: AsyncSession, client_id: str) -> list[str]:
 def _put(client: AsyncClient, cid: str, *names: str):  # noqa: ANN202
     return client.put(
         f"{BASE}/clients/{cid}/competitors",
-        json={"competitors": [{"name": n, "domain": f"{n.lower()}.com"} for n in names]},
+        json={"competitors": [
+            {"name": n, "domain": f"{n.lower().replace(' ', '')}.com"} for n in names
+        ]},
     )
 
 

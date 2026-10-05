@@ -1807,6 +1807,29 @@ Where a save lands, in order:
 
 Two first saves at once leave one next list: the second finds the first's and writes that.
 
+**`domain` is checked like a client's own, and never reduced** (launch checklist 3.81). A blank
+or missing `domain` is no domain, as before. Anything else is lower-cased, and ONE trailing dot
+and ONE leading `www.` are dropped; it is accepted only when what is left is exactly its own
+registrable domain under the hostname check client intake uses, and that is what is stored
+(`WWW.Rival.com.` is stored as `rival.com`; an internationalised name is stored in the spelling
+it was typed, Unicode (`bücher.de`) or punycode (`xn--bcher-kva.de`), and the two are not
+converted into each other). A page, a path, a scheme, a port or a subdomain
+(`https://www.g2.com/products/x`, `shop.rival.com`) is refused, not cut down to the site it would
+name. A domain equal to the client's own (compared in its checked form, so a client stored as `www.acme.com` is `acme.com`, and either spelling of an internationalised name) is refused too. The web editor's Add refuses a pasted page (a `/`, `:`, `@`, `?`, `#` or a space) with the same sentence before Save; the server stays the authority. Every refusal is **`422
+validation-failed`** before anything is written, the rest of the list included, with
+`errors[].field` `competitors.<index>.domain`, `errors[].type` `invalid_domain` for each of the four
+below, and `errors[].message` one plain sentence that quotes nothing typed:
+
+- not a hostname: "That is not a valid website name. Names can only contain letters, numbers and
+  hyphens, with dots between the parts. Enter an address such as example.com."
+- no public domain in it: "That address does not contain a public domain name. Enter a website
+  address such as example.com."
+- a page, path or subdomain: "Enter just the domain, like rival.com: no https://, page path or
+  subdomain."
+- the client's own domain: "That is this client's own domain."
+
+No new problem type.
+
 Replaces wholesale rather than patching rows: an operator correcting a bad
 detection is asserting "these are the rivals", and reconciling that against
 auto-detected rows invites a half-applied state.
