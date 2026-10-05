@@ -544,6 +544,149 @@ class TestTheScanTotal:
         assert parsed["serpapi_billed_or_unknown"] == "1"
 
 
+def one_call(
+    *, requests: int, answered: bool, engine: str | None = "perplexity",
+    purpose: Purpose = ENGINE, provider: str = usage.PERPLEXITY,
+) -> None:
+    """One tracked call that made `requests` requests, reported the way an adapter reports them.
+
+    Every request but the last got no usage back and was sent again. The last was answered, or
+    (`answered=False`) was refused too and ended the call by raising, as an adapter's does.
+    """
+    assert requests >= 1
+    try:
+        with usage.track(provider, purpose, model="asked", engine=engine) as tracked:
+            for _ in range(requests - 1):
+                tracked.begin_attempt()
+                tracked.attempt_failed("http_429")
+            tracked.begin_attempt()
+            if not answered:
+                raise RuntimeError("the last request got no answer either")
+            tracked.read_perplexity({"model": "served", "usage": {"input_tokens": 9}})
+    except RuntimeError:
+        pass
+
+
+class TestWhatUnansweredAndRetriesCount:
+    """`calls` and `retries` count REQUESTS and `unanswered` counts CALLS (U5, 2026-10-06).
+
+    What set it: a Perplexity prompt was refused with a 429, sent again and answered, and the
+    scan's total said `engine_perplexity_unanswered=1` of a scan whose every result was there.
+    A request that a retry rescued is a retry, not a prompt that never got an answer. A call is
+    everything one `track(...)` wraps, which for an engine is one prompt asked of one engine.
+    """
+
+    def test_a_429_then_an_answer_is_a_retry_and_nothing_is_unanswered(self) -> None:
+        with usage.scan_scope("scan_1") as scan:
+            one_call(requests=2, answered=True)
+
+        f = scan.log_fields()
+        assert (f["engine_perplexity_calls"], f["engine_perplexity_retries"]) == (2, 1)
+        assert "engine_perplexity_unanswered" not in f
+        assert (f["engines_calls"], f["engines_retries"]) == (2, 1)
+        assert "engines_unanswered" not in f
+
+    def test_two_requests_and_no_answer_is_one_unanswered_call_and_one_retry(self) -> None:
+        with usage.scan_scope("scan_1") as scan:
+            one_call(requests=2, answered=False)
+
+        f = scan.log_fields()
+        assert (f["engine_perplexity_calls"], f["engine_perplexity_unanswered"],
+                f["engine_perplexity_retries"]) == (2, 1, 1)
+        assert (f["engines_calls"], f["engines_unanswered"], f["engines_retries"]) == (2, 1, 1)
+
+    @pytest.mark.parametrize("requests", [1, 2, 3, 4])
+    def test_a_call_that_got_no_answer_is_one_unanswered_call_however_many_requests_it_made(
+        self, requests: int
+    ) -> None:
+        with usage.scan_scope("scan_1") as scan:
+            one_call(requests=requests, answered=False)
+
+        f = scan.log_fields()
+        assert f["engine_perplexity_calls"] == requests
+        assert f["engine_perplexity_unanswered"] == 1
+        assert f.get("engine_perplexity_retries", 0) == requests - 1
+
+    @pytest.mark.parametrize("requests", [1, 2, 3, 4])
+    def test_an_answered_call_is_never_unanswered_however_many_requests_failed_before_it(
+        self, requests: int
+    ) -> None:
+        with usage.scan_scope("scan_1") as scan:
+            one_call(requests=requests, answered=True)
+
+        f = scan.log_fields()
+        assert f["engine_perplexity_calls"] == requests
+        assert "engine_perplexity_unanswered" not in f
+        assert f.get("engine_perplexity_retries", 0) == requests - 1
+
+    def test_each_engine_is_counted_on_its_own_and_the_engines_line_is_their_sum(self) -> None:
+        with usage.scan_scope("scan_1") as scan:
+            one_call(requests=2, answered=True)                          # perplexity, rescued
+            one_call(requests=2, answered=False)                         # perplexity, no answer
+            one_call(requests=1, answered=False, engine="claude")        # claude, refused once
+            one_call(requests=1, answered=True, engine="chatgpt")        # chatgpt, answered
+            one_call(requests=3, answered=True, engine="gemini")         # gemini, rescued after two
+
+        f = scan.log_fields()
+        per_engine = {
+            engine: (f[f"engine_{engine}_calls"], f.get(f"engine_{engine}_unanswered", 0),
+                     f.get(f"engine_{engine}_retries", 0))
+            for engine in ("perplexity", "claude", "chatgpt", "gemini")
+        }
+        # (requests made, calls that never got an answer, requests that were sent again)
+        assert per_engine == {
+            "perplexity": (4, 1, 2), "claude": (1, 1, 0), "chatgpt": (1, 0, 0), "gemini": (3, 0, 2),
+        }
+        assert (f["engines_calls"], f["engines_unanswered"], f["engines_retries"]) == (9, 2, 4)
+
+    @pytest.mark.parametrize(
+        "purpose",
+        [Purpose.SENTIMENT, Purpose.PROMPT_GENERATION, Purpose.FIXES, Purpose.DETECTION],
+        ids=lambda p: p.value,
+    )
+    def test_the_lines_that_are_not_engines_count_a_call_once_too(self, purpose: Purpose) -> None:
+        with usage.scan_scope("scan_1") as scan:
+            one_call(requests=2, answered=True, engine=None, purpose=purpose,
+                     provider=usage.ANTHROPIC)
+            one_call(requests=2, answered=False, engine=None, purpose=purpose,
+                     provider=usage.ANTHROPIC)
+
+        f = scan.log_fields()
+        line = purpose.value
+        assert (f[f"{line}_calls"], f[f"{line}_unanswered"], f[f"{line}_retries"]) == (4, 1, 2)
+
+    def test_a_request_made_on_its_own_ends_its_call_and_one_that_was_followed_does_not(
+        self,
+    ) -> None:
+        scan = ScanUsage("scan_1")
+        scan.add(call(ok=False))
+        assert scan.log_fields()["engine_claude_unanswered"] == 1
+
+        scan.add(call(ok=False, last=False))   # a later request of its call went on from it
+
+        f = scan.log_fields()
+        assert (f["engine_claude_calls"], f["engine_claude_unanswered"]) == (2, 1)
+        # The marker is the accumulator's business: the `llm.call` line does not carry it.
+        assert "last" not in call(last=False).log_fields()
+
+    def test_a_total_can_be_checked_against_its_lines(self) -> None:
+        """What the runbook says to do: `_calls` is the lines, `_retries` the ones with
+        `retry=True`, and `_unanswered` the ones with `ok=False` less the ones with `retry=True`."""
+        with structlog.testing.capture_logs() as events, usage.scan_scope("scan_1") as scan:
+            # (requests, answered): three of the six calls, the ones ending in False, got nothing.
+            for requests, answered in [(1, True), (2, True), (2, False), (3, False), (3, True),
+                                       (1, False)]:
+                one_call(requests=requests, answered=answered)
+
+        lines = events_named(events, "llm.call")
+        f = scan.log_fields()
+        no_usage = sum(1 for line in lines if not line["ok"])
+        resent = sum(1 for line in lines if line["retry"])
+        assert f["engine_perplexity_calls"] == len(lines) == 12
+        assert f["engine_perplexity_retries"] == resent == 6
+        assert f["engine_perplexity_unanswered"] == no_usage - resent == 3
+
+
 class TestEveryPurposeHasItsLine:
     """A scan's total has a fixed line for each thing a scan pays for. A purpose added without
     its line would be dropped from the total by the very rule that stops counting from breaking

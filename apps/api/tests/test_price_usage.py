@@ -43,6 +43,7 @@ from typing import Any
 import pytest
 import structlog
 
+from avp_api.services import usage
 from avp_api.services.usage import CallUsage, Purpose, ScanUsage
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "verify_e2e.py"
@@ -212,6 +213,88 @@ class TestPricingALine:
         pricing = e2e.price_usage(rendered(scan))
 
         assert any("cache" in note.lower() for note in pricing.notes)
+
+
+SONAR_BODY = {
+    "model": "perplexity/sonar",
+    "usage": {"input_tokens": 1758, "output_tokens": 432,
+              "tool_calls_details": {"search_web": {"invocation": 2}}},
+}
+# One answered Perplexity request: 1,758 in and 432 out at the table's rates, and two searches.
+ONE_SONAR_ANSWER = (
+    per_million(1758, "0.25") + per_million(432, "2.5") + Decimal(2) * Decimal("0.0025"))
+
+
+class TestWhatARetryDoesToThePrice:
+    """U5, 2026-10-06: `unanswered` counts calls and `retries` requests, and neither is a price.
+
+    The script shows both and prices tokens and searches, which only an answered request carries,
+    so what a retry or a call that never got an answer changes is the two columns it prints. The
+    lines are made by the real tracker and the real accumulator, as production makes them.
+    """
+
+    def test_a_call_a_retry_answered_prices_on_its_tokens_alone_and_shows_its_retry(
+        self, e2e: ModuleType
+    ) -> None:
+        with (
+            usage.scan_scope("scan_01RETRIED") as scan,
+            usage.track(
+                usage.PERPLEXITY, Purpose.ENGINE, model="perplexity/sonar", engine="perplexity"
+            ) as tracked,
+        ):
+            tracked.begin_attempt()
+            tracked.attempt_failed("http_429")
+            tracked.begin_attempt()
+            tracked.read_perplexity(SONAR_BODY)
+        line = rendered(scan)
+        assert "engine_perplexity_calls=2" in line and "engine_perplexity_retries=1" in line
+        assert "engine_perplexity_unanswered" not in line
+
+        pricing = e2e.price_usage(line)
+
+        (row,) = pricing.rows
+        assert (row.name, row.calls, row.unanswered, row.retries) == (
+            "engine: perplexity", 2, 0, 1)
+        assert row.cost == ONE_SONAR_ANSWER
+        assert pricing.total == ONE_SONAR_ANSWER
+        assert pricing.missing == []
+
+    def test_a_call_that_never_got_an_answer_is_shown_and_adds_nothing_to_the_price(
+        self, e2e: ModuleType
+    ) -> None:
+        with usage.scan_scope("scan_01UNANSWERED") as scan:
+            with usage.track(
+                usage.PERPLEXITY, Purpose.ENGINE, model="perplexity/sonar", engine="perplexity"
+            ) as tracked:
+                tracked.read_perplexity(SONAR_BODY)
+            # Two requests, neither answered: one retry and ONE call that got no answer.
+            with pytest.raises(RuntimeError), usage.track(
+                usage.PERPLEXITY, Purpose.ENGINE, model="perplexity/sonar", engine="perplexity"
+            ) as tracked:
+                tracked.begin_attempt()
+                tracked.attempt_failed("http_429")
+                tracked.begin_attempt()
+                raise RuntimeError
+
+        pricing = e2e.price_usage(rendered(scan))
+
+        (row,) = pricing.rows
+        assert (row.calls, row.unanswered, row.retries) == (3, 1, 1)
+        assert row.cost == ONE_SONAR_ANSWER
+        assert pricing.total == ONE_SONAR_ANSWER
+
+    def test_the_columns_it_prints_are_the_lines_own_counts(self, e2e: ModuleType) -> None:
+        line = ("scan.usage scan_id=scan_01X engine_perplexity_calls=7 engine_perplexity_retries=2 "
+                "engine_perplexity_unanswered=1 engine_perplexity_input_tokens=1758 "
+                "engine_perplexity_output_tokens=432 engine_perplexity_search_invocations=2 "
+                "engine_perplexity_model=perplexity/sonar")
+
+        pricing = e2e.price_usage(line)
+
+        (row,) = pricing.rows
+        assert (row.calls, row.unanswered, row.retries) == (7, 1, 2)
+        # Priced on the tokens and searches alone, as with any other counts.
+        assert row.cost == ONE_SONAR_ANSWER
 
 
 class TestWhatIsMissing:

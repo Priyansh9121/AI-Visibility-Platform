@@ -12,8 +12,8 @@ domain, an exception's text, a key, or a dollar figure: turning counts into mone
     scan_id         the scan it was made for, or None outside one
     provider        anthropic, openai, perplexity or google
     model           the model the RESPONSE says served it; the one we asked for when the
-                    response names none (Gemini's body may not, and an unanswered request
-                    has no response at all)
+                    response names none (Gemini's body may not, and a request that got no
+                    answer has no response at all)
     purpose         engine, sentiment, prompt_generation, fixes, detection, classification
     engine          the engine's id for an engine call, else None
     input_tokens, output_tokens
@@ -42,15 +42,18 @@ Flat `key=value` counts, so a pasted line can be read back (`verify_e2e.py --pri
 grep finds one scan. For each of `engines` (every engine together), `engine_<id>` (each engine
 that was asked), `sentiment`, `prompt_generation`, `fixes` and `detection`:
 
-    <line>_calls            requests made, retries included
-    <line>_unanswered       of those, how many got no usage back
-    <line>_retries          of those, how many were a re-send
+    <line>_calls            REQUESTS made, retries included. Every request counts, answered or
+                            not: one that got no answer may still have been billed
+    <line>_unanswered       CALLS that never got an answer: the call's last request got no usage
+                            back. A call counts once however many requests it made, and not at
+                            all when a later request of it was answered (see below)
+    <line>_retries          REQUESTS that were a re-send: every request of a call but its first
     <line>_input_tokens, _output_tokens, _reasoning_tokens (inside the output),
     _cache_read_tokens, _cache_write_tokens, _search_invocations
     <line>_model            the model or models that served it, `+`-joined. Only a request that
-                            was answered names one: an unanswered request carries the model that
-                            was ASKED for, often an alias of what answers (`gpt-5.5` for
-                            `gpt-5.5-2026-04-23`), and would make one model look like two.
+                            was answered names one: a request that got no answer carries the
+                            model that was ASKED for, often an alias of what answers (`gpt-5.5`
+                            for `gpt-5.5-2026-04-23`), and would make one model look like two.
 
 A counter that is zero is left out, except `_calls`, `_input_tokens` and `_output_tokens`, which
 every line carries; so is a `_model` nobody named. READ AN ABSENT COUNTER AS ZERO. (Written out in
@@ -63,10 +66,45 @@ And `serpapi_billed_or_unknown`, which is `serpapi_ok` + `serpapi_no_answer`: an
 what SerpApi billed, but for that one kind of answer, which is counted in `serpapi_error`: an
 answered search is billed unless SerpApi served it from its cache, an error answer is not billed
 (an unreadable 200 aside), and a search nobody answered may have been. It is left out when it
-is zero, as every counter above that is. Classification happens at intake and is not part of a
-scan, so it has its own `llm.call` lines and is never in this one.
+is zero, as every counter above that is. SerpApi's four counts are per REQUEST on purpose, unlike
+`_unanswered`: they say what may have been billed, and a request nobody answered may have been
+billed even when a retry of it was answered. Classification happens at intake and is not part of
+a scan, so it has its own `llm.call` lines and is never in this one.
 
 The total is built from the same records the per-call lines are, so the two cannot disagree.
+
+What a call is, and what `unanswered` and `retries` count — U5, 2026-10-06
+--------------------------------------------------------------------------
+A CALL is everything one `track(...)` wraps: the requests it takes to get one answer. For an
+engine that is one prompt asked of one engine (a scan asks each prompt of each engine once).
+It is one request unless something sent it again: the Anthropic SDK retries a 408, 409, 429, 5xx
+or a dropped connection inside the call, and Perplexity sends a request again once after a 429
+that names its wait. Only a call's LAST request decides whether it was answered. A request that
+got no usage back and was followed by another is a retry; a call that ends on a request that got
+none is unanswered, ONCE, however many requests it made:
+
+    a prompt refused with a 429 and answered on the retry     calls=2  retries=1
+    a prompt refused twice, the retry too                     calls=2  retries=1  unanswered=1
+    a prompt refused and not sent again                       calls=1  unanswered=1
+    a prompt answered the first time                          calls=1
+
+A call that was cancelled (by `gather_cancelling` when a sibling failed, checklist 3.77, or by a
+deadline) logs `ok=False error=CancelledError` and never got an answer: one unanswered call. If
+it had been refused once before, that refusal is its retry and not a second unanswered call.
+
+Before U5 every request that got no usage back was an `unanswered`, so the first of those prompts
+read `calls=2 unanswered=1 retries=1`: a scan that answered every prompt said one was not. A line
+logged before U5 still means that, and the two are one sum apart: the old `unanswered` is the new
+`unanswered` plus `retries`. To read a line from U5 on:
+
+    prompts asked           `_calls` less `_retries`
+    prompts answered        that, less `_unanswered`
+    requests with no usage  `_retries` plus `_unanswered`, whose cost the tokens do not show (a
+                            request that timed out may have been billed)
+    against the `llm.call`  of that purpose (and engine), `_calls` is the lines, `_retries` the
+    lines                   lines with `retry=True`, and `_unanswered` the lines with `ok=False`
+                            less the lines with `retry=True` (every re-send follows a request
+                            that got no usage)
 
 How a call is counted
 ---------------------
@@ -97,7 +135,9 @@ WHAT THIS CANNOT SEE, stated so nobody has to find it out
   call. The line says `ok=False error=ValidationError` with zero counts: a run of those in a
   scan's `unanswered` is the sign.
 * An attempt that timed out before any response may have been billed (`call_bounds.py` says
-  so). It is a line with `ok=False`, and its cost is not known.
+  so). It is a line with `ok=False`, and its cost is not known. In the total it is a retry when
+  its call went on after it and an unanswered call when it was the call's last request, so the
+  requests whose cost is unknown are `_retries` plus `_unanswered`: read the two together.
 * Counting is best effort by construction: a reader that raises, a logger that fails or a
   usage block of an unexpected shape leaves the call's own outcome exactly as it was.
 
@@ -309,7 +349,13 @@ def error_label(exc: BaseException) -> str:
 
 @dataclass(frozen=True, slots=True)
 class CallUsage:
-    """One request to a paid provider, as the `llm.call` line carries it."""
+    """One request to a paid provider, as the `llm.call` line carries it.
+
+    `last` is the one field the line does not carry: whether this request ended its call, as a
+    request made on its own does. A request that got no usage back and was followed by another
+    of the same call is `last=False` and counts as a retry in a scan's total; one that ends its
+    call without an answer is what `unanswered` counts (module docstring, U5).
+    """
 
     provider: str
     model: str | None
@@ -325,6 +371,7 @@ class CallUsage:
     ok: bool = True
     error: str | None = None
     scan_id: str | None = None
+    last: bool = True
 
     def log_fields(self) -> dict[str, object]:
         """Exactly the fields the line carries, and nothing else."""
@@ -366,7 +413,10 @@ class _Totals:
 
     def add(self, call: CallUsage) -> None:
         self.calls += 1
-        self.unanswered += 0 if call.ok else 1
+        # `unanswered` counts CALLS. A request that got no usage back and was followed by another
+        # request of its call is a retry (counted below), not a call that went unanswered: only a
+        # call's last request can end it without an answer, and that is once for the whole call.
+        self.unanswered += 1 if call.last and not call.ok else 0
         self.retries += 1 if call.retry else 0
         self.input_tokens += call.input_tokens
         self.output_tokens += call.output_tokens
@@ -413,7 +463,11 @@ class ScanUsage:
         self._serp_no_answer = 0
 
     def add(self, call: CallUsage) -> None:
-        """Add one request. Classification is not part of a scan and is ignored."""
+        """Add one request. Classification is not part of a scan and is ignored.
+
+        Every request is a `calls`; a re-send is a `retries`; and a request that ended its call
+        with no usage back (`call.last`) is the call's one `unanswered`.
+        """
         if call.purpose is Purpose.CLASSIFICATION:
             return
         if call.purpose is Purpose.ENGINE:
@@ -522,7 +576,8 @@ class CallTracker:
 
     Used as a context manager around the call. Leaving it logs one `llm.call` line for each
     request and adds each to the current scan. It never raises and never swallows: the call's
-    own exception goes on as it was.
+    own exception goes on as it was. The call counts as unanswered in a scan's total only when
+    its last request got no usage back; the requests before that one are its retries.
     """
 
     def __init__(self, provider: str, purpose: Purpose, model: str, engine: str | None) -> None:
@@ -592,7 +647,12 @@ class CallTracker:
                     scan.add(call)
 
     def _calls(self, exc: BaseException | None, scan_id: str | None) -> list[CallUsage]:
-        """A line for each request: the ones that failed first, then the one that ended the call."""
+        """A line for each request: the ones that failed first, then the one that ended the call.
+
+        Only the one that ended the call is `last`: a request that failed and was followed by
+        another is a retry in a scan's total, and the call is unanswered only if its last request
+        got no usage back, however many requests failed before it (module docstring, U5).
+        """
         attempts = max(self._attempts, 1)
 
         def failed(index: int) -> CallUsage:
@@ -600,7 +660,7 @@ class CallTracker:
                 provider=self._provider, model=self._asked_model, purpose=self._purpose,
                 engine=self._engine, retry=index > 0, ok=False,
                 error=self._failed[index] if index < len(self._failed) else None,
-                scan_id=scan_id,
+                scan_id=scan_id, last=index == attempts - 1,
             )
 
         calls = [failed(index) for index in range(attempts - 1)]
@@ -608,10 +668,10 @@ class CallTracker:
         if counts is None:
             # The last request got no usable answer. If whoever reported its attempts also
             # reported why, that is the reason; otherwise it is whatever the call raised.
-            last = failed(attempts - 1)
-            if last.error is None and exc is not None:
-                last = replace(last, error=error_label(exc))
-            calls.append(last)
+            ending = failed(attempts - 1)
+            if ending.error is None and exc is not None:
+                ending = replace(ending, error=error_label(exc))
+            calls.append(ending)
             return calls
         calls.append(CallUsage(
             provider=self._provider, model=counts.model or self._asked_model,
