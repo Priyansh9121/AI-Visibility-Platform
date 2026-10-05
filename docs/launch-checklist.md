@@ -324,13 +324,22 @@ The old literal key sat in `.claude/settings.local.json` as `env.API_KEY_21ST`
    runbook's step 5.
    Also in live mode: the trial reminder email and the portal's cancel setting, as in
    1.1g step 6.
-3. **Before the swap, decide 3.73.** Every agency's stored subscription state is test
-   mode's, and no live webhook will ever change it. Then, on Render (API service),
-   replace `STRIPE_SECRET_KEY` with the live secret key, `STRIPE_WEBHOOK_SECRET` with
-   the live endpoint's signing secret and `STRIPE_PRICE_ID` with the live Price id, in
-   one save. Live keys go on Render only, never in the repo or a chat.
+3. **The swap, then clear test mode's billing state** (3.73, decided 2026-10-05). Every
+   agency's stored subscription state is test mode's, and no live webhook will ever
+   change it. On Render (API service), replace `STRIPE_SECRET_KEY` with the live secret
+   key, `STRIPE_WEBHOOK_SECRET` with the live endpoint's signing secret and
+   `STRIPE_PRICE_ID` with the live Price id, in one save. Live keys go on Render only,
+   never in the repo or a chat.
    - Expect `billing.price_check ok=True` with the live Price's id.
    - `STRIPE_TRIAL_DAYS` is not tied to a mode: it stays as 1.1g left it.
+   - When the redeploy has finished, and before anyone subscribes in live mode, open
+     Render → the API service → **Shell** on the new deploy and run the dry run:
+     `cd /app/apps/api && .venv/bin/python scripts/clear_test_billing_state.py`. It
+     prints counts only, and its key line must read `Stripe key: live; Stripe lists no
+     subscription and no customer.`
+   - Then run the same command with `--confirm`. Every Stripe count under `After:`
+     should be `0`, then `Cleared.`. Any exit code but 0 means stop: the runbook's
+     "Clearing test-mode billing state at the live-key swap" says what each one means.
 4. Buy one subscription with your own card, on an agency that has never subscribed.
    - Check Settings shows it and the webhook deliveries answered 200, then cancel it.
    - With `STRIPE_TRIAL_DAYS` set it starts a trial and charges nothing before its
@@ -466,7 +475,7 @@ every one marked (sec).
 | 3.70 | **Done on `pilot-fixes-5`** (`f450775`): Settings' invitation link says "Link copied." in a status region, as the share bar does, and a refused copy takes it back. Left: 3.85. | Founder | Decide whether "Copied" goes back after a few seconds, on both buttons, with one wording ("Copy" against "Copy link"). |
 | 3.71 | **Done on `pilot-fixes-5`** (`c9e6043`): a client whose site no model saw records no classifier model or time. Rows stored before are not backfilled (nothing reads them). | — | — |
 | 3.72 | **A trial needs no verified identity** (P1's security review, H1). Agencies cost nothing to make and need no verified email, so throwaway agencies could each take a trial: 40 scans in each calendar month it touches (two, or three from 30–31 January), at provider cost, before any charge. | Founder, **before `STRIPE_TRIAL_DAYS` is set** | Pick: the trial only for a user with a linked Google identity (the free scan's rule; Claude builds it); a trial worth one allowance counted from its start; a Stripe Radar rule against one card on many customers; or accept and watch `billing.checkout_created trial_days>0`. |
-| 3.73 | **Billing state from Stripe's test mode survives the switch to live keys.** An agency that subscribed on Render's test keys keeps its test-mode `subscription_status`, customer id and subscription id, and no live webhook will ever change them. It stays `active` (the plan's allowance and detection) for free, its checkout fails with a 503 (the customer does not exist in live mode), and it is never offered a trial. | Founder, before 2.2 step 3 | Pick: a one-off SQL at the key swap that clears every agency's Stripe columns and watermark (Claude writes it into the runbook; the founder runs it in Supabase), or Claude records each subscription's `livemode` from the verified webhook and treats test-mode state as none on a live key. |
+| 3.73 | **Decided 2026-10-05, built on `pilot-fixes-6`** (B2): test mode's billing state is cleared at the live-key swap by a founder-run script, `apps/api/scripts/clear_test_billing_state.py` (runbook: "Clearing test-mode billing state at the live-key swap"). It is a dry run by default and prints counts only. `--confirm` clears every agency's Stripe columns in one transaction, and runs only with a live key while Stripe's live account lists no subscription and no customer. | Founder | 2.2 step 3. |
 | 3.74 | **Checkout still opens on a Price that fails the price check** (P2's security review). | Founder | Decide whether checkout refuses with a 503 on a definite mismatch, read fresh in `create_checkout_session`. The reviewer recommends it before live keys. |
 | 3.75 | **Usage is in the logs only** (U1). Keeping it would be one table, `scan_usage_lines`: about 8 rows and 3 KB a scan, written after the scan ends so it can never fail one. | Founder | Decide whether to keep usage in the database (U1's build-log entry has the shape, the cost and the alternatives). |
 | 3.76 | **A schema miss fails a whole scan after it was paid for** (U1): `classify_sentiment`, `generate_prompts` and `run_seed_prompt` do not catch pydantic's `ValidationError` from `messages.parse`. | Claude | Catch it as `classify` and `fix_generator` do, with tests. |
