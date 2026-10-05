@@ -196,7 +196,7 @@ export function SettingsView({
           <PageSection
             eyebrow="Team"
             heading="Who can sign in"
-            lead="Every seat, including invitations nobody has accepted yet — those hold a seat from the moment they are sent."
+            lead="Every seat, including invitations nobody has accepted yet — those hold a seat from the moment someone is invited."
           >
             {state.seats ? (
               <SeatsPanel

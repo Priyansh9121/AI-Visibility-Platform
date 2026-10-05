@@ -98,6 +98,39 @@ describe('ready', () => {
   });
 });
 
+/**
+ * The Team section's lead (3.85, round 2). It said invitations hold a seat "from the moment they
+ * are sent", and while email is off nothing is sent: the owner copies a link and sends it by hand.
+ * What is true in every case is that the seat is held from the moment someone is invited.
+ */
+describe('the team lead says when an invitation holds a seat', () => {
+  const TEAM_LEAD =
+    'Every seat, including invitations nobody has accepted yet — those hold a seat from the moment someone is invited.';
+  const lead = (html: string) =>
+    html.match(/<p[^>]*class="avp-section__lead"[^>]*>(Every seat[^<]*)<\/p>/)?.[1];
+
+  it('says the seat is held from the moment someone is invited', () => {
+    expect(lead(render(READY))).toBe(TEAM_LEAD);
+  });
+
+  it('does not say the invitation is sent: with email off nothing is', () => {
+    expect(render(READY)).not.toContain('from the moment they are sent');
+    expect(lead(render(READY))).not.toMatch(/\bsent\b/);
+  });
+
+  it('is there when the roster is not: the lead belongs to the section, not to the panel', () => {
+    const html = render({
+      kind: 'ready',
+      me: memberMe,
+      seats: null,
+      seatsError: 'Only an owner or an admin can see and change who holds a seat.',
+      billing: null,
+      billingError: null,
+    });
+    expect(lead(html)).toBe(TEAM_LEAD);
+  });
+});
+
 describe('the seat list is allowed to fail on its own', () => {
   it('keeps the rest of the screen when the roster is forbidden', () => {
     const html = render({

@@ -52,7 +52,11 @@ describe('the form', () => {
     const html = render();
     expect(html).not.toContain('role="alert"');
     expect(html).not.toContain('avp-field__error');
-    expect(html).not.toContain('role="status"');
+    // The status region is on the page from the first render, and says nothing yet (3.85): a
+    // message made together with its region is often never read out.
+    expect(html).toContain('<div role="status" data-testid="password-status"></div>');
+    expect(html.match(/role="status"/g)).toHaveLength(1);
+    expect(html).not.toContain('Your password has been changed');
   });
 });
 
@@ -125,6 +129,17 @@ describe('success', () => {
     expect(html).toContain('Every other device has been signed out');
     expect(html).toContain('this one is still signed in');
     expect(html).toContain('role="status"');
+  });
+
+  it('says it in the status region, which holds that sentence and nothing else', () => {
+    const html = render({ kind: 'done' });
+    const region = html.match(/<div role="status" data-testid="password-status">(.*?)<\/div>/)?.[1];
+    expect(region).toBeDefined();
+    expect(region!.replace(/<[^>]+>/g, '')).toBe(
+      'Your password has been changed. Every other device has been signed out; this one is still signed in.',
+    );
+    // One live region, and the paragraph in it is not a second one.
+    expect(html.match(/role="status"/g)).toHaveLength(1);
   });
 
   it('does not tell the user to sign in again — they never signed out', () => {
