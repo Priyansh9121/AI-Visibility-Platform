@@ -12,6 +12,7 @@ import type {
   AlertFeed,
   AnswerGaps,
   CrawlerAccess,
+  BillingPlan,
   BillingStatus,
   CheckoutSession,
   Client,
@@ -582,6 +583,17 @@ export const api = {
    */
   billing: (agencyId: string) =>
     request<BillingStatus>(`/agencies/${agencyId}/billing`),
+
+  /**
+   * What the plan offers the public: the length of its free trial — 2026-10-04.
+   *
+   * `GET /billing/plan`: no session, no agency, nothing secret, never cached. The
+   * public pricing card and the landing page read it before anybody has signed up,
+   * so the length of the trial is stated in ONE place (the API's `STRIPE_TRIAL_DAYS`)
+   * and the pages carry no copy of it. `trialDays` is 0 when there is no trial. Read
+   * through `loadTrialDays` in `lib/billing/trial`, which treats a failure as "no trial".
+   */
+  billingPlan: () => request<BillingPlan>('/billing/plan'),
 
   /**
    * Create a Stripe Checkout Session and get the URL to navigate to — 9.15.

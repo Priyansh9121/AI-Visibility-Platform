@@ -123,12 +123,13 @@ make it `unparsed`.
 | `/problems/invalid-invitation` | 400 | Invitation unknown, expired, accepted, revoked, or orphaned |
 | `/problems/invalid-google-ticket` | 400 | Google sign-up ticket unknown, used or expired |
 | `/problems/rate-limited` | 429 | Too many requests. The credential routes (each says its limit) and, since 2026-10-02, the three routes that read a site in the API's one browser (`POST /clients` with classification, `POST /clients/{clientId}/reclassify`, `POST /scans/{scanId}/audit`). `Retry-After` is `60` and `detail` is one of two sentences: "Your agency already has a site being read. Try again in a minute." (this agency's other read is still queued or running) or "The crawler is busy with other pages right now. Try again in a minute." (four agencies' reads are already inside, or this read waited its whole 60 s for the browser). Nothing is written in either case. Since 2026-10-03 also `POST /clients/{clientId}/competitors/detect`, once per client per 24 hours: there `Retry-After` is the whole seconds left in the 24 hours and `detail` is "Competitor detection already ran for this client in the last 24 hours. It can run again in about N hours." (the last hour reads "in under an hour"); no search is made and no scan is opened |
-| `/problems/invalid-url` | 409 | Submitted URL has no public domain |
+| `/problems/invalid-url` | 409 | Submitted URL has no public domain, or its host is not a valid hostname: a label with a space, quote, bracket or control character, an empty label, a label over 63 characters or starting or ending with a hyphen, a label typed as punycode (`xn--`) that is not valid punycode, or a whole name over 253 characters (2026-10-04, launch checklist 3.67). `detail` is a plain sentence with no code and quotes nothing the person typed; `POST /clients` gives both. Nothing is stored or fetched |
 | `/problems/invalid-webhook-signature` | 400 | Billing webhook signature missing, malformed or wrong |
 | `/problems/billing-not-configured` | 503 | A Stripe setting is unset. `detail` names the variable |
 | `/problems/google-sign-in-not-configured` | 503 | Google sign-in is not configured on this deployment |
 | `/problems/service-unavailable` | 503 | A dependency the request needs is down |
 | `/problems/scan-limit-reached` | 402 | A scan cannot start on the allowance. Carries `code` (`SCAN_LIMIT_FREE_USED`, `SCAN_LIMIT_MONTHLY`, or since 2026-09-29 `SCAN_LIMIT_VERIFY_REQUIRED` — the free scan, asked for by a user with no linked Google identity), `scansUsed`, `scanLimit`, `periodResetsAt` (monthly only) |
+| `/problems/subscription-required` | 402 | The route is for paying agencies and this agency is not one. Since 2026-10-04 only `POST /clients/{clientId}/competitors/detect`, when billing is configured, the agency's subscription is not `active` or `trialing`, and the user is not the exempt operator. `detail` is one sentence for every case, naming no status and no code: "Running competitor detection on its own needs an active subscription. A scan still finds a client's competitors the first time it runs." No `code`, no counts. No search is made, no scan is opened and the client's day is not taken |
 
 Validation problems add an `errors` member:
 
@@ -693,20 +694,49 @@ Three refusals:
 
 ### Billing (subscriptions) — Epic 9.15
 
-**One plan, $160/month, 3 seats** — $29 from Epic 9.15 until 2026-09-22. A
-$160.00/month test-mode Price exists since 2026-09-23 (`price_1UIh3b…`, read
-back at 16000 USD) and the local `STRIPE_PRICE_ID` names it; the $29.00 Price
-(`price_1U9For…`) is still active. Render's `STRIPE_PRICE_ID` was not changed
-from here, so the deployed checkout subscribes at $29 until it is (build log,
-2026-09-23).
+**One plan, $150/month, 3 seats** — $29 from Epic 9.15 until 2026-09-22, then
+$160 until 2026-10-04, then $150 (founder decision). The price is
+`PLAN_PRICE_USD` in `apps/web/src/components/marketing/PricingCard.tsx` and in
+`services/billing.py`, held equal by a web test. A $160.00/month test-mode Price
+exists since 2026-09-23 (`price_1UIh3b…`, read back at 16000 USD) and the local
+`STRIPE_PRICE_ID` names it; Render's names the same $160 test Price (founder,
+2026-10-04). A US$150/month Price is the founder's to create and name in
+`STRIPE_PRICE_ID`; until then a deployed API logs `billing.price_mismatch` at start
+and hourly (`docs/runbook.md`, "Reading the billing price lines"). The $29.00 Price
+(`price_1U9For…`) is still active.
 Stripe, in **TEST MODE**: the keys are
 `sk_test_…` and `price_…` with `livemode: false`, and **no code anywhere behaves
 differently on a live key.** Going live is swapping two environment variables.
 
-**These endpoints gate nothing.** An agency with no subscription has exactly the
-access it had before they existed — sign-up, onboarding, scanning, scoring and
-reporting are all unchanged and ungated. `subscription_status` records whether an
-agency PAYS, not what it MAY DO.
+**A free trial — 2026-10-04** (founder decision: a 30-day free trial with the card
+entered at checkout, charged on day 31 unless the agency cancels). The length is
+the setting `STRIPE_TRIAL_DAYS`, **0 by default, which is no trial**, and with 0
+checkout sends exactly the parameters it did before the setting existed (what is new
+besides is additive: `trialEndsAt`, null unless an agency is trialing, and
+`GET /billing/plan`, answering 0). The setting takes
+0 to 730 whole days (Stripe's own limit; any other value stops the API from
+starting). Above 0:
+- checkout sends Stripe `subscription_data.trial_period_days` and
+  `payment_method_collection: "always"` for an agency that has never had a
+  subscription, and Stripe charges at the trial's end (below, under the checkout);
+- the webhook handles `customer.subscription.trial_will_end` as a log line only, and
+  stores the trial's end (below);
+- `GET /agencies/{agencyId}/billing` says when it ends (`trialEndsAt`), and
+  `GET /billing/plan` tells the public pages how long it is.
+A trialing agency is `isActive` and has the plan's **full allowance**: forty scans a
+month, counted by calendar month (UTC) like any paid agency, so a trial has forty in
+each calendar month it touches (up to three): a 30-day trial touches two, or three when
+it starts on 30 or 31 January (or on 31 January in a leap year). **One trial per
+agency, ever.**
+
+**These endpoints gate nothing themselves; the status they record gates two things.**
+Since 2026-09-28 the scan allowance reads `subscription_status` (one free scan per
+agency, then 40 a month while it is `active` or `trialing`; `services/scan_allowance.py`
+and "The scan allowance" below), and since 2026-10-04 so does the detect route
+(`POST /clients/{clientId}/competitors/detect`, launch checklist 3.61). Sign-up,
+onboarding, and opening scores and reports are not gated. (Until 2026-10-04 this
+paragraph said that nothing was gated and that `subscription_status` recorded only
+whether an agency pays, which stopped being true on 2026-09-28.)
 
 All three authenticated routes require **owner or admin**, the same authority
 rule Epic 9.14 set for seat management, on the same argument: `UserRole`'s own
@@ -740,9 +770,40 @@ one.
   "scanLimit": 40,
   "periodResetsAt": "2026-10-01T00:00:00Z",
   "freeScanRequiresGoogle": false,
-  "cancelAtPeriodEnd": false
+  "cancelAtPeriodEnd": false,
+  "trialEndsAt": null,
+  "trialEligible": false
 }
 ```
+
+**`trialEndsAt` — 2026-10-04.** When the free trial ends and the card is first
+charged, **set only while `subscriptionStatus` is `trialing`** and null in every other
+state: for a trial that converted (the date is history), a cancelled or failed one,
+and an agency that never had one. The column behind it
+(`agencies.subscription_trial_end`) mirrors Stripe's `trial_end`, written by the
+webhook from every `customer.subscription.*` event, so it outlives the trial; the
+status is what says whether one is under way. Settings says "Free trial until
+<day and time, UTC>, then $150 a month" from it (the time, because the instant it
+ends is the cancel-by deadline, and the day unpadded, as a date is mid-sentence: for
+example "Free trial until 3 Nov 2026, 09:05 UTC, then $150 a month"). A trialing agency is `isActive` and reads `scanLimit: 40` like
+any paid agency.
+
+**`trialEligible` — 2026-10-04, round two.** Whether Settings may promise this
+agency a free trial: **true only when a trial is on and this agency's own record has
+never had a subscription.** "A trial is on" is `STRIPE_TRIAL_DAYS` above 0 with billing
+configured, the same reading `GET /billing/plan` gives (0 wherever the Stripe key or the
+Price is unset). "Has never had a subscription" is the row test checkout applies
+(`services.billing.trial_days_for`): no `stripe_subscription_id`, no
+`subscription_status` and no `stripe_event_at` on the agency row (any of the three
+means a subscription has existed, `canceled` and `incomplete_expired` included). So it
+is false for an agency that is subscribed or trialing, for one that has had its
+subscription or its trial, and for every agency while no trial is on. **It cannot see
+Stripe's side of checkout's test, the customer's own subscription list**, because this
+endpoint never calls Stripe: a read makes no round trip. So `true` means "nothing in our
+record says no", and checkout can still refuse the trial to a customer for whom Stripe
+remembers an ended subscription that our row never recorded (a webhook that did not land).
+That is the one case Settings can be wrong in, and a rare one; checkout never gives more
+than it promises. The web promises the trial only on a `true` and never works it out itself.
 
 **`cancelAtPeriodEnd` — 2026-09-29.** True when the subscription was cancelled
 in Stripe's portal and runs to the end of the period already paid for. Stripe
@@ -754,7 +815,7 @@ allowance applies until `currentPeriodEnd`; Settings says "Ends" rather than
 **The scan allowance — 2026-09-28** (`services/scan_allowance.py`). One free
 scan per agency for life (`FREE_SCAN_ALLOWANCE = 1`); forty per calendar
 month, UTC, on the plan (`PAID_SCANS_PER_MONTH = 40` — 40 × ~$1.70 of engine
-cost ≈ $68 against $160). `scansUsedThisPeriod` counts scans that hold a
+cost ≈ $68 against $150 since 2026-10-04, $160 before). `scansUsedThisPeriod` counts scans that hold a
 slot — everything not `failed` or `cancelled`, in-flight included — this
 month for a paid agency and lifetime for a free one. `scanLimit` is **null
 when billing is not configured** on the deployment (no `STRIPE_SECRET_KEY`
@@ -802,10 +863,50 @@ customer and subscription ids are withheld because the browser has no use for
 them and a response body is a place they would be logged by a proxy and kept in
 a network panel.
 
-The four subscription fields and `cancelAtPeriodEnd` are `null`/`false` for
-every agency that has not subscribed, which today is all of them.
+The four subscription fields, `cancelAtPeriodEnd` and `trialEndsAt` are
+`null`/`false` for every agency that has not subscribed. (`trialEligible` is the other
+way round: it is `true` for an agency that has not subscribed, while a trial is on.)
 
 **Errors:** `401`, `403` (member role), `404` (another agency's id).
+
+#### `GET /api/v1/billing/plan`
+**No auth.** What the plan offers the public: the length of its free trial
+(2026-10-04). Read by the pricing card and the landing page before anybody has
+signed up.
+
+**Response `200`**
+```json
+{ "trialDays": 30 }
+```
+
+`trialDays` is `STRIPE_TRIAL_DAYS`, **0 meaning there is no trial**, so the length is
+stated in one place and a page says "the first N days after you subscribe are free"
+only for an N above 0 (while the page is still asking, if the request fails, and for 0,
+it says nothing about a trial at all). It is **0 wherever checkout cannot start a subscription**
+(`STRIPE_SECRET_KEY` or `STRIPE_PRICE_ID` unset): a trial nobody can start is not one
+to promise. It describes the offer to a *new* agency; whether a particular agency
+still gets it is its own history, which checkout decides (and `GET
+/agencies/{agencyId}/billing` says in advance, as `trialEligible`).
+
+**When the web asks (rounds two and three).** At the top of the home page's and Settings'
+loaders, in parallel with their first calls, so the pricing card is drawn with its sentence
+and does not grow a line a moment later. The page keeps that request and waits for it only
+at its **draw point**, when everything else it needs is in: an answer that has already come
+wins at once, however slow the other calls were, and one that has not is waited for 0.5 s
+(the landing page, whose card sits far below the fold) or 1.5 s (Settings), and only where
+the landing page or Settings is what it is about to draw: a slow plan call cannot hold a
+page. If it has not answered by then the page is drawn without a trial sentence and the
+card awaits the page's own request, so the whole page makes one request, never a second. A
+card that was told the answer does not ask. A Settings reload (a seat change) whose plan
+call is slow keeps the previous answer, so the sentence never blinks off and on.
+
+**No session, no agency, nothing secret**, and it touches no database and no Stripe,
+so it is as cheap as `/health` and has nothing to rate-limit. **Never cached**
+(`Cache-Control: no-store`): a cache would keep a page saying "30 days free" after a
+deploy turned the trial off, and checkout would not give one. A `GET` is not checked
+by the Origin check; CORS is unchanged (the web app reads it same-origin through its
+`/api/v1` proxy, and a page on another origin is not let read the answer). **Errors:**
+none of its own.
 
 #### `POST /api/v1/agencies/{agencyId}/billing/checkout`
 **Auth required (owner/admin).** Start a subscription. No request body.
@@ -845,6 +946,31 @@ lands on reads the database.
 
 **This endpoint does not subscribe anybody.** It returns a URL. The subscription
 begins when Stripe says so, over the webhook.
+
+**The free trial — 2026-10-04.** With `STRIPE_TRIAL_DAYS` above 0, a checkout for an
+agency that is **eligible** carries two more parameters, and nothing else about the
+session changes:
+
+| | `STRIPE_TRIAL_DAYS` = 0, or not eligible | `STRIPE_TRIAL_DAYS` = N, eligible |
+|---|---|---|
+| `subscription_data` | `{"metadata": {"agency_id": …}}` | `{"metadata": {"agency_id": …}, "trial_period_days": N}` |
+| `payment_method_collection` | not sent | `"always"` |
+
+`"always"` makes Stripe take the card at checkout, and Stripe charges when the trial
+ends unless the agency cancels first (without it Stripe may skip the card for a
+session that costs nothing now, and there would be nothing to charge on day 31). With
+0 the session params are exactly what they were before the setting existed.
+
+**Eligible = the agency has never had a subscription**, in both places that could
+say so: its own row has no `stripe_subscription_id`, no `subscription_status` and no
+`stripe_event_at` (any of the three means a subscription has existed, `canceled` and
+`incomplete_expired` included), **and**, when it already has a Stripe customer, that
+customer's subscription list, the single call checkout already makes (`status=all`),
+is empty: an ended subscription on it counts. No extra Stripe call is made. An
+ineligible agency still checks out, to the plain session. An agency that opened a
+checkout and left has never had a subscription and still gets the trial. Every
+refusal below is unchanged: a trial never gets round a live subscription. The log
+line `billing.checkout_created` carries `trial_days` (the days sent, 0 when none).
 
 **A subscription that is live at Stripe refuses a new checkout** (founder
 decision 4, 2026-10-01). A second Checkout Session would create a second
@@ -993,14 +1119,33 @@ unconfigured path is a message nobody receives; here it would be believing a
 stranger about money.
 
 **Handled types:** `checkout.session.completed` (only with `mode == "subscription"`
-and a `subscription` id; any other checkout is ignored) and
-`customer.subscription.created|updated|deleted`. Any other type is ignored.
+and a `subscription` id; any other checkout is ignored),
+`customer.subscription.created|updated|deleted` and, since 2026-10-04,
+`customer.subscription.trial_will_end`. Any other type is ignored. (Stripe sends
+`trial_will_end` only if the endpoint is subscribed to it; nothing depends on it.)
 
 **The response is now the typed `WebhookAck`,** always 200 after a valid signature:
 - applied → `{"received": true, "handled": true}`;
 - duplicate → `{"received": true, "handled": false, "duplicate": true}`;
 - stale → `{"received": true, "handled": false, "stale": true}`;
-- ignored or unmatched → `{"received": true, "handled": false}`.
+- ignored or unmatched → `{"received": true, "handled": false}`;
+- `customer.subscription.trial_will_end` for a known agency →
+  `{"received": true, "handled": true}`, see below.
+
+**`customer.subscription.trial_will_end` — 2026-10-04.** Stripe sends it a few days
+before a trial ends. It is **a log line and nothing else**: `billing.trial_will_end`
+with `agency_id` and `subscription_id` (ids only). It changes no state, does **not**
+move the `stripe_event_at` watermark, and leaves **no ledger row**, which is how the
+ledger treats every event that changes nothing (an unhandled type, a non-subscription
+checkout, an event with no `created`): its rows are for events that were applied, or
+were stale and so must not be applied on a retry. A redelivery logs the line again. For
+an agency this database does not know it is `unmatched`, as for any type.
+
+**The trial's end is stored from every `customer.subscription.*` event**, as Stripe's
+`trial_end` (`agencies.subscription_trial_end`), whatever the status: a trial that
+converts, is cancelled, or fails its first charge goes through the same events as any
+other subscription (`trialing` → `active` is the `customer.subscription.updated` that is
+the first payment; `trialing` → `canceled`/`incomplete_expired`/`past_due` likewise).
 
 **Once:** each handled event id is recorded in `stripe_webhook_events` in the
 same transaction as the change it makes. A redelivery is answered `duplicate`
@@ -1014,9 +1159,21 @@ and changes nothing. An event that matches no agency is not recorded, so Stripe'
   because it carries no subscription state of its own.
 - Events in the same second apply in arrival order, except for a state-machine
   guard on the same subscription id: a `canceled` or `incomplete_expired` status
-  is never overwritten, and `incomplete` is never written over another status.
-  A guarded event is also `stale`.
+  is never overwritten, `incomplete` is never written over another status, and
+  `checkout.session.completed`'s `active` is never written over `trialing`
+  (2026-10-04). A guarded event is also `stale`.
 - An event without a numeric `created` is ignored.
+
+**Why checkout's `active` is kept off `trialing`.** `checkout.session.completed`
+carries no subscription status, so it writes a guess, `active`; for a trial's checkout
+nothing was paid and that guess is wrong by construction. Stripe does not order it
+against `customer.subscription.created` (`trialing`). If `created` lands first the agency
+is already `trialing`, and the guard makes the checkout event `stale` (it has nothing to
+add: the ids are already stored). If checkout lands first it writes `active` for the moment
+until `created`, which is never stale on its account (checkout does not move the
+watermark) and overwrites it with `trialing` and the trial's end. Either order ends
+`trialing`. Only `trialing` is protected: the guess still overwrites every other
+status, as before.
 
 **Response `200` with the typed `WebhookAck`:**
 ```json
@@ -1192,6 +1349,16 @@ spending an LLM call (used by tests and by Epic 10's bulk upload).
 }
 ```
 
+**`classifierModel` and `classifiedAt`** (2026-10-04, launch checklist 3.71) name the
+model that was asked to classify the client, and when. Both are `null` unless a model
+was asked: for a `pending` client, and for one whose site was never shown to a model
+(the crawl was refused or failed: `ROBOTS_DISALLOWED`, `ROBOTS_UNREACHABLE`,
+`ADDRESS_NOT_PUBLIC`, `FETCH_FAILED`, `HTTP_*`, `BROWSER_ERROR`, the crawl's own
+`TIMEOUT`; or the page had too little text, `INSUFFICIENT_CONTENT`). A call that was
+made and failed (`PROVIDER_*`, the model's own `TIMEOUT`) still names the model, with
+the time of the attempt. Classifying again replaces both with the new outcome's, `null`
+included. Rows stored before 2026-10-04 carry both for refused and failed crawls too.
+
 **`classificationStatus` is the field to branch on.** It has four values, and
 three of them mean `industry` is `null`:
 
@@ -1268,9 +1435,32 @@ names. Page text is never returned (the facts-only rule); the projection in
 `routers/clients.py:_crawl_summary` names every field explicitly so adding one
 to `CrawlSignals` cannot silently start returning it.
 
-**Errors:** `401`, `409 invalid-url`, `409 conflict` (domain already tracked by
+**Errors:** `401`, `409 invalid-url` (the address has no public domain, or its host is
+not a valid hostname: below), `409 conflict` (domain already tracked by
 this agency — carries `clientId`), `422 validation-failed`, and `429 rate-limited`
 (see below; only with `classify: true`).
+
+**The address must have a public domain and a valid hostname (2026-10-04, launch
+checklist 3.67).** Otherwise `409 invalid-url`, with nothing stored and nothing
+fetched. `detail` is one of two sentences, each plain, with no code, and neither quotes
+anything the person typed (not the address, and not a user name or password written in
+front of it). An address with no public domain name in it (an IPv4 address, `localhost`, a
+bare suffix such as `co.uk`) gets "That address does not contain a public domain name.
+Enter a website address such as example.com." An address whose host is not a valid
+hostname, or that has no host at all, gets "That is not a valid website name. Names can
+only contain letters, numbers and hyphens, with dots between the parts. Enter an address
+such as example.com." EVERY label of the host counts, subdomains included, once an
+internationalised label is encoded as punycode (IDNA 2008, with the `idna` package that
+httpx, which fetches robots.txt, encodes a name with): each is 1 to 63 characters of
+letters, digits and hyphens with no hyphen at either end, and the whole name is at most
+253. A space, quote, bracket (an IPv6 literal's too), control character or underscore
+fails it; so does an empty label (one trailing dot is the same name, a second is an
+empty label); so does an internationalised label that encoding refuses; and so does a
+label typed as punycode (`xn--...`) that is not valid punycode for a label IDNA allows,
+or that does not encode back to what was typed. An internationalised name is stored as
+it always was, lower-case Unicode (`bücher.de`, not `xn--bcher-kva.de`): the punycode
+form is what is checked, not what is kept, and a name typed as punycode is stored as
+typed. Pages are read by Chromium from `https://` and the stored domain.
 
 An unreachable site is **`201` with `classificationStatus: "unclassifiable"`**,
 not an error status. A site that will not load is a normal outcome for a tool
@@ -1398,6 +1588,39 @@ deliberately — the chain never re-detects for a client that already has a set,
 precisely so it cannot spend quota or overwrite an operator's correction on its
 own.
 
+**For paying agencies since 2026-10-04** (launch checklist 3.61). The founder's
+decision: the route is allowed for an agency whose subscription is `active` or
+`trialing`, and for the platform operator; everyone else gets a plain refusal. The
+per-client day below stays for those who are allowed, and a scan's own detection is
+unaffected. The reason is 3.53's security review: the day caps a client, not an agency,
+and an account can add clients without a classification call and detect once on each,
+about six paid searches a time out of a quota the whole platform shares. A press is
+allowed when any one of these holds:
+
+- billing is **not configured** on the deployment: the scan allowance's own switch
+  (`STRIPE_SECRET_KEY` and `STRIPE_PRICE_ID` both set means billing is configured; with
+  neither, or only one, the route is open, because nobody could subscribe there);
+- the agency is **paid up**: `subscription_status` is `active` or `trialing`
+  (`isActive` on `GET /agencies/{agencyId}/billing`), whichever of its seats presses the
+  button, with or without a linked Google identity;
+- the signed-in user is the **exempt operator**: an address in
+  `SCAN_ALLOWANCE_EXEMPT_EMAILS` **and** a linked Google identity, never the address
+  alone, and that user only, not the agency's other seats.
+
+Anything else (no subscription, `past_due`, `unpaid`, `paused`, `incomplete`,
+`canceled`, or a status nobody has decided about) is refused with
+`402 subscription-required` and one sentence that is the same in every case and names no
+status and no code. The plan is checked **after the client is found**, so another
+agency's client is a `404` whatever the caller's plan, and **before the day is taken**, so
+a refused press makes no search, opens no scan and spends none of the client's day: a
+lapsed agency whose day is already taken is told about its plan and not about the day.
+It reads the agency's stored status and never asks Stripe, takes no lock and touches no
+Redis key. A scan's own detection is not this route: `POST /clients/{clientId}/scans`
+still detects for a client that has no competitor set, on any plan the scan itself is
+allowed to start on. Nothing new to set on Render: the switch and the operator's
+exemption are the scan allowance's own settings, and where billing is configured an
+agency without an active plan can no longer press this button once this is deployed.
+
 **Once per client per 24 hours** (2026-10-03, launch checklist 3.53). The founder's
 decision: once per client per day from this button, and always allowed as part of a
 scan. A second press for the same client inside 24 hours is refused with `429` and
@@ -1463,7 +1686,14 @@ Industry classification confidence is uncalibrated (Finding 2, open), so when an
 operator reports a bad set the first question is whether a bad industry label
 seeded it — this makes that answerable without re-running.
 
-**Errors:** `401`, `404 not-found` (unknown client, or another agency's),
+**Errors:** `401`, `402 subscription-required` (2026-10-04: billing is configured and
+the agency is not `active` or `trialing` and the user is not the exempt operator; detail
+"Running competitor detection on its own needs an active subscription. A scan still
+finds a client's competitors the first time it runs."; no `code` and no other member
+beyond the five every problem has; nothing ran and the client's day was not taken; one
+`info` log line, `competitors.detect.subscription_required`, with `client_id` and
+`agency_id` and nothing else, and none for an allowed press), `404 not-found` (unknown
+client, or another agency's; asked before the plan),
 `429 rate-limited` (2026-10-03: this client's detection already ran in the last 24
 hours, with `Retry-After` header in whole seconds, never below 1, the time left in
 the 24 hours; detail "Competitor detection already ran for this client in the last
@@ -1479,8 +1709,14 @@ detail "This is temporarily unavailable. Please try again shortly.").
 #### `GET /api/v1/clients/{clientId}/competitors`
 **Auth required.** The client's most recent set, competitors in rank order.
 
-**Errors:** `401`; `404` if detection has never run — detail: *"No competitor
-set for this client. Run detection first."*
+**Errors:** `401`; `404` for an unknown client or another agency's, and for a client
+with no competitor set on any scan — detail: *"No competitor set for this client yet.
+A scan runs detection for a client that has none."* (2026-10-04, launch checklist 3.61;
+it used to end "Run detection first."). The sentence is the same for every caller, so
+it tells nobody to call `POST /clients/{clientId}/competitors/detect`, which is for
+paying agencies. It says what makes a set, a scan, whose competitor phase runs detection
+for a client that has none, and does not promise that a scan will be allowed to start
+or will succeed.
 
 #### `PUT /api/v1/clients/{clientId}/competitors`
 **Auth required.** Replace the set by hand.
@@ -1518,7 +1754,10 @@ part-detected and part-hand-set. Changing this means redefining what the field
 measures, which is a scoring-semantics decision rather than a UI one. Recorded
 in build-log Epic 3.6.
 
-Max 10 competitors. **Errors:** `401`, `404`, `422`.
+Max 10 competitors. **Errors:** `401`; `404` for an unknown client or another agency's,
+and for a client with no competitor set on any scan yet, with the same sentence as `GET`
+above (reworded 2026-10-04): there is nothing to replace, and naming rivals by hand does
+not start a set, so a refused `PUT` writes nothing; `422`.
 
 **CORS:** `PUT` was missing from `allow_methods` until Epic 3.6. This is the only
 PUT in the API, nothing in a browser called it until the override UI shipped, and

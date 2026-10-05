@@ -23,12 +23,14 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass, field
 
 import httpx
 import structlog
 
 from ..config import Settings, get_settings
+from . import usage
 from .crawl import registrable_domain
 
 logger = structlog.get_logger(__name__)
@@ -153,6 +155,43 @@ SEARCH_COUNTRY_BY_TLD: Mapping[str, str] = {
 }
 # The only values `search` will send as `gl`: one this module could itself have chosen.
 _SEARCH_COUNTRIES = frozenset(SEARCH_COUNTRY_BY_TLD.values())
+
+# --- What is left of the month (2026-10-04) ---------------------------------------------------
+# The plan is 250 searches a month, shared with production (Free Plan, read from `account.json`:
+# build log, the AI Overview investigation), and nothing said how many were left until someone
+# opened SerpApi's account page. `quota_left` asks the account endpoint once for each detection
+# (`competitors.detect_from_facts`, which says why where it does) and writes the answer.
+#
+#   * A free read: an `account.json` call does not count as a search (build log, the same
+#     investigation). It is not a search and never goes through `search`.
+#   * The field is `plan_searches_left`, what the plan still allows this month. It is what
+#     `searches_per_month` is the size of, which is why the line carries both (`left=184
+#     plan_searches=250`). `total_searches_left` is that plus any one-time extra credits. The two
+#     are equal unless credits were bought (none are recorded for this account, a Free Plan), and
+#     then a warning on the plan's figure alone fires while credits remain.
+#   * It lags. SerpApi's counts trail the searches by a minute or two, and a search that failed
+#     can be counted for a moment and then dropped (measured 2026-10-03: the account's month
+#     count read 66, then 75, then 71, where it stayed). A figure read right after a detection is
+#     therefore good to within that detection's own searches, and the next detection's line is the
+#     settled one. It is a reading, not a ledger.
+#   * The bound is 5 s for the whole read, a deadline (`asyncio.timeout`, as `_get`'s is), with
+#     each httpx phase (connect, write, read, pool) at 4 s, a second under it so that a hung
+#     connect ends on its own phase's timeout and the line names the phase. No retry: the figure
+#     is a convenience, and a second wait would be a cost to the detection it is read in.
+#   * A read that failed writes `serp.quota_unavailable` at INFO, the kind and nothing else, one
+#     line for the detection. Not DEBUG: DEBUG is off in staging and production, and turning it on
+#     there prints `classify.result` and `fixes.reasoning` as well (`logs.py`), so a read that had
+#     stopped working would be invisible, or visible only at the price of printing the model's
+#     reasoning about client sites.
+#   * Under 50 is low: a detection makes up to six searches, so under 50 is at most eight more
+#     detections.
+#   * The body also carries the API key and the account owner's address. Two counts are taken
+#     from it and the rest is dropped; never the body, the URL or an exception's text goes into a
+#     line, for the reason `_failure_kind` gives.
+ACCOUNT_URL = "https://serpapi.com/account.json"
+QUOTA_TIMEOUT_S = 5.0
+QUOTA_PHASE_TIMEOUTS = httpx.Timeout(4.0)
+QUOTA_LOW_BELOW = 50
 
 # Domains that rank for "best X" queries but are never the competitor — they
 # are publishers, marketplaces, directories and social platforms writing ABOUT
@@ -327,6 +366,9 @@ def _gave_up(query: str, exc: Exception, kinds: list[str], started: float) -> Se
     logger.warning(
         "serp.attempts_failed", attempts=len(kinds), elapsed_ms=_since_ms(started), kinds=kinds
     )
+    # Into the scan's total, if this is one (`usage.py`): every request that got no answer, and
+    # nothing that did. Whether such a request is billed is the question at the top of the module.
+    usage.record_serp_search(attempts=len(kinds), no_answer=len(kinds), answer=None)
     timed_out = isinstance(exc, httpx.TimeoutException | TimeoutError)
     return SerpResult(
         query=query, ok=False, error_code="SERP_TIMEOUT" if timed_out else "SERP_UNREACHABLE"
@@ -439,14 +481,67 @@ async def search(
         status=answered.response.status_code,
         error_code=result.error_code,
     )
+    # Into the scan's total, if this is one (`usage.py`): the requests that got no answer before
+    # the one that did, and what that one said. An answer that is an error is not billed (the
+    # pricing page, quoted at the top of this module); an `ok` one is, unless SerpApi's cache
+    # served it.
+    usage.record_serp_search(
+        attempts=answered.attempts,
+        no_answer=answered.attempts - 1,
+        answer="ok" if result.ok else "error",
+    )
     return result
+
+
+# The highest rank a result is taken to have. Google answers at most 100 results to a request (the
+# ceiling of `num`) and `search` asks for 10, so no real rank is near it. It is here so that an
+# absurd number cannot get as far as scoring, which takes `1 / sqrt(position)`: that raises
+# `OverflowError` for an integer of 309 digits or more, and a rank that high would weigh nothing.
+MAX_POSITION = 1000
+
+
+def _position(value: object) -> int | None:
+    """A result's own `position`, if it is one: a whole number from 1 to `MAX_POSITION`, else None.
+
+    JSON has one kind of number and Python two, so `2.0` is the whole number 2 and comes out as an
+    `int`. A bool is an `int` to Python and is not a rank; nor is a string (`"1"`), a list, an
+    object, a fraction, NaN, infinity, zero or a negative. `_judge` gives such an item its place
+    on the page, which is what an item with no `position` has always had, so that
+    `competitors._position_weight` is only ever handed an int that it can take.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, float):
+        if not value.is_integer():
+            return None
+        value = int(value)
+    if isinstance(value, int) and 1 <= value <= MAX_POSITION:
+        return value
+    return None
 
 
 def _judge(query: str, response: httpx.Response) -> SerpResult:
     """What an answer says: its hits, or this module's code for what went wrong.
 
-    A 401, a 429, any other status that is not a 200, a body that is not JSON and one that
-    carries an `error` are each an error, and none of them is asked for twice.
+    A 401, a 429, any other status that is not a 200, a body that is not a page of results and
+    one that carries an `error` are each an error, and none of them is asked for twice. A body
+    that is not a page of results is `SERP_BAD_JSON`: not JSON (or nested so deeply that the
+    parser gives up), JSON that is not an object (a list, a string, a number, `true`, `false` or
+    `null`), an `organic_results` that is not a list (absent or `null` is a page with nothing on
+    it), or a list that is not empty and has no object in it. It is an answer like any other, so
+    `search` logs and counts it as one.
+
+    A list of results with SOME items that are not objects keeps the objects and skips the rest,
+    as an item with no usable link has always been skipped: a hit is a fact taken from one item
+    alone, and the search was answered, so one stray item does not throw away its page. A skipped
+    item keeps its place in the page's numbering. But a list with no object in it at all is an
+    error and not an `ok` search with no hits, because `decide_detection` counts the `ok`
+    searches, and "could not be read" must not become "SerpApi ran and found nothing".
+
+    Inside an item that is an object, a `link` that is not a string is no usable link and the item
+    is skipped as one with none is, and a `position` that is not a whole number from 1 to
+    `MAX_POSITION` is not a position and the item has its place on the page instead, as an item
+    with no `position` always had.
     """
     if response.status_code == 401:
         logger.error("serp.auth_failed")
@@ -461,23 +556,62 @@ def _judge(query: str, response: httpx.Response) -> SerpResult:
 
     try:
         payload = response.json()
-    except ValueError:
+    except (ValueError, RecursionError):
+        # Not JSON, or nested so deeply that the parser gives up (9,997 levels on Python 3.12):
+        # `RecursionError` is a `RuntimeError`, not a `ValueError`, and would otherwise leave here.
+        return SerpResult(query=query, ok=False, error_code="SERP_BAD_JSON")
+
+    # JSON that parses is not always an object: a list, a string, a number, `true`, `false` and
+    # `null` do too. This is asked before anything else is asked of the payload, because what
+    # follows is answered, or raises, according to what it is: `"error" in payload` is a substring
+    # test on a string, a membership test on a list (both true for the word `error`, which would
+    # be a `SERP_API_ERROR` SerpApi never sent) and a `TypeError` on a number, a bool or `null`.
+    if not isinstance(payload, dict):
         return SerpResult(query=query, ok=False, error_code="SERP_BAD_JSON")
 
     if "error" in payload:
         return SerpResult(query=query, ok=False, error_code="SERP_API_ERROR")
 
+    # Absent or `null` is a page with nothing on it. Anything else has to be the list it is called:
+    # not `or []`, which would also take `{}`, `""`, `0` and `false` for an empty page.
+    results = payload.get("organic_results")
+    if results is None:
+        results = []
+    if not isinstance(results, list):
+        return SerpResult(query=query, ok=False, error_code="SERP_BAD_JSON")
+
     hits: list[SerpHit] = []
     titles: list[str] = []
-    for index, item in enumerate(payload.get("organic_results") or [], start=1):
-        link = item.get("link") or ""
-        domain = registrable_domain(link)
+    unreadable = 0
+    for index, item in enumerate(results, start=1):
+        if not isinstance(item, dict):
+            # Not a result at all. Skipped, as an item with no usable link is below, and still a
+            # place in the page: a `position` that falls back to `index` does not shift for the
+            # items after it.
+            unreadable += 1
+            continue
+        link = item.get("link")
+        # A `link` that is not a string is one nobody can read, which is no usable link: skipped
+        # as an item with none is, and still a place in the page. `registrable_domain` takes a
+        # string and raises `AttributeError` for a number, a list, an object or a bool.
+        domain = registrable_domain(link) if isinstance(link, str) else ""
         if not domain:
             continue
-        hits.append(SerpHit(domain=domain, position=item.get("position") or index, query=query))
+        # The provider's own rank when it is one (a whole number from 1 to `MAX_POSITION`), else the
+        # item's place on the page: the same number an item with no `position` always had.
+        position = _position(item.get("position")) or index
+        hits.append(SerpHit(domain=domain, position=position, query=query))
         title = item.get("title")
         if title:
             titles.append(str(title))
+
+    if results and unreadable == len(results):
+        # A list with things in it and not one of them an object is not a page of results, and an
+        # `ok` search with no hits would say that it was. `decide_detection` counts the `ok`
+        # searches, so that would be "SerpApi ran and found nothing" where the truth is that we
+        # could not tell. One object, however empty, makes it a list of results; `[]` is a page
+        # with nothing on it.
+        return SerpResult(query=query, ok=False, error_code="SERP_BAD_JSON")
 
     return SerpResult(query=query, hits=hits, titles=titles)
 
@@ -506,6 +640,97 @@ async def search_many(
             return await search(q, settings=settings, country=country)
 
     return list(await asyncio.gather(*(one(q) for q in queries)))
+
+
+def _whole_count(value: object) -> int | None:
+    """A count from a JSON body: a whole number of at least zero, and None for anything else.
+
+    A string (`"184"`), a float (`184.0`), a bool (`True` is an `int` to Python) and a negative
+    are not counts. A provider that changes its body's shape costs a line, never a detection.
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _quota_unavailable(kind: str) -> int | None:
+    """What `quota_left` returns when it could not read: one info line, and None.
+
+    The kind and nothing else, so that the line is as safe as `_failure_kind`'s word is. INFO,
+    so that it is in the logs Render keeps (the reason is at the top of the module). The line is
+    written inside `suppress`: a logger that fails must not turn a read that was never going to
+    be used into an exception. (It is typed `int | None`, not `None`, so that `quota_left` can
+    `return` it.)
+    """
+    with suppress(Exception):
+        logger.info("serp.quota_unavailable", kind=kind)
+    return None
+
+
+async def quota_left(settings: Settings | None = None) -> int | None:
+    """How many searches the plan still allows this month, or None when that could not be read.
+
+    One request to SerpApi's account endpoint, which is free and is not a search; bounded by
+    `QUOTA_TIMEOUT_S` and never retried. The bound, the field read and why are at the top of
+    the module, with how far behind SerpApi's own count can be. Never raises for anything that
+    can go wrong in the read: no key, a timeout, a transport failure, an answer that is not a
+    200, a body that is not a JSON object, a count that is missing or not a whole number of at
+    least zero. A cancellation is not one of those and goes on as it was, because a scan's
+    deadline cancels what it is running.
+
+    Written (the three lines are read in docs/runbook.md, "Reading competitor-search lines"):
+
+    * `serp.quota_left`, info: `left`, and `plan_searches` (the plan's size, `searches_per_month`)
+      when the account gives one;
+    * `serp.quota_low`, warning, as well and with the same fields, when `left` is under
+      `QUOTA_LOW_BELOW`. Both, not either: the info line is the reading, so a search for it finds
+      every figure, the lowest included, and the warning is the alert;
+    * `serp.quota_unavailable`, info, when None is returned, instead of the two lines above, so
+      one line for the detection: `kind` and nothing else. `no_key`, `http_<status>`, `bad_json`
+      (a body that is not a JSON object), `no_count`, the phase of a timeout (`connect`, `read`,
+      `write`, `pool`, or `total` for the deadline), or the class name of any other error.
+
+    Facts only, and no secret: two counts are taken from the body and the rest is dropped (it
+    carries the API key and the owner's address), and NEVER the URL, the params, the body or an
+    exception's text goes into a line: the URL carries the key.
+    """
+    try:
+        settings = settings or get_settings()
+        try:
+            api_key = settings.provider_key("serpapi_key")
+        except RuntimeError:  # the key is unset: `provider_key` says so by raising
+            api_key = ""
+        if not api_key:
+            return _quota_unavailable("no_key")
+
+        # The deadline is inside the client, so that a cut read closes its client in the
+        # ordinary way and not under a cancellation (as `_get` does).
+        async with httpx.AsyncClient(timeout=QUOTA_PHASE_TIMEOUTS) as client:
+            async with asyncio.timeout(QUOTA_TIMEOUT_S):
+                response = await client.get(ACCOUNT_URL, params={"api_key": api_key})
+        if response.status_code != 200:
+            return _quota_unavailable(f"http_{response.status_code}")
+
+        try:
+            body = response.json()
+        except ValueError:
+            return _quota_unavailable("bad_json")
+        if not isinstance(body, dict):
+            return _quota_unavailable("bad_json")
+        left = _whole_count(body.get("plan_searches_left"))
+        if left is None:
+            return _quota_unavailable("no_count")
+
+        line: dict[str, int] = {"left": left}
+        plan = _whole_count(body.get("searches_per_month"))
+        if plan is not None:
+            line["plan_searches"] = plan
+        logger.info("serp.quota_left", **line)
+        if left < QUOTA_LOW_BELOW:
+            logger.warning("serp.quota_low", **line)
+        return left
+    except Exception as exc:  # noqa: BLE001 - never raises; a cancellation is not an Exception
+        return _quota_unavailable(_failure_kind(exc))
 
 
 def is_plausible_competitor(domain: str, *, subject_domain: str) -> bool:

@@ -10,7 +10,7 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import __version__, redis_watch
+from . import __version__, price_watch, redis_watch
 from .config import Settings, get_settings
 from .db import dispose_engine
 from .errors import register_error_handlers
@@ -34,6 +34,7 @@ from .routers import (
     scores,
 )
 from .security_headers import SecurityHeadersMiddleware
+from .services import billing as billing_service  # `billing` is the router module above
 from .services import memory_stats
 
 logger = logging.getLogger(__name__)
@@ -54,18 +55,40 @@ def _log_memory_at_start() -> None:
         return
 
 
+def _log_billing_half_configured(settings: Settings) -> None:
+    """`billing.half_configured`: a deployed API with billing only part set up.
+
+    Either one of the key and the Price id is missing, and billing's gates are off for every
+    agency, or both are set and the webhook secret is not, and no payment would be recorded.
+    Nothing else says so, so the start does, once, naming the missing variable and no value
+    (`log_half_configured` in `services/billing.py`). It must never keep the app from starting, so
+    it catches everything, whatever that does.
+    """
+    try:
+        billing_service.log_half_configured(settings)
+    except Exception:  # noqa: BLE001 - a configuration warning is never worth a start-up
+        return
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
     logger.info("api starting environment=%s", settings.environment)
     _log_memory_at_start()
+    _log_billing_half_configured(settings)
     # `redis.eviction_policy` now, and `redis.data_lost` whenever the sentinel goes missing, for as
     # long as the app runs (`redis_watch.py`). Neither can fail the start.
     redis_watcher = await redis_watch.start(settings)
+    # `billing.price_check` now and then every hour (`price_watch.py`): is the Stripe Price the
+    # one this API sells? A task, started only on a DEPLOYED API with Stripe configured (a local
+    # start never calls Stripe); it cannot fail or delay the start, because the first check runs
+    # in the task and never raises.
+    price_watcher = price_watch.start(settings)
     try:
         yield
     finally:
-        # Before the pool below is closed, so the watcher is never mid-call on a closed pool.
+        # Before the pools below are closed, so neither watcher is ever mid-call on a closed pool.
+        await price_watch.stop(price_watcher)
         await redis_watch.stop(redis_watcher)
     # Return pooled connections deliberately, so a redeploy does not leave
     # Postgres holding sockets until they time out.

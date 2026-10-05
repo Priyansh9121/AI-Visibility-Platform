@@ -25,21 +25,31 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
-import type { BillingStatus, CheckoutSession, PortalSession } from '@avp/shared-types';
+import type {
+  BillingPlan,
+  BillingStatus,
+  CheckoutSession,
+  PortalSession,
+} from '@avp/shared-types';
 import { ApiProblem } from '@/lib/api';
 import { canCheckout } from '@/lib/billing/allowance';
-import { PricingCard } from '@/components/marketing/PricingCard';
+import { PLAN_PRICE_USD, PricingCard } from '@/components/marketing/PricingCard';
 import {
   activeEnding,
   activeSubscription,
   canceledSubscription,
   noSubscription,
+  noSubscriptionTrialOffered,
   pastDueSubscription,
+  trialingEnding,
+  trialingSubscription,
   unknownStatusSubscription,
 } from '@/lib/settings/__fixtures__/billing';
 
 const startCheckout = vi.fn<(agencyId: string) => Promise<CheckoutSession>>();
 const openBillingPortal = vi.fn<(agencyId: string) => Promise<PortalSession>>();
+// The public plan, which the plan card asks for when it mounts (`lib/billing/trial`).
+const billingPlan = vi.fn<() => Promise<BillingPlan>>();
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const real = await importOriginal<typeof import('@/lib/api')>();
@@ -49,6 +59,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
       ...real.api,
       startCheckout: (agencyId: string) => startCheckout(agencyId),
       openBillingPortal: (agencyId: string) => openBillingPortal(agencyId),
+      billingPlan: () => billingPlan(),
     },
   };
 });
@@ -99,9 +110,11 @@ describe('no subscription — the state every agency is in today', () => {
     // The SAME component the landing page renders, in its signed-in state, so
     // the price someone was quoted on the way in is the price they see on the
     // way to paying it.
-    expect(html).toContain('$160');
+    expect(html).toContain('$150');
     expect(html).toContain('per month');
     expect(html).toContain('Subscribe');
+    // Repriced by the founder on 2026-10-04: the card carries the new price only.
+    expect(html).not.toContain('$160');
   });
 
   it('tones it neutral, never as a warning', () => {
@@ -304,6 +317,199 @@ describe('cancelled, but paid to the end of the period — 2026-09-29', () => {
     expect(html).toContain('Renews 21 Sep 2026');
     expect(html).not.toContain('Ends ');
     expect(html).not.toContain('Cancelled —');
+  });
+});
+
+describe('a free trial, in Settings — 2026-10-04', () => {
+  // While the agency is `trialing`, and the trial is not being cancelled, the status card
+  // says when the card is first charged and what it is charged; in every other state, and
+  // on every other plan card, it says nothing about a trial.
+  //
+  // Round two: with its TIME, in UTC. The day the trial ends is the cancel-by deadline, and a day
+  // alone leaves "until the 21st" open to a reading that is hours wrong; a deadline that is a
+  // charge wants the hour it falls in. Round three: the day is UNPADDED (`formatDayTime`), as it
+  // is wherever a date sits mid-sentence (`lib/dates.ts`: a leading zero there reads as a typo).
+  const TRIAL_LINE = 'Free trial until 21 Oct 2026, 14:13 UTC, then $150 a month';
+  // What the trialing status says under that line.
+  const TRIAL_SENTENCE =
+    'Nothing has been charged yet. Cancel in Manage billing before then and nothing will be.';
+
+  it('says when the trial ends, to the minute and in UTC, and what comes after it', () => {
+    const html = render({ billing: trialingSubscription });
+    expect(html).toContain(TRIAL_LINE);
+    expect(html).toContain('Trial');
+    expect(html).toContain('avp-badge--success');
+    expect(html).toContain(TRIAL_SENTENCE);
+    expect(html).toContain('Manage billing');
+  });
+
+  it('no longer says "You are inside a trial period", which said nothing about what to do', () => {
+    for (const billing of [trialingSubscription, { ...trialingSubscription, trialEndsAt: null }]) {
+      expect(render({ billing })).not.toContain('You are inside a trial period');
+    }
+  });
+
+  it('takes the price from the plan constant and the date and time from the response', () => {
+    expect(render({ billing: trialingSubscription })).toContain(
+      `Free trial until 21 Oct 2026, 14:13 UTC, then $${PLAN_PRICE_USD} a month`,
+    );
+    // Another instant, with a one-digit day: UTC, the day unpadded (it sits mid-sentence), the
+    // hour and the minutes padded to two digits.
+    const html = render({
+      billing: { ...trialingSubscription, trialEndsAt: '2026-11-03T09:05:00Z' },
+    });
+    expect(html).toContain('Free trial until 3 Nov 2026, 09:05 UTC, then $150 a month');
+    expect(html).not.toContain('21 Oct 2026');
+  });
+
+  it('never pads the day mid-sentence: not for any day from the 1st to the 9th', () => {
+    for (let day = 1; day <= 9; day += 1) {
+      const html = render({
+        billing: { ...trialingSubscription, trialEndsAt: `2026-12-0${day}T09:05:00Z` },
+      });
+      expect(html).toContain(`Free trial until ${day} Dec 2026, 09:05 UTC, then $150 a month`);
+      expect(html).not.toContain(`until 0${day} `);
+    }
+  });
+
+  it('says the time in UTC whatever time zone the browser is in', () => {
+    // 23:30 on the 20th in UTC is already the 21st in Sydney: the line must say the 20th.
+    const html = render({
+      billing: { ...trialingSubscription, trialEndsAt: '2026-10-20T23:30:00Z' },
+    });
+    expect(html).toContain('Free trial until 20 Oct 2026, 23:30 UTC, then $150 a month');
+    expect(html).not.toContain('21 Oct');
+  });
+
+  it('does not say Renews, or Ends, for a card that has not been charged', () => {
+    const html = render({ billing: trialingSubscription });
+    expect(html).not.toContain('Renews');
+    expect(html).not.toContain('Ends ');
+    expect(html).not.toContain('Cancelled —');
+  });
+
+  it('offers no Subscribe and no plan card: a trial is a subscription', () => {
+    const html = render({ billing: trialingSubscription });
+    expect(html).not.toContain('Subscribe');
+    expect(html).not.toContain('per month');
+  });
+
+  it('cancelled during the trial: Ends on the day, you will not be charged', () => {
+    // Cancelled in the portal, it stays `trialing` to its end and never converts. "then $150
+    // a month" would be untrue, and so would "it won’t renew" (it was never going to renew: it
+    // was going to be charged), so a cancelled TRIAL says what is true of one. The day keeps the
+    // day-only formatter: it is a date a plan ends on, not a deadline to the minute.
+    const html = render({ billing: trialingEnding });
+    expect(html).toContain('Ends 21 Oct 2026');
+    expect(html).not.toContain('Ends 21 Oct 2026,');
+    expect(html).toContain('Cancelled — you keep full access until then, and you will not be charged.');
+    expect(html).not.toContain('won’t renew');
+    expect(html).not.toContain('Free trial until');
+    expect(html).not.toContain('then $');
+    expect(html).not.toContain(TRIAL_SENTENCE);
+    expect(html).toContain('Manage billing');
+  });
+
+  it('a cancelled PAID plan keeps its own sentence: it will not renew, and was charged', () => {
+    const html = render({ billing: activeEnding });
+    expect(html).toContain('Cancelled — you keep full access until then, and it won’t renew.');
+    expect(html).not.toContain('you will not be charged');
+  });
+
+  it('with no end date on the response, falls back to what the panel said before', () => {
+    const html = render({ billing: { ...trialingSubscription, trialEndsAt: null } });
+    expect(html).not.toContain('Free trial until');
+    expect(html).toContain('Renews 21 Oct 2026');
+    expect(html).toContain(TRIAL_SENTENCE);
+  });
+
+  it('says nothing about a trial in any other state', () => {
+    const others: Array<[string, BillingStatus]> = [
+      ['no subscription', noSubscription],
+      ['active', activeSubscription],
+      ['active, cancelling', activeEnding],
+      ['canceled', canceledSubscription],
+      ['past_due', pastDueSubscription],
+      ['a status with no wording yet', unknownStatusSubscription],
+      ['unpaid', unpaid],
+      ['paused', paused],
+      ['incomplete', incomplete],
+      ['incomplete_expired', incompleteExpired],
+    ];
+    for (const [name, billing] of others) {
+      const html = render({ billing });
+      expect(html, name).not.toMatch(/trial/i);
+      expect(html, name).not.toContain('after you subscribe');
+    }
+  });
+
+  it('reads the STATUS: a date left on any other state does not make a trial', () => {
+    for (const billing of [activeSubscription, canceledSubscription, pastDueSubscription]) {
+      const html = render({ billing: { ...billing, trialEndsAt: '2026-10-21T14:13:20Z' } });
+      expect(html).not.toContain('Free trial until');
+      expect(html).not.toMatch(/trial/i);
+    }
+  });
+
+  it('is not a paywall either: no lock, no restriction, in the trial or after it', () => {
+    for (const billing of [trialingSubscription, trialingEnding]) {
+      const html = render({ billing }).toLowerCase();
+      for (const tell of ['upgrade to unlock', 'locked', 'restricted', 'trial has ended', 'read-only']) {
+        expect(html, `found "${tell}"`).not.toMatch(new RegExp(`\\b${tell}\\b`));
+      }
+    }
+  });
+});
+
+describe('the plan card promises the trial only when the API says this agency would get it', () => {
+  // Round two (security review L3). `billing.trialEligible` is the API's word: a trial is on AND
+  // this agency has never had a subscription, the row test checkout applies. Settings used to
+  // work it out from `status === null`, which is the same for an agency whose record says it
+  // has had a subscription that the status no longer shows.
+  const PROMISE = 'The first 30 days after you subscribe are free.';
+
+  it('eligible: the plan card carries the promise', () => {
+    const html = render({ billing: noSubscriptionTrialOffered, initialTrialDays: 30 });
+    expect(html).toContain(PROMISE);
+    expect(html).toContain('>Subscribe<');
+  });
+
+  it('not eligible: the plan card is the plan and no promise, whatever the page was told', () => {
+    for (const billing of [noSubscription, canceledSubscription, incompleteExpired]) {
+      const html = render({ billing, initialTrialDays: 30 });
+      expect(html, billing.subscriptionStatus ?? 'none').not.toContain('after you subscribe');
+      expect(html).toContain('>Subscribe<');
+    }
+  });
+
+  it('obeys the API and not the status: no subscription AND not eligible is no promise', () => {
+    // The old rule, `status === null`, promised here: the status shows no subscription, and
+    // the API knows the record does (a trial that is off, or one already had).
+    const html = render({ billing: { ...noSubscription, trialEligible: false }, initialTrialDays: 30 });
+    expect(html).not.toContain('after you subscribe');
+  });
+
+  it('and the other way: eligible says so even where the status is not null', () => {
+    // The API never says this today (a status means a subscription). The panel does not
+    // second-guess it: one source, and it is not this file.
+    const html = render({ billing: { ...canceledSubscription, trialEligible: true }, initialTrialDays: 30 });
+    expect(html).toContain(PROMISE);
+  });
+
+  it('a billing response without the field promises nothing: only a true is a promise', () => {
+    // An API that has not been deployed with `trialEligible` yet answers without it. The card
+    // defaults to "offered" when it is left out, so the panel must pass a real boolean.
+    const { trialEligible: _omitted, ...without } = noSubscriptionTrialOffered;
+    const html = render({ billing: without as unknown as BillingStatus, initialTrialDays: 30 });
+    expect(html).not.toContain('after you subscribe');
+    expect(html).toContain('>Subscribe<');
+  });
+
+  it('nothing is promised without a length from the API, eligible or not', () => {
+    expect(render({ billing: noSubscriptionTrialOffered })).not.toContain('after you subscribe');
+    expect(render({ billing: noSubscriptionTrialOffered, initialTrialDays: 0 })).not.toContain(
+      'after you subscribe',
+    );
   });
 });
 
@@ -749,5 +955,127 @@ describe('mounted — what a click does, 2026-10-01', () => {
         remove.mockRestore();
       }
     });
+  });
+});
+
+describe('mounted — the plan card and the free trial, 2026-10-04', () => {
+  // The plan card asks the API how long the trial is when it mounts (unless its page already
+  // did: round two), and says so only when the billing response says this agency would get it
+  // (`trialEligible`). Checkout gives one trial per agency, so a cancelled agency is offered the
+  // plan and no trial.
+  const SENTENCE =
+    'The first 30 days after you subscribe are free. You enter your card at checkout, and it is charged on day\u00a031 unless you cancel first. One free trial per agency.';
+  let root: Root | null = null;
+
+  async function mountPanel(
+    billing: BillingStatus,
+    initialTrialDays?: number,
+  ): Promise<HTMLDivElement> {
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    root = createRoot(el);
+    await act(async () => {
+      root!.render(
+        <BillingPanel
+          agencyId="agcy_01TEST"
+          billing={billing}
+          initialTrialDays={initialTrialDays}
+        />,
+      );
+    });
+    // Let the request the card made, and the state it set, settle.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    return el;
+  }
+
+  beforeEach(() => {
+    billingPlan.mockReset();
+  });
+
+  afterEach(() => {
+    act(() => root?.unmount());
+    root = null;
+    document.body.innerHTML = '';
+  });
+
+  it('an agency the API says would get the trial is told of it, and still has Subscribe', async () => {
+    billingPlan.mockResolvedValue({ trialDays: 30 });
+    const el = await mountPanel(noSubscriptionTrialOffered);
+    expect(billingPlan).toHaveBeenCalledTimes(1);
+    expect(el.textContent).toContain(SENTENCE);
+    expect([...el.querySelectorAll('button')].map((b) => b.textContent)).toContain('Subscribe');
+  });
+
+  it('an agency with no subscription whose record says no is offered the plan and no trial', async () => {
+    billingPlan.mockResolvedValue({ trialDays: 30 });
+    const el = await mountPanel(noSubscription);
+    expect(el.textContent).not.toContain('after you subscribe');
+    expect([...el.querySelectorAll('button')].map((b) => b.textContent)).toContain('Subscribe');
+  });
+
+  it('told the length by its page, it says so on its first paint and never asks the API', async () => {
+    billingPlan.mockResolvedValue({ trialDays: 0 });
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    root = createRoot(el);
+    // The very first render, before any effect or request: the sentence is already there.
+    act(() => {
+      root!.render(
+        <BillingPanel
+          agencyId="agcy_01TEST"
+          billing={noSubscriptionTrialOffered}
+          initialTrialDays={30}
+        />,
+      );
+    });
+    expect(el.textContent).toContain(SENTENCE);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(el.textContent).toContain(SENTENCE);
+    expect(billingPlan).not.toHaveBeenCalled();
+  });
+
+  it('told 0 by its page, it says nothing and does not ask', async () => {
+    billingPlan.mockResolvedValue({ trialDays: 30 });
+    const el = await mountPanel(noSubscriptionTrialOffered, 0);
+    expect(el.textContent).not.toContain('after you subscribe');
+    expect(billingPlan).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['canceled', canceledSubscription],
+    ['incomplete_expired', incompleteExpired],
+  ])('%s is offered the plan and no trial, the API saying 30 notwithstanding', async (_s, billing) => {
+    billingPlan.mockResolvedValue({ trialDays: 30 });
+    const el = await mountPanel(billing);
+    expect([...el.querySelectorAll('button')].map((b) => b.textContent)).toContain('Subscribe');
+    expect(el.textContent).not.toContain('after you subscribe');
+    expect(el.textContent).not.toMatch(/free trial/i);
+  });
+
+  it('says nothing when the API says there is no trial', async () => {
+    billingPlan.mockResolvedValue({ trialDays: 0 });
+    const el = await mountPanel(noSubscriptionTrialOffered);
+    expect(el.textContent).not.toMatch(/trial|after you subscribe/i);
+  });
+
+  it('says nothing when the plan cannot be read', async () => {
+    billingPlan.mockRejectedValue(new TypeError('network down'));
+    const el = await mountPanel(noSubscriptionTrialOffered);
+    expect(el.textContent).not.toMatch(/trial|after you subscribe/i);
+    // And the card is whole without it: the price and the button are there.
+    expect(el.textContent).toContain(`$${PLAN_PRICE_USD}`);
+    expect([...el.querySelectorAll('button')].map((b) => b.textContent)).toContain('Subscribe');
+  });
+
+  it('a trialing agency has no plan card to ask: the status line is all it says', async () => {
+    billingPlan.mockResolvedValue({ trialDays: 30 });
+    const el = await mountPanel(trialingSubscription);
+    expect(billingPlan).not.toHaveBeenCalled();
+    expect(el.textContent).toContain('Free trial until 21 Oct 2026, 14:13 UTC, then $150 a month');
+    expect(el.textContent).not.toContain('after you subscribe');
   });
 });

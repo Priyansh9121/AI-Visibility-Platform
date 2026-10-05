@@ -51,6 +51,25 @@ export function formatDay(iso: string): string {
   return `${at.getUTCDate()} ${MONTHS[at.getUTCMonth()]} ${at.getUTCFullYear()}`;
 }
 
+/**
+ * `4 Sep 2026, 09:12 UTC`. A day AND a time, UTC, for a deadline that sits mid-sentence and is
+ * acted on to the hour: "Free trial until 3 Nov 2026, 09:05 UTC, then $150 a month".
+ *
+ * The day is unpadded, as in `formatDay` and for its reason: mid-sentence a leading zero reads as
+ * a typo. The time is `formatStamp`'s (hour and minutes padded to two digits, then `UTC`). That
+ * one pads its day too, because it lines up in a table column; this one is never in a column.
+ *
+ * Returns the input unchanged when it cannot be parsed, like `formatDay`: a deadline always HAS
+ * a date, so a dash would hide a real defect behind something that looks like ordinary absence.
+ */
+export function formatDayTime(iso: string): string {
+  const at = parse(iso);
+  if (at === null) return iso;
+  const hh = String(at.getUTCHours()).padStart(2, '0');
+  const mm = String(at.getUTCMinutes()).padStart(2, '0');
+  return `${at.getUTCDate()} ${MONTHS[at.getUTCMonth()]} ${at.getUTCFullYear()}, ${hh}:${mm} UTC`;
+}
+
 function parse(iso: string | null | undefined): Date | null {
   if (!iso) return null;
   const at = new Date(iso);

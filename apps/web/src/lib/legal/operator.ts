@@ -25,4 +25,4 @@ export const OPERATOR = {
 } as const;
 
 /** When the privacy and terms pages last changed, as an ISO date. */
-export const LEGAL_UPDATED = '2026-09-29';
+export const LEGAL_UPDATED = '2026-10-04';

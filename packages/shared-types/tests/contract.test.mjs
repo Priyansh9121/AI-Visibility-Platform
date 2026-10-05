@@ -50,6 +50,8 @@ test('the endpoints the web app depends on are present', () => {
     '/api/v1/auth/me',
     '/api/v1/dashboard',
     '/api/v1/health',
+    // The public pricing card reads the free trial's length here (2026-10-04).
+    '/api/v1/billing/plan',
   ]) {
     assert.ok(spec.paths[required], `missing endpoint ${required}`);
   }

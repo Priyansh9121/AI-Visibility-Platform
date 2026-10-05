@@ -85,6 +85,7 @@ export const NOT_PROVIDER_DEPENDENCIES: readonly string[] = [
   'playwright', // drives Chromium to visit the client's own site
   'tldextract', // its online suffix-list fetch is switched off (crawl.py)
   'httpx',
+  'idna', // encodes a client's hostname in process (services/intake.py); contacts nothing
   'pyjwt',
   // apps/workers
   'celery',

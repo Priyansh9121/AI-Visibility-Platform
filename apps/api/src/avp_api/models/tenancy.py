@@ -77,11 +77,16 @@ class Agency(Base, TimestampMixin, SoftDeleteMixin):
     # a product decision nobody has made. When a second plan exists, that is the
     # work; until then these columns say everything there is to say.
     #
-    # NOTHING IN THE PRODUCT IS GATED ON ANY OF THEM. An agency with all four
-    # NULL has exactly the access it had before this epic — scanning, scoring,
-    # reporting, seats. These record whether an agency PAYS, not what it may do.
-    # A future brief that wants a paywall is proposing a product decision and
-    # must say so out loud.
+    # THESE RECORD WHETHER AN AGENCY PAYS. WHAT A PLAN LETS IT DO IS DECIDED IN
+    # `services/scan_allowance.py`, NOT HERE. That module reads `subscription_status`
+    # through `billing.is_active` and, where billing is configured, gates the start
+    # of a scan (one free, then forty a month on the plan, since 2026-09-28) and the
+    # competitor-detection route (2026-10-04). An agency that has never subscribed is
+    # a free agency: it can still sign up, add clients, and view, share and export
+    # reports, and it is held to the free allowance rather than the plan's. Where
+    # billing is not configured nothing is gated at all. Anything beyond that list is
+    # a product decision a brief must say out loud, and its rule goes in that module
+    # with its reason, not on these columns.
 
     # The Stripe Customer this agency is. Written once, then reused forever —
     # `services/billing.py` looks here before creating one, so a second visit to
@@ -148,6 +153,22 @@ class Agency(Base, TimestampMixin, SoftDeleteMixin):
     # NOT NULL.
     subscription_cancel_at_period_end: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
+    )
+
+    # When the subscription's free trial ends — 2026-10-04 (founder decision: a trial,
+    # the card taken at checkout, charged on the day it ends unless cancelled). Stripe's
+    # `trial_end` on the Subscription, stored from every `customer.subscription.*` event, so
+    # this MIRRORS Stripe: it is still there after a trial that converted, and NULL for a
+    # subscription that never had one. It is NOT "the trial is on": `GET /billing` says
+    # `trialEndsAt` only while `subscription_status` is `trialing`.
+    #
+    # Its own column, and not `subscription_current_period_end`, because nothing in this
+    # repo shows that the two are the same instant (the SDK documents `trial_end` as "the end
+    # of that trial" and says nothing of the period), and Settings quotes this one as the day
+    # the card is charged. Nullable, no default, no backfill: every existing agency has no
+    # trial. Written by the webhook only, like every column in this block.
+    subscription_trial_end: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
     # `event.created` of the newest Stripe event applied to this agency's

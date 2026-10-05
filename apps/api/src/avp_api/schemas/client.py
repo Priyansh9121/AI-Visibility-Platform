@@ -60,6 +60,9 @@ class ClientOut(ApiModel):
     industry_confidence: str | None = None
     # String-encoded decimal on the wire, like every NUMERIC in this API.
     industry_confidence_score: Decimal | None = None
+    # Both null unless a model was asked: not for a `pending` client, and not for one whose
+    # site was refused or could not be read, or had too little text (launch checklist 3.71).
+    # A call that was made and failed still names the model and the time of the attempt.
     classified_at: datetime | None = None
     classifier_model: str | None = None
 

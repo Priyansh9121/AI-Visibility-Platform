@@ -301,9 +301,18 @@ function Grid({
             The limit that would otherwise look like a clean grid: a rival the
             detector never found leaves no mention row and cannot appear here,
             however often an engine named it.
+
+            No instruction follows the empty case, because there is none to give
+            that is true. The columns are the brands this scan's own answers
+            named from the competitor set it was handed; those mention rows were
+            written when the scan ran, so naming a rival by hand afterwards, or
+            running detection again, adds no column to THIS scan's grid.
+
+            Two causes are named because the grid cannot tell them apart: the set
+            was empty, or it held rivals and no engine named any of them.
           */}
           {rivalsFound === 0
-            ? 'No rivals were detected for this scan, so only this client has a column. Run competitor detection to widen the grid.'
+            ? 'No rivals were detected for this scan, or none was named in an answer, so only this client has a column. A rival never detected cannot appear here.'
             : `${rivalsFound} rival ${rivalsFound === 1 ? 'column' : 'columns'}, from the competitors detected for this scan. A rival never detected cannot appear here.`}
         </p>
       </div>

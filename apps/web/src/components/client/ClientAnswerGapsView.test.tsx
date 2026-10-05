@@ -171,8 +171,22 @@ describe('a claim the data cannot support is not made', () => {
 
   it('says the grid is bounded by competitor detection when no rival is found', () => {
     const html = render(withData(noRivals));
-    expect(html).toContain('No rivals were detected');
-    expect(html).toContain('Run competitor detection');
+    // The whole sentence, so a change to what a customer reads has to change this test.
+    expect(html).toContain(
+      'No rivals were detected for this scan, or none was named in an answer, so only this client has a column. A rival never detected cannot appear here.',
+    );
+  });
+
+  it('gives no instruction that could not widen this scan’s grid', () => {
+    // A column exists only where a mention row was written WHEN THE SCAN RAN, from the
+    // competitor set it was handed. Running detection again, or naming a rival by hand
+    // on the report, changes the client's next scan and adds nothing to this grid, so the
+    // empty case says what the limit is and sends nobody anywhere. (There is also no
+    // Detect button for it to point at, and the route is for paying agencies.)
+    const html = render(withData(noRivals));
+    expect(html).not.toMatch(/run competitor detection/i);
+    expect(html).not.toMatch(/widen/i);
+    expect(html).not.toMatch(/by hand/i);
   });
 
   it('names the limit even when rivals were found', () => {

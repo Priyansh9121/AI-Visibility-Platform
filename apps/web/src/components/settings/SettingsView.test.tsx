@@ -27,7 +27,9 @@ import {
   canceledSubscription,
   freeScanUsed,
   noSubscription,
+  noSubscriptionTrialOffered,
   pastDueSubscription,
+  trialingSubscription,
 } from '@/lib/settings/__fixtures__/billing';
 
 const render = (state: SettingsState) =>
@@ -136,7 +138,9 @@ describe('the "not built yet" list is maintained in both directions', () => {
     expect(html).not.toContain('records pricing as undecided');
     // The real thing is there instead.
     expect(html).toContain('What you pay');
-    expect(html).toContain('$160 a month');
+    expect(html).toContain('$150 a month');
+    // Repriced by the founder on 2026-10-04: the old figure is nowhere on the screen.
+    expect(html).not.toContain('$160');
   });
 
   it('still names the things that genuinely are missing', () => {
@@ -163,7 +167,7 @@ describe('the "not built yet" list is maintained in both directions', () => {
 
 describe('the billing lead depends on what the agency has', () => {
   const lead = (billing: BillingStatus | null) => render({ ...READY, billing });
-  const BASE = 'One plan, $160 a month, 3 seats.';
+  const BASE = 'One plan, $150 a month, 3 seats.';
 
   it('says only the plan when billing is not known', () => {
     const html = lead(null);
@@ -204,7 +208,7 @@ describe('the billing lead depends on what the agency has', () => {
  */
 describe('the billing lead for a subscription that needs attention', () => {
   const lead = (billing: BillingStatus) => render({ ...READY, billing });
-  const BASE = 'One plan, $160 a month, 3 seats.';
+  const BASE = 'One plan, $150 a month, 3 seats.';
   const NEEDS_ATTENTION = ['past_due', 'unpaid', 'paused', 'incomplete', 'some_future_status'];
   const withStatus = (subscriptionStatus: string, over: Partial<BillingStatus> = {}): BillingStatus => ({
     ...pastDueSubscription,
@@ -270,7 +274,8 @@ describe('billing', () => {
     const html = render(READY);
     expect(html).toContain('No subscription');
     expect(html).toContain('Subscribe');
-    expect(html).toContain('$160');
+    expect(html).toContain('$150');
+    expect(html).not.toContain('$160');
   });
 
   it('states the renewal date when a subscription is live', () => {
@@ -279,6 +284,42 @@ describe('billing', () => {
     expect(html).toContain('Renews 21 Sep 2026');
     // And stops selling to someone who has already bought.
     expect(html).not.toContain('>Subscribe<');
+  });
+
+  it('says when a free trial ends and what follows, in the screen as a whole — 2026-10-04', () => {
+    const html = render({ ...READY, billing: trialingSubscription });
+    // With the time, in UTC: the day the card is charged is the cancel-by deadline.
+    expect(html).toContain('Free trial until 21 Oct 2026, 14:13 UTC, then $150 a month');
+    // The section's lead is the paid-up one, unchanged: a trial has the plan.
+    expect(html).toContain(
+      'One plan, $150 a month, 3 seats. Reports you already have stay open even if you cancel.',
+    );
+    expect(html).not.toContain('>Subscribe<');
+    expect(html).not.toContain('Renews');
+    // And no other state says "trial" at all.
+    for (const billing of [noSubscription, activeSubscription, canceledSubscription]) {
+      expect(render({ ...READY, billing })).not.toMatch(/free trial/i);
+    }
+  });
+
+  it('hands the page’s answer about the trial down to the plan card, and nothing else does — round two', () => {
+    // `trialDays` is what the route learned from `GET /billing/plan` while it loaded the rest,
+    // so the card is drawn with its sentence and not a line taller a moment later. The card
+    // says it only where the billing response says this agency would get the trial.
+    const PROMISE = 'The first 30 days after you subscribe are free.';
+    const offered = { ...READY, billing: noSubscriptionTrialOffered };
+    expect(render({ ...offered, trialDays: 30 })).toContain(PROMISE);
+    // Not told (the plan was slow, or the route has not asked): no sentence on the first paint.
+    expect(render(offered)).not.toContain('after you subscribe');
+    // Told 0: no trial.
+    expect(render({ ...offered, trialDays: 0 })).not.toContain('after you subscribe');
+    // Told 30, but the record says this agency has had its trial (or none is on): nothing promised.
+    expect(render({ ...READY, billing: noSubscription, trialDays: 30 })).not.toContain(
+      'after you subscribe',
+    );
+    expect(render({ ...READY, billing: canceledSubscription, trialDays: 30 })).not.toContain(
+      'after you subscribe',
+    );
   });
 
   it('degrades on its own when a member may not read it', () => {

@@ -377,6 +377,7 @@ def _subscription(
     period_end: int | None = PERIOD_END_TS,
     legacy_period_end: bool = False,
     cancel_at_period_end: bool | None = None,
+    trial_end: int | None = None,
 ) -> dict[str, Any]:
     """A Subscription payload shaped like the pinned API version sends one.
 
@@ -384,6 +385,10 @@ def _subscription(
     the change in `2026-08-26.dahlia` that would otherwise have made every
     renewal date silently absent. `legacy_period_end` produces the older shape,
     which replayed events and older endpoint API versions still deliver.
+
+    `trial_end` is a top-level field, present (as Unix seconds) on a subscription
+    that has or had a trial; left out here, the payload is exactly what it was
+    before trials existed.
     """
     obj: dict[str, Any] = {
         "id": sub_id,
@@ -399,6 +404,8 @@ def _subscription(
         obj["items"] = {"data": [{"id": "si_test_001", "current_period_end": period_end}]}
     if cancel_at_period_end is not None:
         obj["cancel_at_period_end"] = cancel_at_period_end
+    if trial_end is not None:
+        obj["trial_end"] = trial_end
     return obj
 
 
@@ -1530,6 +1537,10 @@ async def test_a_new_agency_has_no_subscription_and_is_not_gated(
         "freeScanRequiresGoogle": True,
         # 2026-09-29: nothing is cancelling — there is no subscription at all.
         "cancelAtPeriodEnd": False,
+        # 2026-10-04: no subscription, so no trial under way.
+        "trialEndsAt": None,
+        # Round two: nothing to promise either: the trial is off by default in this file.
+        "trialEligible": False,
     }
 
     # And READING is never withheld because of it — the gate is on starting a
@@ -2648,3 +2659,1038 @@ class TestCancelAtPeriodEnd:
         assert body["isActive"] is False
         assert body["currentPeriodEnd"] is None
         assert body["scanLimit"] == 1
+
+
+# ---------------------------------------------------------------------------
+# the free trial — 2026-10-04
+#
+# Founder decision: a 30-day free trial, the card taken at checkout, charged on
+# day 31 unless cancelled. `STRIPE_TRIAL_DAYS` is its length, and 0, the default,
+# is no trial at all: then checkout and everything above this line is exactly
+# what it was. Nothing here reaches Stripe: `_client` is the stub, as above.
+# ---------------------------------------------------------------------------
+
+# 30 days after PERIOD_END_TS, as Stripe states it: Unix seconds.
+TRIAL_END_TS = 1792592000  # 2026-10-21T14:13:20Z
+TRIAL_END = datetime.fromtimestamp(TRIAL_END_TS, tz=UTC)
+
+
+@pytest.fixture
+def trial_30(settings, monkeypatch):  # noqa: ANN001, ANN201
+    """The trial switched on, at the 30 days the founder decided on."""
+    monkeypatch.setattr(settings, "stripe_trial_days", 30)
+
+
+def _params_before_trials(settings, agency_id: str) -> dict[str, Any]:  # noqa: ANN001
+    """The Checkout Session params as they were before a trial existed, `expires_at` aside.
+
+    Written out in full and not built from the service's own constants, so that
+    what a trial adds is exactly what the tests below say it adds, and an edit to
+    the service cannot quietly edit what "today's checkout" means.
+    """
+    base = settings.public_web_base_url.rstrip("/")
+    return {
+        "mode": "subscription",
+        "customer": "cus_test_001",
+        "line_items": [{"price": FAKE_PRICE_ID, "quantity": 1}],
+        "client_reference_id": agency_id,
+        "metadata": {"agency_id": agency_id},
+        "subscription_data": {"metadata": {"agency_id": agency_id}},
+        "success_url": f"{base}/settings?checkout=success",
+        "cancel_url": f"{base}/settings?checkout=cancelled",
+    }
+
+
+def _with_trial(params: dict[str, Any], days: int) -> dict[str, Any]:
+    """What a trial adds to those params, and nothing else."""
+    return {
+        **params,
+        "payment_method_collection": "always",
+        "subscription_data": {**params["subscription_data"], "trial_period_days": days},
+    }
+
+
+async def _checkout_params(
+    client: AsyncClient, stub: _StripeStub, agency_id: str
+) -> dict[str, Any]:
+    """Start a checkout and return the params it sent Stripe, less the clock."""
+    resp = await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")
+    assert resp.status_code == 201, resp.text
+    params = dict(stub.sessions_created[-1])
+    assert type(params.pop("expires_at")) is int
+    return params
+
+
+async def _set_fields(engine, agency_id: str, **fields: Any) -> None:  # noqa: ANN001
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+    async with factory() as s:
+        row = (await s.execute(select(Agency).where(Agency.id == agency_id))).scalar_one()
+        for name, value in fields.items():
+            setattr(row, name, value)
+        await s.commit()
+
+
+def _created_lines(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [e for e in events if e["event"] == "billing.checkout_created"]
+
+
+# -- checkout ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize("configured", ["left unset", "set to 0"])
+async def test_with_no_trial_configured_checkout_sends_the_params_it_always_did(
+    client: AsyncClient, settings, monkeypatch, stripe_stub: _StripeStub, configured: str  # noqa: ANN001
+) -> None:
+    """The default is no trial, and then nothing about checkout is different."""
+    if configured == "set to 0":
+        monkeypatch.setattr(settings, "stripe_trial_days", 0)
+    assert settings.stripe_trial_days == 0
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+
+    with structlog.testing.capture_logs() as events:
+        params = await _checkout_params(client, stripe_stub, agency_id)
+
+    assert params == _params_before_trials(settings, agency_id)
+    assert "payment_method_collection" not in params
+    assert "trial_period_days" not in params["subscription_data"]
+    # `trial_days` is in the line either way: 0 says there was none.
+    created = _created_lines(events)
+    assert len(created) == 1, events
+    assert created[0]["trial_days"] == 0
+
+
+@pytest.mark.parametrize("days", [1, 14, 30, 730])
+async def test_a_new_agency_checks_out_with_the_trial_and_the_card_collected(
+    client: AsyncClient, settings, monkeypatch, stripe_stub: _StripeStub, days: int  # noqa: ANN001
+) -> None:
+    """`trial_period_days` is the setting, and the card is taken at checkout.
+
+    `payment_method_collection="always"` is what makes Stripe take it: left to
+    itself a trial checkout may skip the card, and then there would be nothing
+    to charge on day 31.
+    """
+    monkeypatch.setattr(settings, "stripe_trial_days", days)
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+
+    with structlog.testing.capture_logs() as events:
+        params = await _checkout_params(client, stripe_stub, agency_id)
+
+    assert params == _with_trial(_params_before_trials(settings, agency_id), days)
+    assert params["subscription_data"]["trial_period_days"] == days
+    assert params["payment_method_collection"] == "always"
+    # Nothing else about the session moved: same price, same metadata, same URLs.
+    assert params["line_items"] == [{"price": FAKE_PRICE_ID, "quantity": 1}]
+    created = _created_lines(events)
+    assert len(created) == 1, events
+    assert created[0]["trial_days"] == days
+    assert set(created[0]) - {"event", "log_level"} == {"agency_id", "session_id", "trial_days"}
+
+
+@pytest.mark.usefixtures("trial_30")
+async def test_a_returning_customer_who_never_subscribed_gets_the_trial_without_another_round_trip(
+    client: AsyncClient, settings, stripe_stub: _StripeStub  # noqa: ANN001
+) -> None:
+    """Someone who opened checkout, left, and came back has never had a subscription.
+
+    Stripe is asked about the customer's subscriptions anyway (that call is how a
+    double subscription is refused), and the trial rides on THAT answer: no new
+    call, and the same four calls in the same order as without a trial.
+    """
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    first = await _checkout_params(client, stripe_stub, agency_id)
+    assert first["subscription_data"]["trial_period_days"] == 30
+    stripe_stub.call_log.clear()
+
+    second = await _checkout_params(client, stripe_stub, agency_id)
+
+    assert second == _with_trial(_params_before_trials(settings, agency_id), 30)
+    assert stripe_stub.call_log == [
+        "checkout.sessions.list",
+        "checkout.sessions.expire",
+        "subscriptions.list",
+        "checkout.sessions.create",
+    ]
+    assert stripe_stub.subscriptions_listed == [LIST_ALL_SUBSCRIPTIONS]
+
+
+ROW_HAS_HAD_A_SUBSCRIPTION = [
+    pytest.param(
+        {"subscription_status": "canceled", "stripe_subscription_id": "sub_old"},
+        id="canceled, with its subscription id",
+    ),
+    pytest.param(
+        {"subscription_status": "incomplete_expired", "stripe_subscription_id": "sub_old"},
+        id="incomplete_expired, with its subscription id",
+    ),
+    pytest.param({"subscription_status": "canceled"}, id="a status and no id"),
+    pytest.param({"stripe_subscription_id": "sub_old"}, id="an id and no status"),
+    pytest.param(
+        {"stripe_event_at": datetime(2026, 5, 1, tzinfo=UTC)},
+        id="only the watermark a subscription event leaves",
+    ),
+]
+
+
+@pytest.mark.usefixtures("trial_30")
+@pytest.mark.parametrize("stored", ROW_HAS_HAD_A_SUBSCRIPTION)
+async def test_an_agency_that_has_ever_had_a_subscription_gets_no_trial(
+    client: AsyncClient, engine, settings, stripe_stub: _StripeStub, stored: dict[str, Any]  # noqa: ANN001
+) -> None:
+    """One trial per agency, ever: a stored subscription of any status ends it.
+
+    Only `canceled` and `incomplete_expired` can reach a checkout at all (every
+    other status is refused with a 409 first), so those are the two that matter
+    in practice; the rest are what a half-written row looks like, and they count.
+    Checkout itself still works: it is the trial that is not offered.
+    """
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    assert (await _checkout_params(client, stripe_stub, agency_id))["subscription_data"][
+        "trial_period_days"
+    ] == 30
+    await _set_fields(engine, agency_id, **stored)
+
+    with structlog.testing.capture_logs() as events:
+        params = await _checkout_params(client, stripe_stub, agency_id)
+
+    assert params == _params_before_trials(settings, agency_id)
+    assert "payment_method_collection" not in params
+    assert "trial_period_days" not in params["subscription_data"]
+    assert _created_lines(events)[0]["trial_days"] == 0
+
+
+@pytest.mark.usefixtures("trial_30")
+@pytest.mark.parametrize("ended", ["canceled", "incomplete_expired"])
+async def test_a_customer_with_an_ended_subscription_at_stripe_gets_no_trial(
+    client: AsyncClient, settings, stripe_stub: _StripeStub, ended: str  # noqa: ANN001
+) -> None:
+    """Our row says nothing (the webhook never landed), Stripe remembers.
+
+    The customer's subscription list is asked for every status, so an ended one is
+    on it. It does not refuse the checkout, and it does end the trial.
+    """
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    assert (await _checkout_params(client, stripe_stub, agency_id))["subscription_data"][
+        "trial_period_days"
+    ] == 30
+    stripe_stub.subscriptions_at_stripe = {ended: ["sub_old_001"]}
+
+    params = await _checkout_params(client, stripe_stub, agency_id)
+
+    assert params == _params_before_trials(settings, agency_id)
+    assert stripe_stub.subscriptions_listed[-1] == LIST_ALL_SUBSCRIPTIONS
+
+
+@pytest.mark.usefixtures("trial_30")
+async def test_the_trial_changes_none_of_the_refusals(
+    client: AsyncClient, engine, stripe_stub: _StripeStub  # noqa: ANN001
+) -> None:
+    """A trial is never a way round a live subscription: still a 409, still no Stripe call."""
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    await _set_status(engine, agency_id, "trialing")
+
+    resp = await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")
+
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["type"] == "/problems/subscription-already-active"
+    assert stripe_stub.sessions_created == []
+    assert stripe_stub.customers_created == []
+
+
+# -- the webhook: a trial, in both orders ---------------------------------------
+
+
+def _trial_created(agency_id: str, *, created: int, event_id: str = "evt_trial_created") -> bytes:
+    """`customer.subscription.created`, the subscription a trial checkout starts: `trialing`."""
+    return _event(
+        "customer.subscription.created",
+        _subscription(status="trialing", agency_id=agency_id, trial_end=TRIAL_END_TS),
+        event_id=event_id,
+        created=created,
+    )
+
+
+def _trial_checkout(agency_id: str, *, created: int) -> bytes:
+    """`checkout.session.completed` for a trial: nothing was paid, Stripe says so."""
+    return _checkout(agency_id, created=created, payment_status="no_payment_required")
+
+
+def _id_of(payload: bytes) -> str:
+    return str(json.loads(payload)["id"])
+
+
+@pytest.mark.parametrize("checkout_after", [0, 1, 60])
+async def test_trialing_created_then_checkout_completed_leaves_the_agency_trialing(
+    client: AsyncClient, engine, checkout_after: int  # noqa: ANN001
+) -> None:
+    """THE TRAP, order one: the subscription event lands first.
+
+    `checkout.session.completed` writes `active`, because it cannot know better:
+    the session carries no subscription status. With a trial that guess is wrong
+    by construction, and if it were applied after the real `trialing` Settings
+    would hide the trial and say Renews for a plan that has not been charged.
+    Whatever second the checkout event is stamped with, it must not move the agency.
+    """
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    t = 1780010000
+    created = _trial_created(agency_id, created=t)
+    checkout = _trial_checkout(agency_id, created=t + checkout_after)
+
+    assert (await _deliver(client, created)).json() == {"received": True, "handled": True}
+    resp = await _deliver(client, checkout)
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"received": True, "handled": False, "stale": True}
+
+    agency = await _agency(engine, agency_id)
+    assert agency.subscription_status == "trialing"
+    assert agency.subscription_trial_end == TRIAL_END
+    assert agency.stripe_subscription_id == "sub_test_001"
+    assert agency.stripe_customer_id == "cus_test_001"
+    assert agency.stripe_event_at == _at(t)
+    ledger = await _ledger(engine)
+    assert ledger["evt_trial_created"].outcome.value == "applied"
+    assert ledger[_id_of(checkout)].outcome.value == "stale"
+
+    body = (await client.get(f"{BASE}/agencies/{agency_id}/billing")).json()
+    assert body["subscriptionStatus"] == "trialing"
+    assert body["isActive"] is True
+    assert body["trialEndsAt"].startswith("2026-10-21T14:13:20")
+
+
+@pytest.mark.parametrize("trialing_created_after_checkout", [-1, 0, 1])
+async def test_checkout_completed_then_trialing_created_leaves_the_agency_trialing(
+    client: AsyncClient, engine, trialing_created_after_checkout: int  # noqa: ANN001
+) -> None:
+    """THE TRAP, order two: the checkout event lands first.
+
+    It writes its guess, `active`, for the moment until the subscription event
+    says what the subscription really is. Checkout never moves the watermark, so
+    the subscription event is never stale on its account, whichever second each is
+    stamped with.
+    """
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    t = 1780020000
+    checkout = _trial_checkout(agency_id, created=t)
+    created = _trial_created(agency_id, created=t + trialing_created_after_checkout)
+
+    assert (await _deliver(client, checkout)).json() == {"received": True, "handled": True}
+    assert (await _agency(engine, agency_id)).subscription_status == "active"
+    assert (await _deliver(client, created)).json() == {"received": True, "handled": True}
+
+    agency = await _agency(engine, agency_id)
+    assert agency.subscription_status == "trialing"
+    assert agency.subscription_trial_end == TRIAL_END
+    assert agency.stripe_event_at == _at(t + trialing_created_after_checkout)
+    assert {r.outcome.value for r in (await _ledger(engine)).values()} == {"applied"}
+    body = (await client.get(f"{BASE}/agencies/{agency_id}/billing")).json()
+    assert body["subscriptionStatus"] == "trialing"
+    assert body["trialEndsAt"].startswith("2026-10-21T14:13:20")
+
+
+async def test_the_two_trial_events_delivered_together_end_trialing_whichever_wins(
+    client: AsyncClient, engine  # noqa: ANN001
+) -> None:
+    """Concurrent deliveries serialise on the agency row, in either order."""
+    base = 1780030000
+    for i in range(6):
+        me = await _sign_up(client, email=f"trial{i}@billing.example", agency=f"Trial {i}")
+        agency_id = me["agency"]["id"]
+        sub, cus = f"sub_trial_{i}", f"cus_trial_{i}"
+        created = _event(
+            "customer.subscription.created",
+            _subscription(
+                status="trialing", sub_id=sub, customer=cus, agency_id=agency_id,
+                trial_end=TRIAL_END_TS,
+            ),
+            created=base,
+        )
+        checkout = _event(
+            "checkout.session.completed",
+            {
+                "id": f"cs_trial_{i}", "object": "checkout.session", "mode": "subscription",
+                "customer": cus, "subscription": sub, "payment_status": "no_payment_required",
+                "metadata": {"agency_id": agency_id},
+            },
+            created=base + 1,
+        )
+        order = [created, checkout] if i % 2 == 0 else [checkout, created]
+        results = await asyncio.wait_for(
+            asyncio.gather(*[_deliver(client, p) for p in order]), 30
+        )
+        assert [r.status_code for r in results] == [200, 200], [r.text for r in results]
+        agency = await _agency(engine, agency_id)
+        assert agency.subscription_status == "trialing", i
+        assert agency.subscription_trial_end == TRIAL_END, i
+        assert agency.stripe_event_at == _at(base), i
+
+
+def test_checkouts_guess_never_overwrites_a_trial() -> None:
+    """The rule itself, table-driven, with no database."""
+    guard = billing_service._blocked_by_state_machine  # noqa: SLF001
+
+    def agency(status: str | None) -> Agency:
+        return Agency(stripe_subscription_id="sub_1", subscription_status=status)
+
+    # The trap: checkout's `active` (a guess) over a `trialing` (a fact).
+    assert guard(agency("trialing"), "sub_1", "active", optimistic=True) is True
+    # The first charge is a subscription event saying `active`, and applies.
+    assert guard(agency("trialing"), "sub_1", "active") is False
+    # `trialing` is the ONLY status the guess is kept off: checkout's `active` still
+    # applies over every other one, as it did before trials existed.
+    for status in (None, "active", "incomplete", "past_due", "unpaid", "paused"):
+        assert guard(agency(status), "sub_1", "active", optimistic=True) is False, status
+    # A different subscription id is a new life, whatever the old one's status.
+    assert guard(agency("trialing"), "sub_2", "active", optimistic=True) is False
+    # A trial moves on to any real status a subscription event brings.
+    for new in ("trialing", "active", "past_due", "unpaid", "paused", "canceled",
+                "incomplete_expired"):
+        assert guard(agency("trialing"), "sub_1", new) is False, new
+    # The rule that was already there: `incomplete` is never written over a status.
+    assert guard(agency("trialing"), "sub_1", "incomplete") is True
+
+
+# -- the webhook: where a trial goes -------------------------------------------
+
+
+async def _start_trial(client: AsyncClient, agency_id: str, *, created: int) -> None:
+    resp = await _deliver(client, _trial_created(agency_id, created=created))
+    assert resp.json() == {"received": True, "handled": True}, resp.text
+
+
+async def test_trialing_becomes_active_at_the_first_charge(
+    client: AsyncClient, engine  # noqa: ANN001
+) -> None:
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    t = 1780050000
+    await _start_trial(client, agency_id, created=t)
+    next_period_end = PERIOD_END_TS + 30 * 86400
+    charged = _event(
+        "customer.subscription.updated",
+        _subscription(
+            status="active", agency_id=agency_id, trial_end=TRIAL_END_TS,
+            period_end=next_period_end,
+        ),
+        created=t + 100,
+    )
+
+    assert (await _deliver(client, charged)).json() == {"received": True, "handled": True}
+
+    agency = await _agency(engine, agency_id)
+    assert agency.subscription_status == "active"
+    assert billing_service.is_active(agency) is True
+    assert agency.subscription_current_period_end == _at(next_period_end)
+    # The column mirrors what Stripe says, which keeps `trial_end` after a trial...
+    assert agency.subscription_trial_end == TRIAL_END
+    # ...and the API says there is no trial under way any more.
+    body = (await client.get(f"{BASE}/agencies/{agency_id}/billing")).json()
+    assert body["subscriptionStatus"] == "active"
+    assert body["isActive"] is True
+    assert body["trialEndsAt"] is None
+    assert body["scanLimit"] == 40
+
+
+@pytest.mark.parametrize(
+    ("event_type", "payload_status"),
+    [
+        pytest.param("customer.subscription.deleted", "canceled", id="deleted"),
+        pytest.param("customer.subscription.updated", "canceled", id="updated to canceled"),
+    ],
+)
+async def test_a_cancelled_trial_ends_canceled_and_free(
+    client: AsyncClient, engine, event_type: str, payload_status: str  # noqa: ANN001
+) -> None:
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    t = 1780060000
+    await _start_trial(client, agency_id, created=t)
+    ended = _event(
+        event_type,
+        _subscription(status=payload_status, agency_id=agency_id, trial_end=TRIAL_END_TS),
+        created=t + 100,
+    )
+
+    assert (await _deliver(client, ended)).json() == {"received": True, "handled": True}
+
+    agency = await _agency(engine, agency_id)
+    assert agency.subscription_status == "canceled"
+    assert billing_service.is_active(agency) is False
+    body = (await client.get(f"{BASE}/agencies/{agency_id}/billing")).json()
+    assert body["subscriptionStatus"] == "canceled"
+    assert body["isActive"] is False
+    assert body["trialEndsAt"] is None
+    # Free again: the plan's forty a month went with the subscription.
+    assert body["scanLimit"] == 1
+
+
+async def test_a_trial_that_never_converts_ends_incomplete_expired_and_stays_ended(
+    client: AsyncClient, engine  # noqa: ANN001
+) -> None:
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    t = 1780070000
+    await _start_trial(client, agency_id, created=t)
+    expired = _event(
+        "customer.subscription.updated",
+        _subscription(status="incomplete_expired", agency_id=agency_id, trial_end=TRIAL_END_TS),
+        created=t + 100,
+    )
+    assert (await _deliver(client, expired)).json() == {"received": True, "handled": True}
+
+    agency = await _agency(engine, agency_id)
+    assert agency.subscription_status == "incomplete_expired"
+    assert billing_service.is_active(agency) is False
+    body = (await client.get(f"{BASE}/agencies/{agency_id}/billing")).json()
+    assert (body["isActive"], body["trialEndsAt"], body["scanLimit"]) == (False, None, 1)
+
+    # A `trialing` event that was only late does not bring the trial back.
+    late = _event(
+        "customer.subscription.updated",
+        _subscription(status="trialing", agency_id=agency_id, trial_end=TRIAL_END_TS),
+        created=t + 100,
+    )
+    assert (await _deliver(client, late)).json() == {
+        "received": True, "handled": False, "stale": True,
+    }
+    assert (await _agency(engine, agency_id)).subscription_status == "incomplete_expired"
+
+
+async def test_a_trial_whose_first_charge_fails_is_past_due_not_trialing_and_not_active(
+    client: AsyncClient, engine  # noqa: ANN001
+) -> None:
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    t = 1780080000
+    await _start_trial(client, agency_id, created=t)
+    failed = _event(
+        "customer.subscription.updated",
+        _subscription(status="past_due", agency_id=agency_id, trial_end=TRIAL_END_TS),
+        created=t + 100,
+    )
+    assert (await _deliver(client, failed)).json() == {"received": True, "handled": True}
+
+    body = (await client.get(f"{BASE}/agencies/{agency_id}/billing")).json()
+    assert body["subscriptionStatus"] == "past_due"
+    assert (body["isActive"], body["trialEndsAt"], body["scanLimit"]) == (False, None, 1)
+
+
+async def test_trial_events_follow_the_same_duplicate_and_stale_rules(
+    client: AsyncClient, engine  # noqa: ANN001
+) -> None:
+    """Nothing about a trial exempts an event from the ledger or the watermark."""
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    t = 1780090000
+    created = _trial_created(agency_id, created=t)
+    assert (await _deliver(client, created)).json() == {"received": True, "handled": True}
+    # The same event again: a duplicate, and nothing is applied twice.
+    assert (await _deliver(client, created)).json() == {
+        "received": True, "handled": False, "duplicate": True,
+    }
+    # An older subscription event arriving late is stale and changes nothing.
+    older = _event(
+        "customer.subscription.updated",
+        _subscription(status="active", agency_id=agency_id, trial_end=TRIAL_END_TS),
+        created=t - 5,
+    )
+    assert (await _deliver(client, older)).json() == {
+        "received": True, "handled": False, "stale": True,
+    }
+    agency = await _agency(engine, agency_id)
+    assert agency.subscription_status == "trialing"
+    assert agency.stripe_event_at == _at(t)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param({}, id="no trial_end on the payload"),
+        pytest.param({"trial_end": None}, id="trial_end null"),
+        pytest.param({"trial_end": "soon"}, id="trial_end not a number"),
+        pytest.param({"trial_end": True}, id="trial_end a boolean"),
+    ],
+)
+async def test_a_subscription_with_no_readable_trial_end_stores_none(
+    client: AsyncClient, engine, payload: dict[str, Any]  # noqa: ANN001
+) -> None:
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    sub = _subscription(status="active", agency_id=agency_id)
+    sub.update(payload)
+    assert (
+        await _deliver(client, _event("customer.subscription.updated", sub))
+    ).json()["handled"] is True
+    assert (await _agency(engine, agency_id)).subscription_trial_end is None
+
+
+# -- customer.subscription.trial_will_end: a log line, and nothing else ----------
+
+
+def _will_end(agency_id: str, *, created: int) -> bytes:
+    return _event(
+        "customer.subscription.trial_will_end",
+        _subscription(status="trialing", agency_id=agency_id, trial_end=TRIAL_END_TS),
+        created=created,
+    )
+
+
+def _billing_state(agency: Agency) -> dict[str, Any]:
+    """Every column a webhook may write, to compare before and after."""
+    return {
+        "stripe_customer_id": agency.stripe_customer_id,
+        "stripe_subscription_id": agency.stripe_subscription_id,
+        "subscription_status": agency.subscription_status,
+        "subscription_current_period_end": agency.subscription_current_period_end,
+        "subscription_cancel_at_period_end": agency.subscription_cancel_at_period_end,
+        "subscription_trial_end": agency.subscription_trial_end,
+        "stripe_event_at": agency.stripe_event_at,
+    }
+
+
+async def test_trial_will_end_logs_ids_only_and_changes_nothing(
+    client: AsyncClient, engine, caplog, capsys  # noqa: ANN001
+) -> None:
+    me = await _sign_up(client, email="ends@billing.example")
+    agency_id = me["agency"]["id"]
+    t = 1780100000
+    await _start_trial(client, agency_id, created=t)
+    before = _billing_state(await _agency(engine, agency_id))
+    ledger_before = set(await _ledger(engine))
+    caplog.set_level("DEBUG")
+
+    with structlog.testing.capture_logs() as events:
+        resp = await _deliver(client, _will_end(agency_id, created=t + 200_000))
+
+    assert resp.status_code == 200, resp.text
+    # Handled (it was logged), and it applied nothing.
+    assert resp.json() == {"received": True, "handled": True}
+    lines = [e for e in events if e["event"] == "billing.trial_will_end"]
+    assert len(lines) == 1, events
+    assert lines[0]["log_level"] == "info"
+    assert set(lines[0]) - {"event", "log_level"} == {"agency_id", "subscription_id"}
+    assert lines[0]["agency_id"] == agency_id
+    assert lines[0]["subscription_id"] == "sub_test_001"
+    everything = json.dumps(events, default=str) + capsys.readouterr().out + caplog.text
+    for secret in (FAKE_SECRET_KEY, FAKE_WEBHOOK_SECRET, "ends@billing.example"):
+        assert secret not in everything, secret
+    assert "@" not in json.dumps(events, default=str)
+
+    # No state moved, the watermark included, and no ledger row was written.
+    assert _billing_state(await _agency(engine, agency_id)) == before
+    assert set(await _ledger(engine)) == ledger_before
+
+
+async def test_trial_will_end_does_not_move_the_watermark(
+    client: AsyncClient, engine  # noqa: ANN001
+) -> None:
+    """If it did, every real event stamped before it would be stale from then on.
+
+    It is delivered stamped far in the future; a subscription update stamped
+    between the trial's start and that must still apply.
+    """
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    t = 1780110000
+    await _start_trial(client, agency_id, created=t)
+    assert (await _deliver(client, _will_end(agency_id, created=t + 500_000))).status_code == 200
+    assert (await _agency(engine, agency_id)).stripe_event_at == _at(t)
+
+    cancelling = _event(
+        "customer.subscription.updated",
+        _subscription(
+            status="trialing", agency_id=agency_id, trial_end=TRIAL_END_TS,
+            cancel_at_period_end=True,
+        ),
+        created=t + 5,
+    )
+    assert (await _deliver(client, cancelling)).json() == {"received": True, "handled": True}
+    agency = await _agency(engine, agency_id)
+    assert agency.subscription_cancel_at_period_end is True
+    assert agency.stripe_event_at == _at(t + 5)
+
+
+async def test_trial_will_end_on_an_agency_with_no_subscription_still_changes_nothing(
+    client: AsyncClient, engine  # noqa: ANN001
+) -> None:
+    """Delivered out of order, before anything else: it still writes no state."""
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    before = _billing_state(await _agency(engine, agency_id))
+
+    with structlog.testing.capture_logs() as events:
+        resp = await _deliver(client, _will_end(agency_id, created=1780120000))
+
+    assert resp.json() == {"received": True, "handled": True}
+    assert len([e for e in events if e["event"] == "billing.trial_will_end"]) == 1
+    assert _billing_state(await _agency(engine, agency_id)) == before
+    assert await _ledger(engine) == {}
+
+
+async def test_trial_will_end_for_an_unknown_agency_is_unmatched_and_logs_no_trial_line(
+    client: AsyncClient, engine  # noqa: ANN001
+) -> None:
+    await _sign_up(client)
+    payload = _event(
+        "customer.subscription.trial_will_end",
+        _subscription(status="trialing", customer="cus_nobody", trial_end=TRIAL_END_TS),
+    )
+
+    with structlog.testing.capture_logs() as events:
+        resp = await _deliver(client, payload)
+
+    assert resp.json() == {"received": True, "handled": False}
+    assert not [e for e in events if e["event"] == "billing.trial_will_end"]
+    assert [e for e in events if e["event"] == "stripe.webhook.unmatched"]
+    assert await _ledger(engine) == {}
+
+
+async def test_trial_will_end_writes_nothing_even_before_the_router_decides(
+    client: AsyncClient, engine  # noqa: ANN001
+) -> None:
+    """The router rolls back a result that does not write, which would hide a write made here.
+
+    So the service is asked directly, in a session of its own: the result says it writes
+    nothing, the agency row it locked is untouched in memory (no status, no watermark), and
+    no ledger row was inserted into the transaction.
+    """
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    t = 1780140000
+    await _start_trial(client, agency_id, created=t)
+    before = _billing_state(await _agency(engine, agency_id))
+    ledger_before = set(await _ledger(engine))
+
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+    async with factory() as s:
+        result = await billing_service.apply_event(
+            s, json.loads(_will_end(agency_id, created=t + 300_000))
+        )
+        assert result is billing_service.WebhookResult.LOGGED
+        assert result.writes is False
+        agency = (await s.execute(select(Agency).where(Agency.id == agency_id))).scalar_one()
+        assert _billing_state(agency) == before
+        assert not s.dirty and not s.new
+        inserted = set((await s.execute(select(StripeWebhookEvent.id))).scalars().all())
+        assert inserted == ledger_before
+        await s.rollback()
+
+
+# -- GET /billing: the trial's end -----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("status", "stored_trial_end", "shown"),
+    [
+        pytest.param("trialing", TRIAL_END, True, id="trialing"),
+        pytest.param("trialing", None, False, id="trialing, no end recorded"),
+        pytest.param("active", TRIAL_END, False, id="active after its trial"),
+        pytest.param("canceled", TRIAL_END, False, id="canceled"),
+        pytest.param("past_due", TRIAL_END, False, id="past_due"),
+        pytest.param("incomplete_expired", TRIAL_END, False, id="incomplete_expired"),
+        pytest.param(None, None, False, id="no subscription"),
+        pytest.param(None, TRIAL_END, False, id="no status, a stale end"),
+    ],
+)
+async def test_billing_exposes_the_trial_end_only_while_the_agency_is_trialing(
+    client: AsyncClient, engine, status: str | None, stored_trial_end: datetime | None,  # noqa: ANN001
+    shown: bool,
+) -> None:
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    await _set_fields(
+        engine, agency_id, subscription_status=status, subscription_trial_end=stored_trial_end
+    )
+
+    body = (await client.get(f"{BASE}/agencies/{agency_id}/billing")).json()
+
+    if shown:
+        assert body["trialEndsAt"].startswith("2026-10-21T14:13:20"), body
+    else:
+        assert body["trialEndsAt"] is None, body
+
+
+async def test_billing_for_a_trialing_agency_says_it_is_paid_up_and_has_the_full_allowance(
+    client: AsyncClient, engine  # noqa: ANN001
+) -> None:
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    await _set_fields(
+        engine, agency_id, stripe_customer_id="cus_test_001", subscription_status="trialing",
+        subscription_current_period_end=TRIAL_END, subscription_trial_end=TRIAL_END,
+    )
+
+    body = (await client.get(f"{BASE}/agencies/{agency_id}/billing")).json()
+
+    assert body["subscriptionStatus"] == "trialing"
+    assert body["isActive"] is True
+    assert body["scanLimit"] == 40
+    assert body["periodResetsAt"] is not None
+    assert body["currentPeriodEnd"].startswith("2026-10-21T14:13:20")
+    assert body["trialEndsAt"].startswith("2026-10-21T14:13:20")
+    # Still nothing of Stripe's in the body.
+    assert "cus_" not in json.dumps(body)
+
+
+# -- GET /billing: trialEligible — whether Settings may promise the trial --------------
+#
+# Round two (security review L3). Settings must promise a trial only when checkout would give
+# one, so the read says it: true only when a trial is on (`trial_days_offered`, which is 0
+# wherever billing is not configured) AND this agency's own row passes the same test checkout
+# applies (`_has_had_a_subscription` is false). A read makes no Stripe call, so it cannot see
+# the other half of checkout's test, the customer's subscription list at Stripe.
+
+# Every shape of row that is NOT "never subscribed", and the one that is. The second column is
+# whether a trial is open to it, with a trial on and Stripe's own list empty.
+TRIAL_ELIGIBILITY_ROWS = [
+    pytest.param({}, True, id="a new agency"),
+    pytest.param(
+        {"stripe_customer_id": "cus_test_001"}, True,
+        id="a customer and no subscription: it opened a checkout and left",
+    ),
+    *[
+        pytest.param(row.values[0], False, id=str(row.id))
+        for row in ROW_HAS_HAD_A_SUBSCRIPTION
+    ],
+    *[
+        pytest.param({"subscription_status": status}, False, id=f"status {status}")
+        for status in ("trialing", "active", *NEEDS_ATTENTION, UNKNOWN_STATUS, *ENDED)
+    ],
+]
+
+
+@pytest.mark.usefixtures("trial_30")
+@pytest.mark.parametrize(("row", "eligible"), TRIAL_ELIGIBILITY_ROWS)
+async def test_billing_says_whether_the_agency_would_be_given_the_trial(
+    client: AsyncClient, engine, row: dict[str, Any], eligible: bool  # noqa: ANN001
+) -> None:
+    """No `stripe_stub` is requested: a read that reached Stripe would fail on the guard."""
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    await _set_fields(engine, agency_id, **row)
+
+    body = (await client.get(f"{BASE}/agencies/{agency_id}/billing")).json()
+
+    assert body["trialEligible"] is eligible, (row, body)
+
+
+async def test_billing_says_no_trial_is_open_when_none_is_configured(
+    client: AsyncClient, settings  # noqa: ANN001
+) -> None:
+    """A brand-new agency, and the trial off: nothing to offer, so nothing to promise."""
+    assert settings.stripe_trial_days == 0
+    me = await _sign_up(client)
+    body = (await client.get(f"{BASE}/agencies/{me['agency']['id']}/billing")).json()
+    assert body["trialEligible"] is False
+
+
+@pytest.mark.usefixtures("trial_30")
+@pytest.mark.parametrize("missing", ["stripe_secret_key", "stripe_price_id"])
+async def test_billing_says_no_trial_is_open_where_checkout_cannot_start_one(
+    client: AsyncClient, settings, monkeypatch, missing: str  # noqa: ANN001
+) -> None:
+    """The same rule as `GET /billing/plan`: a trial nobody can start is not one to promise."""
+    monkeypatch.setattr(settings, missing, None)
+    me = await _sign_up(client)
+    body = (await client.get(f"{BASE}/agencies/{me['agency']['id']}/billing")).json()
+    assert body["trialEligible"] is False
+
+
+# The rows checkout can run for at all: only no subscription and an ended one may start it, and
+# every other status is refused with a 409 before any session exists to compare.
+TRIAL_CHECKOUT_ROWS = [
+    row for row in TRIAL_ELIGIBILITY_ROWS
+    if row.values[0].get("subscription_status") in (None, *ENDED)
+]
+
+
+@pytest.mark.usefixtures("trial_30")
+@pytest.mark.parametrize(("row", "eligible"), TRIAL_CHECKOUT_ROWS)
+async def test_billing_and_checkout_agree_on_who_gets_the_trial(
+    client: AsyncClient,
+    engine,  # noqa: ANN001
+    stripe_stub: _StripeStub,
+    row: dict[str, Any],
+    eligible: bool,
+) -> None:
+    """The read and the checkout apply ONE row test: Settings promises what checkout gives.
+
+    The session checkout makes carries the trial exactly when `trialEligible` was true. Stripe's
+    own list is empty here, which is the half of checkout's test a read cannot see.
+    """
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    await _set_fields(engine, agency_id, **row)
+
+    said = (await client.get(f"{BASE}/agencies/{agency_id}/billing")).json()["trialEligible"]
+    params = await _checkout_params(client, stripe_stub, agency_id)
+    given = "trial_period_days" in params["subscription_data"]
+
+    assert said is eligible
+    assert given is eligible
+    assert said is given
+
+
+@pytest.mark.parametrize(("row", "eligible"), TRIAL_ELIGIBILITY_ROWS)
+def test_the_row_test_is_one_function_for_the_read_and_checkout(
+    settings, monkeypatch, row: dict[str, Any], eligible: bool  # noqa: ANN001
+) -> None:
+    """`trial_days_for` is what both read: the days this agency's row would be given."""
+    monkeypatch.setattr(settings, "stripe_trial_days", 30)
+    agency = Agency(**row)
+    assert billing_service.trial_days_for(agency, settings) == (30 if eligible else 0)
+    monkeypatch.setattr(settings, "stripe_trial_days", 0)
+    assert billing_service.trial_days_for(agency, settings) == 0
+
+
+# -- GET /billing/plan: the trial, said in public --------------------------------
+
+PLAN_PATH = f"{BASE}/billing/plan"
+
+
+async def test_the_plan_says_no_trial_by_default(client: AsyncClient) -> None:
+    resp = await client.get(PLAN_PATH)
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"trialDays": 0}
+
+
+@pytest.mark.parametrize("days", [1, 30, 730])
+async def test_the_plan_says_the_trial_the_setting_says(
+    client: AsyncClient, settings, monkeypatch, days: int  # noqa: ANN001
+) -> None:
+    monkeypatch.setattr(settings, "stripe_trial_days", days)
+    resp = await client.get(PLAN_PATH)
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"trialDays": days}
+
+
+@pytest.mark.parametrize("missing", ["stripe_secret_key", "stripe_price_id"])
+async def test_the_plan_claims_no_trial_where_checkout_cannot_start_one(
+    client: AsyncClient, settings, monkeypatch, missing: str  # noqa: ANN001
+) -> None:
+    """A trial on a deployment that cannot take a checkout is a promise nobody can use.
+
+    `STRIPE_TRIAL_DAYS=30` with the key or the Price unset is a half-configured
+    deployment, and checkout there answers 503; the public page must not say 30.
+    """
+    monkeypatch.setattr(settings, "stripe_trial_days", 30)
+    monkeypatch.setattr(settings, missing, None)
+    assert (await client.get(PLAN_PATH)).json() == {"trialDays": 0}
+
+
+async def test_the_plan_is_public_carries_no_agency_data_and_sets_no_cookie(
+    client: AsyncClient, settings, monkeypatch  # noqa: ANN001
+) -> None:
+    monkeypatch.setattr(settings, "stripe_trial_days", 30)
+    # No sign-up, no session: a stranger's request.
+    anonymous = await client.get(PLAN_PATH)
+    assert anonymous.status_code == 200, anonymous.text
+    assert set(anonymous.json()) == {"trialDays"}
+    assert "set-cookie" not in anonymous.headers
+
+    # The same body for a signed-in owner: nothing about the caller is in it.
+    me = await _sign_up(client, email="plan@billing.example")
+    signed_in = await client.get(PLAN_PATH)
+    assert signed_in.json() == anonymous.json()
+    text_out = signed_in.text
+    for private in (me["agency"]["id"], "plan@billing.example", "cus_", "sub_", FAKE_PRICE_ID):
+        assert private not in text_out, private
+
+
+async def test_the_plan_is_never_cached(
+    client: AsyncClient, settings, monkeypatch  # noqa: ANN001
+) -> None:
+    """The page's sentence must follow the setting, not a copy a browser kept.
+
+    A short cache would let a page say "30 days free" for minutes after a deploy
+    turned the trial off, and checkout would not give one.
+    """
+    monkeypatch.setattr(settings, "stripe_trial_days", 30)
+    resp = await client.get(PLAN_PATH)
+    assert resp.headers["cache-control"] == "no-store"
+    # And it is really read each time: the next answer follows the setting.
+    monkeypatch.setattr(settings, "stripe_trial_days", 0)
+    assert (await client.get(PLAN_PATH)).json() == {"trialDays": 0}
+
+
+async def test_the_plan_is_a_read_the_origin_check_and_cors_leave_as_they_were(
+    client: AsyncClient, settings, monkeypatch  # noqa: ANN001
+) -> None:
+    monkeypatch.setattr(settings, "stripe_trial_days", 30)
+    stranger = {"Origin": "https://evil.example"}
+    # A GET is not an Origin-checked write, so it answers, wherever it comes from...
+    from_elsewhere = await client.get(PLAN_PATH, headers=stranger)
+    assert from_elsewhere.status_code == 200
+    # ...but CORS still withholds the answer from a page on an unlisted origin,
+    assert "access-control-allow-origin" not in from_elsewhere.headers
+    # and still lets the web app's own origin read it.
+    listed = await client.get(PLAN_PATH, headers={"Origin": client.headers["Origin"]})
+    assert listed.headers["access-control-allow-origin"] == client.headers["Origin"]
+    # It is a read and only a read: a write to it is refused as the wrong method.
+    write = await client.post(PLAN_PATH, headers={"Origin": client.headers["Origin"]})
+    assert write.status_code == 405
+
+
+async def test_the_contract_carries_the_trial(client: AsyncClient) -> None:
+    schema = (await client.get(f"{BASE}/openapi.json")).json()
+
+    plan = schema["paths"][PLAN_PATH]["get"]
+    ref = plan["responses"]["200"]["content"]["application/json"]["schema"]["$ref"]
+    out = schema["components"]["schemas"][ref.rsplit("/", 1)[1]]
+    assert out["properties"]["trialDays"]["type"] == "integer"
+    assert out["required"] == ["trialDays"]
+
+    status = schema["components"]["schemas"]["BillingStatusOut"]
+    assert "trialEndsAt" in status["properties"]
+    assert "trialEndsAt" in status["required"]
+    # Round two: whether Settings may promise the trial, as a plain required boolean.
+    assert status["properties"]["trialEligible"]["type"] == "boolean"
+    assert "trialEligible" in status["required"]
+
+
+# -- nothing secret in a trial's log lines --------------------------------------
+
+
+async def test_a_trial_checkout_and_its_events_log_no_key_secret_or_address(
+    client: AsyncClient, settings, monkeypatch, stripe_stub: _StripeStub, caplog, capsys  # noqa: ANN001
+) -> None:
+    """The whole trial, start to first charge: ids, numbers and event names only."""
+    monkeypatch.setattr(settings, "stripe_trial_days", 30)
+    email = "private.owner@billing.example"
+    me = await _sign_up(client, email=email)
+    agency_id = me["agency"]["id"]
+    caplog.set_level("DEBUG")
+    t = 1780130000
+
+    with structlog.testing.capture_logs() as events:
+        await _checkout_params(client, stripe_stub, agency_id)
+        await _deliver(client, _trial_created(agency_id, created=t))
+        await _deliver(client, _trial_checkout(agency_id, created=t))
+        await _deliver(client, _will_end(agency_id, created=t + 1000))
+        await _deliver(
+            client,
+            _event(
+                "customer.subscription.updated",
+                _subscription(status="active", agency_id=agency_id, trial_end=TRIAL_END_TS),
+                created=t + 2000,
+            ),
+        )
+
+    everything = json.dumps(events, default=str) + capsys.readouterr().out + caplog.text
+    for secret in (FAKE_SECRET_KEY, FAKE_WEBHOOK_SECRET, "whsec_", "sk_test_", email):
+        assert secret not in everything, secret
+    assert "@" not in json.dumps(events, default=str)
+    # The lines this change adds or extends are there, and every field in them is an id,
+    # a count or a status: never free text.
+    seen = {e["event"] for e in events}
+    assert {"billing.checkout_created", "billing.trial_will_end"} <= seen
+    for event in events:
+        if event["event"].startswith(("billing.", "stripe.webhook.")):
+            for key, value in event.items():
+                assert isinstance(value, str | int | bool) or value is None, (event["event"], key)

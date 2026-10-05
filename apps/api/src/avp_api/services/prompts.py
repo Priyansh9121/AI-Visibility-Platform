@@ -32,6 +32,7 @@ from pydantic import BaseModel, Field
 
 from ..config import Settings, get_settings
 from ..models.prompt import PromptIntent
+from . import usage
 from .call_bounds import CallBound
 
 logger = structlog.get_logger(__name__)
@@ -299,28 +300,33 @@ async def generate_prompts(
     client = GENERATOR_BOUND.client(settings)
 
     try:
-        # The outer deadline is what makes the ceiling a guarantee. Its
-        # TimeoutError is not an APIError, hence the second clause below.
-        async with GENERATOR_BOUND.deadline():
-            response = await client.messages.parse(
-                model=GENERATOR_MODEL,
-                max_tokens=GENERATOR_MAX_TOKENS,
-                output_config={"effort": GENERATOR_EFFORT},
-                system=SYSTEM_PROMPT,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": build_generation_input(
-                            brand_name=brand_name,
-                            domain=domain,
-                            industry=industry,
-                            niche=niche,
-                            competitors=competitors,
-                        ),
-                    }
-                ],
-                output_format=GeneratedPromptSet,
-            )
+        # Counted, not changed (`usage.py`): one `llm.call` line for each request.
+        with usage.track(
+            usage.ANTHROPIC, usage.Purpose.PROMPT_GENERATION, model=GENERATOR_MODEL
+        ) as call:
+            # The outer deadline is what makes the ceiling a guarantee. Its
+            # TimeoutError is not an APIError, hence the second clause below.
+            async with GENERATOR_BOUND.deadline():
+                response = await client.messages.parse(
+                    model=GENERATOR_MODEL,
+                    max_tokens=GENERATOR_MAX_TOKENS,
+                    output_config={"effort": GENERATOR_EFFORT},
+                    system=SYSTEM_PROMPT,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": build_generation_input(
+                                brand_name=brand_name,
+                                domain=domain,
+                                industry=industry,
+                                niche=niche,
+                                competitors=competitors,
+                            ),
+                        }
+                    ],
+                    output_format=GeneratedPromptSet,
+                )
+            call.read_anthropic(response)
     except (anthropic.APIError, TimeoutError) as exc:
         logger.warning("prompts.generation_failed", error=type(exc).__name__)
         return fallback_prompts(

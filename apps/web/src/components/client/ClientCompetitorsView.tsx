@@ -181,17 +181,26 @@ function Body({ history, field }: { history: ClientHistory; field: FieldState })
 
   const rivals = columns.filter((c) => !c.isSubject);
   if (rivals.length === 0) {
-    const status = report.competitorSet?.status;
     return (
       <EmptyState
         eyebrow="Competitors"
         title="No competitors in this scan"
+        // Neither state points anywhere, because there is nowhere true to point. The report
+        // detects nothing, and its by-hand editor is drawn only under a table of rivals
+        // (`ProofBeat`), so a scan with no set and a set with no rivals both show none.
+        //
+        // And no status note. It used to print the API's own word for how detection went
+        // ("Detection status: no_signal."), which is a code. Putting the status into words
+        // would not be true of every list that reaches here: the report's wording for
+        // `no_signal` says detection surfaced nothing, yet a list an agency emptied by hand
+        // through the report's editor is stored as `no_signal` too, and its wording for
+        // `weak_signal` says to correct a rival set when there is none. The title and the
+        // body already say what is the case.
         body={
           report.competitorSet === null
-            ? 'Competitor detection did not run for this scan, so share of voice was left out of its score and there is no field to draw. The report is where a competitor set is detected or named by hand.'
-            : 'Detection ran and found nobody it was confident enough to name. The report is where a competitor set can be named by hand.'
+            ? 'Competitor detection did not run for this scan, so share of voice was left out of its score and there is nobody to compare.'
+            : 'This scan’s competitor list is empty, so there is nobody to compare.'
         }
-        {...(status && status !== 'ok' ? { note: `Detection status: ${status}.` } : {})}
         {...(scanId ? { action: <ReportLink scanId={scanId} /> } : {})}
       />
     );
@@ -301,9 +310,12 @@ function Field({
         </div>
 
         {intermittent.length > 0 && (
-          // The set is re-detected per scan, and a rival missing from an
-          // earlier one is a real event. Said here the way Rankings says it
-          // under its chart, so the two screens agree about the same rivals.
+          // A new scan copies the client's most recent competitor set
+          // (`carry_forward_set`), so a rival is missing from some scans when
+          // the list changed in between: an operator corrected it, or a
+          // re-detection ran (the API's detect route; no screen calls it).
+          // That is a real event. Said here the way Rankings says it under
+          // its chart, so the two screens agree about the same rivals.
           <p className="max-w-measure text-ui-sm leading-prose text-text-tertiary">
             {intermittent.length === 1
               ? `${intermittent[0]} was not in every scan's competitor set. Each card says how many scans carried its rival.`

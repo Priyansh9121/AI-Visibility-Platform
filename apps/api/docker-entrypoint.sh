@@ -9,6 +9,15 @@
 # and never serves a request against a schema it does not understand.
 set -euo pipefail
 
+# The Stripe SDK PRINTS every request it makes (method and URL), every error Stripe answers with
+# (its message), and at `debug` the request and response bodies, to stderr when STRIPE_LOG is
+# `info` or `debug`, past every logger level, and the platform keeps stderr. It reads the variable
+# ONCE, as it is imported, so it cannot be switched off from Python: it has to be gone before
+# anything here starts. Whatever the host sets, the API never prints those lines.
+# (tests/test_secrets_stay_out_of_logs.py runs this script to prove it; logs.py keeps the SDK's
+# own logger quiet.)
+unset STRIPE_LOG
+
 cd /app/infra/db
 echo "entrypoint: alembic upgrade head"
 alembic upgrade head

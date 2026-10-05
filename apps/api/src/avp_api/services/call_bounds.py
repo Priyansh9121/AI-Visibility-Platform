@@ -37,6 +37,7 @@ from dataclasses import dataclass
 import anthropic
 
 from ..config import Settings
+from . import usage
 
 # Between attempts the SDK sleeps INITIAL_RETRY_DELAY (0.5s) doubling toward
 # MAX_RETRY_DELAY (8.0s), times a jitter in (0.75, 1.0]. That is at most 0.5s
@@ -68,11 +69,19 @@ class CallBound:
         return self.timeout * (self.max_retries + 1) + self.backoff_allowance
 
     def client(self, settings: Settings) -> anthropic.AsyncAnthropic:
-        """An Anthropic client that inherits neither number from the SDK."""
+        """An Anthropic client that inherits neither number from the SDK.
+
+        It also reports each HTTP attempt it makes to the call being tracked (`usage.py`), so
+        a retry the SDK makes inside one call is counted. On the pinned SDK a client with
+        middleware also sends the SDK's raw-response header (`X-Stainless-Raw-Response: raw`; it
+        names a mode and carries no secret) and takes the SDK's middleware code path. Retries,
+        timeouts, idempotency and response parsing are unchanged, and so are both numbers below.
+        """
         return anthropic.AsyncAnthropic(
             api_key=settings.provider_key("anthropic_api_key"),
             timeout=self.timeout,
             max_retries=self.max_retries,
+            **usage.sdk_client_options(),
         )
 
     def deadline(self) -> asyncio.Timeout:

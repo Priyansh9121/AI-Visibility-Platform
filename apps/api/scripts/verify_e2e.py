@@ -12,6 +12,15 @@ build-log.md and the checked-in web fixtures refer to are never touched.
     DATABASE_URL=postgresql+asyncpg://avp@127.0.0.1:55433/avp_dev \
         uv run python scripts/verify_e2e.py --prompts 20
 
+PRICING A SCAN YOU DID NOT RUN HERE (U1, 2026-10-04). Production logs one `scan.usage` line of
+counts when each scan ends (`services/usage.py`). To say what a scan cost from that line:
+
+    uv run python scripts/verify_e2e.py --price-usage '<the line as Render shows it>'
+    pbpaste | uv run python scripts/verify_e2e.py --price-usage -
+
+It prices each line at the rates in `RATES`, each dated and sourced, and lists every rate it
+does not have rather than pricing the line at nothing. It needs no database, key or provider.
+
 COSTS REAL MONEY AND TIME. At --prompts 20 on the four default engines that
 is 27-107 Anthropic calls (20 parametric Claude engine calls, up to 80
 sentiment calls on claude-haiku-4-5 — one per answer that names the subject,
@@ -54,13 +63,17 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
+import re
 import sys
 import time
 from collections import Counter, defaultdict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -224,43 +237,68 @@ def install_meters() -> None:
 # this script remembered to wrap, and the SDK boundary measures every call that
 # actually happened.
 
-# Published rates, $ per million tokens, as (input, output). Both are read from
-# the vendors' own pricing rather than inferred: a fabricated rate in a cost
-# table is worse than an honest gap, and this table is the first thing in the
-# project to put a real dollar figure on a scan.
+# Published rates, $ per million tokens, as (input, output), EACH WITH THE DAY IT WAS READ
+# AND THE PAGE IT WAS READ FROM (U1, 2026-10-04). Both numbers are read from the vendors' own
+# pricing rather than inferred: a fabricated rate in a cost table is worse than an honest
+# gap, and a rate is perishable, so a figure with no date is a guess that looks like a fact.
+# The 2026-10-03 re-read covers every row below (the brief for U1 names the five pages).
+# Before it each had been read on the day its old note gave: 2026-09-08 for `gpt-5.5`,
+# 2026-09-11 for the other four.
 #
-#   claude-opus-5   $5 / $25    Anthropic's published rate.
-#   claude-haiku-4-5 $1 / $5    platform.claude.com/docs/en/about-claude/
-#                               pricing, read 2026-09-11 — the sentiment
-#                               classifier since the cost brief. Matched by
-#                               prefix: the API reports the dated snapshot.
-#   gpt-5.5         $5 / $30    developers.openai.com/api/docs/pricing, read
-#                               2026-09-08, for the <272K context tier this
-#                               product's prompts sit far inside. Cached input
-#                               is $0.50/MTok and is reported separately below;
-#                               nothing here sends a cacheable prefix yet.
+#   claude-opus-5    $5 / $25      platform.claude.com/docs/en/about-claude/pricing
+#   claude-haiku-4-5 $1 / $5       the same page — the sentiment classifier since the cost
+#                                  brief. Matched by prefix: the API reports the dated
+#                                  snapshot.
+#   gpt-5.5          $5 / $30      developers.openai.com/api/docs/pricing, for the <272K
+#                                  context tier this product's prompts sit far inside. Cached
+#                                  input is $0.50/MTok and is reported separately; nothing
+#                                  here sends a cacheable prefix yet.
+#   perplexity/sonar $0.25 / $2.50 docs.perplexity.ai/docs/agent-api/models. Plus a
+#                                  per-invocation web_search fee, in TOOL_FEES.
+#   gemini-3.8-flash $0.75 / $3.75 ai.google.dev/gemini-api/docs/pricing — the promotional
+#                                  rate through 2026-12-31; thinking tokens are billed as
+#                                  output and are `thoughtsTokenCount`, a sibling of
+#                                  `candidatesTokenCount`, added into the output count.
 #
-# A model that answers and is NOT in this table is metered in tokens and shown
-# unpriced, so a model swap surfaces as a gap rather than as a silent zero.
-#   perplexity/sonar $0.25 / $2.50 docs.perplexity.ai/docs/agent-api/models,
-#                               read 2026-09-11. Plus a per-invocation
-#                               web_search fee, metered below.
-#   gemini-3.8-flash $0.75 / $3.75 ai.google.dev/gemini-api/docs/pricing, read
-#                               2026-09-11 — the promotional rate through
-#                               2026-12-31; thinking tokens are billed as
-#                               output and are counted in `candidatesToken
-#                               Count`'s sibling `thoughtsTokenCount`, added
-#                               into `output_tokens` below.
-RATES: dict[str, tuple[float, float]] = {
-    "claude-opus-5": (5.00, 25.00),
-    "claude-haiku-4-5": (1.00, 5.00),
-    "gpt-5.5": (5.00, 30.00),
-    "perplexity/sonar": (0.25, 2.50),
-    "gemini-3.8-flash": (0.75, 3.75),
+# A model that answers and is NOT in this table is metered in tokens and shown unpriced, so a
+# model swap surfaces as a gap rather than as a silent zero.
+READ_2026_10_03 = "2026-10-03"
+ANTHROPIC_PRICING = "platform.claude.com/docs/en/about-claude/pricing"
+
+
+class Rate(NamedTuple):
+    """One model's published rate, and the page and day it was read from.
+
+    `input` and `output` are dollars per MILLION tokens, as `Decimal`: money is not kept in a
+    float, so the pricing of a pasted line is exact. Indexable, so `rate[0]` and `rate[1]` still
+    read as (input, output), the shape this table had before it carried dates.
+    """
+
+    input: Decimal
+    output: Decimal
+    read: str
+    source: str
+
+
+RATES: dict[str, Rate] = {
+    "claude-opus-5": Rate(Decimal("5.00"), Decimal("25.00"), READ_2026_10_03, ANTHROPIC_PRICING),
+    "claude-haiku-4-5": Rate(
+        Decimal("1.00"), Decimal("5.00"), READ_2026_10_03, ANTHROPIC_PRICING
+    ),
+    "gpt-5.5": Rate(
+        Decimal("5.00"), Decimal("30.00"), READ_2026_10_03, "developers.openai.com/api/docs/pricing"
+    ),
+    "perplexity/sonar": Rate(
+        Decimal("0.25"), Decimal("2.50"), READ_2026_10_03,
+        "docs.perplexity.ai/docs/agent-api/models",
+    ),
+    "gemini-3.8-flash": Rate(
+        Decimal("0.75"), Decimal("3.75"), READ_2026_10_03, "ai.google.dev/gemini-api/docs/pricing"
+    ),
 }
 
 
-def rate_for(model: str) -> tuple[float, float] | None:
+def rate_for(model: str) -> Rate | None:
     """The published rate for a model id, matched by longest prefix.
 
     Providers report the DATED SNAPSHOT they actually served — a request for
@@ -275,18 +313,41 @@ def rate_for(model: str) -> tuple[float, float] | None:
     if not matches:
         return None
     return RATES[max(matches, key=len)]
+
+
+class ToolFee(NamedTuple):
+    """What a provider charges for each invocation of a tool, on top of the tokens."""
+
+    per_invocation: Decimal
+    read: str
+    source: str
+
+
 # Anthropic bills the server-side web_search tool PER REQUEST, on top of tokens.
 # $10 per 1,000 searches — platform.claude.com/docs/en/agents-and-tools/tool-use/
 # web-search-tool, read 2026-09-08. The retrieved pages are billed again as
 # input tokens, which is already counted above and is the larger half by far.
 # A search that ERRORS is not billed, and this counts what the API reported
 # rather than what was attempted, so the two agree.
-WEB_SEARCH_PER_1K = 10.00
+#
 # Perplexity bills its `web_search` tool per invocation — $0.0025 each, i.e.
 # $2.50 per 1,000 (docs/agent-api/models, read 2026-09-11) — reported back
 # in `usage.tool_calls_details.web_search.invocation`. Metered separately
 # from Anthropic's because the rate differs by 4x.
-PERPLEXITY_SEARCH_PER_1K = 2.50
+#
+# These two keep the dates they were read on: the 2026-10-03 re-read names the pricing pages
+# above, and whether it also covered these two figures is not something this table can say.
+TOOL_FEES: dict[str, ToolFee] = {
+    "anthropic web_search": ToolFee(
+        Decimal("0.01"), "2026-09-08",
+        "platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool",
+    ),
+    "perplexity web_search": ToolFee(
+        Decimal("0.0025"), "2026-09-11", "docs.perplexity.ai/docs/agent-api/models"
+    ),
+}
+WEB_SEARCH_PER_1K = float(TOOL_FEES["anthropic web_search"].per_invocation * 1000)
+PERPLEXITY_SEARCH_PER_1K = float(TOOL_FEES["perplexity web_search"].per_invocation * 1000)
 
 
 @dataclass
@@ -394,7 +455,9 @@ def record_tokens(
     if rate is None:
         entry.unpriced_models.add(model)
     else:
-        entry.token_cost += (input_tokens * rate[0] + output_tokens * rate[1]) / 1_000_000
+        entry.token_cost += float(
+            (input_tokens * rate.input + output_tokens * rate.output) / 1_000_000
+        )
     return entry
 
 
@@ -514,6 +577,378 @@ def install_query_counter(engine: object) -> None:
 
 
 # ---------------------------------------------------------------------------
+# PRICING A PASTED `scan.usage` LINE — U1, 2026-10-04
+# ---------------------------------------------------------------------------
+# Production logs COUNTS and never a dollar figure (`services/usage.py`): each paid call, and,
+# when a scan ends, one `scan.usage` line totalling them per line of what a scan pays for. This
+# is where counts become money: the line as Render shows it, priced at the rates above, per
+# line and in total, with the date each rate was read, and with every rate it does NOT have
+# said out loud and never priced at nothing.
+#
+#     uv run python scripts/verify_e2e.py --price-usage '<the line>'
+#     pbpaste | uv run python scripts/verify_e2e.py --price-usage -
+#     ... --serp-per-search 0.015       the plan's price for one SerpApi search, if you know it
+#
+# It needs no database, no key and no provider. `price_usage` is the function the tests call.
+
+MILLION = Decimal(1_000_000)
+USAGE_COUNTERS = (
+    "calls", "unanswered", "retries", "input_tokens", "output_tokens", "reasoning_tokens",
+    "cache_read_tokens", "cache_write_tokens", "search_invocations",
+)
+# The lines of a `scan.usage` that are not engines, in the order they are shown. `engines_*` is
+# every engine added together and is NEVER priced: it would count each engine twice.
+USAGE_LINES = (
+    ("sentiment", "sentiment"),
+    ("prompt_generation", "prompt generation"),
+    ("fixes", "fixes"),
+    ("detection", "detection"),
+)
+_ENGINE_CALLS = re.compile(r"^engine_(?P<id>.+)_calls$")
+_USAGE_FIELD = re.compile(r"(?<![\w.])([a-z][a-z0-9_]*)=(\S+)")
+
+
+@dataclass
+class PricedLine:
+    """One line of the scan, priced, or not priced and why (`missing`)."""
+
+    name: str
+    model: str | None
+    calls: int
+    unanswered: int
+    retries: int
+    input_tokens: int
+    output_tokens: int
+    reasoning_tokens: int
+    cache_read_tokens: int
+    cache_write_tokens: int
+    search_invocations: int
+    rate: Rate | None = None
+    fee: ToolFee | None = None
+    token_cost: Decimal | None = None
+    search_cost: Decimal | None = None
+    cost: Decimal | None = None
+    missing: str | None = None
+
+
+@dataclass
+class SerpSummary:
+    """What SerpApi was asked, and what the searches that may have been billed come to."""
+
+    attempted: int = 0
+    ok: int = 0
+    error: int = 0
+    no_answer: int = 0
+    # `serpapi_billed_or_unknown`: the answered searches and the ones nobody answered. An upper
+    # bound on what was billed: an answered search is billed unless SerpApi served it from its
+    # cache, an error answer is not billed, and a search nobody answered may have been. Read off
+    # the line when it has the field, else worked out as `ok + no_answer`, which is what it is.
+    billed_or_unknown: int = 0
+    per_search: Decimal | None = None
+    # `billed_or_unknown` searches at the plan's price: an upper bound, and in the total as one.
+    cost: Decimal | None = None
+
+
+@dataclass
+class UsagePricing:
+    scan_id: str | None
+    rows: list[PricedLine]
+    serp: SerpSummary
+    total: Decimal
+    missing: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+
+def parse_usage_line(text: str) -> dict[str, str | int | None]:
+    """The fields of the first `scan.usage` line in `text`.
+
+    Reads the line as Render shows it (`2026-10-04 03:49:18 [info     ] scan.usage  a=1 ...`,
+    structlog's console renderer, which is what production writes), or a JSON object with
+    `"event": "scan.usage"`, which is what a JSON renderer would. Integers come back as `int`,
+    `None` as `None`, everything else as the text.
+    """
+    for raw in text.splitlines():
+        if "scan.usage" not in raw:
+            continue
+        stripped = raw.strip()
+        if stripped.startswith("{"):
+            try:
+                body = json.loads(stripped)
+            except ValueError:
+                continue
+            if isinstance(body, dict) and body.get("event") == "scan.usage":
+                return {k: v for k, v in body.items() if isinstance(v, str | int | None)}
+            continue
+        fields: dict[str, str | int | None] = {}
+        for key, value in _USAGE_FIELD.findall(raw):
+            if re.fullmatch(r"-?\d+", value):
+                fields[key] = int(value)
+            elif value == "None":
+                fields[key] = None
+            else:
+                fields[key] = value
+        return fields
+    raise ValueError(
+        "no scan.usage line found. Paste the line Render shows for the scan's `scan.usage` "
+        "event, with its fields (`scan_id=... engines_calls=...`)."
+    )
+
+
+def _count(fields: dict[str, str | int | None], key: str) -> int:
+    value = fields.get(key, 0)
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def tool_fee_for(model: str) -> ToolFee | None:
+    """The tool fee of the provider a model belongs to, if this table records one."""
+    if model.startswith("claude"):
+        return TOOL_FEES["anthropic web_search"]
+    if model.startswith("perplexity/"):
+        return TOOL_FEES["perplexity web_search"]
+    return None
+
+
+def _price_line(name: str, prefix: str, fields: dict[str, str | int | None]) -> PricedLine:
+    model_field = fields.get(f"{prefix}_model")
+    row = PricedLine(
+        name=name,
+        model=model_field if isinstance(model_field, str) else None,
+        **{counter: _count(fields, f"{prefix}_{counter}") for counter in USAGE_COUNTERS},
+    )
+    if not (row.input_tokens or row.output_tokens or row.search_invocations):
+        # Nothing was spent, so no rate is needed to say what it cost.
+        row.cost = Decimal(0)
+        return row
+    if row.model is None:
+        row.missing = f"{name}: no model recorded"
+        return row
+    # A line can name several models (`a+b`): two snapshots of one family are one rate, and are
+    # priced as one. Models with no rate, or with different ones, are named and not guessed at.
+    served = row.model.split("+")
+    rates = {model: rate_for(model) for model in served}
+    unknown = [model for model, rate in rates.items() if rate is None]
+    distinct = {id(rate) for rate in rates.values() if rate is not None}
+    if unknown:
+        row.missing = f"{name}: no rate for {', '.join(unknown)}"
+    elif len(distinct) > 1:
+        row.missing = (
+            f"{name}: served by more than one model with different rates ({row.model}); price "
+            "it from its llm.call lines"
+        )
+    else:
+        row.rate = rates[served[0]]
+        assert row.rate is not None
+        row.token_cost = (
+            Decimal(row.input_tokens) * row.rate.input
+            + Decimal(row.output_tokens) * row.rate.output
+        ) / MILLION
+        row.cost = row.token_cost
+        if row.search_invocations:
+            row.fee = tool_fee_for(served[0])
+            if row.fee is None:
+                row.cost = None
+                row.missing = f"{name}: no per-search fee recorded for {row.model}"
+            else:
+                row.search_cost = Decimal(row.search_invocations) * row.fee.per_invocation
+                row.cost = row.token_cost + row.search_cost
+    return row
+
+
+def price_usage(text: str, *, serp_per_search: Decimal | None = None) -> UsagePricing:
+    """Price a pasted `scan.usage` line: per line, and in total, at the dated rates above.
+
+    A line whose model has no rate (or that more than one model served, or that names none)
+    is left out of the total and listed in `missing`: pricing it at nothing would make a model
+    swap look like a saving. Reasoning is inside the output count and is not charged again. A
+    line with cache tokens is priced at the plain input rate and says so, since no cached-token
+    rate is recorded. SerpApi's per-search price depends on the plan, so unless it is given
+    (`serp_per_search`) the searches are counted and the price is listed as missing. Given, it
+    prices `serpapi_billed_or_unknown`, an upper bound (a line from before that field existed
+    has it worked out from the two counts it is the sum of). The price must be a finite number
+    of at least zero, or this raises `ValueError`.
+    """
+    if serp_per_search is not None:
+        serp_per_search = valid_per_search(serp_per_search)
+    fields = parse_usage_line(text)
+    scan_id = fields.get("scan_id")
+    rows: list[PricedLine] = []
+    engine_ids = sorted(
+        m.group("id") for key in fields if (m := _ENGINE_CALLS.match(key)) is not None
+    )
+    for engine_id in engine_ids:
+        if _count(fields, f"engine_{engine_id}_calls"):
+            rows.append(_price_line(f"engine: {engine_id}", f"engine_{engine_id}", fields))
+    for prefix, name in USAGE_LINES:
+        if _count(fields, f"{prefix}_calls"):
+            rows.append(_price_line(name, prefix, fields))
+
+    serp_ok = _count(fields, "serpapi_ok")
+    serp_no_answer = _count(fields, "serpapi_no_answer")
+    stated = fields.get("serpapi_billed_or_unknown")
+    serp = SerpSummary(
+        attempted=_count(fields, "serpapi_attempted"), ok=serp_ok,
+        error=_count(fields, "serpapi_error"), no_answer=serp_no_answer,
+        # The line's own figure when it has one, else the sum it is: older lines have no field.
+        billed_or_unknown=(
+            stated if isinstance(stated, int) and not isinstance(stated, bool)
+            else serp_ok + serp_no_answer
+        ),
+        per_search=serp_per_search,
+    )
+    missing = [row.missing for row in rows if row.missing]
+    if _count(fields, "engines_calls") and not engine_ids:
+        # `engines_*` is every engine together and is never priced, so a line with no per-engine
+        # fields has nothing to price the engines from.
+        missing.insert(0, "engines: the line has no engine_<id>_* fields, so no engine is priced")
+    notes: list[str] = []
+    for row in rows:
+        if row.cache_read_tokens or row.cache_write_tokens:
+            notes.append(
+                f"{row.name}: {row.cache_read_tokens:,} cache read and {row.cache_write_tokens:,}"
+                " cache write tokens present; not priced separately (no cached-token rate is "
+                "recorded), so its input is priced at the plain rate"
+            )
+    if serp.attempted:
+        if serp_per_search is None:
+            missing.append(
+                "serpapi: no per-search rate recorded (the plan sets it; pass --serp-per-search)"
+            )
+        else:
+            serp.cost = Decimal(serp.billed_or_unknown) * serp_per_search
+    total = sum((row.cost for row in rows if row.cost is not None), Decimal(0))
+    if serp.cost is not None:
+        total += serp.cost
+    if missing:
+        notes.append("the total leaves out every line listed under MISSING RATES")
+    return UsagePricing(
+        scan_id=scan_id if isinstance(scan_id, str) else None,
+        rows=rows, serp=serp, total=total, missing=missing, notes=notes,
+    )
+
+
+def format_usage_pricing(pricing: UsagePricing) -> str:
+    """The priced scan as a table, with the rates it used and the day each was read."""
+    out: list[str] = []
+    out.append(f"SCAN USAGE PRICED{' — ' + pricing.scan_id if pricing.scan_id else ''}")
+    out.append(
+        "  Rates are perishable: each was read from the vendor's page on the date shown below,"
+        " and nothing here is a quote."
+    )
+    out.append(
+        f"\n  {'line':20} {'model':28} {'calls':>5} {'unans':>5} {'retry':>5} {'in':>10}"
+        f" {'out':>9} {'(reason)':>9} {'srch':>5} {'$ tokens':>9} {'$ line':>9}"
+    )
+    out.append("  " + "-" * 128)
+    for row in pricing.rows:
+        tokens = f"{row.token_cost:9.4f}" if row.token_cost is not None else f"{'-':>9}"
+        line = f"{row.cost:9.4f}" if row.cost is not None else f"{'unpriced':>9}"
+        out.append(
+            f"  {row.name:20} {(row.model or '-')[:28]:28} {row.calls:5} {row.unanswered:5}"
+            f" {row.retries:5} {row.input_tokens:10,} {row.output_tokens:9,}"
+            f" {row.reasoning_tokens:9,} {row.search_invocations:5} {tokens} {line}"
+        )
+    out.append("  " + "-" * 128)
+    out.append(f"  {'TOTAL PRICED':20} {'':28} {'':5} {'':5} {'':5} {'':10} {'':9} {'':9} {'':5}"
+               f" {'':9} {pricing.total:9.4f}")
+    out.append("  ($ per line = tokens at the rate + each search at its fee; the reasoning column")
+    out.append("  is INSIDE the output count and is not charged again.)")
+
+    out.append("\n  RATES USED, each as read on the date shown")
+    shown_rates: set[int] = set()
+    shown_fees: set[int] = set()
+    for row in pricing.rows:
+        if row.rate is not None and id(row.rate) not in shown_rates:
+            shown_rates.add(id(row.rate))
+            family = next(key for key, rate in RATES.items() if rate is row.rate)
+            out.append(
+                f"    {family:28} ${row.rate.input} in / ${row.rate.output} out per million"
+                f"   read {row.rate.read}   {row.rate.source}"
+            )
+        if row.fee is not None and id(row.fee) not in shown_fees:
+            shown_fees.add(id(row.fee))
+            family = next(key for key, fee in TOOL_FEES.items() if fee is row.fee)
+            out.append(
+                f"    {family:28} ${row.fee.per_invocation} per invocation"
+                f"   read {row.fee.read}   {row.fee.source}"
+            )
+    if not shown_rates:
+        out.append("    (none)")
+
+    serp = pricing.serp
+    if serp.attempted:
+        out.append(
+            f"\n  SerpApi: {serp.attempted} searches attempted (retries included): {serp.ok} "
+            f"answered ok, {serp.error} answered with an error (not billed), {serp.no_answer} "
+            "with no answer"
+        )
+        out.append(
+            f"  SerpApi billed or unknown: {serp.billed_or_unknown}, an upper bound on what was "
+            "billed: an answered search is billed unless SerpApi served it from its cache, an "
+            "error answer is not billed, and a search nobody answered may have been"
+        )
+        if serp.cost is not None:
+            out.append(
+                f"    priced at {serp.per_search} a search: {serp.cost:.4f}, an upper bound, "
+                "and it is in the total as one"
+            )
+    if pricing.missing:
+        out.append("\n  MISSING RATES, left out of the total")
+        out.extend(f"    {message}" for message in pricing.missing)
+    for note in pricing.notes:
+        out.append(f"\n  NOTE  {note}")
+    return "\n".join(out)
+
+
+PRICE_RULE = "give a finite number of 0 or more, such as 0.015"
+
+
+def valid_per_search(value: Decimal) -> Decimal:
+    """The price of one SerpApi search, if it is a price: finite, and not below zero.
+
+    `Decimal` accepts NaN, a signalling NaN, the infinities and negatives without complaint and
+    carries them into arithmetic, where a signalling NaN raises `InvalidOperation` and the rest
+    come out as a figure that means nothing. A negative zero is zero.
+    """
+    if not value.is_finite() or value < 0:
+        raise ValueError(f"{str(value)!r} is not a price: {PRICE_RULE}")
+    return value.copy_abs() if value == 0 else value
+
+
+def _decimal_argument(text: str) -> Decimal:
+    """`--serp-per-search`'s value: a price, or an argparse error (a message and exit code 2)."""
+    try:
+        value = Decimal(text)
+    except InvalidOperation:
+        # `Decimal("abc")`, `Decimal("")`, `Decimal("1e")` and an exponent it cannot hold.
+        raise argparse.ArgumentTypeError(f"{text!r} is not a number: {PRICE_RULE}") from None
+    try:
+        return valid_per_search(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a price: {PRICE_RULE}") from None
+
+
+def price_usage_command(source: str, serp_per_search: Decimal | None) -> int:
+    """`--price-usage`: read the line (`-` is standard input), price it, print it."""
+    text = sys.stdin.read() if source == "-" else source
+    try:
+        pricing = price_usage(text, serp_per_search=serp_per_search)
+    except ValueError as exc:
+        print(f"verify_e2e: {exc}", file=sys.stderr)
+        return 2
+    except ArithmeticError as exc:
+        # `decimal.Overflow` and the rest of `decimal`'s signals: a price that passes the checks
+        # above (finite, not negative) and is still too large to multiply.
+        print(
+            f"verify_e2e: a number was too large to price ({type(exc).__name__}); "
+            f"check --serp-per-search, which must be {PRICE_RULE.removeprefix('give ')}",
+            file=sys.stderr,
+        )
+        return 2
+    print(format_usage_pricing(pricing))
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Reporting
 # ---------------------------------------------------------------------------
 
@@ -572,11 +1007,26 @@ def scan_loop_decomposition(
 # ---------------------------------------------------------------------------
 
 
-async def main() -> int:  # noqa: C901
+async def main(argv: list[str] | None = None) -> int:  # noqa: C901
     parser = argparse.ArgumentParser()
     parser.add_argument("--prompts", type=int, default=6)
     parser.add_argument("--url", default=DEFAULT_URL)
-    args = parser.parse_args()
+    parser.add_argument(
+        "--price-usage", metavar="LINE",
+        help="price a scan.usage line from the logs (- reads it from standard input) and "
+             "exit: no database, no key and no provider is touched",
+    )
+    parser.add_argument(
+        "--serp-per-search", type=_decimal_argument, default=None, metavar="DOLLARS",
+        help="with --price-usage: what the SerpApi plan charges for one search, a finite number "
+             "of 0 or more. It prices serpapi_billed_or_unknown, an upper bound on what SerpApi "
+             "billed (an answered search, unless SerpApi's cache served it, and a search nobody "
+             "answered); without it SerpApi is listed as a missing rate",
+    )
+    args = parser.parse_args(argv)
+
+    if args.price_usage is not None:
+        return price_usage_command(args.price_usage, args.serp_per_search)
 
     settings = Settings()
     # Before any call to SerpApi: pins httpx and the SDKs quiet, so that no log line,

@@ -23739,3 +23739,1134 @@ Drift check (north-star §8): no product layer; the launch plan. Lifecycle phase
   - design-system 935, shared-types 53 and mypy 43 unchanged.
 - SerpApi: 12 requests over the whole brief, all in S1's investigation; 5 counted against the plan.
 - Exit codes were read from files.
+
+# The plan is US$150 a month, and a deployed API checks at start and every hour that the Stripe Price it sells is that plan
+
+**2026-10-04, the fourth entry of the day; branch `pilot-fixes-5`, the founder's brief "free trial, US$150, usage visibility and pilot guardrails" (item P2).** One item, one commit.
+
+**Render: after the deploy, the founder sets `STRIPE_PRICE_ID` on the API service to a US$150 monthly Price created in Stripe's test mode.** Render's variable names the US$160 test Price today (the founder, 2026-10-04), so until it changes the API logs `billing.price_mismatch` at start and every hour, the pages say US$150, and Checkout still shows US$160 (test mode, so no one is charged). Expect `billing.price_check ok=True` once it is set. `STRIPE_LOG`, if it is ever set there, is now ignored.
+
+Drift check (north-star §8): no product layer; the commercial architecture (§5.3, the published price), with Layer 0's rule that no key reaches a log; lifecycle phase: Activation (Epic 9), the plan a pilot agency pays for.
+
+## 1. What changed
+
+- **The price, from its one source on each side.**
+  - Web: `PLAN_PRICE_USD` in `PricingCard.tsx` is 150. The landing page, the pricing card, Settings' billing panel and the terms already build their sentences from it. Only the comments that dated the old price changed.
+  - API: `services/billing.py` gains the plan's terms: `PLAN_PRICE_USD = 150`, `PLAN_CURRENCY = "usd"`, `PLAN_INTERVAL = "month"`, `PLAN_INTERVAL_COUNT = 1`, `PLAN_USAGE_TYPE = "licensed"` and `PLAN_UNIT_AMOUNT_CENTS`.
+  - A new web test, `planPrice.test.ts`, reads `billing.py` and fails when the two constants differ, or when the card stops saying US dollars and per month.
+  - The tests that pinned $160 now pin $150, and they refuse a hand-typed 160:
+    - the landing page, pricing card, billing panel and Settings tests;
+    - the terms page test (`legalPages.test.tsx`);
+    - `test_scan_allowance.py`'s margin test, which now reads the price from `billing.PLAN_PRICE_USD`.
+- **The check** (`billing.price_check`, run by the new `price_watch.py` from the API's lifespan).
+  - When it runs: once at start, then every hour. It runs only on a deployed API (staging or production) with both `STRIPE_SECRET_KEY` and `STRIPE_PRICE_ID` set. A local or CI start never calls Stripe, whatever its `.env` holds.
+  - What it does: one read (`prices.retrieve`), bounded at 60 s, which writes nothing at Stripe. It compares the Price's amount, currency, interval, interval count and usage type with the plan, and requires the Price to be active.
+  - It logs one of three lines:
+    - `billing.price_check ok=True price_id=…` (info);
+    - `billing.price_mismatch` (warning), each field as `expected_…` and `actual_…`, amounts in cents;
+    - `billing.price_check_failed error_type=<class>` (warning), the exception's class and never its message, which can quote the key.
+  - It never fails or delays the start, because the first check runs inside the task. Stopping is bounded at 5 s.
+- **`billing.half_configured missing=<VARIABLE>`** (error, once at start, deployed only), when billing is only part set up:
+  - one of the key and the Price id is set without the other, so billing counts as off: checkout answers 503 and the scan allowance is off for every agency;
+  - or both are set and `STRIPE_WEBHOOK_SECRET` is not, so a customer can pay and the payment is never recorded.
+  - It names the variable, never a value.
+- **The Stripe SDK cannot print a request to the log.**
+  - `docker-entrypoint.sh` unsets `STRIPE_LOG` before Alembic and uvicorn start. With it set, the SDK prints every request, error message and body to stderr.
+  - `logs.py` adds `stripe` to `QUIET_LOGGERS`, so the SDK's logger writes nothing below a warning.
+- **Docs:**
+  - `docs/runbook.md`: Live Stripe test step 2 says US$150, and a new section, "Reading the billing price lines", covers each line and what to do.
+  - `docs/api-contracts.md`: the price paragraph, and the plan's margin figure (≈ $68 against $150).
+  - north-star §5.3: the price, and that Render's `STRIPE_PRICE_ID` names the $160 test Price.
+  - Prices quoted in the `stripe-billing-ops` and `market-research` skills.
+  - Comments in `.env.example` and `scan_allowance.py`.
+
+## 2. The review
+
+The security review passed with nits, and all of them were fixed in a second round except one:
+- **L1:** the check ran on any start with the two settings, a laptop's included; it now runs only on a deployed API.
+- **L2:** an archived or metered US$150 Price would have read as ok; the check now requires an active, licensed Price.
+- **L3:** `STRIPE_LOG` could print request bodies; the entrypoint unsets it, and the SDK's logger is quiet.
+- **L5:** a missing webhook secret is now named.
+- **Nit:** `stop` is bounded.
+- **Not taken, L4:** the mismatch line stays a warning rather than an error, because the brief says a warning.
+
+## Found, not fixed
+
+- **For the founder:**
+  - Checkout still opens on a Price that fails the check. The reviewer recommends refusing it (503) on a definite mismatch, read fresh inside `create_checkout_session`, before live keys.
+  - Subscriptions already on the US$160 Price are not repriced (none is real: test mode).
+- `STRIPE_LOG` is unset only in the container. A developer who exports it and runs `uvicorn` against Stripe still gets the SDK's printing.
+- `redis_watch.stop` still waits for its task without a bound (the same nit `price_watch.stop` had).
+
+## Verified
+
+**API pytest 3416 → 3561 (+145) and web vitest 1849 → 1852 (+3); floors raised to match.** One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **New tests:**
+  - `test_price_check.py` (126);
+  - `test_secrets_stay_out_of_logs.py` 46 → 63: the `stripe` logger stays quiet, `STRIPE_LOG` set at import prints and unset prints nothing, and the real entrypoint run under stubs hides it from both programs;
+  - `test_dockerfile.py` 13 → 15;
+  - `planPrice.test.ts` (3).
+- **Negative controls** (the implementer's twelve, each restored and checked byte-for-byte):
+  - the start ignoring the environment: 11 fail;
+  - no `active` check: 5;
+  - no `usage_type` check: 3;
+  - the new fields not logged: 28;
+  - `active`'s type not validated: 2;
+  - `stripe` not quiet: 7;
+  - no unset in the entrypoint: 4;
+  - the unset after Alembic: 3;
+  - no webhook-secret branch: 4;
+  - the webhook named before the key or Price id: 8;
+  - `stop` waiting for ever: 1, after the test's 15 s watchdog;
+  - `stop` not reading the outcome: 1.
+- **On this tree:** `billing.py`, `main.py`, `logs.py`, `docker-entrypoint.sh` and `PricingCard.tsx` back to `HEAD`, and `price_watch.py` removed.
+  - `test_price_check.py` cannot be collected.
+  - `test_secrets_stay_out_of_logs.py` and `test_dockerfile.py` fail 13 of 78.
+  - `planPrice.test.ts` and `PricingCard.test.tsx` fail 5 of 25.
+  - All restored and checked with `cmp`.
+- **No Stripe call was made.** Every test patches `_client`, and the example lines come from fake clients.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `f45983cfa5e3`) and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# Competitor detection from the button is for paying agencies and the platform operator; a scan's own detection is unchanged
+
+**2026-10-04, the fifth entry of the day; branch `pilot-fixes-5`, the founder's brief "free trial, US$150, usage visibility and pilot guardrails" (item 3.61).** One item, one commit.
+
+**Render: nothing to set.** Where billing is configured (Render has both Stripe settings), an agency without an `active` or `trialing` subscription can no longer press detect once this is deployed. While Render runs on Stripe's test keys, a test card makes any agency `active`, so the gate holds for real only from launch checklist 2.2 (the security review's M1, below).
+
+Drift check (north-star §8): Layer 1, Delivery (who may call a route), reading the plan of §5.3; lifecycle phase: Activation (Epic 9). It protects the SerpApi plan the pilots share: 250 searches a month, used by production too.
+
+## 1. What changed
+
+3.53's review found that the detect route's limit caps each client, not each agency. An account could add clients without a classification call and detect once on each, about six paid searches each time, out of a quota the whole platform shares. The founder's decision: the route is for paying agencies and the operator.
+
+- **The rule** (`scan_allowance.assert_may_run_detection`). A press is allowed when any one of these holds:
+  - billing is not configured: the scan gate's own switch, `gate_enabled`, because nobody could subscribe there;
+  - the agency is paid up (`billing.is_active`: `active` or `trialing`), whichever of its seats presses;
+  - the user is the exempt operator (`is_exempt`: the listed address and a linked Google identity).
+- **The refusal.** Everyone else gets `402 subscription-required` (a new `SubscriptionRequired` in `errors.py`) with one sentence for every case. It names no status and has no code: "Running competitor detection on its own needs an active subscription. A scan still finds a client's competitors the first time it runs." One info line is logged, `competitors.detect.subscription_required`, with `client_id` and `agency_id` only.
+- **Where it sits in the route** (`routers/competitors.py`): after the client is found, so another agency's client is still a 404 whatever the plan. It comes before the client's day is claimed, so a refused press makes no search, opens no scan and spends none of the day.
+  - It reads the stored status and never asks Stripe. It takes no lock and touches no Redis key.
+  - 3.53's once-per-client-per-day limit stays for everyone who is allowed.
+  - A scan's own detection (`ensure_set_for_scan`, inside `POST /clients/{clientId}/scans`) is not this route and is unchanged.
+- **`GET /clients/{clientId}/competitors`'s 404** now ends "A scan runs detection for a client that has none." It used to end "Run detection first.", which pointed at the route.
+- **Two client screens stopped pointing at detection:**
+  - Answer gaps, with no rivals:
+    - Old: "No rivals were detected for this scan, so only this client has a column. Run competitor detection to widen the grid."
+    - New: "No rivals were detected for this scan, or none was named in an answer, so only this client has a column. A rival never detected cannot appear here."
+  - Competitors, no set: the sentence now ends "…and there is nobody to compare." It no longer says "…and there is no field to draw. The report is where a competitor set is detected or named by hand." The report detects nothing, and its editor is drawn only under a table of rivals.
+  - Competitors, an empty list:
+    - Old: "Detection ran and found nobody it was confident enough to name. The report is where a competitor set can be named by hand."
+    - New: "This scan’s competitor list is empty, so there is nobody to compare."
+  - The "Detection status: <code>" note is gone, because it printed the API's code.
+- **Docs and comments:**
+  - `docs/api-contracts.md`: the new problem type, the route's section and its errors, and the 404's sentence.
+  - The billing section's "**These endpoints gate nothing.**" paragraph, untrue since the scan allowance of 2026-09-28, now says what the stored status gates.
+  - Docstrings in `scan_allowance.py` (a new section, "DETECTION FROM THE BUTTON IS FOR THE PLAN"), `billing.py` and `models/tenancy.py`.
+  - OpenAPI and `api.gen.ts` are regenerated.
+
+## 2. The review
+
+**Security review: passed with nits.**
+- **M1, for the founder.** Render runs Stripe's test keys, so anyone who checks out with a test card becomes `active`. The gate, like the scan allowance, holds only from 2.2. Options:
+  - keep the route operator-only until live keys are in;
+  - accept it while the pilots are free;
+  - or record each subscription's `livemode` from the verified webhook and count only live ones in production.
+- **L1, accepted:** a paying agency and the operator are still capped per client, not per agency.
+- **L2:** built in P2 (`billing.half_configured`).
+- **L3:** `trialing` counts as paid, as the founder decided; the trial takes a card.
+- **L4, older than this item:** signing in with Google links a password account by its verified email and keeps the password and its sessions.
+- **Nit:** `scan_allowance.py`'s docstring was also edited by P2. Merged by hand, keeping both.
+
+**UI review: passed with nits.** Every new sentence is true against the API.
+- No dropped element was an accessibility affordance: the status note was a plain paragraph.
+- No class, token or markup changed.
+- Two nits, both taken:
+  - "no field to draw" used the screen's own word for a heading the reader of an empty state has not seen. It now says "nobody to compare", as the screen's other empty state does.
+  - One test's title said the opposite of its assertion, and is renamed.
+- A third, about the landing page's "survives every later re-detection", goes to 3.63, which owns that page's copy.
+
+## Found, not fixed
+
+- **An empty competitor set is permanent** (for the founder). A later scan carries it forward. The report's editor is drawn only under a table of rivals. The detect route is now for paying agencies. So an unpaid agency whose first detection found nobody has no way to get a set. Options:
+  - carry forward only a set with rivals in it;
+  - an editor for an empty set;
+  - allow one re-detect.
+- **Copy in the same family that is still not true:**
+  - the competitor editor says "Saving an empty list clears the set … until the scan is run again", but a later scan carries the empty set forward;
+  - the report's empty card shows the `no_signal` wording for any empty list, one emptied by hand included.
+- **A stale comment:** `models/tenancy.py`'s subscription header still says "NULL is the correct, expected state for every agency that exists today".
+
+## Verified
+
+**API pytest 3561 → 3588 (+27) and web vitest 1852 → 1859 (+7); floors raised to match.** One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **New tests:**
+  - `test_detect_needs_plan.py` (25): each status refused or allowed, the operator, billing not configured, the order against the 404 and against the day, the log line, no Stripe call;
+  - `test_competitor_endpoints.py` (+2);
+  - the two screens' tests (+7).
+- **On this tree:** `routers/competitors.py`, `scan_allowance.py`, `errors.py` and the two screens back to `HEAD`.
+  - The two API files fail 19 of 59.
+  - The two screens' tests fail 8 of 58.
+  - All restored and checked with `cmp`.
+- **The first full run had one failure outside this item.** In `test_crawler_access.py` a sign-up answered 503 (`auth.rate_limit.unavailable`): Redis did not answer within its 2 s socket timeout while the Mac was swapping under parallel test runs (Redis's slow log showed 10 to 50 ms commands). The file passes alone (17 of 17), and the whole bar was run again.
+- **The rest of the bar** (this tree, the second run):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `f45983cfa5e3`) and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts`, regenerated in this commit, regenerate again with no change.
+- Exit codes were read from files.
+
+# The terms and privacy pages say they were last updated on 2026-10-04, the day the terms' price changed
+
+**2026-10-04, the sixth entry of the day; branch `pilot-fixes-5`, the founder's brief "free trial, US$150, usage visibility and pilot guardrails" (a follow-up to P2, from its UI review).** One commit.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 1, Delivery (what `/terms` and `/privacy` say), under Layer 0's facts-only rule; lifecycle phase: Activation (Epic 9), the pages a pilot agency reads before it pays.
+
+## 1. What changed
+
+- **The date.** `LEGAL_UPDATED` in `apps/web/src/lib/legal/operator.ts` goes from `'2026-09-29'` to `'2026-10-04'`. Both pages print it at the top: "Last updated 4 Oct 2026."
+- **Why.**
+  - The terms say "When these terms change, the date at the top changes with them."
+  - P2 (`bc00748`) changed the plan's price on the terms to US$150 and left the date at 29 Sep 2026, so that sentence was not true. The UI review found it.
+  - The privacy page's cookie wording had also changed on 2026-10-02 (`94378fe`, `e39a2c2`) without a new date. One shared date covers both pages, so one change makes both true.
+- **The test.** `legalPages.test.tsx` pins the new date.
+
+## Found, not fixed
+
+- **One date for two pages** (for the founder, with the lawyer review in 2.4). If each page should carry its own date, that is a design change.
+- **Nothing fails a change to a page that leaves the date alone.** The pin only proves the date is the one written in the test.
+
+## Verified
+
+**Counts unchanged:** API 3588, web 1859. No test was added; one pin changed.
+- **On this tree:** the old date put back makes the pin fail (2 of the file's 18: one test per page). Restored and checked with `cmp`.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `f45983cfa5e3`) and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# Every paid provider call logs its counts, and every scan ends with one line that totals them
+
+**2026-10-04, the seventh entry of the day; branch `pilot-fixes-5`, the founder's brief "free trial, US$150, usage visibility and pilot guardrails" (item U1).** One item, one commit.
+
+**Render: nothing to set.** Both new lines are INFO. `LOG_LEVEL` must stay `INFO` or unset, or neither is written.
+
+Drift check (north-star §8): Layer 2, Measurement (the paid-call boundary), with Layer 0's rule that only counts are kept; lifecycle phase: Activation (Epic 9). It serves §5.1's unit economics: until now production threw away the usage every provider sends back, so no customer scan's cost had ever been measured.
+
+## 1. What changed
+
+- **`llm.call`, one line for each paid HTTP request** to Anthropic, OpenAI, Perplexity or Google (`services/usage.py`, `track()` around each call). Fields:
+  - `scan_id`, `provider`, `purpose` (`engine`, `sentiment`, `prompt_generation`, `fixes`, `detection`, `classification`), `engine`;
+  - `model` as the response says it was served, else the model asked for. It is kept only if it is 1 to 100 characters of `[A-Za-z0-9._:/-]`; anything else is dropped;
+  - `input_tokens`, `output_tokens` (reasoning included), `reasoning_tokens`, `cache_read_tokens`, `cache_write_tokens`, `search_invocations`;
+  - `retry`, `ok`, and `error`: `http_<status>` or the exception's class, never its message.
+- **What each provider's usage is read from:**
+  - Anthropic: `usage.input_tokens`, `output_tokens`, `output_tokens_details.thinking_tokens`, the cache counts and `server_tool_use.web_search_requests`.
+  - OpenAI: `prompt_tokens`, `completion_tokens` and its reasoning and cached details.
+  - Perplexity: `input_tokens`, `output_tokens`, the cache read and `tool_calls_details.web_search.invocation`. Its own `usage.cost`, a dollar figure, is deliberately not read.
+  - Gemini: `promptTokenCount`, `candidatesTokenCount` plus `thoughtsTokenCount`, `cachedContentTokenCount`, `modelVersion`, and the number of grounding queries, never their text.
+- **Wrapped calls:** the four engine adapters, and each `messages.parse` in `extraction.py`, `prompts.py`, `fix_generator.py`, `cocitation.py` and `classify.py`.
+- **Retries are visible.**
+  - The Anthropic SDK's own retries inside one call are counted by its per-attempt middleware (`count_attempts`, attached in `call_bounds.py`). On the pinned SDK the middleware also sends the SDK's raw-response header (`X-Stainless-Raw-Response: raw`, which carries no secret); a test compares the requests with and without it, and that header is the only difference. An SDK without middleware gets none and counts no retries.
+  - Perplexity's own retry after a 429 is marked by its adapter.
+- **`scan.usage`, one line for each scan** (`execute_scan` runs inside `usage.scan_scope`), however the scan ended.
+  - Fields per line of the scan, for `engines` (all together), `engine_<id>`, `sentiment`, `prompt_generation`, `fixes` and `detection`: `_calls`, `_unanswered`, `_retries`, the token and search sums, and `_model` (only models that answered).
+  - SerpApi: `serpapi_attempted`, `serpapi_ok`, `serpapi_error` and `serpapi_no_answer` are always written. `serpapi_billed_or_unknown` (ok plus no answer) is an upper bound on what SerpApi billed.
+  - A zero counter is left out, except `_calls`, `_input_tokens` and `_output_tokens`. The sample line for four engines and three prompts is 1,589 bytes.
+- **Calls outside a scan** log `scan_id=None` and are in no total: the detect route, the fixes route, classification at intake and an ad-hoc prompt run.
+- **Bookkeeping never fails a call.** Every reader, the log call, the accumulator and the middleware swallow their own errors. A cancellation passes through untouched.
+- **No dollar figures in production code.**
+  - `test_no_prices_in_src.py` refuses any dollar string literal and any rate table keyed by model anywhere under `src`.
+  - `usage.py` must hold none at all, comments included.
+- **`scripts/verify_e2e.py --price-usage '<line>'`** (or `-` for standard input) prices a pasted `scan.usage` line offline, with no key and no database.
+  - Its `RATES` table now carries the source and the read date of each rate: the five token rates read 2026-10-03, and the two per-search fees as first read (2026-09-08 and 2026-09-11).
+  - SerpApi has no per-search rate in the repo. `--serp-per-search` prices `serpapi_billed_or_unknown` as an upper bound; without it SerpApi is listed under missing rates.
+  - A model with no rate is listed, never priced at nothing.
+- **`docs/runbook.md`:** a new section, "Reading the usage lines", covers every field, what is never in a total, what the lines undercount, and how to price a line.
+
+## 2. The review
+
+**Security review: passed with nits** (no Critical, High or Medium).
+- Nothing secret, third-party or identifying can reach either line.
+- The middleware alters neither request nor response.
+- One scan's calls cannot land in another's total.
+
+Fixed in a second round:
+- **L1:** the "never raises" rule was not enforced in two places (the accumulator inside `__exit__`, and `record_serp_search`). Both are guarded now, and a test ties every `Purpose` to its line.
+- **L2:** the SerpApi key was never checked. Every SerpApi test now runs under a guard that no line holds the key or the URL, with fakes that echo both into their errors. The whole-scan test checks all five providers' keys.
+- **Info:** the middleware docstrings said it changes nothing; they now name the header.
+- **Info:** the script's `--serp-per-search` refuses NaN, infinities and negative numbers.
+- **Untested fallback:** an SDK without middleware is now tested.
+
+## For the founder: keeping usage in the database (not built)
+
+- **Recommended shape:** a table `scan_usage_lines`, one row per scan, line, engine and model, about 8 rows for a four-engine scan.
+  - The counters above as integers.
+  - The four SerpApi counts on the scan or in a 1:1 row.
+  - Unique on (scan, line, engine, model).
+- **Cost:** two statements per scan and about 3 KB on disk, written after the scan's scope ends, in its own session, so it can never fail a scan. It needs:
+  - a model, a migration, the writer and tests;
+  - the Supabase privileges treatment for new tables (D1 already removes the Data API roles' privileges from every new table in `public`).
+- **Alternatives:**
+  - per-call rows: about 165 for a 20-prompt scan, about 35 to 50 KB;
+  - a JSON column on `scans`: one update, about 1.5 KB, weaker to aggregate.
+- **What it would allow:** cost per scan, client, agency and month, with rates applied when read, so no money is stored; margin against the plan; retry waste per engine; and a basis for any cap.
+
+## Found, not fixed
+
+- **A schema miss fails a whole scan after it was paid for.** `classify_sentiment`, `generate_prompts` and `run_seed_prompt` do not catch pydantic's `ValidationError` from `messages.parse`; only `classify` and `fix_generator` do. A scratch run confirmed sentiment raises it, which fails the scan (`EXECUTION_FAILED`).
+- **A failed scan's other prompt slots keep spending.** `scan_runner` gathers them with `asyncio.gather`, which does not cancel the others when one raises (also `cocitation.py` and `serp.py`). Their lines carry the scan's id but are logged after its total and are not in it.
+- **Lines that undercount:**
+  - a response the SDK cannot parse was billed and logs zero counts (`ok=False error=ValidationError`);
+  - a timed-out attempt may have been billed with nothing to show.
+- **Dollar figures in comments:** 20 comment lines under `src` still carry provider dollar figures (`engines.py` 9, `scan_allowance.py` 6, `extraction.py` 3, `prompts.py` 1, `classify.py` 1).
+- **Forward-looking:** structlog's `merge_contextvars` is on. Nothing binds a context variable today, but anything that ever binds an agency, user or domain would appear on both lines.
+- **Log volume:** about 165 `llm.call` lines (about 54 KB) for a 20-prompt, four-engine scan, plus the 1.6 KB total.
+
+## Verified
+
+**API pytest 3588 → 3836 (+248); floor raised to match.** One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **New tests (248):**
+  - `test_usage.py` (86);
+  - `test_llm_call_lines.py` (35);
+  - `test_scan_usage.py` (10): whole scans through the real `execute_scan`, every field against the sum of the scan's own lines;
+  - `test_price_usage.py` (77);
+  - `test_serp_usage.py` (30);
+  - `test_no_prices_in_src.py` (10).
+- **The implementer's negative controls,** each restored and checked byte-for-byte. Round one:
+  - Gemini's thoughts dropped: 2 fail;
+  - the retry flag forced off: 5;
+  - the scan scope removed: 7;
+  - the middleware not attached: 5;
+  - a dollar string in `usage.py`: 4;
+  - a rate table in `engines.py`: 1;
+  - a rate changed: 11;
+  - a read date blanked: 4;
+  - an engine line counted twice: 13;
+  - the exception's message as the error label: 5;
+  - SerpApi not counted: 16 and 10;
+  - the total logged only on success: 4;
+  - the model not sanitised: 9;
+  - an unanswered request naming a model: 5;
+  - and seven more.
+
+  Round two:
+  - the two guards removed: 2 and 3 fail;
+  - a purpose with no line: 3;
+  - a SerpApi URL logged: 15 failed and 19 errors;
+  - the new field missing: 23, or summed wrongly: 19;
+  - NaN accepted: 16.
+- **On this tree:** every source U1 changed back to `HEAD` (only `usage.py` kept), and 135 of the 248 new tests fail. Restored and checked with `cmp`.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, web 1859, mypy 43 (ceiling 50; 111 files checked, `usage.py` the new one).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `f45983cfa5e3`) and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# Intake refuses a website whose name is not a valid hostname, in plain words that quote nothing that was typed
+
+**2026-10-04, the eighth entry of the day; branch `pilot-fixes-5`, the founder's brief "free trial, US$150, usage visibility and pilot guardrails" (item 3.67).** One item, one commit.
+
+**Render: nothing to set.** One dependency is now declared, `idna`. It was already installed and locked at 3.19 through httpx, and its version does not change.
+
+Drift check (north-star §8): Layer 0, Trust (only a name DNS would carry reaches the crawler, a search or a prompt), at Layer 1's intake; lifecycle phase: Activation (Epic 9), the first thing an agency types.
+
+## 1. What changed
+
+S1's security review found that intake took a client's domain without checking that every label is a hostname label (Low). Now `services/intake.py` checks the host of the typed address, every label of it, subdomains included, before anything is stored or fetched. It checks the stored registrable domain again.
+
+- **What a name may be** (`encode_hostname`):
+  - each label is 1 to 63 characters of a–z, 0–9 and `-`, with no hyphen at either end;
+  - the whole name is at most 253 characters, and one trailing dot (the root) is dropped;
+  - a label with a non-ASCII character is encoded with the `idna` package (IDNA 2008, strict: refused rather than mapped). It is the package httpx uses for the robots.txt request; pages are fetched by Chromium from `https://{domain}`;
+  - a label typed as punycode (`xn--…`) must decode and re-encode to itself, so an emoji name is refused in both spellings;
+  - a name or label too long is refused before any encoding, so the cost of a long input is bounded.
+- **What is stored is unchanged:** the registrable domain, lower-case, and Unicode for an internationalised name (`bücher.de`). A name typed as punycode is kept as typed.
+- **Two refusals, both `409 invalid-url`, and neither quotes anything typed:**
+  - a host that is not a valid name: "That is not a valid website name. Names can only contain letters, numbers and hyphens, with dots between the parts. Enter an address such as example.com.";
+  - an address with no public domain (an IP address, `localhost`, a bare suffix): "That address does not contain a public domain name. Enter a website address such as example.com." It used to begin with the typed address in quotes, so a typed user name and password came back in the 409's body.
+- **The dependency:** `idna>=3.10,<4` in `apps/api/pyproject.toml` (BSD-3-Clause), with both uv locks updated and no version changed. It is classified in the providers fixture as a library that contacts nothing.
+- **Docs:** `docs/api-contracts.md`'s `invalid-url` row, `POST /clients`' errors, and a dated paragraph with both sentences.
+- **Web:** the intake form's test fixture carries the new sentence.
+
+## 2. The review
+
+**Security review: passed with nits** (no Critical, High or Medium). Nothing the check accepts reaches the crawler, a search or a prompt as anything but a plain hostname:
+- IP literals in every notation have no public suffix;
+- userinfo, ports and paths are cut off;
+- percent-encoding, control, zero-width and bidi characters are refused;
+- the egress guard still checks every address actually connected.
+
+Fixed in a third round:
+- **L1:** the "public domain" refusal echoed the input. It now quotes nothing, and a test puts a marker in the user name, path and query of 13 refused inputs and finds it in no problem member.
+- **L2:** an `xn--` label was never decoded.
+- **L3:** there was no length cap before encoding. Tests count zero `idna.encode` calls for a 2,000-character label and for 1,000 short labels.
+- **L6:** a docstring said httpx makes every request the crawler sends.
+
+**For the founder, not built:**
+- **D1:** mixed-script look-alike names are accepted and stored as Unicode. Options:
+  - keep accepting them;
+  - refuse labels that mix scripts;
+  - show the punycode beside the Unicode name on reports and share links.
+- **D2:** one internationalised site can be two clients (`bücher.de` and `xn--bcher-kva.de`). An IDN client also gets no "owned" credit for a citation whose URL carries the other spelling. Fix: store or compare one canonical form.
+- **D4, a design question outside this item:** Tier B's platform authority list excludes every agency's competitor rows, manual and suppressed ones included. One agency's lists therefore change the tier used for every agency's Citation Strength.
+- **D6:** subdomain labels are held to the same rule, so `my_shop.example.com` is refused although only `example.com` would be kept.
+
+## Found, not fixed
+
+- **Domains still unchecked:**
+  - A competitor's domain typed through `PUT /clients/{clientId}/competitors` is only stripped, lower-cased and capped at 253. It reaches the fix generator's prompt, the report and share links, and citation typing.
+  - A domain a model proposes in co-citation only goes through `registrable_domain`.
+  - Neither is crawled or searched.
+- **Clients stored before this change are never re-checked.** A read-only count on production would show whether any name fails the rule.
+- **Case mapping:** `str.lower()` is not UTS-46's mapping (capital ẞ, the Greek final sigma), so an all-capitals German or Greek name can be stored as a different name from the one a browser would open. It is then used consistently.
+
+## Verified
+
+**API pytest 3836 → 4084 (+248); floor raised to match.** Web is unchanged at 1859: one fixture row changed. One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **`test_intake_hostname.py` (248):**
+  - every refusal and its exact sentence;
+  - the problem's shape with no code;
+  - at the endpoint, with classification on and off: nothing fetched, nothing stored;
+  - IDN encoding agrees with httpx's;
+  - punycode labels, the length bounds, and the marker test above;
+  - a fuzz of 6,000 seeded inputs: 819 accepted and 5,181 refused, only ever with one of the two sentences. It covers bidi controls, BOM, joiners, combining marks and right-to-left letters; IDNA 2008 accepts a wholly right-to-left label such as `אבג.com`.
+- **The implementer's negative controls,** each restored and checked:
+  - the echo put back: 25 fail;
+  - the `xn--` check off: 34;
+  - each length guard removed: 1 each, 3 with both;
+  - the providers fixture line removed: `providers.test.ts` fails.
+- **On this tree:** with `intake.py` back to `HEAD`, `test_intake_hostname.py` cannot be collected (it imports `encode_hostname`). With the check turned into a no-op (`_require_hostname` returning at once), 104 of its 248 fail. Restored and checked with `cmp`.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass (66 and 81 packages, `idna` 3.19 in both), and Alembic upgrade (to `f45983cfa5e3`) and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments (65 and 80 distributions; `idna` BSD-3-Clause), and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# A client whose site was never shown to a model records no classifier model and no classification time
+
+**2026-10-04, the ninth entry of the day; branch `pilot-fixes-5`, the founder's brief "free trial, US$150, usage visibility and pilot guardrails" (item 3.71).** One item, one commit.
+
+**Render: nothing to set.** Rows stored before this change are left as they are (below).
+
+Drift check (north-star §8): Layer 0, Trust (a record says only what happened), in Layer 1's intake; lifecycle phase: Activation (Epic 9), the client record a pilot's first scan starts from.
+
+## 1. What changed
+
+T1 found the problem. For a site whose robots.txt does not answer, `POST /clients` stored `classifierModel: "claude-opus-5"` and a `classifiedAt`, though no model was called. The cause: `ClassificationOutcome.model` defaulted to `CLASSIFIER_MODEL`, and `apply_outcome` copied it with a time.
+
+- **`services/classify.py`:**
+  - `ClassificationOutcome.model` defaults to `None`.
+  - Every return after the model was asked names it. That is `decide()`'s three outcomes and, through a new `_no_answer`, every way a call can come back with nothing: nine kinds of exception, a refusal, and no parsed output.
+  - The guards that return before any call name none.
+- **`services/intake.py`:** `apply_outcome` writes the model it is given, and a time only when there is one.
+- **No model is asked, so both fields are now `null`, for:**
+  - a crawl that is not ok: robots.txt disallowed or unreachable, an address that is not public, a fetch failure, an HTTP error, a browser error, the crawl's own timeout;
+  - a page under 40 words (`INSUFFICIENT_CONTENT`).
+- **Two choices:**
+  - **A call that was made and failed keeps today's record:** the model asked and the time of the attempt. A request naming that model was sent then, and no field claims it classified anything; the status and reason code say nothing came back.
+  - **A reclassification that is refused clears both fields,** as it already replaces the industry, confidence and status. An old model and time would describe a classification that no longer exists.
+- **T1's shared fixture** (`packages/shared-types/fixtures/intake-robots-unreachable.json`) was regenerated with `AVP_WRITE_FIXTURES=1`. Only `classifierModel` and `classifiedAt` changed, both now `null`, and T1's API test asserts that.
+  - The build log's note under T1 that "a change of `CLASSIFIER_MODEL` will also need the fixture regenerated" stops being true: the fixture no longer holds a model.
+- **Docs:** `docs/api-contracts.md` says what the two fields mean and when they are `null`. Comments in `models/client.py` and `schemas/client.py` say the same. No screen reads either field, and the OpenAPI document is unchanged.
+
+## Found, not fixed
+
+- **Rows stored before this change** still carry a model and a time for refused or failed crawls. Nothing reads them. A backfill would have to treat `TIMEOUT` with care: it is both a crawl code (no model) and the classifier's own timeout (a model was asked).
+- **Without `ANTHROPIC_API_KEY`, `classify` raises** (`Settings.provider_key`, as documented), so `POST /clients` with classification on answers 500 and records nothing.
+- **No database constraint** ties the two columns to be both null or both set. The code now writes them together, and a CHECK would need a migration.
+
+## Verified
+
+**API pytest 4084 → 4128 (+44); floor raised to match.** Web is unchanged at 1859. One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **`test_intake_classifier_provenance.py` (44):**
+  - what `classify` returns on each path;
+  - `apply_outcome` alone;
+  - real `POST /clients` runs, with only the network edges faked, read back from the database: robots.txt unreachable and disallowed, an address that is not public, crawl failures, too little text, a normal classification, a failed call, and a refused reclassification.
+- **Changed tests:**
+  - T1's API test asserts both fields `null` and is otherwise unchanged in count;
+  - `test_intake.py`'s stub of a real classification now names its model;
+  - T1's web test passes on the new fixture.
+- **The implementer's negative controls,** each restored and checked by hash:
+  - the old default back: 26 fail;
+  - a time written with no model: 13;
+  - `_no_answer` not naming the model: 12;
+  - the ambiguous outcome forgetting it: 1;
+  - a refused reclassification keeping the old record: 2;
+  - the too-little-text guard naming the model: 3;
+  - T1's old fixture back: 1.
+- **The first full run caught what the item's own runs missed.** The web's `ClassificationResult.test.tsx` reads every `reason_code="<CODE>"` literal out of `classify.py`, to check the intake card has a sentence for each code. The new `_no_answer("<CODE>")` calls hid nine `PROVIDER_*` codes from it, so 2 web tests failed. `_no_answer`'s argument is now keyword-only, so every call writes `reason_code="<CODE>"`, and its docstring says why. The web file passes (69), and the whole bar was run again.
+- **On this tree:** `classify.py` and `intake.py` back to `HEAD`, and 26 of the 54 tests in the new file and T1's API test fail. Restored and checked with `cmp`.
+- **The rest of the bar** (this tree, the second run):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `f45983cfa5e3`) and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# Each competitor detection logs how many SerpApi searches the plan has left, with a warning below 50
+
+**2026-10-04, the tenth entry of the day; branch `pilot-fixes-5`, the founder's brief "free trial, US$150, usage visibility and pilot guardrails" (item U2).** One item, one commit.
+
+**Render: nothing to set.** The read uses `SERPAPI_KEY`, which is already set. SerpApi does not count it as a search.
+
+Drift check (north-star §8): Layer 2, Measurement (competitor detection's search budget); lifecycle phase: Activation (Epic 9). It protects the SerpApi plan the pilots share: 250 searches a month, used by production too.
+
+## 1. What changed
+
+- **`serp.quota_left(settings)`** reads `https://serpapi.com/account.json` with the key and returns `plan_searches_left`, or `None`. It never raises.
+  - It reads `plan_searches_left`, not `total_searches_left`: the plan's own remaining searches, of which `searches_per_month` is the size. The two differ only if one-time credits are bought; none are recorded.
+  - It is bounded at 5 s in all, 4 s for each phase, so a hung connection names itself rather than reading as the overall timeout. It does not retry.
+  - It returns `None` on a missing key, any timeout or transport error, a non-200, bad JSON, or a missing or non-integer count (a bool is not a count).
+- **Called once per detection** (`competitors.detect_from_facts`).
+  - It starts right after the searches, so the figure reflects them, though SerpApi's count can lag a minute or two.
+  - It runs beside the model's calls, so its 5 s hides inside them and the scan's worst-case time is unchanged.
+  - A failing model call or a cancelled detection cancels it. Its outcome is always retrieved, so an error could never reach asyncio's "Task exception was never retrieved" report on stderr, with its text.
+  - A read that failed cannot fail a detection.
+  - Through the detect route and a client's first scan it runs once; a scan that carries the set forward reads nothing.
+- **The lines:**
+  - `serp.quota_left left=<n> plan_searches=<m>` (info), always written;
+  - `serp.quota_low` (warning) with the same fields, written as well when `left` is below 50;
+  - `serp.quota_unavailable kind=<kind>` (info) when the read failed: `http_<status>`, `bad_json`, `no_count`, `no_key`, `connect`, `read`, `write`, `pool`, `total`, or an exception's class name, never its text. It is INFO, not DEBUG, so nobody has to turn DEBUG on in production to see a failed read; DEBUG would also print `classify.result` and `fixes.reasoning`.
+  - The figure is account state, not what the scan used, so it is not in U1's `scan.usage`.
+- **The key, the account's owner email and the URL** are in no line on any channel: structlog's events, its printed output, and the standard library's records at INFO and DEBUG.
+  - `httpx` and `httpcore` stay pinned at WARNING (`logs.py`).
+  - `quota_left` joins the script entry points that `test_secrets_stay_out_of_logs.py` makes configure logging first.
+- **Tests stand in for it everywhere.** The suite's autouse stub (`tests/conftest.py`, `stub_chain_externals`) now also stands in for `quota_left`.
+- **`docs/runbook.md`, "Reading competitor-search lines":** the three lines, and what to do below 50. The free plan is 250 a month, shared with production; a larger plan is the founder's decision.
+
+## 2. The review
+
+**Security review: passed with nits** (no Critical, High or Medium). Fixed in a second round:
+- **L1:** an unretrieved task error, which can carry the URL and so the key, could reach stderr. A test reproduces the one path where it could, a read still in flight when the model fails, and the callback closes it.
+- **L2:** `quota_left` joins the script logging guard.
+- **The failed-read line moved from DEBUG to INFO.** The reviewer recommended it, and the orchestrator decided it: it is at most one line per detection and carries a fixed word.
+
+## Found, not fixed
+
+- **Nothing in the suite stops a real outbound call.** A test that falls back to `get_settings()` reads `apps/api/.env`, which holds the live key, and a missed stub would make a real request that is swallowed by design.
+  - The implementer's control proved it. With the conftest stand-in removed, 8 existing detection tests made account requests that a scratch guard refused at name resolution, so no request was sent.
+  - The reviewer recommends an autouse guard on httpx's transports that refuses any host but loopback.
+- **`search()` with no key raises** `RuntimeError` from `provider_key`. The `SERPAPI_KEY_MISSING` result code, and the runbook's sentence about it, are reachable only with an empty key.
+- **The live scripts** (`verify_competitors.py`, `verify_e2e.py`, `verify_scoring.py`) now make one free account read for each detection.
+- **`serp.quota_low` notifies nobody;** a Render log alert would be the founder's.
+
+## Verified
+
+**API pytest 4128 → 4263 (+135); floor raised to match.** One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **`test_serp_quota.py` (135):**
+  - the field and the boundary at 49 and 50;
+  - all 22 failure shapes, each one INFO line;
+  - the key, email, URL, `@` and `api_key` on every channel;
+  - 6 searches and 1 account request, and only one read even when every search retries;
+  - the overlap with the model, shown by event order with no clock;
+  - three real-socket tests (a silent server, a trickle, a refused connection);
+  - cancellation not swallowed;
+  - the unretrieved-error paths;
+  - a run through `POST /clients/{clientId}/competitors/detect`.
+- **No real SerpApi request was made.** Every run had a scratch guard that refuses any `serpapi` name resolution, and it recorded no refusal.
+- **The implementer's negative controls,** each restored and checked:
+  - `total_searches_left` read: 21 fail;
+  - `<=` at 50: 1;
+  - exception text in the line: 26;
+  - the owner's email on the line: 24;
+  - the URL on the failure line: 82;
+  - the key on the line: 24;
+  - a retry after an httpx error: 17;
+  - no deadline: 4;
+  - a second read: 35;
+  - the read started before the searches: 36;
+  - the read waiting for the model: 4;
+  - `except BaseException`: 1;
+  - the callback removed: 1, or 6 with the cancel removed too;
+  - the line at DEBUG or WARNING: 59.
+- **On this tree:** `competitors.py` back to `HEAD`, so no detection starts a read. 34 of the first 127 tests in `test_serp_quota.py` failed. The 128th waits for a read that never starts and hung, so the run was stopped and the file restored and checked with `cmp`. A runbook sentence was corrected while landing: `bad_json` also means a JSON body that is not an object.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, web 1859, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `f45983cfa5e3`) and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# A free trial at checkout, off until `STRIPE_TRIAL_DAYS` is set: one per agency, the plan's allowance while it runs, and every page offers it only when it is on
+
+**2026-10-04, the eleventh entry of the day; branch `pilot-fixes-5`, the founder's brief "free trial, US$150, usage visibility and pilot guardrails" (item P1).** One item, one commit.
+
+**Render: nothing has to be set for this to be safe.**
+- `STRIPE_TRIAL_DAYS` defaults to 0, and with 0 checkout sends exactly the parameters it sent before.
+- One migration, `7106cadcd0ed` (a nullable `agencies.subscription_trial_end`), runs as the API starts, under `lock_timeout`.
+- Turning the trial on is launch checklist 1.1g, and it waits on two things: the US$150 Price being named, and the founder's decision on 3.72 (a trial needs no verified identity).
+
+Drift check (north-star §8): no product layer; the commercial architecture (§5.3, how the plan starts), across Layer 1's checkout, Settings and pricing card; lifecycle phase: Activation (Epic 9), how a pilot agency starts paying.
+
+## 1. What changed
+
+The founder's decision (2026-10-04): a 30-day free trial with a card at checkout, charged on day 31 unless cancelled; one trial per agency.
+
+- **The setting.** `STRIPE_TRIAL_DAYS` takes whole days from 0 to 730 (Stripe's own limit). Blank is 0, and any other value stops the API from starting. It is documented in `.env.example`.
+- **Checkout** (`create_checkout_session`). With N above 0 and an eligible agency, it adds `subscription_data.trial_period_days = N` and `payment_method_collection = "always"`, and nothing else changes. Otherwise the parameters are today's.
+  - Eligible (`trial_days_for`) has two halves, both decided under the agency row's existing lock:
+    - the row has no `stripe_subscription_id`, no `subscription_status` and no `stripe_event_at`;
+    - for an agency that already has a Stripe customer, Stripe lists no subscription of any status for it. Checkout already makes that call, so there is no new round trip.
+  - `billing.checkout_created` carries `trial_days`, 0 when none.
+- **The webhook.**
+  - `trialing` → `active` (the first charge) and `trialing` → `canceled` or `incomplete_expired` go through the usual events.
+  - **The trap a trial adds:** `checkout.session.completed` writes an optimistic `active`. Arriving after the real `trialing`, it would have hidden the trial. `_blocked_by_state_machine(…, optimistic=True)`, passed only for that event, refuses to replace `trialing` for the same subscription id. Both arrival orders end `trialing` with its end date.
+  - `customer.subscription.trial_will_end` logs `billing.trial_will_end` with `agency_id` and `subscription_id`, and does nothing else: no state, no watermark, no ledger row. A redelivery logs again.
+- **Storage.** `agencies.subscription_trial_end` mirrors Stripe's `trial_end` from every `customer.subscription.*` event.
+- **Reads.**
+  - `GET /agencies/{agencyId}/billing` gains two fields:
+    - `trialEndsAt`, set only while `trialing`;
+    - `trialEligible`, true only when the trial is on and the row passes checkout's row test. It cannot see Stripe's list, and the contract says so.
+  - A new public `GET /api/v1/billing/plan` answers `{"trialDays": N}`, 0 when billing is not configured. It needs no session and reads no database and no Stripe. It sends `Cache-Control: no-store`, and its body is the same for every caller.
+- **The allowance.** A trialing agency has the plan's 40 scans a month, by calendar month (UTC). A 30-day trial touches two months, or three when it starts on 30 or 31 January, and has forty in each.
+- **The web reads the trial from that one source.** Each page asks for the plan beside its first call and waits for it only at the moment it draws: at most 500 ms on the landing page (the card is far below the fold) and 1.5 s on Settings. That is one request per page. A slower answer arrives later on the same request, and a reload keeps the previous answer, so the sentence never blinks.
+- **The sentences:**
+  - **Pricing card,** on the landing page and in Settings when `trialEligible`: "The first 30 days after you subscribe are free. You enter your card at checkout, and it is charged on day 31 unless you cancel first. One free trial per agency."
+    - N comes from the API, and "day 31" is joined by a no-break space.
+    - There is no sentence while it loads, if it fails, or with 0.
+  - **Settings, trialing:** the badge "Trial", then "Free trial until 3 Nov 2026, 09:05 UTC, then $150 a month" (a new `formatDayTime`: UTC, the day unpadded), then "Nothing has been charged yet. Cancel in Manage billing before then and nothing will be."
+  - **Settings, a trial being cancelled:** "Ends <day>" and "Cancelled — you keep full access until then, and you will not be charged."
+  - **The landing page's pricing lead** said the plan "buys the product as described above — not a trial of it". It now says "It buys the whole product as described above, and not a cut-down tier with the useful part held back."
+- **Docs:**
+  - `docs/api-contracts.md`: the trial, both fields and the plan endpoint.
+  - `docs/runbook.md`:
+    - the webhook endpoint's fifth event, `customer.subscription.trial_will_end`, which writes only a log line;
+    - never clear an agency's Stripe columns by hand, because a cleared row is offered a second trial;
+    - a new section, "The free trial, and what it depends on in Stripe": the reminder email, and whether the portal cancels at once or at the period's end. Either way, a trial cancelled before its end is not charged.
+  - The `stripe-billing-ops` skill and the launch checklist's live-mode event list.
+- **OpenAPI and `api.gen.ts`** are regenerated, and `BillingPlan` is exported from shared-types.
+
+## 2. The reviews
+
+**Security review: passed with nits. Safe to merge with the trial off.**
+- **H1, for the founder, before `STRIPE_TRIAL_DAYS` goes above 0** (launch checklist 3.72). A trial gives the paid allowance with no verified identity. Agencies cost nothing to make and need no verified email, so throwaway agencies could take 40 scans in each calendar month their trial touches, at provider cost. Options:
+  - offer the trial only to a user with a linked Google identity, the free scan's rule;
+  - make a trial worth one allowance counted from its start;
+  - a Stripe Radar rule against one card on many customers;
+  - accept it and watch `billing.checkout_created trial_days>0`.
+- **Fixed in round two:**
+  - L2: the docs said two calendar months, and it can be three;
+  - L3: Settings promised a trial on `status === null`, a weaker rule than checkout's. It now uses `trialEligible`.
+- **L1, not built** (3.83): `trialing` is not bounded by its end date, so a lost end-of-trial event would leave the plan on. The same is true of `active`.
+- **L4, for the founder:** Stripe's trial-ending reminder email, and the portal's cancel behaviour. Production sends no email of its own.
+- **Checked and clean:** both arrival orders; one trial per agency (a cancelled trial, two checkouts at once, a failed or full Stripe list fails closed); the plan endpoint's CORS, Origin and caching; ids-only logs; the migration.
+
+**UI review: passed with nits twice.** Fixed in rounds two and three:
+- M1: the cancel-by deadline was a UTC day with no time, so someone west of UTC could read a day later than their charge;
+- M2: the trial sentence arrived after load and moved the card and its button by 57 px on a desktop and 102 px on a phone;
+- the plan request pinned by a test;
+- three sentences taken as proposed;
+- one request per page, even when the session check is slower than the wait;
+- the shorter wait on the landing page;
+- the reload blink;
+- the padded day.
+
+**Not built, for the founder** (3.84):
+- the hero's "$150/month after that." does not mention the trial;
+- the scan-limit notice's Subscribe buttons carry no trial terms;
+- a cancelled agency is not told why it gets no trial.
+
+**For the lawyer** (2.4). These sentences are not untrue, but a trial leaves them incomplete:
+- the terms' "The plan" says nothing of a free trial or of the charge on its last day;
+- their cancellation sentence does not say a trial cancelled before its end is not charged;
+- their fair-use example names extra accounts for free scans, not for trials;
+- the privacy page's "Billing." does not list the stored trial end.
+
+## Found, not fixed
+
+- **The legal pages ship the API client.** `/terms` and `/privacy` import their constants from `PricingCard`, which now imports the trial loader and so `lib/api`. Only the bundle grows.
+- **The landing page asks for the plan on every signed-in visit too,** and the answer is never used: one small public GET, an accepted trade-off.
+- **Right after Stripe returns** to `/settings?checkout=success`, and until the webhook lands, Settings can still show the offer. This was already so. A second checkout is refused.
+
+## Verified
+
+**API pytest 4263 → 4398 (+135) and web vitest 1859 → 1999 (+140); floors raised to match.** One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **New API tests:**
+  - `test_trial_setting.py` (19);
+  - `test_billing.py` and `test_scan_allowance.py` (+116). They cover:
+    - checkout with the trial off (byte-for-byte today's parameters), on and eligible, and each ineligible row shape and Stripe list;
+    - both arrival orders at several offsets and six concurrent pairs;
+    - each trial transition;
+    - `trial_will_end` writing nothing even before the router decides;
+    - `trialEndsAt` and `trialEligible` per state;
+    - the plan endpoint signed out, cross-origin and uncached;
+    - 40 a month while trialing, including a three-month trial.
+- **New web tests:**
+  - `lib/billing/trial.test.tsx`, `lib/api.billingPlan.test.ts` and `app/settings/page.test.tsx`;
+  - stepwise fake-clock timelines in `app/home.test.tsx`;
+  - the panel, Settings, card, landing and date tests.
+- **The implementer's negative controls,** each restored and checked by hash: 21 on the API side and 12 on the web side in round one. Two were first not caught (the router's rollback hid a write), so a service-level test was added.
+  - Round two:
+    - `trialEligible`: 6 mutations;
+    - the deadline: 2;
+    - the early plan call: 7, one of which first escaped and got its own test;
+    - the copy: 4.
+  - Round three:
+    - the wait counted from the call: 5 mutations;
+    - the two waits swapped: 3 and 4 fail;
+    - the reload dropping its answer: 1;
+    - the padded day: 6.
+- **Alembic, on an empty scratch database:** `upgrade head` (`f45983cfa5e3 -> 7106cadcd0ed`), `check`, `downgrade -1` and `upgrade` again all pass, with one head. The bar's own Alembic step ran it again.
+- **On this tree:** `services/billing.py`, `routers/billing.py`, `schemas/billing.py`, `config.py`, `BillingPanel.tsx` and `PricingCard.tsx` back to `HEAD`. `test_billing.py` and `test_trial_setting.py` give 79 failed and 36 errors of 283, and the panel's and card's tests fail 18 of 139. Restored and checked with `cmp`.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (`f45983cfa5e3 -> 7106cadcd0ed`) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts`, regenerated in this commit, regenerate again with no change.
+- Exit codes were read from files.
+
+# A migration's NOTICEs and WARNINGs reach the deploy log, and the two migration test files each make a scratch database of their own
+
+**2026-10-04, the twelfth entry of the day; branch `pilot-fixes-5`, the founder's brief "free trial, US$150, usage visibility and pilot guardrails" (item 3.69).** One item, one commit.
+
+**Render: nothing to set.** From the next deploy that runs a migration which raises something, the deploy log shows it.
+
+Drift check (north-star §8): no product layer; the deploy and the test harness (§4.3); lifecycle phase: Activation (Epic 9), the database the pilots' data lives in.
+
+## 1. What changed
+
+D1 (`c247ef9`) found the gap. asyncpg drops a server message when no listener is registered, so a migration's `RAISE NOTICE` never reached the deploy log. D1 logged its one warning through Alembic instead.
+
+- **`infra/db/migrations/env.py`** registers an asyncpg log listener on the migration connection and removes it in a `finally`.
+  - Each server message goes to `alembic.runtime.migration` as `Postgres <SEVERITY>: <message>`: a WARNING at WARNING, everything else at INFO.
+  - Only the message is forwarded, never DETAIL or HINT, which can quote data.
+  - A comment says a migration must never raise a secret, a token or an email address.
+- **On a cluster where D1's branch is taken,** the log now shows the server's own notice, then the revision's warning:
+  - `Postgres NOTICE: revoke_data_api_grants: this user is not a member of role postgres, so its default privileges in schema public were left as they are`
+  - Across all 27 revisions, that notice is the only server message any of them prints.
+- **A scratch database per run.**
+  - `test_migrations.py` used one fixed name, `avp_migration_check`; `test_enum_constraints.py` used another, `avp_migrationcheck`.
+  - Two runs at once on one Postgres therefore dropped each other's database. The build log's earlier note that the two files shared one name was wrong: each collided with a second run of itself.
+  - A new session fixture in `tests/conftest.py`, `scratch_databases`, makes `<prefix><8 random hex>` and drops it `WITH (FORCE)` in a `finally`. Both files use it, and every existing assertion is kept.
+- **`docs/runbook.md`.** Its sentence "The server's own notice never reaches the log" now says what the log shows. It adds that the revision's own warning is the one to rely on, since nobody has checked that Supabase's pooler passes a notice through.
+
+## Found, not fixed
+
+- **The D1 revision's own docstring and a comment** still say the notice never reaches the log. It is an applied migration, so it is left alone.
+- **A run killed outright** leaves its scratch database behind (the fixture's docstring says so). Nothing sweeps them, because a sweep could drop one another run is using.
+- **Whether Supabase's pooler passes server notices to the client** is not testable here.
+
+## Verified
+
+**API pytest 4398 → 4407 (+9); floor raised to match.** One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **New tests:** `test_migrations.py` 4 → 9 and `test_enum_constraints.py` 32 → 36:
+  - each run has its own name, and the database is gone afterwards;
+  - a second run does not drop the first's while it holds a connection;
+  - the database is dropped when the run fails;
+  - a notice and a warning from a one-revision script, run through the real `env.py`, reach the log, and a warning before a failure does too.
+- **The implementer's negative controls,** each restored and checked:
+  - the listener not registered: both log tests fail;
+  - a WARNING logged at INFO: both fail;
+  - one fixed name with drop-before-create: the name tests fail, and the second run's connection dies (`InterfaceError: connection is closed`), the real collision;
+  - the drop outside a `finally`: the failure-path tests fail;
+  - the old fixed name: the name test fails.
+- **On this tree:** `env.py` back to `HEAD`, and the two log tests in `test_migrations.py` fail (2 of 9). Restored and checked with `cmp`.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, web 1999, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7106cadcd0ed`) and check pass on an empty database, through the new `env.py`.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+  - No `avp_migration_check_…` or `avp_migrationcheck_…` database was left on the server afterwards.
+- Exit codes were read from files.
+
+# The scoring line says why each dimension was left out
+
+**2026-10-04, the thirteenth entry of the day; branch `pilot-fixes-5`, the founder's brief "free trial, US$150, usage visibility and pilot guardrails" (item 3.58).** One item, one commit.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 3, Insight (the score's exclusions), read through its log line; lifecycle phase: Activation (Epic 9). C1 (`3114aff`) found that the line said which dimensions a production scan left out, but not why.
+
+## 1. What changed
+
+- **`scoring.completed`'s `excluded`** (`services/scoring_runner.py`) was a sorted list of dimension names. It is now a mapping from each dimension left out to its reason code, sorted by dimension, and the same mapping the scan's `Score` row stores.
+  - C1's case: `excluded={'citation_strength': 'NO_AUTHORITY_DATA'}` where it said `excluded=['citation_strength']`.
+  - Nothing left out: `excluded={}`.
+  - Several left out at once: `excluded={'citation_strength': 'NO_AUTHORITY_DATA', 'sentiment': 'NO_POPULATION', 'share_of_voice': 'NO_COMPETITOR_SET', 'technical_foundation': 'CRAWL_DISALLOWED'}`.
+- **The values come from a closed set:** a dimension's name and a reason code. Technical Foundation's reason is checked against `TECHNICAL_FOUNDATION_EXCLUSIONS` in `compute_score`, so no text from an answer or a page can reach the line.
+- **Nothing parses the old list.** A search of every tracked file finds only five historic pasted lines in this log. The runbook has no description of the line to change.
+
+## Found, not fixed
+
+- **`audit.completed` has the same shape** (`services/audit_runner.py` ~203): it logs the excluded components' names, though it holds a reason for each.
+- **For the founder:** an audit that failed with a code scoring does not single out (`TIMEOUT`, `BROWSER_BUSY`) is stored and logged as `NOT_YET_MEASURED`, the same as a scan never audited. The new field only makes that visible. A reason of its own would change the stored reason, the inputs digest and the report's copy.
+
+## Verified
+
+**API pytest 4407 → 4422 (+15); floor raised to match.** One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **`test_scoring_log.py` (15):** real rows seeded and run through `score_scan`.
+  - One case per reason: `NO_AWARENESS_POPULATION`, `NO_AUTHORITY_DATA`, `NO_COMPETITOR_SET`, `NO_POPULATION`, `NO_ANSWERED_RESULTS`, and all four Technical Foundation reasons.
+  - `{}` when nothing is left out.
+  - The logged mapping equals the stored `Score` row.
+  - Dimension order.
+  - The line's exact field set.
+  - A guard that fails if a fifth Technical Foundation reason is added without a case here.
+- **The implementer's negative controls,** each restored and checked:
+  - the old line back: 12 fail (the 3 that pass are the field-set tests and the guard);
+  - the sort removed: 1;
+  - an extra field: 2;
+  - a fifth reason in `scoring.py`: the guard.
+- **On this tree:** `scoring_runner.py` back to `HEAD`, and 12 of the 15 new tests fail (the 3 that pass are the field-set tests and the guard). Restored and checked with `cmp`.
+- **The first full run had one failure outside this item.** `test_call_bounds.py`'s generate-fixes bound ran 1.39 s against its 1.0 s allowance while the Mac was on battery under load (load average 6 to 7). The file passes alone (28 of 28), and the whole bar was run again.
+- **The rest of the bar** (this tree, the second run):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, web 1999, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7106cadcd0ed`) and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# Settings' invitation link says "Link copied." to a screen reader, as the share bar does
+
+**2026-10-04, the fourteenth entry of the day; branch `pilot-fixes-5`, the founder's brief "free trial, US$150, usage visibility and pilot guardrails" (item 3.70).** One item, one commit.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 1, Delivery (Settings' seat management); lifecycle phase: Activation (Epic 9), an agency inviting its team while email is off.
+
+## 1. What changed
+
+While production sends no email, Settings shows the owner an invitation link to send by hand, with a Copy link button. A copy changed only the button's name, to "Copied", and a screen reader does not reliably announce a button's new name. 3.52 fixed the same gap on the share bar.
+
+- **An always-present polite status region** (`role="status"`) sits after the link block in `SeatsPanel.tsx`, outside its flex column, so it adds no height or gap.
+- **A copy that worked** puts a visually hidden "Link copied." in it (`avp-visually-hidden`). The paragraph's key is the number of copies, so a repeat copy is a new element and is announced again.
+- **A refused copy says nothing.** After a copy that worked, a refused one puts the button back to "Copy link" and takes the sentence away, as the share bar does, so the panel never claims a copy that did not happen.
+- **A late clipboard answer** applies only to the link still on the page. Before, it could bring back a link that a new invitation or a removal had cleared.
+
+## 2. The review
+
+**UI review: passed with nits.**
+- The pattern matches 3.52 and works as built, and nothing visible changed.
+- Two nits were taken: share-bar parity on a refused copy, and a test that pins the region as polite. The round-one test asserted only "not assertive", which an `aria-live="off"` region also passes.
+
+**For later** (launch checklist 3.85), the same family on the same screens, all older than this item:
+- the invitation link arrives with no status and no focus move, and the new-seat notice says "has been invited", not that nothing was sent;
+- the seat panel's notice and the password panel's success message are each mounted together with their text.
+
+**For the founder:** whether "Copied" should go back to "Copy link" after a few seconds, here and on the share bar, with one wording for both buttons ("Copy" against "Copy link").
+
+## Found, not fixed
+
+- **A removal that fails also clears the invitation link shown once.** `remove()` clears it before the request, so the owner would have to invite again.
+- **No browser or screen reader was run.** A repeat-copy announcement belongs in the founder's listening step: press Copy twice.
+
+## Verified
+
+**Web vitest 1999 → 2017 (+18); floor raised to match.**
+- **`SeatsPanel.test.tsx` 30 → 48.** The tests cover:
+  - the empty region present before any link;
+  - a copy that worked: the sentence, the button, the same polite region before and after, and the notice untouched;
+  - the sentence visually hidden, and only the button's name changing for a sighted reader;
+  - a repeat copy as a new element;
+  - a refused first copy, no clipboard, and a refused copy after one that worked;
+  - late answers after a re-invite and after a removal;
+  - a removal clearing the link and the region.
+- **The implementer's negative controls,** each restored and checked:
+  - a constant key: 2 fail;
+  - a refused copy counted: 4;
+  - the late-answer guard removed: 3;
+  - the reset removed: 1;
+  - the class removed: 2;
+  - the region inside the flex block: 5;
+  - the region mounted only with a link: 4;
+  - `aria-live` set to assertive or off: 2 each;
+  - `role="alert"`: 7.
+- **On this tree:** `SeatsPanel.tsx` back to `HEAD`, and 18 of the 48 tests in its file fail (all the new ones). Restored and checked with `cmp`.
+- **The rest of the bar** (this tree, one run):
+  - Counts: API 4422 (one skipped on macOS), workers 27, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7106cadcd0ed`) and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# A competitor search answered with a page of an unexpected shape is SERP_BAD_JSON or skipped item by item, and never raises out of a detection
+
+**2026-10-04, the fifteenth entry of the day; branch `pilot-fixes-5`, the founder's brief "free trial, US$150, usage visibility and pilot guardrails" (item 3.66).** One item, one commit.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 2, Measurement (competitor search); lifecycle phase: Activation (Epic 9), the competitor set a pilot's first report compares against.
+
+## 1. What changed
+
+Launch checklist 3.66 (found on `pilot-fixes-4`): a 200 whose JSON body was not an object raised out of `search` instead of returning `SERP_BAD_JSON`, so neither of S2's lines was logged for it, and the detection failed after its searches were spent. `services/serp.py`'s `_judge` now checks the body's shape before it reads it:
+
+- **A body that is not an object,** or that is nested too deeply to parse (`RecursionError`, which is not a `ValueError`), is `SERP_BAD_JSON`, judged before the `error` test. It gives one `serp.completed` line (status 200, 0 hits, `SERP_BAD_JSON`), is not retried, and counts as an answered error in `scan.usage`.
+  - A list or string that happens to contain the word "error" used to read as `SERP_API_ERROR`; it is now `SERP_BAD_JSON`.
+- **`organic_results`:**
+  - absent or `null` is an empty page, as before;
+  - any other value that is not a list is `SERP_BAD_JSON`. The old `or []` also took `{}`, `""`, `0` and `false` as empty;
+  - a list with no object in it is `SERP_BAD_JSON`, so an unreadable page is never counted as "SerpApi ran and found nothing" (that would make a detection's confidence 0.000 instead of none).
+- **One stray item does not cost the page.** An item that is not an object is skipped. So is an item whose `link` is not a string, like an item with no usable link. Each keeps its place in the position numbering.
+- **`position`** is used only when it is a whole number from 1 to 1000 (a whole float such as `4.0` counts). Anything else falls back to the item's place on the page, as a missing position already did.
+  - The ceiling exists because the weighting in `competitors._position_weight` raises `OverflowError` for a number of 309 digits or more, and JSON allows far longer.
+  - It is a technical bound, not a product limit: a search asks for 10 results.
+- **Through detection:**
+  - one odd page among six still gives a normal detection on the other five;
+  - six unreadable pages give no confidence, where six genuinely empty pages give 0.000;
+  - a page whose items carry odd links and positions scores exactly as its clean twin does.
+- **`docs/runbook.md`:**
+  - `SERP_BAD_JSON` is described in "Reading competitor-search lines".
+  - "Reading the usage lines" no longer says an error answer is never billed. A 200 whose body could not be read was a 200 to SerpApi, which may have counted it. It is counted under `serpapi_error`, so it is outside `serpapi_billed_or_unknown`, and the runbook says how to count such searches from the `serp.completed` lines.
+
+## Found, not fixed
+
+- **Billing claims for an unreadable 200** still say "not billed" in `usage.py`'s docstring, a comment in `serp.py`, and `verify_e2e.py`'s printed labels. The runbook now carries the caveat.
+- **A junk domain from a string `link`** (for example `%zz.com`) is returned by `registrable_domain`. How far it reaches downstream was not traced.
+
+## Verified
+
+**API pytest 4422 → 4571 (+149); floor raised to match.** One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **`test_serp_body_shapes.py` (149):**
+  - 13 bodies that are not objects;
+  - 8 `organic_results` that are not lists, and 5 lists with no object;
+  - mixed lists and the position numbering;
+  - 11 odd links and 22 odd positions (each kind kept or replaced as above, and the ceiling pinned);
+  - three nested-body shapes, refused at once;
+  - `search_many` with one odd page among six;
+  - the scan's counts;
+  - no key or URL in any line when a bad body echoes them;
+  - five detections through the real `search_many` and `detect_from_facts`.
+- **The implementer's negative controls,** each restored and checked:
+  - the unfixed `_judge`: 91 of 100 fail;
+  - the shape check after the `error` test: 24;
+  - no rule for a list with no object: 15;
+  - the old `or []`: 12;
+  - one bad item condemning the page: 4;
+  - the position taken from the hit count: 1;
+  - the link guard reverted: 9;
+  - the position rule reverted: 17;
+  - the ceiling removed: 5, with `OverflowError` out of the detection;
+  - the `RecursionError` catch reverted: 10.
+- **On this tree:** `serp.py` back to `HEAD`, and 135 of the 149 new tests fail. Restored and checked with `cmp`.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, web 2017, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7106cadcd0ed`) and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# North-star §5.1 counts the SerpApi quota in new clients, not scans, and records the 2026-10-03 cost analysis at the US$150 price
+
+**2026-10-04, the sixteenth entry of the day; branch `pilot-fixes-5`, the founder's brief "free trial, US$150, usage visibility and pilot guardrails" (item U3).** One commit, docs and two code comments.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): no product layer; the commercial architecture (§5.1, unit economics, and §5.3, what the plan gates); lifecycle phase: Activation (Epic 9), what each pilot costs to run.
+
+## 1. What changed
+
+- **§5.1's quota line.** It said "250 searches ÷ 6 per scan ≈ **41 scans per month across the entire platform**". Detection's searches are spent once per client: `ensure_set_for_scan` carries a client's competitor set forward, so its later scans search nothing. The line now says ≈41 **new clients** a month, ≈20 if every search is retried (12 a client, since R2's retry of 2026-10-03), and is dated.
+- **A new block in §5.1: the 2026-10-03 cost analysis, re-stated at US$150.** It is provider spend only, from the two measured development runs.
+  - **The rates.** Every token rate in `verify_e2e.py`'s `RATES` matched the vendors' own pages on 2026-10-03, and the pages are named. SerpApi's plans were read the same day.
+  - **The table.** Each line of a 20-prompt, four-engine scan, with its model, calls, cost and share: Claude answers $0.85 (52%), ChatGPT $0.49 (30%), Perplexity $0.08, Gemini $0.07, sentiment $0.05, prompt generation and fixes about $0.08, and a first scan's classification and co-citation about $0.09.
+  - **Per scan:** about $1.63 for a repeat scan and $1.72 for a client's first. The output-cap ceiling is about $6.28.
+  - **Against $150:** 40 scans cost about $65–69, which is 43–46% of the price. $150 covers about 87–92 typical scans. The worst case, 40 scans at the ceiling, is $251.20.
+  - **SerpApi per new client:** the Free plan's 250 a month allow about 41 (about 20 with every search retried). The $25 Starter plan's 1,000 allow about 166 (about 83).
+  - **The trial.** A trialing agency has forty scans in each calendar month the trial touches, two or three. A trial that ends in a cancellation can cost about $130–138 (or $196–206 over three months) at typical cost and earns nothing. Nothing ties a trial to a verified identity yet (launch checklist 3.72).
+  - **Gemini 3.8 Flash's price doubles on 2027-01-01.**
+  - **What is not included:** hosting, Stripe fees, Supabase, and failed scans.
+  - **How the figures become measured:** U1's `llm.call` and `scan.usage` lines, priced by `verify_e2e.py --price-usage`, and U2's `serp.quota_left`. The figures stay estimates until production lines replace them.
+- **The "There is no paywall" paragraph** had been untrue since the scan allowance of 2026-09-28. It now says the plan gates two things, each by a founder decision: starting a scan (one free, then 40 a month) and, since this branch, running competitor detection on its own. A scan's own detection is not gated, and the paragraph is dated.
+- **Two code comments repeated the "≈41 scans" figure:**
+  - `scan_allowance.py`'s module docstring now says a client's first scan spends the searches, about 41 new clients a month (about 20 with retries);
+  - `competitors.py`'s note on the re-detect-every-scan alternative now says ≈41 scans only "if every scan detected", and that §5.1 counts the quota in new clients.
+
+## Verified
+
+**Counts unchanged:** API 4571, web 2017. Docs and comments only; no test reads either changed passage.
+- **The figures were checked against their source.** That is the cost analysis written on 2026-10-03 (two sessions; the table follows the later one, 17:15 AEST, which re-checked the morning's against the code). The $150 arithmetic was recomputed:
+  - 40 × $1.63 to $1.72 = $65.20 to $68.80;
+  - $150 ÷ $1.72 to $1.63 = 87 to 92 scans;
+  - 80 × $1.63 to $1.72 = $130.40 to $137.60.
+- **The rest of the bar** (this tree, one run):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7106cadcd0ed`) and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# The landing page and the pricing card say fixes are ordered by the points each would recover, with the effort beside each, and other claims the code does not support are corrected
+
+**2026-10-04, the seventeenth entry of the day; branch `pilot-fixes-5`, the founder's brief "free trial, US$150, usage visibility and pilot guardrails" (item 3.63).** One item, one commit.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 1, Delivery (the public landing page and pricing card), describing Layer 4's fix list; lifecycle phase: Activation (Epic 9), the page a pilot agency reads first.
+
+## 1. What changed
+
+The founder approved the wording on 2026-10-04: fixes are ordered by points, not by cost, with the effort of each shown beside it (3.49, `9d1b213`).
+
+| Where | Old | New |
+|---|---|---|
+| Landing, step 07 | "…and specific changes ordered by what they would move and what they would cost to do." | "…and specific changes ordered by the points each would recover, with the effort of each shown beside it." |
+| Pricing card | "Named fixes, ordered by what they would move and what they would cost you." | "Named fixes, ordered by the points each would recover, with the effort of each shown beside it." |
+| Landing, step 02 (3.61's review) | "…and you can overrule the result, which then survives every later re-detection." | "…which then stays in place for every later scan." No screen starts a re-detection, and a later scan carries the list forward. |
+
+Checking the rest of both components against the code found more claims that were not true. Each was corrected, and each new sentence is pinned:
+- **Step 02.** "which brands the AI engines name" became "which brands an AI model names". Co-citation asks one model (`cocitation.py`). And "who ranks for the niche in search" became "who ranks in search": three of the six queries name the brand (`serp.py`).
+- **Step 01.** "…works out for itself what the business sells and to whom" lost "and to whom". The classifier returns no audience.
+- **The heading and step 03.** "the questions your client's buyers actually ask" and "how people actually shop" became "would ask" and "the buying stages". A model writes the questions; nothing sees real ones.
+- **Step 04.** "They disagree more often than you would expect" became "They do not always agree". Nothing measures how often.
+- **Step 06.** Its title, "The site itself checked for what the engines need", and its claim that technical signals "decide whether a page can be quoted at all" became:
+  - title: "The homepage checked for structured data, crawlability and freshness";
+  - body: "It loads the homepage, reads the site's robots.txt and checks for a sitemap. The result is Technical Foundation, one of the five weighted dimensions of the score."
+- **The facts-only paragraph.** It said the tests "walk every table and every response shape". It now names what they cover: the tables that hold anything from an answer or a website, and the report's own response schemas.
+
+Other changes:
+- **A stale comment** in `ClientCompetitorsView.tsx` said a set is re-detected per scan; a new scan copies the most recent set.
+- **`claimsAgainstCode.test.tsx`** (new) holds the page to the code:
+  - it builds fix lists with the report's own `deriveFixes()`. Figures come in descending order, fixes without a figure follow, effort does not rank, and a noindex tag, a `Disallow: /` rule or a missing robots.txt leads with no figure;
+  - it renders the real report to check effort is shown beside each fix;
+  - it checks that the API tests proving the carry-forward and facts-only claims still exist by name.
+
+## 2. The review
+
+**UI review: passed with nits.** All the edited sentences are true against the code and plain. The diff changes strings and comments only.
+
+Taken in a second round:
+- step 06, a Medium;
+- "for the niche" and "every field";
+- the stale comment;
+- a less brittle claims test: no pins on Python source text, ordering cases built from literals, and the boundary case added.
+
+The reviewer recommended keeping the founder's short wording rather than a longer exact one, since the report's own lead gives the exceptions.
+
+**For the founder** (launch checklist 3.86):
+- the hero's "Buyers increasingly ask an assistant before they ask a search engine." has no source;
+- the pricing card's "Viewing, sharing and exporting reports is never limited." (and the terms' copy of it), while a share link ends after 30 days;
+- two "What it does not do yet" lines that understate the product;
+- "A page like this usually stops before this section";
+- the on-screen fix list's bare "effort S/M/L".
+
+## Found, not fixed
+
+- **The same stale premise ("re-detected per scan")** is still in `ClientDetailView.tsx`, `lib/client/trends.ts`, `lib/client/competitors.ts`, `docs/design-system.md` and the styleguide's visible text.
+
+## Verified
+
+**Web vitest 2017 → 2046 (+29); floor raised to match.** The marketing suite went from 78 to 107: `LandingView.test.tsx` 42 → 53, `PricingCard.test.tsx` 33 → 35, `claimsAgainstCode.test.tsx` 16.
+- **The implementer's negative controls,** each restored and checked:
+  - the old sentences put back: every new pin fails;
+  - `derive.ts` sorted by effort: 3 or 5 fail;
+  - the blocking list emptied: the 3 boundary tests fail;
+  - sorted by id: 7;
+  - the effort tag removed from the fix list: 1;
+  - the named API tests renamed: 3;
+  - a harmless rename inside `ensure_set_for_scan`: round one's version of the file failed and this one passes, which is why the source-text pins went.
+- **On this tree:** `LandingView.tsx` and `PricingCard.tsx` back to `HEAD`, and 16 of the 107 marketing tests fail. Restored and checked with `cmp`.
+- **The rest of the bar** (this tree, one run):
+  - Counts: API 4571 (one skipped on macOS), workers 27, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - All six count gates pass through `assert_count.py`.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7106cadcd0ed`) and check pass on an empty database (no schema change).
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# The launch checklist says what `pilot-fixes-5` closed, how to merge it with the Stripe steps in order, and every decision still open
+
+**2026-10-04, the eighteenth entry of the day; branch `pilot-fixes-5`, the founder's brief "free trial, US$150, usage visibility and pilot guardrails" (its finish).** One commit: `docs/launch-checklist.md` and this entry only.
+
+**Render: the steps are 1.1g's.** Nothing has to be set for the code to be safe.
+
+Drift check (north-star §8): no product layer; the launch plan. Lifecycle phase: Activation (Epic 9), what stands between the code and the first pilots.
+
+## 1. What changed
+
+- **Status and merge steps:**
+  - The status line says PRs #2 to #8 are merged (`main` at `fc11f02`), and in what order the founder's Stripe and Render steps fall.
+  - **1.1f** is marked merged (PR #8), with the founder's results from production:
+    - the migration ran;
+    - Redis' policy and its one `data_lost`;
+    - the Supabase grants queries, with `rls_auto_enable()` left as it is by the founder's decision;
+    - the headers, which close 3.10 on production;
+    - the first Australian client's searches.
+
+    Steps 6 and 7 are not reported yet.
+  - **New 1.1g,** how to merge this branch:
+    - before the merge, create the US$150 test-mode Price;
+    - after the deploy, read the price-mismatch line, set `STRIPE_PRICE_ID` and expect `billing.price_check ok=True`, then check one scan's usage, quota and scoring lines;
+    - the trial, only after 3.72 is decided: the fifth webhook event, Stripe's reminder email, then `STRIPE_TRIAL_DAYS=30`.
+  - **1.2** is now the US$150 Price.
+  - **2.2** creates the US$150 Price in live mode and decides 3.73 before the key swap. It also says how a test purchase behaves with a trial on.
+  - **2.4** gives the lawyer the sentences a trial leaves incomplete.
+- **Rows closed, each with its commit:** 3.58 (`bcdab98`), 3.61 (`4a0466d`), 3.63 (`8bafd3d`), 3.66 (`8153e5b`), 3.67 (`3c1223f`), 3.69 (`64a6010`), 3.70 (`f450775`), 3.71 (`c9e6043`).
+- **The founder's decisions, recorded:**
+  - 3.56: after the pilots, with the new evidence;
+  - 3.59: keep failing a lost scan;
+  - 3.60: sessions do not slide;
+  - 3.62: no Detect button;
+  - 3.64: leave the fix generator's input;
+  - 3.65: with 3.48;
+  - 3.68: enforce the CSP after the click-through, share links never embeddable, HSTS with a custom domain;
+  - `rls_auto_enable()`: leave it;
+  - the price, US$150 a month;
+  - the trial, 30 days with a card.
+- **New rows, the decisions and follow-ups this brief found:**
+  - 3.72: a trial needs no verified identity. It blocks setting `STRIPE_TRIAL_DAYS`;
+  - 3.73: test-mode billing state survives the live-key swap. It blocks 2.2;
+  - 3.74: refuse checkout on a price mismatch;
+  - 3.75: keep usage in the database;
+  - 3.76 and 3.77: a schema miss, and spending after a scan failed;
+  - 3.78 and 3.79: the empty competitor set, and its copy;
+  - 3.80 and 3.81: internationalised names, and domains still unchecked;
+  - 3.82: a guard against real outbound calls in tests;
+  - 3.83: `trialing` with no end bound;
+  - 3.84: trial copy;
+  - 3.85: the remaining Settings announcements;
+  - 3.86: landing and pricing claims;
+  - 3.87: small leftovers.
+
+## Verified
+
+**The final bar on this tree** (the commands of `ci.yml`, run locally; this commit changes no code, and no test reads either file it changes).
+- Counts: API 4571 (one test skipped on macOS: it reads Linux's `/proc`), workers 27, shared-types 53 (0 fail), design-system 935, web 2046, mypy 43 (ceiling 50).
+- Ruff is clean, all typechecks pass, the styleguide builds, and all six count gates pass through `assert_count.py`.
+- Both `uv lock --check` runs pass, and Alembic upgrade (through `7106cadcd0ed`) and check pass on an empty database.
+- The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+- OpenAPI and `api.gen.ts` regenerate with no change.
+- Over the branch:
+  - API 3416 → 4571;
+  - web 1849 → 2046;
+  - design-system 935, workers 27, shared-types 53 and mypy 43 unchanged.
+- **SerpApi: no real request in the whole brief**, searches and account reads alike. Every SerpApi test fakes its transport, and U2's and 3.66's runs had a scratch guard that refused any `serpapi` name resolution and recorded none.
+- **Stripe: no real call.** Every billing test patches the client.
+- Exit codes were read from files.

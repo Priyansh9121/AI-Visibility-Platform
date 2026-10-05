@@ -188,10 +188,33 @@ describe('the empty voices say what is the case', () => {
     expect(html).toContain('Open the report');
   });
 
-  it('a scan with no competitor set points at the report, where a set is made', () => {
+  it('a scan with no competitor set says detection did not run, and sends nobody to make one', () => {
     const html = render(shown(noCompetitorSetReport));
     expect(html).toContain('No competitors in this scan');
-    expect(html).toContain('detection did not run');
+    // The whole sentence. The report detects nothing, and with no set it draws no by-hand
+    // editor either, so nothing here says the report is where a set is made.
+    expect(text(html)).toContain(
+      'Competitor detection did not run for this scan, so share of voice was left out of its score and there is nobody to compare.',
+    );
+    expect(html).not.toMatch(/by hand/i);
+    expect(html).not.toMatch(/is where a competitor set/i);
+    expect(html).toContain('Open the report');
+    expect(html).not.toContain('avp-ledger');
+  });
+
+  it('a set with no rivals says its list is empty, and does not say the report can name them', () => {
+    // A set that exists and is empty (detection found nobody it trusted). The report draws
+    // its by-hand editor only under a table of rivals, so there is none to point at.
+    const emptySet = {
+      ...REPORT,
+      competitorSet: { ...REPORT.competitorSet!, status: 'no_signal', competitors: [] },
+    } as unknown as Report;
+    const html = render(shown(emptySet));
+    expect(html).toContain('No competitors in this scan');
+    expect(text(html)).toContain('This scan’s competitor list is empty, so there is nobody to compare.');
+    expect(text(html)).not.toContain('found nobody');
+    expect(html).not.toMatch(/by hand/i);
+    expect(html).not.toMatch(/is where a competitor set/i);
     expect(html).toContain('Open the report');
     expect(html).not.toContain('avp-ledger');
   });
@@ -214,5 +237,50 @@ describe('the empty voices say what is the case', () => {
     });
     expect(html).toContain('No such client');
     expect(html).not.toContain('avp-ledger');
+  });
+});
+
+describe('the empty state prints no status code — the house rule since launch checklist 3.39', () => {
+  // This screen used to add "Detection status: no_signal." under the sentence. The status is
+  // the API's own word for how detection went, and a person reads the sentence, not the word.
+  // It is not put into words here either: the report's wording for `no_signal` says detection
+  // surfaced nothing, yet a list an agency emptied by hand is stored as `no_signal` too, and
+  // its wording for `weak_signal` says to correct a rival set when there is none. So the screen
+  // says what is the case in the title and the body, and nothing about the status.
+  const LOWER_CASE_CODE = /\b[a-z]+(?:_[a-z0-9]+)+\b/;
+
+  /** A set that exists and has no rivals, carrying whatever status the API sent. */
+  const emptyWith = (status: string): Report =>
+    ({
+      ...REPORT,
+      competitorSet: { ...REPORT.competitorSet!, status, competitors: [] },
+    }) as unknown as Report;
+
+  it.each([
+    ['no_signal'],
+    ['weak_signal'],
+    ['ok'],
+    // A status the API adds later: nothing words it, so nothing is said, and no code shows.
+    ['a_status_nothing_words'],
+  ])('a set with status %s and no rivals shows no note and no code', (status) => {
+    const html = render(shown(emptyWith(status)));
+    const t = text(html);
+    expect(html).toContain('No competitors in this scan');
+    expect(t).toContain('This scan’s competitor list is empty, so there is nobody to compare.');
+    expect(t).not.toContain('Detection status');
+    expect(html).not.toContain('avp-empty__note');
+    // No lower-case code, and no underscore-joined word of any kind, anywhere in the text.
+    expect(t.match(LOWER_CASE_CODE)).toBeNull();
+    // `ok` is a word that other words contain, so it is held to the two checks above.
+    if (status !== 'ok') expect(t).not.toContain(status);
+  });
+
+  it('a scan with no set shows no note and no code either', () => {
+    const html = render(shown(noCompetitorSetReport));
+    const t = text(html);
+    expect(html).toContain('No competitors in this scan');
+    expect(t).not.toContain('Detection status');
+    expect(html).not.toContain('avp-empty__note');
+    expect(t.match(LOWER_CASE_CODE)).toBeNull();
   });
 });
