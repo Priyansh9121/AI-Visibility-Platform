@@ -115,10 +115,8 @@ class EngineResultStatus(str, enum.Enum):
     # client-side tool is added — on the Claude side, an entry in
     # `kwargs["tools"]` in `services/engines.py` that is not a server tool; on
     # the OpenAI side, a `tools` or `functions` entry in the ChatGPT adapter's
-    # request payload. `serp.py`'s SERPAPI_KEY_MISSING is unreachable because
-    # a guard elsewhere makes it redundant — a deletion candidate. These are
-    # unreachable because a feature does not exist yet, and they are the
-    # status that feature will need on its first day.
+    # request payload. These are unreachable because a feature does not
+    # exist yet, and they are the status that feature will need on its first day.
     PAUSED = "paused"
 
 

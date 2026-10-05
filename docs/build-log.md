@@ -26103,3 +26103,36 @@ A SerpApi answer that came back as a 200 whose body could not be read is counted
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# A missing SerpApi key degrades competitor detection with `SERPAPI_KEY_MISSING` instead of failing it
+
+**2026-10-06, the fourth entry of the day; branch `pilot-fixes-6`, launch checklist 3.87 (a leftover of `pilot-fixes-5`).** API only, one of five small commits, with its own bar.
+
+**Render: nothing to set.** Production has `SERPAPI_KEY` set, so nothing changes there.
+
+Drift check (north-star §8): Layer 2, Measurement (competitor detection); lifecycle phase: Activation.
+
+## 1. What changed
+
+`serp.search` has a result code for a missing key, `SERPAPI_KEY_MISSING`, but only an empty key reached it: with the key unset, `Settings.provider_key` raised `RuntimeError` first, and the competitor phase failed.
+
+- **`services/serp.py`:** `search` treats the `RuntimeError` from `provider_key` as an empty key, so an unset key and an empty one both return `SERPAPI_KEY_MISSING`, send nothing and log no `serp.*` line.
+- **What the detection does with it:** it logs `competitors.serp_failed` for each failed query, counts only the searches that answered, and runs on the model's answers alone, as it does when SerpApi stops answering (runbook). It degrades; it does not fail.
+- **`models/engine_result.py`:** the comment that called the code unreachable is gone.
+- **`docs/runbook.md`:** "its searches raised, as they do with no `SERPAPI_KEY`" was no longer true; it now says that with no key the searches are not sent, each is `SERPAPI_KEY_MISSING` with a `competitors.serp_failed` line, and the detection runs on the model's answers alone.
+
+## Verified
+
+**API pytest 4857 → 4858 (+1); floor raised to match.**
+- **`test_serp_completed.py` 55 → 56:** an unset key is `SERPAPI_KEY_MISSING`, sends nothing and logs no serp line (it used to expect the `RuntimeError`); `search_many` with no key returns one such result per query and makes no request.
+- **`test_serp_usage.py`:** its missing-key test expects the result instead of the `RuntimeError`.
+- **Before the fix,** 2 failed. **The implementer's negative control:** the catch narrowed to an unrelated exception, 2 fail.
+- **On this tree:** in `test_serp_completed.py` and `test_serp_usage.py` (86 tests): the search's catch narrowed so an unset key raises again, 3 fail. The file was restored and the tree's checksums matched.
+- **The rest of the bar** (this tree, one run, 08:22 to 08:28):
+  - Counts: API 4858, workers 27, shared-types 53 (0 fail), design-system 935, web 2116, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7945e69b06e5`) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

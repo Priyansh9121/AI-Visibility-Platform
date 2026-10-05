@@ -653,8 +653,9 @@ forward, searches nothing and reads nothing.
   status); `connect`, `read`, `write`, `pool` or `total` (no answer within 5 s, and which part
   ran out); `bad_json` or `no_count` (it answered, and the body was not a JSON object, or had no
   whole-number `plan_searches_left`, which would mean SerpApi changed it); `no_key`; or an error's class
-  name. A detection with neither line did not get as far as the read: its searches raised,
-  as they do with no `SERPAPI_KEY`.
+  name. A detection with neither line did not get as far as the read: its searches raised.
+  With no `SERPAPI_KEY` nothing is sent: each search is `SERPAPI_KEY_MISSING`, with a
+  `competitors.serp_failed` line, and the detection runs on the model's answers alone.
 
 **What would justify a change.** The timeouts and the retry are unchanged until there is
 data. This is what the numbers would mean.

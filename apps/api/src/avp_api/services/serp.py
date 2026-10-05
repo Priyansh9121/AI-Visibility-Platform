@@ -449,10 +449,14 @@ async def search(
 
     One line is logged for each query that reached SerpApi: `serp.completed` when it was
     answered, whatever the answer said, and `serp.attempts_failed` (from `_get`) when it
-    was not. A missing key sends nothing and logs neither.
+    was not. A missing key, unset or empty, sends nothing, logs neither and is the result
+    `SERPAPI_KEY_MISSING`; the detection counts it as a search that failed and goes on.
     """
     settings = settings or get_settings()
-    api_key = settings.provider_key("serpapi_key")
+    try:
+        api_key = settings.provider_key("serpapi_key")
+    except RuntimeError:  # the key is unset: `provider_key` says so by raising
+        api_key = ""
     if not api_key:
         return SerpResult(query=query, ok=False, error_code="SERPAPI_KEY_MISSING")
 
