@@ -240,6 +240,12 @@ at Stripe, whatever its `.env` holds. The check is a read; it changes nothing at
   usage, not as the plan. The fix is the founder's: create an active, licensed US$150
   monthly Price in Stripe (test mode until 2.2) and set `STRIPE_PRICE_ID` on the API
   service to its id. The line repeats every hour until then.
+- Each of the three lines above carries `trigger`: `watch` is the hourly task, and
+  `checkout` is a checkout click made while a mismatch is recorded (that click reads the
+  Price again before deciding). A `trigger=checkout` line therefore means a customer tried
+  to subscribe while the Price was wrong. If that read confirms the mismatch, the click is
+  refused and `billing.checkout_refused_price_mismatch` (error, `agency_id` and `price_id`)
+  follows it.
 - `billing.price_check_failed error_type=…` (warning): Stripe could not be read (a wrong
   key, the network, a timeout, or an answer that is not a Price). Only the error's class
   is logged, never its message.

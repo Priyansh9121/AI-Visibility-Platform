@@ -120,6 +120,7 @@ from ..errors import (
     BillingNotConfigured,
     CheckoutInProgress,
     InvalidWebhookSignature,
+    PlanPriceMismatch,
     ServiceUnavailable,
     SubscriptionAlreadyActive,
     SubscriptionNeedsAttention,
@@ -473,7 +474,30 @@ def _price_terms(price: Any) -> _PriceTerms:
     )
 
 
-async def price_check(settings: Settings) -> None:
+# What the latest DEFINITE price check found, in this process: `_PRICE_OK`,
+# `_PRICE_MISMATCH` (Stripe answered with a Price and its terms differ: a CONFIRMED
+# mismatch) or None (never ran, or Stripe is not configured). Only a definite answer
+# (ok or mismatch) replaces the record: a read that fails or does not answer leaves an
+# earlier mismatch in place, so the next checkout reads again. A failed read never
+# blocks anyone either: refusing needs that request's own fresh read to confirm.
+# Read by `create_checkout_session`, which refuses only on a mismatch.
+_PRICE_OK = "ok"
+_PRICE_MISMATCH = "mismatch"
+_latest_price_check: str | None = None
+
+
+def reset_price_check_record() -> None:
+    """Forget the latest price check (tests, and nothing else)."""
+    global _latest_price_check  # noqa: PLW0603
+    _latest_price_check = None
+
+
+def price_mismatch_confirmed() -> bool:
+    """True when the latest price check in this process confirmed a mismatch."""
+    return _latest_price_check == _PRICE_MISMATCH
+
+
+async def price_check(settings: Settings, *, trigger: str = "watch") -> str | None:
     """Read the Price `STRIPE_PRICE_ID` names and log whether it is the plan. Never raises.
 
     One READ (`prices.retrieve`) through `_client`: it writes nothing at Stripe. It
@@ -503,17 +527,28 @@ async def price_check(settings: Settings) -> None:
     With Stripe not configured (`is_configured`) it does nothing: no call and no
     line. A cancellation is not swallowed (`CancelledError` is not an `Exception`),
     so shutdown can still end the task that runs this.
+
+    **It records its outcome in process** (`_latest_price_check`): `ok` or `mismatch`
+    replace the record; a failed read leaves it as it was; Stripe not configured clears
+    it. It returns what THIS call found: `"ok"`, `"mismatch"`, or None (not configured
+    or the read failed). Every line it logs also carries `trigger`: `"watch"` for the
+    hourly task (the default) and `"checkout"` for a checkout click while a mismatch
+    is recorded. Otherwise the lines are as above.
     """
+    global _latest_price_check  # noqa: PLW0603
     if not is_configured(settings):
-        return
+        _latest_price_check = None
+        return None
     try:
         price_id = settings.provider_key("stripe_price_id")
         async with asyncio.timeout(PRICE_CHECK_TIMEOUT_S):
             price = await _client(settings).v1.prices.retrieve_async(price_id)
         found = _price_terms(price)
     except Exception as exc:  # noqa: BLE001 - a check that fails is reported, never raised
-        logger.warning("billing.price_check_failed", error_type=type(exc).__name__)
-        return
+        logger.warning(
+            "billing.price_check_failed", error_type=type(exc).__name__, trigger=trigger
+        )
+        return None
 
     if (
         found.amount == PLAN_UNIT_AMOUNT_CENTS
@@ -523,8 +558,10 @@ async def price_check(settings: Settings) -> None:
         and found.usage_type == PLAN_USAGE_TYPE
         and found.active is True
     ):
-        logger.info("billing.price_check", ok=True, price_id=price_id)
-        return
+        _latest_price_check = _PRICE_OK
+        logger.info("billing.price_check", ok=True, price_id=price_id, trigger=trigger)
+        return _PRICE_OK
+    _latest_price_check = _PRICE_MISMATCH
     logger.warning(
         "billing.price_mismatch",
         price_id=price_id,
@@ -540,7 +577,9 @@ async def price_check(settings: Settings) -> None:
         actual_active=found.active,
         expected_usage_type=PLAN_USAGE_TYPE,
         actual_usage_type=found.usage_type,
+        trigger=trigger,
     )
+    return _PRICE_MISMATCH
 
 
 # ---------------------------------------------------------------------------
@@ -666,6 +705,12 @@ async def ensure_customer(db: AsyncSession, agency: Agency, *, settings: Setting
     return customer.id
 
 
+_PLAN_PRICE_MISMATCH_DETAIL = (
+    "Subscribing is not available right now because the plan's price is not set up "
+    "correctly. Please try again later."
+)
+
+
 async def create_checkout_session(
     db: AsyncSession, agency: Agency, *, settings: Settings
 ) -> str:
@@ -737,6 +782,19 @@ async def create_checkout_session(
     # Recording the FIRST customer id writes a unique-indexed column, which
     # Postgres treats as a key change, so that case takes the full FOR UPDATE
     # (up front, before any Stripe call). A repeat checkout writes no key.
+    # The plan's price (B3, 2026-10-05). Only when the latest price check CONFIRMED a
+    # mismatch is the Price read again, here, BEFORE the lock below: no Stripe read is
+    # made while the agency row is held. That read also updates the record, so a Price
+    # fixed since the last hourly check blocks no one. The answer is kept in
+    # `price_mismatch_now` and acted on only after the two subscription refusals (an
+    # agency that is already subscribed hears its 409, not a price problem) and before
+    # `ensure_customer` and every other Stripe write, so a refusal leaves no customer
+    # and no session. A failed read, a timeout, no check yet or an `ok` record all
+    # proceed, with no extra read on the normal path.
+    price_mismatch_now = False
+    if price_mismatch_confirmed():
+        price_mismatch_now = (await price_check(settings, trigger="checkout")) == _PRICE_MISMATCH
+
     key_share = bool(agency.stripe_customer_id)
     await db.execute(text(f"SET LOCAL lock_timeout = '{CHECKOUT_LOCK_TIMEOUT}'"))
     try:
@@ -760,6 +818,13 @@ async def create_checkout_session(
         raise SubscriptionAlreadyActive(_ALREADY_ACTIVE_DETAIL)
     if is_live_at_stripe(agency.subscription_status):
         raise SubscriptionNeedsAttention(_NEEDS_ATTENTION_DETAIL)
+    if price_mismatch_now:
+        logger.error(
+            "billing.checkout_refused_price_mismatch",
+            agency_id=agency.id,
+            price_id=price_id,
+        )
+        raise PlanPriceMismatch(_PLAN_PRICE_MISMATCH_DETAIL)
 
     # The trial, if there is to be one: the length on offer, unless this agency's own
     # row has had a subscription (`trial_days_for`, the same test `GET /billing` reads for

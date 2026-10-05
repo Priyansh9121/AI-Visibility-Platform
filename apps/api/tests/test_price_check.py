@@ -81,7 +81,13 @@ EXPECTED_INTERVAL = "month"
 EXPECTED_INTERVAL_COUNT = 1
 EXPECTED_USAGE_TYPE = "licensed"
 
-OK_LINE = {"event": "billing.price_check", "log_level": "info", "ok": True, "price_id": PRICE_ID}
+OK_LINE = {
+    "event": "billing.price_check",
+    "log_level": "info",
+    "ok": True,
+    "price_id": PRICE_ID,
+    "trigger": "watch",
+}
 
 
 def mismatch_line(**actual: Any) -> dict[str, Any]:
@@ -111,11 +117,17 @@ def mismatch_line(**actual: Any) -> dict[str, Any]:
         "actual_active": found["active"],
         "expected_usage_type": EXPECTED_USAGE_TYPE,
         "actual_usage_type": found["usage_type"],
+        "trigger": "watch",
     }
 
 
 def failed_line(error_type: str) -> dict[str, Any]:
-    return {"event": "billing.price_check_failed", "log_level": "warning", "error_type": error_type}
+    return {
+        "event": "billing.price_check_failed",
+        "log_level": "warning",
+        "error_type": error_type,
+        "trigger": "watch",
+    }
 
 
 def half_line(missing: str) -> dict[str, Any]:

@@ -438,6 +438,14 @@ def signup_payload() -> dict[str, str]:
 
 
 @pytest.fixture(autouse=True)
+def _reset_price_check_record() -> None:
+    """No test hands another a stale latest-price-check record (checkout reads it)."""
+    from avp_api.services import billing
+
+    billing.reset_price_check_record()
+
+
+@pytest.fixture(autouse=True)
 def stub_chain_externals(monkeypatch, request):  # noqa: ANN001, ANN201
     """Keep the chained scan phases off the network. **Autouse, deliberately.**
 

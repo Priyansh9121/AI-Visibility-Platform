@@ -217,6 +217,22 @@ class BillingNotConfigured(ProblemError):
     title = "Billing is not configured on this server"
 
 
+class PlanPriceMismatch(ProblemError):
+    """Checkout refused: the latest price check CONFIRMED the Price is not the plan.
+
+    **503**, like `BillingNotConfigured`: nothing is wrong with the request, and
+    the deployment's Stripe Price (amount, currency, interval or archived state)
+    has to be fixed by whoever runs it before anyone can subscribe. The `detail`
+    is a plain sentence for the person at the screen; it names no amount, no
+    Price id and no setting, and promises nothing about who has been told. A
+    failed or missing price read never raises this: only a confirmed mismatch.
+    """
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    problem_type = "plan-price-mismatch"
+    title = "The plan's price is not set up correctly"
+
+
 class GoogleSignInNotConfigured(ProblemError):
     """Google sign-in was asked for and no OAuth client is configured — Epic 20.
 
