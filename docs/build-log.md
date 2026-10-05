@@ -24870,3 +24870,133 @@ Drift check (north-star §8): no product layer; the launch plan. Lifecycle phase
 - **SerpApi: no real request in the whole brief**, searches and account reads alike. Every SerpApi test fakes its transport, and U2's and 3.66's runs had a scratch guard that refused any `serpapi` name resolution and recorded none.
 - **Stripe: no real call.** Every billing test patches the client.
 - Exit codes were read from files.
+
+# Design notes for the four pilot features, written before their code
+
+**2026-10-05, the first entry of the day; branch `pilot-fixes-6`, the founder's brief "clear the board, harden billing, and four pilot features" (F1 to F4).** Notes only; each feature lands in its own commit with its own entry.
+
+**Render: nothing to set.** Every feature is off until the founder sets its variable (launch checklist 1.1h).
+
+Drift check (north-star §8), one line per feature:
+- F1 (email when a scan finishes): Layer 5, Distribution; lifecycle phase: Activation (Epic 9), getting the finished report in front of the person who asked for it.
+- F2 (monthly rescans): Layer 2, Measurement, run on a schedule; lifecycle phase: Retention (Epic 11), the 90-day before/after cycle.
+- F3 (CSV export): Layer 5, Distribution; lifecycle phase: Sales Enablement (Epic 10), the figures an agency takes into its own deck.
+- F4 (feedback link): Layer 1, Delivery; lifecycle phase: Activation (Epic 9), pilots telling the founder what is wrong.
+
+The brief's rule: a note that shows a feature needs a paid service, or a decision the brief does not cover, stops that feature. **None of the four does.** F1 sends nothing until 2.3 (Resend) is done, which the founder has already planned.
+
+## F1. Email when a scan finishes (`EMAIL_SCAN_NOTIFICATIONS`, default off)
+
+**What.** When a scan reaches a final status, the user who started it (`scans.requested_by_user_id`) gets plain-text email, our own copy:
+- **SUCCEEDED or PARTIAL:** "Your report for <client name> is ready", linking to the signed-in report (`<PUBLIC_WEB_BASE_URL>/scans/<id>/report`). Never a share link, and no score. A PARTIAL scan adds one sentence: some answers are missing, and the report says which.
+- **The scan raised alerts:** a second email, giving how many alerts of each kind in plain words and linking to the client's alerts screen (`/clients/<id>/alerts`).
+- **FAILED:** one plain "did not finish" email linking to the client's page, saying the scan can be run again. **Decision: send it.** A user who started a scan and walked away is waiting for this email. Without it, silence reads as "still running", and only the dashboard says otherwise. The email carries no score and nothing from the scan but the client's name.
+- **CANCELLED:** nothing in the code writes this status today; it would get no email.
+
+**Where.** The email goes through `services/email.py`'s one send function, `_send`, which never raises: the same Resend path invitations and resets use.
+- **A sweep, not a hook.** Four paths write a final status: `finalize_scan`, the deadline's finalise, `_mark_failed` and the reaper. A new loop in the API (the shape of `price_watch.py`) is started only when the setting is on. Every 60 s it finds scans that reached a final status in the last 15 minutes and have no `notified_at`. It claims each with one conditional UPDATE (`notified_at` set where it is null), then sends.
+  - Zero rows means another API instance has it, so two instances during a deploy send one email, not two.
+  - A sweep also covers a scan that finished just before a deploy restarted the process.
+  - The 15-minute window stops a switch-on from emailing every past scan.
+- **At most once.** A failed send is logged and not retried: a missed email is better than two.
+- **Who gets nothing:**
+  - a scan with no requester;
+  - a requester who is suspended, deleted or no longer in the scan's agency (checked at send time);
+  - a user who opted out;
+  - every user while email is not configured.
+- **Opt-out.** A per-user switch in Settings (`users.scan_emails`, default on), shown only when the feature is on and email is configured.
+- **Migration:** `users.scan_emails` (not null, default true) and `scans.notified_at` (nullable). No backfill.
+- **Logs:** event, `user_id` and `scan_id`; never an address, a link or a client name.
+
+**Cost.** No new provider and no new service. Nothing goes out until 2.3 is done (a verified sending domain and `RESEND_API_KEY`). One small query a minute.
+
+**Risk.**
+- Deliverability rests on 2.3's domain.
+- The client's name is in the subject; it is the agency's own data.
+- Sending to the wrong person is closed by the agency check at send time.
+- Security review and UI review.
+
+## F2. Automatic monthly rescans (`AUTO_RESCAN_ENABLED`, default off; per client, default off)
+
+**What.** An owner or admin turns on "Rescan every month" for a client. Once the client's latest scan started 30 or more days ago, the API starts a new scan as the user who turned it on. It goes through the same start path as the Run button: engines, the reaper, the allowance and the one-open-scan rule all apply.
+
+**Where: the scheduler.** Scans run inside the API's process today; there is no worker service.
+- **The cheapest safe scheduler is a loop in the API,** like the price check's (`price_watch.py`). It is started only when the setting is on and wakes every 10 minutes.
+- **One at a time.** Each wake starts at most ONE due scan. It starts none while another automatic scan is queued or running anywhere.
+- **Two API instances during a deploy start one scan, not two.** A deploy overlaps the old and new instances, and both can wake. Each due client is claimed with one conditional UPDATE on its own row (`clients.auto_rescan_attempted_at`), so only one instance starts it. The one-open-scan unique index (`uq_scans_one_open_per_client`) is the backstop.
+- **Nothing new to run:** no Render service, no cron, no Redis.
+- **The start path.** The body of `POST /clients/{clientId}/scans` moves into one service function that both callers use, so nothing in the start path can drift between them.
+
+**Skips.** Each is recorded on the client (`auto_rescan_skip_reason` and the time) and shown on the client screen in plain words:
+- the agency is not paid up (the allowance would give it only its free scan): skipped without calling the start path;
+- the allowance refuses (the month's scans are used);
+- the user who turned it on is no longer an active owner or admin of the agency.
+
+A skipped month is tried again on the first day of the next calendar month (UTC), when the allowance resets; never in a loop. A failed automatic scan is not retried: it is the latest scan, so the next is due 30 days after it.
+
+**Migration:** four columns on `clients`, `auto_rescan` (default false), `auto_rescan_by_user_id` (FK, SET NULL), `auto_rescan_attempted_at` and `auto_rescan_skip_reason`.
+
+**Logs:** `rescan.started` and `rescan.skipped reason=`, with ids only.
+
+**Cost.** No new service. Each automatic scan is an ordinary scan: about US$1.45 to 1.50 of provider spend (the first production scan, 2026-10-05) and one of the agency's 40 a month.
+
+**Risk.**
+- The start route is the product's busiest write. It keeps its existing tests, and new ones call the service directly.
+- A deploy that restarts the API mid-scan fails that scan, as it does today (`EXECUTOR_NEVER_STARTED`); the next rescan is then 30 days later. Pressing Run starts one sooner.
+- Memory: one automatic scan at a time, on top of what operators run.
+- Security review.
+
+## F3. CSV export of a report's figures (`REPORT_CSV_ENABLED`, default off)
+
+**What.** On the signed-in report page, a "Download figures (CSV)" link. One CSV of the facts the report already shows:
+- per engine and prompt: mentioned, position and sentiment. The prompt text is ours, generated;
+- Share of Voice per brand;
+- citation domains with counts;
+- each dimension's subscore, or its exclusion reason;
+- the fix list: title, priority, effort and points.
+
+It is one long table (section, engine, prompt, item, measure, value), so every section shares one header row and opens in a spreadsheet as it is.
+
+**Where.**
+- **The route:** `GET /scans/{scanId}/report.csv`, signed in and scoped to the agency as the report is. It is built from the same projection the signed-in report serves, so it cannot carry anything the report does not.
+- **Share links get nothing:** there is no token route.
+- **Refusals:** with the setting off it answers 404. A failed, queued or running scan answers 409, because a failed scan's score is withheld, as for sharing.
+- **The web** shows the link only when the report says the export is available.
+
+**Excel safety.**
+- A UTF-8 byte-order mark.
+- Every cell that begins with `=`, `+`, `-` or `@` gets a leading apostrophe; so does one that begins with a tab or a carriage return (OWASP's list).
+- Quoting by Python's `csv` module.
+- The file name is `avp-report-<date>.csv`, with nothing an operator typed in a header.
+
+**Facts only.** `tests/test_facts_only.py`'s harness is run over the CSV.
+
+**Cost.** Nothing new: no dependency and no provider call. It is built in memory per request; a scan is about 80 answers.
+
+**Risk.**
+- A name an operator typed (a client or competitor) could carry a formula; the guard covers it.
+- Launch checklist 3.43 says FastAPI's cap holds Starlette below 0.49, and should be lifted before the API serves files (`FileResponse`, `StaticFiles`; the pin's comment in `apps/api/pyproject.toml`). This export is an ordinary in-memory response, neither of those, so it does not wait on that lift.
+- Security review and UI review.
+
+## F4. "Send feedback" (`FEEDBACK_EMAIL`, unset means no link)
+
+**What.** A small "Send feedback" link in the signed-in footer and on Settings. It opens `mailto:<FEEDBACK_EMAIL>` with the page in the subject.
+- **The subject carries the route's shape, never its values.** A path segment is kept only when it is one of the app's own fixed segment names (`clients`, `report`, `alerts`, `settings` and the like). Any other segment becomes "…", and the query and fragment are dropped. No id, token or client name can reach the subject.
+
+**Where.** `FEEDBACK_EMAIL` is an API setting: checked as an address at start, and blank means unset. It reaches the signed-in web through a response the shell already reads, as the trial's days reach the web from the API. The founder sets it on the API service.
+
+**Cost.** None.
+
+**Risk.**
+- The address is shown to every signed-in user, which is the point.
+- UI review.
+
+## Verified
+
+**This commit changes only `docs/build-log.md`, which no test reads** (the suites mention it in comments, and none opens it). The bar below ran on the same code, the branch's base `7fbde03`, today: the commands of `ci.yml`, run locally.
+- Counts: API 4571, workers 27, shared-types 53 (0 fail), design-system 935, web 2046, mypy 43 (ceiling 50). All six count gates pass through `assert_count.py`.
+- Ruff is clean, all typechecks pass, and the styleguide builds.
+- Both `uv lock --check` runs pass, and Alembic upgrade (to `7106cadcd0ed`) and check pass on an empty database.
+- The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages).
+- OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
