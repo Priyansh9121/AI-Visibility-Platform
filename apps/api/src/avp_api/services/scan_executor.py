@@ -56,7 +56,7 @@ from ..db import get_sessionmaker
 from ..models import Client, EngineResult, Prompt, Scan, ScanStatus
 from ..models.engine_result import Engine
 from . import alerts as alerts_service
-from . import audit_runner, fix_runner, memory_stats, scan_runner, scoring_runner
+from . import audit_runner, fix_runner, memory_stats, scan_runner, scoring_runner, usage
 from . import competitors as detection
 from .browser_slot import SCAN_AUDIT_WAIT_S
 from .scan_allowance import IN_FLIGHT_WINDOW
@@ -602,11 +602,18 @@ async def execute_scan(job: ScanJob, *, settings: Settings) -> None:
             # Cancelled from under us the moment a renewal matches zero
             # rows. Everything the chain would have gone on to spend is
             # what that cancellation saves.
-            held = await run_under_lease(
-                _run_chain(session, scan, client, job, settings=settings, progress=progress),
-                scan_id=scan.id,
-                settings=settings,
-            )
+            #
+            # In the scope that totals what the scan pays for (`usage.py`): the chain runs as a
+            # task started INSIDE it, so it and every task it starts share the accumulator, and
+            # one `scan.usage` line is logged when this block ends however it ends: finished,
+            # PARTIAL, FAILED, raised, cancelled by a lost lease, or out of time. An executor
+            # that held no claim never gets here, and spent nothing.
+            with usage.scan_scope(scan.id):
+                held = await run_under_lease(
+                    _run_chain(session, scan, client, job, settings=settings, progress=progress),
+                    scan_id=scan.id,
+                    settings=settings,
+                )
             if not held:
                 # The row is not ours. Somebody else — the reaper, or a
                 # finalise that beat us — owns its status now, and writing

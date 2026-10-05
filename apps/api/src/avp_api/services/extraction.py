@@ -34,6 +34,7 @@ from pydantic import BaseModel, Field
 
 from ..config import Settings, get_settings
 from ..models.engine_result import CitationType, EngineResultStatus, Sentiment
+from . import usage
 from .call_bounds import CallBound
 from .competitors import slugify
 from .engines import EngineAnswer
@@ -352,21 +353,26 @@ async def classify_sentiment(
     settings = settings or get_settings()
     client = SENTIMENT_BOUND.client(settings)
     try:
-        # The outer deadline is what makes the ceiling a guarantee. Its
-        # TimeoutError is not an APIError, hence the second clause below.
-        async with SENTIMENT_BOUND.deadline():
-            response = await client.messages.parse(
-                model=SENTIMENT_MODEL,
-                max_tokens=SENTIMENT_MAX_TOKENS,
-                system=SENTIMENT_SYSTEM,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": f"Subject brand: {subject_name}\n\nAnswer:\n{answer.text}",
-                    }
-                ],
-                output_format=SentimentJudgement,
-            )
+        # Counted, not changed (`usage.py`): one `llm.call` line for each request.
+        with usage.track(usage.ANTHROPIC, usage.Purpose.SENTIMENT, model=SENTIMENT_MODEL) as call:
+            # The outer deadline is what makes the ceiling a guarantee. Its
+            # TimeoutError is not an APIError, hence the second clause below.
+            async with SENTIMENT_BOUND.deadline():
+                response = await client.messages.parse(
+                    model=SENTIMENT_MODEL,
+                    max_tokens=SENTIMENT_MAX_TOKENS,
+                    system=SENTIMENT_SYSTEM,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": (
+                                f"Subject brand: {subject_name}\n\nAnswer:\n{answer.text}"
+                            ),
+                        }
+                    ],
+                    output_format=SentimentJudgement,
+                )
+            call.read_anthropic(response)
     except (anthropic.APIError, TimeoutError) as exc:
         logger.warning("extraction.sentiment_failed", error=type(exc).__name__)
         return None, None

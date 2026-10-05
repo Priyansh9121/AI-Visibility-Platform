@@ -12,7 +12,8 @@
  *
  * That changed by founder decision, not by drift. $29/month became a real,
  * published price backed by a real Stripe Price object (repriced to $160 on
- * 2026-09-22 — `PLAN_PRICE_USD` below says what did and did not move), and §5.3 has been
+ * 2026-09-22 and to $150 on 2026-10-04, both founder decisions — `PLAN_PRICE_USD`
+ * below says what did and did not move), and §5.3 has been
  * updated to say so rather than left to contradict this page. The rest of Epic
  * 9.10's rule is untouched: no testimonial, no logo wall, no user count, no
  * invented scale. A price the founder decided to charge is a fact about us; a
@@ -38,11 +39,32 @@
  * WHAT THE CARD MAY CLAIM
  * -----------------------
  * Only capabilities this codebase ships today, the same bar `LandingView`'s
- * header comment sets for every sentence on the public page. Note in particular
+ * header comment sets for every sentence on the public page (and the list there of what was
+ * corrected against the code on 2026-10-04, launch checklist 3.63, covers this card's fix-list
+ * line too). Note in particular
  * what is NOT written here: "unlimited scans". Scan volume is genuinely not
  * metered yet — north-star.md §5.2 argues metering the scan is the right model
  * and §5.4 records that none of it is built — so the absence of a cap is an
  * absence, not a feature, and the card says exactly that.
+ *
+ * THE FREE TRIAL — 2026-10-04
+ * ---------------------------
+ * When the API says the plan has a trial (`GET /billing/plan`, `lib/billing/trial`),
+ * the card says so, in one paragraph under the price: how many days after you subscribe
+ * are free, that the card is entered at checkout and charged on the day after, unless the
+ * agency cancels first, and that it is one trial per agency. The length is the API's, so
+ * this file carries no copy of it. While the request is out, if it fails, and when the API
+ * says 0, the card says NOTHING about a trial: never a trial that may not exist.
+ *
+ * The page that draws the card asks early and tells it (`initialTrialDays`), so the card is
+ * drawn with its sentence and not a line taller a moment later; a card that was told does not
+ * ask. A card the page could not tell in time awaits the page's own request (`trialPlan`), and
+ * one that was handed nothing asks for itself when it mounts.
+ *
+ * Signed out, the card describes the offer to somebody who has not subscribed. Signed in,
+ * in Settings, it describes it only where the billing response says this agency would get
+ * it (`trialEligible`, which is the API's word: a trial is on and this agency has never had a
+ * subscription): one that cancelled would be told of a trial checkout will not give it.
  *
  * The no-competitor-reference and no-borrowed-copy rules: derived from product-spec.md §3's core loop,
  * §5.4's pipeline and the seat model in `models/tenancy.py`. No competitor's
@@ -51,6 +73,7 @@
 
 import type { JSX } from 'react';
 import { Button, Card, CardBody } from '@avp/design-system';
+import { trialSentence, usePlanTrial } from '@/lib/billing/trial';
 
 /**
  * The published price, in whole dollars.
@@ -70,8 +93,17 @@ import { Button, Card, CardBody } from '@avp/design-system';
  * the $29.00 Price (`price_1U9For…`) is still active, and Render's variable
  * still has to be changed by hand. That is exactly the "kept in step by hand"
  * deal the paragraph above describes. Build log, 2026-09-22 and 2026-09-23.
+ *
+ * Repriced $160 → $150 on 2026-10-04 (founder decision). The number moves here;
+ * the Stripe side stays the founder's: a $160.00 test-mode Price has existed
+ * since 2026-09-23, and a $150.00 one is for the founder to create in the
+ * dashboard and name in `STRIPE_PRICE_ID` (locally and on Render). The two are
+ * no longer kept in step by hand alone: the API states the same number in
+ * `services/billing.py` (`PLAN_PRICE_USD`) and, when deployed, at start and every
+ * hour, reads the configured Price and logs `billing.price_mismatch` when it is
+ * not the plan; `planPrice.test.ts` fails if this constant and that one differ.
  */
-export const PLAN_PRICE_USD = 160;
+export const PLAN_PRICE_USD = 150;
 
 /**
  * Seats included, matching `Settings.default_seat_limit` (3) and
@@ -116,6 +148,30 @@ export interface PricingCardProps {
   disabled?: boolean | undefined;
   /** A failure from the checkout call, in a sentence. */
   error?: string | null | undefined;
+  /**
+   * Whether the free trial may be offered on THIS card at all: false for an agency that
+   * has had a subscription, which checkout gives no trial to. Settings passes the billing
+   * response's `trialEligible`; the public card is always offered it. Default true. Even
+   * when true, nothing is said unless the API says the plan has a trial.
+   */
+  trialEligible?: boolean | undefined;
+  /**
+   * The trial's length, when the page already knows it: the page loaders ask the API early
+   * (`loadTrialDays`), wait for it at their draw point (`within`) and pass the answer down, so the
+   * card is drawn with its sentence and does not ask. 0 is "no trial", and also does not ask. Left
+   * out, the card awaits `trialPlan` if it was handed one, and otherwise asks for itself when it
+   * mounts. A static render never runs a request, so this is also how a test renders the card as
+   * it is once the API has said the trial is this many days.
+   */
+  initialTrialDays?: number | undefined;
+  /**
+   * The page's own request for the plan, for a card drawn UNTOLD (no `initialTrialDays`): the page
+   * asked early, gave up waiting for the answer, and hands the card the promise it asked with, so
+   * the card awaits that instead of asking again. One request for the whole page, however slow
+   * the plan is, and the sentence appears when it answers. Ignored when `initialTrialDays` is
+   * given. Round three.
+   */
+  trialPlan?: Promise<number> | undefined;
 }
 
 export function PricingCard({
@@ -125,7 +181,13 @@ export function PricingCard({
   busy = false,
   disabled = false,
   error = null,
+  trialEligible = true,
+  initialTrialDays,
+  trialPlan,
 }: PricingCardProps): JSX.Element {
+  // What the page told it, or what the page's own request answers, or (with neither) what it asks
+  // for itself: 0 until the API has answered, and for every failure: no sentence then.
+  const trialDays = usePlanTrial(initialTrialDays, trialPlan);
   return (
     <Card elevation="seated">
       <CardBody>
@@ -145,6 +207,14 @@ export function PricingCard({
               there is no tier above this one to be upsold to, and no annual
               commitment to sign.
             </p>
+            {trialEligible && trialDays > 0 && (
+              // The terms of the free trial, beside the price they end in. Stronger than
+              // the paragraph above on purpose: when the card is charged is the one thing
+              // here nobody should miss.
+              <p className="mt-3 max-w-measure text-ui-base leading-prose text-text-primary">
+                {trialSentence(trialDays)}
+              </p>
+            )}
           </div>
 
           <ul className="flex flex-col gap-3">
@@ -152,7 +222,15 @@ export function PricingCard({
             <Includes text="Every prospect you want to scan, with industry and competitors detected for you rather than typed in." />
             <Includes text="Twenty intent-tagged questions per scan, put to four AI answer engines and read for facts." />
             <Includes text="The full narrative report — on screen, as a share link, and as a PDF." />
-            <Includes text="Named fixes, ordered by what they would move and what they would cost you." />
+            {/*
+              Launch checklist 3.63. This said "ordered by what they would move and what they
+              would cost you", which is not the order: the report ranks its fixes by the points
+              each recovers (a fix for a noindex tag, a `Disallow: /` rule or a missing
+              robots.txt first) and shows an effort of S, M or L beside each, which ranks
+              nothing. `deriveFixes` and `FixList` are the authority, and
+              `claimsAgainstCode.test.tsx` holds this sentence and the landing page's to them.
+            */}
+            <Includes text="Named fixes, ordered by the points each would recover, with the effort of each shown beside it." />
           </ul>
 
           {/*

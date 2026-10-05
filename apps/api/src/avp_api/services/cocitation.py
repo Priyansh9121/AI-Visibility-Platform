@@ -34,6 +34,7 @@ import structlog
 from pydantic import BaseModel, Field
 
 from ..config import Settings, get_settings
+from . import usage
 from .call_bounds import CallBound
 from .crawl import registrable_domain
 
@@ -188,20 +189,25 @@ async def run_seed_prompt(
     client = CO_CITATION_BOUND.client(settings)
 
     try:
-        async with CO_CITATION_BOUND.deadline():
-            response = await client.messages.parse(
-                model=CO_CITATION_MODEL,
-                max_tokens=CO_CITATION_MAX_TOKENS,
-                output_config={"effort": CO_CITATION_EFFORT},
-                system=SYSTEM_PROMPT,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": f"Subject brand: {subject_brand}\n\nQuestion: {prompt}",
-                    }
-                ],
-                output_format=CoCitationAnswer,
-            )
+        # Counted, not changed (`usage.py`): one `llm.call` line for each request.
+        with usage.track(
+            usage.ANTHROPIC, usage.Purpose.DETECTION, model=CO_CITATION_MODEL
+        ) as call:
+            async with CO_CITATION_BOUND.deadline():
+                response = await client.messages.parse(
+                    model=CO_CITATION_MODEL,
+                    max_tokens=CO_CITATION_MAX_TOKENS,
+                    output_config={"effort": CO_CITATION_EFFORT},
+                    system=SYSTEM_PROMPT,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": f"Subject brand: {subject_brand}\n\nQuestion: {prompt}",
+                        }
+                    ],
+                    output_format=CoCitationAnswer,
+                )
+            call.read_anthropic(response)
     except anthropic.AuthenticationError:
         return CoCitationResult(prompt=prompt, ok=False, error_code="PROVIDER_AUTH_FAILED")
     except anthropic.RateLimitError:

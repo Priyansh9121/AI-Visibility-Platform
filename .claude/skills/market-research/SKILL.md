@@ -44,7 +44,7 @@ For each competitor collect, with URL and as-of date:
 
 Then infer strengths, weaknesses and gaps, labelled as inference.
 
-### Pricing check (the $160 plan)
+### Pricing check (the $150 plan, since 2026-10-04)
 Compare like with like: normalise to the same billing period and currency, and state what one unit of limit costs (per prompt, per engine, per seat) where the data allows. Show the nearest competitors above and below. Output a recommendation with the founder's decision left explicit: what the evidence supports, what it does not, and what would change the view.
 
 ### Agency ICP

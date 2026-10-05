@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -32,6 +33,7 @@ from avp_api.db import get_sessionmaker
 from avp_api.deps import google_provider, scan_executor
 from avp_api.models import Agency, Scan, ScanStatus, ScanTrigger, User, UserRole
 from avp_api.services import auth as auth_service
+from avp_api.services import billing as billing_service
 from avp_api.services import scan_allowance as allowance
 from avp_api.services.google_oauth import GoogleIdentity
 
@@ -245,9 +247,12 @@ async def _continue_with_google(client: AsyncClient) -> Any:
 
 class TestTheNumbersAreArgued:
     def test_the_paid_cap_leaves_a_margin_over_engine_cost(self) -> None:
-        # 40 × $1.70 ≈ $68 against $160 — about 57% gross margin before SerpApi.
+        # 40 × $1.70 ≈ $68 against $150 — about 55% gross margin before SerpApi (it was $160, about
+        # 57%, until the founder's repricing of 2026-10-04). The price is the one the API checks
+        # Stripe against, so the margin is argued at the price the plan really has.
         engine_cost = allowance.PAID_SCANS_PER_MONTH * 1.70
-        assert engine_cost < 160 * 0.5, "the cap must leave at least half the price as margin"
+        price = billing_service.PLAN_PRICE_USD
+        assert engine_cost < price * 0.5, "the cap must leave at least half the price as margin"
 
     def test_the_paid_cap_fits_serpapis_free_tier_even_if_every_scan_is_a_new_client(
         self,
@@ -444,6 +449,158 @@ class TestPaid:
         assert (await _start(client, cid)).status_code == 202
 
 
+    # A free trial (2026-10-04) is the plan, not a lesser one: `trialing` is paid-up
+    # (`billing.is_active`), so it gets the whole forty a month, counted the same way.
+    async def test_a_trialing_agency_has_the_full_forty_and_the_41st_is_refused(
+        self, client: AsyncClient, billing_on, engine
+    ) -> None:  # noqa: ANN001
+        agency_id = await _sign_up(client)
+        await _set_subscription(engine, agency_id, "trialing")
+        _defer(client)
+        cid = await _make_client(client, "helpscout.com")
+        await _seed_scans(engine, agency_id=agency_id, client_id=cid, n=40)
+        resp = await _start(client, cid)
+        assert resp.status_code == 402, resp.text
+        body = resp.json()
+        assert body["code"] == "SCAN_LIMIT_MONTHLY"
+        assert body["scansUsed"] == 40 and body["scanLimit"] == 40
+        _, next_start = allowance.period_bounds(datetime.now(UTC))
+        assert body["periodResetsAt"] == next_start.isoformat().replace("+00:00", "Z")
+
+    async def test_a_trialing_agency_is_not_held_to_the_free_scan(
+        self, client: AsyncClient, billing_on, engine
+    ) -> None:  # noqa: ANN001
+        """The one free scan is for an agency with no subscription; a trial has the plan."""
+        agency_id = await _sign_up(client)
+        await _set_subscription(engine, agency_id, "trialing")
+        _defer(client)
+        cid = await _make_client(client, "helpscout.com")
+        await _seed_scans(engine, agency_id=agency_id, client_id=cid, n=3)
+        assert (await _start(client, cid)).status_code == 202
+        assert await _counted(engine, agency_id) == 4
+
+    async def test_a_trial_that_straddles_two_months_gets_forty_in_each(
+        self, client: AsyncClient, billing_on, engine, settings  # noqa: ANN001
+    ) -> None:
+        """The cap is the UTC calendar month, as it is for `active`: a 30-day trial touches
+        two calendar months (three when it starts on 30 or 31 January: the test below), so it
+        can use forty in each month it touches. Pinned, not changed, here."""
+        agency_id = await _sign_up(client)
+        await _set_subscription(engine, agency_id, "trialing")
+        cid = await _make_client(client, "helpscout.com")
+        in_october = datetime(2026, 10, 20, 12, 0, tzinfo=UTC)
+        await _seed_scans(
+            engine, agency_id=agency_id, client_id=cid, n=40, created_at=in_october
+        )
+        factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+        async with factory() as s:
+            agency = (await s.execute(select(Agency).where(Agency.id == agency_id))).scalar_one()
+            user = (
+                await s.execute(select(User).where(User.agency_id == agency_id))
+            ).scalars().first()
+            assert user is not None
+            october = await allowance.allowance(
+                s, agency, settings, now=datetime(2026, 10, 25, tzinfo=UTC), user=user
+            )
+            november = await allowance.allowance(
+                s, agency, settings, now=datetime(2026, 11, 3, tzinfo=UTC), user=user
+            )
+        assert (october.scans_used, october.scan_limit, october.is_paid) == (40, 40, True)
+        assert october.exhausted is True
+        assert (november.scans_used, november.scan_limit, november.is_paid) == (0, 40, True)
+        assert november.exhausted is False
+        assert november.period_resets_at == datetime(2026, 12, 1, tzinfo=UTC)
+
+    async def test_a_trial_that_touches_three_calendar_months_gets_forty_in_each(
+        self, client: AsyncClient, billing_on, engine, settings  # noqa: ANN001
+    ) -> None:
+        """A 30-day trial that starts on 31 January (2027, not a leap year) runs to 2 March:
+        it touches January, February and March, and has forty scans in each of the three.
+
+        Month by month, as time passes: the count has no upper bound (it never needs one, as
+        nothing is dated in the future), so each month is asked about before the next month's
+        scans exist.
+        """
+        agency_id = await _sign_up(client)
+        await _set_subscription(engine, agency_id, "trialing")
+        cid = await _make_client(client, "helpscout.com")
+        starts = datetime(2027, 1, 31, 12, 0, tzinfo=UTC)
+        assert starts + timedelta(days=30) == datetime(2027, 3, 2, 12, 0, tzinfo=UTC)
+
+        factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+
+        async def asked(now: datetime) -> allowance.Allowance:
+            async with factory() as s:
+                agency = (
+                    await s.execute(select(Agency).where(Agency.id == agency_id))
+                ).scalar_one()
+                user = (
+                    await s.execute(select(User).where(User.agency_id == agency_id))
+                ).scalars().first()
+                assert user is not None
+                return await allowance.allowance(s, agency, settings, now=now, user=user)
+
+        await _seed_scans(engine, agency_id=agency_id, client_id=cid, n=40, created_at=starts)
+        january = await asked(datetime(2027, 1, 31, 18, 0, tzinfo=UTC))
+        await _seed_scans(
+            engine, agency_id=agency_id, client_id=cid, n=40,
+            created_at=datetime(2027, 2, 14, 9, 0, tzinfo=UTC),
+        )
+        february = await asked(datetime(2027, 2, 20, tzinfo=UTC))
+        march = await asked(datetime(2027, 3, 2, 6, 0, tzinfo=UTC))
+
+        # Forty used and none left in January and in February; forty fresh in March.
+        assert [(a.scans_used, a.scan_limit) for a in (january, february, march)] == [
+            (40, 40), (40, 40), (0, 40),
+        ]
+        assert [a.exhausted for a in (january, february, march)] == [True, True, False]
+        assert [a.is_paid for a in (january, february, march)] == [True, True, True]
+        assert march.period_resets_at == datetime(2027, 4, 1, tzinfo=UTC)
+
+
+def _calendar_months_touched(start: datetime, days: int) -> int:
+    """How many UTC calendar months the interval from `start` to `start` + `days` touches."""
+    end = start + timedelta(days=days)
+    months, month_start = 0, allowance.period_bounds(start)[0]
+    while month_start <= end:
+        months += 1
+        month_start = allowance.period_bounds(month_start)[1]
+    return months
+
+
+class TestHowManyMonthsATrialTouches:
+    """What the docs say, in dates: forty a month in each month a 30-day trial touches.
+
+    Two calendar months, or three when it starts on 30 or 31 January (the second one of
+    February is short), or on 31 January in a leap year (29 days in February).
+    """
+
+    @pytest.mark.parametrize(
+        ("start", "months"),
+        [
+            pytest.param(datetime(2026, 10, 4, 12, tzinfo=UTC), 2, id="the day this was decided"),
+            pytest.param(datetime(2026, 12, 31, 12, tzinfo=UTC), 2, id="31 December"),
+            pytest.param(datetime(2027, 1, 29, 12, tzinfo=UTC), 2, id="29 January"),
+            pytest.param(datetime(2027, 1, 30, 12, tzinfo=UTC), 3, id="30 January"),
+            pytest.param(datetime(2027, 1, 31, 12, tzinfo=UTC), 3, id="31 January"),
+            pytest.param(datetime(2028, 1, 30, 12, tzinfo=UTC), 2, id="30 January, a leap year"),
+            pytest.param(datetime(2028, 1, 31, 12, tzinfo=UTC), 3, id="31 January, a leap year"),
+            pytest.param(datetime(2026, 3, 31, 12, tzinfo=UTC), 2, id="31 March"),
+        ],
+    )
+    def test_a_thirty_day_trial(self, start: datetime, months: int) -> None:
+        assert _calendar_months_touched(start, 30) == months
+
+    def test_the_docs_say_so(self) -> None:
+        """The two places that state it say the same thing, and not "two" for every start."""
+        repo = Path(__file__).resolve().parents[3]
+        for path in (Path(allowance.__file__), repo / "docs" / "api-contracts.md"):
+            text = " ".join(path.read_text().split())
+            assert "forty in each of the two" not in text, path
+            assert "forty in each calendar month it touches (up to three)" in text, path
+            assert "30 or 31 January" in text, path
+
+
 # ---------------------------------------------------------------------------
 # off when billing is not configured
 # ---------------------------------------------------------------------------
@@ -501,6 +658,22 @@ class TestTheBillingResponse:
         assert (body["scansUsedThisPeriod"], body["scanLimit"]) == (12, 40)
         _, next_start = allowance.period_bounds(datetime.now(UTC))
         assert body["periodResetsAt"] == next_start.isoformat().replace("+00:00", "Z")
+
+    async def test_trialing_reads_forty_this_month_with_the_reset(
+        self, client: AsyncClient, billing_on, engine
+    ) -> None:  # noqa: ANN001
+        """2026-10-04: a trial reads exactly as the plan does, the 40 included."""
+        agency_id = await _sign_up(client)
+        await _set_subscription(engine, agency_id, "trialing")
+        cid = await _make_client(client, "helpscout.com")
+        await _seed_scans(engine, agency_id=agency_id, client_id=cid, n=12)
+        body = (await client.get(f"{BASE}/agencies/{agency_id}/billing")).json()
+        assert body["subscriptionStatus"] == "trialing"
+        assert body["isActive"] is True
+        assert (body["scansUsedThisPeriod"], body["scanLimit"]) == (12, 40)
+        _, next_start = allowance.period_bounds(datetime.now(UTC))
+        assert body["periodResetsAt"] == next_start.isoformat().replace("+00:00", "Z")
+        assert body["freeScanRequiresGoogle"] is False
 
 
 # ---------------------------------------------------------------------------

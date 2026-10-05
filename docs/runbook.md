@@ -72,8 +72,8 @@ All of this happens in Stripe's **Test mode**. Never use a live key.
    after deploy applies whatever its age.
 
 2. **Price.** In the Stripe dashboard (Test mode), open Product catalogue and
-   find or create the product with a recurring monthly Price of US$160. Copy
-   its Price ID (`price_…`).
+   find or create the product with a recurring monthly Price of US$150 (the
+   price since 2026-10-04). Copy its Price ID (`price_…`).
 
 3. **Render.** On the API service (`ai-visibility-platform-5gk4`), open
    Environment. Set `STRIPE_PRICE_ID` to that id. Confirm `STRIPE_SECRET_KEY`
@@ -84,7 +84,10 @@ All of this happens in Stripe's **Test mode**. Never use a live key.
    The URL is
    `https://ai-visibility-platform-5gk4.onrender.com/api/v1/billing/webhook`. Select exactly these
    events: `checkout.session.completed`, `customer.subscription.created`,
-   `customer.subscription.updated`, `customer.subscription.deleted`. Save,
+   `customer.subscription.updated`, `customer.subscription.deleted` and
+   `customer.subscription.trial_will_end`. The fifth only writes a log line
+   (`billing.trial_will_end`, a few days before a free trial ends); it changes
+   nothing, and the endpoint works without it. Save,
    reveal the endpoint's Signing secret (`whsec_…`), set it as
    `STRIPE_WEBHOOK_SECRET` on the Render API service, and save.
 
@@ -102,7 +105,9 @@ All of this happens in Stripe's **Test mode**. Never use a live key.
    - (a) Settings shows the plan as active, with "Renews" and a date.
    - (b) In Stripe → Webhooks → your endpoint → Event deliveries, each of the
      four event types answered 200. The subscription events answer
-     `{"received":true,"handled":true}`.
+     `{"received":true,"handled":true}`. (The fifth, `customer.subscription.trial_will_end`,
+     is sent only for a free trial, a few days before it ends; it answers the same and
+     writes only a log line.)
    - (c) Press **Resend** on one delivered `customer.subscription.updated`. It
      answers `{"received":true,"handled":false,"duplicate":true}` and changes
      nothing.
@@ -130,6 +135,26 @@ All of this happens in Stripe's **Test mode**. Never use a live key.
 
 8. **Stop.** Nothing is ever switched to live mode from this runbook. Going
    live is the founder's key swap after Stripe's business verification.
+
+## The free trial, and what it depends on in Stripe
+
+`STRIPE_TRIAL_DAYS` on the Render API service is the trial's length; 0, the default, is no
+trial. It is the founder's to turn on, in test mode first. Two settings in the Stripe
+dashboard decide how it behaves, and the code cannot see either:
+
+- **Trial-ending reminder email.** Stripe can email a customer before a trial ends. AVP
+  sends no email of its own (Resend is off), so that reminder, if wanted, is Stripe's: a
+  Billing setting in the Stripe dashboard, and the founder's decision.
+- **How the portal cancels** (Settings → Billing → Customer portal, step 5 above): at the
+  end of the billing period, or at once. Either way a trial cancelled before its end is not
+  charged. At the period's end the agency keeps the plan until the trial ends and Settings
+  shows "Ends" and the day; cancelled at once, it loses the plan, and the allowance with it,
+  at that moment.
+
+To rehearse the first charge, use a Stripe test clock in the dashboard (Test mode) to move
+the clock past the trial's end: the subscription goes from `trialing` to `active`, and
+Settings drops "Free trial until" for "Renews". Do it with the test card, as in the steps
+above.
 
 ## Confirm how Render passes the client IP (rate limits)
 
@@ -195,6 +220,43 @@ with it), so it resets every login, sign-up, reset and change-password window an
 every client's 24-hour detection day. For the same reason a client's detection day
 cannot be cleared by hand without that secret.
 
+## Reading the billing price lines
+
+**When:** a **deployed** API (staging or production) reads the Stripe Price named by
+`STRIPE_PRICE_ID` once at start and then once an hour, when both `STRIPE_SECRET_KEY` and
+`STRIPE_PRICE_ID` are set. A local API never does: starting it on a laptop calls nothing
+at Stripe, whatever its `.env` holds. The check is a read; it changes nothing at Stripe.
+
+**Where:** Render → the **API** service → **Logs**, by event name.
+
+- `billing.price_check ok=True price_id=…`: the Price is active, licensed (a flat amount,
+  not metered) and US$150 a month, billed every month: what the pricing card and Settings
+  say.
+- `billing.price_mismatch` (warning): it is not. Each field comes as `expected_…` and
+  `actual_…`: the amount in cents (15000 is US$150), the currency, the interval, the
+  interval count, whether the Price is active, and its usage type. An archived Price
+  (`actual_active=False`) and a metered one (`actual_usage_type=metered`) are mismatches
+  even when the amount is right: checkout cannot use the first and the second is billed by
+  usage, not as the plan. The fix is the founder's: create an active, licensed US$150
+  monthly Price in Stripe (test mode until 2.2) and set `STRIPE_PRICE_ID` on the API
+  service to its id. The line repeats every hour until then.
+- `billing.price_check_failed error_type=…` (warning): Stripe could not be read (a wrong
+  key, the network, a timeout, or an answer that is not a Price). Only the error's class
+  is logged, never its message.
+- `billing.half_configured missing=…` (error, once at start, deployed only): billing is
+  only part set up. `missing` names the one variable that is not set, and never a value.
+  - `STRIPE_SECRET_KEY` or `STRIPE_PRICE_ID`: only one of the two is set. Billing then
+    counts as not configured: checkout answers 503 and the scan allowance is off for
+    every agency.
+  - `STRIPE_WEBHOOK_SECRET`: the key and the Price id are set but not the webhook secret.
+    Customers can pay, and every Stripe webhook is refused with a 503, so a payment is
+    never recorded and the agency never shows as subscribed.
+
+  Set the missing variable.
+
+`STRIPE_LOG` does nothing on this service: the container's start script unsets it, because
+the Stripe SDK would otherwise print every request, error message and body to stderr.
+
 ## If the logs show a second Stripe subscription
 
 Checkout refuses a new subscription while one is live, expires older open
@@ -218,6 +280,11 @@ new session. If two subscriptions still end up on one customer, the API logs
    a metadata key); Stripe sends a new `customer.subscription.updated`, which
    AVP applies as the newest event. Re-check Billing. Rehearse this in test
    mode before relying on it.
+
+Never clear an agency's Stripe columns by hand (`stripe_customer_id`,
+`stripe_subscription_id`, `subscription_status`, `stripe_event_at`) to start it
+again or to make Settings look right: a row with none of them reads as an agency
+that has never had a subscription, and checkout will offer it a second free trial.
 
 ## Reading the API's memory
 
@@ -393,9 +460,10 @@ wipe.
 ## Reading competitor-search lines
 
 **When:** competitor detection lost a search (`competitors.serp_failed`), or you want
-to know how long SerpApi takes from Render and whether the retry ever helps. A
-detection makes 3 to 6 Google searches through SerpApi, three at a time, and the API
-logs a line for each search that reached SerpApi.
+to know how long SerpApi takes from Render and whether the retry ever helps, or how many
+of the month's searches are left. A detection makes 3 to 6 Google searches through
+SerpApi, three at a time, and the API logs a line for each search that reached SerpApi,
+and one more for what the account has left.
 
 **Where:** the Render dashboard → the **API** service → **Logs**. Search for the event
 name. Every line below carries numbers, our own codes and the HTTP status, and nothing
@@ -408,11 +476,14 @@ else: no query, no client, no domain, no URL, no key.
 | `serp.completed` | info | SerpApi answered the search, whatever it said | `elapsed_ms`, `attempts`, `hits`, `status`, `error_code` |
 | `serp.retried` | info | the first attempt got no answer and the retry did; logged before that search's `serp.completed` | `attempts` (always 2), `kinds` (how the first attempt failed), `elapsed_ms` |
 | `serp.attempts_failed` | warning | no attempt got an answer, so the search failed | `attempts`, `kinds` (how each attempt failed), `elapsed_ms` |
+| `serp.quota_left` | info | once for each detection, after its searches, when SerpApi's account said how many searches are left | `left`, and `plan_searches` when the account gave the plan's size |
+| `serp.quota_low` | warning | the same moment, in addition, when `left` is under 50 | the same two fields |
+| `serp.quota_unavailable` | info | the account could not be read: written instead of the two lines above, one for the detection | `kind` |
 
 **Every search that reached SerpApi logs exactly one of `serp.completed` and
 `serp.attempts_failed`**, and `serp.retried` besides when a retry answered, so those two
 add up to the number of searches made. A search that was never sent (no `SERPAPI_KEY`)
-logs none of the three.
+logs none of the three. The three quota lines are not searches and are not in that count.
 
 **`serp.completed`, field by field**
 
@@ -429,7 +500,12 @@ logs none of the three.
   `SERP_AUTH_FAILED` (401: the key is wrong or revoked; a `serp.auth_failed` error line
   comes with it), `SERP_RATE_LIMITED` (429), `SERP_HTTP_<n>` (any other status; a
   `serp.http_error` warning with the status comes with it), `SERP_BAD_JSON` (a 200 whose
-  body was not JSON) or `SERP_API_ERROR` (a 200 whose body carried an `error`).
+  body could not be read as a page of results: it was not JSON or was nested too deeply to
+  read, or it was JSON of another shape, such as a list, a string, a number or `null`, an
+  `organic_results` that is not a list, or a list of results of which none is an object) or
+  `SERP_API_ERROR` (a 200 whose body carried an `error`). A page in which only some results
+  can be used is read: the others are skipped (a result that is not an object, or whose link
+  is not a string, is one of them), and `hits` counts what was kept.
 
 **`serp.retried` and `serp.attempts_failed`, field by field**
 
@@ -468,6 +544,42 @@ search it records as successful, so a search it finished after we stopped waitin
 be billed and only the account's count would show it, not these lines (the evidence is
 in the comment at the top of `services/serp.py`).
 
+**How many searches are left: `serp.quota_left` and `serp.quota_low`.** A detection reads
+SerpApi's account once, after its searches and while the model is still answering, and logs
+what it says. The read is free (it is not a search and does not count against the month),
+it is not retried, and it is cut off after 5 s. The model's calls take far longer, so the
+read does not lengthen a detection (if they took less, it would add at most the rest of
+its 5 s). Only a detection that searches reads it: a client's first scan, and a press of
+Detect competitors (once per client per 24 hours). A repeat scan carries the client's set
+forward, searches nothing and reads nothing.
+
+- `left`: the searches the plan still allows this month (SerpApi's `plan_searches_left`).
+  `plan_searches`: the plan's size (`searches_per_month`), left out when the account does
+  not give one, so `left=184 plan_searches=250` is 184 of 250. The Free plan is 250 a
+  month, and the account is shared with production, so a development run spends from the
+  same count. Only these two numbers are logged: the account's body also carries the API
+  key and the owner's address, and neither is ever written.
+- **It lags.** SerpApi's count trails the searches by a minute or two, and a search that
+  failed can be counted for a moment and then dropped (measured 2026-10-03). The line
+  written right after a detection can be off by that detection's own searches, and the next
+  detection's line is the settled one. Read the trend, not one line.
+- **`serp.quota_low` is `left` under 50.** A detection makes up to six searches, so under 50
+  is at most eight more detections. Open SerpApi's account page for the figure and the
+  renewal date, then decide: wait for the renewal, or move from the Free plan to SerpApi's
+  Starter plan.
+  **That is the founder's decision.** If the searches stop being answered (`serp.completed`
+  lines with an `error_code`, `competitors.serp_failed`), a detection runs on the model's
+  answers alone and its set says so (`weak_signal`, or `no_signal` if the model names no one
+  either).
+- **`serp.quota_unavailable` instead of `serp.quota_left`** means the read did not work. It
+  is one line at INFO, `kind` and nothing else, so it is in the logs Render keeps and nobody
+  has to turn DEBUG on to see it. `kind` says why: `http_<status>` (SerpApi answered with that
+  status); `connect`, `read`, `write`, `pool` or `total` (no answer within 5 s, and which part
+  ran out); `bad_json` or `no_count` (it answered, and the body was not a JSON object, or had no
+  whole-number `plan_searches_left`, which would mean SerpApi changed it); `no_key`; or an error's class
+  name. A detection with neither line did not get as far as the read: its searches raised,
+  as they do with no `SERPAPI_KEY`.
+
 **What would justify a change.** The timeouts and the retry are unchanged until there is
 data. This is what the numbers would mean.
 
@@ -488,6 +600,162 @@ once, so their lines interleave), the market, the URL, the key and anything Serp
 returned. `competitors.serp_failed` (one for each search that failed, an error answer
 included) names the query and its `error_code`, and `competitors.detected`, logged after
 the searches' lines, carries the `client_id` and the `country` the searches were made in.
+
+## Reading the usage lines
+
+**When:** you want to know what a scan used: how many requests each provider got, how many
+tokens they reported back, and how many requests were retries or got no answer; or what a scan
+cost to run. The API writes two lines about it, from U1 (2026-10-04): `llm.call`, one line for
+each paid HTTP request, and `scan.usage`, one total for each scan. Both carry counts and
+nothing else: no prompt, no answer, no brand, no domain, no error message and no key.
+
+**Where:** the Render dashboard → the **API** service → **Logs**. Search for the event name, or
+for `scan_id=<the scan's id>`, which finds a scan's `scan.usage` line and the `llm.call` lines
+it made. Both are INFO lines. **`LOG_LEVEL` must stay at `INFO` or be unset (unset is INFO on
+staging and production), or both lines disappear:** at `WARNING` or above neither is written.
+
+**The lines**
+
+| Event | Level | When | Carries |
+|---|---|---|---|
+| `llm.call` | info | a paid request has ended: one line for each HTTP request to Anthropic, OpenAI, Perplexity or Google (a request the SDK or the adapter sent again is a second line) | `scan_id`, `provider`, `model`, `purpose`, `engine`, the token and search counts, `retry`, `ok`, `error` |
+| `scan.usage` | info | once, when the executor that ran a scan is done with it, however the scan ended | `scan_id`, then counts for each line of the scan and for SerpApi, flat as `key=value` |
+
+A scan of twenty prompts on four engines writes up to about 170 `llm.call` lines, and a retry
+adds one: the engines (prompts times engines), a sentiment request for each answer that named
+the client, one for prompt generation, one for the fixes and, on a client's first scan, two to
+four for competitor detection (a later scan carries the competitor set forward and makes
+none). `scan.usage` is one line of about one and a half kilobytes for four engines.
+
+**`llm.call`, field by field**
+
+- `scan_id`: the scan the request was made for. `None` outside a scan (see below).
+- `provider`: `anthropic`, `openai`, `perplexity` or `google` (Gemini).
+- `model`: the model the provider's response says served the request. When the response names
+  none, or there was no response, it is the model the API asked for, so a request that failed
+  still says what was being called.
+- `purpose`: `engine`, `sentiment`, `prompt_generation`, `fixes`, `detection` (the co-citation
+  requests that find rivals) or `classification`.
+- `engine`: the engine's id (`claude`, `claude_search`, `chatgpt`, `perplexity`, `gemini`) for
+  an engine request, `None` otherwise.
+- `input_tokens`, `output_tokens`: as the provider reports them. Reasoning is inside the output
+  count, not on top of it.
+- `reasoning_tokens`: the part of the output that was reasoning, where the provider reports it.
+- `cache_read_tokens`, `cache_write_tokens`: cached tokens, as reported. Anthropic's input count
+  leaves them out and OpenAI's and Google's include the cached part. Nothing the API sends is
+  cacheable today, so they are 0.
+- `search_invocations`: web searches or grounding queries the request made (Claude's web search,
+  Perplexity's `web_search`, Gemini's grounding queries).
+- `retry`: this request sent an earlier one again for the same call. Two things do that: the
+  Anthropic SDK, which retries once inside a call, and Perplexity, which retries once after a
+  429 that names its wait. SerpApi's retry is not an `llm.call`: it is in `serpapi_attempted`.
+- `ok`: a response came back and its usage was read. `False` means no usage came back, so the
+  counts are 0: there was no response (a timeout, a refused connection, an error status) or the
+  SDK could not parse the response. A request that was answered and then did not count as an
+  answer (a truncated or refused answer) is `ok`: it was billed, and its usage is logged.
+- `error`: why `ok` is `False`, as one word: `http_<status>` for an error status (`http_429`,
+  `http_529`), otherwise the exception's class (`APITimeoutError`, `TimeoutError`,
+  `ValidationError`, `CancelledError`). It is never the message. `None` when `ok` is `True`.
+
+**`scan.usage`, field by field**
+
+`scan_id`, then these for each of `engines` (every engine added together), `engine_<id>` (each
+engine that was asked, such as `engine_claude_calls`), `sentiment`, `prompt_generation`, `fixes`
+and `detection`:
+
+- `<line>_calls`: requests made, retries included.
+- `<line>_unanswered`: of those, how many got no usage back (`ok=False`).
+- `<line>_retries`: of those, how many were sent again.
+- `<line>_input_tokens`, `<line>_output_tokens`, `<line>_reasoning_tokens` (inside the output),
+  `<line>_cache_read_tokens`, `<line>_cache_write_tokens`, `<line>_search_invocations`: the sums
+  of the `llm.call` lines of that line.
+- `<line>_model`: the model or models that served it, joined with `+`. **Only a request that
+  was answered names a model.** A request that failed carries the model the API asked for, which
+  can be an alias of the one that answers (`gpt-5.5` for `gpt-5.5-2026-04-23`) and would make one
+  model look like two.
+
+**A counter that is zero is left out: read an absent counter as zero.** The three every line
+carries are `_calls`, `_input_tokens` and `_output_tokens`. A `_model` that nobody named is left
+out too. `engines_*` is every engine added together: read the `engine_<id>_*` fields for one
+engine, and never add `engines_*` to them.
+
+SerpApi, for the scan's detection searches. The first four are always present:
+
+- `serpapi_attempted`: HTTP requests made, retries included.
+- `serpapi_ok`: answered with a result page. SerpApi bills it unless it served the search from its
+  cache.
+- `serpapi_error`: answered with an error (a 401, a 429, any other status, a body that could not
+  be read as a page of results, or an `error` in the body). Counted as not billed, which holds for
+  all but one kind: a 200 whose body could not be read was a 200 to SerpApi, which may have counted
+  it as a search. This count cannot tell that kind from the rest (see "What the lines undercount").
+- `serpapi_no_answer`: requests that got no answer (a timeout or a transport failure). Nobody can
+  say whether SerpApi billed them.
+- `serpapi_billed_or_unknown`: `serpapi_ok` plus `serpapi_no_answer`. **An upper bound on what
+  SerpApi billed, but for one kind of answer**: an answered search is billed unless SerpApi served
+  it from its cache, an error answer is not billed, and a search nobody answered may have been. The
+  exception is a 200 whose body could not be read: it is counted in `serpapi_error`, so it is not
+  in this number, and SerpApi may have billed it. Left out when it is zero.
+
+`serpapi_ok`, `serpapi_error` and `serpapi_no_answer` add up to `serpapi_attempted`.
+
+**One total for each scan, and what is not in it.** `scan.usage` is logged once for each scan an
+executor ran, whether it finished, ended partial or failed, stopped on an error of ours, was
+cancelled because its lease was lost, or ran out of time. An executor that did not claim the scan
+(a duplicate submission, a scan already finished) logs none: it spent nothing.
+
+These are never in a scan's total. Their `llm.call` lines carry `scan_id=None` and no
+`scan.usage` follows them:
+
+- the detect route, `POST /clients/{clientId}/competitors/detect` (`purpose=detection`);
+- the fixes route, `POST /scans/{scanId}/fixes` (`purpose=fixes`);
+- classification at intake, `POST /clients` and `POST /clients/{clientId}/reclassify`
+  (`purpose=classification`; it is left out of a scan's total even when it is logged inside one);
+- an ad-hoc prompt run, `POST /clients/{clientId}/prompt-runs`.
+
+A scan's own detection and fixes requests, made while the scan runs, are in its total.
+
+**What the lines undercount**
+
+- A response the SDK could not parse (it did not fit the schema) was billed and logs zero counts:
+  `ok=False error=ValidationError`. A run of these in a `_unanswered` count is the sign.
+- A request that timed out may have been billed with nothing to show for it: `ok=False`, `error`
+  `APITimeoutError` or `TimeoutError`, zero counts. A request cut by `CancelledError` is the same.
+- A scan's prompt slots that are still running after the scan has failed are not in its total.
+  When one slot raises, the others are not cancelled, so their paid requests go on and are logged
+  after `scan.usage`. Their `llm.call` lines carry the scan's `scan_id`: search for it.
+- Whether a SerpApi search with no answer was billed. Only the account's count says.
+- A SerpApi search answered with a 200 whose body could not be read as a page of results. It is
+  counted in `serpapi_error`, which is not billed, and it is not in `serpapi_billed_or_unknown`;
+  but SerpApi sent it as a 200 and may have counted it as a search. How many there were is in the
+  `serp.completed` lines with `error_code=SERP_BAD_JSON`: they carry no scan id and also cover the
+  searches the detect route makes, so read them over the same period. Whether any was billed, only
+  the account's count says.
+
+**How to price a line**
+
+```
+cd apps/api && uv run python scripts/verify_e2e.py --price-usage '<pasted line>'
+```
+
+Paste the `scan.usage` line as Render shows it, with its timestamp and level, or just its
+`key=value` fields. Give `-` instead of the line to read it from standard input
+(`pbpaste | uv run python scripts/verify_e2e.py --price-usage -`). It needs no database and no
+key and calls no provider. A line from before `serpapi_billed_or_unknown` existed prices the same.
+
+`--serp-per-search <price>` is optional: what your SerpApi plan charges for one search, a finite
+number of 0 or more (anything else is refused with exit code 2). With it the command prices
+`serpapi_billed_or_unknown`, an upper bound, and says so; without it SerpApi is listed under
+missing rates.
+
+It prints each line of the scan (each engine, sentiment, prompt generation, fixes, detection)
+with its model, requests, tokens and what they come to at the rates in `RATES` in
+`scripts/verify_e2e.py`; the total; and every rate it used with the day it was read and the
+vendor page it came from. **The rates are perishable.** Each is a vendor's published rate on the
+date shown, and nothing the command prints is a quote or a bill. A line it cannot price (a model
+with no rate in the table, a line that more than one model with different rates served, no model
+at all) is listed under MISSING RATES and left out of the total, never priced at nothing. Cached
+tokens are not priced separately, since no cached-token rate is recorded, and the command says
+when a line has some.
 
 ## Supabase grants check
 
@@ -610,9 +878,13 @@ it is: the fix is a new revision, because a grant changed by hand is invisible t
   before-the-deploy query listed: the revision skipped it.
 - If query 3 still shows `postgres` rows for `public`, the likeliest cause is that the deploy
   ran as a user that is neither `postgres` nor a member of it. The revision then skips that
-  step and logs a warning from `alembic.runtime.migration` that starts with
-  `revoke_data_api_grants`; search the deploy log for it. The server's own notice never
-  reaches the log.
+  step, and the deploy log says so in two lines from `alembic.runtime.migration`, both
+  containing `revoke_data_api_grants`: first the server's own notice, logged as
+  `Postgres NOTICE: revoke_data_api_grants: this user is not a member of role postgres, ...`
+  and then the revision's own warning. Search the deploy log for `revoke_data_api_grants`.
+  The warning is the one to rely on: the revision writes it itself, while the notice has to
+  come through the connection from the database, and it has not been checked that Supabase's
+  pooler passes it on.
 - A `postgres` row whose schema is `(every schema)` is a default that applies to every schema.
   A per-schema revoke cannot remove it, so the revision leaves it; removing it takes a
   revision of its own, and whether to write one is the founder's call.

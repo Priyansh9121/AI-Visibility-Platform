@@ -3,12 +3,16 @@
 WHY A GATE EXISTS AT ALL
 ------------------------
 Until this date nothing in the product was behind the plan, and the pricing
-card said so. Stripe is wired to a $160 Price; no rational agency pays for
-what it already gets free. And a scan is not free to run: about **$1.70 in
-engine calls** each, plus 6 of the **250 SerpApi searches** the Free tier
-allows per month — about 41 scans platform-wide before every user's
-competitor detection stops at once. An unmetered free tier is an open cost
-line with a shared fuse. So: the plan gates STARTING a scan, and only that.
+card said so. Stripe is wired to a $160 Price (repriced to $150 on 2026-10-04,
+founder decision); no rational agency pays for what it already gets free. And
+a scan is not free to run: about **$1.70 in engine calls** each, plus, on a
+client's first scan, 6 of the **250 SerpApi searches** the Free tier allows per
+month (up to 12 when searches are retried; a later scan carries the client's
+competitor set forward and spends none) — about 41 new clients platform-wide,
+about 20 if every search is retried, before every user's competitor detection
+stops at once. An unmetered free tier is an open cost line with a shared fuse. So: the plan
+gates STARTING a scan and, since 2026-10-04, pressing the competitor-detection
+button (DETECTION FROM THE BUTTON, below), and nothing else.
 
 THE ALLOWANCE
 -------------
@@ -17,7 +21,14 @@ THE ALLOWANCE
   (2026-09-29, below). Viewing reports, share links and PDFs stays free
   forever.
 * **Paid** (`services/billing.is_active`: `active` or `trialing`):
-  `PAID_SCANS_PER_MONTH` per agency per calendar month, UTC.
+  `PAID_SCANS_PER_MONTH` per agency per calendar month, UTC. **A free trial
+  (2026-10-04) is paid for this purpose**: a `trialing` agency has the plan's
+  whole forty, not a smaller one, and they are counted exactly as for `active`,
+  by the calendar month, so a trial has forty in each calendar month it touches
+  (up to three): a 30-day trial touches two, or three when it starts on 30 or 31
+  January (or on 31 January in a leap year). Scans started before the trial in the
+  same month count against that month's forty, as they would for an agency that
+  had paid.
 * A `canceled`, `past_due`, `unpaid` or `paused` subscription is free.
 * Existing agencies are grandfathered nothing: completed scans already in the
   table count, so an agency that has scanned is at "free scan used". That is
@@ -116,10 +127,12 @@ configured and a confirmation flow, which is a later decision.
   identity enough, so the forty a month applies to any seated user, password
   or Google. An exempt operator has a `google_sub` by definition.
 * **Everything else stays open to a password-only user**: signing up,
-  adding clients, competitor detection, and viewing, sharing and exporting
-  reports. The way through already exists: Continue with Google on the same
-  address links the account by its Google-verified email
-  (`services/google_oauth.resolve_identity`).
+  adding clients, replacing a client's competitors by hand, and viewing,
+  sharing and exporting reports. (The competitor-detection button is not on
+  that list since 2026-10-04: it is for the plan, whoever presses it. See
+  DETECTION FROM THE BUTTON below.) The way through already exists: Continue
+  with Google on the same address links the account by its Google-verified
+  email (`services/google_oauth.resolve_identity`).
 
 **One Google account, one free scan** — and that is why this closes the
 farm rather than raising its price. `google_sub` is UNIQUE and a user
@@ -174,6 +187,33 @@ CI — the gate is OFF: `gate_enabled` is false and `assert_can_start` is never
 called. That matches how checkout already answers `503 billing-not-configured`
 rather than breaking the app: nobody can subscribe on such a deployment, so a
 gate there would be a cap nobody could lift. With both set, the gate is ON.
+
+DETECTION FROM THE BUTTON IS FOR THE PLAN (2026-10-04, launch checklist 3.61)
+-----------------------------------------------------------------------------
+`POST /clients/{clientId}/competitors/detect` runs a detection on its own: about six
+SerpApi searches, out of the same 250 a month. 3.53 gave each client one run a day
+(`rate_limit.claim_detection`), and that caps a client, not an agency: an account can add
+clients without a classification call and detect once on each. So the route is for an
+agency that is paid up and for the exempt operator, and `assert_may_run_detection` refuses
+everyone else with `402 subscription-required` (the founder's decision). It is built from
+the pieces above and adds no number of its own:
+
+* **The scan gate's own switch.** With billing not configured `gate_enabled` is false and
+  the route is open, for the reason above. It is that function, not a second reading of
+  the two Stripe settings, so the two cannot disagree about what "configured" is.
+* **Paid up** is `billing.is_active`: `active` or `trialing`. `past_due`, `unpaid`,
+  `paused`, `incomplete`, `canceled` and a status nobody has decided about are refused.
+  A payment is identity enough, so a paid agency's password-only user is let through.
+* **The exemption is the scan's**, `is_exempt`: the listed address AND a linked Google
+  identity, for that user and not for the agency's other seats.
+* **One sentence for every case**, naming no status and no code, so a lapsed agency and one
+  that never subscribed read the same words.
+* **A scan's own detection is not this route.** `competitors.ensure_set_for_scan` runs
+  inside a scan the allowance has already let start, whatever the plan, and detects for a
+  client that has no competitor set to carry forward. It is neither refused here nor
+  counted against the day.
+* **No count, so no lock.** A subscription status is not a number to race: the check reads
+  the agency `current_principal` loaded from Postgres at the start of the request.
 """
 
 from __future__ import annotations
@@ -181,28 +221,33 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+import structlog
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings
-from ..errors import ScanLimitReached
+from ..errors import ScanLimitReached, SubscriptionRequired
 from ..models.scan import Scan, ScanStatus
 from ..models.tenancy import Agency, User
 from . import billing
+
+logger = structlog.get_logger(__name__)
 
 # One full scan and report, free, per agency, for the life of the agency. One
 # is the number that lets a prospect judge the product on a business they know
 # and is not a number worth building a second agency to get again.
 FREE_SCAN_ALLOWANCE = 1
 
-# Forty a month on the $160 plan. The arithmetic: a scan costs about $1.70 in
-# engine calls (measured, build log 2026-09-12: 20 prompts × 4 engines plus
-# sentiment), so 40 × $1.70 ≈ $68 of engine cost against $160 — about 57%
-# gross margin before SerpApi. SerpApi's Free tier is 250 searches a month and
-# detection spends 6 per NEW client, so forty scans of forty new clients would
-# be 240 searches; forty re-scans of existing clients spend none. The cap is
-# per calendar month, UTC, because Stripe's billing period and a calendar
-# month differ by at most a few days and a month is what the card can say.
+# Forty a month on the $150 plan (repriced to $150 on 2026-10-04, founder
+# decision; it was $160). The arithmetic: a scan costs about $1.70 in engine
+# calls (measured, build log 2026-09-12: 20 prompts × 4 engines plus
+# sentiment), so 40 × $1.70 ≈ $68 of engine cost against $150 — about 55% gross
+# margin before SerpApi (about 57% at the old $160). SerpApi's Free tier is 250
+# searches a month and detection spends 6 per NEW client, so forty scans of
+# forty new clients would be 240 searches; forty re-scans of existing clients
+# spend none. The cap is per calendar month, UTC, because Stripe's billing
+# period and a calendar month differ by at most a few days and a month is what
+# the card can say.
 PAID_SCANS_PER_MONTH = 40
 
 # A scan that finished with something to show. Holds its slot for good.
@@ -243,6 +288,17 @@ IN_FLIGHT_WINDOW = timedelta(minutes=15)
 CODE_FREE_USED = "SCAN_LIMIT_FREE_USED"
 CODE_MONTHLY = "SCAN_LIMIT_MONTHLY"
 CODE_VERIFY_REQUIRED = "SCAN_LIMIT_VERIFY_REQUIRED"
+
+# What `POST /clients/{clientId}/competitors/detect` says to an agency that is not paid up
+# (launch checklist 3.61). One sentence for every case: it names no status and carries no
+# code, because a lapsed agency and one that never subscribed are told the same thing. The
+# second sentence is what `competitors.ensure_set_for_scan` does: a scan detects for a
+# client that has no set yet, whatever the plan. It does not promise a scan is available:
+# starting one is the allowance's own question and has its own answer.
+DETECTION_NEEDS_PLAN = (
+    "Running competitor detection on its own needs an active subscription. "
+    "A scan still finds a client's competitors the first time it runs."
+)
 
 
 def gate_enabled(settings: Settings) -> bool:
@@ -482,3 +538,35 @@ async def assert_can_start(
         scanLimit=current.scan_limit,
         periodResetsAt=None,
     )
+
+
+def assert_may_run_detection(
+    settings: Settings, *, agency: Agency, user: User, client_id: str
+) -> None:
+    """Let `POST /clients/{clientId}/competitors/detect` through, or refuse it with a 402.
+
+    Allowed when any one holds: billing is not configured (`gate_enabled`, the scan gate's
+    own switch); the agency is paid up (`billing.is_active`: `active` or `trialing`); the
+    requesting user is the exempt operator (`is_exempt`: the listed address AND a linked
+    Google identity, never the address alone). Anything else raises
+    `SubscriptionRequired` with `DETECTION_NEEDS_PLAN`, and logs one `info` line,
+    `competitors.detect.subscription_required`, with the two ids and nothing else.
+
+    Called by the route after the client is found, so another agency's client is a `404`
+    whatever this agency's plan, and before `rate_limit.claim_detection`, so a press the plan
+    refuses spends none of the client's day. It touches no Redis key, opens no scan and makes
+    no search. `client_id` goes to the log line and nowhere else.
+
+    `agency` and `user` are the principal's: `current_principal` read both from Postgres at
+    the start of the request, which is as fresh as this check needs. There is no count to
+    race, so no row lock is taken (`assert_can_start` takes one because it counts).
+
+    A scan's own detection (`competitors.ensure_set_for_scan`) never calls this: it runs
+    inside a scan the allowance has already let start, and is not refused by the plan.
+    """
+    if not gate_enabled(settings) or billing.is_active(agency) or is_exempt(settings, user):
+        return
+    logger.info(
+        "competitors.detect.subscription_required", client_id=client_id, agency_id=agency.id
+    )
+    raise SubscriptionRequired(detail=DETECTION_NEEDS_PLAN)

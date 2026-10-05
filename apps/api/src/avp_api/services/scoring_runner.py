@@ -288,12 +288,18 @@ async def score_scan(
         _apply(row, computed)
         await session.flush()
 
+        # `excluded` is each dimension left out with the reason `compute_score` recorded for
+        # it, in dimension order: `{'citation_strength': 'NO_AUTHORITY_DATA'}`, or `{}` when
+        # nothing was left out. It was the dimension names alone until launch checklist 3.58,
+        # so "why was Citation Strength left out?" took elimination. Both halves are fixed
+        # vocabularies (a `Dimension` value, a reason code), never text from an answer or a
+        # page, so the line stays facts only.
         logger.info(
             "scoring.completed",
             scan_id=scan.id,
             status=computed.status,
             composite=str(computed.composite),
-            excluded=sorted(computed.excluded_dimensions),
+            excluded=dict(sorted(computed.excluded_dimensions.items())),
             flags=computed.degradation_flags,
             inputs_digest=computed.inputs_digest[:16],
             results=len(results),

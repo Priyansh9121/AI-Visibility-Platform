@@ -38,7 +38,8 @@ import { SCAN_DURATION_SENTENCE } from '@/lib/scans/scanOutcome';
 const PRICE_WORDS = [
   'nineteen', 'twenty', 'twenty-nine', 'thirty', 'thirty-nine', 'forty', 'forty-nine', 'fifty',
   'fifty-nine', 'sixty', 'seventy', 'seventy-nine', 'eighty', 'ninety', 'ninety-nine',
-  'one hundred', 'a hundred', 'one hundred and sixty', 'two hundred',
+  'one hundred', 'a hundred', 'one hundred and fifty', 'one hundred fifty', 'a hundred and fifty',
+  'one hundred and sixty', 'two hundred',
 ];
 import { renderToStaticMarkup } from 'react-dom/server';
 import { LandingView } from './LandingView';
@@ -86,7 +87,7 @@ describe('the page explains the product', () => {
     // question.
     expect(out).toContain('One URL in, and nothing else to fill in');
     expect(out).toContain('Rivals found rather than guessed at');
-    expect(out).toContain('The site itself checked for what the engines need');
+    expect(out).toContain('The homepage checked for structured data, crawlability and freshness');
   });
 
   it('leads with a call to action that reaches the sign-up surface', () => {
@@ -166,10 +167,12 @@ describe('the header is on page one, before any scrolling or clicking', () => {
 });
 
 describe('the price is published, deliberately', () => {
-  it('states $160 a month on the pricing card', () => {
+  it('states $150 a month on the pricing card', () => {
     const out = html();
-    expect(out).toContain('$160');
+    expect(out).toContain('$150');
     expect(out).toContain('per month');
+    // Repriced by the founder on 2026-10-04: the old figure is nowhere on the page.
+    expect(out).not.toContain('$160');
   });
 
   it('says what the plan includes, seats named rather than implied', () => {
@@ -179,7 +182,7 @@ describe('the price is published, deliberately', () => {
 
   it('agrees with itself everywhere a number appears', () => {
     const out = html();
-    // A page that says $160 in one place and something else in another is worse
+    // A page that says $150 in one place and something else in another is worse
     // than a page with no price. Every mention comes from one constant; this
     // asserts no hand-typed one crept in — as a figure OR in words. The pricing
     // heading read "Twenty-nine dollars a month" above a $160 card for six
@@ -229,6 +232,201 @@ describe('the price is published, deliberately', () => {
     expect(out).not.toContain('Scan volume is not metered');
     expect(out).toContain('Signing up is free. Your first scan is free with a Google sign-in.');
     expect(out).not.toContain('includes one full scan and report');
+  });
+});
+
+describe('the free trial — 2026-10-04, and only when the API says there is one', () => {
+  // The pricing card reads the trial's length from the API (`GET /billing/plan`) when it
+  // mounts. A static render never runs the request, so `html()` is the page while the API has
+  // not answered (and so is the page when the request fails, or says 0): no trial, anywhere.
+  // `initialTrialDays` renders the page as it is once the API has said so; the mounted
+  // behaviour, one request for the whole page and every failure, is `lib/billing/trial.test.tsx`.
+  const SENTENCE =
+    'The first 30 days after you subscribe are free. You enter your card at checkout, and it is charged on day\u00a031 unless you cancel first. One free trial per agency.';
+  const on = () => renderToStaticMarkup(<LandingView animate={false} initialTrialDays={30} />);
+
+  it('off: says nothing about a trial, or about free days, anywhere on the page', () => {
+    for (const out of [html(), renderToStaticMarkup(<LandingView animate={false} initialTrialDays={0} />)]) {
+      expect(out.toLowerCase()).not.toContain('trial');
+      expect(out).not.toContain('after you subscribe');
+      expect(out).not.toContain('charged on day');
+    }
+  });
+
+  it('on: the pricing card says it, in the pricing section, once, word for word', () => {
+    const out = on();
+    expect(out).toContain(SENTENCE);
+    expect(out.indexOf(SENTENCE)).toBeGreaterThan(out.indexOf(`One plan. $${PLAN_PRICE_USD} a month.`));
+    expect(out.indexOf(SENTENCE)).toBeLessThan(out.indexOf('Signing up is free.'));
+    expect(out.split('after you subscribe').length - 1).toBe(1);
+  });
+
+  it('the pricing lead no longer says the plan is "not a trial", whatever the state', () => {
+    // That clause sat beside a card that may now say the first days after you subscribe are free.
+    // What the plan is is still said: the whole product, and not a cut-down tier.
+    for (const out of [html(), on()]) {
+      expect(out.toLowerCase()).not.toContain('not a trial');
+      expect(out).toContain('It buys the whole product as described above, and not a cut-down tier');
+    }
+  });
+
+  it('the hero’s sentence is the same on or off: its price is still true with a trial', () => {
+    for (const out of [html(), on()]) {
+      expect(out).toContain(
+        'twenty questions, put to four AI answer engines. Your first scan is free with a Google sign-in.',
+      );
+      expect(out).toContain(`$${PLAN_PRICE_USD}/month after that.`);
+    }
+  });
+
+  it('on, the page still agrees with itself about money: one price, no figure of its own', () => {
+    const out = on();
+    const prices = out.match(/\$\d[\d,]*/g) ?? [];
+    expect(new Set(prices)).toEqual(new Set([`$${PLAN_PRICE_USD}`]));
+    expect(out).not.toContain('$0');
+    expect(out.toLowerCase()).not.toContain('no card');
+    expect(out.toLowerCase()).not.toContain('no credit card');
+  });
+
+  it('on, it is still a page that invents nothing: no scale, no testimonial', () => {
+    const out = on().toLowerCase();
+    for (const tell of ['trusted by', 'customers say', 'join thousands', 'most popular', 'best value']) {
+      expect(out, `found "${tell}"`).not.toContain(tell);
+    }
+    expect(out).not.toMatch(/\d[\d,]*\s*\+?\s*(brands|agencies|customers|users|companies|teams)/i);
+  });
+});
+
+describe('the fix list is described as the report orders it — launch checklist 3.63', () => {
+  // The report ranks its fixes by the points each would recover (a fix for a noindex tag, a
+  // `Disallow: /` rule or a missing robots.txt first, and fixes with no point figure after those
+  // that have one) and draws an effort of S, M or L beside each. The page said "ordered by what
+  // they would move and what they would cost to do", and the pricing card, which this page
+  // contains, said "ordered by what they would move and what they would cost you". Cost ranks
+  // nothing. `claimsAgainstCode.test.tsx` reads the report back to hold these words to it.
+  const CLAUSE = 'ordered by the points each would recover, with the effort of each shown beside it';
+
+  it('says it in the last pipeline step, word for word', () => {
+    expect(html()).toContain(
+      'Five weighted dimensions into one number out of 100, the biggest gap named in points, and specific changes ' +
+        `${CLAUSE}.`,
+    );
+  });
+
+  it('says it again on the pricing card the page carries, so the two agree', () => {
+    const out = html();
+    expect(out).toContain(`Named fixes, ${CLAUSE}.`);
+    expect(out.split(CLAUSE).length - 1).toBe(2);
+  });
+
+  it('no longer says they are ordered by what they would move or what they would cost', () => {
+    for (const out of [html(), renderToStaticMarkup(<LandingView animate={false} initialTrialDays={30} />)]) {
+      for (const old of ['what they would move', 'what they would cost', 'cost to do', 'would cost you']) {
+        expect(out, `found "${old}"`).not.toContain(old);
+      }
+      // The only ordering the page names is by points.
+      expect(out).not.toMatch(/ordered by what/i);
+    }
+  });
+});
+
+describe('sentences corrected against the code — launch checklist 3.63', () => {
+  // Each of these was read against the code and was not true; the new wording says less, and
+  // each old claim is asserted gone so it cannot come back unnoticed. React escapes the
+  // apostrophe, so the text is compared with it put back.
+  const text = () => html().replaceAll('&#x27;', "'");
+
+  it('says a hand-corrected rival list stays in place for later scans, and names no re-detection', () => {
+    // No screen starts a re-detection, and a later scan carries the list forward rather than
+    // detecting again (`services/competitors.py`, `carry_forward_set`; proved by
+    // `tests/test_scan_chain.py::TestCompetitorSetsCarryForward`).
+    const out = text();
+    expect(out).toContain('and you can overrule the result, which then stays in place for every later scan.');
+    expect(out).not.toContain('re-detection');
+    expect(out).not.toContain('survives every later');
+  });
+
+  it('names one AI model, not the four engines, as the second signal that finds rivals', () => {
+    // `services/cocitation.py` asks one model; the four engines are what a scan measures.
+    const out = text();
+    expect(out).toContain('which brands an AI model names in the same breath as your prospect.');
+    expect(out).not.toContain('which brands the AI engines name');
+  });
+
+  it('does not say the search signal is about the niche alone', () => {
+    // Three of the six queries are about the prospect by name ("<brand> alternatives",
+    // "<brand> competitors", "<brand> vs"), and three are about its field (`services/serp.py`,
+    // `build_queries`). The sentence says who ranks in search, and not for what.
+    const out = text();
+    expect(out).toContain(
+      'Two independent signals: who ranks in search, and which brands an AI model names in the same breath as your prospect.',
+    );
+    expect(out).not.toContain('who ranks for the niche');
+    expect(out).not.toContain('for the niche');
+  });
+
+  it('says the audit loads the homepage and reads robots.txt and a sitemap, with no claim about quoting', () => {
+    // `services/audit_runner.py` audits `https://{client.domain}`, and `technical_audit.py` reads
+    // its robots.txt and looks for a sitemap: one page, not "the site". Structured data,
+    // crawlability and freshness are the inputs to Technical Foundation (the report's own
+    // sentence, `FIX_FOR_DIMENSION`), one of the five weighted dimensions. Nothing measures that
+    // these signals "decide whether a page can be quoted", and nothing shows the audit would
+    // otherwise be one "nobody reads".
+    const out = text();
+    expect(out).toContain('The homepage checked for structured data, crawlability and freshness');
+    expect(out).toContain(
+      'It loads the homepage, reads the site\'s robots.txt and checks for a sitemap. The result is Technical Foundation, one of the five weighted dimensions of the score.',
+    );
+    for (const old of [
+      'The site itself checked',
+      'what the engines need',
+      'decide whether a page can be quoted',
+      'quoted at all',
+      'nobody reads',
+      'a separate audit',
+      'page structure',
+    ]) {
+      expect(out, `found "${old}"`).not.toContain(old);
+    }
+  });
+
+  it('says it works out what the business sells, and not who it sells to', () => {
+    // `services/classify.py` returns an industry, a niche and a brand name, and no audience.
+    const out = text();
+    expect(out).toContain(
+      'works out for itself what the business sells — so the first thing you do is not a form about your prospect\'s industry.',
+    );
+    expect(out).not.toContain('and to whom');
+  });
+
+  it('says the questions are what buyers would ask, not what they actually ask', () => {
+    // A model writes them (`services/prompts.py`); nothing here has seen what buyers type.
+    const out = text();
+    expect(out).toContain('It asks the questions your client\'s buyers would ask.');
+    expect(out).toContain('a spread across the buying stages.');
+    expect(out).not.toContain('actually ask');
+    expect(out).not.toContain('actually shop');
+  });
+
+  it('claims no frequency for the engines disagreeing, only that they do not always agree', () => {
+    // Nothing measures how often. The report has a "Where the engines disagree" section.
+    const out = text();
+    expect(out).toContain('They do not always agree, and where they differ is itself a finding.');
+    expect(out).not.toContain('more often than you would expect');
+  });
+
+  it('says what the facts-only tests cover, and not every table, every response or every field', () => {
+    // `tests/test_facts_only.py` covers a named list of the tables that hold anything taken from
+    // an engine's answer or a website, and sweeps the schemas the report module defines. The
+    // report does show two free-text fields, a fix's title and detail, by design: they are the
+    // product's own wording, and `ActionItem` is the documented exception to the rule.
+    const out = text();
+    expect(out).toContain(
+      'It is enforced by tests over the tables that hold anything taken from an engine\'s answer or a website, and over the report\'s own response schemas, so a field that could carry someone else\'s prose fails the build rather than reaching a client\'s report.',
+    );
+    expect(out).not.toContain('every table');
+    expect(out).not.toContain('every response shape');
+    expect(out).not.toContain('every field');
   });
 });
 
@@ -393,7 +591,7 @@ describe('the page arrives rather than being already there — Epic 9.16', () =>
     // until it arrives; it must never remove it from the document.
     const out = live();
     expect(out).toContain('For SEO and digital marketing agencies');
-    expect(out).toContain('$160');
+    expect(out).toContain('$150');
     expect(out).toContain('One URL in, and nothing else to fill in');
     expect(out).toContain('Signing up is free. Your first scan is free with a Google sign-in.');
   });

@@ -6,6 +6,7 @@ import { googleReasonSentence, takeGoogleFailure } from '@/lib/auth/googleFailur
 import { Button, Card, CardBody, ErrorState, LoadingState } from '@avp/design-system';
 import type { ClientDetail, Me } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
+import { LANDING_PLAN_WAIT_MS, loadTrialDays, within } from '@/lib/billing/trial';
 import { ClassificationResult } from '@/components/ClassificationResult';
 import { IntakeForm } from '@/components/IntakeForm';
 import { SignInPanel } from '@/components/SignInPanel';
@@ -56,6 +57,13 @@ export default function Home() {
   const [me, setMe] = useState<Me | null>(null);
   const [view, setView] = useState<View>({ kind: 'loading' });
   const [googleNotice, setGoogleNotice] = useState<string | null>(null);
+  // How long the free trial is, for the landing page's pricing card: `days` is a number (0 for
+  // none) once the page has the answer, or undefined while unknown or when the API did not answer
+  // in time; `plan` is the page's own request, which an untold card awaits instead of asking
+  // again. Round two, 2026-10-04; the request is kept for the card in round three.
+  const [trial, setTrial] = useState<
+    { days: number | undefined; plan: Promise<number> } | undefined
+  >(undefined);
 
   const load = useCallback(async () => {
     // Take the reason BEFORE the session check, so it survives whichever view
@@ -64,6 +72,16 @@ export default function Home() {
     // `/?view=sign-in` or `/?view=sign-up` — the header on the privacy and
     // terms pages opens these forms by URL (`lib/auth/frontDoor.ts`).
     const asked = takeFrontDoorForm(window);
+    // The pricing card says how long the free trial is, and the API says it. Asked for NOW, beside
+    // the session check, and the promise KEPT: the landing page can then be drawn with the
+    // sentence in its card and not grow a line a moment later. It is waited for only where it is
+    // the landing page that is about to be drawn, and the wait starts there, at the draw point
+    // (`within`): an answer that has already come wins at once, however slow the session check
+    // was; the sign-in and sign-up forms and the intake screen never wait for it. The card, if it
+    // is drawn untold, awaits this same promise, so the whole page makes one request. Never
+    // rejects.
+    const plan = loadTrialDays();
+    setTrial({ days: undefined, plan });
     try {
       const signedIn = await api.me();
       setMe(signedIn);
@@ -72,13 +90,20 @@ export default function Home() {
     } catch (err) {
       if (failure != null) {
         setGoogleNotice(googleReasonSentence(failure));
-        // Straight to the sign-in form, where the notice and the way forward are.
+        // Straight to the sign-in form, where the notice and the way forward are. Not held up by
+        // the plan; the answer is kept for the landing page, one click on Back away.
+        void plan.then((days) => setTrial({ days, plan }));
         setView({ kind: 'sign-in' });
       } else if (asked != null) {
+        void plan.then((days) => setTrial({ days, plan }));
         setView({ kind: asked });
       } else if (err instanceof ApiProblem && err.status === 401) {
+        // The landing page: wait for the plan (half a second at most, from here: the card is far
+        // below the fold), then draw it, with the pricing card already carrying its sentence.
+        setTrial({ days: await within(plan, LANDING_PLAN_WAIT_MS), plan });
         setView({ kind: 'signed-out' });
       } else {
+        setTrial({ days: await within(plan, LANDING_PLAN_WAIT_MS), plan });
         setView({ kind: 'signed-out' });
       }
     }
@@ -104,6 +129,10 @@ export default function Home() {
         // different forms, and landing a returning customer on a sign-up panel
         // asks them to read their way back out of it.
         onLogIn={() => setView({ kind: 'sign-in' })}
+        // What the plan said while the session was checked, so the pricing card is drawn with
+        // its sentence. Undefined (it was slow) leaves the card awaiting the page's own request.
+        initialTrialDays={trial?.days}
+        trialPlan={trial?.plan}
       />
     );
   }
