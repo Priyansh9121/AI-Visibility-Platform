@@ -25000,3 +25000,34 @@ It is one long table (section, engine, prompt, item, measure, value), so every s
 - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages).
 - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# North-star §5.1 records the first production scan's cost next to the two development measurements
+
+**2026-10-05, the second entry of the day; branch `pilot-fixes-6`, the founder's brief "clear the board, harden billing, and four pilot features" (item U6).** One item, one commit.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): §5, Commercial architecture (unit economics); lifecycle phase: Activation (Epic 9), what a pilot's scans cost against its price.
+
+## 1. What changed
+
+`docs/north-star.md` §5.1 only:
+- **A third row in the measured table:** the first production scan, a repeat scan with its competitors carried forward. The founder reported it on 2026-10-05 from the deployed API's own `scan.usage` line, priced at the 2026-10-03 rates in `verify_e2e.py`. It is about $1.45–1.50:
+  - 81 engine calls: 20 prompts on 4 engines, plus one Perplexity 429 that was retried and answered;
+  - 44 sentiment calls, and one each of prompt generation and fix generation;
+  - Claude answers $0.82, ChatGPT $0.39, Perplexity $0.04 in tokens plus about $0.05 in search fees the line did not count, Gemini $0.07, sentiment $0.05, fixes and prompts $0.08;
+  - 13,636 of Claude's 32,799 output tokens (42%) were reasoning at effort "low".
+- **The text under the table:**
+  - The cost analysis now says it was built from the two development rows; the production row came later.
+  - The production figure sits below the development estimates ($1.63 for a repeat scan, $1.72 for a first).
+  - 40 scans a month at that cost are about $58–60, about 39–40% of the US$150 price.
+  - It is one scan.
+- **The founder's decision recorded:** Claude answers stay on `claude-opus-5` through the pilot. The reasoning share is named as a later cost lever, with no change now.
+- **The arithmetic:**
+  - $0.82 + $0.39 + $0.04 + $0.07 + $0.05 + $0.08 = $1.45; with $0.05 of search fees, $1.50.
+  - 40 × $1.45 = $58 and 40 × $1.50 = $60, which are 38.7% and 40.0% of $150.
+  - 13,636 ÷ 32,799 = 41.6%.
+
+## Verified
+
+**This commit changes only `docs/north-star.md` and `docs/build-log.md`, which no test reads.** The code is the branch's base `7fbde03`, and the base bar of the first entry of the day stands for it: API 4571, workers 27, shared-types 53, design-system 935, web 2046, mypy 43 (ceiling 50), every gate and audit passing. Exit codes were read from files.
