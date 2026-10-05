@@ -26072,3 +26072,34 @@ Drift check (north-star §8): no product layer (the API's shutdown); lifecycle p
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# The usage lines and `verify_e2e.py` no longer say an unreadable SerpApi 200 was not billed
+
+**2026-10-06, the third entry of the day; branch `pilot-fixes-6`, launch checklist 3.87 (a leftover of `pilot-fixes-5`).** API comments and a dev script's labels, one of five small commits, with its own bar.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 1, Collection (what a scan's search usage says); lifecycle phase: none.
+
+## 1. What changed
+
+A SerpApi answer that came back as a 200 whose body could not be read is counted under `serpapi_error`, beside answers that really were errors. SerpApi sent it as a 200 and may have counted it, so "an error answer is not billed" was not true of it. The runbook already said so; three other places did not.
+
+- **`services/usage.py`:** the docstring and a comment say an error answer is not billed, except a 200 whose body could not be read, which may have been, and that `serpapi_billed_or_unknown` is therefore an upper bound for every kind of answer but that one.
+- **`services/serp.py`:** the comment at the usage call says the same.
+- **`scripts/verify_e2e.py`:** its two printed labels say "answered with an error (not billed, except a 200 whose body could not be read, which may have been)" and "billed, but for an unreadable 200 (counted as an error, and possibly billed)".
+
+## Verified
+
+**API pytest 4857 → 4857 (unchanged count); the floor stays.**
+- **`test_price_usage.py`:** its check of the printed label now requires "not billed, except a 200 whose body could not be read". No test was added.
+- **The implementer's negative control:** the old label back in `verify_e2e.py`, 1 fails.
+- **On this tree:** in `test_price_usage.py` (77 tests): the old label back in `verify_e2e.py`, 1 fails. The file was restored and the tree's checksums matched.
+- **The rest of the bar** (this tree, one run, 08:15 to 08:21):
+  - Counts: API 4857, workers 27, shared-types 53 (0 fail), design-system 935, web 2116, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7945e69b06e5`) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

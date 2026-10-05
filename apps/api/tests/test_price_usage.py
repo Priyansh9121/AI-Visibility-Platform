@@ -319,7 +319,9 @@ class TestWhatIsMissing:
         # answer is not billed.
         text = e2e.format_usage_pricing(pricing)
         assert re.search(r"billed or unknown.*4", text, re.I | re.S)
-        assert re.search(r"error.*not billed", text, re.I | re.S)
+        assert re.search(
+            r"error.*not billed, except a 200 whose body could not be read", text, re.I | re.S
+        )
 
     def test_a_per_search_rate_prices_serpapi_billed_or_unknown_as_an_upper_bound(
         self, e2e: ModuleType

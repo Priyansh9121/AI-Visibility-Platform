@@ -641,8 +641,9 @@ class SerpSummary:
     error: int = 0
     no_answer: int = 0
     # `serpapi_billed_or_unknown`: the answered searches and the ones nobody answered. An upper
-    # bound on what was billed: an answered search is billed unless SerpApi served it from its
-    # cache, an error answer is not billed, and a search nobody answered may have been. Read off
+    # bound on what was billed, but for an unreadable 200 (counted as an error): an answered search
+    # is billed unless SerpApi served it from its cache, an error answer is not billed (that 200
+    # aside), and a search nobody answered may have been. Read off
     # the line when it has the field, else worked out as `ok + no_answer`, which is what it is.
     billed_or_unknown: int = 0
     per_search: Decimal | None = None
@@ -879,13 +880,14 @@ def format_usage_pricing(pricing: UsagePricing) -> str:
     if serp.attempted:
         out.append(
             f"\n  SerpApi: {serp.attempted} searches attempted (retries included): {serp.ok} "
-            f"answered ok, {serp.error} answered with an error (not billed), {serp.no_answer} "
-            "with no answer"
+            f"answered ok, {serp.error} answered with an error (not billed, except a 200 whose "
+            f"body could not be read, which may have been), {serp.no_answer} with no answer"
         )
         out.append(
             f"  SerpApi billed or unknown: {serp.billed_or_unknown}, an upper bound on what was "
-            "billed: an answered search is billed unless SerpApi served it from its cache, an "
-            "error answer is not billed, and a search nobody answered may have been"
+            "billed, but for an unreadable 200 (counted as an error, and possibly billed): an "
+            "answered search is billed unless SerpApi served it from its cache, an error answer "
+            "is not billed, and a search nobody answered may have been"
         )
         if serp.cost is not None:
             out.append(
