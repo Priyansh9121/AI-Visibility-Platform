@@ -2,9 +2,10 @@
  * The Technical screen — a `partial` audit is a scored audit.
  *
  * `partial` means the page was read and scored with a component excluded (no
- * date signal, usually); `failed` means it was not read and not scored. This
- * screen once treated everything but `ok` as unreadable, so a scored audit
- * read "The site could not be read". These tests hold the line between them.
+ * date signal, usually); `failed` means the check could not be completed and
+ * nothing is scored. This screen once treated everything but `ok` as
+ * unreadable, so a scored audit read "The site could not be read". These
+ * tests hold the line between them.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -106,12 +107,39 @@ const render = (audit: TechnicalAudit | null) => {
 /** How many times `needle` is said: a sentence the screen repeats reads as a fault. */
 const occurrences = (html: string, needle: string): number => html.split(needle).length - 1;
 
+/**
+ * The body of the failed-audit state, word for word (launch checklist 3.87, follow-up of
+ * 2026-10-05). True of every code that lands there: a timeout, a busy crawler (the check
+ * never started), a browser that broke, a page that did not respond, an error status (the
+ * page did answer), and no code. It blames no one and says nothing about a read.
+ * "The latest scan", not "this scan" as the report says: this screen is a client's, names
+ * no scan, and shows the audit of the latest scan that produced answers (the one the
+ * sidebar's Report item opens). The note under it is the line `auditFailureSentence` fills.
+ */
+const FAILED_BODY =
+  'The technical check of the site could not be completed for the latest scan, so nothing here is scored and Technical Foundation is left out of the score.';
+
+/**
+ * What this state said until then. Untrue of a check that never started (nothing was read
+ * because nothing began) and of a page that answered, and "could not read" leaned on the site.
+ */
+const OLD_FAILED_BODY =
+  'A site the crawler could not read is not a site with a bad technical foundation, so nothing here is scored. The audit records what went wrong rather than guessing.';
+
+/** The text of the state's body, and of its note: what the markup draws, not what contains it. */
+const emptyBody = (html: string): string | null =>
+  html.match(/<div class="avp-empty__body">([^<]*)<\/div>/)?.[1] ?? null;
+const emptyNote = (html: string): string | null =>
+  html.match(/<p class="avp-empty__note">([^<]*)<\/p>/)?.[1] ?? null;
+
 describe('a partial audit renders as the scored audit it is', () => {
   const html = render(PARTIAL);
 
   it('never says the site could not be read', () => {
     expect(html).not.toContain('could not be read');
-    // The failed audit's own sentence, which says the crawler could not read the site.
+    // The failed audit's own body, now and as it was: a partial audit was read and scored.
+    expect(html).not.toContain(FAILED_BODY);
+    expect(html).not.toContain(OLD_FAILED_BODY);
     expect(html).not.toContain('A site the crawler could not read');
   });
 
@@ -193,14 +221,14 @@ describe('a partial audit says what the audit read about dates, in the card and 
 });
 
 describe('a failed audit is the only unreadable one', () => {
-  it('says the site could not be read, with what happened in a sentence and no figures', () => {
+  it('says the technical check could not be completed, with what happened in a sentence and no figures', () => {
     const html = render(FAILED);
     expect(html).toContain(EXCLUSION_REASON.AUDIT_FAILED!.label);
-    // The body is true of every failure, a busy crawler and a cut run included: it says
-    // the crawler could not read the site, never that the site was unreachable.
-    expect(html).toContain(
-      'A site the crawler could not read is not a site with a bad technical foundation, so nothing here is scored. The audit records what went wrong rather than guessing.',
-    );
+    // The body is true of every failure, a busy crawler that never started and a page that
+    // answered with an error included: it says the check could not be completed, never that
+    // the site could not be read or was unreachable.
+    expect(emptyBody(html)).toBe(FAILED_BODY);
+    expect(html).not.toContain(OLD_FAILED_BODY);
     expect(html).not.toContain('An unreachable site');
     expect(html).toContain(AUDIT_FAILURE_SENTENCE.FETCH_FAILED);
     expect(html).not.toContain('FETCH_FAILED');
@@ -587,12 +615,30 @@ describe('a check says what its code means, in a sentence under the check, and n
 
 describe('a technical audit that failed for any other reason — launch checklist 3.87', () => {
   it.each(['TIMEOUT', 'BROWSER_BUSY', 'BROWSER_ERROR', 'FETCH_FAILED', 'HTTP_503', null])(
-    '%s: titled with the reason’s label, not blaming the site, no code',
+    '%s: titled with the reason’s label, a body true of every failure, the note under it, no code',
     (errorCode) => {
       const html = render({ ...FAILED, errorCode });
       expect(html).toContain(EXCLUSION_REASON.AUDIT_FAILED!.label);
       expect(html).not.toContain('The site could not be read');
       expect(html).not.toContain('Not yet checked');
+      // The body, exactly, and the same for every code: it claims only what a timeout, a
+      // check that never started and a page that answered with an error all share.
+      expect(emptyBody(html)).toBe(FAILED_BODY);
+      // What it replaced is gone, whole and in the parts that made it loose.
+      expect(html).not.toContain(OLD_FAILED_BODY);
+      for (const words of [
+        'A site the crawler could not read',
+        'not a site with a bad technical foundation',
+        'records what went wrong',
+        'rather than guessing',
+      ]) {
+        expect(html, words).not.toContain(words);
+      }
+      // The code's own sentence is in the note, drawn after the body.
+      expect(emptyNote(html)).toBe(auditFailureSentence(errorCode));
+      expect(html.indexOf('class="avp-empty__note"')).toBeGreaterThan(
+        html.indexOf('class="avp-empty__body"'),
+      );
       expect(html).toContain(auditFailureSentence(errorCode));
       for (const code of [errorCode ?? 'x_none', 'AUDIT_FAILED', 'NOT_YET_MEASURED', 'Reason:']) {
         expect(html, code).not.toContain(code);
@@ -600,13 +646,25 @@ describe('a technical audit that failed for any other reason — launch checklis
     },
   );
 
-  it('the crawl-code states keep their own titles', () => {
-    expect(render({ ...FAILED, errorCode: 'ROBOTS_UNREACHABLE' })).not.toContain(
-      EXCLUSION_REASON.AUDIT_FAILED!.label,
-    );
-    expect(render({ ...FAILED, errorCode: 'ADDRESS_NOT_PUBLIC' })).not.toContain(
-      EXCLUSION_REASON.AUDIT_FAILED!.label,
-    );
+  it('the crawl-code states keep their own titles and their own words', () => {
+    for (const errorCode of ['ROBOTS_DISALLOWED', 'ROBOTS_UNREACHABLE', 'ADDRESS_NOT_PUBLIC']) {
+      const html = render({ ...FAILED, errorCode });
+      expect(html, errorCode).not.toContain(EXCLUSION_REASON.AUDIT_FAILED!.label);
+      expect(html, errorCode).not.toContain(FAILED_BODY);
+    }
+  });
+
+  it('the body keeps the report’s two claims, and names the one scan this screen can', () => {
+    // The report's reason says "for this scan": a report is of one scan. This screen is a
+    // client's and shows the audit of its latest scan, so it says that; the rest is the
+    // report's. If the report's reason is reworded, this fails and the screen is looked at.
+    const reason = EXCLUSION_REASON.AUDIT_FAILED!.detail;
+    const checkClaim = 'The technical check of the site could not be completed for';
+    const leftOut = 'Technical Foundation is left out of the score.';
+    expect(reason).toContain(`${checkClaim} this scan.`);
+    expect(reason).toContain(leftOut);
+    expect(FAILED_BODY).toContain(`${checkClaim} the latest scan,`);
+    expect(FAILED_BODY).toContain(leftOut);
   });
 
   it('the reason’s words are the agreed sentence, with no code in them', () => {

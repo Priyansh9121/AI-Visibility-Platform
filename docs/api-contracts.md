@@ -2310,9 +2310,10 @@ machine-readable (`NO_STRUCTURED_DATA`, `META_ROBOTS_NOINDEX`,
 `ROBOTS_TXT_DISALLOW`, …), never prose.
 
 **`technicalFoundation`** is the §6 sub-score, a string-encoded decimal 0–100,
-or `null` when the site could not be read. **A site we could not reach is not a
-site with a bad technical foundation** — the two must not collapse into one
-number, which is why `status: "failed"` exists.
+or `null` when the technical check could not be completed (`status: "failed"`).
+**A check that could not be completed says nothing about the site's technical
+foundation** — the two must not collapse into one number, which is why
+`status: "failed"` exists.
 
 **A `failed` scan's audit carries no `technicalFoundation` and no `components`**
 (checklist 3.30, extending 3.24), on `POST` and `GET` alike: `technicalFoundation` is
@@ -2340,7 +2341,7 @@ routes should withhold more is the founder's decision and is open.
 |---|---|
 | `ok` | Every component measurable; `components` and `componentWeights` filled. |
 | `partial` | Read the page, but a component had no signal (e.g. no date anywhere). Scored on what was measurable; `components` and `componentWeights` show the measured ones, and `excludedComponents` lists those left out with their reason (e.g., `content_freshness: NO_DATE_SIGNAL_AVAILABLE`). |
-| `failed` | Could not read the site. `technicalFoundation`, `components` and `componentWeights` are all empty. |
+| `failed` | The technical check could not be completed. `technicalFoundation`, `components` and `componentWeights` are all empty. |
 
 A `failed` audit's `errorCode` says why. Three codes mean the crawler declined to
 read the site rather than failed to:
@@ -2469,7 +2470,7 @@ facts the sub-score is computed from are returned.
 Once an audit exists, `POST /scans/{scanId}/score` includes Technical Foundation
 instead of excluding it as `NOT_YET_MEASURED`, and the effective weights return
 to §6's table exactly (30/25/20/15/10). A **failed** audit leaves the dimension
-excluded — an unreadable site is not a measured zero.
+excluded — a check that could not be completed is not a measured zero.
 The exclusion reason is `NOT_YET_MEASURED` when the scan has no audit row, and
 `AUDIT_FAILED` for a failed audit with any code but the three below (2026-10-05),
 except `CRAWL_DISALLOWED` for an audit failed with `ROBOTS_DISALLOWED`, `CRAWL_ADDRESS_NOT_PUBLIC` for one
