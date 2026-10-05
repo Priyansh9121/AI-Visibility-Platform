@@ -25764,3 +25764,60 @@ Drift check (north-star §8): Layer 2, Measurement (which rivals a scan compares
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# The landing page drops its unsourced claim about buyers, and the pricing card says what is true of reports: viewing and the PDF use no scan, and a shared link works for 30 days
+
+**2026-10-05, the eleventh entry of the day; branch `pilot-fixes-6`, the founder's decisions of 2026-10-05 on B5 (launch checklist 3.86).** Web copy only, with a UI review and its own bar.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): the public pages' claims (marketing), none of the three product layers; lifecycle phase: Acquisition.
+
+## 1. What changed
+
+The founder's decisions (2026-10-05): remove the hero's unsourced sentence; make the pricing card's "never limited" sentence true; do not edit `/terms` or `/privacy`, but list their sentences for the lawyer; change the other 3.86 items only where a sentence is untrue.
+
+- **The hero** (`LandingView.tsx`). "Buyers increasingly ask an assistant before they ask a search engine." is gone: it had no source. The lead now reads "A scan measures whether your client is named in those answers, who is named instead, and what to change — as a report you can put in front of them." "Those answers" points back to the heading, "Find out what AI assistants say when your client's buyers ask.", and "A scan" to the button under it, "Scan a website".
+- **The pricing card** (`PricingCard.tsx`). "Viewing, sharing and exporting reports is never limited." was untrue: a shared link ends after 30 days and can be withdrawn. The line now reads "40 scans a month. Viewing a report or exporting it as a PDF does not use a scan. A shared link works for 30 days and can be withdrawn sooner." The checks against the code:
+  - `GET /scans/{scanId}/report` and the PDF route take only the signed-in principal and the database: no rate limit, no plan gate, and nothing counts them against the scan allowance.
+  - `SHARE_TTL` is 30 days (`services/share.py`). The card takes the 30 from `lib/legal/retention`, the value `/privacy` and the share bar already use, which `legalPages.test.tsx` holds to the API.
+  - "Withdraw link" is the share bar's own button.
+  - "40" is `PLAN_SCANS_PER_MONTH`, which a test holds to the API.
+- **"What it does not do yet"** (`LandingView.tsx`), two of its three lines, each untrue as worded:
+  - "Logo and colour control are not built yet." The API sets both (`PATCH /agencies/{agencyId}/branding`) and the report draws them; no screen sets them. Now: "White-labelling covers your agency name. No screen sets a logo or colour yet."
+  - "Nothing tracks whether a fix was actually done, or re-measures what it changed." A new scan re-measures. Now: "Nothing tracks whether a fix was actually done, and nothing re-measures on its own; a new scan does. The report ends at the recommendation."
+- **Left as they are:**
+  - "A page like this usually stops before this section." It is an unsourced claim about other pages: not provably untrue, not provably true. The founder's call (launch checklist).
+  - The fix list's bare "effort S/M/L". The landing page and the card say effort is shown beside each fix, and it is. No sentence about it is untrue; the letters are not explained anywhere.
+- **A developer comment:** the card's header comment said scan volume is "not metered yet". It now says a plan has a monthly allowance and the card states it.
+
+## 2. The review
+
+**UI review: no Blocker; one Should-fix, taken; three nits.**
+- **Should-fix, taken:** with the first sentence gone, the lead began "It measures…", and "It" had no noun: the heading names assistants. It now begins "A scan measures…".
+- **Nit, not taken:** the public report route refuses a share link whose scan failed. A failed scan cannot be shared from the app, so every link a user can send works for 30 days. Recorded.
+- **Nit:** the product says "withdrawn" and `/privacy` says "revoked". A wording difference, in the lawyer's list below.
+- **Nit:** "A page like this usually stops before this section", the founder's call, above.
+
+## For the lawyer (launch checklist 2.4); not edited here
+
+- `TermsOfService.tsx:80`: "Viewing, sharing and exporting reports is never limited." The same absolute the pricing card had; a shared link ends after 30 days. The site and the terms now say different things until the terms change.
+- `TermsOfService.tsx:82-84`: "…starting a scan goes back to the free allowance, and the reports you already have stay open." Absolute about viewing after a cancellation. It matches the routes today (no billing check on viewing); an unpaid or past-due agency was not tested.
+- `PrivacyPolicy.tsx:234-235`: "A shared report's link expires after 30 days, and can be revoked sooner." True; "revoked" where the product says "withdrawn".
+- `PrivacyPolicy.tsx:98`: "A shared report's link is kept as it is, so it can be copied again." True; a downloaded PDF outlives a withdrawn link.
+
+## Verified
+
+**Web vitest 2105 → 2107 (+2); floor raised to match.** API is unchanged at 4760.
+- **`LandingView.test.tsx` (+2):** the hero makes no claim about how buyers behave (both halves of the removed sentence are absent; the new lead is pinned); the two old "does not do yet" lines are gone and the new ones are pinned.
+- **`PricingCard.test.tsx`:** the new sentence is pinned and the old one asserted gone. Its check that no trial number appears now subtracts the share-link sentence first, after asserting that sentence is there, so a changed sentence fails the test before the exclusion could stop guarding. `lib/billing/trial.test.tsx` does the same.
+- **The implementer's negative controls,** each restored and checked with md5: the old pricing sentence back, 2 fail; the hero sentence back, 1 fail.
+- **On this tree:** the never-limited pricing sentence back: 3 of 213 fail in `src/components/marketing` and `src/lib/billing`; the hero's buyers sentence back: 1 fails. Each file was restored and the tree's checksums matched.
+- **The rest of the bar** (this tree, one run, 21:28 to 21:35):
+  - Counts: API 4760, workers 27, shared-types 53 (0 fail), design-system 935, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7945e69b06e5`) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

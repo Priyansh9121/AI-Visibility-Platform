@@ -493,6 +493,27 @@ describe('nothing on this page is fabricated', () => {
     expect(out).toContain('Nothing tracks whether a fix was actually done');
   });
 
+  it('says what is true of logo, colour and re-measuring, and no more — launch checklist 3.86', () => {
+    const out = html();
+    // An API sets a logo and colour but no screen does; a new scan re-measures
+    // but nothing does it on its own.
+    expect(out).toContain('No screen sets a logo or colour yet.');
+    expect(out).not.toContain('Logo and colour control are not built yet');
+    expect(out).toContain(
+      'nothing re-measures on its own; a new scan does. The report ends at the recommendation.',
+    );
+    expect(out).not.toContain('or re-measures what it changed');
+  });
+
+  it('makes no claim about how buyers behave: the hero lead is only what the product measures — launch checklist 3.86', () => {
+    const out = html();
+    expect(out).not.toContain('Buyers increasingly ask');
+    expect(out).not.toContain('before they ask a search engine');
+    expect(out).toContain(
+      'A scan measures whether your client is named in those answers, who is named instead, and what to change',
+    );
+  });
+
   it('no longer claims two things that have since shipped', () => {
     const out = html();
     // Both sentences were true when 9.10 wrote them and false by 9.15. On a
