@@ -26042,3 +26042,33 @@ With `STRIPE_LOG` set to `info` or `debug` (or `stripe.log` set in code), the St
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# The Redis watcher's shutdown gives up after 5 seconds instead of waiting for ever, as the price check's already does
+
+**2026-10-06, the second entry of the day; branch `pilot-fixes-6`, launch checklist 3.87 (a leftover of `pilot-fixes-5`).** API only, one of five small commits, with its own bar.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): no product layer (the API's shutdown); lifecycle phase: none.
+
+## 1. What changed
+
+`redis_watch.stop` cancelled the watcher and then waited for it with no bound. The watcher never swallows a cancellation, so in practice that was a few turns of the loop; but a task that ignored it would have held a deploy's shutdown for ever, with the pools left open. `price_watch.stop` had the same nit and got a bound in `pilot-fixes-5`.
+
+- **`redis_watch.py`:** `STOP_TIMEOUT_S = 5.0`; `stop` waits with `asyncio.wait({task}, timeout=…)`, as `price_watch.stop` does, reads the outcome of a task that finished (so a failure of the loop is not reported again when it is collected), and lets go of one still running so the shutdown goes on to close the pools.
+- **No log line on the timeout,** as `price_watch.stop` has none.
+
+## Verified
+
+**API pytest 4855 → 4857 (+2); floor raised to match.**
+- **`test_redis_watch.py` 58 → 60:** a watcher that ignores its cancellation (held on an event, not a sleep) does not keep `stop` waiting past the bound, and the bound is a constant of a few seconds. Before the fix, both failed (the first by the test's own watchdog).
+- **The implementer's negative control:** the bound removed, the stubborn-watcher test fails at its 15-second watchdog.
+- **On this tree:** in `test_redis_watch.py` (60 tests): `stop` waiting with no bound, 1 fails, at the test's 15-second watchdog. The file was restored and the tree's checksums matched.
+- **The rest of the bar** (this tree, one run, 08:07 to 08:14):
+  - Counts: API 4857, workers 27, shared-types 53 (0 fail), design-system 935, web 2116, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7945e69b06e5`) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
