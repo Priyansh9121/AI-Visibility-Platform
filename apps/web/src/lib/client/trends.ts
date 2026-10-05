@@ -8,8 +8,10 @@
  *
  * THE CASE THIS FILE EXISTS FOR
  * -----------------------------
- * A competitor set is re-detected per scan. A rival can appear in scan 1,
- * vanish in scan 2 and return in scan 3 — and a cited domain certainly can,
+ * A scan's competitor set is the client's list as it stood when the scan started: the
+ * list someone saved or ran detection for since the previous scan, else the previous
+ * scan's, carried forward. It never changes once the scan has started. A rival can appear
+ * in scan 1, vanish in scan 2 and return in scan 3, and a cited domain certainly can,
  * since it depends on what the engines happened to cite that day.
  *
  * Two wrong answers are easy to reach and both are silent:

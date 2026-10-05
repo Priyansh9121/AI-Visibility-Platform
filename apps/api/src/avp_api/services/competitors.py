@@ -28,6 +28,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 
 import structlog
 from sqlalchemy import select
@@ -619,9 +620,13 @@ async def open_scan(session: AsyncSession, client_id: str) -> Scan | None:
 async def get_or_create_scan(
     session: AsyncSession, client: Client, *, user_id: str | None = None
 ) -> Scan:
-    """The scan a competitor set hangs off, and the scan a run executes.
+    """The open scan a detection run leaves for a later scan to reuse, and the scan a run executes.
 
-    §5.3 nests CompetitorSet under Scan, so detection needs one. Epic 3 reuses
+    Detection used to hang its set off this scan (§5.3 nests CompetitorSet under Scan). It no
+    longer does: the button's detection writes the client's NEXT LIST, which the scan adopts when
+    it starts, so this scan carries no set until then. It is still opened (and counted by the scan
+    allowance as it always was), because a detect-only run has always left an open QUEUED row for
+    the next scan to reuse and nothing here changes that. Epic 3 reuses
     the most recent non-terminal scan rather than creating a new one per
     detection run, so repeated detection while tuning does not litter the
     client with empty scans.
@@ -855,6 +860,40 @@ async def persist_detection(
         session.add(competitor_set)
         await session.flush()
 
+    return await _write_detection(session, competitor_set, outcome)
+
+
+async def persist_detection_for_client(
+    session: AsyncSession, client: Client, outcome: DetectionOutcome
+) -> CompetitorSet:
+    """Write a detection outcome to the client's NEXT LIST: what the button's detection run does.
+
+    A scan's own set never changes once the scan has started, so a detection run no longer writes
+    one (it used to write the open scan's, which a running scan had already read). It writes the
+    list the next scan will adopt. If the client has none, it is created as a copy of the client's
+    latest set (rows, hand edits and struck rivals included) and detection merges into the copy,
+    so what an operator named or struck survives a re-detection exactly as it does within one set.
+    A client with no set at all starts from an empty list.
+
+    The row is locked from here to the caller's commit, so a scan adopting the list at the same
+    moment either takes it before this writes (and this makes a new list from what is now that
+    scan's set) or waits for it.
+    """
+    next_list = await next_list_for_client(session, client, lock=True)
+    if next_list is None:
+        source = await latest_set_for_client(session, client)
+        next_list = await create_next_list(session, client, source=source)
+    return await _write_detection(session, next_list, outcome)
+
+
+async def _write_detection(
+    session: AsyncSession, competitor_set: CompetitorSet, outcome: DetectionOutcome
+) -> CompetitorSet:
+    """Merge a detection outcome into `competitor_set`, preserving operator overrides.
+
+    The body of `persist_detection`, shared with `persist_detection_for_client`, which differ
+    only in which set they hand it. `competitor_set.competitors` must be loaded.
+    """
     manual = [c for c in competitor_set.competitors if c.is_manual_override]
     manual_keys = {slugify(c.name) for c in manual} | {c.domain for c in manual if c.domain}
 
@@ -948,26 +987,244 @@ async def persist_detection(
 
 
 async def latest_set_for_client(
-    session: AsyncSession, client_id: str, *, excluding_scan_id: str | None = None
+    session: AsyncSession, client: Client, *, excluding_scan_id: str | None = None
 ) -> CompetitorSet | None:
-    """The client's most recent competitor set, on any of its scans.
+    """The set of the client's most recent scan that has one. Its next list is not one.
 
-    The same query `routers/competitors.py::_latest_set_for_client` runs for
-    `GET /clients/{id}/competitors`, factored here because the chain needs it
-    too and a second copy of "which set is the current one" is a second answer
-    waiting to disagree with the first.
+    **Ordered by the scan, not by when the set was minted.** An adopted next list keeps the id it
+    was minted with, so a set id can be older than the id of an earlier scan's own set (that scan's
+    detection finishing after the list was created). Ordering by set id would then put the earlier
+    scan's raw detection ahead of the later scan's adopted list, and the operator's names and
+    strikes would silently be gone. Scan ids are creation-ordered ULIDs and a client has one open
+    scan at a time, so scan order is run order (`latest_scan_for_client` orders the same way).
+
+    The inner join to `scans` is what leaves a next list out: it has no scan. The query names the
+    client's agency as well as its id, which only stops a scan row whose agency disagrees with the
+    client's. Tenancy is the caller's: each one resolves the client under the signed-in agency first
+    (`get_client`, `_load_client`), or takes it from a scan of that client.
+    A scan carries this set forward when there is no next list to adopt, and a save or a detection
+    run copies it when the client has no next list yet. `current_list_for_client` answers "what is
+    the client's list now", with the next list ahead of this one; a second copy of that question
+    is a second answer waiting to disagree with the first.
     """
     stmt = (
         select(CompetitorSet)
         .join(Scan, Scan.id == CompetitorSet.scan_id)
-        .where(Scan.client_id == client_id)
-        .order_by(CompetitorSet.id.desc())
+        .where(Scan.client_id == client.id, Scan.agency_id == client.agency_id)
+        .order_by(Scan.id.desc(), CompetitorSet.id.desc())
         .limit(1)
         .options(selectinload(CompetitorSet.competitors))
     )
     if excluding_scan_id is not None:
         stmt = stmt.where(CompetitorSet.scan_id != excluding_scan_id)
     return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def latest_scan_for_client(
+    session: AsyncSession, client_id: str, agency_id: str
+) -> Scan | None:
+    """The client's most recent scan of any status: what a save is checked against.
+
+    No scan at all is a 404 for `PUT /clients/{id}/competitors`, and a RUNNING one is a 409. The
+    scan is not where the saved list goes (that is the client's next list).
+
+    Scoped to the client's own agency as well, so a scan row that does not belong to it can
+    never be chosen.
+    """
+    return (
+        await session.execute(
+            select(Scan)
+            .where(Scan.client_id == client_id, Scan.agency_id == agency_id)
+            .order_by(Scan.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+async def next_list_for_client(
+    session: AsyncSession, client: Client, *, lock: bool = False
+) -> CompetitorSet | None:
+    """The client's next list, if it has one: the set a save and a detection run write.
+
+    Reachable only through the client: the query names the client's id and its agency. That
+    agency is the client object's own, so tenancy is the caller's: each one resolves the client
+    under the signed-in agency first (`get_client`, `_load_client`), or takes it from a scan of
+    that client.
+
+    `lock=True` takes the row `FOR UPDATE` and reads it as the database holds it now. Every
+    writer takes the lock, and so does the adoption by a scan. That is the whole protocol that
+    keeps a scan's set from changing after the scan has started: a writer that finds the list
+    while a scan is adopting it waits for the adoption to commit, and when it does the row is
+    the scan's and no longer matches `scan_id IS NULL`, so the writer finds nothing here and
+    makes a new next list instead of writing the adopted one.
+    """
+    stmt = (
+        select(CompetitorSet)
+        .where(
+            CompetitorSet.client_id == client.id,
+            CompetitorSet.scan_id.is_(None),
+            CompetitorSet.client_id.in_(
+                select(Client.id).where(
+                    Client.id == client.id, Client.agency_id == client.agency_id
+                )
+            ),
+        )
+        .options(selectinload(CompetitorSet.competitors))
+    )
+    if lock:
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def current_list_for_client(
+    session: AsyncSession, client: Client
+) -> CompetitorSet | None:
+    """The client's list as it stands: its next list if it has one, else its latest set.
+
+    What `GET /clients/{id}/competitors` returns, and what an ad hoc prompt run looks for. The
+    next list is ahead of the latest set because it is the one later scans will use.
+    """
+    next_list = await next_list_for_client(session, client)
+    if next_list is not None:
+        return next_list
+    return await latest_set_for_client(session, client)
+
+
+async def create_next_list(
+    session: AsyncSession, client: Client, *, source: CompetitorSet | None = None
+) -> CompetitorSet:
+    """Make the client's next list, as a copy of `source` (a set of one of its scans) or empty.
+
+    The copy is the one `carry_forward_set` makes (rows, hand edits and struck rivals, provenance
+    verbatim), held for the client instead of hung off a scan. A client with no set at all gets
+    an empty list, which a hand edit then fills (`apply_override`) and no detection has touched.
+
+    If a next list appeared between the caller's look and this insert (two first saves, or a
+    save and a detection run), `uq_competitor_sets_next_list_per_client` refuses the second, and
+    that one is returned instead of failing. The losing INSERT blocks until the winner commits,
+    so the winner's list is there to find, and is locked for the caller to write.
+
+    **If the winner's list is gone by the re-read** (a scan adopted it between the winner's commit
+    and this look, so it is that scan's set and no longer a next list), the insert is tried once
+    more from the client's latest set, which is now the adopted one. Raising there would be a 500,
+    and on a detection run the paid outcome would be thrown away. A second refusal is a constraint
+    that is genuinely wrong, and is raised.
+    """
+    for attempt in (1, 2):
+        created = CompetitorSet(
+            id=ids.new_id(ids.COMPETITOR_SET),
+            client_id=client.id,
+            competitors=[],
+            **(_provenance(source) if source is not None else {}),
+        )
+        try:
+            async with session.begin_nested():
+                session.add(created)
+                await session.flush()
+        except IntegrityError:
+            if created in session:
+                session.expunge(created)
+            winner = await next_list_for_client(session, client, lock=True)
+            if winner is not None:
+                logger.info(
+                    "competitors.next_list.lost_race", client_id=client.id, adopted=winner.id
+                )
+                return winner
+            if attempt == 2:
+                raise
+            source = await latest_set_for_client(session, client)
+            logger.info(
+                "competitors.next_list.retried_after_adoption",
+                client_id=client.id,
+                source_set_id=source.id if source is not None else None,
+            )
+            continue
+        break
+    if source is not None:
+        _copy_rows(created, source)
+        await session.flush()
+    logger.info(
+        "competitors.next_list.created",
+        client_id=client.id,
+        source_set_id=source.id if source is not None else None,
+        competitors=len(created.competitors),
+    )
+    return created
+
+
+async def adopt_next_list(
+    session: AsyncSession, scan: Scan, client: Client
+) -> CompetitorSet | None:
+    """Make the client's next list `scan`'s own set, whole, if the client has one.
+
+    The set is not copied: its `scan_id` becomes the scan's and its `client_id` NULL, in one
+    UPDATE, so it is no longer the client's next list and a later save starts another. From that
+    moment it is the scan's set and nothing writes it again.
+
+    The row is locked first (`next_list_for_client`), so a save that is writing it finishes
+    before this takes it, and one that arrives after waits and then finds it gone.
+
+    `scan` must be `client`'s own: a next list is reachable only through its client, and handing
+    it to another client's scan would be a way across that line.
+    """
+    if scan.client_id != client.id:
+        raise ValueError("a scan adopts only its own client's next list")
+    next_list = await next_list_for_client(session, client, lock=True)
+    if next_list is None:
+        return None
+    next_list.scan_id = scan.id
+    next_list.client_id = None
+    await session.flush()
+    logger.info(
+        "competitors.adopted",
+        scan_id=scan.id,
+        set_id=next_list.id,
+        competitors=len(next_list.active_competitors),
+    )
+    return next_list
+
+
+def _provenance(source: CompetitorSet) -> dict[str, Any]:
+    """How `source` was made, to be recorded on a copy of it verbatim.
+
+    Provenance is copied rather than re-stamped: it records what detection found when it ran, and
+    a `detected_at` of now would claim a detection run that did not happen.
+    """
+    return {
+        "status": source.status,
+        "detection_confidence": source.detection_confidence,
+        "serp_queries_run": source.serp_queries_run,
+        "co_citation_prompts_run": source.co_citation_prompts_run,
+        "candidates_considered": source.candidates_considered,
+        "used_industry_seed": source.used_industry_seed,
+        "detected_at": source.detected_at,
+    }
+
+
+def _copy_rows(copy: CompetitorSet, source: CompetitorSet) -> None:
+    """Every row of `source` as a new row of `copy`, struck rivals' tombstones included.
+
+    Appended through the relationship, not `session.add()`: the collection cascades delete-orphan,
+    so a row attached only by foreign key would be deleted as an orphan on flush.
+    """
+    for row in source.competitors:
+        copy.competitors.append(
+            Competitor(
+                id=ids.new_id(ids.COMPETITOR),
+                competitor_set_id=copy.id,
+                name=row.name,
+                domain=row.domain,
+                rank=row.rank,
+                detection_source=row.detection_source,
+                signal_count=row.signal_count,
+                serp_mentions=row.serp_mentions,
+                co_citation_mentions=row.co_citation_mentions,
+                corroborated=row.corroborated,
+                score=row.score,
+                is_manual_override=row.is_manual_override,
+                is_suppressed=row.is_suppressed,
+            )
+        )
 
 
 async def carry_forward_set(
@@ -1012,36 +1269,12 @@ async def carry_forward_set(
     copy = CompetitorSet(
         id=ids.new_id(ids.COMPETITOR_SET),
         scan_id=scan.id,
-        status=source.status,
-        detection_confidence=source.detection_confidence,
-        serp_queries_run=source.serp_queries_run,
-        co_citation_prompts_run=source.co_citation_prompts_run,
-        candidates_considered=source.candidates_considered,
-        used_industry_seed=source.used_industry_seed,
-        detected_at=source.detected_at,
         competitors=[],
+        **_provenance(source),
     )
     session.add(copy)
     await session.flush()
-
-    for row in source.competitors:
-        copy.competitors.append(
-            Competitor(
-                id=ids.new_id(ids.COMPETITOR),
-                competitor_set_id=copy.id,
-                name=row.name,
-                domain=row.domain,
-                rank=row.rank,
-                detection_source=row.detection_source,
-                signal_count=row.signal_count,
-                serp_mentions=row.serp_mentions,
-                co_citation_mentions=row.co_citation_mentions,
-                corroborated=row.corroborated,
-                score=row.score,
-                is_manual_override=row.is_manual_override,
-                is_suppressed=row.is_suppressed,
-            )
-        )
+    _copy_rows(copy, source)
     await session.flush()
     logger.info(
         "competitors.carried_forward",
@@ -1057,9 +1290,15 @@ async def ensure_set_for_scan(
 ) -> tuple[CompetitorSet | None, str]:
     """Guarantee this scan has a competitor set before it is run.
 
-    Returns `(set, how)` where `how` is one of `existing`, `carried_forward`,
-    `detected` or `failed` — recorded so a log line can say which of the three
-    paths a scan took, and in particular whether it spent SerpApi quota.
+    Returns `(set, how)` where `how` is one of `existing`, `adopted`, `carried_forward`
+    or `detected` — so a caller can say which path a scan took, and in particular whether
+    it spent SerpApi quota. In the order tried: the scan's own set, else the client's NEXT LIST
+    (what a save or the button's detection wrote since the last scan, adopted whole:
+    `adopt_next_list`), else a copy of the client's latest set, else detection.
+
+    **From here on the set is the scan's, and never changes.** Everything the scan shows reads it
+    by `scan_id`, and nothing writes a scan's set after this phase: a save and a detection run
+    from the button write the next list, which a later scan takes.
 
     **Ordering: this must run BEFORE `scan_runner.run_scan`, not after.**
     `run_scan` reads the competitor list at its top and feeds it into two
@@ -1078,11 +1317,15 @@ async def ensure_set_for_scan(
         )
     ).scalar_one_or_none()
     if existing is not None:
-        # The detect-then-scan flow: `get_or_create_scan` handed detection and
-        # this run the same open scan, so the set is already here.
+        # A scan that already has its own set (a scan run again, or one whose phase had already
+        # run) keeps it, and the client's next list is left for the scan after.
         return existing, "existing"
 
-    previous = await latest_set_for_client(session, client.id, excluding_scan_id=scan.id)
+    adopted = await adopt_next_list(session, scan, client)
+    if adopted is not None:
+        return adopted, "adopted"
+
+    previous = await latest_set_for_client(session, client, excluding_scan_id=scan.id)
     if previous is not None:
         return await carry_forward_set(session, scan, previous), "carried_forward"
 

@@ -30,12 +30,22 @@
  * half-applied state — but it means removing one rival also converts the
  * survivors into overrides. The UI says so plainly rather than letting an
  * operator discover it from a badge appearing on rows they never touched.
+ *
+ * A save is for later scans
+ * -------------------------
+ * `PUT` writes the client's NEXT LIST, which the next scan that starts adopts; a scan that has
+ * started keeps the list it started with (launch checklist 3.78, 3.79). So nothing on the report
+ * on screen changes when a save succeeds, and the editor says so in its status line (focus moves
+ * there) rather than the page reloading a report that cannot have changed. What it replaces is the
+ * client's CURRENT list, which on an older scan is not the list on screen, so it is read when the
+ * editor opens.
  */
 
-import { useState, type JSX } from 'react';
+import { useEffect, useId, useRef, useState, type JSX } from 'react';
 import { Button, TextField } from '@avp/design-system';
 import type { Competitor, CompetitorInput } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
+import { COMPETITOR_EDITOR_COPY as COPY } from '@/lib/report/strings';
 
 /** Mirrors the API's `max_length=10` on ReplaceCompetitorsRequest.competitors. */
 const MAX_COMPETITORS = 10;
@@ -44,111 +54,245 @@ type Draft = { name: string; domain: string };
 
 export interface CompetitorEditorProps {
   clientId: string;
+  /** The list of the scan on screen. Not what a save replaces: see `current` below. */
   competitors: readonly Competitor[];
-  /** Called after a successful save so the caller can refetch the report. */
-  onSaved: () => void | Promise<void>;
+  /**
+   * The scan has no competitor set at all (the report's `competitorSet` is null), as opposed to a
+   * set with no rivals. Only the words differ: the same `PUT` names rivals in both cases.
+   */
+  setMissing?: boolean;
+  /**
+   * The scan on screen has finished, so a saved list is for later scans and does not change it.
+   * False for a scan still queued or running, which a save can still reach: a queued
+   * scan takes the saved list when it runs, and the API refuses a save while one is running.
+   */
+  scanFinished?: boolean;
+  /**
+   * Called after a successful save, for a caller that wants to do something then. The report page
+   * passes none: a save is for later scans, so the report on screen is what it was. A caller whose
+   * reaction removes the editor is safe: nothing is set on it once it has gone.
+   */
+  onSaved?: () => void | Promise<void>;
 }
 
 function toDraft(competitor: Competitor): Draft {
   return { name: competitor.name, domain: competitor.domain ?? '' };
 }
 
+const sameList = (a: readonly Draft[], b: readonly Draft[]) =>
+  a.length === b.length && a.every((d, i) => d.name === b[i]!.name && d.domain === b[i]!.domain);
+
 export function CompetitorEditor({
   clientId,
   competitors,
+  setMissing = false,
+  scanFinished = true,
   onSaved,
 }: CompetitorEditorProps): JSX.Element {
+  // What a save replaces is the client's CURRENT list (its next list, else its latest scan's set),
+  // which on an older scan is not the list on screen. It is read when the editor opens, and the
+  // drafts and the "unchanged" test start from it.
+  const [current, setCurrent] = useState<Draft[]>([]);
   const [open, setOpen] = useState(false);
-  const [drafts, setDrafts] = useState<Draft[]>(() => competitors.map(toDraft));
+  const [reading, setReading] = useState(false);
+  const [drafts, setDrafts] = useState<Draft[]>([]);
   const [name, setName] = useState('');
   const [domain, setDomain] = useState('');
   const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const errorId = useId();
 
-  function start() {
-    // Re-seed from the current set each time, so an abandoned edit does not
-    // resurface stale drafts over a set that has since been re-detected.
-    setDrafts(competitors.map(toDraft));
+  const mounted = useRef(true);
+  const opener = useRef<HTMLDivElement | null>(null);
+  const addRow = useRef<HTMLDivElement | null>(null);
+  const heading = useRef<HTMLHeadingElement | null>(null);
+  const savedNote = useRef<HTMLParagraphElement | null>(null);
+  const restoreOpener = useRef(false);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  // Focus moves with the editor: into it when it opens, back to the button that opened it when it
+  // closes without a save, and to the status line that says what a save did when it closes with one.
+  useEffect(() => {
+    if (open) heading.current?.focus();
+    else if (restoreOpener.current) {
+      restoreOpener.current = false;
+      opener.current?.querySelector('button')?.focus();
+    } else if (saved) savedNote.current?.focus();
+  }, [open, saved]);
+
+  // No rivals on the list on screen, or no list: the editor is then how rivals get named.
+  const naming = competitors.length === 0;
+  // Once open, the words follow the list the save replaces.
+  const namingCurrent = current.length === 0;
+  const differs = !sameList(competitors.map(toDraft), current);
+
+  async function start() {
+    // Not `disabled` while it reads: a focused button that disables can lose its focus.
+    if (reading) return;
+    setError(null);
+    setSaved(false);
+    setReading(true);
+    let seeded: Draft[];
+    try {
+      const found = await api.competitorSet(clientId);
+      seeded = (found?.competitors ?? []).map(toDraft);
+    } catch {
+      if (mounted.current) {
+        setError('The client’s current list could not be read. Try again.');
+        setReading(false);
+        opener.current?.querySelector('button')?.focus();
+      }
+      return;
+    }
+    if (!mounted.current) return;
+    // Re-seeded each time, so an abandoned edit does not resurface stale drafts.
+    setCurrent(seeded);
+    setDrafts(seeded);
     setName('');
     setDomain('');
-    setError(null);
+    setReading(false);
     setOpen(true);
   }
+
+  function close() {
+    // An error from adding or saving belongs to the open editor: left set, the closed editor
+    // would announce it again as a fresh alert.
+    setError(null);
+    restoreOpener.current = true;
+    setOpen(false);
+  }
+
+  // The Brand field is refocused after an Add (the Add button disables itself when the field
+  // empties, which would strand focus) and marked invalid only for an error add() raised.
+  const [addFailed, setAddFailed] = useState(false);
 
   function add() {
     const trimmed = name.trim();
     if (!trimmed) return;
     if (drafts.length >= MAX_COMPETITORS) {
       setError(`A set carries at most ${MAX_COMPETITORS} competitors.`);
+      setAddFailed(true);
       return;
     }
     if (drafts.some((d) => d.name.toLowerCase() === trimmed.toLowerCase())) {
       // The API enforces this too (uq_competitors_set_name), but a 422 after a
       // round trip is a worse way to learn it.
       setError(`${trimmed} is already on the list.`);
+      setAddFailed(true);
       return;
     }
     setDrafts([...drafts, { name: trimmed, domain: domain.trim() }]);
     setName('');
     setDomain('');
     setError(null);
+    setAddFailed(false);
+    addRow.current?.querySelector('input')?.focus(); // the Brand field, first in the row
   }
 
   async function save() {
     setSaving(true);
     setError(null);
+    setAddFailed(false);
     try {
       const payload: CompetitorInput[] = drafts.map((d) => ({
         name: d.name,
         domain: d.domain.trim() || null,
       }));
       await api.replaceCompetitors(clientId, payload);
-      await onSaved();
+      await onSaved?.();
+      // A caller's own reaction took the editor away: nothing below touches state once it is gone.
+      if (!mounted.current) return;
+      // The editor is still here: it says what the save did, and focus moves to that line. The
+      // report above is not touched, because the saved list is for later scans.
+      setSaved(true);
       setOpen(false);
     } catch (err) {
-      setError(
-        err instanceof ApiProblem
-          ? err.problem.detail || err.problem.title
-          : 'The change could not be saved.',
-      );
+      if (mounted.current) {
+        setError(
+          err instanceof ApiProblem
+            ? err.problem.detail || err.problem.title
+            : 'The change could not be saved.',
+        );
+      }
     } finally {
-      setSaving(false);
+      if (mounted.current) setSaving(false);
     }
   }
 
   if (!open) {
+    const lead = setMissing ? COPY.missingLead : COPY.emptyLead;
+    // Under the status line a save just printed, the "does not change" sentence is not said twice.
+    const tail = scanFinished
+      ? saved
+        ? COPY.namingTailSaved
+        : COPY.namingTail
+      : COPY.namingTailRunning;
+    const correctTail = scanFinished
+      ? saved
+        ? COPY.correctTailSaved
+        : COPY.correctTail
+      : COPY.correctTailRunning;
     return (
-      <div className="mt-4">
-        <Button variant="secondary" size="sm" onClick={start}>
-          Correct this list
+      <div className="mt-4" ref={opener}>
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => void start()}
+          aria-disabled={reading ? true : undefined}
+        >
+          {naming ? COPY.openButton : 'Correct this list'}
         </Button>
+        {reading && (
+          <p role="status" className="mt-2 text-ui-sm leading-prose text-text-tertiary">
+            {COPY.reading}
+          </p>
+        )}
+        {error && (
+          <p role="alert" className="mt-2 text-ui-sm leading-prose text-danger">
+            {error}
+          </p>
+        )}
+        {saved && (
+          <p
+            ref={savedNote}
+            role="status"
+            tabIndex={-1}
+            className="mt-2 text-ui-sm leading-prose text-text-secondary"
+          >
+            {scanFinished ? COPY.saved : COPY.savedRunning}
+          </p>
+        )}
         <p className="mt-2 text-ui-sm leading-prose text-text-tertiary">
-          Detection is automated and imperfect. A rival you add or keep by hand stays in place
-          when the scan is run again.
+          {naming ? `${lead} ${tail}` : `${COPY.correctLead} ${correctTail}`}
         </p>
       </div>
     );
   }
 
-  const unchanged =
-    drafts.length === competitors.length &&
-    drafts.every((d, i) => {
-      const original = competitors[i];
-      return (
-        original !== undefined &&
-        d.name === original.name &&
-        d.domain === (original.domain ?? '')
-      );
-    });
+  const unchanged = sameList(drafts, current);
 
   return (
     <div className="mt-4 flex flex-col gap-4 border-t border-line-hairline pt-4">
       <div>
-        <h4 className="text-ui-sm font-medium text-text-primary">Correct the competitor list</h4>
+        <h4
+          ref={heading}
+          tabIndex={-1}
+          className="text-ui-sm font-medium text-text-primary"
+        >
+          {namingCurrent ? COPY.openHeading : 'Correct the competitor list'}
+        </h4>
+        {differs && (
+          <p className="mt-1 text-ui-sm leading-prose text-text-secondary">{COPY.differsFromScan}</p>
+        )}
         <p className="mt-1 text-ui-sm leading-prose text-text-tertiary">
-          Saving replaces the whole list and marks every entry on it as set by hand, including
-          ones you did not change. The corroboration figure is cleared with it, because it
-          measures agreement between two automated signals and neither produced this list.
+          {COPY.openNote} {scanFinished ? COPY.openNoteFinished : COPY.openNoteRunning}
         </p>
       </div>
 
@@ -167,6 +311,7 @@ export function CompetitorEditor({
             <Button
               variant="ghost"
               size="sm"
+              aria-label={`Remove ${draft.name}`}
               onClick={() => setDrafts(drafts.filter((_, i) => i !== index))}
             >
               Remove
@@ -175,18 +320,19 @@ export function CompetitorEditor({
         ))}
         {drafts.length === 0 && (
           <li className="text-ui-sm leading-prose text-text-tertiary">
-            No competitors. Saving an empty list clears the set, and Share of Voice becomes
-            unmeasurable until the scan is run again.
+            {namingCurrent ? COPY.noneYet : COPY.emptiedStaysEmpty}
           </li>
         )}
       </ol>
 
-      <div className="flex flex-wrap items-end gap-3">
+      <div ref={addRow} className="flex flex-wrap items-end gap-3">
         <TextField
           label="Brand"
           value={name}
           onChange={(e) => setName(e.target.value)}
           maxLength={200}
+          aria-invalid={error && addFailed ? true : undefined}
+          aria-describedby={error ? errorId : undefined}
         />
         <TextField
           label="Domain (optional)"
@@ -200,16 +346,16 @@ export function CompetitorEditor({
       </div>
 
       {error && (
-        <p role="alert" className="text-ui-sm leading-prose text-danger">
+        <p id={errorId} role="alert" className="text-ui-sm leading-prose text-danger">
           {error}
         </p>
       )}
 
       <div className="flex flex-wrap gap-3">
-        <Button variant="primary" size="md" onClick={save} disabled={saving || unchanged}>
+        <Button variant="primary" size="md" onClick={() => void save()} disabled={saving || unchanged}>
           {saving ? 'Saving…' : 'Save the list'}
         </Button>
-        <Button variant="ghost" size="md" onClick={() => setOpen(false)} disabled={saving}>
+        <Button variant="ghost" size="md" onClick={close} disabled={saving}>
           Cancel
         </Button>
       </div>

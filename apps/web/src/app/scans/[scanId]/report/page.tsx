@@ -8,7 +8,7 @@
  * is what holds it.
  */
 
-import { use, useCallback, useEffect, useState } from 'react';
+import { use, useEffect, useState } from 'react';
 import { Button, ErrorState, LoadingState } from '@avp/design-system';
 import type { Report } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
@@ -31,18 +31,9 @@ export default function ReportPageRoute({
   const { scanId } = use(params);
   const [view, setView] = useState<View>({ kind: 'loading' });
 
-  /**
-   * Re-read the report from the API.
-   *
-   * Correcting the competitor set changes Share of Voice's inputs, so the whole
-   * document has to come back rather than the table being patched in place —
-   * the gap beat, the fix list and the pitch are all derived from figures the
-   * correction can move.
-   */
-  const reload = useCallback(async () => {
-    setView({ kind: 'ready', report: await api.report(scanId) });
-  }, [scanId]);
-
+  // No reload after the competitor editor saves. A saved list is for the client's later scans
+  // (the API writes its next list), so the scan on screen, its figures and everything derived from
+  // them are what they were; the editor says so itself.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -151,13 +142,12 @@ export default function ReportPageRoute({
         <ReportView
           report={view.report}
           competitorEditor={
-            view.report.competitorSet ? (
-              <CompetitorEditor
-                clientId={view.report.subject.clientId}
-                competitors={view.report.competitorSet.competitors}
-                onSaved={reload}
-              />
-            ) : undefined
+            <CompetitorEditor
+              clientId={view.report.subject.clientId}
+              competitors={view.report.competitorSet?.competitors ?? []}
+              setMissing={view.report.competitorSet === null}
+              scanFinished={!['queued', 'running'].includes(view.report.scanStatus)}
+            />
           }
         />
       </div>

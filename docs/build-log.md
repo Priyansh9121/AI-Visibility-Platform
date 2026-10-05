@@ -25648,3 +25648,119 @@ The founder's decision (2026-10-05): the Technical screen's failed-state text ("
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# An empty or missing competitor list can be named from the report; a save goes to the client's next list, which the next scan takes, so a scan's own rivals and score never change after it starts
+
+**2026-10-05, the tenth entry of the day; branch `pilot-fixes-6`, the founder's decisions of 2026-10-05 on B4 (launch checklist 3.78 and 3.79).** One item, built over six rounds, with a security review, a UI review and its own bar.
+
+**Render: nothing to set, but this deploy runs a migration (`7945e69b06e5`).** The API runs `alembic upgrade head` before it starts (`infra/deploy/README.md`). Deploy while no scan and no ad hoc prompt run is in flight: the migration waits at most 5 seconds for its lock, and an old instance in the middle of a scan holds a read lock on `competitor_sets` across its model calls, so a busy deploy fails and nothing changes (redeploy when idle). Launch checklist 1.1h says so.
+
+Drift check (north-star §8): Layer 2, Measurement (which rivals a scan compares against), with its copy on the report, the PDF, the narrative and the client's Competitors screen; lifecycle phase: Activation (Epic 9) and Retention (the scans after the first).
+
+## 1. What changed
+
+**The founder's decisions (2026-10-05).** An empty or missing competitor set is no longer permanent: an operator can name rivals by hand from the report. A rival named after a scan started counts only for later scans. It never counts for that scan, its client-history Share of Voice, or an explicit re-score of it. History's Share of Voice comes from the stored score. Ad hoc prompt runs use the client's current list.
+
+**The next list.**
+- A `competitor_sets` row now belongs either to a scan (`scan_id` set, as before) or to a client (`scan_id` NULL, `client_id` set). The second kind is the client's "next list". A client has at most one.
+- `PUT /clients/{clientId}/competitors` and `POST /clients/{clientId}/competitors/detect` write only the next list. When there is none yet, they start it as a copy of the client's latest list. Neither ever writes a scan's own set again, a running scan's included.
+- A scan's competitor phase (`ensure_set_for_scan`) takes, in order: its own set if it has one; else the client's next list, adopted under `FOR UPDATE` (the row becomes the scan's set; log `competitors.adopted`, ids only); else the previous set carried forward; else detection.
+- `GET /clients/{clientId}/competitors` returns the next list, else the latest scan's set.
+- "The latest set" is ordered by scan, then by set (`Scan.id DESC, CompetitorSet.id DESC`), because an adopted list keeps the id it was made with.
+- PUT still answers 409 while the client's latest scan is RUNNING, and 404 when the client has no scan.
+- Detect still opens or reuses a QUEUED scan, as before, and is no longer refused while a scan runs, because it no longer writes that scan's set. Whether to keep the QUEUED scan is an open decision (launch checklist).
+
+**The migration `7945e69b06e5`** (down revision `7106cadcd0ed`):
+- `competitor_sets.scan_id` becomes nullable, and `client_id` is added with a foreign key to `clients`.
+- A CHECK (`ck_competitor_sets_scan_or_client`) requires exactly one of the two.
+- A partial unique index (`uq_competitor_sets_next_list_per_client`) allows one next list per client.
+- `lock_timeout` is 5 s. Every existing row has `scan_id` set, so the CHECK holds on production data.
+- The downgrade deletes next lists that no scan has taken yet, and restores `scan_id NOT NULL`.
+
+**Reading.**
+- **Client history** reads Share of Voice from the stored score (`Score.share_of_voice`) instead of recomputing it from the scan's set on every read. The per-rival figures on the report are still computed on read from the scan's own set, which no longer changes.
+- **Ad hoc prompt runs** (`prompt_runs.subject_competitors`) read the client's current list (the next list, else the latest scan's set) and look only for rivals that are not struck. They used to filter on `suppressed_at`, a column `Competitor` does not have, so struck rivals were still looked for.
+
+**The report's editor** (`CompetitorEditor.tsx`, signed-in report only; never on the share link):
+- It shows for a set with rivals, an empty set and a missing set.
+- On open it reads the client's current list and starts from it. When that differs from the scan on screen it says so.
+- A save no longer reloads the page. A status line takes focus and says the save is for later scans.
+- Its sentences, each true for a finished, a queued and a running latest scan (U is "This scan’s list and score do not change."; R is "A list cannot be saved while a scan of this client is running."):
+  - naming rivals, finished scan: "Rivals you name here are saved for later scans, which compare against them." U R
+  - correcting a list, finished scan: "Detection is automated and imperfect." "A list you correct here is saved for later scans, and a rival you add or keep by hand stays in place on them." U R
+  - with the client's latest scan queued or running, each leads with R, then "…are saved as the client’s list…" and "A scan that has not started yet uses the list when it runs."
+  - the open editor: "Saving replaces the client’s whole list and marks every entry on it as set by hand, including ones you did not change. The corroboration figure is cleared with it, because it measures agreement between two automated signals and neither produced this list." Then, for a finished scan, "The list is saved for later scans." U R
+  - after a save, the status line: "Saved for later scans." U (said once; the paragraph below it drops U).
+  - when the client's current list differs from the scan on screen: "The client’s current list, which later scans use, differs from this scan’s. Saving replaces the current list."
+- U says "score", not "figures": the per-rival figures are computed on read with today's platform tiers, so naming a rival elsewhere can move a rival's Citation Strength (Found, not fixed).
+- Accessibility: focus moves to the editor's heading on open and back to the opener on Cancel; the status line takes focus after a save; Cancel clears an error; `aria-invalid` marks Brand only for its own errors (a duplicate, the ten-rival limit); "Reading…" is a status region and the opener is `aria-disabled` while it reads, and gets focus back if the read fails; each Remove button names its rival; focus returns to Brand after Add; the empty and missing cards' label is an `h3`.
+
+**Other surfaces.** The Competitors screen's empty and missing states, the report's weak-signal sentence, the PDF's competitor sentences, and the developer comments that still said rivals are "re-detected per scan" (`ClientDetailView`, `lib/client/competitors.ts`, `lib/client/trends.ts`, the landing page's claims list, `docs/design-system.md` and the styleguide) now describe the next list.
+
+**Dev scripts.** `scripts/verify_competitor_override.py` and `scripts/seed_dev.py` pick the newest set that belongs to a scan, so a next list cannot break them.
+
+**`docs/api-contracts.md`:** PUT, GET and detect, the scan chain's competitor step, and the history's Share of Voice figure. OpenAPI and `api.gen.ts` are regenerated (`CompetitorSetOut.scanId` is nullable).
+
+## 2. The reviews
+
+**Security review: nothing at Blocker or High.**
+- **Medium, fixed (round 5):** "the latest set" was the newest set id, but an adopted next list keeps the id it was made with. A scan's own detection that finished after an operator's next list was made would outrank that list once a later scan took it. GET, the copy source for PUT and detect, carry-forward and ad hoc runs would then use the raw detection, and the operator's names and strikes would be gone from later scans. Every trigger was API-only or a race (the web app never calls detect). Fixed by ordering on the scan first.
+- **Low, fixed (round 5):** a lost first-writer race followed by an adoption re-raised the unique-index error as a 500, which on detect threw away a paid detection and spent the client's day. The loser now starts once more from the adopted set (log `competitors.next_list.retried_after_adoption`, ids only).
+- **Nits, taken:** the client-only queries now also filter on the agency, and `seed_dev.py` picks a set that belongs to a scan.
+- **Nit, recorded:** PUT's 409 is check-then-act. A scan claimed between the check and the lock either takes the save (fine), or locks first, in which case the save becomes the list for the scan after it, and "a scan that has not started yet uses it" is wrong for that one scan. Scores are unaffected.
+- **Checked clean:** tenancy (every route resolves the client under the agency before any read or write; 404 comes before 409; adoption refuses another client's scan); the migration (the CHECK and the index allow one next list per client; one Alembic head; the downgrade loses only lists not yet taken); score integrity (every reader selects by `scan_id`, and nothing writes a scan's set after its competitor phase); detect (no new spend or allowance path, and the old write into a running scan's set is gone); logging (ids and counts only).
+- **The earlier Low** (the scan chain's own set inserts have no savepoint) is lower now, not higher: only a scan's own chain can give it a set.
+- **The re-check of the round-5 fixes:** nothing at Blocker, High, Medium or Low, and round 6 touched nothing security-relevant. Every reader of "the latest set" now goes through the one ordered query; every other reader matches a scan id, so a next list and a scan's set cannot be taken for each other. The retry is bounded to two attempts, its savepoint rolls back only its own insert, and hand-named rows survive it. Two nits: the agency predicate compares the client with its own agency, so it guards against a row that disagrees with its client, not against a caller holding another agency's client (the docstrings now say tenancy is the caller's, and every caller resolves the client under the signed-in agency first); and the retry treats any integrity error as a lost race (Found, not fixed).
+
+**UI review: one Blocker and four Should-fix, all taken in round 6, with the nits.**
+- **Blocker, fixed:** the weak-signal sentence on the report and the PDF said "correct it before sending the report on", but a correction never reaches that report, its PDF or its share link. Both now end "…Treat this rival set as a starting point."
+- **Should-fix, fixed:** Cancel left an error set, and the closed editor announced it again as an alert. Cancel clears it.
+- **Should-fix, fixed:** the finished-scan forms promised a save with no refusal, but the 409 keys on the client's latest scan, so an older report's editor could promise a save it then refused. Each finished form now ends with R.
+- **Should-fix, fixed:** the Competitors screen's empty state said the list "stays empty until rivals are named in the scan’s report", false right after that. It now says "This scan’s competitor list is empty, so there is nobody to compare. Rivals named in the scan’s report are used by later scans; this scan’s list does not change." (Without a report link: "a scan’s report".)
+- **Should-fix, fixed:** the PDF printed "Search results and AI answers independently surfaced this set of rivals." for a hand-named list (stored as found, with no confidence, every row a manual override), which a scan now adopts as it is. When every rival is a manual override the PDF says "These rivals were named by the agency, not found by search results or AI answers.", as the web's "set by hand" does.
+- **Nits, all taken:** the accessibility points above; "figures" to "score"; the duplicated "does not change" after a save; the running forms lead with the refusal; `docs/design-system.md`'s line matches the styleguide; the dead focus branch is gone.
+- **Recorded, not changed:** a scan queued before this deploy that already holds a set keeps it; Enter in Brand does nothing (Found, not fixed).
+- **The re-check of the Blocker fix:** clean on the web report, the PDF, the narrative, the copy fixture and the shared report; the four Should-fix items are fixed as asked and round 2's and round 6's accessibility work holds. Four nits: one is the recorded queued-scan case; the `scanFinished` prop's comment said "started or finished" and now says "finished"; two are below or hold (the Competitors screen shows the newest scan with a reading, so its "this scan’s list does not change" is true).
+
+## 3. Deploying it
+
+- The migration runs before the new API starts. While the old instance still serves, its PUT edits the latest scan's own set and its scans ignore next lists. That ends when it drains.
+- Adding the foreign key also blocks writes to `clients` for the length of the migration's transaction.
+- The migration's 5 s lock timeout fails the deploy, closed, if a scan or an ad hoc run is in flight. Redeploy when idle.
+- Older, and unchanged: the detect route keeps its transaction open across the minutes of detection, which blocks a concurrent scan start for that client.
+
+## Found, not fixed
+
+- **Tier B counts every competitor domain on the platform.** `domain_authority.load_platform_domains` excludes, from Tier B, every client domain and every `Competitor.domain`, struck rows and next lists included. A rival named on one client can therefore move Tier B, and so Citation Strength, on an explicit re-score of any scan that cites it. In avp_dev today: 0 struck rows among 125 competitor domains, and no next lists, so no effect. Counting only non-struck rows in sets that belong to a scan is a formula change and needs a `FORMULA_VERSION` bump. Open decision for the founder (launch checklist).
+- **Detect still opens a QUEUED scan** that no longer holds the list. Keep or drop: open decision (launch checklist).
+- **A QUEUED scan that already holds a set** made by the old code's detect keeps it, so "a scan that has not started yet uses the list when it runs" is false for that one scan. Only scans queued before this deploy can be in that state.
+- **Enter in the Brand field does nothing.** Older than this item.
+- **"Reading…" may not be announced** by some screen readers: its status region mounts together with its text. An always-mounted empty region would fix it.
+- **The next-list retry treats any integrity error as a lost race,** so a foreign-key failure (the client row deleted mid-save) logs `competitors.next_list.retried_after_adoption` before the second attempt fails with a clean 500. Only the log line is wrong; the fix is to take the lost-race path only for `uq_competitor_sets_next_list_per_client`.
+- **A scan scored under an older formula** now shows its stored Share of Voice in history, as its composite always did.
+
+## Verified
+
+**API pytest 4703 → 4760 (+57); web vitest 2073 → 2105 (+32); floors raised to match.**
+- **API, new files:**
+  - `test_competitor_next_list.py` (34): the schema's shape (one next list per client; a set belongs to a scan or a client, never both or neither); a save writes the next list and leaves the scan alone; GET returns the next list, else the latest set; a scan adopts the list, keeps a set of its own, or carries forward, and only for its own client; two writers at once (a save waiting on an adoption, two first saves); detection writes the next list, keeps what an operator named and struck, and still opens the placeholder scan; another agency's save and read touch nothing; a running scan still refuses an edit (409) and a client with no list is a 404; ad hoc runs read the current list and skip struck rivals (3); the latest set belongs to the latest scan (1); a lost race followed by an adoption, for PUT and detect (2); the agency scoping (1).
+  - `test_a_finished_scans_list_is_final.py` (7), the founder's case: a save after a scan finished leaves that scan's set, report, stored score, history Share of Voice and an explicit re-score as they were, and the next scan uses the named rivals, for a set with rivals, an empty set and no set (two tests each); and a scan queued before the save takes the list when it runs.
+  - `test_competitor_set_missing.py` (9): naming rivals for a client with no set (the next list, not a scan's set; the 404s; another agency's client), and the latest scan's status (RUNNING refuses; QUEUED and FAILED do not, and the next scan adopts the list without detecting).
+- **API, changed files:** `test_client_history.py` 18 → 20 (history reads the stored Share of Voice); `test_competitor_endpoints.py` 34 → 36; `test_report_pdf.py` 63 → 66 (the weak-signal sentence, the hand-named sentence); `test_detect_rate_limit.py` 33 (a patch target renamed). `conftest.py`'s engines-only executor adopts the next list before its engine loop, as the real one does.
+- **Web, new files:** `CompetitorEditor.emptyAndMissing.test.tsx` (15) and `CompetitorEditor.interaction.test.tsx` (17): the editor for each kind of set, the sentences for a finished and an unfinished scan, reading the current list, the differs note, the save, the status line and its focus, Cancel, the errors' ARIA, Remove labels and focus after Add.
+- **Web, changed pins:** `ReportView.test.tsx` (141), `ClientCompetitorsView.test.tsx` (26), `claimsAgainstCode.test.tsx` (16).
+- **The implementer's negative controls,** each restored and checked:
+  - round 3 (API, 189 tests in 8 files): a save that edits the scan's own set, 23 fail; history recomputing Share of Voice, 2; adoption removed, 33; no row lock, 1; the race loser re-raising, 2; the CHECK removed, 2; the partial unique index removed, 3; detect writing the scan's set, 11; the cross-client guard removed, 1; the 409 removed, 3; the empty-list 404 removed, 1;
+  - round 3 (web, 207 tests in 5 files, on that round's sentences): no status line, 4; no focus to it, 1; the old naming sentence, 4; a queued scan told its list does not change, 1; the open editor silent about later scans, 1;
+  - round 4: ad hoc runs back on the latest scan's own set, 3; back on the `suppressed_at` filter, 3;
+  - round 5: "the latest set" ordered by set id again, 1; no retry after a lost race, 2; either agency predicate removed, 1 each;
+  - round 6: the weak-signal sentence back, 1 web and 1 PDF; Cancel not clearing the error, 1; the old Competitors-screen sentence, 5; the PDF's hand-named branch removed, 1.
+- **On this tree:** 5 API files, 136 passed. A scan that no longer adopts the next list: 12 fail. History recomputing Share of Voice from the set: 2 fail. The weak-signal sentence asking for a correction again: 1 of `ReportView.test.tsx`'s 141 fails. Each file was restored, and the tree's checksums matched before and after.
+- **The rest of the bar** (this tree, one run, 21:17 to 21:24):
+  - Counts: API 4760, workers 27, shared-types 53 (0 fail), design-system 935, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7945e69b06e5`, this item's migration) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

@@ -185,21 +185,24 @@ function Body({ history, field }: { history: ClientHistory; field: FieldState })
       <EmptyState
         eyebrow="Competitors"
         title="No competitors in this scan"
-        // Neither state points anywhere, because there is nowhere true to point. The report
-        // detects nothing, and its by-hand editor is drawn only under a table of rivals
-        // (`ProofBeat`), so a scan with no set and a set with no rivals both show none.
+        // Both states point to the report, because its editor is drawn for a scan with no set and
+        // for a set with no rivals (`ProofBeat`), and that is where rivals are named. A save there is
+        // the client's next list, which later scans adopt; this scan's own list never changes, and
+        // this page reads the scan's list, so the body says both and does not say it stays empty.
         //
         // And no status note. It used to print the API's own word for how detection went
         // ("Detection status: no_signal."), which is a code. Putting the status into words
-        // would not be true of every list that reaches here: the report's wording for
-        // `no_signal` says detection surfaced nothing, yet a list an agency emptied by hand
-        // through the report's editor is stored as `no_signal` too, and its wording for
-        // `weak_signal` says to correct a rival set when there is none. The title and the
-        // body already say what is the case.
+        // would not be true of every list that reaches here: `no_signal` is stored both when
+        // detection surfaced nothing and when an agency emptied the list by hand. The title and
+        // the body already say what is the case.
         body={
           report.competitorSet === null
-            ? 'Competitor detection did not run for this scan, so share of voice was left out of its score and there is nobody to compare.'
-            : 'This scan’s competitor list is empty, so there is nobody to compare.'
+            ? `Competitor detection did not run for this scan, so share of voice was left out of its score and there is nobody to compare.${
+                scanId ? ' Rivals can be named in the scan’s report, and later scans compare against them.' : ''
+              }`
+            : `This scan’s competitor list is empty, so there is nobody to compare. Rivals named in ${
+                scanId ? 'the' : 'a'
+              } scan’s report are used by later scans; this scan’s list does not change.`
         }
         {...(scanId ? { action: <ReportLink scanId={scanId} /> } : {})}
       />
@@ -310,10 +313,11 @@ function Field({
         </div>
 
         {intermittent.length > 0 && (
-          // A new scan copies the client's most recent competitor set
-          // (`carry_forward_set`), so a rival is missing from some scans when
-          // the list changed in between: an operator corrected it, or a
-          // re-detection ran (the API's detect route; no screen calls it).
+          // A new scan takes the list its client saved or detected since the last
+          // scan, else copies the client's most recent set (`ensure_set_for_scan`), and
+          // never changes it afterwards. So a rival is missing from some scans when the
+          // list changed in between: an operator saved a new one, or a re-detection ran
+          // (the API's detect route, for paying agencies; no screen calls it).
           // That is a real event. Said here the way Rankings says it under
           // its chart, so the two screens agree about the same rivals.
           <p className="max-w-measure text-ui-sm leading-prose text-text-tertiary">

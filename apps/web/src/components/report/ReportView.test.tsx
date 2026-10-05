@@ -223,13 +223,16 @@ describe('degraded data renders as degraded, never as bad', () => {
     const html = render(noCompetitorSetReport);
     expect(html).toContain('Share of Voice');
     expect(html).toContain('normally 25% of the score');
-    expect(html).toContain('rather than awarding points for a detection that did not happen');
+    expect(html).toContain('rather than awarding points for a comparison that could not be made');
   });
 
   it('a weak competitor set carries its caveat next to the comparison', () => {
     const html = render(weakSignalReport);
     expect(html).toContain('Weakly corroborated');
-    expect(html).toContain('correct it before sending the report on');
+    expect(html).toContain('Treat this rival set as a starting point.');
+    // A correction never reaches this report, its PDF or its share link, so it is not asked for.
+    expect(html).not.toContain('correct it');
+    expect(html).not.toContain('sending the report on');
   });
 
   it('a failed audit says the technical check could not be completed, and does not blame the site', () => {

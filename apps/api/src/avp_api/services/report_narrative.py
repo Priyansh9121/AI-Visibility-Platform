@@ -91,10 +91,10 @@ EXCLUSION_DETAIL: dict[str, str] = {
         "is excluded rather than scored zero."
     ),
     "NO_COMPETITOR_SET": (
-        "No competitor set was detected for this scan, so there is no rival to measure "
-        "a share of voice or a citation comparison against. The dimension is excluded "
-        "and its weight spread across the others, rather than awarding points for a "
-        "detection that did not happen."
+        "This scan\u2019s competitor list was missing or had no rivals on it, so there is "
+        "no rival to measure a share of voice or a citation comparison against. The "
+        "dimension is excluded and its weight spread across the others, rather than "
+        "awarding points for a comparison that could not be made."
     ),
     "NO_AWARENESS_POPULATION": (
         "Mention Rate counts only questions that did not name the brand — the ones "
@@ -226,7 +226,7 @@ DEGRADATION_FLAG: dict[str, str] = {
         "single signal. Share of Voice should be read as indicative rather than exact."
     ),
     "NO_CITATIONS_IN_SCAN": "No engine cited any source in this scan, for any brand.",
-    "NO_COMPETITOR_SET": "No competitors were detected, so no share comparison was possible.",
+    "NO_COMPETITOR_SET": "No competitors were on the list, so no share comparison was possible.",
     "TECHNICAL_FOUNDATION_NOT_MEASURED": (
         "The site had not been audited when this score was computed."
     ),

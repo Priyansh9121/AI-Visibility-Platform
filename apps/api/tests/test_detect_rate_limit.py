@@ -282,7 +282,9 @@ class TestARunThatFailsStillCounts:
         async def breaks(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202, ARG001
             raise RuntimeError("the database went away mid-run")
 
-        monkeypatch.setattr(detection, "persist_detection", breaks)
+        # The route writes the client's next list (`persist_detection_for_client`), no longer a
+        # scan's own set (`persist_detection`): the write that fails mid-run is that one.
+        monkeypatch.setattr(detection, "persist_detection_for_client", breaks)
         with pytest.raises(RuntimeError, match="went away"):
             await _detect(client, cid)
         assert len(runs.searches) == 1

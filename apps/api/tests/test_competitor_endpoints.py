@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 
+from avp_api import ids
+from avp_api.models import Client, CompetitorSet, Scan, ScanStatus
 from avp_api.services import competitors as detection
 from avp_api.services import scan_runner
 from avp_api.services.cocitation import CoCitationHit, CoCitationResult
@@ -39,6 +42,26 @@ async def _make_client(client: AsyncClient, domain: str = "helpscout.com") -> st
     resp = await client.post(f"{BASE}/clients", json={"url": domain, "classify": False})
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
+
+
+async def _scan_that_took_the_list(session, cid: str) -> str:  # noqa: ANN001
+    """A scan that started after the list was saved or detected, and so took it as its own set.
+
+    A save or a detection run from the button writes the client's next list, and no scan's own
+    set. A scan's report shows a list only once the scan has taken it, which is what the chain's
+    competitor phase does at the start of a scan: this runs that one step for one scan.
+    """
+    owner = (await session.execute(select(Client).where(Client.id == cid))).scalar_one()
+    scan = Scan(
+        id=ids.new_id(ids.SCAN), client_id=cid, agency_id=owner.agency_id,
+        status=ScanStatus.SUCCEEDED,
+    )
+    session.add(scan)
+    await session.flush()
+    _found, how = await detection.ensure_set_for_scan(session, scan, owner)
+    assert how in ("adopted", "carried_forward"), how
+    await session.commit()
+    return scan.id
 
 
 # `stub_discovery` now lives in conftest.py — test_report_endpoint.py needs the
@@ -366,11 +389,15 @@ class TestOverrideReachesDownstream:
     and, deliberately, they assert it WITHOUT any Epic 5-8 code changing, which
     is the evidence that Epic 3's design was complete rather than that this
     epic patched around a gap.
+
+    Since launch checklist 3.78/3.79 a save is written to the client's next list and reaches a
+    scan when the scan starts, so each test below follows a scan that took the list. The scan
+    that had already started is held beside it: a save does not reach its report.
     """
 
     async def test_the_report_projection_carries_the_provenance_flag(
-        self, client: AsyncClient, stub_discovery
-    ) -> None:  # noqa: ANN001
+        self, client: AsyncClient, session, stub_discovery  # noqa: ANN001
+    ) -> None:
         """The report table's "set by hand" badge reads this field.
 
         `ReportCompetitorOut` inherits it from `CompetitorOut` — no Epic 7
@@ -381,9 +408,10 @@ class TestOverrideReachesDownstream:
         cid = await _make_client(client)
         stub_discovery(serp_domains=["a.com"], cocit_brands=[("A", "a.com")])
         await client.post(f"{BASE}/clients/{cid}/competitors/detect")
-        scan_id = (await client.get(f"{BASE}/clients/{cid}/competitors")).json()["scanId"]
+        started = await _scan_that_took_the_list(session, cid)
 
-        before = (await client.get(f"{BASE}/scans/{scan_id}/report")).json()
+        before = (await client.get(f"{BASE}/scans/{started}/report")).json()
+        assert before["competitorSet"]["competitors"]
         assert all(
             c["isManualOverride"] is False for c in before["competitorSet"]["competitors"]
         )
@@ -393,14 +421,20 @@ class TestOverrideReachesDownstream:
             json={"competitors": [{"name": "Operator Pick", "domain": "operatorpick.com"}]},
         )
 
-        after = (await client.get(f"{BASE}/scans/{scan_id}/report")).json()
-        competitors = after["competitorSet"]["competitors"]
+        # The scan that had started keeps the list it measured.
+        unchanged = (await client.get(f"{BASE}/scans/{started}/report")).json()
+        assert unchanged["competitorSet"] == before["competitorSet"]
+        # The next scan takes the saved one, and the badge's field is on it.
+        later = await _scan_that_took_the_list(session, cid)
+        competitors = (await client.get(f"{BASE}/scans/{later}/report")).json()[
+            "competitorSet"
+        ]["competitors"]
         assert [c["name"] for c in competitors] == ["Operator Pick"]
         assert all(c["isManualOverride"] is True for c in competitors)
 
     async def test_the_report_drops_the_corroboration_claim_after_an_override(
-        self, client: AsyncClient, stub_discovery
-    ) -> None:  # noqa: ANN001
+        self, client: AsyncClient, session, stub_discovery  # noqa: ANN001
+    ) -> None:
         """`detectionConfidence` measures agreement between two automated
         signals. Neither produced a corrected set, so the report must stop
         making the claim rather than carry a stale one next to new rows."""
@@ -410,13 +444,17 @@ class TestOverrideReachesDownstream:
             serp_domains=["a.com"], cocit_brands=[("A", "a.com")]
         )
         await client.post(f"{BASE}/clients/{cid}/competitors/detect")
-        scan_id = (await client.get(f"{BASE}/clients/{cid}/competitors")).json()["scanId"]
+        started = await _scan_that_took_the_list(session, cid)
 
         await client.put(
             f"{BASE}/clients/{cid}/competitors",
             json={"competitors": [{"name": "Operator Pick", "domain": "operatorpick.com"}]},
         )
-        report = (await client.get(f"{BASE}/scans/{scan_id}/report")).json()
+        # The scan that measured the detected list still says what the detection found: it did.
+        kept = (await client.get(f"{BASE}/scans/{started}/report")).json()
+        assert kept["competitorSet"]["detectionConfidence"] is not None
+        later = await _scan_that_took_the_list(session, cid)
+        report = (await client.get(f"{BASE}/scans/{later}/report")).json()
         assert report["competitorSet"]["detectionConfidence"] is None
 
     # A third test here would assert that re-scoring compares against the
@@ -434,6 +472,10 @@ class TestOverrideReachesDownstream:
     # It is asserted in scripts/verify_competitor_override.py instead, against
     # a scan in avp_dev that has six real answered results, where the
     # comparison list is genuinely non-empty and the claim genuinely holds.
+    #
+    # And since launch checklist 3.78/3.79 the opposite is true and is tested, for a scan that
+    # has answers: `test_a_finished_scans_list_is_final.py` names rivals after a scan finished
+    # and holds its figures, its history and a re-score unchanged.
 
 
 class TestStruckCompetitorsStayStruck:
@@ -495,9 +537,9 @@ class TestStruckCompetitorsStayStruck:
         got = (await client.get(f"{BASE}/clients/{cid}/competitors")).json()
         assert [c["name"] for c in got["competitors"]] == ["Keep"]
 
-    async def test_a_struck_rival_leaves_the_report(
-        self, client: AsyncClient, stub_discovery
-    ) -> None:  # noqa: ANN001
+    async def test_a_struck_rival_leaves_the_report_of_the_next_scan(
+        self, client: AsyncClient, session, stub_discovery  # noqa: ANN001
+    ) -> None:
         await _sign_up(client)
         cid = await _make_client(client)
         stub_discovery(
@@ -505,12 +547,16 @@ class TestStruckCompetitorsStayStruck:
             cocit_brands=[("Keep", "keep.com"), ("Strike", "strike.com")],
         )
         await client.post(f"{BASE}/clients/{cid}/competitors/detect")
-        scan_id = (await client.get(f"{BASE}/clients/{cid}/competitors")).json()["scanId"]
+        started = await _scan_that_took_the_list(session, cid)
         await client.put(
             f"{BASE}/clients/{cid}/competitors",
             json={"competitors": [{"name": "Keep", "domain": "keep.com"}]},
         )
-        report = (await client.get(f"{BASE}/scans/{scan_id}/report")).json()
+        # The scan that measured both keeps both. It measured them.
+        before = (await client.get(f"{BASE}/scans/{started}/report")).json()
+        assert {c["name"] for c in before["competitorSet"]["competitors"]} == {"Keep", "Strike"}
+        later = await _scan_that_took_the_list(session, cid)
+        report = (await client.get(f"{BASE}/scans/{later}/report")).json()
         assert [c["name"] for c in report["competitorSet"]["competitors"]] == ["Keep"]
 
     async def test_an_operator_can_change_their_mind(
@@ -723,10 +769,15 @@ class TestAttributionSurvivesAnOverride:
             out[key] = competitor.name if competitor else "<dangling>"
         return out
 
-    async def test_an_override_keeps_attribution_for_rivals_it_keeps(
-        self, client: AsyncClient, session, stub_discovery
-    ) -> None:  # noqa: ANN001
-        """The defect, stated as a test: keep a rival, keep its attribution."""
+    async def test_an_override_leaves_a_finished_scans_attribution_alone(
+        self, client: AsyncClient, session, stub_discovery  # noqa: ANN001
+    ) -> None:
+        """Since 3.78/3.79 a save does not touch a started scan's rows, so none can be nulled.
+
+        The defect was an override nulling the attribution of rivals it kept. The scan's rows are
+        now out of its reach, so every rival stays attributed, a struck one too: the scan
+        measured it.
+        """
         await _sign_up(client)
         cid = await _make_client(client)
         stub_discovery(
@@ -734,10 +785,11 @@ class TestAttributionSurvivesAnOverride:
             cocit_brands=[("Keep", "keep.com"), ("Strike", "strike.com")],
         )
         await client.post(f"{BASE}/clients/{cid}/competitors/detect")
-        scan_id = (await client.get(f"{BASE}/clients/{cid}/competitors")).json()["scanId"]
+        scan_id = await _scan_that_took_the_list(session, cid)
 
         before = await self._attribute(session, scan_id)
         assert set(before) >= {"Keep", "Strike"}, before
+        attributed = await self._attribution(session, scan_id)
 
         # The operator keeps Keep and strikes Strike.
         resp = await client.put(
@@ -747,21 +799,17 @@ class TestAttributionSurvivesAnOverride:
         assert resp.status_code == 200, resp.text
 
         after = await self._attribution(session, scan_id)
-        kept = {k: v for k, v in after.items() if "keep" in k.lower()}
-        assert kept, after
-        assert all(v == "Keep" for v in kept.values()), (
-            f"an override nulled the attribution for a rival it kept: {kept}"
-        )
+        assert after == attributed, "a save changed what the finished scan attributes"
+        assert all(v is not None for v in after.values()), after
+        assert any("strike" in k.lower() for k in after), after
 
     async def test_an_override_keeps_the_row_id_for_an_unchanged_rival(
-        self, client: AsyncClient, session, stub_discovery
-    ) -> None:  # noqa: ANN001
-        """The mechanism, asserted directly.
+        self, client: AsyncClient, session, stub_discovery  # noqa: ANN001
+    ) -> None:
+        """The mechanism, asserted directly, on the list a save writes.
 
-        Reusing the row is the whole fix — the FKs survive because the id does.
-        Asserted separately from the behaviour above so a future change that
-        preserves attribution some other way is not silently constrained, but a
-        regression in the mechanism is still legible.
+        Reusing the row is what kept the FKs alive when a save reached a scan's rows. It is still
+        how `apply_override` works, and the next list is where it works now.
         """
         from sqlalchemy import select
 
@@ -771,19 +819,20 @@ class TestAttributionSurvivesAnOverride:
         cid = await _make_client(client)
         stub_discovery(serp_domains=["keep.com"], cocit_brands=[("Keep", "keep.com")])
         await client.post(f"{BASE}/clients/{cid}/competitors/detect")
-        scan_id = (await client.get(f"{BASE}/clients/{cid}/competitors")).json()["scanId"]
 
         async def ids_by_name() -> dict[str, str]:
             rows = (
                 await session.execute(
                     select(Competitor)
                     .join(CompetitorSet, CompetitorSet.id == Competitor.competitor_set_id)
-                    .where(CompetitorSet.scan_id == scan_id)
+                    .where(CompetitorSet.client_id == cid, CompetitorSet.scan_id.is_(None))
+                    .execution_options(populate_existing=True)
                 )
             ).scalars().all()
             return {r.name: r.id for r in rows}
 
         before = await ids_by_name()
+        assert "Keep" in before, before
         await client.put(
             f"{BASE}/clients/{cid}/competitors",
             json={"competitors": [{"name": "Keep", "domain": "keep.com"}]},
@@ -794,14 +843,15 @@ class TestAttributionSurvivesAnOverride:
             f"the row was recreated rather than reused: {before} -> {after}"
         )
 
-    async def test_redetection_keeps_attribution_for_rivals_it_finds_again(
-        self, client: AsyncClient, session, stub_discovery, a_day_passes
-    ) -> None:  # noqa: ANN001
+    async def test_redetection_leaves_a_finished_scans_attribution_alone(
+        self, client: AsyncClient, session, stub_discovery, a_day_passes  # noqa: ANN001
+    ) -> None:
         """Finding 4 named `apply_override`; `persist_detection` had it too.
 
         It hard-deleted every non-manual row on each run, so re-detecting a
         scan nulled the attribution for competitors it went on to re-find
-        immediately afterwards.
+        immediately afterwards. The button's detection now writes the next list, so a scan that
+        has started keeps every row its answers point at.
         """
         await _sign_up(client)
         cid = await _make_client(client)
@@ -810,15 +860,79 @@ class TestAttributionSurvivesAnOverride:
             cocit_brands=[("Keep", "keep.com"), ("Gone", "gone.com")],
         )
         await client.post(f"{BASE}/clients/{cid}/competitors/detect")
-        scan_id = (await client.get(f"{BASE}/clients/{cid}/competitors")).json()["scanId"]
+        scan_id = await _scan_that_took_the_list(session, cid)
         await self._attribute(session, scan_id)
+        attributed = await self._attribution(session, scan_id)
 
-        # The next day, detection runs again and still finds Keep. The status is asserted:
-        # a refused second run would leave the attribution as it was and pass untested.
+        # The next day, detection runs again and finds only Keep. The status is asserted: a
+        # refused second run would leave the attribution as it was and pass untested.
         await a_day_passes()
         stub_discovery(serp_domains=["keep.com"], cocit_brands=[("Keep", "keep.com")])
         redetected = await client.post(f"{BASE}/clients/{cid}/competitors/detect")
         assert redetected.status_code == 201, redetected.text
+        assert [c["name"] for c in redetected.json()["competitors"]] == ["Keep"]
+
+        assert await self._attribution(session, scan_id) == attributed
+        assert all(v is not None for v in attributed.values()), attributed
+
+    async def test_apply_override_still_keeps_attribution_for_the_rivals_it_keeps(
+        self, client: AsyncClient, session, stub_discovery  # noqa: ANN001
+    ) -> None:
+        """The mechanism, for any caller that hands it a set whose rows have attribution.
+
+        No route does now. `scripts/verify_competitor_override.py` does, and a future caller
+        could, so the guarantee stays tested where it lives.
+        """
+        from sqlalchemy.orm import selectinload
+
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_discovery(
+            serp_domains=["keep.com", "strike.com"],
+            cocit_brands=[("Keep", "keep.com"), ("Strike", "strike.com")],
+        )
+        await client.post(f"{BASE}/clients/{cid}/competitors/detect")
+        scan_id = await _scan_that_took_the_list(session, cid)
+        await self._attribute(session, scan_id)
+        cset = (
+            await session.execute(
+                select(CompetitorSet)
+                .where(CompetitorSet.scan_id == scan_id)
+                .options(selectinload(CompetitorSet.competitors))
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one()
+
+        await detection.apply_override(session, cset, [("Keep", "keep.com")])
+        await session.commit()
+
+        after = await self._attribution(session, scan_id)
+        kept = {k: v for k, v in after.items() if "keep" in k.lower()}
+        assert kept, after
+        assert all(v == "Keep" for v in kept.values()), (
+            f"an override nulled the attribution for a rival it kept: {kept}"
+        )
+
+    async def test_persist_detection_still_keeps_attribution_for_the_rivals_it_finds_again(
+        self, client: AsyncClient, session, stub_discovery  # noqa: ANN001
+    ) -> None:
+        """The same, for `persist_detection` handed a scan whose set has attribution."""
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_discovery(
+            serp_domains=["keep.com", "gone.com"],
+            cocit_brands=[("Keep", "keep.com"), ("Gone", "gone.com")],
+        )
+        await client.post(f"{BASE}/clients/{cid}/competitors/detect")
+        scan_id = await _scan_that_took_the_list(session, cid)
+        await self._attribute(session, scan_id)
+
+        stub_discovery(serp_domains=["keep.com"], cocit_brands=[("Keep", "keep.com")])
+        owner = (await session.execute(select(Client).where(Client.id == cid))).scalar_one()
+        scan = (await session.execute(select(Scan).where(Scan.id == scan_id))).scalar_one()
+        outcome = await detection.detect_for_client(owner)
+        await detection.persist_detection(session, scan, outcome)
+        await session.commit()
 
         after = await self._attribution(session, scan_id)
         kept = {k: v for k, v in after.items() if "keep" in k.lower()}

@@ -561,8 +561,9 @@ export function ClientRankingsView({
             {intermittent.length > 0 && (
               // The gaps in the chart, explained rather than left to be
               // noticed. A rival missing from one scan's set is a real event —
-              // detection re-runs per scan — and the honest reading is "not
-              // measured", never a fall to zero.
+              // the client's list changed between the scans (someone saved a
+              // new one, or ran detection again) — and the honest reading is
+              // "not measured", never a fall to zero.
               <p className="max-w-measure text-ui-sm leading-prose text-text-tertiary">
                 {intermittent.length === 1
                   ? `${intermittent[0]} was not in every scan's competitor set, so its line breaks where it was not measured.`

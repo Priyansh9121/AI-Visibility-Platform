@@ -20,7 +20,7 @@
     },
     "NO_COMPETITOR_SET": {
       "label": "No comparison was made",
-      "detail": "No competitor set was detected for this scan, so there is no rival to measure a share of voice or a citation comparison against. The dimension is excluded and its weight spread across the others, rather than awarding points for a detection that did not happen."
+      "detail": "This scan’s competitor list was missing or had no rivals on it, so there is no rival to measure a share of voice or a citation comparison against. The dimension is excluded and its weight spread across the others, rather than awarding points for a comparison that could not be made."
     },
     "NO_AWARENESS_POPULATION": {
       "label": "Nothing unprompted to measure",
@@ -55,7 +55,7 @@
     "NO_AUTHORITY_DATA": "Citation Strength was measured as whether the brand’s own domain was cited, against every domain the engines cited, because this system has no external authority source. That measure cannot rise above about a point for any site, and later scores leave the dimension out instead.",
     "WEAK_COMPETITOR_SET": "The competitor set was only weakly corroborated — some rivals were surfaced by a single signal. Share of Voice should be read as indicative rather than exact.",
     "NO_CITATIONS_IN_SCAN": "No engine cited any source in this scan, for any brand.",
-    "NO_COMPETITOR_SET": "No competitors were detected, so no share comparison was possible.",
+    "NO_COMPETITOR_SET": "No competitors were on the list, so no share comparison was possible.",
     "TECHNICAL_FOUNDATION_NOT_MEASURED": "The site had not been audited when this score was computed.",
     "NO_ANSWERED_RESULTS": "No engine returned an answer for this scan.",
     "NO_AWARENESS_POPULATION": "This prompt set contained no unprompted questions, which are the only ones Mention Rate and Share of Voice count. Both were left out of the score rather than measured on questions that named the brand.",

@@ -50,6 +50,7 @@ import { scanOutcomeSentence } from '@/lib/scans/scanOutcome';
 import {
   DEGRADATION_FLAG,
   DETECTION_STATUS,
+  NO_COMPETITOR_LIST,
   DIMENSION_NOTE,
   EXCLUSION_REASON,
   PARTIAL_AUDIT_LABEL,
@@ -843,16 +844,20 @@ function ProofBeat({
             {competitorEditor}
           </div>
         ) : (
-          <Card elevation="flat">
-            <CardBody>
-              <p className="text-ui-base font-medium text-text-primary">
-                {DETECTION_STATUS.no_signal.label}
-              </p>
-              <p className="mt-2 text-ui-sm leading-prose text-text-secondary">
-                {DETECTION_STATUS.no_signal.detail}
-              </p>
-            </CardBody>
-          </Card>
+          <div>
+            <Card elevation="flat">
+              <CardBody>
+                {/* An h3, like the table's heading in the other branch, so the open editor's h4 follows an h3. */}
+                <h3 className="text-ui-base font-medium text-text-primary">
+                  {(report.competitorSet ? DETECTION_STATUS.no_signal : NO_COMPETITOR_LIST).label}
+                </h3>
+                <p className="mt-2 text-ui-sm leading-prose text-text-secondary">
+                  {(report.competitorSet ? DETECTION_STATUS.no_signal : NO_COMPETITOR_LIST).detail}
+                </p>
+              </CardBody>
+            </Card>
+            {competitorEditor}
+          </div>
         )}
 
         {/* --- where the engines disagree (Epic 9.23, Layer 3) -------------- */}

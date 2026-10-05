@@ -251,6 +251,15 @@ class EnginesOnlyScanExecutor:
             client = await session.get(Client, job.client_id)
             if scan is None or client is None:
                 return
+            # The one thing the chain's competitor phase does that these tests lean on: a scan
+            # takes the list its client saved or detected since the last scan, and does so before
+            # the engine loop reads rivals. A detection run from the button used to hang its set
+            # off the open scan, so a scan that stopped after the engines still had it; it now
+            # writes the client's next list, which a scan adopts when it starts. Only the adoption
+            # is done here: no detection and no carry-forward, so a test that wants a scan with
+            # no rivals still gets one.
+            await detection.adopt_next_list(session, scan, client)
+            await session.commit()
             await scan_runner.run_scan(
                 session, scan, client,
                 settings=settings, engines=job.engines, prompt_limit=job.prompt_limit,

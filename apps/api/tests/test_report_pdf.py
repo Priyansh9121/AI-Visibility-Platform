@@ -233,8 +233,65 @@ def test_a_missing_competitor_set_is_said_not_omitted() -> None:
     """A dropped beat reads as 'no rivals exist', which is a claim about the
     brand rather than about the detection."""
     text = _visible_text(_render("no-competitor-set"))
-    assert "No competitor set was detected for this scan" in text
-    assert "a limit of the detection, not a finding about the brand" in text
+    assert (
+        "This scan\u2019s competitor list has no rivals" not in text
+    ), "a missing set is not an empty one"
+    assert (
+        "This scan has no competitor list, so no comparison is shown. "
+        "That is a limit of the data, not a finding about the brand."
+    ) in text
+    assert "No competitor set was detected" not in text
+
+
+def _with_competitors(**changes: Any) -> str:
+    case = next(
+        name for name, body in CASES.items()
+        if body.get("competitorSet") and body["competitorSet"]["competitors"]
+    )
+    body = json.loads(json.dumps(CASES[case]))
+    competitor_set = body["competitorSet"]
+    competitor_set.update({k: v for k, v in changes.items() if k != "manual"})
+    for competitor in competitor_set["competitors"]:
+        competitor["isManualOverride"] = changes.get("manual", competitor["isManualOverride"])
+    return _visible_text(render_report_pdf(ReportOut.model_validate(body)))
+
+
+def test_a_hand_named_list_is_not_said_to_be_found_by_search_or_ai_answers() -> None:
+    """A list the agency named is stored as status ok with no confidence, and a scan adopts it
+    whole, so "independently surfaced" would be false of every rival on it."""
+    detected = "Search results and AI answers independently surfaced this set of rivals."
+    assert detected in _with_competitors(manual=False, status="ok")
+    hand = _with_competitors(manual=True, status="ok", detectionConfidence=None)
+    assert (
+        "These rivals were named by the agency, not found by search results or AI answers."
+    ) in hand
+    assert detected not in hand
+
+
+def test_a_weak_signal_note_does_not_ask_for_a_correction_that_cannot_reach_the_report() -> None:
+    text = _with_competitors(manual=False, status="weak_signal")
+    assert "Treat this rival set as a starting point." in text
+    assert "correct it" not in text
+    assert "before sending the report on" not in text
+
+
+def test_an_empty_competitor_list_is_true_of_detection_and_of_a_hand_emptied_list() -> None:
+    """`no_signal` is stored both when detection found nothing and when a list was emptied by
+    hand, so the sentence names neither as the cause."""
+    case = next(
+        name for name, body in CASES.items()
+        if body.get("competitorSet") and body["competitorSet"]["competitors"]
+    )
+    body = json.loads(json.dumps(CASES[case]))
+    body["competitorSet"]["competitors"] = []
+    body["competitorSet"]["status"] = "no_signal"
+    text = _visible_text(render_report_pdf(ReportOut.model_validate(body)))
+    assert (
+        "This scan\u2019s competitor list has no rivals, so no comparison is shown. "
+        "Either search results and AI answers surfaced no usable set, or the list was "
+        "emptied by hand. Neither is a finding about the brand."
+    ) in text
+    assert "Detection ran and surfaced" not in text
 
 
 def test_empty_action_items_render_the_deterministic_derivation() -> None:

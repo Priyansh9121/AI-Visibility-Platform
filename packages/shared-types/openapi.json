@@ -1688,8 +1688,15 @@
             "type": "string"
           },
           "scanId": {
-            "title": "Scanid",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scanid"
           },
           "serpQueriesRun": {
             "title": "Serpqueriesrun",
@@ -1705,7 +1712,6 @@
         },
         "required": [
           "id",
-          "scanId",
           "status",
           "serpQueriesRun",
           "coCitationPromptsRun",
@@ -6647,7 +6653,7 @@
     },
     "/api/v1/clients/{clientId}/competitors": {
       "get": {
-        "description": "The client's most recent competitor set.",
+        "description": "The client's current competitor list: its next list, else its latest scan's set.\n\nThe next list is what a save or the button's detection last wrote and what the next scan\nwill use (launch checklist 3.78/3.79), so it is ahead of the latest scan's own set, which\nnever changes once the scan has started. It belongs to no scan: its `scanId` is null.",
         "operationId": "get_competitors_api_v1_clients__clientId__competitors_get",
         "parameters": [
           {
@@ -6688,7 +6694,7 @@
         ]
       },
       "put": {
-        "description": "Replace the competitor set by hand.\n\nThis matters more than a normal CRUD override. `Client.industry` confidence\nis uncalibrated (build-log Epic 2.6/2.8, Finding 2 \u2014 open), so a wrong\nclassification can seed a poor competitor set, and an operator who knows the\nmarket is the only reliable corrective available today. Everything supplied\nhere is marked `isManualOverride` and survives later re-detection.\n\nAnything currently in the set and not sent back has been STRUCK, and is\nrecorded as such \u2014 Epic 3 deleted it, which recorded nothing, so the next\ndetection run reinstated it. See `services.competitors.apply_override`.\n\n`detectionConfidence` is cleared: it measures agreement between two\nautomated signals, and neither one produced this set. Leaving the previous\nvalue would attach a corroboration claim to rows that were never corroborated.",
+        "description": "Replace the client's competitor list by hand: the list its later scans use.\n\nWrites the client's NEXT LIST, never a scan's own set (launch checklist 3.78/3.79). The next\nscan that starts adopts it, and a scan that has started keeps the list it started with, so\na save moves nothing a finished scan shows: not its score, its report, its client-history\nfigure, or an explicit re-score. With no next list yet, one is made as a copy of the\nclient's latest set and the replacement applied to the copy; for a client with no set on\nany scan, a non-empty list makes one. An empty list for a client\nwith no set, or a client with no scan at all, is the `404`, and nothing is written.\n\nWhile the client's most recent scan is RUNNING the answer is `409` and nothing is written,\non every path: a running scan may or may not have taken the client's list yet, and a save\ncannot say which.\n\nThis matters more than a normal CRUD override. `Client.industry` confidence\nis uncalibrated (build-log Epic 2.6/2.8, Finding 2 \u2014 open), so a wrong\nclassification can seed a poor competitor set, and an operator who knows the\nmarket is the only reliable corrective available today. Everything supplied\nhere is marked `isManualOverride` and survives later re-detection.\n\nAnything currently in the set and not sent back has been STRUCK, and is\nrecorded as such \u2014 Epic 3 deleted it, which recorded nothing, so the next\ndetection run reinstated it. See `services.competitors.apply_override`.\n\n`detectionConfidence` is cleared: it measures agreement between two\nautomated signals, and neither one produced this set. Leaving the previous\nvalue would attach a corroboration claim to rows that were never corroborated.",
         "operationId": "replace_competitors_api_v1_clients__clientId__competitors_put",
         "parameters": [
           {
@@ -6741,7 +6747,7 @@
     },
     "/api/v1/clients/{clientId}/competitors/detect": {
       "post": {
-        "description": "Run SERP + AI co-citation discovery and rank the top competitors.\n\nRuns synchronously. A run makes several paid SerpApi searches and several\nmodel calls, so it is explicitly operator-triggered rather than implicit in\nintake \u2014 an accidental re-detection costs money.\n\n**For paying agencies since 2026-10-04** (launch checklist 3.61, the founder's\ndecision). The 24-hour limit below caps a client, not an agency, and every run is\npaid searches, so the route is for an agency whose subscription is `active` or\n`trialing`, and for the platform operator (a listed address with a linked Google\nidentity, the scan allowance's own exemption). Anyone else is refused with\n`402 subscription-required` and one plain sentence that names no status and no code.\nWhere billing is not configured the route stays open, as the scan allowance does. It\nis checked after the client is found, so another agency's client is still a `404`\nwhatever the caller's plan, and before the day below is taken, so a refused press\nspends none of the client's day: no search is made and no scan is opened. A scan's own\ndetection is not this route and is unaffected: a client with no competitor set gets\none when it is first scanned, on any plan.\n\n**Once per client per 24 hours** (2026-10-03, launch checklist 3.53), for those who\nare allowed. The day is taken when a run starts, so a run that then fails still\ncounts: its searches may already be spent. Checked after the client is found, so\nanother agency's client is still a `404` and cannot spend this client's day, and\nbefore anything is done. Another client of the same agency has its own day. A scan's\nown detection, for a client with no competitor set yet, is never refused by this\nlimit and does not use the day up; neither does replacing the set by hand with `PUT`.\n\nCompetitors an operator marked as overrides are preserved across runs.\n\n**Errors:** `401 authentication-required`; `402 subscription-required` (\"Running\ncompetitor detection on its own needs an active subscription. A scan still finds a\nclient's competitors the first time it runs.\"); `404 not-found`; `429 rate-limited`\n(with `Retry-After`, the whole seconds left in the 24 hours): \"Competitor detection\nalready ran for this client in the last 24 hours. It can run again in about N hours.\"\n(the last hour reads \"in under an hour\"); `503 service-unavailable` (Redis cannot say\nwhether the day is taken, so nothing runs).",
+        "description": "Run SERP + AI co-citation discovery and rank the top competitors.\n\nRuns synchronously. A run makes several paid SerpApi searches and several\nmodel calls, so it is explicitly operator-triggered rather than implicit in\nintake \u2014 an accidental re-detection costs money.\n\n**For paying agencies since 2026-10-04** (launch checklist 3.61, the founder's\ndecision). The 24-hour limit below caps a client, not an agency, and every run is\npaid searches, so the route is for an agency whose subscription is `active` or\n`trialing`, and for the platform operator (a listed address with a linked Google\nidentity, the scan allowance's own exemption). Anyone else is refused with\n`402 subscription-required` and one plain sentence that names no status and no code.\nWhere billing is not configured the route stays open, as the scan allowance does. It\nis checked after the client is found, so another agency's client is still a `404`\nwhatever the caller's plan, and before the day below is taken, so a refused press\nspends none of the client's day: no search is made and no scan is opened. A scan's own\ndetection is not this route and is unaffected: a client with no competitor set gets\none when it is first scanned, on any plan.\n\n**Once per client per 24 hours** (2026-10-03, launch checklist 3.53), for those who\nare allowed. The day is taken when a run starts, so a run that then fails still\ncounts: its searches may already be spent. Checked after the client is found, so\nanother agency's client is still a `404` and cannot spend this client's day, and\nbefore anything is done. Another client of the same agency has its own day. A scan's\nown detection, for a client with no competitor set yet, is never refused by this\nlimit and does not use the day up; neither does replacing the set by hand with `PUT`.\n\nCompetitors an operator marked as overrides are preserved across runs.\n\n**Where the result goes (launch checklist 3.78/3.79).** Into the client's NEXT LIST: the list\nthe next scan that starts will adopt, which is what this answers (`scanId` is null, because it\nbelongs to no scan yet). A scan's own set never changes once the scan has started, so a run\ndoes not touch a finished scan's set and does not touch a running scan's either. With no next\nlist yet, one is made as a copy of the client's latest set and detection merges into the\ncopy, so rivals an operator named or struck stay named and struck; a client with no set at all\nstarts from an empty list. The open scan this route opens (or reuses, as before) carries no\nset until it runs.\n\n**Errors:** `401 authentication-required`; `402 subscription-required` (\"Running\ncompetitor detection on its own needs an active subscription. A scan still finds a\nclient's competitors the first time it runs.\"); `404 not-found`; `429 rate-limited`\n(with `Retry-After`, the whole seconds left in the 24 hours): \"Competitor detection\nalready ran for this client in the last 24 hours. It can run again in about N hours.\"\n(the last hour reads \"in under an hour\"); `503 service-unavailable` (Redis cannot say\nwhether the day is taken, so nothing runs).",
         "operationId": "detect_competitors_api_v1_clients__clientId__competitors_detect_post",
         "parameters": [
           {
