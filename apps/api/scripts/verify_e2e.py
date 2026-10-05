@@ -332,8 +332,8 @@ class ToolFee(NamedTuple):
 #
 # Perplexity bills its `web_search` tool per invocation — $0.0025 each, i.e.
 # $2.50 per 1,000 (docs/agent-api/models, read 2026-09-11) — reported back
-# in `usage.tool_calls_details.web_search.invocation`. Metered separately
-# from Anthropic's because the rate differs by 4x.
+# in `usage.tool_calls_details.search_web.invocation` (`web_search` is the fallback key).
+# Metered separately from Anthropic's because the rate differs by 4x.
 #
 # These two keep the dates they were read on: the 2026-10-03 re-read names the pricing pages
 # above, and whether it also covered these two figures is not something this table can say.
@@ -542,9 +542,10 @@ def install_token_meter() -> None:
                 cache_read=int(details.get("cache_read_input_tokens") or 0),
             )
             tools = usage.get("tool_calls_details") or {}
-            entry.perplexity_searches += int(
-                (tools.get("web_search") or {}).get("invocation") or 0
-            )
+            # Keyed by the tool's name as it ran: `search_web` on the 2026-10-05 call,
+            # `web_search` as the API reference names it; the first present wins, never both.
+            searches = tools.get("search_web") if "search_web" in tools else tools.get("web_search")
+            entry.perplexity_searches += int((searches or {}).get("invocation") or 0)
             entry.reported_cost += float((usage.get("cost") or {}).get("total_cost") or 0)
         else:
             # Gemini `usageMetadata` — Epic 21. The model is not echoed in the

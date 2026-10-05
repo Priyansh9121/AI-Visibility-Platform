@@ -718,7 +718,11 @@ none). `scan.usage` is one line of about one and a half kilobytes for four engin
   leaves them out and OpenAI's and Google's include the cached part. Nothing the API sends is
   cacheable today, so they are 0.
 - `search_invocations`: web searches or grounding queries the request made (Claude's web search,
-  Perplexity's `web_search`, Gemini's grounding queries).
+  Perplexity's search, Gemini's grounding queries). Perplexity's is read from
+  `tool_calls_details.search_web` (U4, 2026-10-05; `web_search` is the fallback key). **Lines
+  written before that change show 0 for every Perplexity call.** Each answered Perplexity call
+  made one search in the measured call, billed at US$0.0025, so to price an old line by hand:
+  answered Perplexity calls (calls minus unanswered) x US$0.0025, on top of the tokens.
 - `retry`: this request sent an earlier one again for the same call. Two things do that: the
   Anthropic SDK, which retries once inside a call, and Perplexity, which retries once after a
   429 that names its wait. SerpApi's retry is not an `llm.call`: it is in `serpapi_attempted`.

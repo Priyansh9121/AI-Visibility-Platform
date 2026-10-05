@@ -236,7 +236,7 @@ class Providers:
                 "output": [{"type": "message", "content": [
                     {"type": "output_text", "text": ANSWER, "annotations": []}]}],
                 "usage": {"input_tokens": 1758, "output_tokens": 432,
-                          "tool_calls_details": {"web_search": {"invocation": 2}}},
+                          "tool_calls_details": {"search_web": {"invocation": 2}}},
             }))
         if host == "generativelanguage.googleapis.com":
             return self._engine("gemini", key, httpx.Response(200, json={
