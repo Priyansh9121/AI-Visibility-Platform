@@ -35,6 +35,7 @@ from ..models.engine_result import ANSWERED_STATUSES, Engine, EngineResultStatus
 from . import engines as engine_service
 from . import extraction as extraction_service
 from . import prompts as prompt_service
+from .concurrency import gather_cancelling
 
 logger = structlog.get_logger(__name__)
 
@@ -571,7 +572,7 @@ async def run_scan(
                 progress.completed.append((prompt.id, per_engine))
             return prompt, per_engine
 
-    completed = await asyncio.gather(*(one(p) for p in ordered))
+    completed = await gather_cancelling(*(one(p) for p in ordered))
 
     failures = 0
     for prompt, per_engine in completed:

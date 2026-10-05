@@ -1125,6 +1125,52 @@ class TestTheEngineLoopReportsWhatItHasFinished:
         assert len(await _rows(session, EngineResult, sid)) == len(job.engines)
 
 
+class _EngineBug(Exception):  # noqa: N818 - a stand-in for any bug in the loop
+    """What the failing prompt raises: the caller must see this type, not a group."""
+
+
+class TestAFailedPromptEndsTheOthers:
+    """Checklist 3.77 (U1): one prompt slot raising ends the slots still asking the engines.
+
+    `asyncio.gather` left them running, still making paid calls, after the scan had failed.
+    """
+
+    async def test_the_other_slots_are_cancelled_and_the_scan_sees_the_original_error(
+        self, client: AsyncClient, session, settings, monkeypatch  # noqa: ANN001
+    ) -> None:
+        sid, job = await _queued_scan(client)
+        scan = await session.get(Scan, sid)
+        row = await session.get(Client, scan.client_id)
+        monkeypatch.setattr(scan_runner.prompt_service, "generate_prompts", _two_prompts)
+        monkeypatch.setattr(scan_runner.extraction_service, "classify_sentiment", _sentiment)
+        progress = scan_runner.EnginePhaseProgress()
+        waiting, cancelled, all_waiting = [], [], asyncio.Event()
+
+        async def ask_all(prompt, *, engines, settings):  # noqa: ANN001, ANN202, ARG001
+            if prompt == "early":
+                waiting.append(prompt)
+                all_waiting.set()
+                try:
+                    await asyncio.Event().wait()  # nobody sets it: only a cancellation ends it
+                except asyncio.CancelledError:
+                    cancelled.append(prompt)
+                    raise
+            async with asyncio.timeout(30):  # a safety net for a broken fix, never a pause
+                await all_waiting.wait()
+            raise _EngineBug
+
+        monkeypatch.setattr(scan_runner.engine_service, "ask_all", ask_all)
+
+        with pytest.raises(_EngineBug):
+            await scan_runner.run_scan(
+                session, scan, row, settings=settings, engines=job.engines, progress=progress
+            )
+
+        assert waiting == ["early"], "the sibling slot never reached the engines"
+        assert cancelled == ["early"], "the sibling slot was left running"
+        assert progress.completed == []
+
+
 async def _two_prompts(**kwargs):  # noqa: ANN003, ANN202, ARG001
     return (
         [
