@@ -25571,3 +25571,80 @@ The founder's decision (2026-10-05): the one fresh price read that checkout make
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# The client's Technical screen and the report's failed-audit card say the technical check could not be completed, as B6's reason does, instead of blaming a site the crawler could not read
+
+**2026-10-05, the ninth entry of the day; branch `pilot-fixes-6`, the founder's answer of 2026-10-05 on B6's wording (item B6, launch checklist 3.87).** A small follow-up, with its own bar.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 3, Insight (the score's exclusions), shown on the client's Technical screen, the report and the shared report; lifecycle phase: Activation (Epic 9).
+
+## 1. What changed
+
+The founder's decision (2026-10-05): the Technical screen's failed-state text ("A site the crawler could not read…") is to match B6's wording. The same sentence sat on the report's own failed-audit card, so both change. Every sentence below is true of each code that reaches it: `TIMEOUT`, `BROWSER_BUSY` (the check never started), `BROWSER_ERROR`, `FETCH_FAILED`, `HTTP_<status>` (the page did answer), an unknown code, or none. None of them blames the site.
+
+- **The client's Technical screen** (`ClientTechnicalView.tsx`), its failed state for a non-crawl code:
+  - The title is unchanged: "Technical check failed", B6's label.
+  - The body was "A site the crawler could not read is not a site with a bad technical foundation, so nothing here is scored. The audit records what went wrong rather than guessing." It is now "The technical check of the site could not be completed for the latest scan, so nothing here is scored and Technical Foundation is left out of the score."
+  - "The latest scan" is the scan the screen shows: the newest one that produced answers, as on the Competitors screen.
+  - The per-code note below it is unchanged.
+- **The report's failed-audit card** (`ReportView.tsx`, the proof beat, on the signed-in report and the shared one):
+  - The title was "The site could not be read", with an "Audit failed" chip. It is now B6's label, "Technical check failed", and the chip is gone (the review's Should-fix 1, below).
+  - After the code's own sentence, the card said "The crawl of … did not complete, so nothing was measured from the page. A site the crawler could not read is not a site with a bad technical foundation — the dimension is left unscored rather than scored zero." It now says "The technical check of <the audited address, or 'the site'> could not be completed for this scan, so nothing was measured from the page and Technical Foundation is left out of the score."
+  - Only the `AUDIT_FAILED` codes reach this card. The three crawl codes keep their own states, and a test now pins that.
+- **`docs/api-contracts.md`:** three statements about a failed audit change to the same frame:
+  - the audit status table's `failed` row: "The technical check could not be completed.";
+  - the `technicalFoundation` description: `null` "when the technical check could not be completed", and "a check that could not be completed says nothing about the site's technical foundation";
+  - the scoring paragraph: "a check that could not be completed is not a measured zero".
+- **The founder's decision on the review's Nit 5:** no surface adds "rather than counted as zero". B6's wording stays as it is, ending "left out of the score."
+
+## 2. The review
+
+**UI review: no Blocker. Three Should-fix items, all taken, and one nit taken.**
+- **Should-fix 1:** the report card's "Audit failed" chip repeated the new title in another word ("audit" against "check") and in amber. Every left-out state elsewhere uses a neutral chip, and the Technical screen has none. The chip is gone; the title is the state.
+- **Should-fix 2:** one more sentence in `docs/api-contracts.md` said "an unreadable site is not a measured zero". Fixed, above.
+- **Should-fix 3:** the web floor is raised in this commit.
+- **Nit 4, taken:** the Technical screen ended "The note below says what went wrong." For an unknown or missing code the note only says "The crawler could not read the home page.", which tells less than that promised. The sentence is gone.
+- **Nit 5, the founder's call, not taken:** neither surface now says the failure is no verdict on the site. "Rather than counted as zero" would be true for every code, but it belongs in B6's detail, which the founder worded.
+- The round that took these was not sent back for review. Its negative control is below.
+
+## Found, not fixed
+
+- **Nit 6:** "for the latest scan" names the newest scan that produced answers. While a newer scan runs, it names the previous one, as the sidebar's latest figures do. Left.
+- **Nit 7:** a score stored before 2026-10-05 for a failed audit keeps `NOT_YET_MEASURED`, so that report's score says "Not yet checked … a check that never ran" beside this card's "Technical check failed". Not a regression (the old card disagreed too), and stored scores are not re-scored.
+- **Nit 8:** the card's title is a `<p>` where the read branch's is an `<h3>`, so heading navigation skips the failed-audit notice. This is older than this item, and three sibling cards do the same.
+- **Nit 9:** developer-facing docstrings keep the old phrase: the audit model's (which reaches `openapi.json`), `scoring_runner.py`'s and a shared-types contract test's. Changing the model's means regenerating OpenAPI. Left.
+- **The same page states the failure twice,** in the score's exclusion note and on this card. Both are true, in different words.
+- **The card reads the audit, and the score reads the stored score.** They can disagree only if `POST /scans/{scanId}/audit` is run again and fails after the scan was scored. The web app never calls that route; it is API-only, as before.
+
+## Verified
+
+**Web vitest 2070 → 2073 (+3); floor raised to match.** API is unchanged at 4703.
+- **`ClientTechnicalView.test.tsx` (76 → 77):**
+  - for each of `TIMEOUT`, `BROWSER_BUSY`, `BROWSER_ERROR`, `FETCH_FAILED`, `HTTP_503` and no code:
+    - the exact body;
+    - the old sentence and its parts are absent;
+    - the note equals the code's own sentence and comes after the body;
+  - the crawl-code states, `ROBOTS_DISALLOWED` included, never carry the new body;
+  - a new test ties the screen's claims to B6's report wording, so rewording one without the other fails.
+- **`ReportView.test.tsx` (139 → 141).** It covers:
+  - each of `BROWSER_ERROR`, `FETCH_FAILED`, `TIMEOUT`, `BROWSER_BUSY`, `HTTP_503`, an unknown code and no code, in the signed-in and the shared view: the exact title and sentence, the old title and sentence absent, and no code printed;
+  - a new test ties the card's claims to B6's `AUDIT_FAILED` detail, with the address or "the site";
+  - a new test shows that the three crawl codes never get this card or its title;
+  - the card is found by its title and sentence. The four "no 'Audit failed'" checks went vacuous with the chip and were dropped; the label checks beside them stay.
+- **The implementer's negative controls,** each restored and checked with `cmp`:
+  - the old screen body back: 7 fail;
+  - the note drawn above the body: 6 fail;
+  - the old card text back: 4 fail;
+  - `ROBOTS_DISALLOWED` let into the generic card: 3 fail;
+  - the chip put back: 4 fail.
+- **On this tree:** with the Technical screen's old sentence back ("A site the crawler could not read…"), 7 of the 77 tests in `ClientTechnicalView.test.tsx` fail. Restored and checked with `cmp`.
+- **The rest of the bar** (this tree, one run, 20:34 to 20:40):
+  - Counts: API 4703, workers 27, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7106cadcd0ed`) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
