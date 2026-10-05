@@ -25319,3 +25319,127 @@ What was taken and what was not:
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
   - OpenAPI and `api.gen.ts`, regenerated in this commit, regenerate again with no change.
 - Exit codes were read from files.
+
+# A founder-run script clears test mode's Stripe state from every agency at the live-key swap, and runs only with a live key while the live account has no subscription and no customer
+
+**2026-10-05, the sixth entry of the day; branch `pilot-fixes-6`, the founder's brief "clear the board, harden billing, and four pilot features" (item B2, launch checklist 3.73).** One item, one commit.
+
+**Render: nothing to set.** The script runs once, by hand, at the live-key swap, from the API service's Shell (launch checklist 2.2 step 3). Nothing runs it on its own.
+
+Drift check (north-star §8): no product layer; the commercial architecture (§5.3, how the plan starts), at the switch to live Stripe keys; lifecycle phase: Activation (Epic 9), the step before the first pilot pays.
+
+## 1. What changed
+
+The founder's decision (2026-10-05, 3.73): test-mode billing state must not survive the switch to live keys. A founder-run script clears the Stripe columns on every agency in one transaction. It is a dry run by default, printing counts only, and `--confirm` applies it. It refuses if the configured Stripe key is a live key and Stripe lists any subscription.
+
+- **`apps/api/scripts/clear_test_billing_state.py`** (new):
+  - **What it clears.** On every agency, soft-deleted ones included, and in one transaction:
+    - `stripe_customer_id`, `stripe_subscription_id`, `subscription_status`, `subscription_current_period_end`, `subscription_trial_end` and `stripe_event_at` (the webhook watermark) become NULL;
+    - `subscription_cancel_at_period_end` becomes false.
+    - The `stripe_webhook_events` ledger is left alone: test and live event ids do not collide.
+  - **What it prints:**
+    - counts only: `Before:`, and after a clear `After:` and `Cleared.`;
+    - one `Stripe key:` line saying whether the key is live and whether Stripe was asked;
+    - never an id, an email, a name, a Stripe id, any part of the key, or an exception's text.
+  - **The dry run** is the default, and it writes nothing.
+  - **`--confirm` runs only with a live key**: `sk_live_` or `rk_live_`, after stripping spaces.
+    - No key, a test key or anything else refuses with exit 4 and writes nothing.
+    - This is stricter than the decision's wording, which refused only a live key whose account has subscriptions. Without it, a run that read the test key from a laptop's `.env` would have cleared live state unchecked (the review's M1).
+  - **With a live key it asks Stripe twice** whether the live account has any subscription (of any status) or any customer:
+    - first before touching anything, with no lock held, within 30 s for both reads;
+    - then after the UPDATE, while its row locks are held, within 10 s for both reads.
+    - It commits only if both passes list nothing.
+    - A listing refuses with exit 2, and an error or a timeout with exit 3. Either way it rolls back.
+    - The dry run with a live key makes the same reads, after ending its own read transaction, and refuses the same way.
+  - **A database error,** including one at connect time, prints one fixed sentence and exits 5.
+  - **Exit codes:**
+    - 0: counted, or cleared;
+    - 1: bad arguments;
+    - 2: the live account has a subscription or a customer;
+    - 3: Stripe could not be asked;
+    - 4: `--confirm` without a live key;
+    - 5: a database error.
+- **`docs/runbook.md`,** a new section, "Clearing test-mode billing state at the live-key swap":
+  - **When:** after the live keys are saved and the API has redeployed, and before anyone subscribes in live mode.
+  - **Where:** only the API service's Shell, on the new deploy. A Shell opened earlier still has the test key, and the script refuses there.
+  - An `rk_live_` key's read access to Subscriptions and Customers.
+  - The two commands and what they print.
+  - What to do for each exit code.
+- **`docs/launch-checklist.md`:**
+  - 2.2 step 3 runs the dry run, then `--confirm`, after the swap's redeploy and before step 4;
+  - row 3.73 is decided and built.
+
+## 2. The review
+
+**Security review, in three rounds: nothing above Low at the end.**
+- **Round one: two Mediums with one cause, and four Lows.**
+  - **M1:** the guard was a deny-list. Any key that was not recognisably live skipped the Stripe check, and `--confirm` cleared every agency.
+    - Scenario: a run from a laptop checkout with `DATABASE_URL` pointed at production reads the test key from `apps/api/.env`, so Stripe is never asked.
+    - Every paying agency would lose its live ids, then be offered a trial and a second live subscription.
+    - Now `--confirm` runs only with a live key, and both modes say whether Stripe was asked.
+  - **M2:** the runbook's fallback put the live key on a laptop. It is gone: the script runs only from the API service's Shell, and with no Shell the founder stops and asks.
+  - **L1:** Stripe was asked before the rows were locked, and a live customer with no subscription yet was not checked. The check now lists customers too, and runs again under the row locks before the commit.
+  - **L2:** a test now uses errors that quote the full key, and asserts no part of it is printed.
+  - **L3:** the checklist did not mention the script. This commit fixes that.
+  - **L4:** a database error exited 1 with a traceback, which the runbook read as bad arguments. It is now exit 5 with a fixed sentence.
+- **Round two (the re-check): every finding fixed, nothing above Low.** Three new items, all taken in round three:
+  - **N1:** holding every agency row lock across two Stripe reads could stall that agency's scan starts, seat changes and webhooks for about 40 s. The reads now run first with no lock held, and again under the locks within one shared 10 s budget.
+  - **N2:** a database that was down at connect time still exited 1 with a traceback naming the host. It is now exit 5 with no detail.
+  - **N3:** the dry run held its read transaction across the Stripe reads. It now ends it first.
+- **No third review.** Round three was not sent back for review. Its four negative controls are below.
+
+## Found, not fixed
+
+- **One test needs a closed port.** It relies on nothing listening on `127.0.0.1:1`. That holds on this Mac; a machine that serves that port would fail the test.
+
+## Verified
+
+**API pytest 4646 → 4682 (+36); floor raised to match.** Web is unchanged at 2070. One API test is skipped on macOS as before: it reads Linux's `/proc`.
+- **New: `test_clear_test_billing_state.py` (36).** It covers:
+  - **the dry run,** with any key: the counts, and nothing written. With a live key it makes the check and still writes nothing.
+  - **`--confirm`:**
+    - every Stripe column on every agency is cleared, and the rest of each row is left alone;
+    - it is one transaction: another connection never sees the uncommitted change, and a failure before the commit leaves everything as it was;
+    - each key that is not live (none, `sk_test_`, `rk_test_`, an unrecognised value, an empty string) refuses and never calls Stripe;
+    - a live key with stray whitespace still goes to the check.
+  - **the live check:**
+    - a subscription or a customer listed, for `sk_live_` and `rk_live_`, refuses and rolls back;
+    - an error quoting the key, an error and a timeout refuse;
+    - a hung read, of subscriptions or of customers, times out and refuses;
+    - the UPDATE is issued but not committed while Stripe is asked;
+    - an empty account commits.
+  - **the pre-check:**
+    - a listing in the pre-check refuses before any UPDATE;
+    - the locked re-check's budget is shared by both reads;
+    - the dry run ends its read transaction before calling Stripe.
+  - **database errors:**
+    - an unreachable server is exit 5 with no detail;
+    - each kind of connect failure (an OS error, two asyncpg errors, a SQLAlchemy error), in both modes, is one fixed sentence;
+    - a statement that fails prints the fixed sentence and writes nothing.
+  - **a bad argument** is a usage error.
+- **The implementer's negative controls,** each restored and checked with `cmp`:
+  - round one:
+    - the live guard off: 7 fail;
+    - the commit moved before the after-count: 1 fails;
+    - the dry run writing: 1 fails;
+  - round two:
+    - the not-live guard: 5 fail;
+    - the check before the UPDATE: 1 fails;
+    - the customers check: 2 fail;
+    - the database catch: 2 fail;
+    - the key strip: 1 fails;
+  - round three:
+    - the pre-check removed: 4 fail;
+    - the shared budget made per read: 1 fails;
+    - the connect-time catch removed: 9 fail;
+    - the dry run's early rollback removed: 1 fails.
+- **On this tree:** with the live-key requirement for `--confirm` switched off (`if False and confirm and not live:`), 5 of the 36 fail: one for each key that is not live. Restored and checked with `cmp`.
+- **The command line itself:** run from `apps/api` against a scratch database, with the test key from `apps/api/.env`. The dry run exits 0, prints the counts and `Stripe key: not live; Stripe was not checked; --confirm would refuse.`, and writes nothing. `--confirm` exits 4 with its refusal and changes nothing. An unknown flag exits 1 with the usage line. Stripe was never called.
+- **The rest of the bar** (this tree, one run, 13:47 to 13:53):
+  - Counts: workers 27, shared-types 53 (0 fail), design-system 935, mypy 43 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7106cadcd0ed`) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`: 236 packages, 3 to review, unchanged).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

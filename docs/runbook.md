@@ -136,6 +136,65 @@ All of this happens in Stripe's **Test mode**. Never use a live key.
 8. **Stop.** Nothing is ever switched to live mode from this runbook. Going
    live is the founder's key swap after Stripe's business verification.
 
+## Clearing test-mode billing state at the live-key swap
+
+**When:** once, when going live. Everything the API stored about Stripe so far
+came from Stripe's Test mode. A live key cannot see any of it, and an agency
+that still holds a test subscription id would look already subscribed. Run this
+**after** the live keys are saved on Render and the API has redeployed, and
+**before anyone subscribes in live mode**: between the key swap and the first
+live checkout (launch checklist 2.2, between steps 3 and 4).
+
+**Where:** only the Render dashboard → the **API** service → **Shell**. The
+script reads the live key from the service's own environment, so it runs only
+there. Open the Shell on the **new deploy**, after the redeploy has finished:
+a Shell opened earlier still has the test key and the script will refuse. If
+there is no Shell tab, stop and ask Claude.
+
+If the key is an `rk_live_` restricted key, it needs read access to
+**Subscriptions** and **Customers**, or every run ends with "could not check".
+
+Dry run first; it writes nothing:
+
+```bash
+cd /app/apps/api && .venv/bin/python scripts/clear_test_billing_state.py
+```
+
+Read the counts, then clear:
+
+```bash
+cd /app/apps/api && .venv/bin/python scripts/clear_test_billing_state.py --confirm
+```
+
+**What it prints:** counts only, never an id, an email, a name, a Stripe id or
+any part of the key. `Before:` lists how many agencies there are in all and how
+many have each Stripe column set (for `subscription_cancel_at_period_end`, how
+many are true), then one `Stripe key:` line. The dry run with a test key says
+`Stripe key: not live; Stripe was not checked; --confirm would refuse.`, which
+means the swap has not reached this Shell. With a live key it says
+`Stripe key: live; Stripe lists no subscription and no customer.`
+
+`--confirm` runs only with a live key. It clears every Stripe column on every
+agency, soft-deleted ones included, in one transaction. It asks Stripe whether
+the live account has any subscription or customer twice: once before touching
+anything, and again while the change is held uncommitted (within 10 seconds).
+It commits only if both reads list none. If a read lists one, or anything fails
+before the commit, nothing changes. It prints `After:`, where every
+Stripe count should be `0`, and `Cleared.`. It leaves the `stripe_webhook_events`
+ledger alone (test and live event ids never collide).
+
+**Exit codes** (every refusal writes nothing; the dry run makes the same Stripe
+reads and refuses the same way):
+
+| Exit code | Meaning | What to do |
+|---|---|---|
+| 0 | Counted (dry run) or cleared (`--confirm`) | Carry on with step 4 |
+| 1 | Bad arguments | Run it as shown above |
+| 2 | The live Stripe account already has a subscription or a customer | Stop. Someone has used live mode; clearing would orphan them. Do not clear by hand; ask Claude |
+| 3 | Stripe could not be asked (error, timeout, or a key that cannot read Subscriptions and Customers) | Check the key's permissions and Stripe's status, then run it again |
+| 4 | `--confirm` with a key that is not live (test, missing or unrecognised) | The live key is not in force in this Shell: check the saved keys and that the redeploy finished, open a new Shell, and start from the dry run |
+| 5 | A database error stopped the run (the database could not be reached, or a statement failed). It prints no detail | Run the dry run to see the current state, then decide; if it repeats, ask Claude |
+
 ## The free trial, and what it depends on in Stripe
 
 `STRIPE_TRIAL_DAYS` on the Render API service is the trial's length; 0, the default, is no
