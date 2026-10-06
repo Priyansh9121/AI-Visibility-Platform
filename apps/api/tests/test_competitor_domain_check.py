@@ -8,6 +8,11 @@ its own stored form (lower-case registrable domain, Unicode for an international
 PUT refuses before anything is written: `422 validation-failed`, with the field and a plain
 sentence that quotes nothing typed. Co-citation keeps the brand and drops its domain, and says how
 many it dropped in one counts-only line per detection.
+
+Checklist 3.90 adds a second refusal on the typed path: a PLATFORM or publisher (`g2.com`,
+`linkedin.com`, `wikipedia.org`), by detection's own list (`serp.NON_COMPETITOR_DOMAINS`) and the
+comparison detection makes (`serp.is_plausible_competitor`), so a typed rival and a detected one
+obey one rule. A model's domain needs no new check: detection already drops a platform it names.
 """
 
 from __future__ import annotations
@@ -28,7 +33,12 @@ from avp_api.services import cocitation
 from avp_api.services import competitors as detection
 from avp_api.services.cocitation import CoCitationResult
 from avp_api.services.intake import checked_domain
-from avp_api.services.serp import SerpHit, SerpResult
+from avp_api.services.serp import (
+    NON_COMPETITOR_DOMAINS,
+    SerpHit,
+    SerpResult,
+    is_plausible_competitor,
+)
 
 BASE = "/api/v1"
 SENTINEL = "TYPEDSENTINEL"
@@ -46,6 +56,26 @@ NO_PUBLIC_DOMAIN = (
 # For a name that is a hostname but is not the rival's own domain: a page, a path, a subdomain.
 OWN_DOMAIN = "Enter just the domain, like rival.com: no https://, page path or subdomain."
 SAME_AS_CLIENT = "That is this client's own domain."
+# For a platform or publisher (3.90): one on detection's own list, `serp.NON_COMPETITOR_DOMAINS`.
+A_PLATFORM = "That is a platform or publisher, so it cannot be added as a rival."
+
+# One of each kind that list holds, spelled out so that trimming the list is a change on purpose.
+# An app store is its operator's registrable domain (`apps.apple.com` is `apple.com`).
+PLATFORM_KINDS = [
+    pytest.param("g2.com", id="review-site"),
+    pytest.param("capterra.com", id="software-directory"),
+    pytest.param("linkedin.com", id="social-network"),
+    pytest.param("reddit.com", id="forum"),
+    pytest.param("wikipedia.org", id="wiki"),
+    pytest.param("amazon.com", id="marketplace"),
+    pytest.param("yelp.com", id="local-directory"),
+    pytest.param("forbes.com", id="publisher"),
+    pytest.param("indeed.com", id="job-board"),
+    pytest.param("crunchbase.com", id="company-database"),
+    pytest.param("apple.com", id="app-store"),
+    pytest.param("google.com", id="search-engine-and-app-store"),
+    pytest.param("github.com", id="code-host"),
+]
 
 # Shapes a person pastes that reduce to a DIFFERENT site's domain (a review platform, a social
 # network, the client's own site): refused, never reduced.
@@ -256,6 +286,235 @@ class TestPutRefusesABadDomain:
         resp = await client.put(f"{BASE}/clients/{cid}/competitors", json={"competitors": [item]})
         assert resp.status_code == 200, resp.text
         assert resp.json()["competitors"][0]["domain"] is None
+
+
+class TestPutRefusesAPlatformDomain:
+    """A platform or publisher typed as a rival is refused, by detection's own list (3.90).
+
+    Stored as a rival, `g2.com` types every citation of G2 as the rival's and takes G2 out of
+    Tier B for every agency. Detection never proposes such a domain, so a typed one obeys the
+    same rule. The refusal is the schema's, so it comes before the client is looked up and before
+    anything is written.
+    """
+
+    @pytest.mark.parametrize("raw", PLATFORM_KINDS)
+    async def test_each_kind_is_refused_with_the_sentence_and_nothing_is_written(
+        self, client: AsyncClient, session, stub_discovery, raw: str  # noqa: ANN001
+    ) -> None:
+        cid = await _client_with_a_list(client, stub_discovery)
+        before = await _rows(session)
+
+        resp = await client.put(
+            f"{BASE}/clients/{cid}/competitors",
+            json={"competitors": [
+                {"name": "Good Rival", "domain": "goodrival.com"},
+                {"name": "A Platform", "domain": raw},
+            ]},
+        )
+
+        assert resp.status_code == 422, resp.text
+        assert resp.headers["content-type"].startswith("application/problem+json")
+        body = resp.json()
+        assert body["type"] == "/problems/validation-failed"
+        assert body["errors"] == [
+            {"field": "competitors.1.domain", "message": A_PLATFORM, "type": "invalid_domain"}
+        ]
+        assert await _rows(session) == before, "a refusal writes nothing, the good row included"
+
+    async def test_every_domain_on_detections_list_is_refused(
+        self, client: AsyncClient, session, stub_discovery  # noqa: ANN001
+    ) -> None:
+        """The list is detection's own, not a copy: whatever it holds, a typed rival obeys it."""
+        cid = await _client_with_a_list(client, stub_discovery)
+        before = await _rows(session)
+        listed = sorted(NON_COMPETITOR_DOMAINS)
+        assert len(listed) >= 50, "a sweep of a short list would prove little"
+
+        for start in range(0, len(listed), 10):  # a save takes at most ten rivals
+            chunk = listed[start : start + 10]
+            resp = await client.put(
+                f"{BASE}/clients/{cid}/competitors",
+                json={"competitors": [
+                    {"name": f"Platform {i}", "domain": domain} for i, domain in enumerate(chunk)
+                ]},
+            )
+            assert resp.status_code == 422, (chunk, resp.text)
+            assert resp.json()["errors"] == [
+                {"field": f"competitors.{i}.domain", "message": A_PLATFORM,
+                 "type": "invalid_domain"}
+                for i in range(len(chunk))
+            ], chunk
+            assert not any(is_plausible_competitor(d, subject_domain="x.com") for d in chunk)
+        assert await _rows(session) == before
+
+    async def test_the_spelling_does_not_matter_and_nothing_typed_is_echoed(
+        self, client: AsyncClient, session, stub_discovery  # noqa: ANN001
+    ) -> None:
+        cid = await _client_with_a_list(client, stub_discovery)
+        before = await _rows(session)
+        typed = ["G2.COM", "www.g2.com", "g2.com.", "  WWW.LinkedIn.COM. ", "Wikipedia.org"]
+
+        resp = await client.put(
+            f"{BASE}/clients/{cid}/competitors",
+            json={"competitors": [
+                {"name": f"Platform {i}", "domain": domain} for i, domain in enumerate(typed)
+            ]},
+        )
+
+        assert resp.status_code == 422, resp.text
+        assert resp.json()["errors"] == [
+            {"field": f"competitors.{i}.domain", "message": A_PLATFORM, "type": "invalid_domain"}
+            for i in range(len(typed))
+        ]
+        assert "g2.com" not in resp.text.lower()
+        assert "linkedin" not in resp.text.lower()
+        assert await _rows(session) == before
+
+    @pytest.mark.parametrize(
+        "raw",
+        ["apps.apple.com", "play.google.com", "en.wikipedia.org", "www.g2.com/products/x/reviews"],
+    )
+    async def test_a_platforms_own_page_or_subdomain_is_refused_and_never_reduced(
+        self, client: AsyncClient, session, stub_discovery, raw: str  # noqa: ANN001
+    ) -> None:
+        """An app store's page reduces to its operator's domain: it is refused as a page, not
+        stored as `apple.com` (3.81), and not given the platform sentence either."""
+        cid = await _client_with_a_list(client, stub_discovery)
+        before = await _rows(session)
+        resp = await client.put(
+            f"{BASE}/clients/{cid}/competitors",
+            json={"competitors": [{"name": "Store", "domain": raw}]},
+        )
+        assert resp.status_code == 422, resp.text
+        assert resp.json()["errors"] == [
+            {"field": "competitors.0.domain", "message": OWN_DOMAIN, "type": "invalid_domain"}
+        ]
+        assert await _rows(session) == before
+
+    async def test_a_typed_rival_and_a_detected_one_obey_one_rule(
+        self, client: AsyncClient, stub_discovery  # noqa: ANN001
+    ) -> None:
+        """Domain by domain, PUT refuses exactly what detection's filter drops."""
+        cid = await _client_with_a_list(client, stub_discovery)
+        samples = [
+            *[p.values[0] for p in PLATFORM_KINDS],
+            "zendesk.com", "front.com", "g2labs.com", "linkedin-rival.com", "yelpful.com",
+        ]
+        refused: list[str] = []
+        for domain in samples:
+            resp = await client.put(
+                f"{BASE}/clients/{cid}/competitors",
+                json={"competitors": [{"name": "Rival", "domain": domain}]},
+            )
+            assert resp.status_code in {200, 422}, (domain, resp.text)
+            if resp.status_code == 422:
+                refused.append(domain)
+        dropped = [d for d in samples if not is_plausible_competitor(d, subject_domain="x.com")]
+        assert refused == dropped
+        assert refused, "the sample holds platforms"
+        assert len(refused) < len(samples), "and rivals"
+
+    @pytest.mark.parametrize(
+        "raw",
+        ["g2labs.com", "linkedin-rival.com", "notreddit.com", "yelpful.com", "WWW.Zendesk.com."],
+    )
+    async def test_a_good_rival_is_stored_as_before(
+        self, client: AsyncClient, session, stub_discovery, raw: str  # noqa: ANN001
+    ) -> None:
+        """A name that only contains a platform's, or sits next to it, is a rival: the rule is
+        the list's membership, not a match on part of a name."""
+        cid = await _client_with_a_list(client, stub_discovery)
+        resp = await client.put(
+            f"{BASE}/clients/{cid}/competitors",
+            json={"competitors": [{"name": "Rival", "domain": raw}]},
+        )
+        assert resp.status_code == 200, resp.text
+        (stored,) = [d for name, d, _ in await _rows(session) if name == "Rival"]
+        assert stored == raw.lower().removeprefix("www.").removesuffix(".")
+        assert resp.json()["competitors"][0]["domain"] == stored
+
+    async def test_the_clients_own_domain_still_gets_its_own_sentence(
+        self, client: AsyncClient, session, stub_discovery  # noqa: ANN001
+    ) -> None:
+        cid = await _client_with_a_list(client, stub_discovery)
+        before = await _rows(session)
+        resp = await client.put(
+            f"{BASE}/clients/{cid}/competitors",
+            json={"competitors": [
+                {"name": "Good Rival", "domain": "goodrival.com"},
+                {"name": "Itself", "domain": "helpscout.com"},
+            ]},
+        )
+        assert resp.status_code == 422, resp.text
+        assert resp.json()["errors"] == [
+            {"field": "competitors.1.domain", "message": SAME_AS_CLIENT, "type": "invalid_domain"}
+        ]
+        assert await _rows(session) == before
+
+    async def test_a_list_with_both_kinds_of_row_is_refused_for_the_platform_row_first(
+        self, client: AsyncClient, session, stub_discovery  # noqa: ANN001
+    ) -> None:
+        """The platform check is the schema's, so it runs before the client's own-domain check,
+        which needs the client: the second kind of row is named once the first is fixed."""
+        cid = await _client_with_a_list(client, stub_discovery)
+        before = await _rows(session)
+        both = {"competitors": [
+            {"name": "Itself", "domain": "helpscout.com"},
+            {"name": "A Platform", "domain": "g2.com"},
+        ]}
+
+        first = await client.put(f"{BASE}/clients/{cid}/competitors", json=both)
+        assert first.status_code == 422, first.text
+        assert first.json()["errors"] == [
+            {"field": "competitors.1.domain", "message": A_PLATFORM, "type": "invalid_domain"}
+        ]
+
+        both["competitors"].pop()
+        second = await client.put(f"{BASE}/clients/{cid}/competitors", json=both)
+        assert second.status_code == 422, second.text
+        assert second.json()["errors"] == [
+            {"field": "competitors.0.domain", "message": SAME_AS_CLIENT, "type": "invalid_domain"}
+        ]
+        assert await _rows(session) == before
+
+    @pytest.mark.parametrize("fix", ["remove the row", "clear its domain"])
+    async def test_a_platform_stored_before_blocks_a_save_until_its_row_is_fixed(
+        self, client: AsyncClient, session, stub_discovery, fix: str  # noqa: ANN001
+    ) -> None:
+        """No migration: what an older version stored is read as it is, and the list that holds
+        it is refused when it is saved again, naming the row, until that row is removed (or its
+        domain cleared). The editor sends the list back as it read it, so it meets the refusal."""
+        cid = await _client_with_a_list(client, stub_discovery)
+        await session.execute(
+            update(Competitor).where(Competitor.name == "A").values(domain="g2.com")
+        )
+        await session.commit()
+
+        listed = await client.get(f"{BASE}/clients/{cid}/competitors")
+        assert listed.status_code == 200, listed.text
+        as_read = [{"name": c["name"], "domain": c["domain"]} for c in listed.json()["competitors"]]
+        assert as_read == [{"name": "A", "domain": "g2.com"}], "a read does not recheck a row"
+        before = await _rows(session)
+        another = {"name": "Another Rival", "domain": "anotherrival.com"}
+
+        blocked = await client.put(
+            f"{BASE}/clients/{cid}/competitors", json={"competitors": [*as_read, another]}
+        )
+        assert blocked.status_code == 422, blocked.text
+        assert blocked.json()["errors"] == [
+            {"field": "competitors.0.domain", "message": A_PLATFORM, "type": "invalid_domain"}
+        ]
+        assert await _rows(session) == before
+
+        fixed = [] if fix == "remove the row" else [{"name": "A", "domain": None}]
+        saved = await client.put(
+            f"{BASE}/clients/{cid}/competitors", json={"competitors": [*fixed, another]}
+        )
+        assert saved.status_code == 200, saved.text
+        assert {c["name"]: c["domain"] for c in saved.json()["competitors"]} == {
+            **({"A": None} if fix == "clear its domain" else {}),
+            "Another Rival": "anotherrival.com",
+        }
 
 
 class TestCheckedDomain:

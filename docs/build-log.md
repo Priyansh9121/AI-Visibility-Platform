@@ -26451,3 +26451,43 @@ Drift check (north-star §8): no product layer (the design system's focus styles
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# A platform or publisher typed as a rival's domain is refused, with one short sentence, by the same list detection uses
+
+**2026-10-06, the twelfth entry of the day; branch `pilot-fixes-6`, launch checklist 3.90 (the founder's decision of 2026-10-06: "refuse with a short reason").** API, with its own bar.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 2, Measurement (the rival list a scan compares against); lifecycle phase: Activation and Retention.
+
+## 1. What changed
+
+Since 3.81, `PUT /clients/{clientId}/competitors` accepts a rival's domain only when it is the rival's own registrable domain. A platform typed on purpose (`g2.com`, `linkedin.com`) still passed: it is a real domain. Detection never proposes one, and stored as a rival it types every citation of that platform as the rival's and takes the platform out of Tier B for every agency (3.88).
+
+- **One list, two paths** (`services/serp.py`): `is_non_competitor_domain` is exact membership in detection's own `NON_COMPETITOR_DOMAINS`, and `is_plausible_competitor` now calls it, so detection's behaviour is unchanged and a typed rival obeys the same rule.
+- **The refusal** (`schemas/competitor.py`): after `rival_domain`, a listed domain is refused in the same `422` shape as 3.81's, field `competitors.<i>.domain`, before anything is written: "That is a platform or publisher, so it cannot be added as a rival." The editor shows it as "<name>: <sentence>" with no change of its own.
+- **The list holds more than platforms:** retailers, analyst firms and large software companies too; "platform or publisher" is the nearest short true phrase. A client that really competes with one of them can name it without a domain.
+- **Co-citation needed nothing:** detection already drops a platform a model names, brand and all.
+- **`docs/api-contracts.md`:** the PUT paragraph lists the new refusal. The list's comment no longer says regional variants match: matching is exact on the registrable domain, so `amazon.co.uk` passes both paths, as before.
+
+## Found, not fixed
+
+- **A next list that already holds a platform domain** is refused on its next save, naming the row, until the row is removed or its domain cleared. No migration; the 3.81 count script does not count these rows.
+- **A platform named with no domain is accepted,** typed or named by a model; with no domain it types no citations.
+- **Regional variants** (`amazon.co.uk`, `amazon.de`) pass both detection's filter and the refusal.
+
+## Verified
+
+**API pytest 4961 → 4990 (+29); web vitest 2490 → 2491 (+1); floors raised to match.**
+- **`test_competitor_domain_check.py` 57 → 86:** thirteen kinds of platform and every entry on detection's list refused, with the sentence and nothing written; spelling variants; a platform's page still refused as a page; typed and detected parity; near-miss names accepted; the client's own-domain sentence unchanged; a platform row reported before an own-domain row; a stored next list with a platform domain. Before the change, 18 of 85 failed.
+- **`CompetitorEditor.interaction.test.tsx` 26 → 27:** the editor names the row for this refusal.
+- **The implementer's negative controls,** each restored and checked with `cmp`: the platform check removed, 19 of 86 fail; a hard-coded two-domain copy instead of detection's list, 14; the raw typed text checked instead of the stored form, 1; co-citation hits no longer filtered, 1 of 64 in `test_competitors.py`; the editor no longer naming the row, 2 of 27.
+- **On this tree:** in `test_competitor_domain_check.py` (86 tests): the platform refusal removed, 19 fail. The file was restored and the tree's checksums matched.
+- **The rest of the bar** (this tree, one run, 15:05 to 15:13):
+  - Counts: API 4990, workers 27, shared-types 53 (0 fail), design-system 967, web 2491, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7945e69b06e5`) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

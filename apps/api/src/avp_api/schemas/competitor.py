@@ -15,7 +15,14 @@ from pydantic_core import PydanticCustomError
 
 from ..models import DetectionSource, DetectionStatus
 from ..services.intake import InvalidUrl, rival_domain
+from ..services.serp import is_non_competitor_domain
 from .common import ApiModel
+
+# The refusal of a platform or publisher typed as a rival (launch checklist 3.90). The list is
+# detection's own (`serp.NON_COMPETITOR_DOMAINS`) and holds publishers, marketplaces, review sites
+# and directories, social networks, wikis, job boards, search engines and the big platforms, so
+# the sentence says "platform or publisher". No domain in it: nothing typed is echoed.
+A_PLATFORM_NOT_A_RIVAL = "That is a platform or publisher, so it cannot be added as a rival."
 
 
 class CompetitorOut(ApiModel):
@@ -86,19 +93,27 @@ class CompetitorInput(ApiModel):
     @field_validator("domain")
     @classmethod
     def _domain_is_the_rivals_own(cls, value: str | None) -> str | None:
-        """The rival's own domain, checked as a client's is and never reduced (checklist 3.81).
+        """The rival's own domain, checked as a client's is and never reduced (checklist 3.81),
+        and not a platform or publisher (3.90).
 
         Blank is no domain, as it always was. Anything else goes through `rival_domain`: a page, a
-        path or a subdomain is refused and not cut down to another site's domain. The error is a
+        path or a subdomain is refused and not cut down to another site's domain. What is left
+        must not be on detection's own list (`serp.is_non_competitor_domain`), so a typed rival
+        obeys the rule a detected one does. `rival_domain` itself does not check the list, on
+        purpose: a model's domain goes through it too, and a refusal there would keep the brand
+        with no domain, where detection drops a platform it names whole. Each error is a
         `PydanticCustomError`, so `errors[].message` is the plain sentence and not pydantic's
         "Value error, " in front of it.
         """
         if value is None or not value.strip():
             return None
         try:
-            return rival_domain(value)
+            domain = rival_domain(value)
         except InvalidUrl as exc:
             raise PydanticCustomError("invalid_domain", exc.detail) from exc
+        if is_non_competitor_domain(domain):
+            raise PydanticCustomError("invalid_domain", A_PLATFORM_NOT_A_RIVAL)
+        return domain
 
 
 class ReplaceCompetitorsRequest(ApiModel):
