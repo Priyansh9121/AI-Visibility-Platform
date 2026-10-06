@@ -48,11 +48,29 @@ textarea {
 
 /* Emphasis is light, not lift — one global rule so no component reimplements it.
    The one exception is a filled button (components.css, checklist 3.33), whose ring
-   would merge with its fill: it swaps the token for --avp-focus-ring-filled. */
+   would merge with its fill: it swaps the token for --avp-focus-ring-filled.
+
+   This rule is (0,1,0) on purpose. A component's own class ties it and wins on file
+   order, so `.avp-btn`'s radius is not cut to --avp-radius-sm the moment it is focused.
+   It leaves `outline` to the rule below, which has to outrank this one. */
 :where(a, button, input, select, textarea, [tabindex]):focus-visible {
-  outline: none;
   box-shadow: var(--avp-focus-ring);
   border-radius: var(--avp-radius-sm);
+}
+
+/* The same controls keep an outline that is transparent — checklist 3.40.
+   Forced colours (Windows High Contrast) drops every box-shadow, so a control with
+   no outline of its own showed no focus there. A transparent outline costs nothing
+   on a normal screen, and in forced colours it is painted in a system colour.
+   It outranks Tailwind's preflight, `:-moz-focusring { outline: auto }` at (0,1,0),
+   which loads after this sheet and which a (0,1,0) rule only ties and loses to on file
+   order: Firefox then drew its own ring on every one of these controls, inside the
+   shadow. `html` in front adds a type selector, (0,1,1): above preflight and above
+   `.avp-field__input`'s `outline: none`, and below the (0,2,0) of a component's own
+   `:focus-visible` rule, so one that draws its own outline (`.avp-gapgrid`) keeps it.
+   It is a rule of its own because the ring's rule above must stay weak. */
+html :where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid transparent;
 }
 
 ::selection {

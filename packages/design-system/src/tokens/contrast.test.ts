@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -131,9 +132,10 @@ describe('focus ring is at least 3:1 against its surface (WCAG 1.4.11)', () => {
  * gradient ends, so on a primary the ring's inner edge was lost against the fill
  * (1.0:1; 1.13:1 against the report's paper fill). The danger fill is the same
  * lightness. A filled button therefore takes `--avp-focus-ring-filled`: a 2px gap
- * in the colour of the surface it sits on, then the 2px ring, then the halo. Two
- * blocks spell it: the light theme (the card) and the report (its paper page, in
- * an app of either theme). The dark theme aliases the plain ring and does not move.
+ * in the colour of the surface it sits on, then the 2px ring, then the halo. Three
+ * blocks spell it: the light theme (the card), the dark theme (its card too, since
+ * checklist 3.40: its translucent plain ring was 1.6 to 2.0:1 against the primary
+ * fill) and the report (its paper page, in an app of either theme).
  *
  * Read from the real files, as everything above is: tokens.css for the colours,
  * components.css and base.css for the rules that apply them. The report's paper
@@ -148,6 +150,10 @@ const globalsCss = readFileSync(
   join(dirname(fileURLToPath(import.meta.url)), '../../../../apps/web/src/app/globals.css'),
   'utf8',
 );
+// Tailwind's own preflight, from the copy the app installs: the rules that load after this sheet.
+const webDir = join(dirname(fileURLToPath(import.meta.url)), '../../../../apps/web');
+const tailwindDir = dirname(createRequire(join(webDir, 'package.json')).resolve('tailwindcss/package.json'));
+const preflightCss = readFileSync(join(tailwindDir, 'src/css/preflight.css'), 'utf8');
 
 interface Layer {
   spread: number;
@@ -183,26 +189,67 @@ function fillOf(scope: Map<string, string>, name: (typeof FILLS)[number]): Rgb {
   return stop;
 }
 
-/** Where a filled button's ring is spelled, and the surfaces its outside edge can end on. */
-const FILLED_SCOPES: readonly { where: string; scope: Map<string, string>; surfaces: string[] }[] = [
+/**
+ * The ring a person sees on `surfaceName`: the ring layer over the halo layer over the surface, in
+ * the order a box-shadow paints them. A solid ring hides what is under it, so on the light theme and
+ * the report it is the ring's own colour on every surface; the dark theme's is translucent (70%), and
+ * what is seen is its blend with the halo and the surface.
+ */
+function paintedRing(
+  scope: Map<string, string>,
+  token: '--avp-focus-ring' | '--avp-focus-ring-filled',
+  surfaceName: string,
+): Rgb {
+  const layers = shadowLayers(scope, token);
+  const [ring, halo] = token === '--avp-focus-ring' ? [layers[0], layers[1]] : [layers[1], layers[2]];
+  return composite(ring!.colour, composite(halo!.colour, surface(scope, surfaceName)));
+}
+
+/**
+ * Where a filled button's ring is spelled, and the surfaces its outside edge can end on. `solid` is
+ * whether the ring layer is opaque (the light theme's and the report's are; the dark theme's is its
+ * plain ring's own 70%), and `plainLostBelow` is how far under 3:1 the plain ring, as painted, is
+ * against every fill: 1.00 to 1.04 in the light theme, 1.13 on the report's paper fill, and in the
+ * dark theme 1.01 to 2.01 (the primary's two ends and the danger fill; checklist 3.40).
+ */
+const FILLED_SCOPES: readonly {
+  where: string;
+  scope: Map<string, string>;
+  surfaces: string[];
+  solid: boolean;
+  plainLostBelow: number;
+}[] = [
   {
     where: 'light theme',
     scope: light,
     surfaces: ['--avp-surface-seated', '--avp-surface-raised', '--avp-surface-ground', '--avp-surface-sunken'],
+    solid: true,
+    plainLostBelow: 1.5,
+  },
+  {
+    where: 'dark theme',
+    scope: darkScope,
+    surfaces: ['--avp-surface-seated', '--avp-surface-raised', '--avp-surface-ground', '--avp-surface-sunken'],
+    solid: false,
+    plainLostBelow: 3,
   },
   {
     where: 'report',
     scope: reportScope,
     surfaces: ['--avp-surface-ground', '--avp-surface-sunken', '--avp-surface-seated'],
+    solid: true,
+    plainLostBelow: 1.5,
   },
   {
     where: 'report inside a dark app',
     scope: reportInDarkApp,
     surfaces: ['--avp-surface-ground', '--avp-surface-sunken', '--avp-surface-seated'],
+    solid: true,
+    plainLostBelow: 1.5,
   },
 ];
 
-for (const { where, scope, surfaces } of FILLED_SCOPES) {
+for (const { where, scope, surfaces, solid, plainLostBelow } of FILLED_SCOPES) {
   describe(`a filled button keeps its focus ring off its fill, ${where} (WCAG 1.4.11)`, () => {
     it('is a 2px gap, a 2px ring, then the halo out to 8px', () => {
       expect(shadowLayers(scope, '--avp-focus-ring-filled').map((l) => l.spread)).toEqual([2, 4, 8]);
@@ -222,11 +269,13 @@ for (const { where, scope, surfaces } of FILLED_SCOPES) {
       expect(shadowLayers(scope, '--avp-focus-ring-filled')[0]?.colour.alpha).toBe(1);
     });
 
-    it('is needed: the plain ring is lost against every one of these fills', () => {
-      // 1.00 to 1.04 in the light theme and 1.13 on the report's paper fill: far under 3:1.
-      const plain = shadowLayers(scope, '--avp-focus-ring')[0]!.colour.rgb;
-      for (const name of FILLS) {
-        expect(contrastRatio(plain, fillOf(scope, name)), name).toBeLessThan(1.5);
+    it('is needed: the plain ring, as painted, is lost against every one of these fills', () => {
+      // 1.00 to 1.04 in the light theme and 1.13 on the report's paper fill; 1.01 to 2.01 in the dark theme.
+      for (const s of surfaces) {
+        const plain = paintedRing(scope, '--avp-focus-ring', s);
+        for (const name of FILLS) {
+          expect(contrastRatio(plain, fillOf(scope, name)), `${name} on ${s}`).toBeLessThan(plainLostBelow);
+        }
       }
     });
 
@@ -237,10 +286,14 @@ for (const { where, scope, surfaces } of FILLED_SCOPES) {
       });
     }
 
-    it('the ring is at least 3:1 against the gap it sits on', () => {
+    it('the ring, as painted, is at least 3:1 against the gap it sits on', () => {
       const [gap, ring] = shadowLayers(scope, '--avp-focus-ring-filled');
-      expect(ring!.colour.alpha).toBe(1);
-      expect(contrastRatio(ring!.colour.rgb, gap!.colour.rgb)).toBeGreaterThanOrEqual(3);
+      // A solid ring does not depend on what is under it; the dark theme's does, so it is measured on every surface.
+      if (solid) expect(ring!.colour.alpha).toBe(1);
+      for (const s of surfaces) {
+        const painted = paintedRing(scope, '--avp-focus-ring-filled', s);
+        expect(contrastRatio(painted, gap!.colour.rgb), s).toBeGreaterThanOrEqual(3);
+      }
     });
 
     for (const s of surfaces) {
@@ -255,11 +308,16 @@ for (const { where, scope, surfaces } of FILLED_SCOPES) {
       // components.css: `filter: brightness(1.08)` on a hovered primary or danger button
       // lifts the fill and its box-shadow together. Multiplied in sRGB, the larger change.
       const lift = (c: Rgb): Rgb => [Math.min(1, c[0] * 1.08), Math.min(1, c[1] * 1.08), Math.min(1, c[2] * 1.08)];
-      const [gap, ring] = shadowLayers(scope, '--avp-focus-ring-filled');
+      const [gap] = shadowLayers(scope, '--avp-focus-ring-filled');
       for (const name of FILLS) {
         expect(contrastRatio(lift(gap!.colour.rgb), lift(fillOf(scope, name))), name).toBeGreaterThanOrEqual(3);
       }
-      expect(contrastRatio(lift(gap!.colour.rgb), lift(ring!.colour.rgb))).toBeGreaterThanOrEqual(3);
+      // The ring as painted, lifted whole: a close reading for the dark theme's translucent ring, whose
+      // margin (5.6:1 and up) is wide enough that how a filter blends it does not matter.
+      for (const s of surfaces) {
+        const painted = lift(paintedRing(scope, '--avp-focus-ring-filled', s));
+        expect(contrastRatio(lift(gap!.colour.rgb), painted), s).toBeGreaterThanOrEqual(3);
+      }
     });
   });
 }
@@ -267,9 +325,23 @@ for (const { where, scope, surfaces } of FILLED_SCOPES) {
 describe('which scopes spell the filled ring, and what a report inside a dark app gets', () => {
   const resolved = (scope: Map<string, string>) => resolveVars(scope.get('--avp-focus-ring-filled') ?? '', scope);
 
-  it('the dark theme keeps the plain ring, so nothing there moves', () => {
-    expect(resolved(darkScope)).not.toBe('');
-    expect(resolved(darkScope)).toBe(resolveVars(darkScope.get('--avp-focus-ring') ?? '', darkScope));
+  it('the dark theme spells its own gap-then-ring: three layers, not an alias of the plain ring (checklist 3.40)', () => {
+    // It was `var(--avp-focus-ring)`: against the primary fill that ring is 1.6 to 2.0:1, against the danger fill 1.0.
+    const own = dark.get('--avp-focus-ring-filled');
+    expect(own).toBeDefined();
+    expect(own).not.toMatch(/^var\(--avp-focus-ring\)$/);
+    expect(splitTopLevel(own ?? '')).toHaveLength(3);
+    expect(resolved(darkScope)).not.toBe(resolveVars(darkScope.get('--avp-focus-ring') ?? '', darkScope));
+  });
+
+  it("the dark theme's gap is the dark card colour, so it reads as air on a card and a faint band elsewhere", () => {
+    // The same choice as the light theme's, for the same reason: cards hold the forms and their actions.
+    expect(dark.get('--avp-focus-ring-filled')).toMatch(/^0 0 0 2px var\(--avp-surface-seated\),/);
+    const gap = shadowLayers(darkScope, '--avp-focus-ring-filled')[0]!.colour.rgb;
+    expect(contrastRatio(gap, surface(darkScope, '--avp-surface-seated'))).toBe(1);
+    for (const s of ['--avp-surface-sunken', '--avp-surface-ground', '--avp-surface-raised']) {
+      expect(contrastRatio(gap, surface(darkScope, s)), s).toBeLessThan(1.25);
+    }
   });
 
   it('the report block declares its own three-layer ring: not the plain ring, not a :root value read through', () => {
@@ -357,6 +429,7 @@ describe('the specificity helper the cascade check below relies on', () => {
     ['.a:focus-visible', [0, 2, 0]],
     [':where(a, button, [tabindex]):focus-visible', [0, 1, 0]],
     [':-moz-focusring', [0, 1, 0]],
+    ['html :where(a, button, [tabindex]):focus-visible', [0, 1, 1]],
     ['.avp-btn:active:not(:disabled)', [0, 3, 0]],
     ['a.b > button', [0, 1, 2]],
     ['#x .y[data-z]', [1, 2, 0]],
@@ -390,11 +463,12 @@ describe('the ring a filled button takes is applied by a rule that beats the glo
     expect(rules[0]!.body).toMatch(/(^|;|\s)outline:\s*2px solid transparent\s*;?(\s|$)/);
   });
 
-  it("is more specific than Tailwind preflight's :-moz-focusring { outline: auto }, which loads after this sheet and beats base.css's outline: none", () => {
+  it("is more specific than Tailwind preflight's :-moz-focusring { outline: auto }, which loads after this sheet and wins a tie on file order", () => {
     // `apps/web/src/app/globals.css` imports this stylesheet and then `@tailwind base`; preflight
     // (tailwindcss 3.4, src/css/preflight.css) says `:-moz-focusring { outline: auto }`. On equal
-    // specificity the later rule wins, so in Firefox it beats base.css's `outline: none` and draws
-    // the native ring, which on a filled button lands inside the gap. This rule must out-rank it.
+    // specificity the later rule wins, so in Firefox it would beat a (0,1,0) rule here (the ring's
+    // rule, which only ties it) and draw the native ring, which on a filled button lands inside the
+    // gap. This rule must out-rank it.
     const designSystem = globalsCss.indexOf("@import '@avp/design-system/styles.css'");
     expect(designSystem, 'globals.css imports the design-system stylesheet').toBeGreaterThanOrEqual(0);
     expect(globalsCss.indexOf('@tailwind base'), 'and then preflight').toBeGreaterThan(designSystem);
@@ -436,5 +510,186 @@ describe('the ring a filled button takes is applied by a rule that beats the glo
       (r) => /\.avp-btn\b/.test(r.selector) && /(^|;|\s)box-shadow\s*:/.test(r.body),
     );
     expect(shadowed.map((r) => splitTopLevel(r.selector).sort())).toEqual([FILLED_SELECTORS]);
+  });
+});
+
+/*
+ * THE GLOBAL OUTLINE — checklist 3.40.
+ *
+ * base.css drew the focus ring with a box-shadow and said `outline: none`. Forced colours drops
+ * every shadow, so a control with no outline of its own showed no focus there; and in Firefox
+ * Tailwind's preflight (`:-moz-focusring { outline: auto }`, loaded after this sheet, at the same
+ * (0,1,0) as that rule) put Firefox's own ring back on every one of them, inside the shadow. A
+ * transparent 2px outline is nothing on a normal screen, is painted in a system colour in forced
+ * colours, and, from a rule that outranks preflight, leaves Firefox no ring of its own.
+ *
+ * It is a rule of its own and not a line in the ring's: that rule has to stay at (0,1,0), so a
+ * component's own radius (`.avp-btn`'s, the field's) still beats its `border-radius` on file
+ * order. A rule that outranked preflight would shrink every button's corners on focus.
+ */
+describe('every focusable control keeps a transparent outline, which forced colours paints and Firefox cannot replace (checklist 3.40)', () => {
+  const bare = (sheet: string) => sheet.replace(/\/\*[\s\S]*?\*\//g, '');
+  const OUTLINE = /(^|;|\s)outline:\s*2px solid transparent\s*;?(\s|$)/;
+  const ringRule = () => {
+    const found = rulesOf(baseCss).filter((r) => /box-shadow:\s*var\(--avp-focus-ring\)/.test(r.body));
+    expect(found, 'base.css has one rule that draws the ring').toHaveLength(1);
+    return found[0]!;
+  };
+  const outlineRule = () => {
+    const found = rulesOf(baseCss).filter((r) => OUTLINE.test(r.body));
+    expect(found, 'base.css has one rule that sets the transparent outline').toHaveLength(1);
+    return found[0]!;
+  };
+  /** The list of elements a `:where(...)` or `:is(...)` names. */
+  const elementsOf = (selector: string) => /:(?:where|is)\(([^)]*)\)/.exec(selector)?.[1];
+
+  it('base.css says outline: none nowhere, so no rule in it can leave a control without one', () => {
+    expect(bare(baseCss)).not.toMatch(/outline\s*:\s*none/);
+  });
+
+  it('is one rule, for the same elements and the same state as the ring, that sets the outline and neither the ring nor the radius', () => {
+    const rule = outlineRule();
+    expect(rule.selector).toMatch(/:focus-visible$/);
+    expect(elementsOf(rule.selector)).toBeDefined();
+    expect(elementsOf(rule.selector)).toBe(elementsOf(ringRule().selector));
+    expect(rule.body).not.toMatch(/box-shadow|border-radius/);
+  });
+
+  it("outranks Tailwind preflight's :-moz-focusring { outline: auto }, which loads after this sheet and which the ring's own rule only ties", () => {
+    const designSystem = globalsCss.indexOf("@import '@avp/design-system/styles.css'");
+    expect(designSystem, 'globals.css imports the design-system stylesheet').toBeGreaterThanOrEqual(0);
+    expect(globalsCss.indexOf('@tailwind base'), 'and then preflight').toBeGreaterThan(designSystem);
+
+    // The rule in the copy of Tailwind the app installs, not a selector spelled here.
+    const preflight = rulesOf(preflightCss).filter((r) => r.selector === ':-moz-focusring');
+    expect(preflight, "preflight's rule").toHaveLength(1);
+    expect(preflight[0]!.body).toMatch(/outline:\s*auto/);
+    const theirs = specificity(preflight[0]!.selector);
+    expect(bySpecificity(specificity(ringRule().selector), theirs), "the ring's rule only ties it").toBe(0);
+    expect(bySpecificity(specificity(outlineRule().selector), theirs)).toBeGreaterThan(0);
+  });
+
+  it('outranks the rule that says outline: none on a field input, which would otherwise keep a focused field out of forced colours', () => {
+    const none = rulesOf(componentsCss).filter(
+      (r) => /(^|;|\s)outline:\s*none/.test(r.body) && /\.avp-field__input\b/.test(r.selector),
+    );
+    expect(none.length, 'the field input does say outline: none').toBeGreaterThan(0);
+    const mine = specificity(outlineRule().selector);
+    for (const r of none) {
+      for (const selector of splitTopLevel(r.selector)) {
+        expect(bySpecificity(mine, specificity(selector)), selector).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("yields to a component's own :focus-visible outline, so a control that draws one keeps it", () => {
+    const own = rulesOf(componentsCss)
+      .flatMap((r) => splitTopLevel(r.selector).map((selector) => ({ selector, body: r.body })))
+      .filter((r) => /:focus-visible$/.test(r.selector) && /(^|;|\s)outline\s*:/.test(r.body));
+    expect(own.length, 'components draw their own focus outlines').toBeGreaterThan(0);
+    const mine = specificity(outlineRule().selector);
+    for (const r of own) expect(bySpecificity(specificity(r.selector), mine), r.selector).toBeGreaterThan(0);
+  });
+
+  /** Every spelling of "no outline" in a declaration block. */
+  const NO_OUTLINE = [/(^|;|\s)outline(-style)?\s*:\s*none\b/, /(^|;|\s)outline(-width)?\s*:\s*0(px)?(?![\d.])/];
+  /** The selectors, among those that end in `:focus-visible`, whose block takes a control's outline away. */
+  const removesOutline = (sheet: string) =>
+    rulesOf(sheet)
+      .flatMap((r) => splitTopLevel(r.selector).map((selector) => ({ selector, body: r.body })))
+      .filter((r) => /:focus-visible$/.test(r.selector) && NO_OUTLINE.some((re) => re.test(r.body)))
+      .map((r) => r.selector);
+
+  it('no component rule on :focus-visible says outline: none, so none can take a control back out of forced colours', () => {
+    // `.avp-google-btn:focus-visible` did until 3.40, and the test above counted it as a component
+    // drawing its own outline (it matches any `outline:`), so it would not have stopped the line returning.
+    expect(removesOutline(componentsCss)).toEqual([]);
+  });
+
+  it('and that check does see such a rule, in each spelling of it, and passes one that draws or only offsets an outline', () => {
+    expect(removesOutline('.g:focus-visible { outline: none; box-shadow: var(--avp-focus-ring); }')).toEqual([
+      '.g:focus-visible',
+    ]);
+    expect(removesOutline('.g:focus-visible { outline:none }')).toEqual(['.g:focus-visible']);
+    expect(removesOutline('.g:focus-visible { outline-style: none; }')).toEqual(['.g:focus-visible']);
+    expect(removesOutline('.g:focus-visible { outline-width: 0px; }')).toEqual(['.g:focus-visible']);
+    expect(removesOutline('.a:focus-visible, .b:focus-visible { outline: 0; }')).toEqual([
+      '.a:focus-visible',
+      '.b:focus-visible',
+    ]);
+    expect(removesOutline('.g:focus-visible { outline: 2px solid transparent; }')).toEqual([]);
+    expect(removesOutline('.g:focus-visible { outline: 2px solid red; outline-offset: 2px; }')).toEqual([]);
+    expect(removesOutline('.g:focus-visible { outline: 0.5px solid red; }')).toEqual([]);
+    expect(removesOutline('.g:hover { outline: none; }')).toEqual([]);
+  });
+
+  it("leaves the ring's rule where it was, no more specific than a component class, so a component's own radius still wins", () => {
+    const button = rulesOf(componentsCss).find((r) => r.selector === '.avp-btn');
+    expect(button?.body).toMatch(/border-radius:/);
+    expect(ringRule().body).toMatch(/border-radius:/);
+    expect(bySpecificity(specificity(ringRule().selector), specificity('.avp-btn'))).toBeLessThanOrEqual(0);
+  });
+});
+
+/*
+ * A FOCUSED FIELD IS LIT ONCE — checklist 3.40.
+ *
+ * The ring belongs on the wrapper (`.avp-field__control:focus-within`), so the affix and the input
+ * read as one control. The input is a focusable element too, so the global rule drew the ring on it
+ * as well: a second ring inside the first, a text field always matching `:focus-visible`. Both
+ * `TextField` and `SelectField` put the input in that wrapper under `.avp-field__input`.
+ */
+describe('a focused field is lit once: the wrapper keeps its ring and the input takes none of its own (checklist 3.40)', () => {
+  const ruleFor = (selector: string) => rulesOf(componentsCss).find((r) => r.selector === selector);
+  const ringSelector = () => {
+    const found = rulesOf(baseCss).filter((r) => /box-shadow:\s*var\(--avp-focus-ring\)/.test(r.body));
+    expect(found, 'base.css has one rule that draws the ring').toHaveLength(1);
+    return found[0]!.selector;
+  };
+
+  it('the input takes no shadow while focused', () => {
+    expect(ruleFor('.avp-field__input:focus-visible')?.body).toMatch(/(^|;|\s)box-shadow:\s*none\s*;?(\s|$)/);
+  });
+
+  it("and that rule outranks the global ring's, so file order cannot decide it", () => {
+    const field = specificity('.avp-field__input:focus-visible');
+    expect(bySpecificity(field, specificity(ringSelector()))).toBeGreaterThan(0);
+  });
+
+  it("the wrapper's ring stays, valid or invalid", () => {
+    expect(ruleFor('.avp-field__control:focus-within')?.body).toMatch(/box-shadow:\s*var\(--avp-focus-ring\)/);
+    expect(ruleFor('.avp-field__control.is-invalid:focus-within')?.body).toMatch(/box-shadow:/);
+  });
+
+  it('nothing else gives the input a shadow', () => {
+    const shadowed = rulesOf(componentsCss).filter(
+      (r) => /\.avp-field__(input|select)\b/.test(r.selector) && /(^|;|\s)box-shadow\s*:/.test(r.body),
+    );
+    expect(shadowed.map((r) => r.selector)).toEqual(['.avp-field__input:focus-visible']);
+  });
+});
+
+/*
+ * THE PRIMARY BUTTON'S RIM — checklist 3.40.
+ *
+ * `.avp-btn` has a 1px transparent border, which the background shows through (a background paints
+ * to the border box). A gradient is sized to the padding box and repeats, so the border showed the
+ * far end of the next tile: a 1px line round every primary button in the gradient's other colour.
+ * Sized to the border box (`background-origin`) the gradient covers the whole box once.
+ */
+describe('the primary button is not rimmed by its own gradient (checklist 3.40)', () => {
+  const body = (selector: string) => rulesOf(componentsCss).find((r) => r.selector === selector)?.body ?? '';
+
+  it('sizes the gradient to the border box, so it does not tile into the 1px transparent border round it', () => {
+    expect(body('.avp-btn')).toMatch(/(^|;|\s)border:\s*1px solid transparent\s*;/);
+    expect(body('.avp-btn--primary')).toMatch(/(^|;|\s)background-origin:\s*border-box\s*;/);
+  });
+
+  it("changes neither the button's size nor its colours: the fill, the gradient and the text colour are as they were", () => {
+    const primary = body('.avp-btn--primary');
+    expect(primary).toMatch(/background-color:\s*var\(--avp-beacon-600\)/);
+    expect(primary).toMatch(/background-image:\s*var\(--avp-gradient-accent\)/);
+    expect(primary).toMatch(/(^|;|\s)color:\s*var\(--avp-on-accent\)/);
+    expect(primary).not.toMatch(/(^|;|\s)(border|padding|margin|width|height|background-clip|background-repeat)\s*:/);
   });
 });
