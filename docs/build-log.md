@@ -26551,3 +26551,68 @@ Drift check (north-star §8): Layer 5, Distribution; lifecycle phase: Sales Enab
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# An email when a scan finishes, for the user who started it: off until `EMAIL_SCAN_NOTIFICATIONS` is set and email is set up, with a per-user switch in Settings
+
+**2026-10-06, the fourteenth entry of the day; branch `pilot-fixes-6`, pilot feature F1 (the founder's brief of 2026-10-05; design note in this log, "Design notes for the four pilot features").** API and web, with a security review, a UI review and its own bar.
+
+**Render: nothing to set for the code to be safe, but this deploy runs a migration (`b3f1c8e2a9d4`).** The feature sends nothing until `EMAIL_SCAN_NOTIFICATIONS=true` is set on the API service AND email is set up (launch checklist 2.3: `RESEND_API_KEY` and a verified `EMAIL_FROM`), with `PUBLIC_WEB_BASE_URL` the real web address (launch checklist 1.1h).
+
+Drift check (north-star §8): Layer 5, Distribution; lifecycle phase: Activation (getting the finished report in front of the person who asked for it).
+
+## 1. What changed
+
+- **Who gets what** (`services/scan_emails.py`, `services/email.py`), plain text through the existing Resend path (`_send`), to the user who started the scan only:
+  - succeeded or partial: "Your report for <name> is ready", linking to the signed-in report (never a share link, never a score); a partial scan adds "Some answers are missing from this scan; the report shows how many each engine returned.";
+  - a scan that raised alerts: one email, "Your scan for <name> raised <n> alert(s)", with a line for each kind and its count in the alerts screen's own words, linking to the client's alerts;
+  - failed: one plain "Your scan for <name> did not finish." linking to the client's page, where it can be run again (decided in the design note: a user who walked away is waiting for it);
+  - cancelled: nothing (nothing writes that status today).
+  - Every email ends "You are getting this because you started this scan or turned on its monthly rescan. To stop these emails, turn them off in Settings:" with the link.
+- **`<name>`** is the client's name only if the agency typed it, at most 60 characters (a longer one is cut at a word, with "…"), cleaned of control, invisible, direction-changing and encoded-word characters; otherwise the client's domain. A name the classifier read off the client's own site is never used (the security review's Medium, below).
+- **At most once, as a sweep:** a loop beside the price check (`scan_email_watch.py`), started only when the setting is on and email is set up, sweeps once at start and then every 60 s for scans that reached a final status in the last 15 minutes and have not been notified. Each is claimed with one conditional update of `scans.notified_at`, committed before the send, so two API instances during a deploy send one email, a second finalize sends nothing, and switching it on does not email past scans. A failed send is logged and not retried: a missed email is better than two.
+- **Nobody is emailed** when the scan has no requester, or the requester is suspended, deleted, invited but not yet in, or no longer in the scan's agency, or has turned the emails off, or the client or agency is deleted; each skip logs `scan_emails.skipped` with ids and a fixed reason.
+- **The requester is the user who pressed Run** (`routers/scans.py`), also when the scan reuses the queued row a colleague's detection opened.
+- **Settings:** "Email when a scan finishes", On and Off (`ScanEmailsPanel.tsx`), drawn only when the feature is on and email is set up. `PUT /api/v1/auth/me/scan-emails {enabled}` changes only the caller's own switch; `MeOut.scanEmails {available, enabled}` carries it on the six responses that carry the signed-in user.
+- **The migration `b3f1c8e2a9d4`** (from `7945e69b06e5`): `users.scan_emails` (not null, default true, the server default kept so the old instance can still insert users during a deploy) and `scans.notified_at` (nullable, no backfill).
+- **Logs:** event, `user_id`, `scan_id`, a fixed reason or an error's class; never an address, a link or a client's name.
+- **`docs/api-contracts.md`, OpenAPI and the generated types.** `/privacy` and `/terms` are not edited (below).
+
+## 2. The reviews
+
+**Security review: no Blocker or High; one Medium and one Low taken in round 2; one Low is the founder's.**
+- **Medium, fixed:** when the agency types no name, the client's name is the brand name a model read off the client's own website, so text on that site (or an instruction aimed at the classifier) could reach the requester in an email from our address, a phishing line included. The email now uses only a typed name and otherwise the domain; `test_facts_only.py`'s guard now covers the promoted name.
+- **Low, fixed:** a scan that reused the queued row a colleague's detection opened kept that colleague as its requester, so the wrong person was emailed and the wrong opt-out applied.
+- **Nits, fixed:** a few invisible characters and RFC 2047 encoded words passed the name's cleaning.
+- **Low, the founder's decision (launch checklist 3.93):** the emails are on by default for every user, and no address is verified (there is no email verification), so a password sign-up made with someone else's address could make us email that person. Bounded by the scan allowance and a card on file; the invitation email has the same exposure today.
+- **Checked clean:** the recipient checks at send time and every read after the claim scoped by the scan's agency; at most once under two instances; the window and the batch; a cancellation is not swallowed, so the loop stops within its bound; no score, share link or third-party text; links only from `PUBLIC_WEB_BASE_URL`; plain text with line breaks collapsed; the logs; the switch's route (the Origin check, the caller's own row, a strict boolean, no rate limit needed); the migration.
+
+**UI review: no Blocker; four Should-fix, taken in round 3.**
+- Settings would have crashed when the web deployed before the API (an older `/auth/me` has no `scanEmails`); it reads the key safely now.
+- The On/Off buttons disabled themselves while saving, which drops keyboard focus; they stay focusable and ignore presses while a save is in flight.
+- "You are getting this because you started the scan" would be untrue of F2's monthly rescans; it reads "You are getting this because you started this scan or turned on its monthly rescan."
+- A partial scan's "the report says which" claimed more than the report shows (it gives each engine's count, not the missing prompts): "Some answers are missing from this scan; the report shows how many each engine returned."
+- Nits taken: the group's name, "Scan-finished emails"; a long name cut at a word with "…". The rounds after the reviews were not sent back; their negative controls are below.
+
+## Found, not fixed
+
+- **/privacy, for the lawyer (launch checklist 2.4):** `PrivacyPolicy.tsx:153-156` lists only password-reset and invitation emails as sent through Resend; scan emails also go through it and carry the client's name. "Your account" (`:66-69`) does not list the stored on/off choice. Terms say nothing about emails.
+- **A typed name that equals the brand name** is treated as the brand name, so the email shows the domain.
+- **A failed "ready" email does not stop the alerts email** being tried once; neither is retried.
+- **The sweep reads the scans table every 60 s;** a partial index on `finished_at WHERE notified_at IS NULL` can come later. A database error inside a claim ends that sweep's batch until the next minute.
+
+## Verified
+
+**API pytest 5332 → 5464 (+132); web vitest 2547 → 2559 (+12); floors raised to match.**
+- **API, new:** `test_scan_emails.py` (86: who gets which email for each final status, who gets none and why, at most once under a second sweep and two instances, the window, the batch, the four real writers of a final status, the bodies, the name rules, the cleaning, the footer), `test_scan_emails_switch.py` (41: the setting, `MeOut.scanEmails` on the six responses, the switch's route, the loop and the app's lifespan), `test_scan_requester.py` (1: the user who presses Run becomes the requester of a reused queued row); one more case in `test_secrets_stay_out_of_logs.py` (no address, link or client name on the sent, failed and skipped paths) and in `test_facts_only.py` (no score or third-party text; a promoted brand name can never reach an email). `test_feedback_email.py`'s key set gains `scanEmails`.
+- **Web, new:** `ScanEmailsPanel.test.tsx`, `SettingsView.scanEmails.test.tsx` (drawn only when available; a `Me` without the key), `api.setScanEmails.test.ts`.
+- **Alembic:** upgrade, check, downgrade and upgrade on an empty database, by the implementer; the bar's Alembic step runs the migration on an empty database too.
+- **The implementer's negative controls,** each restored: the claim's `notified_at IS NULL` removed, 3 fail; the agency check, 2; the opt-out ignored, 3; the feature guard, 2; a cancelled scan made notifiable, 1; the window removed from sweep and claim, 2; the section always drawn, 2; round 2: the promoted-name rule removed, 3; the cap, 2; the requester line, 1; the invisible-character cleaning, 10; `=?` kept, 1; round 3: the optional read, 1; the in-flight guard, 1; the old footer, 4; the word cut, 2.
+- **On this tree:** in the three F1 files (128 tests): the promoted brand name allowed into the email, 2 fail; the opt-out ignored, 2 fail. Each file was restored and the tree's checksums matched.
+- **The rest of the bar** (this tree, one run, 16:55 to 17:04):
+  - Counts: API 5464, workers 27, shared-types 53 (0 fail), design-system 967, web 2559, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `b3f1c8e2a9d4`, this item's migration) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

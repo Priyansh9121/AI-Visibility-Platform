@@ -1167,3 +1167,102 @@ class TestTheEntrypointSwitchesPydanticSettingsDebuggingOff:
 
         assert seen["alembic.pydantic_settings_debug"] == "1"
         assert seen["uvicorn.pydantic_settings_debug"] == "1"
+
+
+# ---------------------------------------------------------------------------
+# the scan-finished emails (F1, 2026-10-06): ids and a reason, never an address, link or name
+# ---------------------------------------------------------------------------
+
+SCAN_EMAIL_ADDRESS = "scanwatcher-SENTINEL@logs.example"
+SCAN_EMAIL_CLIENT = "CLIENTNAMESENTINEL Traders"
+SCAN_EMAIL_BASE = "https://scan-links-sentinel.avp-pilot.example"
+
+
+async def test_the_scan_finished_emails_log_no_address_link_or_client_name(
+    settings: Settings,  # noqa: ANN001
+    engine,  # noqa: ANN001
+    session,  # noqa: ANN001
+    resend_configured,  # noqa: ANN001
+    capsys,  # noqa: ANN001
+    caplog,  # noqa: ANN001
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every outcome of a sweep (sent, a provider failure, a skip, an error) in every channel."""
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from avp_api import ids
+    from avp_api.models import Agency, Alert, AlertKind, Client, Scan, ScanStatus, User, UserRole
+    from avp_api.services import scan_emails
+
+    now = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
+    agency = Agency(id=ids.new_id(ids.AGENCY), name="Log Agency", slug="log-agency")
+    session.add(agency)
+    await session.flush()
+    users = {}
+    for name, address, opted in (("loud", SCAN_EMAIL_ADDRESS, True), ("quiet", STRANGER, False)):
+        users[name] = User(
+            id=ids.new_id(ids.USER), agency_id=agency.id, email=address, full_name="X",
+            role=UserRole.MEMBER, password_hash="x", scan_emails=opted,
+        )
+        session.add(users[name])
+    client_row = Client(
+        id=ids.new_id(ids.CLIENT), agency_id=agency.id, name=SCAN_EMAIL_CLIENT, domain="c.example"
+    )
+    session.add(client_row)
+    await session.flush()
+
+    def scan(user: User, status: ScanStatus, minutes: int) -> Scan:
+        return Scan(
+            id=ids.new_id(ids.SCAN), client_id=client_row.id, agency_id=agency.id,
+            requested_by_user_id=user.id, status=status,
+            finished_at=now - timedelta(minutes=minutes),
+        )
+
+    done, failed, skipped = (
+        scan(users["loud"], ScanStatus.SUCCEEDED, 3),
+        scan(users["loud"], ScanStatus.FAILED, 2),
+        scan(users["quiet"], ScanStatus.SUCCEEDED, 1),
+    )
+    session.add_all([done, failed, skipped])
+    await session.flush()
+    session.add(
+        Alert(
+            id=ids.new_id(ids.ALERT), client_id=client_row.id, agency_id=agency.id,
+            kind=AlertKind.VISIBILITY_DROP, scan_id=done.id, baseline_scan_id=failed.id,
+            detail="x",
+        )
+    )
+    await session.commit()
+
+    on = settings.model_copy(
+        update={
+            "email_scan_notifications": True,
+            "public_web_base_url": SCAN_EMAIL_BASE,
+        }
+    )
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+    caplog.set_level("DEBUG")
+    with structlog.testing.capture_logs() as events:
+        assert await scan_emails.sweep(on, factory=factory, now=now) == 3
+        # The provider is down for the next one: the failure line is searched too.
+        resend_configured.clear()
+        monkeypatch.setattr(
+            email_service.httpx, "AsyncClient",
+            lambda *a, **k: (_ for _ in ()).throw(httpx.ConnectError(SCAN_EMAIL_ADDRESS)),
+        )
+        retry = scan(users["loud"], ScanStatus.SUCCEEDED, 1)
+        session.add(retry)
+        await session.commit()
+        await scan_emails.sweep(on, factory=factory, now=now)
+
+    everything = json.dumps(events, default=str) + capsys.readouterr().out + caplog.text
+    for secret in (
+        SCAN_EMAIL_ADDRESS, STRANGER, "SENTINEL", SCAN_EMAIL_CLIENT, "CLIENTNAMESENTINEL",
+        SCAN_EMAIL_BASE, "scan-links-sentinel", "http://", "https://",
+    ):
+        assert secret not in everything, f"{secret!r} reached the logs"
+    kinds = {e["event"] for e in events}
+    assert {"email.scan_ready.sent", "email.scan_alerts.sent", "email.scan_failed.sent",
+            "scan_emails.skipped", "email.scan_ready.failed"} <= kinds

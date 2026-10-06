@@ -10,7 +10,7 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import __version__, price_watch, redis_watch
+from . import __version__, price_watch, redis_watch, scan_email_watch
 from .config import Settings, get_settings
 from .db import dispose_engine
 from .errors import register_error_handlers
@@ -84,10 +84,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # start never calls Stripe); it cannot fail or delay the start, because the first check runs
     # in the task and never raises.
     price_watcher = price_watch.start(settings)
+    # Emails a scan's requester when it finishes (`scan_email_watch.py`): a task, started only when
+    # `EMAIL_SCAN_NOTIFICATIONS` is on and email is configured; it cannot fail or delay the start.
+    scan_email_watcher = scan_email_watch.start(settings)
     try:
         yield
     finally:
         # Before the pools below are closed, so neither watcher is ever mid-call on a closed pool.
+        await scan_email_watch.stop(scan_email_watcher)
         await price_watch.stop(price_watcher)
         await redis_watch.stop(redis_watcher)
     # Return pooled connections deliberately, so a redeploy does not leave

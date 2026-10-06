@@ -357,6 +357,15 @@ class Settings(BaseSettings):
     # would be a switch somebody believes they set.
     report_csv_enabled: bool = False
 
+    # --- email when a scan finishes (F1, 2026-10-06) --------------------------------------------
+    # Whether the API emails the user who started a scan when it finishes
+    # (`services/scan_emails.py`,
+    # run every minute by `scan_email_watch.py`). Off, the DEFAULT, nothing runs, nothing is claimed
+    # or logged, and nothing a user sees changes. On, it still sends nothing while email is not
+    # configured (`scan_emails_available`). NOT a secret, and read by no log line. A blank is off;
+    # a value that is not a boolean stops the start, naming this setting.
+    email_scan_notifications: bool = False
+
     @field_validator(*PROVIDER_SETTINGS, mode="before")
     @classmethod
     def _blank_provider_setting_is_unset(cls, value: object) -> object:
@@ -386,6 +395,15 @@ class Settings(BaseSettings):
         # `REPORT_CSV_ENABLED=` is what `cp .env.example .env` and a cleared Render variable leave
         # behind. It is off, the safe direction, and never a refusal to start. Anything else is
         # read as a boolean by pydantic (`true`, `1`, `no`, `off`...), whitespace around it aside.
+        if isinstance(value, str):
+            return value.strip() or False
+        return value
+
+    @field_validator("email_scan_notifications", mode="before")
+    @classmethod
+    def _a_blank_scan_email_switch_is_off(cls, value: object) -> object:
+        # `EMAIL_SCAN_NOTIFICATIONS=` is what `cp .env.example .env` and a cleared Render variable
+        # leave behind: off, never a refusal to start.
         if isinstance(value, str):
             return value.strip() or False
         return value
@@ -440,6 +458,15 @@ class Settings(BaseSettings):
         cannot tell anybody whether an account exists.
         """
         return self.resend_api_key is not None
+
+    @property
+    def scan_emails_available(self) -> bool:
+        """Whether a scan-finished email can go out at all: the setting is on AND email is set up.
+
+        A fact about the deployment, the same for every user, so it can be shown to a signed-in
+        user (`MeOut.scanEmails.available`) without telling anybody anything about an account.
+        """
+        return self.email_scan_notifications and self.email_configured
 
     @property
     def google_sign_in_configured(self) -> bool:

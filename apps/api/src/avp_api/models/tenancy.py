@@ -314,6 +314,14 @@ class User(Base, TimestampMixin, SoftDeleteMixin):
     # account. See services/google_oauth.py for the whole policy.
     google_sub: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
 
+    # F1 (2026-10-06): whether this user is emailed when a scan they started finishes. The user's
+    # own choice, changed only through `PUT /auth/me/scan-emails`; read by `services/scan_emails`.
+    # Nothing is sent at all unless `EMAIL_SCAN_NOTIFICATIONS` is on. The server default stays so
+    # the old instance of a deploy can still insert users without this column.
+    scan_emails: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+
     agency: Mapped[Agency] = relationship(back_populates="users")
 
     __table_args__ = (

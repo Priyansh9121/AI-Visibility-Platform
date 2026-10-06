@@ -445,7 +445,8 @@ shell does not need three round trips per page load.
     "createdAt": "2026-08-20T05:29:02Z"
   },
   "seats": { "used": 1, "limit": 3 },
-  "feedbackEmail": null
+  "feedbackEmail": null,
+  "scanEmails": { "available": false, "enabled": true }
 }
 ```
 
@@ -470,7 +471,39 @@ not a secret and is shown to every signed-in user. From it the web builds
 `mailto:<address>?subject=AVP feedback: <route shape>`: the subject carries the shape of the
 page (`/clients/…/alerts`), never an id, a token or a client's name. Nothing about it is logged.
 
+`scanEmails` — F1, 2026-10-06 — is the scan-finished email switch for the caller. **Required** on
+the same six context operations as `feedbackEmail`, and on no other response (not the seat list).
+`available` is a fact about the deployment, the same for every user: `EMAIL_SCAN_NOTIFICATIONS`
+is on AND email is configured. `enabled` is the caller's own choice (`users.scan_emails`,
+default `true`). The web shows the switch only when `available` is `true`.
+
 **Errors:** `401 authentication-required`.
+
+#### `PUT /api/v1/auth/me/scan-emails`
+**Auth required.** Turn the emails sent when a scan you started finishes on or off.
+
+```json
+{ "enabled": false }
+```
+
+**Response `200`** — `{ "available": true, "enabled": false }` (the same object as `MeOut.scanEmails`).
+
+**Only the caller's own choice.** No user id is in the request: the row written is the caller's,
+matched by user id and agency id. `enabled` must be a JSON `true` or `false`, and a body that
+names anything else is a `422`. Idempotent. Accepted whether or not the feature is on (`available`
+says), because it writes one boolean that nothing reads while the feature is off.
+
+**Errors:** `401 authentication-required`, `422 validation-failed`.
+
+**The emails themselves (F1)** go out only when `EMAIL_SCAN_NOTIFICATIONS` is on and
+`RESEND_API_KEY` is set, to the user who started the scan (`scans.requested_by_user_id`), who
+is active, in the scan's agency and has not opted out. A sweep every 60 s finds scans that reached
+a final status in the last 15 minutes with no `scans.notified_at`, claims each with one
+conditional UPDATE, then sends, at most once. SUCCEEDED and PARTIAL: "Your report for <client> is
+ready" (PARTIAL adds one sentence) linking `/scans/<id>/report`; a scan that raised alerts: a
+second email counting them by kind, linking `/clients/<id>/alerts`; FAILED: "did not finish",
+linking `/clients/<id>`. CANCELLED sends nothing. Plain text; the client's name and counts are all
+that is said of the scan.
 
 ---
 

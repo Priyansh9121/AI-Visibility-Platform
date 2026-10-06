@@ -33,6 +33,7 @@ import { PasswordChangePanel } from '@/components/settings/PasswordChangePanel';
 import { BillingPanel } from '@/components/settings/BillingPanel';
 import { PLAN_PRICE_USD } from '@/components/marketing/PricingCard';
 import { ThemeControl } from '@/components/settings/ThemeControl';
+import { ScanEmailsPanel } from '@/components/settings/ScanEmailsPanel';
 
 /** Roles that may invite and remove. A member holds a seat; they do not grant them. */
 const MANAGING_ROLES = new Set(['owner', 'admin']);
@@ -249,6 +250,23 @@ export function SettingsView({
               <p className="text-ui-sm leading-prose text-text-tertiary">
                 Signed in as {state.me.user.email} through Google.
               </p>
+            </PageSection>
+          )}
+
+          {/*
+            The scan-finished email switch (F1). Drawn only when the API says the feature is on
+            AND email is configured (`scanEmails.available`); with it off, the default, the screen
+            is exactly what it was. Every sentence is true of what the API does: it emails the user
+            who started the scan, a link to the report, or that it did not finish, and a second
+            email when the scan raised alerts.
+          */}
+          {state.me.scanEmails?.available === true && (
+            <PageSection
+              eyebrow="Your account"
+              heading="Email when a scan finishes"
+              lead="When a scan you started finishes, we email you a link to its report, or tell you it did not finish. If the scan raised alerts, a second email says how many."
+            >
+              <ScanEmailsPanel enabled={state.me.scanEmails.enabled} />
             </PageSection>
           )}
 

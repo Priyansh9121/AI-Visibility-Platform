@@ -80,6 +80,13 @@ class Scan(Base, TimestampMixin):
         DateTime(timezone=True), nullable=True
     )
 
+    # F1 (2026-10-06): when a scan-finished email was CLAIMED for this scan, by one conditional
+    # UPDATE before any send (`services/scan_emails.claim`). NULL: not yet. Set even when the
+    # decision was to send nothing (opted out, no longer in the agency), so a scan is looked at
+    # once and an email goes out at most once. No backfill: the sweep's 15-minute window is what
+    # keeps a switch-on from emailing past scans.
+    notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # Machine-readable code plus a SAFE detail string. `error_detail` carries
     # our own diagnostics only — never a vendor response body, which could
     # contain third-party content (the facts-only rule).

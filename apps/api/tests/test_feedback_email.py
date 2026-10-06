@@ -222,7 +222,7 @@ async def test_set_the_signed_in_context_carries_the_address(
     assert resp.status_code == 200, resp.text
     assert resp.json()["feedbackEmail"] == feedback_on
     # Nothing else about the context moved.
-    assert set(resp.json()) == {"user", "agency", "seats", "feedbackEmail"}
+    assert set(resp.json()) == {"user", "agency", "seats", "feedbackEmail", "scanEmails"}
 
 
 async def test_signed_out_the_context_is_refused_and_carries_no_address(
