@@ -1038,6 +1038,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/clients/{clientId}/auto-rescan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Client Auto Rescan
+         * @description Whether this client is rescanned every month, and why the last try started nothing.
+         *
+         *     **Reads. Starts nothing.** `available` is false (and every other field empty) unless the API
+         *     has automatic rescans on (`AUTO_RESCAN_ENABLED`) and the caller is an owner or admin, so the
+         *     screen draws the switch only when it can be used. Scoped to the caller's agency by
+         *     `get_client`, which 404s on another agency's id.
+         *
+         *     **Errors:** `401`, `404`.
+         */
+        get: operations["get_client_auto_rescan_api_v1_clients__clientId__auto_rescan_get"];
+        /**
+         * Set Client Auto Rescan
+         * @description Switch "Rescan every month" on or off for this client (owner or admin).
+         *
+         *     On: from the next wake of the loop (every 10 minutes), the client is rescanned whenever its
+         *     latest scan started 30 or more days ago, as the person who switched it on, through the Run
+         *     button's own start path (the allowance applies). Off: nothing is started and the skip
+         *     notice is cleared. Switching it on again as a different user hands the rescans to that user;
+         *     pressing it on again as the same user changes nothing.
+         *
+         *     **Errors:** `401`; `403 permission-denied` for a member; `404` when the API has automatic
+         *     rescans off (the body an unknown path gets) or the client is not the caller's agency's.
+         */
+        put: operations["set_client_auto_rescan_api_v1_clients__clientId__auto_rescan_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/clients/{clientId}/competitors": {
         parameters: {
             query?: never;
@@ -2374,6 +2414,32 @@ export interface components {
          * @enum {string}
          */
         AuditStatus: "ok" | "partial" | "failed";
+        /**
+         * AutoRescanOut
+         * @description A client's monthly-rescan setting, as the caller may see it.
+         *
+         *     `available` is true only when the API has automatic rescans on (`AUTO_RESCAN_ENABLED`) AND the
+         *     caller is an owner or admin. When it is false everything else is its empty value, whatever
+         *     the client holds, and the web draws nothing. `skipReason` is one of our own codes
+         *     (`AGENCY_NOT_PAID`, `ALLOWANCE_USED`, `USER_NOT_ADMIN`, `COULD_NOT_START`) or null; with it,
+         *     `skippedAt` is when the last attempt started no scan and `retriesAt` is the first instant of
+         *     the next UTC calendar month, when it is tried again.
+         */
+        AutoRescanOut: {
+            /** Available */
+            available: boolean;
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /** Retriesat */
+            retriesAt?: string | null;
+            /** Skipreason */
+            skipReason?: string | null;
+            /** Skippedat */
+            skippedAt?: string | null;
+        };
         /**
          * BillingPlanOut
          * @description What the plan offers the public — today, only the length of its free trial.
@@ -4167,6 +4233,14 @@ export interface components {
          */
         Sentiment: "positive" | "neutral" | "negative";
         /**
+         * SetAutoRescanRequest
+         * @description Switch "Rescan every month" on or off for one client.
+         */
+        SetAutoRescanRequest: {
+            /** Enabled */
+            enabled: boolean;
+        };
+        /**
          * ShareLinkOut
          * @description The public link for a report — Epic 9.8.
          *
@@ -5282,6 +5356,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AnswerGapsOut"] | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_client_auto_rescan_api_v1_clients__clientId__auto_rescan_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                clientId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRescanOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_client_auto_rescan_api_v1_clients__clientId__auto_rescan_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                clientId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetAutoRescanRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRescanOut"];
                 };
             };
             /** @description Validation Error */

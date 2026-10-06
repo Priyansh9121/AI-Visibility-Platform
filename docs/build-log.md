@@ -26616,3 +26616,67 @@ Drift check (north-star §8): Layer 5, Distribution; lifecycle phase: Activation
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# A client can be rescanned every month by itself: off until `AUTO_RESCAN_ENABLED` is set, then a per-client switch for owners and admins, started through the same path as the Run button
+
+**2026-10-06, the fifteenth entry of the day; branch `pilot-fixes-6`, pilot feature F2 (the founder's brief of 2026-10-05; design note in this log, "Design notes for the four pilot features").** API and web, with a security review, a UI review and its own bar.
+
+**Render: nothing to set for the code to be safe, but this deploy runs a migration (`c4a9e17d2b58`).** The feature runs nothing until `AUTO_RESCAN_ENABLED=true` is set on the API service, and must not be set before the lawyer has fixed `/crawler` (launch checklist 1.1h and 2.4).
+
+Drift check (north-star §8): Layer 2, Measurement, run on a schedule; lifecycle phase: Retention (the 90-day before and after).
+
+## 1. What changed
+
+The design note's conclusion: no new paid service. Scans run inside the API, so the scheduler is a loop in the API, as the price check is.
+
+- **One start path** (`services/scan_start.py`): the body of `POST /clients/{clientId}/scans` moved into `start_scan`, which the route and the loop both call, so the engines check, the reaper, the scan allowance under its lock, the one-open-scan rule and the hand-off cannot drift apart. The route's existing tests pass unchanged. It stamps the requester and the trigger only on a row nobody has submitted yet (a detection's queued row), so an automatic start never takes over a scan a person just started (the security review's first Low).
+- **The loop** (`auto_rescan_watch.py`, `services/auto_rescan.py`), started only when the setting is on: it waits 10 minutes, then wakes every 10 minutes, runs the reaper, and starts at most one due scan, and none while another automatic scan is open anywhere. Each wake holds a Postgres advisory lock for its transaction, so two instances during a deploy act one at a time; each due client is claimed with one conditional update of `clients.auto_rescan_attempted_at`; the one-open-scan index is the backstop. Logs: `rescan.started` and `rescan.skipped reason=…`, ids only.
+- **Due** means the client's latest scan started 30 or more days ago. A client never scanned is never due; a client with a scan in flight is not due; a failed automatic scan is the latest scan, so the next is due 30 days after it.
+- **Skips, never retried in a loop:** the agency is not paid up (checked whether or not billing is configured, so a free agency is never rescanned unattended; an exempt operator is not skipped); the month's scans are used; the user who turned it on is no longer an active owner or admin of the agency; or the start could not happen for another reason. Each is recorded on the client and tried again from the 1st of the next calendar month (UTC).
+- **The scan runs as the user who turned it on;** F1's email, when F1 is on, goes to that user ("You are getting this because you started this scan or turned on its monthly rescan.").
+- **The switch** (`AutoRescanPanel.tsx`), for an owner or admin, under Scan history on the overview of a client that has a scan, drawn only when the feature is on: "Rescan every month", On and Off. "On: when this client's latest scan is 30 or more days old (checked about every 10 minutes, so switching on now may start a scan straight away), a scan starts by itself as the person who turned this on. It is a normal scan: it counts toward the agency's 40 scans for the calendar month (UTC)." A skip reads "The last monthly rescan did not run: <why>. It will be tried again from <date> (UTC), within about 10 minutes of then.", and for an agency not paid up adds "Turn it off and on after subscribing to try sooner." The buttons stay focusable while saving.
+- **The routes:** `GET` and `PUT /clients/{clientId}/auto-rescan` (`{available, enabled, skipReason, skippedAt, retriesAt}`; `PUT {enabled}`, a strict boolean, nothing else accepted), owner or admin, scoped to the caller's agency; with the setting off the PUT answers as an unknown path does, and the GET says it is not available.
+- **The migration `c4a9e17d2b58`** (from F1's `b3f1c8e2a9d4`): `clients.auto_rescan` (default false), `auto_rescan_by_user_id` (to users, set null when the user goes, indexed), `auto_rescan_attempted_at`, `auto_rescan_skip_reason`.
+- **Landed after F1:** both added a setting and a loop to `config.py` and `main.py`, and F1 had added the requester line that F2's start path now holds; the three files were merged by hand, and F2's migration was re-pointed from `7945e69b06e5` to F1's.
+
+## 2. The reviews
+
+**Security review: no Blocker, High or Medium; four Lows and a nit, all fixed in round 2.**
+- An automatic wake could adopt a scan a person had just started (queued and submitted, not yet claimed), relabel it automatic and make it the admin's, so F1 would email the wrong person: the start path now stamps only an unsubmitted row, and the wake reports it as already running.
+- A claim kept last month's skip reason, so a crash right after it held the client until the next month with a stale notice: the claim clears it.
+- With billing not configured nothing was gated, so every opted-in client of every free agency would be rescanned unattended (staging, or mid live-key swap): a free agency is skipped either way.
+- The wake's advisory lock was held by the session, and could stay held on a pooled connection if its release failed: it is a transaction lock, released by the rollback.
+- Nit: the switch's body is a strict boolean with nothing else accepted.
+- **Checked clean:** tenancy and roles; the Origin check; the allowance through the same locked check; paid up refuses past-due, cancelled, unpaid, paused and free; identity skips; one scan at a time (the claim, the lock, no automatic scan open anywhere, the unique index, the executor's own claim); a crash bounded by the claim's hour; the loop (sleeps first, catches every error, reaps each wake, stops within 5 s); the migration; ids-only logs.
+
+**UI review: no Blocker; three Should-fix and nits, all taken in round 2.**
+- The buttons disabled themselves while saving, dropping keyboard focus, and a second press was not ignored.
+- The retry date did not say it was UTC.
+- The On sentence did not say a scan may start straight away, or that each counts toward the month's 40.
+- Nits: the paragraph's line height; "when someone starts a scan" instead of a button's name; how to try sooner after subscribing; the client view's indentation.
+- The round was not sent back for review; its negative controls are below.
+
+## Found, not fixed
+
+- **`/crawler` says "Nothing repeats on its own."** (`CrawlerInfo.tsx`, "How often"). With monthly rescans on, an automatic scan runs the technical audit, so AVPScanBot visits on a schedule. A lawyer-pending page: listed for 2.4, and the feature is not to be turned on before it changes.
+- **With the setting off, `GET …/auto-rescan` answers 200 with `available: false`,** not an unknown path's 404: the web needs it to hide the switch. It shows that the setting is off, and nothing else.
+- **A removed admin re-invited as an admin** resumes the rescans recorded in their name.
+- **The tests were written after the code;** the negative controls below stand for the before-run.
+- **No test pins a second person pressing Run on a scan already submitted:** the start path keeps the first person as its requester (the inner guard), but removing that guard fails no test. The automatic case is pinned by the early return above it.
+
+## Verified
+
+**API pytest 5464 → 5544 (+80); web vitest 2559 → 2570 (+11); floors raised to match.**
+- **API, new:** `test_auto_rescan.py` (66: due and not due at 29 and 30 days, a detection row, a scan in flight, a failed scan; one start per wake; none while another automatic scan is open; two instances racing the claim and the lock; each skip and its month; a person's submitted scan not adopted; the claim clearing the notice; billing unconfigured; the lock free after a wake and after one that raises; the loop; the setting), `test_auto_rescan_routes.py` (13: the routes' roles, agency scope, the setting off, the strict body), one more case in `test_secrets_stay_out_of_logs.py`. The existing scan-start, allowance, race and executor tests pass unchanged on the moved start path.
+- **Web, new:** `AutoRescanPanel.test.tsx` (9: drawn only when available, the sentences, focus kept while saving, a second press ignored) and `autoRescan.test.ts` (2: each skip's sentence and its UTC date).
+- **Alembic:** upgrade, check, downgrade and upgrade on an empty database, by the implementer; in the bar, from empty through F1's revision to this one.
+- **The implementer's negative controls,** each restored: the claim made unconditional, 3 fail; the paid-up check removed, 7; the once-a-month retry removed, 2; the requester stamp removed, 2; round 2: the adopt guard removed, 2; the claim keeping the notice, 1; the paid check only when billing is configured, 1; the session lock with no release, 29; a lax body, 3; the buttons disabled again, 1; the date without UTC, 2.
+- **On this tree:** in `test_auto_rescan.py`, `test_auto_rescan_routes.py` and `test_scan_requester.py` (80 tests): the paid-up check removed, 8 fail; the early return that stops an automatic start on a scan someone already submitted removed, 2 fail; the inner guard that keeps a submitted scan's requester removed, 0 fail (below). Each file was restored and the tree's checksums matched.
+- **The rest of the bar** (this tree, one run, 17:09 to 17:17):
+  - Counts: API 5544, workers 27, shared-types 53 (0 fail), design-system 967, web 2570, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `c4a9e17d2b58`, through F1's `b3f1c8e2a9d4`) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

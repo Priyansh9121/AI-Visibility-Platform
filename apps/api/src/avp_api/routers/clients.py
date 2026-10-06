@@ -11,19 +11,23 @@ from typing import Any
 from fastapi import APIRouter, Path, Query, status
 from sqlalchemy import select
 
-from ..deps import DbDep, PrincipalDep, SettingsDep
-from ..models import Client
+from ..deps import DbDep, Principal, PrincipalDep, SettingsDep
+from ..errors import NotFound, PermissionDenied
+from ..models import Client, UserRole
 from ..schemas.answer_gaps import AnswerGapsOut
 from ..schemas.client import (
+    AutoRescanOut,
     ClientDetailOut,
     ClientOut,
     CrawlSummaryOut,
     CreateClientRequest,
+    SetAutoRescanRequest,
 )
 from ..schemas.client_history import ClientHistoryOut
 from ..schemas.common import Page
 from ..schemas.crawler_access import CrawlerAccessOut
 from ..services import answer_gaps as answer_gaps_service
+from ..services import auto_rescan as auto_rescan_service
 from ..services import client_history as history_service
 from ..services import crawler_access as crawler_access_service
 from ..services import intake as intake_service
@@ -284,3 +288,90 @@ async def reclassify_client(
     detail = ClientDetailOut.model_validate(client)
     detail.crawl = _crawl_summary(crawl)
     return detail
+
+
+def _may_manage(principal: Principal) -> bool:
+    return principal.user.role in (UserRole.OWNER, UserRole.ADMIN)
+
+
+def _auto_rescan_out(client: Client, principal: Principal, settings: Any) -> AutoRescanOut:
+    if not settings.auto_rescan_enabled or not _may_manage(principal):
+        return AutoRescanOut(available=False)
+    if not client.auto_rescan:
+        return AutoRescanOut(available=True, enabled=False)
+    reason = client.auto_rescan_skip_reason
+    skipped_at = client.auto_rescan_attempted_at if reason else None
+    return AutoRescanOut(
+        available=True,
+        enabled=True,
+        skip_reason=reason,
+        skipped_at=skipped_at,
+        retries_at=auto_rescan_service.retries_at(skipped_at) if skipped_at else None,
+    )
+
+
+@router.get("/{clientId}/auto-rescan", response_model=AutoRescanOut)
+async def get_client_auto_rescan(
+    principal: PrincipalDep,
+    db: DbDep,
+    settings: SettingsDep,
+    client_id: str = Path(alias="clientId"),
+) -> Any:
+    """Whether this client is rescanned every month, and why the last try started nothing.
+
+    **Reads. Starts nothing.** `available` is false (and every other field empty) unless the API
+    has automatic rescans on (`AUTO_RESCAN_ENABLED`) and the caller is an owner or admin, so the
+    screen draws the switch only when it can be used. Scoped to the caller's agency by
+    `get_client`, which 404s on another agency's id.
+
+    **Errors:** `401`, `404`.
+    """
+    client = await intake_service.get_client(
+        db, agency_id=principal.agency_id, client_id=client_id
+    )
+    return _auto_rescan_out(client, principal, settings)
+
+
+@router.put("/{clientId}/auto-rescan", response_model=AutoRescanOut)
+async def set_client_auto_rescan(
+    payload: SetAutoRescanRequest,
+    principal: PrincipalDep,
+    db: DbDep,
+    settings: SettingsDep,
+    client_id: str = Path(alias="clientId"),
+) -> Any:
+    """Switch "Rescan every month" on or off for this client (owner or admin).
+
+    On: from the next wake of the loop (every 10 minutes), the client is rescanned whenever its
+    latest scan started 30 or more days ago, as the person who switched it on, through the Run
+    button's own start path (the allowance applies). Off: nothing is started and the skip
+    notice is cleared. Switching it on again as a different user hands the rescans to that user;
+    pressing it on again as the same user changes nothing.
+
+    **Errors:** `401`; `403 permission-denied` for a member; `404` when the API has automatic
+    rescans off (the body an unknown path gets) or the client is not the caller's agency's.
+    """
+    if not settings.auto_rescan_enabled:
+        # The body an unknown path gets (Starlette's own detail), so off is not a tell.
+        raise NotFound(detail="Not Found")
+    if not _may_manage(principal):
+        raise PermissionDenied(
+            detail="Only an owner or admin can change automatic rescans for a client."
+        )
+    client = await intake_service.get_client(
+        db, agency_id=principal.agency_id, client_id=client_id
+    )
+    if payload.enabled:
+        if not (client.auto_rescan and client.auto_rescan_by_user_id == principal.user_id):
+            client.auto_rescan = True
+            client.auto_rescan_by_user_id = principal.user_id
+            client.auto_rescan_attempted_at = None
+            client.auto_rescan_skip_reason = None
+    else:
+        client.auto_rescan = False
+        client.auto_rescan_by_user_id = None
+        client.auto_rescan_attempted_at = None
+        client.auto_rescan_skip_reason = None
+    await db.commit()
+    await db.refresh(client)
+    return _auto_rescan_out(client, principal, settings)

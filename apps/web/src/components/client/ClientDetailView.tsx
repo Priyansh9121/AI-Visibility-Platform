@@ -37,6 +37,7 @@ import type {
   HistoryScan,
   Me,
 } from '@avp/shared-types';
+import { AutoRescanPanel } from '@/components/client/AutoRescanPanel';
 import { ClientSpace, type ClientSection } from '@/components/client/ClientSpace';
 import { formatStamp } from '@/lib/dates';
 import {
@@ -280,24 +281,27 @@ export function ClientOverviewView({
         ];
 
         return (
-          <Card elevation="seated">
-            <CardHeader>
-              <CardTitle>Scan history</CardTitle>
-            </CardHeader>
-            {/*
-              Oldest first, matching the trends. The dashboard's list is
-              newest-first and stays so: that one is "what happened lately"
-              across every client, this one is this client's timeline, and a
-              timeline that runs backwards beside two charts that run forwards
-              would be a third reading order on one screen.
-            */}
-            <DataTable
-              columns={columns}
-              rows={history.scans}
-              rowKey={(s) => s.scanId}
-              caption="Oldest first, matching the Sources and Rankings trends."
-            />
-          </Card>
+          <div className="flex flex-col gap-6">
+            <Card elevation="seated">
+              <CardHeader>
+                <CardTitle>Scan history</CardTitle>
+              </CardHeader>
+              {/*
+                Oldest first, matching the trends. The dashboard's list is
+                newest-first and stays so: that one is "what happened lately"
+                across every client, this one is this client's timeline, and a
+                timeline that runs backwards beside two charts that run forwards
+                would be a third reading order on one screen.
+              */}
+              <DataTable
+                columns={columns}
+                rows={history.scans}
+                rowKey={(s) => s.scanId}
+                caption="Oldest first, matching the Sources and Rankings trends."
+              />
+            </Card>
+            {state.kind === 'ready' ? <AutoRescanPanel clientId={state.client.id} /> : null}
+          </div>
         );
       }}
     </Frame>

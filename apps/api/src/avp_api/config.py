@@ -366,6 +366,19 @@ class Settings(BaseSettings):
     # a value that is not a boolean stops the start, naming this setting.
     email_scan_notifications: bool = False
 
+    # --- automatic monthly rescans (F2, 2026-10-06) --------------------------------------------
+    # Whether the API starts a client's scan by itself, every month, for a client an owner or
+    # admin has switched "Rescan every month" on for. Off, the DEFAULT, no loop runs, the
+    # setting routes answer as an unknown path does, the client screen draws no switch, and
+    # nothing a user sees changes. On, a loop in the API wakes every 10 minutes and starts at
+    # most one due scan through the same start path as the Run button (`services/scan_start.py`),
+    # so the scan allowance, the one-open-scan rule and the reaper all apply. NOT a secret, and
+    # read by no log line. Set it on the API service only; the web has no variable for it.
+    #
+    # A blank is off, like every other blank setting. A value that is not a boolean stops the API
+    # from starting, naming this setting (the validator below).
+    auto_rescan_enabled: bool = False
+
     @field_validator(*PROVIDER_SETTINGS, mode="before")
     @classmethod
     def _blank_provider_setting_is_unset(cls, value: object) -> object:
@@ -404,6 +417,15 @@ class Settings(BaseSettings):
     def _a_blank_scan_email_switch_is_off(cls, value: object) -> object:
         # `EMAIL_SCAN_NOTIFICATIONS=` is what `cp .env.example .env` and a cleared Render variable
         # leave behind: off, never a refusal to start.
+        if isinstance(value, str):
+            return value.strip() or False
+        return value
+
+    @field_validator("auto_rescan_enabled", mode="before")
+    @classmethod
+    def _a_blank_rescan_switch_is_off(cls, value: object) -> object:
+        # `AUTO_RESCAN_ENABLED=` is what `cp .env.example .env` and a cleared Render variable
+        # leave behind. It is off, the safe direction, and never a refusal to start.
         if isinstance(value, str):
             return value.strip() or False
         return value

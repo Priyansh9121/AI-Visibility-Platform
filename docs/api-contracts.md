@@ -1654,6 +1654,28 @@ already inside, with `Retry-After: 60` — see `POST /clients` for the limits an
 bounds. A read that waits more than 60 s for the browser is refused with the same
 `429`, and the client keeps the classification it had: nothing is written.
 
+#### `GET /api/v1/clients/{clientId}/auto-rescan` — F2, 2026-10-06
+**Auth required. Reads, starts nothing.** Whether this client is rescanned every month, as
+`AutoRescanOut`: `{ available, enabled, skipReason, skippedAt, retriesAt }`. `available` is `true`
+only when the API's `AUTO_RESCAN_ENABLED` is on AND the caller is an owner or admin; otherwise it
+is `false`, `enabled` is `false` and the rest are `null`, whatever the client holds (a member is
+told nothing). `skipReason` is one of the API's own codes, or `null`: `AGENCY_NOT_PAID`,
+`ALLOWANCE_USED`, `USER_NOT_ADMIN`, `COULD_NOT_START`; `skippedAt` is when the last attempt
+started no scan and `retriesAt` is the first instant of the next UTC calendar month, when it is
+tried again. **Errors:** `401`; `404 not-found` (unknown id, or another agency's client).
+
+#### `PUT /api/v1/clients/{clientId}/auto-rescan` — F2, 2026-10-06
+**Auth required, owner or admin.** Body `{ "enabled": true | false }`; answers the same
+`AutoRescanOut`. On: from the loop's next wake (every 10 minutes), a scan is started through
+the Run button's own start path, as the user who switched it on, whenever the client's latest scan
+started 30 or more days ago. The allowance, the one-open-scan rule and the reaper apply; a refusal
+is a skip recorded on the client, never a retry loop. Off: nothing is started and the notice is
+cleared. On again as another user hands the rescans to that user and clears the notice; on again
+as the same user changes nothing. **Errors:** `401`; `403 permission-denied` (a member); `404`
+with the body an unknown path gets when the API has `AUTO_RESCAN_ENABLED` off, and
+`404 not-found` for an unknown id or another agency's client; `422 validation-failed`.
+Automatic scans have `trigger: scheduled`.
+
 
 ---
 

@@ -11,6 +11,7 @@ import type {
   AcknowledgeAlert,
   AlertFeed,
   AnswerGaps,
+  AutoRescan,
   CrawlerAccess,
   BillingPlan,
   BillingStatus,
@@ -349,6 +350,21 @@ export const api = {
   clients: () => request<{ data: Client[]; nextCursor: string | null }>('/clients'),
 
   client: (clientId: string) => request<Client>(`/clients/${clientId}`),
+
+  /**
+   * Whether this client is rescanned every month, and why the last try started nothing — F2.
+   *
+   * `available` is false (everything else empty) unless the API has automatic rescans on and the
+   * caller is an owner or admin: the screen draws nothing then.
+   */
+  autoRescan: (clientId: string) => request<AutoRescan>(`/clients/${clientId}/auto-rescan`),
+
+  /** Switch "Rescan every month" on or off for one client (owner or admin). A JSON boolean. */
+  setAutoRescan: (clientId: string, enabled: boolean) =>
+    request<AutoRescan>(`/clients/${clientId}/auto-rescan`, {
+      method: 'PUT',
+      body: JSON.stringify({ enabled }),
+    }),
 
   /**
    * A client's whole scan history, shaped for a trend — Epic 9.20.

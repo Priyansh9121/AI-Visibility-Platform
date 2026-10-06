@@ -34,6 +34,7 @@ export type Dashboard = Schemas['DashboardOut'];
 export type Client = Schemas['ClientOut'];
 export type ClientDetail = Schemas['ClientDetailOut'];
 export type CrawlSummary = Schemas['CrawlSummaryOut'];
+export type AutoRescan = Schemas['AutoRescanOut'];
 export type Scan = Schemas['ScanOut'];
 export type ScanDetail = Schemas['ScanDetailOut'];
 export type PromptSet = Schemas['PromptSetOut'];

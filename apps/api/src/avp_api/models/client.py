@@ -8,12 +8,14 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     Index,
     Numeric,
     String,
     UniqueConstraint,
+    false,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -113,6 +115,27 @@ class Client(Base, TimestampMixin, SoftDeleteMixin):
     # The brand entity to match against in engine answers. A FACT about the
     # client (their own name), not scraped third-party content.
     brand_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+    # --- automatic monthly rescans (F2, 2026-10-06) ----------------------------------------
+    # OFF for every client until an owner or admin switches it on (and, in the API, only while
+    # `AUTO_RESCAN_ENABLED` is). `services/auto_rescan.py` reads and writes all four columns.
+    auto_rescan: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    # The user who switched it on: the scan runs as them (their sign-in is the allowance's, and
+    # F1 emails them). SET NULL on delete, so a removed user leaves a client that skips with
+    # `USER_NOT_ADMIN` and is never scanned on behalf of nobody.
+    auto_rescan_by_user_id: Mapped[str | None] = fk_column(
+        "users.id", ondelete="SET NULL", nullable=True
+    )
+    # When the loop last took this client up: the claim (one conditional UPDATE on this column,
+    # so only one API instance starts a due client) and the time of a skip.
+    auto_rescan_attempted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Why the last attempt started no scan (`auto_rescan.SKIP_*`), our own code and never a
+    # vendor's words. NULL when the last attempt started a scan, or none was made yet.
+    auto_rescan_skip_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     agency: Mapped[Agency] = relationship(back_populates="clients")
     scans: Mapped[list[Scan]] = relationship(back_populates="client")
