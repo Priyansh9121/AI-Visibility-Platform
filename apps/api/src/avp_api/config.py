@@ -14,6 +14,10 @@ Rules this module enforces:
     would block local development on credentials nobody needs yet.
   * `.env` is read for local development only and is git-ignored. The committed
     file is `.env.example`, which contains names and shapes but never values.
+  * A failed start never prints a value. Pydantic's errors would echo their input,
+    which for a model validator is the whole environment (`hide_input_in_errors`
+    below), every message here names the variable and not what it held, and the
+    two URLs that carry credentials are left out of `repr()`.
 """
 
 from __future__ import annotations
@@ -70,6 +74,16 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
+        # Pydantic prints a failed validation as its message and `input_value=<the input>`. For
+        # a model validator (`_harden_deployed_environments`) the input is the whole settings
+        # dict: the raw environment strings, not masked, cut to 50 characters (the first 25 and
+        # the last 24). So a refused production start wrote the tail of the last setting that was
+        # set (a webhook secret, an address) to the deploy log, and a key pasted into the wrong
+        # variable was printed whole by its own field's error. This leaves `input_value` and
+        # `input_type` out of every error's text; each error still names the setting.
+        # `ValidationError.errors()` and `.json()` still carry the input. Nothing catches a
+        # Settings error, so nothing reads them: the failed start is the traceback.
+        hide_input_in_errors=True,
     )
 
     # --- runtime -----------------------------------------------------------
@@ -85,13 +99,17 @@ class Settings(BaseSettings):
 
     # --- datastores --------------------------------------------------------
     # asyncpg driver; alembic rewrites this to psycopg2-style sync when needed.
+    # `repr=False` on both URLs: they carry `user:password@host` on a deployed host, and `repr()`
+    # of the settings masks a `SecretStr` but prints a plain `str` in full. Nothing prints the
+    # object today; this keeps it so for the first debug line or traceback viewer that does.
     database_url: str = Field(
         default="postgresql+asyncpg://avp:avp@127.0.0.1:5432/avp",
         description="SQLAlchemy async URL for Postgres.",
+        repr=False,
     )
     database_pool_size: int = 10
     database_max_overflow: int = 5
-    redis_url: str = Field(default="redis://127.0.0.1:6379/0")
+    redis_url: str = Field(default="redis://127.0.0.1:6379/0", repr=False)
     # Bounds on every Redis call, so a slow or unreachable Redis fails the
     # request fast (a 503) instead of hanging it. Redis is same-region and
     # answers in about a millisecond; 2 s is generous for a Lua rate-limit
@@ -365,8 +383,9 @@ class Settings(BaseSettings):
             except EmailNotValidError:
                 pass  # said below, once, and without the value
         # A RuntimeError that carries no value, and not a ValueError, on purpose. Pydantic wraps
-        # a ValueError in a ValidationError that prints `input_value='…'`, so a key pasted into
-        # this variable by mistake would be written to the deploy log by the failed start. It is
+        # a ValueError in a ValidationError that would print `input_value='…'` but for this
+        # model's `hide_input_in_errors`, so a key pasted into this variable by mistake could
+        # reach the deploy log by the failed start; this stays value-free on its own. It is
         # raised out here, not inside the `except`, so the library's own message, which can quote
         # characters of the address, is not chained to it. `provider_key` below is the precedent
         # for naming the variable in a RuntimeError.
