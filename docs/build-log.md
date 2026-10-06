@@ -26392,7 +26392,7 @@ The dashboard is the only screen that polls a running scan (`GET /dashboard`, th
 - **`app/dashboard/page.test.tsx` (new, 11),** the real route with the API mocked at its edge: the first poll at 5 s; it stops when the scan lands; the visibility listener added, told to the poller and removed; the timer cleared on unmount; a late answer logs nothing.
 - **Before the change,** 30 of the 59 failed; the 5 page tests that passed are the guards that nothing visible changes.
 - **The implementer's negative controls** (of 59, each restored): a flat 5 s poller, 10 fail; the schedule itself flat, 13; no visibility pause, 6; hiding keeps the timer, 2; showing does not poll at once, 7; stop leaves the timer, 2; a second timer, 1; no in-flight guard, 2; a joining scan does not restart the clock, 2; a failed poll retried at the age's pace, 1; an answer after stop reaching the page, 1; the page's listener not removed, 2, or not telling the poller, 3; the injected clock ignored, 1.
-- **On this tree:** in `src/lib/dashboard`, `src/app/dashboard` and `src/components/dashboard`: the schedule flattened to 5 s, see the result above (`nc-iU7`). The file was restored and the tree's checksums matched.
+- **On this tree:** in `src/lib/dashboard`, `src/app/dashboard` and `src/components/dashboard`: the schedule flattened to 5 s, 14 of 146 fail. The file was restored and the tree's checksums matched.
 - **The rest of the bar** (this tree, one run, 12:42 to 12:50):
   - Counts: API 4961, workers 27, shared-types 53 (0 fail), design-system 935, web 2490, mypy 42 (ceiling 50).
   - All six count gates pass through `assert_count.py`.
