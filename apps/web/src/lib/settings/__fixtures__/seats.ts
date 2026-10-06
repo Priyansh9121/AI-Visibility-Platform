@@ -81,6 +81,8 @@ export const ownerMe: Me = {
     createdAt: '2026-08-20T05:29:02Z',
   },
   seats: { used: 3, limit: 3 },
+  // `FEEDBACK_EMAIL` unset, which is every deployment's default: no "Send feedback" link.
+  feedbackEmail: null,
 };
 
 export const memberMe: Me = {

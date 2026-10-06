@@ -81,6 +81,7 @@ export function ClientsView({
       current="clients"
       agencyName={me?.agency.name}
       seats={me?.seats}
+      feedbackEmail={me?.feedbackEmail}
       wide
     >
       {state.kind === 'loading' && <LoadingState message="Loading your clients…" />}

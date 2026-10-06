@@ -65,6 +65,7 @@ import {
   type ShellClient,
   type ShellSection,
 } from '@/components/shell/sidebars';
+import { FeedbackLink } from '@/components/shell/FeedbackLink';
 
 export type { ShellSection, ShellClient };
 
@@ -100,6 +101,7 @@ export function WorkspaceShell({
   current,
   agencyName,
   seats,
+  feedbackEmail,
   wide = false,
   client,
   children,
@@ -115,6 +117,15 @@ export function WorkspaceShell({
    */
   agencyName?: string | undefined;
   seats?: { used: number; limit: number } | undefined;
+  /**
+   * Where the footer's "Send feedback" link writes to — 2026-10-06: `me.feedbackEmail`, the API's
+   * `FEEDBACK_EMAIL`, from the `/auth/me` the page already reads (the dashboard's is its standing
+   * read's, `useScanStanding`) or, for the report, which reads none, `useFeedbackEmail`. Null,
+   * undefined or anything that is not one address draws no link, and
+   * then the footer is exactly what it was: that is the default, until the founder sets the
+   * variable on the API service.
+   */
+  feedbackEmail?: string | null | undefined;
   wide?: boolean | undefined;
   /** Present on every screen inside one client's space; absent everywhere else. */
   client?: ShellClient | undefined;
@@ -225,6 +236,7 @@ export function WorkspaceShell({
               {`${seats.used} of ${seats.limit} seats`}
             </p>
           )}
+          {feedbackEmail != null && <FeedbackLink address={feedbackEmail} />}
           <Button
             size="sm"
             variant="ghost"

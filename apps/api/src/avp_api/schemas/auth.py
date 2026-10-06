@@ -203,3 +203,12 @@ class MeOut(ApiModel):
     user: UserOut
     agency: AgencyOut
     seats: SeatUsageOut
+    # Where the shell's "Send feedback" link writes to — 2026-10-06: the API's `FEEDBACK_EMAIL`,
+    # null when it is unset (the default, and then the web draws no link at all). Not a secret,
+    # and on every signed-in user's context by design. It is on this response and on NO other:
+    # a context is only ever built for someone who holds a session or has just presented a
+    # credential in a call that sets one (`test_feedback_email.py` lists the six routes that
+    # return one, the one that redeems an invitation token among them), so a signed-out answer,
+    # the public plan and the routes that only look a token up (a share, a reset) cannot carry
+    # it. Required, with no default, so a route that builds a context has to decide it.
+    feedback_email: str | None

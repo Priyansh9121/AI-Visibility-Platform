@@ -126,6 +126,7 @@ async def sign_up(
         user=UserOut.model_validate(user),
         agency=AgencyOut.model_validate(agency),
         seats=SeatUsageOut(used=used, limit=limit),
+        feedback_email=settings.feedback_email,
     )
 
 
@@ -171,6 +172,7 @@ async def login(
         user=UserOut.model_validate(user),
         agency=AgencyOut.model_validate(agency),
         seats=SeatUsageOut(used=used, limit=limit),
+        feedback_email=settings.feedback_email,
     )
 
 
@@ -302,6 +304,7 @@ async def change_password(
         user=UserOut.model_validate(user),
         agency=AgencyOut.model_validate(agency),
         seats=SeatUsageOut(used=used, limit=limit),
+        feedback_email=settings.feedback_email,
     )
 
 
@@ -488,6 +491,7 @@ async def accept_invitation(
         user=UserOut.model_validate(user),
         agency=AgencyOut.model_validate(agency),
         seats=SeatUsageOut(used=used, limit=limit),
+        feedback_email=settings.feedback_email,
     )
 
 
@@ -817,14 +821,22 @@ async def google_complete(
         user=UserOut.model_validate(user),
         agency=AgencyOut.model_validate(agency),
         seats=SeatUsageOut(used=used, limit=limit),
+        feedback_email=settings.feedback_email,
     )
 
 
 @router.get("/me", response_model=MeOut)
-async def me(principal: PrincipalDep, db: DbDep) -> Any:
+async def me(principal: PrincipalDep, db: DbDep, settings: SettingsDep) -> Any:
+    """The signed-in context, in one call. **Auth required.**
+
+    `feedbackEmail` (2026-10-06) is `FEEDBACK_EMAIL`, null when it is unset: the address the
+    shell's "Send feedback" link writes to. It is on this response, and on the other responses
+    that return the same context to someone who has just signed in, and on no other.
+    """
     used, limit = await seat_service.seat_usage(db, principal.agency_id)
     return MeOut(
         user=UserOut.model_validate(principal.user),
         agency=AgencyOut.model_validate(principal.agency),
         seats=SeatUsageOut(used=used, limit=limit),
+        feedback_email=settings.feedback_email,
     )

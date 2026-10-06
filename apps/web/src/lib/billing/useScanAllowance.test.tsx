@@ -126,6 +126,7 @@ const standing = (el: HTMLElement) =>
     label: string | null;
     billing: BillingStatus | null;
     role: string | null;
+    feedbackEmail: string | null;
   };
 
 const offersSubscribe = (el: HTMLElement) =>
@@ -149,21 +150,26 @@ describe('the role, and where it comes from', () => {
     me.mockResolvedValue(signedInAs('owner'));
     const el = await mount(<Probe agencyId="agcy_01" />);
     expect(billing).toHaveBeenCalledWith('agcy_01');
-    expect(standing(el)).toEqual({ label: 'Free scan used', billing: BILLING, role: 'owner' });
+    expect(standing(el)).toEqual({
+      label: 'Free scan used',
+      billing: BILLING,
+      role: 'owner',
+      feedbackEmail: null,
+    });
   });
 
   it('a member whose /auth/me answers: no billing, no label, and the role it gave', async () => {
     billing.mockRejectedValue(problem(403));
     me.mockResolvedValue(signedInAs('member'));
     const el = await mount(<Probe agencyId="agcy_01" />);
-    expect(standing(el)).toEqual({ label: null, billing: null, role: 'member' });
+    expect(standing(el)).toEqual({ label: null, billing: null, role: 'member', feedbackEmail: null });
   });
 
   it('a member whose /auth/me FAILS: the 403 from the billing read says member', async () => {
     billing.mockRejectedValue(problem(403));
     me.mockRejectedValue(new TypeError('Failed to fetch'));
     const el = await mount(<Probe agencyId="agcy_01" />);
-    expect(standing(el)).toEqual({ label: null, billing: null, role: 'member' });
+    expect(standing(el)).toEqual({ label: null, billing: null, role: 'member', feedbackEmail: null });
   });
 
   it('a member whose /auth/me is refused too: still a member', async () => {
@@ -182,14 +188,19 @@ describe('the role, and where it comes from', () => {
     billing.mockRejectedValue(failure);
     me.mockRejectedValue(new TypeError('Failed to fetch'));
     const el = await mount(<Probe agencyId="agcy_01" />);
-    expect(standing(el)).toEqual({ label: null, billing: null, role: null });
+    expect(standing(el)).toEqual({ label: null, billing: null, role: null, feedbackEmail: null });
   });
 
   it('a failed /auth/me beside a billing read that worked leaves the role unknown', async () => {
     billing.mockResolvedValue(BILLING);
     me.mockRejectedValue(new TypeError('Failed to fetch'));
     const el = await mount(<Probe agencyId="agcy_01" />);
-    expect(standing(el)).toEqual({ label: 'Free scan used', billing: BILLING, role: null });
+    expect(standing(el)).toEqual({
+      label: 'Free scan used',
+      billing: BILLING,
+      role: null,
+      feedbackEmail: null,
+    });
   });
 
   it('the role /auth/me gives is never overruled by the inference', async () => {
@@ -203,7 +214,80 @@ describe('the role, and where it comes from', () => {
     const el = await mount(<Probe agencyId={null} />);
     expect(billing).not.toHaveBeenCalled();
     expect(me).not.toHaveBeenCalled();
-    expect(standing(el)).toEqual({ label: null, billing: null, role: null });
+    expect(standing(el)).toEqual({ label: null, billing: null, role: null, feedbackEmail: null });
+  });
+});
+
+const ADDRESS = 'pilot-feedback@avp-pilot.example';
+
+/**
+ * The address the shell's "Send feedback" link writes to (2026-10-06, round 2). The dashboard reads
+ * no `me` of its own and used to ask for the address with a second `GET /auth/me`, on every load,
+ * whether or not the feature was on. It takes it from THIS read instead: `/auth/me` carries
+ * `feedbackEmail`, and this hook already asks for the role. One request, as before.
+ */
+describe('the address for the "Send feedback" link, from the /auth/me this hook already reads', () => {
+  it('is the address /auth/me carries, and /auth/me is still read once', async () => {
+    billing.mockResolvedValue(BILLING);
+    me.mockResolvedValue({ ...signedInAs('owner'), feedbackEmail: ADDRESS });
+    const el = await mount(<Probe agencyId="agcy_01" />);
+    expect(standing(el)).toEqual({
+      label: 'Free scan used',
+      billing: BILLING,
+      role: 'owner',
+      feedbackEmail: ADDRESS,
+    });
+    expect(me).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['null: the setting is off, the default', { feedbackEmail: null }],
+    ['an API with no such field yet', {}],
+    ['something that is not an address', { feedbackEmail: 'pilot.example' }],
+    ['two addresses', { feedbackEmail: 'a@pilot.example, b@pilot.example' }],
+    ['a number', { feedbackEmail: 25 }],
+  ])('is null for %s', async (_what, extra) => {
+    billing.mockResolvedValue(BILLING);
+    me.mockResolvedValue({ ...signedInAs('owner'), ...extra });
+    const el = await mount(<Probe agencyId="agcy_01" />);
+    expect(standing(el).feedbackEmail).toBeNull();
+    expect(standing(el).role).toBe('owner');
+  });
+
+  it('is null when /auth/me fails, and the role is inferred as it always was', async () => {
+    billing.mockRejectedValue(problem(403));
+    me.mockRejectedValue(new TypeError('Failed to fetch'));
+    const el = await mount(<Probe agencyId="agcy_01" />);
+    expect(standing(el)).toEqual({ label: null, billing: null, role: 'member', feedbackEmail: null });
+  });
+
+  it('does not wait for the billing read, which may never answer', async () => {
+    billing.mockReturnValue(new Promise(() => {}));
+    me.mockResolvedValue({ ...signedInAs('owner'), feedbackEmail: ADDRESS });
+    const el = await mount(<Probe agencyId="agcy_01" />);
+    expect(standing(el)).toEqual({ label: null, billing: null, role: null, feedbackEmail: ADDRESS });
+  });
+
+  it('is kept when the billing read is refused, as a member’s is', async () => {
+    billing.mockRejectedValue(problem(403));
+    me.mockResolvedValue({ ...signedInAs('member'), feedbackEmail: ADDRESS });
+    const el = await mount(<Probe agencyId="agcy_01" />);
+    expect(standing(el)).toEqual({ label: null, billing: null, role: 'member', feedbackEmail: ADDRESS });
+  });
+
+  it('is kept when a billing response cannot be read: that standing is unknown, the address is not', async () => {
+    label.throwNext = true;
+    billing.mockResolvedValue(BILLING);
+    me.mockResolvedValue({ ...signedInAs('owner'), feedbackEmail: ADDRESS });
+    const el = await mount(<Probe agencyId="agcy_01" />);
+    expect(standing(el)).toEqual({ label: null, billing: null, role: null, feedbackEmail: ADDRESS });
+  });
+
+  it('asks nothing until there is an agency: no read, and no address', async () => {
+    me.mockResolvedValue({ ...signedInAs('owner'), feedbackEmail: ADDRESS });
+    const el = await mount(<Probe agencyId={null} />);
+    expect(me).not.toHaveBeenCalled();
+    expect(standing(el).feedbackEmail).toBeNull();
   });
 });
 
@@ -222,7 +306,7 @@ describe('a label that cannot be read', () => {
       // Node reports an unhandled rejection a turn after it happens.
       await new Promise((resolve) => setTimeout(resolve, 10));
       expect(unhandled).toEqual([]);
-      expect(standing(el)).toEqual({ label: null, billing: null, role: null });
+      expect(standing(el)).toEqual({ label: null, billing: null, role: null, feedbackEmail: null });
     } finally {
       process.off('unhandledRejection', onUnhandled);
     }

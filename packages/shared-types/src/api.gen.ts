@@ -611,7 +611,14 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Me */
+        /**
+         * Me
+         * @description The signed-in context, in one call. **Auth required.**
+         *
+         *     `feedbackEmail` (2026-10-06) is `FEEDBACK_EMAIL`, null when it is unset: the address the
+         *     shell's "Send feedback" link writes to. It is on this response, and on the other responses
+         *     that return the same context to someone who has just signed in, and on no other.
+         */
         get: operations["me_api_v1_auth_me_get"];
         put?: never;
         post?: never;
@@ -3159,6 +3166,8 @@ export interface components {
          */
         MeOut: {
             agency: components["schemas"]["AgencyOut"];
+            /** Feedbackemail */
+            feedbackEmail: string | null;
             seats: components["schemas"]["SeatUsageOut"];
             user: components["schemas"]["UserOut"];
         };

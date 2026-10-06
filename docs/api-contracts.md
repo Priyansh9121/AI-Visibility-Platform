@@ -443,7 +443,8 @@ shell does not need three round trips per page load.
     "seatLimit": 3,
     "createdAt": "2026-08-20T05:29:02Z"
   },
-  "seats": { "used": 1, "limit": 3 }
+  "seats": { "used": 1, "limit": 3 },
+  "feedbackEmail": null
 }
 ```
 
@@ -452,6 +453,21 @@ shell does not need three round trips per page load.
 never set a password has only `"google"`, and Settings says so instead of
 offering a password change. Named for the door rather than the credential,
 because no auth response may carry the word "password" (`test_password_is_never_returned`).
+
+`feedbackEmail` — 2026-10-06 — is the API's `FEEDBACK_EMAIL`: the one address the web's
+"Send feedback" link writes to, or `null` when it is unset, which is the default and means the
+web draws no link at all. It is **required** (the key is always there), so every route that
+builds the context has to decide it, and it is on the signed-in context and on no other
+response. `MeOut` is also what sign-up (`201`), login, change-password, an accepted invitation
+and Google's sign-up completion return; each of those either needs a session or sets one in
+that same response, and `tests/test_feedback_email.py` lists these six operations so a seventh
+must be added on purpose. A signed-out `GET /auth/me` is the same `401` as ever, and the public
+plan, a shared report and the reset routes carry nothing of it. The setting is checked as one
+email address when the API starts: a blank is unset, and anything else that is not one address
+stops the start with a message that names `FEEDBACK_EMAIL` and does not repeat the value. It is
+not a secret and is shown to every signed-in user. From it the web builds
+`mailto:<address>?subject=AVP feedback: <route shape>`: the subject carries the shape of the
+page (`/clients/…/alerts`), never an id, a token or a client's name. Nothing about it is logged.
 
 **Errors:** `401 authentication-required`.
 

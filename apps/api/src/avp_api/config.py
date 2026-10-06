@@ -23,6 +23,7 @@ import re
 from functools import lru_cache
 from typing import Annotated, Literal
 
+from email_validator import EmailNotValidError, validate_email
 from pydantic import Field, PositiveInt, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
@@ -33,6 +34,13 @@ LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 # setting below bounds itself by it, so a value Stripe would refuse fails the start and not the
 # first checkout after it.
 MAX_STRIPE_TRIAL_DAYS = 730
+
+# What a bad `FEEDBACK_EMAIL` stops the start with. It names the variable and never the value:
+# see `_feedback_address_is_one_address_or_nothing` for why.
+FEEDBACK_EMAIL_MESSAGE = (
+    "FEEDBACK_EMAIL is not an email address. Set it to one address, such as "
+    'name@example.com, or leave it empty to turn the "Send feedback" link off.'
+)
 
 # Every setting that names or unlocks an outside provider. ONE rule for all of
 # them, in `_blank_provider_setting_is_unset` below: a present-but-empty value
@@ -303,6 +311,19 @@ class Settings(BaseSettings):
     # a person to pick an account and type an agency name, not a standing key.
     google_sign_in_ttl_seconds: int = 600
 
+    # --- the feedback link (2026-10-06) -------------------------------------
+    # Where the signed-in web app's "Send feedback" link writes to: ONE email address. Unset,
+    # the DEFAULT, there is no link and nothing a user sees changes. NOT a secret, and
+    # deliberately a plain `str`, for the reason `stripe_price_id` gives: it is shown to every
+    # signed-in user (`GET /auth/me` carries it as `feedbackEmail`) and the web builds a
+    # `mailto:` from it, with the SHAPE of the page in the subject and never an id, a token or
+    # a name. Only the auth router's context responses read it, and no log line carries it.
+    #
+    # A blank is unset, like every other blank setting. Anything else must be one address, or
+    # the API does not start (the validator below). Set it on the API service only; the web
+    # has no variable for it.
+    feedback_email: str | None = None
+
     @field_validator(*PROVIDER_SETTINGS, mode="before")
     @classmethod
     def _blank_provider_setting_is_unset(cls, value: object) -> object:
@@ -325,6 +346,31 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return value.strip() or 0
         return value
+
+    @field_validator("feedback_email", mode="before")
+    @classmethod
+    def _feedback_address_is_one_address_or_nothing(cls, value: object) -> object:
+        # Blank is unset: `FEEDBACK_EMAIL=` is what `cp .env.example .env` and a cleared Render
+        # variable leave behind, and it must never become a link to nowhere. Anything else is
+        # checked as ONE bare address (`validate_email` refuses "Name <a@b>", a list and a
+        # `mailto:` prefix), without asking the network, and kept as it normalises.
+        if value is None:
+            return None
+        if isinstance(value, str):
+            address = value.strip()
+            if not address:
+                return None
+            try:
+                return validate_email(address, check_deliverability=False).normalized
+            except EmailNotValidError:
+                pass  # said below, once, and without the value
+        # A RuntimeError that carries no value, and not a ValueError, on purpose. Pydantic wraps
+        # a ValueError in a ValidationError that prints `input_value='…'`, so a key pasted into
+        # this variable by mistake would be written to the deploy log by the failed start. It is
+        # raised out here, not inside the `except`, so the library's own message, which can quote
+        # characters of the address, is not chained to it. `provider_key` below is the precedent
+        # for naming the variable in a RuntimeError.
+        raise RuntimeError(FEEDBACK_EMAIL_MESSAGE)
 
     @field_validator("log_level", mode="before")
     @classmethod
