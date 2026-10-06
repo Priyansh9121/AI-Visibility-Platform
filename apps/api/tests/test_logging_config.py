@@ -138,6 +138,7 @@ class TestTheAccessLog:
             "/api/v1/health",
             "/api/v1/scans/scan_01ABC/report",
             "/api/v1/scans/scan_01ABC/report.pdf",
+            "/api/v1/scans/scan_01ABC/report.csv",
             "/api/v1/clients?limit=25&cursor=abc",
             "/api/v1/auth/google/start",
         ],

@@ -313,7 +313,7 @@ export const EXCLUSION_REASON: Record<string, { label: string; detail: string }>
   NO_COMPETITOR_SET: {
     label: 'No comparison was made',
     detail:
-      'No competitor set was detected for this scan, so there is no rival to measure a share of voice or a citation comparison against. The dimension is excluded and its weight spread across the others, rather than awarding points for a detection that did not happen.',
+      'This scan’s competitor list was missing or had no rivals on it, so there is no rival to measure a share of voice or a citation comparison against. The dimension is excluded and its weight spread across the others, rather than awarding points for a comparison that could not be made.',
   },
   NO_AWARENESS_POPULATION: {
     label: 'Nothing unprompted to measure',
@@ -365,6 +365,17 @@ export const EXCLUSION_REASON: Record<string, { label: string; detail: string }>
   CRAWL_POLICY_UNREADABLE: {
     label: 'Could not read robots.txt',
     detail: `${ROBOTS_UNREACHABLE_SENTENCE} Technical Foundation is left out of the score.`,
+  },
+  // 2026-10-05 (launch checklist 3.87). Any failed audit the three above do not name: a
+  // timeout, a browser that was busy (the check never started) or broke, a page that did
+  // not respond, an error status (the page did answer). The words claim only what is true
+  // of all of them, and blame no one: the check could not be completed. Not
+  // NOT_YET_MEASURED: an audit exists and failed. Mirrored word for word in
+  // `report_narrative.EXCLUSION_LABEL` / `EXCLUSION_DETAIL`.
+  AUDIT_FAILED: {
+    label: 'Technical check failed',
+    detail:
+      'The technical check of the site could not be completed for this scan. Technical Foundation is left out of the score.',
   },
 };
 
@@ -441,7 +452,7 @@ export const DEGRADATION_FLAG: Record<string, string> = {
   WEAK_COMPETITOR_SET:
     'The competitor set was only weakly corroborated — some rivals were surfaced by a single signal. Share of Voice should be read as indicative rather than exact.',
   NO_CITATIONS_IN_SCAN: 'No engine cited any source in this scan, for any brand.',
-  NO_COMPETITOR_SET: 'No competitors were detected, so no share comparison was possible.',
+  NO_COMPETITOR_SET: 'No competitors were on the list, so no share comparison was possible.',
   TECHNICAL_FOUNDATION_NOT_MEASURED:
     'The site had not been audited when this score was computed.',
   NO_ANSWERED_RESULTS: 'No engine returned an answer for this scan.',
@@ -474,13 +485,81 @@ export const DETECTION_STATUS: Record<'ok' | 'weak_signal' | 'no_signal', Detect
   weak_signal: {
     label: 'Weakly corroborated',
     detail:
-      'Few candidates surfaced and the two detection signals largely disagreed. Treat this rival set as a starting point and correct it before sending the report on.',
+      'Few candidates surfaced and the two detection signals largely disagreed. Treat this rival set as a starting point.',
   },
+  // True of every empty list: detection that found nothing, and a list emptied by hand through
+  // the report's editor, are both stored as `no_signal` and nothing tells them apart.
   no_signal: {
-    label: 'No rivals detected',
+    label: 'No rivals on the list',
     detail:
-      'Neither search results nor AI answers surfaced a usable competitor set, so no comparison is shown. That is a limit of the detection, not a finding about the brand.',
+      'This scan’s competitor list has no rivals, so no comparison is shown. Either search results and AI answers surfaced no usable set, or the list was emptied by hand. Neither is a finding about the brand.',
   },
+};
+
+/**
+ * What the report's competitor editor says. Each sentence is true of the code (launch checklist
+ * 3.78, 3.79): a save is written to the client's NEXT LIST, which the next scan that starts adopts
+ * (`ensure_set_for_scan`), and a scan that has started keeps the list it started with, so a save
+ * moves nothing the scan on screen shows: its list, its score, its figures, its client-history
+ * point, an explicit re-score. A scan that has not started yet (queued) takes the saved list when
+ * it runs; a save is refused while one is running (`409`). A list saved empty is carried forward
+ * by later scans like any other.
+ *
+ * The `...Running` and `...Finished` forms differ only for a scan still queued or running, which
+ * a saved list can still reach: for a finished scan the plain sentence "this scan's list and
+ * score do not change" is the true one. It says "score", not "figures": a rival's figures are
+ * recomputed on read with today's platform tiers, and a rival named in a next list is a market
+ * participant for them, so one of those can move.
+ *
+ * A save is refused while a scan of the CLIENT is running (`409`), whichever scan's report is on
+ * screen, so every form says so, and the forms for a scan still queued or running lead with it.
+ * The `...Saved` forms are what the closed editor says under the status line a save just printed,
+ * so that "does not change" is said once.
+ */
+const SCAN_UNCHANGED = 'This scan’s list and score do not change.';
+const NOT_WHILE_RUNNING = 'A list cannot be saved while a scan of this client is running.';
+const NAMING_FOR_LATER = 'Rivals you name here are saved for later scans, which compare against them.';
+const CORRECT_FOR_LATER =
+  'A list you correct here is saved for later scans, and a rival you add or keep by hand stays in place on them.';
+
+export const COMPETITOR_EDITOR_COPY = {
+  openButton: 'Name the rivals',
+  openHeading: 'Name the competitors',
+  missingLead: 'No competitor list is recorded for this scan.',
+  emptyLead:
+    'This scan’s competitor list has no rivals: none were found, or the list was emptied by hand.',
+  // After the lead, for a list with no rivals or none at all, on a scan that has started.
+  namingTail: `${NAMING_FOR_LATER} ${SCAN_UNCHANGED} ${NOT_WHILE_RUNNING}`,
+  // The same, under the status line a save just printed (which says the scan does not change).
+  namingTailSaved: `${NAMING_FOR_LATER} ${NOT_WHILE_RUNNING}`,
+  // The same, for a scan still queued or running.
+  namingTailRunning: `${NOT_WHILE_RUNNING} Rivals you name here are saved as the client’s list, and later scans compare against them. A scan that has not started yet uses the list when it runs.`,
+  // Under a list that has rivals.
+  correctLead: 'Detection is automated and imperfect.',
+  correctTail: `${CORRECT_FOR_LATER} ${SCAN_UNCHANGED} ${NOT_WHILE_RUNNING}`,
+  correctTailSaved: `${CORRECT_FOR_LATER} ${NOT_WHILE_RUNNING}`,
+  correctTailRunning: `${NOT_WHILE_RUNNING} A list you correct here is saved as the client’s list, and a rival you add or keep by hand stays in place on later scans. A scan that has not started yet uses the list when it runs.`,
+  reading: 'Reading the client’s current list…',
+  differsFromScan:
+    'The client’s current list, which later scans use, differs from this scan’s. Saving replaces the current list.',
+  noneYet: 'No competitors named yet. Add the first below.',
+  emptiedStaysEmpty:
+    'No competitors on the list. A list saved empty stays empty: later scans carry it forward, and compare against no rivals until some are named here.',
+  // In the open editor: what saving does to the list, then what it does to this scan.
+  openNote:
+    'Saving replaces the client’s whole list and marks every entry on it as set by hand, including ones you did not change. The corroboration figure is cleared with it, because it measures agreement between two automated signals and neither produced this list.',
+  openNoteFinished: `The list is saved for later scans. ${SCAN_UNCHANGED} ${NOT_WHILE_RUNNING}`,
+  openNoteRunning: `${NOT_WHILE_RUNNING} The list is saved as the client’s list. A scan that has not started yet uses it when it runs.`,
+  // After a save, in the editor's status line. The scan's own card does not change.
+  saved: `Saved for later scans. ${SCAN_UNCHANGED}`,
+  savedRunning: 'Saved as the client’s list. A scan that has not started yet uses it when it runs.',
+} as const;
+
+/** A scan with no competitor set at all, which is not the same as an empty one. */
+export const NO_COMPETITOR_LIST: DetectionCopy = {
+  label: 'No competitor list for this scan',
+  detail:
+    'This scan has no competitor list, so no comparison is shown. That is a limit of the data, not a finding about the brand.',
 };
 
 export const ENGINE_LABEL: Record<string, string> = {

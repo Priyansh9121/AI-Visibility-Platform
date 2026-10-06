@@ -23,23 +23,38 @@
  * thing: a member (another agency's id is a 404, not a 403). So a 403 stands in
  * for `member` when `/auth/me` cannot say; any other failure leaves the role
  * unknown, and `/auth/me`, when it answers, is never overruled.
+ *
+ * THE FEEDBACK ADDRESS RIDES ON THAT SAME READ — 2026-10-06, round 2. `/auth/me` carries
+ * `feedbackEmail` (the API's `FEEDBACK_EMAIL`, null when it is unset), and the dashboard, which
+ * reads no `me` of its own, takes it from here for the shell's "Send feedback" link, so with the
+ * feature off or on the dashboard still makes the one `/auth/me` request it always did. It is the
+ * address as `lib/feedback/subject` vets it, or null: while the read is out, for an API with no
+ * such field, and for any failure. It is its own state, set when `/auth/me` answers: it does not
+ * wait for the billing read, and a billing response the label cannot read does not take it away.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { BillingStatus, UserRole } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
+import { feedbackAddress } from '@/lib/feedback/subject';
 import { allowanceLabel } from './allowance';
 
 export interface ScanStanding {
   label: string | null;
   billing: BillingStatus | null;
   role: UserRole | null;
+  /** `me.feedbackEmail` from the same `/auth/me` read: one address, or null. See above. */
+  feedbackEmail: string | null;
 }
 
-const UNKNOWN: ScanStanding = { label: null, billing: null, role: null };
+/** What the billing read and the role make between them; the address is kept apart. */
+type Standing = Omit<ScanStanding, 'feedbackEmail'>;
+
+const UNKNOWN: Standing = { label: null, billing: null, role: null };
 
 export function useScanStanding(agencyId: string | null | undefined): ScanStanding {
-  const [standing, setStanding] = useState<ScanStanding>(UNKNOWN);
+  const [standing, setStanding] = useState<Standing>(UNKNOWN);
+  const [feedbackEmail, setFeedbackEmail] = useState<string | null>(null);
   useEffect(() => {
     if (!agencyId) return;
     let cancelled = false;
@@ -50,17 +65,25 @@ export function useScanStanding(agencyId: string | null | undefined): ScanStandi
         forbidden: e instanceof ApiProblem && e.status === 403,
       }),
     );
-    const role = api.me().then(
-      (me) => me.user.role,
-      () => null,
+    const identity = api.me().then(
+      (me) => ({ role: me.user.role, feedbackEmail: feedbackAddress(me.feedbackEmail) }),
+      () => ({ role: null, feedbackEmail: null }),
     );
-    void Promise.all([billing, role])
-      .then(([{ billing: b, forbidden }, r]) => {
+    // The address as soon as `/auth/me` answers, apart from the standing below (which waits for the
+    // billing read, and falls back to unknown if the label cannot be read).
+    void identity.then(
+      (who) => {
+        if (!cancelled) setFeedbackEmail(who.feedbackEmail);
+      },
+      () => undefined,
+    );
+    void Promise.all([billing, identity])
+      .then(([{ billing: b, forbidden }, who]) => {
         if (cancelled) return;
         setStanding({
           label: b ? allowanceLabel(b) : null,
           billing: b,
-          role: r ?? (forbidden ? 'member' : null),
+          role: who.role ?? (forbidden ? 'member' : null),
         });
       })
       .catch(() => {
@@ -73,5 +96,5 @@ export function useScanStanding(agencyId: string | null | undefined): ScanStandi
       cancelled = true;
     };
   }, [agencyId]);
-  return standing;
+  return useMemo(() => ({ ...standing, feedbackEmail }), [standing, feedbackEmail]);
 }

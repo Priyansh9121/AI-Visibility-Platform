@@ -40,7 +40,11 @@ export default function DashboardRoute() {
   const [rerunError, setRerunError] = useState<string | null>(null);
   const [scanLimit, setScanLimit] = useState<ScanLimitProblem | null>(null);
   const agencyId = view.kind === 'ready' ? view.dashboard.agency.id : null;
-  const { label: allowance, billing, role } = useScanStanding(agencyId);
+  // `feedbackEmail` is the address for the footer's "Send feedback" link (2026-10-06), off the
+  // `/auth/me` this hook already reads for the role: the dashboard makes no request of its own for
+  // it, whether the feature is on or off. Null until the page has an agency and `/auth/me` has
+  // answered, and for anything but one address; then the footer draws no link.
+  const { label: allowance, billing, role, feedbackEmail } = useScanStanding(agencyId);
   const [pollProblem, setPollProblem] = useState<string | null>(null);
   const [live, setLive] = useState(false);
 
@@ -91,12 +95,15 @@ export default function DashboardRoute() {
     };
   }, [apply]);
 
-  // A backgrounded tab keeps its timer but does no work. Refocusing polls at
-  // once rather than making the user wait out an interval on a stale view.
+  // A hidden tab is not polled: hiding it clears the poller's timer, and
+  // showing it polls once at once rather than making the user wait out an
+  // interval on a stale view, after which the schedule carries on. The poller
+  // reads the tab's state itself; this only tells it when that changes, and the
+  // listener is taken off with the page. It reads `poller.current` when the
+  // event fires, so it always reaches the live poller (StrictMode builds a
+  // second one) and a late event after unmount reaches none.
   useEffect(() => {
-    const onVisibility = () => {
-      if (document.visibilityState === 'visible') poller.current?.pokeNow();
-    };
+    const onVisibility = () => poller.current?.visibilityChanged();
     document.addEventListener('visibilitychange', onVisibility);
     return () => document.removeEventListener('visibilitychange', onVisibility);
   }, []);
@@ -204,7 +211,7 @@ export default function DashboardRoute() {
 
   if (view.kind === 'loading') {
     return (
-      <WorkspaceShell current="dashboard" wide>
+      <WorkspaceShell current="dashboard" feedbackEmail={feedbackEmail} wide>
         <LoadingState message="Loading your scans…" />
       </WorkspaceShell>
     );
@@ -212,7 +219,7 @@ export default function DashboardRoute() {
 
   if (view.kind === 'error') {
     return (
-      <WorkspaceShell current="dashboard" wide>
+      <WorkspaceShell current="dashboard" feedbackEmail={feedbackEmail} wide>
         <ErrorState
           title={view.title}
           detail={view.detail}
@@ -234,6 +241,7 @@ export default function DashboardRoute() {
       current="dashboard"
       agencyName={view.dashboard.agency.name}
       seats={view.dashboard.seats}
+      feedbackEmail={feedbackEmail}
       wide
     >
       <DashboardView

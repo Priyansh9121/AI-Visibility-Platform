@@ -14,6 +14,10 @@ Rules this module enforces:
     would block local development on credentials nobody needs yet.
   * `.env` is read for local development only and is git-ignored. The committed
     file is `.env.example`, which contains names and shapes but never values.
+  * A failed start never prints a value. Pydantic's errors would echo their input,
+    which for a model validator is the whole environment (`hide_input_in_errors`
+    below), every message here names the variable and not what it held, and the
+    two URLs that carry credentials are left out of `repr()`.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ import re
 from functools import lru_cache
 from typing import Annotated, Literal
 
+from email_validator import EmailNotValidError, validate_email
 from pydantic import Field, PositiveInt, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
@@ -33,6 +38,13 @@ LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 # setting below bounds itself by it, so a value Stripe would refuse fails the start and not the
 # first checkout after it.
 MAX_STRIPE_TRIAL_DAYS = 730
+
+# What a bad `FEEDBACK_EMAIL` stops the start with. It names the variable and never the value:
+# see `_feedback_address_is_one_address_or_nothing` for why.
+FEEDBACK_EMAIL_MESSAGE = (
+    "FEEDBACK_EMAIL is not an email address. Set it to one address, such as "
+    'name@example.com, or leave it empty to turn the "Send feedback" link off.'
+)
 
 # Every setting that names or unlocks an outside provider. ONE rule for all of
 # them, in `_blank_provider_setting_is_unset` below: a present-but-empty value
@@ -62,6 +74,16 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
+        # Pydantic prints a failed validation as its message and `input_value=<the input>`. For
+        # a model validator (`_harden_deployed_environments`) the input is the whole settings
+        # dict: the raw environment strings, not masked, cut to 50 characters (the first 25 and
+        # the last 24). So a refused production start wrote the tail of the last setting that was
+        # set (a webhook secret, an address) to the deploy log, and a key pasted into the wrong
+        # variable was printed whole by its own field's error. This leaves `input_value` and
+        # `input_type` out of every error's text; each error still names the setting.
+        # `ValidationError.errors()` and `.json()` still carry the input. Nothing catches a
+        # Settings error, so nothing reads them: the failed start is the traceback.
+        hide_input_in_errors=True,
     )
 
     # --- runtime -----------------------------------------------------------
@@ -77,13 +99,17 @@ class Settings(BaseSettings):
 
     # --- datastores --------------------------------------------------------
     # asyncpg driver; alembic rewrites this to psycopg2-style sync when needed.
+    # `repr=False` on both URLs: they carry `user:password@host` on a deployed host, and `repr()`
+    # of the settings masks a `SecretStr` but prints a plain `str` in full. Nothing prints the
+    # object today; this keeps it so for the first debug line or traceback viewer that does.
     database_url: str = Field(
         default="postgresql+asyncpg://avp:avp@127.0.0.1:5432/avp",
         description="SQLAlchemy async URL for Postgres.",
+        repr=False,
     )
     database_pool_size: int = 10
     database_max_overflow: int = 5
-    redis_url: str = Field(default="redis://127.0.0.1:6379/0")
+    redis_url: str = Field(default="redis://127.0.0.1:6379/0", repr=False)
     # Bounds on every Redis call, so a slow or unreachable Redis fails the
     # request fast (a 503) instead of hanging it. Redis is same-region and
     # answers in about a millisecond; 2 s is generous for a Lua rate-limit
@@ -303,6 +329,56 @@ class Settings(BaseSettings):
     # a person to pick an account and type an agency name, not a standing key.
     google_sign_in_ttl_seconds: int = 600
 
+    # --- the feedback link (2026-10-06) -------------------------------------
+    # Where the signed-in web app's "Send feedback" link writes to: ONE email address. Unset,
+    # the DEFAULT, there is no link and nothing a user sees changes. NOT a secret, and
+    # deliberately a plain `str`, for the reason `stripe_price_id` gives: it is shown to every
+    # signed-in user (`GET /auth/me` carries it as `feedbackEmail`) and the web builds a
+    # `mailto:` from it, with the SHAPE of the page in the subject and never an id, a token or
+    # a name. Only the auth router's context responses read it, and no log line carries it.
+    #
+    # A blank is unset, like every other blank setting. Anything else must be one address, or
+    # the API does not start (the validator below). Set it on the API service only; the web
+    # has no variable for it.
+    feedback_email: str | None = None
+
+    # --- the report's CSV (2026-10-06) ---------------------------------------------------------
+    # Whether the signed-in report offers "Download figures (CSV)", and the route
+    # `GET /scans/{scanId}/report.csv` answers. Off, the DEFAULT, the route is a 404 that says
+    # what an unknown path says, the report says the export is not available
+    # (`csvExportAvailable: false`), the web draws no link, and nothing a user sees changes.
+    # On, the file carries the figures the signed-in report already shows, built from the same
+    # projection, for a finished scan only. A share link never has it, whatever this says. NOT a
+    # secret, and read by no log line. Set it on the API service only; the web has no variable
+    # for it.
+    #
+    # A blank is off, like every other blank setting. A value that is not a boolean stops the API
+    # from starting, naming this setting (the validator below): a typo that quietly left it off
+    # would be a switch somebody believes they set.
+    report_csv_enabled: bool = False
+
+    # --- email when a scan finishes (F1, 2026-10-06) --------------------------------------------
+    # Whether the API emails the user who started a scan when it finishes
+    # (`services/scan_emails.py`,
+    # run every minute by `scan_email_watch.py`). Off, the DEFAULT, nothing runs, nothing is claimed
+    # or logged, and nothing a user sees changes. On, it still sends nothing while email is not
+    # configured (`scan_emails_available`). NOT a secret, and read by no log line. A blank is off;
+    # a value that is not a boolean stops the start, naming this setting.
+    email_scan_notifications: bool = False
+
+    # --- automatic monthly rescans (F2, 2026-10-06) --------------------------------------------
+    # Whether the API starts a client's scan by itself, every month, for a client an owner or
+    # admin has switched "Rescan every month" on for. Off, the DEFAULT, no loop runs, the
+    # setting routes answer as an unknown path does, the client screen draws no switch, and
+    # nothing a user sees changes. On, a loop in the API wakes every 10 minutes and starts at
+    # most one due scan through the same start path as the Run button (`services/scan_start.py`),
+    # so the scan allowance, the one-open-scan rule and the reaper all apply. NOT a secret, and
+    # read by no log line. Set it on the API service only; the web has no variable for it.
+    #
+    # A blank is off, like every other blank setting. A value that is not a boolean stops the API
+    # from starting, naming this setting (the validator below).
+    auto_rescan_enabled: bool = False
+
     @field_validator(*PROVIDER_SETTINGS, mode="before")
     @classmethod
     def _blank_provider_setting_is_unset(cls, value: object) -> object:
@@ -325,6 +401,60 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return value.strip() or 0
         return value
+
+    @field_validator("report_csv_enabled", mode="before")
+    @classmethod
+    def _a_blank_csv_switch_is_off(cls, value: object) -> object:
+        # `REPORT_CSV_ENABLED=` is what `cp .env.example .env` and a cleared Render variable leave
+        # behind. It is off, the safe direction, and never a refusal to start. Anything else is
+        # read as a boolean by pydantic (`true`, `1`, `no`, `off`...), whitespace around it aside.
+        if isinstance(value, str):
+            return value.strip() or False
+        return value
+
+    @field_validator("email_scan_notifications", mode="before")
+    @classmethod
+    def _a_blank_scan_email_switch_is_off(cls, value: object) -> object:
+        # `EMAIL_SCAN_NOTIFICATIONS=` is what `cp .env.example .env` and a cleared Render variable
+        # leave behind: off, never a refusal to start.
+        if isinstance(value, str):
+            return value.strip() or False
+        return value
+
+    @field_validator("auto_rescan_enabled", mode="before")
+    @classmethod
+    def _a_blank_rescan_switch_is_off(cls, value: object) -> object:
+        # `AUTO_RESCAN_ENABLED=` is what `cp .env.example .env` and a cleared Render variable
+        # leave behind. It is off, the safe direction, and never a refusal to start.
+        if isinstance(value, str):
+            return value.strip() or False
+        return value
+
+    @field_validator("feedback_email", mode="before")
+    @classmethod
+    def _feedback_address_is_one_address_or_nothing(cls, value: object) -> object:
+        # Blank is unset: `FEEDBACK_EMAIL=` is what `cp .env.example .env` and a cleared Render
+        # variable leave behind, and it must never become a link to nowhere. Anything else is
+        # checked as ONE bare address (`validate_email` refuses "Name <a@b>", a list and a
+        # `mailto:` prefix), without asking the network, and kept as it normalises.
+        if value is None:
+            return None
+        if isinstance(value, str):
+            address = value.strip()
+            if not address:
+                return None
+            try:
+                return validate_email(address, check_deliverability=False).normalized
+            except EmailNotValidError:
+                pass  # said below, once, and without the value
+        # A RuntimeError that carries no value, and not a ValueError, on purpose. Pydantic wraps
+        # a ValueError in a ValidationError that would print `input_value='…'` but for this
+        # model's `hide_input_in_errors`, so a key pasted into this variable by mistake could
+        # reach the deploy log by the failed start; this stays value-free on its own. It is
+        # raised out here, not inside the `except`, so the library's own message, which can quote
+        # characters of the address, is not chained to it. `provider_key` below is the precedent
+        # for naming the variable in a RuntimeError.
+        raise RuntimeError(FEEDBACK_EMAIL_MESSAGE)
 
     @field_validator("log_level", mode="before")
     @classmethod
@@ -350,6 +480,15 @@ class Settings(BaseSettings):
         cannot tell anybody whether an account exists.
         """
         return self.resend_api_key is not None
+
+    @property
+    def scan_emails_available(self) -> bool:
+        """Whether a scan-finished email can go out at all: the setting is on AND email is set up.
+
+        A fact about the deployment, the same for every user, so it can be shown to a signed-in
+        user (`MeOut.scanEmails.available`) without telling anybody anything about an account.
+        """
+        return self.email_scan_notifications and self.email_configured
 
     @property
     def google_sign_in_configured(self) -> bool:

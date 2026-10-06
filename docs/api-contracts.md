@@ -114,6 +114,7 @@ make it `unparsed`.
 | `/problems/not-found` | 404 | No such resource in the caller's agency |
 | `/problems/conflict` | 409 | Generic conflict |
 | `/problems/failed-scan-not-shareable` | 409 | `POST /scans/{scanId}/share` for a scan whose status is `failed`. `detail` is "This scan failed, so its report cannot be shared." (2026-10-02, checklist 3.24) |
+| `/problems/scan-not-exportable` | 409 | `GET /scans/{scanId}/report.csv` (when `REPORT_CSV_ENABLED` is on) for a scan whose status is not `succeeded` or `partial`. `detail` is one plain sentence per status (failed, queued, running, any other), naming no code and no figure (2026-10-06, F3) |
 | `/problems/email-already-registered` | 409 | Signup email in use |
 | `/problems/seat-limit-reached` | 409 | Carries `seatsUsed`, `seatLimit` |
 | `/problems/subscription-already-active` | 409 | Checkout refused: the agency's subscription is `active` or `trialing`. `detail` points at the billing portal |
@@ -126,6 +127,7 @@ make it `unparsed`.
 | `/problems/invalid-url` | 409 | Submitted URL has no public domain, or its host is not a valid hostname: a label with a space, quote, bracket or control character, an empty label, a label over 63 characters or starting or ending with a hyphen, a label typed as punycode (`xn--`) that is not valid punycode, or a whole name over 253 characters (2026-10-04, launch checklist 3.67). `detail` is a plain sentence with no code and quotes nothing the person typed; `POST /clients` gives both. Nothing is stored or fetched |
 | `/problems/invalid-webhook-signature` | 400 | Billing webhook signature missing, malformed or wrong |
 | `/problems/billing-not-configured` | 503 | A Stripe setting is unset. `detail` names the variable |
+| `/problems/plan-price-mismatch` | 503 | Checkout refused: the latest price check found the Stripe Price is not the plan (amount, currency, interval or archived) and a fresh read made for this request confirms it. `detail` is one plain sentence: "Subscribing is not available right now because the plan's price is not set up correctly. Please try again later." It names no amount, Price id or setting. Nothing is created at Stripe. The fresh read waits at most 10 s; a read that fails or takes longer never refuses |
 | `/problems/google-sign-in-not-configured` | 503 | Google sign-in is not configured on this deployment |
 | `/problems/service-unavailable` | 503 | A dependency the request needs is down |
 | `/problems/scan-limit-reached` | 402 | A scan cannot start on the allowance. Carries `code` (`SCAN_LIMIT_FREE_USED`, `SCAN_LIMIT_MONTHLY`, or since 2026-09-29 `SCAN_LIMIT_VERIFY_REQUIRED` — the free scan, asked for by a user with no linked Google identity), `scansUsed`, `scanLimit`, `periodResetsAt` (monthly only) |
@@ -442,7 +444,9 @@ shell does not need three round trips per page load.
     "seatLimit": 3,
     "createdAt": "2026-08-20T05:29:02Z"
   },
-  "seats": { "used": 1, "limit": 3 }
+  "seats": { "used": 1, "limit": 3 },
+  "feedbackEmail": null,
+  "scanEmails": { "available": false, "enabled": true }
 }
 ```
 
@@ -452,7 +456,54 @@ never set a password has only `"google"`, and Settings says so instead of
 offering a password change. Named for the door rather than the credential,
 because no auth response may carry the word "password" (`test_password_is_never_returned`).
 
+`feedbackEmail` — 2026-10-06 — is the API's `FEEDBACK_EMAIL`: the one address the web's
+"Send feedback" link writes to, or `null` when it is unset, which is the default and means the
+web draws no link at all. It is **required** (the key is always there), so every route that
+builds the context has to decide it, and it is on the signed-in context and on no other
+response. `MeOut` is also what sign-up (`201`), login, change-password, an accepted invitation
+and Google's sign-up completion return; each of those either needs a session or sets one in
+that same response, and `tests/test_feedback_email.py` lists these six operations so a seventh
+must be added on purpose. A signed-out `GET /auth/me` is the same `401` as ever, and the public
+plan, a shared report and the reset routes carry nothing of it. The setting is checked as one
+email address when the API starts: a blank is unset, and anything else that is not one address
+stops the start with a message that names `FEEDBACK_EMAIL` and does not repeat the value. It is
+not a secret and is shown to every signed-in user. From it the web builds
+`mailto:<address>?subject=AVP feedback: <route shape>`: the subject carries the shape of the
+page (`/clients/…/alerts`), never an id, a token or a client's name. Nothing about it is logged.
+
+`scanEmails` — F1, 2026-10-06 — is the scan-finished email switch for the caller. **Required** on
+the same six context operations as `feedbackEmail`, and on no other response (not the seat list).
+`available` is a fact about the deployment, the same for every user: `EMAIL_SCAN_NOTIFICATIONS`
+is on AND email is configured. `enabled` is the caller's own choice (`users.scan_emails`,
+default `true`). The web shows the switch only when `available` is `true`.
+
 **Errors:** `401 authentication-required`.
+
+#### `PUT /api/v1/auth/me/scan-emails`
+**Auth required.** Turn the emails sent when a scan you started finishes on or off.
+
+```json
+{ "enabled": false }
+```
+
+**Response `200`** — `{ "available": true, "enabled": false }` (the same object as `MeOut.scanEmails`).
+
+**Only the caller's own choice.** No user id is in the request: the row written is the caller's,
+matched by user id and agency id. `enabled` must be a JSON `true` or `false`, and a body that
+names anything else is a `422`. Idempotent. Accepted whether or not the feature is on (`available`
+says), because it writes one boolean that nothing reads while the feature is off.
+
+**Errors:** `401 authentication-required`, `422 validation-failed`.
+
+**The emails themselves (F1)** go out only when `EMAIL_SCAN_NOTIFICATIONS` is on and
+`RESEND_API_KEY` is set, to the user who started the scan (`scans.requested_by_user_id`), who
+is active, in the scan's agency and has not opted out. A sweep every 60 s finds scans that reached
+a final status in the last 15 minutes with no `scans.notified_at`, claims each with one
+conditional UPDATE, then sends, at most once. SUCCEEDED and PARTIAL: "Your report for <client> is
+ready" (PARTIAL adds one sentence) linking `/scans/<id>/report`; a scan that raised alerts: a
+second email counting them by kind, linking `/clients/<id>/alerts`; FAILED: "did not finish",
+linking `/clients/<id>`. CANCELLED sends nothing. Plain text; the client's name and counts are all
+that is said of the scan.
 
 ---
 
@@ -772,7 +823,8 @@ one.
   "freeScanRequiresGoogle": false,
   "cancelAtPeriodEnd": false,
   "trialEndsAt": null,
-  "trialEligible": false
+  "trialEligible": false,
+  "trialRequiresGoogle": false
 }
 ```
 
@@ -804,6 +856,28 @@ record says no", and checkout can still refuse the trial to a customer for whom 
 remembers an ended subscription that our row never recorded (a webhook that did not land).
 That is the one case Settings can be wrong in, and a rare one; checkout never gives more
 than it promises. The web promises the trial only on a `true` and never works it out itself.
+
+**A trial needs a Google sign-in — 2026-10-05 (launch checklist 3.72).** A free trial
+is given only when the **user who starts the checkout** has a verified Google identity
+(`User.google_sub`, `scan_allowance.has_verified_identity`: the free scan's rule, reused). The
+rule is on the user and not the agency: a password-only admin of an agency whose owner has
+Google gets the plain checkout. So both trial fields are about **the requesting user**, and two
+seats of one agency can read them differently:
+
+- `trialEligible` is true only when everything above holds **and** this user has a linked
+  Google identity: it is what a Subscribe from this sign-in would get (subject to the Stripe-side
+  caveat above). Its meaning is therefore narrower than it was: false for a user without Google.
+- `trialRequiresGoogle` is true exactly when the agency's record and the configuration would
+  give a trial **and the only thing missing is the Google identity**: checkout would give this
+  user no trial, and continuing with Google on the same address would. False when no trial is on,
+  when the agency has had a subscription, and for a user who has Google. The two are never both
+  true. Settings says, from it, that subscribing now starts the paid plan at once with no free
+  trial and offers Continue with Google.
+
+Checkout for a user without Google is **not refused**: it creates the same session a no-trial
+checkout does (no `trial_period_days`, no `payment_method_collection`), returns the same `201`
+and URL, and logs `billing.checkout_created` with `trial_withheld_no_google: true` (ids and
+booleans only: `agency_id`, `session_id`, `user_id`, `trial_days`).
 
 **`cancelAtPeriodEnd` — 2026-09-29.** True when the subscription was cancelled
 in Stripe's portal and runs to the end of the period already paid for. Stripe
@@ -887,6 +961,8 @@ it says nothing about a trial at all). It is **0 wherever checkout cannot start 
 to promise. It describes the offer to a *new* agency; whether a particular agency
 still gets it is its own history, which checkout decides (and `GET
 /agencies/{agencyId}/billing` says in advance, as `trialEligible`).
+
+`trialDays` is the offer to an account that qualifies: since 2026-10-05 a trial needs a Google sign-in on the user who subscribes, which this public read cannot know, so the signed-out pricing card says the trial is for an account signed in with Google.
 
 **When the web asks (rounds two and three).** At the top of the home page's and Settings'
 loaders, in parallel with their first calls, so the pricing card is drawn with its sentence
@@ -1053,7 +1129,11 @@ checking the customer's subscriptions, or a full page of either left nothing
 provable), `503
 billing-not-configured` when
 `STRIPE_SECRET_KEY` or `STRIPE_PRICE_ID` is unset — `detail` names the exact
-variable, the same courtesy `provider_key()` gives every other integration.
+variable, the same courtesy `provider_key()` gives every other integration,
+`503 plan-price-mismatch` when the latest price check found the Price is not the
+plan and a fresh read for this request confirms it (after the two 409s, before
+anything is created at Stripe; that read waits at most 10 s, and one that fails or
+takes longer never refuses).
 
 #### `POST /api/v1/agencies/{agencyId}/billing/portal`
 **Auth required (owner/admin).** Stripe's hosted billing portal. No request body.
@@ -1544,6 +1624,13 @@ report reads through `scoring_runner.compare_on_read` (a test holds the two
 equal), so a figure here cannot disagree with the same figure on the report for
 the same scan. Nothing is persisted, and so no `scoring.completed` is logged.
 
+**The subject's own `shareOfVoice` is the stored Score's, as `composite` is**
+(2026-10-05, the founder's decision), and is not recomputed on read: a figure derived from
+the scan's competitor set as it stood on the day of the read could move after the scan,
+beside a composite that had not. It is null when the scan was never scored or the score
+left the dimension out. The rivals' figures stay derived on read, from the scan's own
+competitor set, which nothing writes once the scan has started.
+
 Scans that produced no reading (queued, running, failed, cancelled) are excluded
 from `scans` and counted in `scansWithoutData`, so a client with four scans and
 one usable one does not look like a client with one scan.
@@ -1567,6 +1654,28 @@ already inside, with `Retry-After: 60` — see `POST /clients` for the limits an
 bounds. A read that waits more than 60 s for the browser is refused with the same
 `429`, and the client keeps the classification it had: nothing is written.
 
+#### `GET /api/v1/clients/{clientId}/auto-rescan` — F2, 2026-10-06
+**Auth required. Reads, starts nothing.** Whether this client is rescanned every month, as
+`AutoRescanOut`: `{ available, enabled, skipReason, skippedAt, retriesAt }`. `available` is `true`
+only when the API's `AUTO_RESCAN_ENABLED` is on AND the caller is an owner or admin; otherwise it
+is `false`, `enabled` is `false` and the rest are `null`, whatever the client holds (a member is
+told nothing). `skipReason` is one of the API's own codes, or `null`: `AGENCY_NOT_PAID`,
+`ALLOWANCE_USED`, `USER_NOT_ADMIN`, `COULD_NOT_START`; `skippedAt` is when the last attempt
+started no scan and `retriesAt` is the first instant of the next UTC calendar month, when it is
+tried again. **Errors:** `401`; `404 not-found` (unknown id, or another agency's client).
+
+#### `PUT /api/v1/clients/{clientId}/auto-rescan` — F2, 2026-10-06
+**Auth required, owner or admin.** Body `{ "enabled": true | false }`; answers the same
+`AutoRescanOut`. On: from the loop's next wake (every 10 minutes), a scan is started through
+the Run button's own start path, as the user who switched it on, whenever the client's latest scan
+started 30 or more days ago. The allowance, the one-open-scan rule and the reaper apply; a refusal
+is a skip recorded on the client, never a retry loop. Off: nothing is started and the notice is
+cleared. On again as another user hands the rescans to that user and clears the notice; on again
+as the same user changes nothing. **Errors:** `401`; `403 permission-denied` (a member); `404`
+with the body an unknown path gets when the API has `AUTO_RESCAN_ENABLED` off, and
+`404 not-found` for an unknown id or another agency's client; `422 validation-failed`.
+Automatic scans have `trigger: scheduled`.
+
 
 ---
 
@@ -1582,11 +1691,25 @@ implicit in intake.
 
 **Since Epic 9.17 it is no longer the only way a set gets created.**
 `POST /clients/{clientId}/scans` guarantees the scan it starts has one: reusing
-the scan's own set, else carrying the client's most recent set forward, else
-running this detection. This endpoint remains the way to *re-run* detection
+the scan's own set, else adopting the client's next list, else carrying the client's
+most recent set forward, else running this detection. This endpoint remains the way to *re-run* detection
 deliberately — the chain never re-detects for a client that already has a set,
 precisely so it cannot spend quota or overwrite an operator's correction on its
 own.
+
+**Where the result goes** (launch checklist 3.78/3.79, 2026-10-05). Into the client's
+**next list**, not a scan's set: the response is that list, with `scanId` null because it
+belongs to no scan yet, and the next scan that starts adopts it (`POST
+/clients/{clientId}/scans`, below). **A scan's own set never changes once the scan has
+started**, so a run touches neither a finished scan's set nor a running one's. It used to
+write the open scan's set, which a running scan had already read. With no next list yet,
+one is made as a copy of the client's latest set (rows, hand edits and struck rivals
+included) and detection merges into the copy, so rivals an operator named or struck stay
+named and struck. Before this, a run for a client whose latest scan had finished started
+a fresh set on the new open scan, and the hand edits in the finished scan's set were not
+in it. A client with no set at all starts from an empty list. The scan this route opens,
+or reuses, is unchanged: an open QUEUED row a later scan reuses, carrying no set until it
+runs. The plan, the 24-hour day and every refusal below are unchanged.
 
 **For paying agencies since 2026-10-04** (launch checklist 3.61). The founder's
 decision: the route is allowed for an agency whose subscription is `active` or
@@ -1641,7 +1764,7 @@ run unmetered, because a run spends paid searches. Nothing to set on Render.
 ```json
 {
   "id": "cset_01J...",
-  "scanId": "scan_01J...",
+  "scanId": null,
   "status": "ok",
   "detectionConfidence": "0.800",
   "serpQueriesRun": 6,
@@ -1660,6 +1783,11 @@ run unmetered, because a run spends paid searches. Nothing to set on Render.
   ]
 }
 ```
+
+**`scanId` is null** for the client's next list, which is what this route, `GET` and `PUT`
+answer with while the client has one: it belongs to no scan until the next scan adopts it.
+It is a scan's id only for a set that belongs to a scan, which `GET` returns when the client
+has no next list.
 
 **`detectionConfidence` is null, not zero, when only one signal ran.** Zero means
 "two independent signals looked and agreed on nothing"; null means agreement was
@@ -1707,10 +1835,14 @@ and `retry_after_s` and nothing else, and none for an allowed run),
 detail "This is temporarily unavailable. Please try again shortly.").
 
 #### `GET /api/v1/clients/{clientId}/competitors`
-**Auth required.** The client's most recent set, competitors in rank order.
+**Auth required.** The client's **current list**, competitors in rank order: its next
+list if it has one (what a save or the button's detection last wrote, which the next scan
+will use; `scanId` null), else the set of its most recent scan (`scanId` that scan's).
+A scan's own set never changes once the scan has started, so the next list is the only one
+`PUT` and `detect` write (launch checklist 3.78/3.79, 2026-10-05).
 
 **Errors:** `401`; `404` for an unknown client or another agency's, and for a client
-with no competitor set on any scan — detail: *"No competitor set for this client yet.
+with neither a next list nor a competitor set on any scan — detail: *"No competitor set for this client yet.
 A scan runs detection for a client that has none."* (2026-10-04, launch checklist 3.61;
 it used to end "Run detection first."). The sentence is the same for every caller, so
 it tells nobody to call `POST /clients/{clientId}/competitors/detect`, which is for
@@ -1719,18 +1851,82 @@ for a client that has none, and does not promise that a scan will be allowed to 
 or will succeed.
 
 #### `PUT /api/v1/clients/{clientId}/competitors`
-**Auth required.** Replace the set by hand.
+**Auth required.** Replace the client's competitor list by hand.
 
 ```json
 { "competitors": [ { "name": "Zendesk", "domain": "zendesk.com" } ] }
 ```
+
+**It writes the client's next list, never a scan's own set** (launch checklist 3.78/3.79,
+the founder's decision of 2026-10-05). The saved list is for later scans: the next scan that
+starts adopts it whole, and **a scan's own set never changes once the scan has started**.
+So a save moves nothing a finished scan shows: not its list, its report, its score, its
+client-history figure (`GET /clients/{clientId}/history`) or an explicit
+`POST /scans/{scanId}/score`. A rival named after a scan finished counts only for later
+scans. A scan that is `queued` when the list is saved adopts it when it runs. `scanId` is
+null in the response: the list belongs to no scan until one adopts it.
+
+Where a save lands, in order:
+
+1. the client's next list, if it has one: edited in place, under a row lock that an
+   adopting scan takes too, so a save that arrives while a scan is adopting the list either
+   finishes first or waits, and never writes the set once it is a scan's (it then starts
+   a new next list from what is now that scan's set);
+2. else a **copy of the client's latest set** (the copy a scan carries forward: rows, hand
+   edits and struck rivals), with the replacement applied to the copy;
+3. else, for a client with no set on any scan, an empty next list that a non-empty
+   replacement fills.
+
+Two first saves at once leave one next list: the second finds the first's and writes that.
+
+**`domain` is checked like a client's own, and never reduced** (launch checklist 3.81). A blank
+or missing `domain` is no domain, as before. Anything else is lower-cased, and ONE trailing dot
+and ONE leading `www.` are dropped; it is accepted only when what is left is exactly its own
+registrable domain under the hostname check client intake uses, and that is what is stored
+(`WWW.Rival.com.` is stored as `rival.com`; an internationalised name is stored in the spelling
+it was typed, Unicode (`bücher.de`) or punycode (`xn--bcher-kva.de`), and the two are not
+converted into each other). A page, a path, a scheme, a port or a subdomain
+(`https://www.g2.com/products/x`, `shop.rival.com`) is refused, not cut down to the site it would
+name. A domain equal to the client's own (compared in its checked form, so a client stored as `www.acme.com` is `acme.com`, and either spelling of an internationalised name) is refused too. The web editor's Add refuses a pasted page (a `/`, `:`, `@`, `?`, `#` or a space) with the same sentence before Save; the server stays the authority. Every refusal is **`422
+validation-failed`** before anything is written, the rest of the list included, with
+`errors[].field` `competitors.<index>.domain`, `errors[].type` `invalid_domain` for each of the five
+below, and `errors[].message` one plain sentence that quotes nothing typed:
+
+- not a hostname: "That is not a valid website name. Names can only contain letters, numbers and
+  hyphens, with dots between the parts. Enter an address such as example.com."
+- no public domain in it: "That address does not contain a public domain name. Enter a website
+  address such as example.com."
+- a page, path or subdomain: "Enter just the domain, like rival.com: no https://, page path or
+  subdomain."
+- the client's own domain: "That is this client's own domain."
+- a platform or publisher: "That is a platform or publisher, so it cannot be added as a rival."
+
+**A platform or publisher is refused** (launch checklist 3.90, the founder's decision of
+2026-10-06). After the checks above, the domain as it would be stored must not be on the list of
+domains detection itself never proposes as rivals (`NON_COMPETITOR_DOMAINS` in `services/serp.py`,
+compared as `is_plausible_competitor` compares): review sites and software directories, social
+networks and forums, wikis, local directories, marketplaces, publishers and press, job boards and
+company databases, search engines and the large platforms (an app store is its operator's domain,
+`apple.com` or `google.com`). Stored as a rival, such a domain would type every citation of that
+platform as the rival's. So `g2.com`, `WWW.LinkedIn.com.` and `wikipedia.org` are refused with the
+sentence above, whatever their spelling. The match is exact: a regional variant (`amazon.co.uk`)
+is refused only if the list holds it, and a name that only contains a listed one (`g2labs.com`) is
+a rival as before. A platform's own page or subdomain (`apps.apple.com`) is still refused as a
+page, with that sentence. The check is part of request validation, so it comes before the
+client's own-domain check, which needs the client: a list with a row of each kind is refused for
+the platform row first. A rival can still be named without a domain. **Nothing already stored is
+changed or rechecked on read:** a list an older version stored with a platform domain on a row is
+returned as it is, and is refused when it is saved again, naming that row, until the row is
+removed or its domain is cleared.
+
+No new problem type.
 
 Replaces wholesale rather than patching rows: an operator correcting a bad
 detection is asserting "these are the rivals", and reconciling that against
 auto-detected rows invites a half-applied state.
 
 Everything supplied is marked `isManualOverride: true` and **survives later
-re-detection**, keeping the top ranks. An empty array clears the set and returns
+re-detection**, keeping the top ranks. An empty array clears the list and returns
 `status: "no_signal"`.
 
 **Anything currently in the set and not sent back is STRUCK, and stays struck.**
@@ -1754,10 +1950,22 @@ part-detected and part-hand-set. Changing this means redefining what the field
 measures, which is a scoring-semantics decision rather than a UI one. Recorded
 in build-log Epic 3.6.
 
+**A client with no set on any scan** (launch checklist 3.78, 2026-10-05). A non-empty list
+now makes the client's next list, recorded as every hand edit is: each row `manual` and
+`isManualOverride: true`, `status: "ok"`, `detectionConfidence: null`, no `detectedAt` (no
+detection ran). The scan that starts next adopts it, so detection does not run for that
+client. Two cases are still the `404` and write nothing: a client with no scan at all, and
+an empty list (a set with no rivals would be copied by every later scan and stop detection
+ever running for the client; there is nothing to clear).
+
+**`409 conflict` while the client's most recent scan is `running`**, on every path,
+detail "A scan of this client is running. Name the rivals after it finishes." A running scan
+may or may not have taken the client's list yet, and a save cannot say which, so nothing is
+written. A `queued`, `succeeded`, `partial`, `failed` or `cancelled` latest scan is no reason
+to refuse. The scan the check reads is scoped to the client's own agency.
+
 Max 10 competitors. **Errors:** `401`; `404` for an unknown client or another agency's,
-and for a client with no competitor set on any scan yet, with the same sentence as `GET`
-above (reworded 2026-10-04): there is nothing to replace, and naming rivals by hand does
-not start a set, so a refused `PUT` writes nothing; `422`.
+and for the two cases above, with the same sentence as `GET` above; `409` (above); `422`.
 
 **CORS:** `PUT` was missing from `allow_methods` until Epic 3.6. This is the only
 PUT in the API, nothing in a browser called it until the override UI shipped, and
@@ -1829,7 +2037,7 @@ The chain, in `services/scan_executor.py::execute_scan`:
 
 | # | Phase | Notes |
 |---|---|---|
-| 1 | **Competitor set** | `existing` → carry forward from the client's last scan → detect. Detection, the only branch that spends SerpApi quota, runs **once per client**. |
+| 1 | **Competitor set** | the scan's own set (`existing`) → **adopt the client's next list** (`adopted`: what `PUT` or the button's detection wrote since the last scan) → carry forward the client's latest set (`carried_forward`) → detect (`detected`). Detection, the only branch that spends SerpApi quota, runs **once per client**. |
 | 2 | **Prompt generation + engine loop** | Unchanged. |
 | 3 | **Technical audit** | Needs only the client's domain. |
 | 4 | **Scoring** | Reads the audit, so Technical Foundation is now included rather than excluded as `NOT_YET_MEASURED`. |
@@ -1843,12 +2051,20 @@ a set does not fail; it reports `succeeded` with the subject at position 1 of 1
 in every answer. A set written afterwards would be a set nothing had used.
 
 **A competitor set is carried forward onto each new scan rather than
-re-detected.** `CompetitorSet` hangs off a *scan*, so a client's second scan
+re-detected; detection runs only for a client with no set on any scan** (in practice its
+first scan; a set emptied by hand is carried forward empty). `CompetitorSet` hangs off a *scan*, so a client's second scan
 would otherwise start with no rivals. Re-detecting instead would spend six
 SerpApi searches per scan against a 250/month quota **and** discard an
 operator's `PUT /clients/{clientId}/competitors` correction, because
 `persist_detection` preserves manual rows only within the set it is writing.
 Suppressed tombstones are carried too, so a struck rival stays struck.
+
+**A list saved or detected since the client's last scan is adopted instead** (launch checklist
+3.78/3.79): the client's next list becomes the scan's own set whole, not a copy, under a row
+lock, and is logged as `competitors.adopted`. From then on it is that scan's set, and
+**nothing writes it again**: everything the scan shows (its score, its report, its
+client-history figure, an explicit re-score) reads it by the scan's id, so a rival named
+afterwards counts only for later scans.
 
 **One phase failing does not stop the others.** Each is attempted
 independently and commits on its own; the report renders whatever is missing
@@ -2138,7 +2354,8 @@ interchangeable:
 
 | Reason | Meaning | How a report should word it |
 |---|---|---|
-| `NOT_YET_MEASURED` | The capability does not exist yet (Technical Foundation, pending Epic 6) | "not yet checked" |
+| `NOT_YET_MEASURED` | Technical Foundation: the scan has no audit row. (Scores stored before 2026-10-05 also carry it for an audit that had failed; stored scores are not re-scored.) | "not yet checked" |
+| `AUDIT_FAILED` | Technical Foundation: the scan's audit failed with a code the three `CRAWL_*` reasons below do not cover (`TIMEOUT`, `BROWSER_BUSY`, `BROWSER_ERROR`, `FETCH_FAILED`, `HTTP_<status>`, or no code), 2026-10-05 | "Technical check failed" |
 | `NO_POPULATION` | Nothing to measure for this brand (no mentions → no sentiment) | "nothing to measure" |
 | `NO_COMPETITOR_SET` | Competitor detection returned nothing | "no comparison was made" |
 | `NO_AWARENESS_POPULATION` | The prompt set had no unprompted questions (v2) | "nothing unprompted to measure" |
@@ -2279,9 +2496,10 @@ machine-readable (`NO_STRUCTURED_DATA`, `META_ROBOTS_NOINDEX`,
 `ROBOTS_TXT_DISALLOW`, …), never prose.
 
 **`technicalFoundation`** is the §6 sub-score, a string-encoded decimal 0–100,
-or `null` when the site could not be read. **A site we could not reach is not a
-site with a bad technical foundation** — the two must not collapse into one
-number, which is why `status: "failed"` exists.
+or `null` when the technical check could not be completed (`status: "failed"`).
+**A check that could not be completed says nothing about the site's technical
+foundation** — the two must not collapse into one number, which is why
+`status: "failed"` exists.
 
 **A `failed` scan's audit carries no `technicalFoundation` and no `components`**
 (checklist 3.30, extending 3.24), on `POST` and `GET` alike: `technicalFoundation` is
@@ -2309,7 +2527,7 @@ routes should withhold more is the founder's decision and is open.
 |---|---|
 | `ok` | Every component measurable; `components` and `componentWeights` filled. |
 | `partial` | Read the page, but a component had no signal (e.g. no date anywhere). Scored on what was measurable; `components` and `componentWeights` show the measured ones, and `excludedComponents` lists those left out with their reason (e.g., `content_freshness: NO_DATE_SIGNAL_AVAILABLE`). |
-| `failed` | Could not read the site. `technicalFoundation`, `components` and `componentWeights` are all empty. |
+| `failed` | The technical check could not be completed. `technicalFoundation`, `components` and `componentWeights` are all empty. |
 
 A `failed` audit's `errorCode` says why. Three codes mean the crawler declined to
 read the site rather than failed to:
@@ -2352,7 +2570,7 @@ guard could not verify), `FETCH_FAILED` (the home page returned no response),
 about the site, while `HTTP_<status>` (the home page answered 400 or above) is the
 site's own answer. Each leaves one `site_reachable` check with the code as its
 `detailCode`, `error` for ours and `fail` for an HTTP status, and excludes
-Technical Foundation as `NOT_YET_MEASURED`.
+Technical Foundation as `AUDIT_FAILED` (`NOT_YET_MEASURED` before 2026-10-05).
 
 - `TIMEOUT`: one browser run is cut at **244.5 s** (`audit_run_cap_s`, the sum of
   every step at its own limit, so only a hang reaches it; 2026-10-02). Since then it
@@ -2438,15 +2656,18 @@ facts the sub-score is computed from are returned.
 Once an audit exists, `POST /scans/{scanId}/score` includes Technical Foundation
 instead of excluding it as `NOT_YET_MEASURED`, and the effective weights return
 to §6's table exactly (30/25/20/15/10). A **failed** audit leaves the dimension
-excluded — an unreadable site is not a measured zero.
-The exclusion reason is `NOT_YET_MEASURED`, except `CRAWL_DISALLOWED` for an
-audit failed with `ROBOTS_DISALLOWED`, `CRAWL_ADDRESS_NOT_PUBLIC` for one
+excluded — a check that could not be completed is not a measured zero.
+The exclusion reason is `NOT_YET_MEASURED` when the scan has no audit row, and
+`AUDIT_FAILED` for a failed audit with any code but the three below (2026-10-05),
+except `CRAWL_DISALLOWED` for an audit failed with `ROBOTS_DISALLOWED`, `CRAWL_ADDRESS_NOT_PUBLIC` for one
 failed with `ADDRESS_NOT_PUBLIC` and `CRAWL_POLICY_UNREADABLE` for one failed with
-`ROBOTS_UNREACHABLE`. All four give the same composite, with the same dimensions
+`ROBOTS_UNREACHABLE`. All five give the same composite, with the same dimensions
 excluded in the same cases; only the reason differs, so `FORMULA_VERSION` did not change
 for any. The reason enters `inputsDigest` when it is set (a score read as
 `CRAWL_POLICY_UNREADABLE` has its own digest), so a stored score keeps the digest and the
-reason it was computed with.
+reason it was computed with. `inputsDigest` therefore records the reason: a score
+computed for a failed audit now carries `AUDIT_FAILED` (and a different digest from
+before), while rows stored earlier keep `NOT_YET_MEASURED`.
 
 ---
 
@@ -2479,6 +2700,7 @@ place that `tests/test_facts_only.py` can assert over.
 ```json
 {
   "scanId": "scan_01J...", "scanStatus": "succeeded", "scanErrorCode": null,
+  "csvExportAvailable": false,
   "generatedAt": "2026-08-22T00:18:31Z", "scannedAt": "2026-08-21T05:49:24Z",
   "agency": { "id": "agcy_01J...", "name": "Acme SEO", "slug": "acme-seo" },
   "subject": { "clientId": "clnt_01J...", "name": "Help Scout",
@@ -2549,6 +2771,17 @@ and always `null` on the shared report and its PDF, like `scanErrorCode`. A
 `failed` scan's token still counts (checklist 3.29): that link no longer opens
 the report, but the token stays so the agency can withdraw it, and this field is
 how the page knows to offer that.
+
+**`csvExportAvailable` (2026-10-06, F3)** says whether this report may offer
+"Download figures (CSV)": `true` only when the API's `REPORT_CSV_ENABLED` is on
+**and** the scan's status is `succeeded` or `partial`. It is a required boolean
+(the key is always there) and `false` by default, so with the setting unset
+nothing about the report moves but this one key. It is set by this route alone:
+the PDF, `POST /reports/shared` and its PDF carry `false` whatever the setting
+says, because no share link has a CSV. The report and
+`GET /scans/{scanId}/report.csv` use one rule, so the report never offers a file
+the route would refuse. The web draws the control from this field and from nothing
+else.
 
 **`dimensions` is ordered heaviest-weight first.** The Luminance Ledger stacks
 the heaviest segment at the bottom and consumes this list directly, so the order
@@ -2720,6 +2953,87 @@ read the same checked-in fixtures and assert the same checked-in expected
 output, so changing either derivation reddens one of them.
 
 **Errors:** `401`, `404` (unknown scan, or another agency's).
+
+#### `GET /api/v1/scans/{scanId}/report.csv`
+**Auth required. Off unless `REPORT_CSV_ENABLED` is on** (2026-10-06, F3; labels and sections as
+revised after review the same day). The report's figures as one CSV file: the facts the
+signed-in report already shows, for an agency to take into its own spreadsheet or deck.
+
+**A rendering target, not a second report.** It calls the same `build_report` the JSON
+route calls and writes what comes back (`services/report_csv.py`): no second query, no
+second aggregation, and nothing the report does not already hold. Makes no provider call
+and costs nothing; built in memory per request.
+
+**One long table, one header row, six columns:** `Section,Engine,Prompt,Item,Measure,Value`.
+Every row is one fact, every label is plain words, and a figure carries its unit in its
+`Measure`. Six sections, in this order:
+
+| `Section` | One row per | `Measure` and `Value` |
+|---|---|---|
+| `Scan` | fact about the scan (three rows) | `Item` is the client's name. `Scan date` (an ISO date, UTC); `Scan status` (`Complete`, or for a `partial` scan the PDF cover's own sentence, "This scan is partial: not every planned question was answered, so these results rest on fewer answers than planned."); `Overall score (out of 100)` (the stored composite, or `Not scored` for a scan never scored or with too little data, never a zero) |
+| `Dimension scores` | dimension, heaviest first | `Score (out of 100)`, or `Left out of the score because` with the reason as the report words it (`Not yet checked`). Never a zero for a dimension left out; no rows for a scan never scored |
+| `Share of voice` | the client and each competitor, as the report's "Rivals in the same answers" table lists them | `Share of voice (out of 100)` (a blank when the scan made no comparison, never `0`). No rows when the scan has no competitors |
+| `Answers` | engine (`Prompt` blank), and engine and prompt | per engine, for the whole scan: `Prompts asked (count)`, `Prompts listed below (count)` (the report lists the first 20 prompts of a scan, so this says how many of the asked ones are below), `Answers received (count)`, `Answers naming the client (count)` and `Sentiment (out of 100)` (when the engine named the client at all); per prompt: `Answered (yes/no)` and, if it answered, `Named the client (yes/no)` and `Position when named (1 = first)` (when it was named and the position was stored). `Item` is the client's name. The prompt text is ours, generated |
+| `Cited domains` | domain cited | `Citations (count)` and `Attributed to` (the client's name for its own pages, a competitor's name, or `Third party`). Both of the report's citation tables, each as capped by the report (12 domains) |
+| `Fixes` | fix on the report's list | `Priority`, `Effort (S, M or L)` and `Points the score gains` (none for an audit fix, which has no measurable value). The title is `Item` |
+
+**The fix list is the report's, not the projection's `actionItems`.** The report derives
+which fixes exist, their order and their points itself, and generated wording is laid on
+by key; the CSV takes that derivation (`report_narrative.derive_narrative`, the one the PDF
+runs), so a scan whose fixes were never generated has the list its page shows. A fix's
+`detail` is not in the file.
+
+**Numbers are written as the report serves them**: a decimal as stored (two places, never
+an exponent), counts as integers, a fix's points to one place as the page shows them. The
+web page rounds its tables to one place; the file keeps the stored figure, as the PDF does,
+and the button says so. A figure that does not exist is not a row; one the report shows as a
+dash is a blank cell. Left out because the brief did not name them: the weights, a rival's
+mention rate, citation strength and average position, a citation's page address, the audit's
+checks and a fix's detail.
+
+**Response `200`** — `text/csv; charset=utf-8`, with
+`Content-Disposition: attachment; filename="<client>-ai-visibility-<date>.csv"` and
+`Cache-Control: private, no-store`. The client's name is reduced to `[A-Za-z0-9._-]` exactly as
+the PDF's name is (a run of any other characters becomes `-`, a leading or trailing `-` or `.` is
+dropped, 60 characters at most), because a client's name is caller-supplied data and a header is
+a header; `<date>` is the scan's date in UTC, or the day the report was made when the scan has
+none; a name with nothing left after the reduction gives `ai-visibility-<date>.csv`, which
+keeps the date. Nothing else an operator typed is in it. The body starts with a UTF-8
+byte-order mark and rows end `\r\n`.
+**Excel-safe:** every cell that begins with `=`, `+`, `-`, `@`, a tab, a carriage return or a
+full-width `＝`, `＋`, `－`, `＠` (OWASP's list, and the full-width forms), with white space in
+front of it or not, gets a leading apostrophe; and an apostrophe goes straight after a `;`, a
+tab, a carriage return or a line feed inside a cell when a formula character follows it (white
+space between or not), because a spreadsheet that splits on `;` or a tab starts a new cell there,
+and one in a `;` locale ends the record at a line break even inside the quotes `csv` writes, so
+what follows starts a record of its own. `csv` quotes a cell for a comma, a quote or a line break
+and for neither a `;` nor a tab. Where a `;` and a line break both come before a formula, the
+apostrophe goes after both, so the new line begins with `'`. The header and our own words are
+guarded the same, so a client name, a competitor name, a prompt or a fix title is text and
+never a formula. Quoting is Python's `csv` module.
+
+**Facts only.** Every cell is a name, a domain, a count, an ordinal, a yes or a no, a number, a
+date, one of our own words, our own generated prompt, or the title of one of our fixes.
+`tests/test_facts_only.py` holds the builder to that.
+
+**No token route.** A share link opens the report and its PDF and never this file; there is
+no `POST /reports/shared/csv`, and `csvExportAvailable` is `false` on every public response.
+
+**Errors:** `401` (signed out, whatever the setting); `404` (unknown scan, another agency's, **or
+the setting is off**, with the body an unknown path gets: type `/problems/not-found`, detail
+`Not Found`); `409` `/problems/scan-not-exportable` for a scan with no figures to give. The
+agency check runs first, so another agency's scan is a `404` in every status and never a
+`409`. The `detail` is one plain sentence, and names no code and no figure:
+
+| Scan status | `detail` |
+|---|---|
+| `failed` (its score is withheld, as for sharing) | "This scan failed, so its figures cannot be exported." |
+| `queued` | "This scan has not started yet, so there are no figures to export. Try again when it has finished." |
+| `running` | "This scan is still running, so its figures are not final. Try again when it has finished." |
+| any other status except `succeeded` and `partial` (`cancelled`, which nothing writes today) | "This scan did not finish, so its figures cannot be exported." |
+
+`succeeded` and `partial` are exported: the list is an allow-list, so a status added later is
+refused until somebody says it should be exported.
 
 #### `POST /api/v1/reports/shared/pdf`
 **No auth.** The signed report as a PDF, by share token.

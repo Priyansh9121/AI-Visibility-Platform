@@ -37,6 +37,7 @@ const billing = (subscriptionStatus: string | null): BillingStatus => ({
   cancelAtPeriodEnd: false,
   trialEndsAt: null,
   trialEligible: false,
+  trialRequiresGoogle: false,
 });
 
 function render(

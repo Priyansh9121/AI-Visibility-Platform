@@ -39,6 +39,7 @@ import {
   activeSubscription,
   canceledSubscription,
   noSubscription,
+  noSubscriptionTrialNeedsGoogle,
   noSubscriptionTrialOffered,
   pastDueSubscription,
   trialingEnding,
@@ -510,6 +511,66 @@ describe('the plan card promises the trial only when the API says this agency wo
     expect(render({ billing: noSubscriptionTrialOffered, initialTrialDays: 0 })).not.toContain(
       'after you subscribe',
     );
+  });
+});
+
+describe('a free trial needs a Google sign-in — 2026-10-05, launch checklist 3.72', () => {
+  // The rule is on the user who subscribes, and the billing response is the API's word about THIS
+  // user: `trialEligible` is what their Subscribe would get, `trialRequiresGoogle` is "no trial,
+  // and Google is the only thing missing". A user without Google is told, in plain words, that
+  // subscribing now starts the paid plan at once; a user with Google sees nothing new.
+  const NOTICE =
+    'Subscribing now starts the paid plan at once, with no free trial: a free trial needs a Google sign-in. Continue with Google using the same address you sign in with here; a subscription started after that begins with the free trial, unless this agency has subscribed before. A different Google account would start a new agency instead.';
+  const PROMISE = 'The first 30 days after you subscribe are free.';
+
+  it('a user without Google: the notice, the Continue with Google control, and no trial promise', () => {
+    const html = render({ billing: noSubscriptionTrialNeedsGoogle, initialTrialDays: 30 });
+    expect(html).toContain(NOTICE);
+    expect(html).toContain('Continue with Google');
+    expect(html).toContain('/auth/google/start');
+    // The plan card beneath it is the plain plan: nothing promises a trial that would not come.
+    expect(html).not.toContain(PROMISE);
+    expect(html).not.toContain('after you subscribe are free');
+    expect(html).toContain('>Subscribe<');
+  });
+
+  it('the notice sits above the plan card, where the person is about to press Subscribe', () => {
+    const html = render({ billing: noSubscriptionTrialNeedsGoogle, initialTrialDays: 30 });
+    expect(html.indexOf(NOTICE)).toBeLessThan(html.indexOf('>Subscribe<'));
+  });
+
+  it('it is said whatever the page was told about the length: the API said the trial is on', () => {
+    expect(render({ billing: noSubscriptionTrialNeedsGoogle })).toContain(NOTICE);
+  });
+
+  it('a user with Google: the promise as before, and no notice and no Google control', () => {
+    const html = render({ billing: noSubscriptionTrialOffered, initialTrialDays: 30 });
+    expect(html).toContain(PROMISE);
+    expect(html).not.toContain('with no free trial');
+    expect(html).not.toContain('Continue with Google');
+    expect(html).not.toContain('trial-needs-google');
+  });
+
+  it('where no trial is on or the agency had its one: neither promise nor notice', () => {
+    for (const billing of [noSubscription, canceledSubscription]) {
+      const html = render({ billing, initialTrialDays: 30 });
+      expect(html).not.toContain('with no free trial');
+      expect(html).not.toContain('Continue with Google');
+    }
+  });
+
+  it('a response without the field says nothing: only a true is a notice', () => {
+    const { trialRequiresGoogle: _omitted, ...without } = noSubscriptionTrialNeedsGoogle;
+    const html = render({ billing: without as unknown as BillingStatus, initialTrialDays: 30 });
+    expect(html).not.toContain('with no free trial');
+  });
+
+  it('it says nothing where there is no plan card to subscribe from', () => {
+    const html = render({
+      billing: { ...activeSubscription, trialRequiresGoogle: true },
+      initialTrialDays: 30,
+    });
+    expect(html).not.toContain('with no free trial');
   });
 });
 

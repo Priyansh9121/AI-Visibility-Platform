@@ -72,6 +72,7 @@ EXCLUSION_REASON: dict[str, str] = {
     "CRAWL_DISALLOWED": "Blocked by robots.txt",
     "CRAWL_ADDRESS_NOT_PUBLIC": "Address not public",
     "CRAWL_POLICY_UNREADABLE": "Could not read robots.txt",
+    "AUDIT_FAILED": "Technical check failed",
 }
 
 # The sentence under each label — `strings.ts`'s `EXCLUSION_REASON[code].detail`,
@@ -90,10 +91,10 @@ EXCLUSION_DETAIL: dict[str, str] = {
         "is excluded rather than scored zero."
     ),
     "NO_COMPETITOR_SET": (
-        "No competitor set was detected for this scan, so there is no rival to measure "
-        "a share of voice or a citation comparison against. The dimension is excluded "
-        "and its weight spread across the others, rather than awarding points for a "
-        "detection that did not happen."
+        "This scan\u2019s competitor list was missing or had no rivals on it, so there is "
+        "no rival to measure a share of voice or a citation comparison against. The "
+        "dimension is excluded and its weight spread across the others, rather than "
+        "awarding points for a comparison that could not be made."
     ),
     "NO_AWARENESS_POPULATION": (
         "Mention Rate counts only questions that did not name the brand — the ones "
@@ -149,6 +150,14 @@ EXCLUSION_DETAIL: dict[str, str] = {
         "The crawler tried to read the robots.txt of this site, or of an address the site "
         "sent it to, and did not get a usable answer. It obeys robots.txt, so without that "
         "answer it did not read the site. Technical Foundation is left out of the score."
+    ),
+    # 2026-10-05 (launch checklist 3.87). Any failed audit the three above do not name:
+    # a timeout, a browser that was busy (the check never started) or broke, a page that
+    # did not respond, an error status (the page did answer). The words claim only what
+    # is true of all of them, and blame no one: the check could not be completed.
+    "AUDIT_FAILED": (
+        "The technical check of the site could not be completed for this scan. Technical "
+        "Foundation is left out of the score."
     ),
 }
 
@@ -217,7 +226,7 @@ DEGRADATION_FLAG: dict[str, str] = {
         "single signal. Share of Voice should be read as indicative rather than exact."
     ),
     "NO_CITATIONS_IN_SCAN": "No engine cited any source in this scan, for any brand.",
-    "NO_COMPETITOR_SET": "No competitors were detected, so no share comparison was possible.",
+    "NO_COMPETITOR_SET": "No competitors were on the list, so no share comparison was possible.",
     "TECHNICAL_FOUNDATION_NOT_MEASURED": (
         "The site had not been audited when this score was computed."
     ),
@@ -713,7 +722,9 @@ def derive_fixes(
     # A dimension excluded because WE have not measured it yet is our gap, not
     # the client's. It must never produce a fix telling them to change anything.
     not_their_problem = {
-        f"gap:{e['key']}" for e in exclusions if e.get("reason") == "NOT_YET_MEASURED"
+        f"gap:{e['key']}"
+        for e in exclusions
+        if e.get("reason") in ("NOT_YET_MEASURED", "AUDIT_FAILED")
     }
 
     ordered = [f for f in fixes if f.id not in not_their_problem]

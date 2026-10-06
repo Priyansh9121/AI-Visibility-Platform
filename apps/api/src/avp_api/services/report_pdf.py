@@ -23,7 +23,7 @@ Everything the screen refuses to fake, this refuses to fake:
     could read as a value
   * `insufficient_data` is its own sentence, distinct from never-scored
   * an excluded dimension prints its reason and no sub-score, never a zero
-  * a null competitor set says detection did not run, rather than omitting the
+  * a null competitor set says the scan has no list, rather than omitting the
     beat and letting the absence read as "no rivals exist"
   * an empty `actionItems` list renders the deterministic derivation, exactly
     as api-contracts.md's note on that field says the fix beat does
@@ -302,19 +302,22 @@ def _proof_beat(doc: PdfDocument, data: dict[str, Any], subject_name: str) -> No
         # Said, not omitted. A missing beat reads as "no rivals exist", which is
         # a claim about the brand rather than about the detection.
         doc.text(
-            "No competitor set was detected for this scan, so no comparison is shown. "
-            "That is a limit of the detection, not a finding about the brand.",
+            "This scan has no competitor list, so no comparison is shown. "
+            "That is a limit of the data, not a finding about the brand.",
             size=10,
         )
     elif not competitor_set["competitors"]:
         doc.text(
-            "Detection ran and surfaced no usable rivals. Again: a limit of the "
-            "detection, not a finding about the brand.",
+            "This scan\u2019s competitor list has no rivals, so no comparison is shown. "
+            "Either search results and AI answers surfaced no usable set, or the list was "
+            "emptied by hand. Neither is a finding about the brand.",
             size=10,
         )
     else:
         doc.text(
-            _DETECTION_STATUS.get(competitor_set["status"], ""),
+            _HAND_NAMED
+            if all(c.get("isManualOverride") for c in competitor_set["competitors"])
+            else _DETECTION_STATUS.get(competitor_set["status"], ""),
             size=9.5,
             leading=13,
             grey=True,
@@ -608,16 +611,20 @@ _EFFORT = {"S": "Small effort", "M": "Medium effort", "L": "Large effort"}
 # 2026-09-27, mirrored from `strings.ts` and tested against it. It lived here
 # first, and shipped without two of the codes the screen had sentences for.
 
+# A list the agency named by hand is stored as status ok with no confidence, and a scan adopts it
+# whole, so every rival on it is a manual override. "Independently surfaced" is false of it.
+_HAND_NAMED = "These rivals were named by the agency, not found by search results or AI answers."
+
 _DETECTION_STATUS = {
     "ok": "Search results and AI answers independently surfaced this set of rivals.",
     "weak_signal": (
         "Few candidates surfaced and the two detection signals largely disagreed. Treat "
-        "this rival set as a starting point and correct it before sending the report on."
+        "this rival set as a starting point."
     ),
     "no_signal": (
-        "Neither search results nor AI answers surfaced a usable competitor set, so no "
-        "comparison is shown. That is a limit of the detection, not a finding about the "
-        "brand."
+        "This scan\u2019s competitor list has no rivals, so no comparison is shown. Either "
+        "search results and AI answers surfaced no usable set, or the list was emptied by "
+        "hand. Neither is a finding about the brand."
     ),
 }
 

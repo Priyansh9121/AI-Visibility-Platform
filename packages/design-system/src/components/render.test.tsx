@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Button } from './Button.js';
+import { TextField } from './TextField.js';
+import { SelectField } from './SelectField.js';
 import { Card, CardBody } from './Card.js';
 import { Badge, VisibilityBadge } from './Badge.js';
 import { DataTable } from './Table.js';
@@ -1474,5 +1476,25 @@ describe('ShareBar', () => {
   it('renders identically on the Working palette apart from the rivals\' hues', () => {
     const strip = (o: string) => o.replace(/fill="[^"]*"/g, '').replace(/stroke="[^"]*"/g, '');
     expect(strip(bar({ palette: 'working' }))).toBe(strip(bar()));
+  });
+});
+
+describe('both fields carry the classes the focus rules are written for — checklist 3.40', () => {
+  /*
+   * contrast.test.ts reads `.avp-field__input:focus-visible` (no shadow on the input) and
+   * `.avp-field__control:focus-within` (the one ring) out of components.css. Those rules reach every
+   * field only while `TextField` and `SelectField` still put their input under these two classes.
+   */
+  it('TextField puts its input under .avp-field__input, inside .avp-field__control', () => {
+    const out = html(<TextField label="Client URL" prefix="https://" />);
+    expect(out).toMatch(/class="avp-field__control avp-field__control--md"><span class="avp-field__prefix">/);
+    expect(out).toMatch(/<input [^>]*class="avp-field__input"/);
+    expect(out.indexOf('avp-field__control')).toBeLessThan(out.indexOf('<input'));
+  });
+
+  it('SelectField puts its select under .avp-field__input, inside .avp-field__control', () => {
+    const out = html(<SelectField label="Role" options={[{ value: 'a', label: 'A' }]} />);
+    expect(out).toMatch(/class="avp-field__control avp-field__control--md"><select /);
+    expect(out).toMatch(/<select [^>]*class="avp-field__input avp-field__select"/);
   });
 });

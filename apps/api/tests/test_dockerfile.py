@@ -228,6 +228,33 @@ class TestTheScriptHandsOverToUvicorn:
         assert "STRIPE_LOG" in comments
         assert "stderr" in comments
 
+    def test_it_unsets_pydantic_settings_debug_before_it_starts_anything(self) -> None:
+        """`PYDANTIC_SETTINGS_DEBUG` makes pydantic-settings write every source it reads, secrets
+        included, to its logger at DEBUG. The behaviour, with the real script run under stubs, is
+        `tests/test_secrets_stay_out_of_logs.py`; this pins the line and its place, as for
+        `STRIPE_LOG`, so it cannot drift below the `alembic` call or the `exec`."""
+        code = self.code_lines()
+
+        assert code.count("unset PYDANTIC_SETTINGS_DEBUG") == 1
+        unset = code.index("unset PYDANTIC_SETTINGS_DEBUG")
+        assert unset < code.index("alembic upgrade head")
+        assert unset < next(i for i, line in enumerate(code) if line.startswith("exec uvicorn"))
+
+    def test_the_why_of_the_pydantic_settings_unset_is_written_right_above_it(self) -> None:
+        lines = ENTRYPOINT_SCRIPT.read_text().splitlines()
+        at = next(
+            i for i, line in enumerate(lines) if line.strip() == "unset PYDANTIC_SETTINGS_DEBUG"
+        )
+        above: list[str] = []
+        for line in reversed(lines[:at]):
+            if not line.startswith("#"):
+                break
+            above.append(line)
+        said = "\n".join(above)
+
+        assert "PYDANTIC_SETTINGS_DEBUG" in said
+        assert "stderr" in said
+
     def test_the_one_worker_is_said_to_be_deliberate(self) -> None:
         comments = "\n".join(
             line for line in ENTRYPOINT_SCRIPT.read_text().splitlines()

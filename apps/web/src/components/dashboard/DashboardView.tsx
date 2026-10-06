@@ -13,11 +13,12 @@
  * it safe to act on, and both left the poller unbuilt so the screen needed a
  * manual refresh to advance.
  *
- * It no longer does. The route refreshes the dashboard every 5s while a scan is
+ * It no longer does. The route refreshes the dashboard while a scan is
  * running, or while a scan this session started has not finished, and stops as
- * soon as it lands. This component takes `live` and renders that it is
- * watching, so an auto-updating page says so rather than appearing to move on
- * its own. The rules are in `lib/dashboard/polling.ts`.
+ * soon as it lands: every 5s at first, less often as the scan ages (U7), and
+ * not at all while the tab is hidden. This component takes `live` and renders
+ * that it is watching, so an auto-updating page says so rather than appearing
+ * to move on its own. The rules are in `lib/dashboard/polling.ts`.
  *
  * There is still no progress BAR, for the reason the intake screen gives: we
  * cannot measure real progress, and a fake one is a lie the user will notice.
@@ -228,7 +229,7 @@ export function DashboardView({
         return (
           <div className="flex flex-col items-start gap-1">
             {/* `live` on the running one only. This screen re-reads itself
-                every 5s while a scan is in flight and the row it is waiting on
+                while a scan is in flight and the row it is waiting on
                 is otherwise indistinguishable from a finished one — same chip,
                 same weight. A badge that breathes says which row the page is
                 watching, and it is the only motion here that runs without

@@ -10,10 +10,19 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import Field
+from pydantic import Field, field_validator
+from pydantic_core import PydanticCustomError
 
 from ..models import DetectionSource, DetectionStatus
+from ..services.intake import InvalidUrl, rival_domain
+from ..services.serp import is_non_competitor_domain
 from .common import ApiModel
+
+# The refusal of a platform or publisher typed as a rival (launch checklist 3.90). The list is
+# detection's own (`serp.NON_COMPETITOR_DOMAINS`) and holds publishers, marketplaces, review sites
+# and directories, social networks, wikis, job boards, search engines and the big platforms, so
+# the sentence says "platform or publisher". No domain in it: nothing typed is echoed.
+A_PLATFORM_NOT_A_RIVAL = "That is a platform or publisher, so it cannot be added as a rival."
 
 
 class CompetitorOut(ApiModel):
@@ -33,7 +42,10 @@ class CompetitorOut(ApiModel):
 
 class CompetitorSetOut(ApiModel):
     id: str
-    scan_id: str
+    # The scan this set belongs to, or null for the client's NEXT LIST: the list a save or the
+    # button's detection wrote, which belongs to no scan until the next scan adopts it. A scan's
+    # own set never changes once the scan has started; the next list is the only one that does.
+    scan_id: str | None = None
     status: DetectionStatus
 
     # Cross-signal agreement, 0-1, or null when it could not be measured
@@ -77,6 +89,31 @@ class CompetitorInput(ApiModel):
 
     name: str = Field(min_length=1, max_length=200)
     domain: str | None = Field(default=None, max_length=253)
+
+    @field_validator("domain")
+    @classmethod
+    def _domain_is_the_rivals_own(cls, value: str | None) -> str | None:
+        """The rival's own domain, checked as a client's is and never reduced (checklist 3.81),
+        and not a platform or publisher (3.90).
+
+        Blank is no domain, as it always was. Anything else goes through `rival_domain`: a page, a
+        path or a subdomain is refused and not cut down to another site's domain. What is left
+        must not be on detection's own list (`serp.is_non_competitor_domain`), so a typed rival
+        obeys the rule a detected one does. `rival_domain` itself does not check the list, on
+        purpose: a model's domain goes through it too, and a refusal there would keep the brand
+        with no domain, where detection drops a platform it names whole. Each error is a
+        `PydanticCustomError`, so `errors[].message` is the plain sentence and not pydantic's
+        "Value error, " in front of it.
+        """
+        if value is None or not value.strip():
+            return None
+        try:
+            domain = rival_domain(value)
+        except InvalidUrl as exc:
+            raise PydanticCustomError("invalid_domain", exc.detail) from exc
+        if is_non_competitor_domain(domain):
+            raise PydanticCustomError("invalid_domain", A_PLATFORM_NOT_A_RIVAL)
+        return domain
 
 
 class ReplaceCompetitorsRequest(ApiModel):

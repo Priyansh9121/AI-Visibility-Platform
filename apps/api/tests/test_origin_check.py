@@ -269,7 +269,7 @@ async def test_a_put_from_another_origin_replaces_nothing(client: AsyncClient) -
     cid = (await client.post(f"{BASE}/clients", json=NEW_CLIENT)).json()["id"]
     assert (await client.post(f"{BASE}/clients/{cid}/competitors/detect")).status_code == 201
     before = await _competitor_names(client, cid)
-    pick = {"competitors": [{"name": "Operator Pick", "domain": "operatorpick.example"}]}
+    pick = {"competitors": [{"name": "Operator Pick", "domain": "operatorpick.com"}]}
 
     async with _page(client, FOREIGN) as page:
         refused = await page.put(f"{BASE}/clients/{cid}/competitors", json=pick)

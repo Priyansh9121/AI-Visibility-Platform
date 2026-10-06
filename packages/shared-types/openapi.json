@@ -718,6 +718,60 @@
         "title": "AuditStatus",
         "type": "string"
       },
+      "AutoRescanOut": {
+        "description": "A client's monthly-rescan setting, as the caller may see it.\n\n`available` is true only when the API has automatic rescans on (`AUTO_RESCAN_ENABLED`) AND the\ncaller is an owner or admin. When it is false everything else is its empty value, whatever\nthe client holds, and the web draws nothing. `skipReason` is one of our own codes\n(`AGENCY_NOT_PAID`, `ALLOWANCE_USED`, `USER_NOT_ADMIN`, `COULD_NOT_START`) or null; with it,\n`skippedAt` is when the last attempt started no scan and `retriesAt` is the first instant of\nthe next UTC calendar month, when it is tried again.",
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "retriesAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retriesat"
+          },
+          "skipReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skipreason"
+          },
+          "skippedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skippedat"
+          }
+        },
+        "required": [
+          "available"
+        ],
+        "title": "AutoRescanOut",
+        "type": "object"
+      },
       "BillingPlanOut": {
         "description": "What the plan offers the public \u2014 today, only the length of its free trial.\n\n`GET /billing/plan`, with no session, no agency and nothing secret in it:\nit is read by the public pricing card and landing page, before anybody has\nsigned up. `trialDays` is `STRIPE_TRIAL_DAYS`, the one place the length of\nthe trial is stated, so what a page says and what checkout does cannot\ndisagree. **0 means there is no trial**, and is also the answer on a\ndeployment where checkout is not configured (a trial nobody can start is\nnot one to promise). A page says \"the first N days after you subscribe are\nfree\" only for an N above 0.\n\nIt describes the offer to a NEW agency. Whether a particular agency still\ngets the trial is not here: that is the agency's own history, and checkout\ndecides it (`services/billing.create_checkout_session`).",
         "properties": {
@@ -816,6 +870,10 @@
               }
             ],
             "title": "Trialendsat"
+          },
+          "trialRequiresGoogle": {
+            "title": "Trialrequiresgoogle",
+            "type": "boolean"
           }
         },
         "required": [
@@ -829,7 +887,8 @@
           "cancelAtPeriodEnd",
           "freeScanRequiresGoogle",
           "trialEndsAt",
-          "trialEligible"
+          "trialEligible",
+          "trialRequiresGoogle"
         ],
         "title": "BillingStatusOut",
         "type": "object"
@@ -1683,8 +1742,15 @@
             "type": "string"
           },
           "scanId": {
-            "title": "Scanid",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scanid"
           },
           "serpQueriesRun": {
             "title": "Serpqueriesrun",
@@ -1700,7 +1766,6 @@
         },
         "required": [
           "id",
-          "scanId",
           "status",
           "serpQueriesRun",
           "coCitationPromptsRun",
@@ -2725,6 +2790,20 @@
           "agency": {
             "$ref": "#/components/schemas/AgencyOut"
           },
+          "feedbackEmail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feedbackemail"
+          },
+          "scanEmails": {
+            "$ref": "#/components/schemas/ScanEmailsOut"
+          },
           "seats": {
             "$ref": "#/components/schemas/SeatUsageOut"
           },
@@ -2735,7 +2814,9 @@
         "required": [
           "user",
           "agency",
-          "seats"
+          "seats",
+          "feedbackEmail",
+          "scanEmails"
         ],
         "title": "MeOut",
         "type": "object"
@@ -3835,6 +3916,11 @@
               }
             ]
           },
+          "csvExportAvailable": {
+            "default": false,
+            "title": "Csvexportavailable",
+            "type": "boolean"
+          },
           "dimensions": {
             "items": {
               "$ref": "#/components/schemas/ReportDimensionOut"
@@ -4286,6 +4372,40 @@
           "updatedAt"
         ],
         "title": "ScanDetailOut",
+        "type": "object"
+      },
+      "ScanEmailsOut": {
+        "description": "The scan-finished email switch, for the signed-in caller only (F1, 2026-10-06).\n\n`available` is a fact about the deployment: `EMAIL_SCAN_NOTIFICATIONS` is on AND email is\nconfigured, the same for every user. `enabled` is this caller's own choice.",
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "available",
+          "enabled"
+        ],
+        "title": "ScanEmailsOut",
+        "type": "object"
+      },
+      "ScanEmailsRequest": {
+        "additionalProperties": false,
+        "description": "Set your own choice. Strict (a JSON true or false) and nothing else may be in the body.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "ScanEmailsRequest",
         "type": "object"
       },
       "ScanOut": {
@@ -4908,6 +5028,21 @@
         "title": "Sentiment",
         "type": "string"
       },
+      "SetAutoRescanRequest": {
+        "additionalProperties": false,
+        "description": "Switch \"Rescan every month\" on or off for one client.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "SetAutoRescanRequest",
+        "type": "object"
+      },
       "ShareLinkOut": {
         "description": "The public link for a report \u2014 Epic 9.8.\n\nCarries the complete URL, not just the token, because the operator's next\naction is to paste it into an email. Returning a bare token would force\nevery caller to rebuild the same string, which is how a frontend and a\nbackend end up disagreeing about a path.\n\n`token` is exposed alongside it deliberately: it is the operator's OWN\ncapability for their OWN scan, already implied by the URL beside it, and\ntests assert on it without having to parse a URL apart.\n\n`expiresAt` is returned because the operator is about to paste this URL\ninto an email and the one thing they cannot see from the URL is when it\nstops working \u2014 Epic 9.21. It is the end the link was given when it was\nmade: a press on a live link returns the same value, and only a press when\nno link is live (never shared, withdrawn, or ended) makes a new link with a\nfresh 30 days (checklist 3.28).",
         "properties": {
@@ -5443,7 +5578,7 @@
   "paths": {
     "/api/v1/agencies/{agencyId}/billing": {
       "get": {
-        "description": "This agency's subscription, as recorded, and its scan allowance. **Never asks Stripe.**\n\nThe allowance \u2014 `scansUsedThisPeriod`, `scanLimit`, `periodResetsAt` \u2014 is\none COUNT over the agency's scans (2026-09-28, `services/scan_allowance`).\n`scanLimit` is null when billing is not configured on this deployment,\nwhich is the honest way to say no gate applies. `freeScanRequiresGoogle`\n(2026-09-29) is true when the free scan is what this sign-in would start\nand it has no linked Google identity \u2014 the case a scan start refuses with\n`SCAN_LIMIT_VERIFY_REQUIRED`. It is about the requesting user, not the\nagency: two seats of one agency can read it differently.\n\n`cancelAtPeriodEnd` (2026-09-29) is true when the subscription was\ncancelled in Stripe's portal and runs to `currentPeriodEnd` without\nrenewing. It is still `active` until then, so `isActive` stays true and\nthe scan allowance stays the plan's.\n\n`trialEndsAt` (2026-10-04) is when the free trial ends and the card is first\ncharged, and is set ONLY while the status is `trialing`: null for every other\nstatus, for a trial that converted (the date is history) and for an agency that\nnever had one. A trialing agency is `isActive` and has the plan's full allowance.\n\n`trialEligible` (2026-10-04, round two) is whether Settings may promise this agency a free\ntrial: true only when a trial is on (`STRIPE_TRIAL_DAYS` above 0 and billing configured) and\nthe agency's own row has never had a subscription, the same row test checkout applies. **It\ncannot see Stripe's side of that test** (the customer's subscription list: a read never\nasks Stripe), so true means \"nothing in our record says no\": checkout can still refuse the\ntrial to a customer Stripe remembers an ended subscription for.\n\nEvery field comes off the `agencies` row the webhook maintains. A settings\nscreen that called a payment processor on page load would be slower, would\nfail whenever Stripe was slow, and would put a third party in the render\npath of a page with four other sections on it \u2014 for a value that would be\nno more current than the webhook already makes it.\n\nThe agency is already loaded on the principal, so there is no query here at\nall beyond the one `current_principal` performs on every request.\n\n**Errors:** `401`, `403` (member role), `404` (another agency's id).",
+        "description": "This agency's subscription, as recorded, and its scan allowance. **Never asks Stripe.**\n\nThe allowance \u2014 `scansUsedThisPeriod`, `scanLimit`, `periodResetsAt` \u2014 is\none COUNT over the agency's scans (2026-09-28, `services/scan_allowance`).\n`scanLimit` is null when billing is not configured on this deployment,\nwhich is the honest way to say no gate applies. `freeScanRequiresGoogle`\n(2026-09-29) is true when the free scan is what this sign-in would start\nand it has no linked Google identity \u2014 the case a scan start refuses with\n`SCAN_LIMIT_VERIFY_REQUIRED`. It is about the requesting user, not the\nagency: two seats of one agency can read it differently.\n\n`cancelAtPeriodEnd` (2026-09-29) is true when the subscription was\ncancelled in Stripe's portal and runs to `currentPeriodEnd` without\nrenewing. It is still `active` until then, so `isActive` stays true and\nthe scan allowance stays the plan's.\n\n`trialEndsAt` (2026-10-04) is when the free trial ends and the card is first\ncharged, and is set ONLY while the status is `trialing`: null for every other\nstatus, for a trial that converted (the date is history) and for an agency that\nnever had one. A trialing agency is `isActive` and has the plan's full allowance.\n\n`trialEligible` (2026-10-04, round two) is whether Settings may promise this agency a free\ntrial: true only when a trial is on (`STRIPE_TRIAL_DAYS` above 0 and billing configured) and\nthe agency's own row has never had a subscription, the same row test checkout applies. **It\ncannot see Stripe's side of that test** (the customer's subscription list: a read never\nasks Stripe), so true means \"nothing in our record says no\": checkout can still refuse the\ntrial to a customer Stripe remembers an ended subscription for.\n\n**Both trial fields are about the REQUESTING user** (2026-10-05, founder decision 3.72): a\ntrial needs a verified Google identity on the user who starts checkout, so two seats of\none agency can read them differently. `trialEligible` is true only when the agency's\nrecord allows a trial (above) AND this user has a linked Google identity: it is what a\nSubscribe from this sign-in would get. `trialRequiresGoogle` is true exactly when the\nrecord allows a trial and the ONLY thing missing is that identity: checkout would give\nthis user no trial, and continuing with Google on the same address would. The two are\nnever both true.\n\nEvery field comes off the `agencies` row the webhook maintains. A settings\nscreen that called a payment processor on page load would be slower, would\nfail whenever Stripe was slow, and would put a third party in the render\npath of a page with four other sections on it \u2014 for a value that would be\nno more current than the webhook already makes it.\n\nThe agency is already loaded on the principal, so there is no query here at\nall beyond the one `current_principal` performs on every request.\n\n**Errors:** `401`, `403` (member role), `404` (another agency's id).",
         "operationId": "read_billing_api_v1_agencies__agencyId__billing_get",
         "parameters": [
           {
@@ -5486,7 +5621,7 @@
     },
     "/api/v1/agencies/{agencyId}/billing/checkout": {
       "post": {
-        "description": "Create a Stripe Checkout Session. Returns the URL to navigate to.\n\n**`201`, because a session really is created** \u2014 at Stripe, with an id and a\nlifetime, and this call is what makes it. That it lives in someone else's\ndatabase does not make it less of a created resource.\n\nThe agency's Stripe customer is created here too, if it does not have one\nyet, and REUSED if it does. A second visit to this endpoint does not mint a\nsecond customer \u2014 see `services/billing.py`, where the reuse and the unique\nconstraint under it are explained.\n\n**This endpoint does not subscribe anybody.** It returns a URL. The\nsubscription begins when Stripe says it did, over the webhook below.\n\n**A free trial, when `STRIPE_TRIAL_DAYS` is above 0** (2026-10-04): the session\nasks Stripe for that many trial days and for the card at checkout, and Stripe\ncharges when the trial ends unless the agency cancels. One trial per agency, ever:\nan agency that has had any subscription, or whose Stripe customer has, gets the\nplain checkout. The response is the same either way, a URL.\n\n**Errors:**\n\n- `401`, `403` (member role), `404` (another agency's id). Authority and\n  tenancy are settled first, so a member or another agency never sees a `409`.\n- `409 subscription-already-active` when the agency's status is `active` or\n  `trialing`.\n- `409 subscription-needs-attention` when it is anything else that is not\n  over: `past_due`, `unpaid`, `paused`, `incomplete`, or a status this server\n  has never seen (it denies by default). Those are live at Stripe, so a\n  second checkout would create a second subscription; the detail points at\n  Manage billing in Settings and carries no Stripe id and not the status.\n  Only no subscription, `canceled` and `incomplete_expired` may check out.\n- The stored status is checked first, before any Stripe call. When the\n  agency already has a customer, Stripe is then asked: its open Checkout\n  Sessions are expired FIRST and its subscriptions listed AFTER, so both\n  subscription refusals also fire when our row has not caught up (or says\n  `canceled`), and a session paid in the meantime is found.\n- `409 checkout-in-progress` when another checkout holds the agency row for\n  over 3 s. Nothing was created; retrying is safe.\n- `503 service-unavailable`, with a sentence that says which step: Stripe\n  failed while listing or expiring the open sessions, or there are more of\n  them than one page holds; or Stripe failed while listing the\n  subscriptions, or a full page of them had none live on it (a live one\n  could be on the next page). A full page with a live subscription on it is\n  still the `409`. Nothing is created in any of these.\n- `503 billing-not-configured` when `STRIPE_SECRET_KEY` or `STRIPE_PRICE_ID`\n  is unset, carrying a detail that names the variable.",
+        "description": "Create a Stripe Checkout Session. Returns the URL to navigate to.\n\n**`201`, because a session really is created** \u2014 at Stripe, with an id and a\nlifetime, and this call is what makes it. That it lives in someone else's\ndatabase does not make it less of a created resource.\n\nThe agency's Stripe customer is created here too, if it does not have one\nyet, and REUSED if it does. A second visit to this endpoint does not mint a\nsecond customer \u2014 see `services/billing.py`, where the reuse and the unique\nconstraint under it are explained.\n\n**This endpoint does not subscribe anybody.** It returns a URL. The\nsubscription begins when Stripe says it did, over the webhook below.\n\n**A free trial, when `STRIPE_TRIAL_DAYS` is above 0** (2026-10-04): the session\nasks Stripe for that many trial days and for the card at checkout, and Stripe\ncharges when the trial ends unless the agency cancels. One trial per agency, ever:\nan agency that has had any subscription, or whose Stripe customer has, gets the\nplain checkout. **And only for a user with a linked Google identity** (2026-10-05):\nthe rule is on the user who starts the checkout, not the agency, so a password-only\nuser gets the plain checkout (no trial, the same session otherwise). The response is\nthe same either way, a URL.\n\n**Errors:**\n\n- `401`, `403` (member role), `404` (another agency's id). Authority and\n  tenancy are settled first, so a member or another agency never sees a `409`.\n- `409 subscription-already-active` when the agency's status is `active` or\n  `trialing`.\n- `409 subscription-needs-attention` when it is anything else that is not\n  over: `past_due`, `unpaid`, `paused`, `incomplete`, or a status this server\n  has never seen (it denies by default). Those are live at Stripe, so a\n  second checkout would create a second subscription; the detail points at\n  Manage billing in Settings and carries no Stripe id and not the status.\n  Only no subscription, `canceled` and `incomplete_expired` may check out.\n- The stored status is checked first, before any Stripe call. When the\n  agency already has a customer, Stripe is then asked: its open Checkout\n  Sessions are expired FIRST and its subscriptions listed AFTER, so both\n  subscription refusals also fire when our row has not caught up (or says\n  `canceled`), and a session paid in the meantime is found.\n- `409 checkout-in-progress` when another checkout holds the agency row for\n  over 3 s. Nothing was created; retrying is safe.\n- `503 service-unavailable`, with a sentence that says which step: Stripe\n  failed while listing or expiring the open sessions, or there are more of\n  them than one page holds; or Stripe failed while listing the\n  subscriptions, or a full page of them had none live on it (a live one\n  could be on the next page). A full page with a live subscription on it is\n  still the `409`. Nothing is created in any of these.\n- `503 billing-not-configured` when `STRIPE_SECRET_KEY` or `STRIPE_PRICE_ID`\n  is unset, carrying a detail that names the variable.\n- `503 plan-price-mismatch` when the latest price check found the Price is not\n  the plan (amount, currency, interval or archived) and a fresh read made for\n  this request confirms it. Checked after the two `409` refusals and before\n  anything is created at Stripe. A price read that fails never refuses.",
         "operationId": "start_checkout_api_v1_agencies__agencyId__billing_checkout_post",
         "parameters": [
           {
@@ -6098,6 +6233,7 @@
     },
     "/api/v1/auth/me": {
       "get": {
+        "description": "The signed-in context, in one call. **Auth required.**\n\n`feedbackEmail` (2026-10-06) is `FEEDBACK_EMAIL`, null when it is unset: the address the\nshell's \"Send feedback\" link writes to. It is on this response, and on the other responses\nthat return the same context to someone who has just signed in, and on no other.",
         "operationId": "me_api_v1_auth_me_get",
         "responses": {
           "200": {
@@ -6112,6 +6248,48 @@
           }
         },
         "summary": "Me",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/me/scan-emails": {
+      "put": {
+        "description": "Turn the emails sent when a scan you started finishes on or off. **Auth required.**\n\n**Only your own choice.** There is no user id anywhere in the request: the row written is the\ncaller's, matched by user id AND agency id, and a body that names anything but `enabled` is a\n`422`. Accepted whether or not the feature is on (`available` in the answer says), because it\nwrites one boolean nothing reads while the feature is off. Idempotent.\n\n**Errors:** `401 authentication-required`, `422 validation-failed` (not a JSON true or false).",
+        "operationId": "set_scan_emails_api_v1_auth_me_scan_emails_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScanEmailsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanEmailsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Scan Emails",
         "tags": [
           "auth"
         ]
@@ -6640,9 +6818,103 @@
         ]
       }
     },
+    "/api/v1/clients/{clientId}/auto-rescan": {
+      "get": {
+        "description": "Whether this client is rescanned every month, and why the last try started nothing.\n\n**Reads. Starts nothing.** `available` is false (and every other field empty) unless the API\nhas automatic rescans on (`AUTO_RESCAN_ENABLED`) and the caller is an owner or admin, so the\nscreen draws the switch only when it can be used. Scoped to the caller's agency by\n`get_client`, which 404s on another agency's id.\n\n**Errors:** `401`, `404`.",
+        "operationId": "get_client_auto_rescan_api_v1_clients__clientId__auto_rescan_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clientId",
+            "required": true,
+            "schema": {
+              "title": "Clientid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutoRescanOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Client Auto Rescan",
+        "tags": [
+          "clients"
+        ]
+      },
+      "put": {
+        "description": "Switch \"Rescan every month\" on or off for this client (owner or admin).\n\nOn: from the next wake of the loop (every 10 minutes), the client is rescanned whenever its\nlatest scan started 30 or more days ago, as the person who switched it on, through the Run\nbutton's own start path (the allowance applies). Off: nothing is started and the skip\nnotice is cleared. Switching it on again as a different user hands the rescans to that user;\npressing it on again as the same user changes nothing.\n\n**Errors:** `401`; `403 permission-denied` for a member; `404` when the API has automatic\nrescans off (the body an unknown path gets) or the client is not the caller's agency's.",
+        "operationId": "set_client_auto_rescan_api_v1_clients__clientId__auto_rescan_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clientId",
+            "required": true,
+            "schema": {
+              "title": "Clientid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetAutoRescanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutoRescanOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Client Auto Rescan",
+        "tags": [
+          "clients"
+        ]
+      }
+    },
     "/api/v1/clients/{clientId}/competitors": {
       "get": {
-        "description": "The client's most recent competitor set.",
+        "description": "The client's current competitor list: its next list, else its latest scan's set.\n\nThe next list is what a save or the button's detection last wrote and what the next scan\nwill use (launch checklist 3.78/3.79), so it is ahead of the latest scan's own set, which\nnever changes once the scan has started. It belongs to no scan: its `scanId` is null.",
         "operationId": "get_competitors_api_v1_clients__clientId__competitors_get",
         "parameters": [
           {
@@ -6683,7 +6955,7 @@
         ]
       },
       "put": {
-        "description": "Replace the competitor set by hand.\n\nThis matters more than a normal CRUD override. `Client.industry` confidence\nis uncalibrated (build-log Epic 2.6/2.8, Finding 2 \u2014 open), so a wrong\nclassification can seed a poor competitor set, and an operator who knows the\nmarket is the only reliable corrective available today. Everything supplied\nhere is marked `isManualOverride` and survives later re-detection.\n\nAnything currently in the set and not sent back has been STRUCK, and is\nrecorded as such \u2014 Epic 3 deleted it, which recorded nothing, so the next\ndetection run reinstated it. See `services.competitors.apply_override`.\n\n`detectionConfidence` is cleared: it measures agreement between two\nautomated signals, and neither one produced this set. Leaving the previous\nvalue would attach a corroboration claim to rows that were never corroborated.",
+        "description": "Replace the client's competitor list by hand: the list its later scans use.\n\nWrites the client's NEXT LIST, never a scan's own set (launch checklist 3.78/3.79). The next\nscan that starts adopts it, and a scan that has started keeps the list it started with, so\na save moves nothing a finished scan shows: not its score, its report, its client-history\nfigure, or an explicit re-score. With no next list yet, one is made as a copy of the\nclient's latest set and the replacement applied to the copy; for a client with no set on\nany scan, a non-empty list makes one. An empty list for a client\nwith no set, or a client with no scan at all, is the `404`, and nothing is written.\n\nWhile the client's most recent scan is RUNNING the answer is `409` and nothing is written,\non every path: a running scan may or may not have taken the client's list yet, and a save\ncannot say which.\n\nThis matters more than a normal CRUD override. `Client.industry` confidence\nis uncalibrated (build-log Epic 2.6/2.8, Finding 2 \u2014 open), so a wrong\nclassification can seed a poor competitor set, and an operator who knows the\nmarket is the only reliable corrective available today. Everything supplied\nhere is marked `isManualOverride` and survives later re-detection.\n\nAnything currently in the set and not sent back has been STRUCK, and is\nrecorded as such \u2014 Epic 3 deleted it, which recorded nothing, so the next\ndetection run reinstated it. See `services.competitors.apply_override`.\n\n`detectionConfidence` is cleared: it measures agreement between two\nautomated signals, and neither one produced this set. Leaving the previous\nvalue would attach a corroboration claim to rows that were never corroborated.",
         "operationId": "replace_competitors_api_v1_clients__clientId__competitors_put",
         "parameters": [
           {
@@ -6736,7 +7008,7 @@
     },
     "/api/v1/clients/{clientId}/competitors/detect": {
       "post": {
-        "description": "Run SERP + AI co-citation discovery and rank the top competitors.\n\nRuns synchronously. A run makes several paid SerpApi searches and several\nmodel calls, so it is explicitly operator-triggered rather than implicit in\nintake \u2014 an accidental re-detection costs money.\n\n**For paying agencies since 2026-10-04** (launch checklist 3.61, the founder's\ndecision). The 24-hour limit below caps a client, not an agency, and every run is\npaid searches, so the route is for an agency whose subscription is `active` or\n`trialing`, and for the platform operator (a listed address with a linked Google\nidentity, the scan allowance's own exemption). Anyone else is refused with\n`402 subscription-required` and one plain sentence that names no status and no code.\nWhere billing is not configured the route stays open, as the scan allowance does. It\nis checked after the client is found, so another agency's client is still a `404`\nwhatever the caller's plan, and before the day below is taken, so a refused press\nspends none of the client's day: no search is made and no scan is opened. A scan's own\ndetection is not this route and is unaffected: a client with no competitor set gets\none when it is first scanned, on any plan.\n\n**Once per client per 24 hours** (2026-10-03, launch checklist 3.53), for those who\nare allowed. The day is taken when a run starts, so a run that then fails still\ncounts: its searches may already be spent. Checked after the client is found, so\nanother agency's client is still a `404` and cannot spend this client's day, and\nbefore anything is done. Another client of the same agency has its own day. A scan's\nown detection, for a client with no competitor set yet, is never refused by this\nlimit and does not use the day up; neither does replacing the set by hand with `PUT`.\n\nCompetitors an operator marked as overrides are preserved across runs.\n\n**Errors:** `401 authentication-required`; `402 subscription-required` (\"Running\ncompetitor detection on its own needs an active subscription. A scan still finds a\nclient's competitors the first time it runs.\"); `404 not-found`; `429 rate-limited`\n(with `Retry-After`, the whole seconds left in the 24 hours): \"Competitor detection\nalready ran for this client in the last 24 hours. It can run again in about N hours.\"\n(the last hour reads \"in under an hour\"); `503 service-unavailable` (Redis cannot say\nwhether the day is taken, so nothing runs).",
+        "description": "Run SERP + AI co-citation discovery and rank the top competitors.\n\nRuns synchronously. A run makes several paid SerpApi searches and several\nmodel calls, so it is explicitly operator-triggered rather than implicit in\nintake \u2014 an accidental re-detection costs money.\n\n**For paying agencies since 2026-10-04** (launch checklist 3.61, the founder's\ndecision). The 24-hour limit below caps a client, not an agency, and every run is\npaid searches, so the route is for an agency whose subscription is `active` or\n`trialing`, and for the platform operator (a listed address with a linked Google\nidentity, the scan allowance's own exemption). Anyone else is refused with\n`402 subscription-required` and one plain sentence that names no status and no code.\nWhere billing is not configured the route stays open, as the scan allowance does. It\nis checked after the client is found, so another agency's client is still a `404`\nwhatever the caller's plan, and before the day below is taken, so a refused press\nspends none of the client's day: no search is made and no scan is opened. A scan's own\ndetection is not this route and is unaffected: a client with no competitor set gets\none when it is first scanned, on any plan.\n\n**Once per client per 24 hours** (2026-10-03, launch checklist 3.53), for those who\nare allowed. The day is taken when a run starts, so a run that then fails still\ncounts: its searches may already be spent. Checked after the client is found, so\nanother agency's client is still a `404` and cannot spend this client's day, and\nbefore anything is done. Another client of the same agency has its own day. A scan's\nown detection, for a client with no competitor set yet, is never refused by this\nlimit and does not use the day up; neither does replacing the set by hand with `PUT`.\n\nCompetitors an operator marked as overrides are preserved across runs.\n\n**Where the result goes (launch checklist 3.78/3.79).** Into the client's NEXT LIST: the list\nthe next scan that starts will adopt, which is what this answers (`scanId` is null, because it\nbelongs to no scan yet). A scan's own set never changes once the scan has started, so a run\ndoes not touch a finished scan's set and does not touch a running scan's either. With no next\nlist yet, one is made as a copy of the client's latest set and detection merges into the\ncopy, so rivals an operator named or struck stay named and struck; a client with no set at all\nstarts from an empty list. The open scan this route opens (or reuses, as before) carries no\nset until it runs.\n\n**Errors:** `401 authentication-required`; `402 subscription-required` (\"Running\ncompetitor detection on its own needs an active subscription. A scan still finds a\nclient's competitors the first time it runs.\"); `404 not-found`; `429 rate-limited`\n(with `Retry-After`, the whole seconds left in the 24 hours): \"Competitor detection\nalready ran for this client in the last 24 hours. It can run again in about N hours.\"\n(the last hour reads \"in under an hour\"); `503 service-unavailable` (Redis cannot say\nwhether the day is taken, so nothing runs).",
         "operationId": "detect_competitors_api_v1_clients__clientId__competitors_detect_post",
         "parameters": [
           {
@@ -7519,7 +7791,7 @@
     },
     "/api/v1/scans/{scanId}/report": {
       "get": {
-        "description": "Everything the narrative report needs, in one response.\n\n**Presents; does not compute.** Score, competitors and audit are read from\nthe rows Epics 3-6 wrote. The only new numbers are aggregates \u2014 citation\ncounts per domain, mention shares, per-engine coverage \u2014 and each is a\ncount over stored facts.\n\nDegraded data is reported, never smoothed over. `score` is null when the\nscan was never scored, and a score with `status: \"insufficient_data\"` is a\ndifferent thing again: an unrunnable scan is never rendered as a low score.\n`competitorSet` is null when detection never ran, and `audit` is null when\nthe site was never audited \u2014 in each case the report says so rather than\nquietly omitting a beat.\n\n**Errors:** `401`, `404` (unknown scan, or another agency's).",
+        "description": "Everything the narrative report needs, in one response.\n\n**Presents; does not compute.** Score, competitors and audit are read from\nthe rows Epics 3-6 wrote. The only new numbers are aggregates \u2014 citation\ncounts per domain, mention shares, per-engine coverage \u2014 and each is a\ncount over stored facts.\n\nDegraded data is reported, never smoothed over. `score` is null when the\nscan was never scored, and a score with `status: \"insufficient_data\"` is a\ndifferent thing again: an unrunnable scan is never rendered as a low score.\n`competitorSet` is null when detection never ran, and `audit` is null when\nthe site was never audited \u2014 in each case the report says so rather than\nquietly omitting a beat.\n\n**`csvExportAvailable`** says whether this report may offer \"Download figures (CSV)\"\n(`GET /scans/{scanId}/report.csv`): the `REPORT_CSV_ENABLED` setting is on and this scan's\nstatus is one the file is made for. It is set here and nowhere else, so it is false on the\nPDF and on every public route; the web draws the link from it alone.\n\n**Errors:** `401`, `404` (unknown scan, or another agency's).",
         "operationId": "get_report_api_v1_scans__scanId__report_get",
         "parameters": [
           {
@@ -7555,6 +7827,45 @@
           }
         },
         "summary": "Get Report",
+        "tags": [
+          "reports"
+        ]
+      }
+    },
+    "/api/v1/scans/{scanId}/report.csv": {
+      "get": {
+        "description": "The report's figures as one CSV \u2014 F3, off unless `REPORT_CSV_ENABLED` is on.\n\n**A rendering target, not a second report.** It calls the same `build_report` the JSON route\ncalls and writes what comes back (`services/report_csv.py`): no second query, no second\naggregation, and nothing the signed-in report does not already show. One long table, one\nheader row (`Section, Engine, Prompt, Item, Measure, Value`) and plain labels with their\nunits; the module says what each of its six sections holds (the first says whose scan it is,\nits date, whether it is complete and its overall score) and what it leaves out.\n\n**There is no token route, and there will not be one here.** A share link opens the report and\nits PDF; it does not open this. The route is the agency's, scoped to the agency as the report\nis, and `csvExportAvailable` is false on every public response.\n\n**Off, it is not there.** With the setting off a signed-in caller gets a `404` with the body\nan unknown path gets, whatever the scan, so it says nothing about the scan either. A signed-out\ncaller gets the `401` every signed-in route here gives.\n\n**A scan with no figures to give is `409`** `/problems/scan-not-exportable`, with one plain\nsentence: a FAILED scan (its score is withheld, as for sharing), a QUEUED or RUNNING one (its\nfigures are not final). The agency check runs first, so another agency's scan is a `404`\nin every status and never a `409` that says how it ended. SUCCEEDED and PARTIAL are exported.\n\n**Excel-safe:** a UTF-8 byte-order mark, and a leading apostrophe on any cell that begins\nwith `=`, `+`, `-`, `@`, a tab, a carriage return or a full-width `\uff1d\uff0b\uff0d\uff20` (white space in\nfront does not hide it), and straight after a `;`, a tab or a line break inside a cell (each\nstarts a new cell or a new record in a spreadsheet), so a name somebody typed cannot become a\nformula. The file is named `<client>-ai-visibility-<date>.csv`, the client reduced as the\nPDF's name is.\n\n**Errors:** `401`, `404` (off, or unknown scan, or another agency's), `409` (no figures yet).",
+        "operationId": "get_report_csv_api_v1_scans__scanId__report_csv_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scanId",
+            "required": true,
+            "schema": {
+              "title": "Scanid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/csv": {}
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Report Csv",
         "tags": [
           "reports"
         ]

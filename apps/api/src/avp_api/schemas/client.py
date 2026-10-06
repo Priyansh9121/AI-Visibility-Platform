@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 from ..models import ClassificationStatus, ClientKind
 from .common import ApiModel
@@ -74,3 +74,29 @@ class ClientDetailOut(ClientOut):
     """A client plus the crawl facts from its most recent classification."""
 
     crawl: CrawlSummaryOut | None = None
+
+
+class SetAutoRescanRequest(ApiModel):
+    """Switch "Rescan every month" on or off for one client."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(strict=True)
+
+
+class AutoRescanOut(ApiModel):
+    """A client's monthly-rescan setting, as the caller may see it.
+
+    `available` is true only when the API has automatic rescans on (`AUTO_RESCAN_ENABLED`) AND the
+    caller is an owner or admin. When it is false everything else is its empty value, whatever
+    the client holds, and the web draws nothing. `skipReason` is one of our own codes
+    (`AGENCY_NOT_PAID`, `ALLOWANCE_USED`, `USER_NOT_ADMIN`, `COULD_NOT_START`) or null; with it,
+    `skippedAt` is when the last attempt started no scan and `retriesAt` is the first instant of
+    the next UTC calendar month, when it is tried again.
+    """
+
+    available: bool
+    enabled: bool = False
+    skip_reason: str | None = None
+    skipped_at: datetime | None = None
+    retries_at: datetime | None = None

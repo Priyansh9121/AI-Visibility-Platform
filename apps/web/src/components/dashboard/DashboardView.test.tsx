@@ -423,7 +423,7 @@ describe('clients but no scans gets the same treatment, without the figure', () 
  * The dashboard is deliberately excluded from arrival motion, and stays so.
  * What it gains is motion tied to something that is genuinely still happening,
  * which on this screen is exactly one thing: a scan that is running while the
- * page re-reads itself every five seconds.
+ * page re-reads itself.
  */
 describe('the live dot marks what is actually happening', () => {
   it('breathes on a running scan', () => {

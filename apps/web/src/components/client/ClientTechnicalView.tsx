@@ -218,16 +218,26 @@ function Audited({ audit }: { audit: TechnicalAudit }): JSX.Element {
   }
   // `partial` is NOT unreadable: the page was read and scored with a component
   // excluded (the "Not measured" card below says which and why). Only `failed`
-  // means nothing was read and nothing is scored. What happened is the same
-  // sentence the report's failed-audit card shows (`auditFailureSentence`), so
-  // the two screens cannot word one failure two ways; a failed audit that
-  // carries no code gets the generic sentence there too.
+  // means the check could not be completed and nothing is scored.
+  //
+  // The title is the report's reason for it, and the body claims only what every
+  // failure shares (launch checklist 3.87, follow-up of 2026-10-05): a timeout, a
+  // crawler too busy to start the check, a browser that broke, a page that did not
+  // respond, an error status from a page that did answer. So it says nothing of a
+  // read, and blames no one. "The latest scan", where the report says "this scan":
+  // this is a client's screen and names no scan, and the audit it shows is that of
+  // the client's latest scan that produced answers, the scan the sidebar's Report
+  // item opens.
+  //
+  // What happened is the same sentence the report's failed-audit card shows
+  // (`auditFailureSentence`), so the two screens cannot word one failure two
+  // ways; a failed audit that carries no code gets the generic sentence there too.
   if (audit.status === 'failed') {
     return (
       <EmptyState
         eyebrow="Technical"
-        title="The site could not be read"
-        body="A site the crawler could not read is not a site with a bad technical foundation, so nothing here is scored. The audit records what went wrong rather than guessing."
+        title={EXCLUSION_REASON.AUDIT_FAILED!.label}
+        body="The technical check of the site could not be completed for the latest scan, so nothing here is scored and Technical Foundation is left out of the score."
         note={auditFailureSentence(audit.errorCode)}
       />
     );
