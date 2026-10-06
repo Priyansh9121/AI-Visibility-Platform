@@ -332,8 +332,8 @@ class ToolFee(NamedTuple):
 #
 # Perplexity bills its `web_search` tool per invocation — $0.0025 each, i.e.
 # $2.50 per 1,000 (docs/agent-api/models, read 2026-09-11) — reported back
-# in `usage.tool_calls_details.web_search.invocation`. Metered separately
-# from Anthropic's because the rate differs by 4x.
+# in `usage.tool_calls_details.search_web.invocation` (`web_search` is the fallback key).
+# Metered separately from Anthropic's because the rate differs by 4x.
 #
 # These two keep the dates they were read on: the 2026-10-03 re-read names the pricing pages
 # above, and whether it also covered these two figures is not something this table can say.
@@ -542,9 +542,10 @@ def install_token_meter() -> None:
                 cache_read=int(details.get("cache_read_input_tokens") or 0),
             )
             tools = usage.get("tool_calls_details") or {}
-            entry.perplexity_searches += int(
-                (tools.get("web_search") or {}).get("invocation") or 0
-            )
+            # Keyed by the tool's name as it ran: `search_web` on the 2026-10-05 call,
+            # `web_search` as the API reference names it; the first present wins, never both.
+            searches = tools.get("search_web") if "search_web" in tools else tools.get("web_search")
+            entry.perplexity_searches += int((searches or {}).get("invocation") or 0)
             entry.reported_cost += float((usage.get("cost") or {}).get("total_cost") or 0)
         else:
             # Gemini `usageMetadata` — Epic 21. The model is not echoed in the
@@ -610,7 +611,14 @@ _USAGE_FIELD = re.compile(r"(?<![\w.])([a-z][a-z0-9_]*)=(\S+)")
 
 @dataclass
 class PricedLine:
-    """One line of the scan, priced, or not priced and why (`missing`)."""
+    """One line of the scan, priced, or not priced and why (`missing`).
+
+    `calls` counts requests, `retries` the requests that were sent again, and `unanswered` the
+    CALLS that never got an answer (from U5, 2026-10-06; a line logged before that counted every
+    request that got no usage back: `services/usage.py` and the runbook say how to read one).
+    They are shown and never priced: tokens and searches are, and only an answered request has
+    either.
+    """
 
     name: str
     model: str | None
@@ -640,8 +648,9 @@ class SerpSummary:
     error: int = 0
     no_answer: int = 0
     # `serpapi_billed_or_unknown`: the answered searches and the ones nobody answered. An upper
-    # bound on what was billed: an answered search is billed unless SerpApi served it from its
-    # cache, an error answer is not billed, and a search nobody answered may have been. Read off
+    # bound on what was billed, but for an unreadable 200 (counted as an error): an answered search
+    # is billed unless SerpApi served it from its cache, an error answer is not billed (that 200
+    # aside), and a search nobody answered may have been. Read off
     # the line when it has the field, else worked out as `ok + no_answer`, which is what it is.
     billed_or_unknown: int = 0
     per_search: Decimal | None = None
@@ -878,13 +887,14 @@ def format_usage_pricing(pricing: UsagePricing) -> str:
     if serp.attempted:
         out.append(
             f"\n  SerpApi: {serp.attempted} searches attempted (retries included): {serp.ok} "
-            f"answered ok, {serp.error} answered with an error (not billed), {serp.no_answer} "
-            "with no answer"
+            f"answered ok, {serp.error} answered with an error (not billed, except a 200 whose "
+            f"body could not be read, which may have been), {serp.no_answer} with no answer"
         )
         out.append(
             f"  SerpApi billed or unknown: {serp.billed_or_unknown}, an upper bound on what was "
-            "billed: an answered search is billed unless SerpApi served it from its cache, an "
-            "error answer is not billed, and a search nobody answered may have been"
+            "billed, but for an unreadable 200 (counted as an error, and possibly billed): an "
+            "answered search is billed unless SerpApi served it from its cache, an error answer "
+            "is not billed, and a search nobody answered may have been"
         )
         if serp.cost is not None:
             out.append(

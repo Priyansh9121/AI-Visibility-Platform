@@ -26,11 +26,14 @@ import type { BillingStatus, Me, SeatList } from '@avp/shared-types';
 import { BILLING_SECTION_ID } from '@/lib/settings/sections';
 import { canCheckout, freeScanUsed } from '@/lib/billing/allowance';
 import { WorkspaceShell } from '@/components/shell/WorkspaceShell';
+import { FeedbackLink } from '@/components/shell/FeedbackLink';
+import { feedbackAddress } from '@/lib/feedback/subject';
 import { SeatsPanel } from '@/components/settings/SeatsPanel';
 import { PasswordChangePanel } from '@/components/settings/PasswordChangePanel';
 import { BillingPanel } from '@/components/settings/BillingPanel';
 import { PLAN_PRICE_USD } from '@/components/marketing/PricingCard';
 import { ThemeControl } from '@/components/settings/ThemeControl';
+import { ScanEmailsPanel } from '@/components/settings/ScanEmailsPanel';
 
 /** Roles that may invite and remove. A member holds a seat; they do not grant them. */
 const MANAGING_ROLES = new Set(['owner', 'admin']);
@@ -100,6 +103,10 @@ export function SettingsView({
   onChanged: () => void | Promise<void>;
 }): JSX.Element {
   const me = state.kind === 'ready' ? state.me : null;
+  // The address the "Send feedback" link writes to (2026-10-06): `me.feedbackEmail`, the API's
+  // `FEEDBACK_EMAIL`, from the read this screen already holds, so it asks for nothing. Null for
+  // anything but one address, and then there is no section and no link: the default.
+  const feedbackTo = me === null ? null : feedbackAddress(me.feedbackEmail);
 
   // `/settings#billing` — the scan-limit notice's link — arrives at a page that
   // is still loading, and the browser's own scroll to a fragment runs before the
@@ -139,7 +146,13 @@ export function SettingsView({
      * the extra width buys is table columns and the agency grid below, not
      * 90rem-long lines of text.
      */
-    <WorkspaceShell current="settings" agencyName={me?.agency.name} seats={me?.seats} wide>
+    <WorkspaceShell
+      current="settings"
+      agencyName={me?.agency.name}
+      seats={me?.seats}
+      feedbackEmail={me?.feedbackEmail}
+      wide
+    >
       {state.kind === 'loading' && <LoadingState message="Loading your settings…" />}
 
       {state.kind === 'error' && (
@@ -196,7 +209,7 @@ export function SettingsView({
           <PageSection
             eyebrow="Team"
             heading="Who can sign in"
-            lead="Every seat, including invitations nobody has accepted yet — those hold a seat from the moment they are sent."
+            lead="Every seat, including invitations nobody has accepted yet — those hold a seat from the moment someone is invited."
           >
             {state.seats ? (
               <SeatsPanel
@@ -241,6 +254,23 @@ export function SettingsView({
           )}
 
           {/*
+            The scan-finished email switch (F1). Drawn only when the API says the feature is on
+            AND email is configured (`scanEmails.available`); with it off, the default, the screen
+            is exactly what it was. Every sentence is true of what the API does: it emails the user
+            who started the scan, a link to the report, or that it did not finish, and a second
+            email when the scan raised alerts.
+          */}
+          {state.me.scanEmails?.available === true && (
+            <PageSection
+              eyebrow="Your account"
+              heading="Email when a scan finishes"
+              lead="When a scan you started finishes, we email you a link to its report, or tell you it did not finish. If the scan raised alerts, a second email says how many."
+            >
+              <ScanEmailsPanel enabled={state.me.scanEmails.enabled} />
+            </PageSection>
+          )}
+
+          {/*
             The id is on a wrapper, not on the section: `PageSection` takes no
             id, and a wrapper is a flex item exactly as the section was, so
             nothing about the layout moves.
@@ -267,6 +297,30 @@ export function SettingsView({
               />
             </PageSection>
           </div>
+
+          {/*
+            Feedback — 2026-10-06. The second place the link lives (the sidebar's footer is the
+            first), with a few words about what it does, every one of them true of the link: it
+            opens an email in the user's own email app, to the address named here (the API's
+            `FEEDBACK_EMAIL`, shown to every signed-in user), and the subject carries the shape of
+            the screen and never an id, a token or a client's name (`lib/feedback/subject`). The
+            last sentence is for a browser whose `mailto:` opens nothing (a webmail user with no
+            handler set): the address is in the first sentence, to write to by hand. Drawn only for
+            an address: with none, the default, this section is not here.
+          */}
+          {feedbackTo !== null && (
+            <PageSection
+              eyebrow="Feedback"
+              heading="Tell us what you think."
+              lead={`Opens an email to ${feedbackTo} in your email app. The subject names the kind of screen you are on, never a client's name or an id. Nothing is sent until you send it. If nothing opens, write to that address yourself.`}
+            >
+              <Card elevation="seated">
+                <CardBody>
+                  <FeedbackLink address={feedbackTo} look="inline" />
+                </CardBody>
+              </Card>
+            </PageSection>
+          )}
 
           <PageSection
             eyebrow="Not built yet"

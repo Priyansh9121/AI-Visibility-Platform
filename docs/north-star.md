@@ -641,9 +641,10 @@ Two consequences for the CI definition in §4.3, both concrete:
 | Wall-clock per scan | **361.3s** best measured | Epic 9.2 |
 | **Provider spend per scan, 24 prompts × 5 engines** | **$6.19** | 2026-09-11, `groovehq.com`, `verify_e2e.py`'s token meter reading each vendor's own `usage` (build log, "the cost split"): grounded Claude $3.99 (64%), parametric Claude $1.13, ChatGPT $0.71, Gemini $0.10, Perplexity $0.09, all analysis calls $0.17 |
 | **Provider spend per scan, 20 prompts × 4 engines — the default since 2026-09-12** | **$1.70** | 2026-09-12, `reamaze.com`, same meter (build log, "dropping grounded Claude and cutting to 20 prompts"): Claude $0.85, ChatGPT $0.49, Perplexity $0.08, Gemini $0.07, sentiment $0.05 (37 calls on Haiku 4.5), the four other analysis calls $0.17. Wall clock 135.3s |
+| **Provider spend per scan, first production scan (a repeat scan, competitors carried forward)** | **≈ $1.45–1.50** | Reported by the founder on 2026-10-05, after PR #9 was deployed: the API's own `scan.usage` line, priced at the 2026-10-03 rates in `verify_e2e.py`. 81 engine calls (20 prompts × 4 engines, plus one Perplexity 429 that was retried and answered), 44 sentiment calls, 1 prompt generation, 1 fix generation. Claude answers $0.82, ChatGPT $0.39, Perplexity $0.04 in tokens plus about $0.05 in search fees the line did not count (U4 on `pilot-fixes-6` counts them), Gemini $0.07, sentiment $0.05, fixes and prompts $0.08. Of Claude's 32,799 output tokens, 13,636 (42%) were reasoning at effort "low" |
 
 **The 2026-10-03 cost analysis, re-stated at the US$150 price (recorded 2026-10-04).**
-Provider spend only, from the two measured rows above. Every token rate in
+Provider spend only, from the two development rows above (2026-09-11 and 2026-09-12; the production row came later). Every token rate in
 `verify_e2e.py`'s `RATES` table was re-read on the vendors' own pages on 2026-10-03 and
 matched (Anthropic `platform.claude.com/docs/en/about-claude/pricing`, OpenAI
 `developers.openai.com/api/docs/pricing`, Google `ai.google.dev/gemini-api/docs/pricing`,
@@ -689,8 +690,17 @@ had changed since the 2026-09-12 run.
 - **How it becomes measured:** until `pilot-fixes-5` no production code read the
   providers' usage. Since its U1, every paid call logs its counts and every scan ends with
   one `scan.usage` line, which `verify_e2e.py` prices with its dated rates; since its U2,
-  every detection logs the SerpApi plan's remaining searches (`serp.quota_left`). These
-  figures stay estimates from two development runs until production lines replace them.
+  every detection logs the SerpApi plan's remaining searches (`serp.quota_left`).
+- **The first production measurement (2026-10-05)** is the third row of the table above:
+  about **$1.45** in tokens and **$1.50** with Perplexity's search fees, for a repeat
+  scan. It sits below the development estimates from the 2026-09-12 run ($1.63 for a
+  repeat scan, $1.72 for a first). At that cost an agency using all **40** scans a month costs about
+  **$58–60**, about **39–40%** of the US$150 price. It is one scan; a pilot's first weeks
+  of `scan.usage` lines will say how much scans vary.
+- **A later cost lever, not a change (founder, 2026-10-05):** Claude answers stay on
+  `claude-opus-5` through the pilot. In the first production scan 42% of their output
+  tokens were reasoning at effort "low"; that share is the lever to look at after the
+  pilot, not the model.
 
 **NOT MEASURED — [UNVERIFIED]:** *(the block below predates the two rows above
 and is kept as the record of why they were needed)*

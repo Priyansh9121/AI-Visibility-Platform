@@ -329,7 +329,8 @@ class TestScoringIntegration:
 
         body = (await client.post(f"{BASE}/scans/{sid}/score")).json()
         assert body["technicalFoundation"] is None
-        assert body["excludedDimensions"]["technical_foundation"] == "NOT_YET_MEASURED"
+        # AUDIT_FAILED since 2026-10-05: an audit exists and failed; it is not "not yet checked".
+        assert body["excludedDimensions"]["technical_foundation"] == "AUDIT_FAILED"
 
 
 class TestComponentBreakdown:

@@ -19,6 +19,7 @@ from ..models import AiCrawlerAccess, Client, Scan, TechnicalAudit, TechnicalAud
 from ..models.technical_audit import AuditStatus, CheckStatus
 from .ai_crawlers import AccessVerdict
 from .browser_slot import BROWSER_BUSY, crawler_busy
+from .scoring_runner import technical_foundation_reason
 from .technical_audit import AuditOutcome, AuditSignals, audit_site, score_audit
 
 logger = structlog.get_logger(__name__)
@@ -201,6 +202,9 @@ async def run_audit(
         technical_foundation=str(outcome.score),
         checks=len(outcome.checks),
         excluded=sorted(outcome.excluded_components),
+        # Why Technical Foundation will be left out of the score when this audit failed
+        # (a code, as `scoring.completed` records it); None when the audit did not fail.
+        technical_foundation_reason=technical_foundation_reason(row.status, row.error_code),
         **signals.redacted(),
     )
     return row, outcome

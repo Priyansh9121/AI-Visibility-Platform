@@ -8,14 +8,17 @@
  * is what holds it.
  */
 
-import { use, useCallback, useEffect, useState } from 'react';
+import { use, useEffect, useState } from 'react';
 import { Button, ErrorState, LoadingState } from '@avp/design-system';
 import type { Report } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
+import { useFeedbackEmail } from '@/lib/feedback/useFeedbackEmail';
 import { ReportView } from '@/components/report/ReportView';
 import { CompetitorEditor } from '@/components/report/CompetitorEditor';
 import { ShareLinkBar } from '@/components/report/ShareLinkBar';
 import { DownloadPdfButton } from '@/components/report/DownloadPdfButton';
+import { DownloadCsvButton } from '@/components/report/DownloadCsvButton';
+import { fileSaysNotScored } from '@/lib/report/csvScore';
 import { WorkspaceShell } from '@/components/shell/WorkspaceShell';
 
 type View =
@@ -30,19 +33,13 @@ export default function ReportPageRoute({
 }) {
   const { scanId } = use(params);
   const [view, setView] = useState<View>({ kind: 'loading' });
+  // This page reads no `me`, so the footer's "Send feedback" link asks for its address here
+  // (2026-10-06): null, and no link, until it is told one.
+  const feedbackEmail = useFeedbackEmail();
 
-  /**
-   * Re-read the report from the API.
-   *
-   * Correcting the competitor set changes Share of Voice's inputs, so the whole
-   * document has to come back rather than the table being patched in place —
-   * the gap beat, the fix list and the pitch are all derived from figures the
-   * correction can move.
-   */
-  const reload = useCallback(async () => {
-    setView({ kind: 'ready', report: await api.report(scanId) });
-  }, [scanId]);
-
+  // No reload after the competitor editor saves. A saved list is for the client's later scans
+  // (the API writes its next list), so the scan on screen, its figures and everything derived from
+  // them are what they were; the editor says so itself.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -80,7 +77,7 @@ export default function ReportPageRoute({
 
   if (view.kind === 'loading') {
     return (
-      <WorkspaceShell current="dashboard" wide>
+      <WorkspaceShell current="dashboard" feedbackEmail={feedbackEmail} wide>
         <LoadingState message="Assembling the report…" />
       </WorkspaceShell>
     );
@@ -88,7 +85,7 @@ export default function ReportPageRoute({
 
   if (view.kind === 'error') {
     return (
-      <WorkspaceShell current="dashboard" wide>
+      <WorkspaceShell current="dashboard" feedbackEmail={feedbackEmail} wide>
         <ErrorState
           title={view.title}
           detail={view.detail}
@@ -126,7 +123,7 @@ export default function ReportPageRoute({
       beats and its tokens are untouched, which ReportView.test.tsx and
       reportIsolation.test.ts keep asserting.
     */
-    <WorkspaceShell current="dashboard" wide>
+    <WorkspaceShell current="dashboard" feedbackEmail={feedbackEmail} wide>
       {/*
         Operator chrome, deliberately ABOVE the report rather than inside it.
         ReportView is the document that gets sent; anything to do with sending
@@ -139,25 +136,37 @@ export default function ReportPageRoute({
           scanStatus={view.report.scanStatus}
           shareExpiresAt={view.report.shareExpiresAt}
         />
-        <div className="mt-4 mb-6">
+        <div className="mt-4 mb-6 flex flex-col gap-3">
           <DownloadPdfButton
             scanId={scanId}
             subjectName={view.report.subject.brandName || view.report.subject.name}
             unscored={view.report.score === null}
           />
+          {/*
+            The figures as a spreadsheet (F3), only when the report says it is available: the
+            API's switch is on and the scan is finished. `=== true`, so a report from an API that
+            has no such field yet draws nothing. One wrapper for both downloads, so they sit one
+            above the other with the same gap. The control is told whether the scan is unscored by
+            the rule the file uses for "Not scored" (never scored, too little data, or no
+            composite), which is wider than the PDF control's `score === null`; the PDF control is
+            told what it always was. Operator chrome like the PDF, above the document and not in
+            it, and on this screen only: `/share` does not import the control.
+          */}
+          {view.report.csvExportAvailable === true && (
+            <DownloadCsvButton scanId={scanId} unscored={fileSaysNotScored(view.report.score)} />
+          )}
         </div>
       </div>
       <div className="avp-report-frame">
         <ReportView
           report={view.report}
           competitorEditor={
-            view.report.competitorSet ? (
-              <CompetitorEditor
-                clientId={view.report.subject.clientId}
-                competitors={view.report.competitorSet.competitors}
-                onSaved={reload}
-              />
-            ) : undefined
+            <CompetitorEditor
+              clientId={view.report.subject.clientId}
+              competitors={view.report.competitorSet?.competitors ?? []}
+              setMissing={view.report.competitorSet === null}
+              scanFinished={!['queued', 'running'].includes(view.report.scanStatus)}
+            />
           }
         />
       </div>

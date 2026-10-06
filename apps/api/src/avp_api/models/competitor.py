@@ -1,4 +1,4 @@
-"""CompetitorSet and Competitor — the auto-detected rival set for a scan.
+"""CompetitorSet and Competitor — the rival set for a scan, and a client's next list.
 
 Facts-only note: a competitor is stored as NAME + DOMAIN +
 provenance, and nothing else. There is deliberately no description, tagline,
@@ -23,6 +23,7 @@ from sqlalchemy import (
     Numeric,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -56,10 +57,29 @@ class DetectionStatus(str, enum.Enum):
 
 
 class CompetitorSet(Base, TimestampMixin):
+    """A set of rivals. It belongs to a scan, or it is a client's NEXT LIST: exactly one of the two.
+
+    **A scan's own set never changes once the scan has started.** It is made when the scan's
+    competitor phase runs (`competitors.ensure_set_for_scan`): the scan's own set if it has one,
+    else the client's next list adopted whole, else a copy of the client's latest set, else
+    detection. Everything the scan shows (its score, its report, its client-history figure, an
+    explicit re-score) reads that set by `scan_id`, so nothing a person does afterwards can move
+    them.
+
+    **The next list is where a save and a detection run from the button write.** It has no scan
+    (`scan_id` NULL) and a client (`client_id` set), and a client has at most one. The next scan
+    that starts adopts it: `scan_id` is set to that scan and `client_id` to NULL in one update, so
+    from then on it is that scan's set and is never written again. The lock that adoption and
+    every write to the next list take (`SELECT ... FOR UPDATE`) is what keeps a save that arrives
+    mid-adoption out of the adopted set.
+    """
+
     __tablename__ = "competitor_sets"
 
     id: Mapped[str] = id_column()
-    scan_id: Mapped[str] = fk_column("scans.id")
+    scan_id: Mapped[str | None] = fk_column("scans.id", nullable=True)
+    # Set only for a next list. Reachable only through its client: every query for one names it.
+    client_id: Mapped[str | None] = fk_column("clients.id", nullable=True)
 
     status: Mapped[DetectionStatus] = enum_column(
         DetectionStatus, name="detection_status", default=DetectionStatus.OK
@@ -135,6 +155,24 @@ class CompetitorSet(Base, TimestampMixin):
 
     __table_args__ = (
         UniqueConstraint("scan_id", name="uq_competitor_sets_scan_id"),
+        # A set is a scan's or a client's next list, never both and never neither. A set of
+        # neither could never be found again, and one of both would be a scan's set that a save
+        # could still reach.
+        CheckConstraint(
+            "num_nonnulls(scan_id, client_id) = 1",
+            name="scan_or_client",
+        ),
+        # At most one next list per client, which is what lets a save and a scan both ask for
+        # "the client's next list" and mean the same row. Partial, because a client has a set for
+        # every scan it ever ran and only the one without a scan is held for it. A second writer
+        # that loses the race for it blocks on this index until the first commits, then adopts
+        # the first one's list (`competitors.create_next_list`).
+        Index(
+            "uq_competitor_sets_next_list_per_client",
+            "client_id",
+            unique=True,
+            postgresql_where=text("scan_id IS NULL"),
+        ),
         CheckConstraint(
             "detection_confidence IS NULL OR "
             "(detection_confidence >= 0 AND detection_confidence <= 1)",

@@ -13,8 +13,10 @@ Two things enforce it, at two strengths.
 
 What the second does NOT cover, on purpose, is prose. Some comments and docstrings under `src`
 quote a dated vendor price, a measured scan cost or the plan's own price as the reason a choice
-was made (`extraction.py`'s "$1 / $5 per MTok ... read 2026-09-11", `scan_allowance.py`'s
-arithmetic for the monthly limit): rationale written beside a choice, read by nobody's code, and
+was made (`billing.py`'s plan price and its history, a "cents" in `cocitation.py` and
+`fix_generator.py`; the provider figures that `engines.py`, `extraction.py` and `scan_allowance.py`
+carried were replaced by a pointer to north-star section 5.1, 2026-10-06): rationale written
+beside a choice, read by nobody's code, and
 the cost skill allows a price "with a vendor URL and the date it was read". A figure in prose
 is not a figure in production code, and a guard on prose would fail every time the plan's price
 or a vendor's rate is discussed where it belongs.

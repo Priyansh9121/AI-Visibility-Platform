@@ -67,6 +67,9 @@ markers = [
     # `stub_chain_externals`, for tests that fake the HTTP transport under the
     # real client and need the call to reach it.
     "real_parse: do not stub AsyncMessages.parse (test_call_bounds.py)",
+    # The test stubs the TCP connect beneath httpx, so no packet leaves; conftest's outbound
+    # guard stands aside for it (test_egress.py).
+    "stubbed_connect: the TCP connect is stubbed below httpx; the outbound guard stands aside",
 ]
 filterwarnings = [
     # Our own deprecation warnings are errors — they are ours to fix.

@@ -190,9 +190,10 @@ export function fieldLeads(
 
 /**
  * How many of this client's scans carried each rival — the cross-scan half
- * of "is this rival always here". A competitor set is re-detected per scan,
- * so a rival in the latest set may be new, and one missing from it may have
- * been in every earlier one; the card says which.
+ * of "is this rival always here". A scan's competitor set is the client's list as it stood
+ * when the scan started (the one saved or detected since the previous scan, else the previous
+ * scan's, carried forward) and never changes afterwards; a rival in the latest set may be new,
+ * and one missing from it may have been in every earlier one; the card says which.
  */
 export function presence(history: ClientHistory, name: string): { seen: number; of: number } {
   return {

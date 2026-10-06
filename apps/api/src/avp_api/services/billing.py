@@ -114,22 +114,32 @@ from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
+from stripe import _util as _stripe_util
 
 from ..config import Settings
 from ..errors import (
     BillingNotConfigured,
     CheckoutInProgress,
     InvalidWebhookSignature,
+    PlanPriceMismatch,
     ServiceUnavailable,
     SubscriptionAlreadyActive,
     SubscriptionNeedsAttention,
 )
-from ..models import Agency, StripeWebhookEvent, StripeWebhookOutcome
+from ..models import Agency, StripeWebhookEvent, StripeWebhookOutcome, User
 
 if TYPE_CHECKING:
     # Only to type the session's params below: built in two steps, a trial adds to them, so
     # they are no longer an inline literal at the call. Never imported at run time.
     from stripe.params.checkout import SessionCreateParams
+
+# The SDK PRINTS each request's method and URL, each error message and, at `debug`, the bodies, to
+# stderr when `STRIPE_LOG` (read into `stripe._util.STRIPE_LOG` as the SDK is imported) or
+# `stripe.log` is `info` or `debug`, past every logger level. It checks both at each call, so
+# clearing them here holds in every process that imports this module, with or without the
+# entrypoint's `unset STRIPE_LOG` (which stays, for the processes that never import it).
+stripe.log = None
+_stripe_util.STRIPE_LOG = None
 
 logger = structlog.get_logger(__name__)
 
@@ -154,10 +164,19 @@ PLAN_USAGE_TYPE = "licensed"
 # Stripe states an amount in the currency's smallest unit, which for US dollars is the cent.
 # Derived, so the price is typed once; a change of currency changes this line too.
 PLAN_UNIT_AMOUNT_CENTS = PLAN_PRICE_USD * 100
-# The longest one `price_check` waits for Stripe. The client's own bounds (15 s a call, one
-# retry) give up well inside this; it is here for a call that is stuck past them, so a hang is a
-# `billing.price_check_failed` line and not a check that never reports.
+# How long `price_check` waits for Stripe unless the caller gives another limit, which is the
+# hourly watch's (`price_watch.py`: nobody is waiting on it). The client's own bounds (15 s a
+# call, one retry) give up well inside this; it is here for a call that is stuck past them, so a
+# hang is a `billing.price_check_failed` line and not a check that never reports.
 PRICE_CHECK_TIMEOUT_S = 60.0
+# How long the ONE fresh read made for a checkout click waits for Stripe (founder decision,
+# 2026-10-05), and the only read given this limit: `create_checkout_session` passes it to
+# `price_check` as `timeout_s`. A person is waiting on the click, so it is far shorter than the
+# watch's, and shorter than the client's own 15 s a call, so for this read it is the limit that
+# applies and not a backstop. A read that outlasts it is a failed read like any other:
+# `billing.price_check_failed` with `error_type` `TimeoutError` and `trigger` `checkout`, the
+# price record left as it was, and the checkout goes on.
+CHECKOUT_PRICE_READ_TIMEOUT_S = 10.0
 
 # How long a checkout waits for another checkout of the same agency.
 CHECKOUT_LOCK_TIMEOUT = "3s"
@@ -473,7 +492,32 @@ def _price_terms(price: Any) -> _PriceTerms:
     )
 
 
-async def price_check(settings: Settings) -> None:
+# What the latest DEFINITE price check found, in this process: `_PRICE_OK`,
+# `_PRICE_MISMATCH` (Stripe answered with a Price and its terms differ: a CONFIRMED
+# mismatch) or None (never ran, or Stripe is not configured). Only a definite answer
+# (ok or mismatch) replaces the record: a read that fails or does not answer leaves an
+# earlier mismatch in place, so the next checkout reads again. A failed read never
+# blocks anyone either: refusing needs that request's own fresh read to confirm.
+# Read by `create_checkout_session`, which refuses only on a mismatch.
+_PRICE_OK = "ok"
+_PRICE_MISMATCH = "mismatch"
+_latest_price_check: str | None = None
+
+
+def reset_price_check_record() -> None:
+    """Forget the latest price check (tests, and nothing else)."""
+    global _latest_price_check  # noqa: PLW0603
+    _latest_price_check = None
+
+
+def price_mismatch_confirmed() -> bool:
+    """True when the latest price check in this process confirmed a mismatch."""
+    return _latest_price_check == _PRICE_MISMATCH
+
+
+async def price_check(
+    settings: Settings, *, trigger: str = "watch", timeout_s: float | None = None
+) -> str | None:
     """Read the Price `STRIPE_PRICE_ID` names and log whether it is the plan. Never raises.
 
     One READ (`prices.retrieve`) through `_client`: it writes nothing at Stripe. It
@@ -494,7 +538,7 @@ async def price_check(settings: Settings) -> None:
       archived, billed every two months or metered, is not a mismatch whose fields all
       read the same.
     * `billing.price_check_failed`, warning, `error_type` only: Stripe answered with
-      an error, did not answer in `PRICE_CHECK_TIMEOUT_S`, or answered with
+      an error, did not answer within `timeout_s` (`TimeoutError`), or answered with
       something that is not a Price. `error_type` is the exception's CLASS NAME and
       never its message, which can carry request details (an authentication error
       quotes the key it refused). The key is never logged, and of the response only
@@ -503,17 +547,35 @@ async def price_check(settings: Settings) -> None:
     With Stripe not configured (`is_configured`) it does nothing: no call and no
     line. A cancellation is not swallowed (`CancelledError` is not an `Exception`),
     so shutdown can still end the task that runs this.
+
+    **It records its outcome in process** (`_latest_price_check`): `ok` or `mismatch`
+    replace the record; a failed read leaves it as it was; Stripe not configured clears
+    it. It returns what THIS call found: `"ok"`, `"mismatch"`, or None (not configured
+    or the read failed). Every line it logs also carries `trigger`: `"watch"` for the
+    hourly task (the default) and `"checkout"` for a checkout click while a mismatch
+    is recorded. Otherwise the lines are as above.
+
+    **How long it waits** is `timeout_s`. None, the default and what the hourly task
+    uses, is `PRICE_CHECK_TIMEOUT_S`, read when the check runs. The checkout's one fresh
+    read passes `CHECKOUT_PRICE_READ_TIMEOUT_S`, so that read waits no longer than that
+    (the click's other Stripe calls keep their own limits). The limit belongs to the
+    caller and not to `trigger`, which only labels
+    the lines: a read that outlasts it is the same failed read as any other.
     """
+    global _latest_price_check  # noqa: PLW0603
     if not is_configured(settings):
-        return
+        _latest_price_check = None
+        return None
     try:
         price_id = settings.provider_key("stripe_price_id")
-        async with asyncio.timeout(PRICE_CHECK_TIMEOUT_S):
+        async with asyncio.timeout(PRICE_CHECK_TIMEOUT_S if timeout_s is None else timeout_s):
             price = await _client(settings).v1.prices.retrieve_async(price_id)
         found = _price_terms(price)
     except Exception as exc:  # noqa: BLE001 - a check that fails is reported, never raised
-        logger.warning("billing.price_check_failed", error_type=type(exc).__name__)
-        return
+        logger.warning(
+            "billing.price_check_failed", error_type=type(exc).__name__, trigger=trigger
+        )
+        return None
 
     if (
         found.amount == PLAN_UNIT_AMOUNT_CENTS
@@ -523,8 +585,10 @@ async def price_check(settings: Settings) -> None:
         and found.usage_type == PLAN_USAGE_TYPE
         and found.active is True
     ):
-        logger.info("billing.price_check", ok=True, price_id=price_id)
-        return
+        _latest_price_check = _PRICE_OK
+        logger.info("billing.price_check", ok=True, price_id=price_id, trigger=trigger)
+        return _PRICE_OK
+    _latest_price_check = _PRICE_MISMATCH
     logger.warning(
         "billing.price_mismatch",
         price_id=price_id,
@@ -540,7 +604,9 @@ async def price_check(settings: Settings) -> None:
         actual_active=found.active,
         expected_usage_type=PLAN_USAGE_TYPE,
         actual_usage_type=found.usage_type,
+        trigger=trigger,
     )
+    return _PRICE_MISMATCH
 
 
 # ---------------------------------------------------------------------------
@@ -599,6 +665,27 @@ def trial_days_for(agency: Agency, settings: Settings) -> int:
     that did not land). The one case Settings can be wrong in, and a rare one.
     """
     return 0 if _has_had_a_subscription(agency) else trial_days_offered(settings)
+
+
+def has_verified_identity(user: User | None) -> bool:
+    """The free scan's rule (`scan_allowance.has_verified_identity`), not a second copy of it.
+
+    Imported at the call: `scan_allowance` imports this module, so a top-level import
+    would be a cycle.
+    """
+    from .scan_allowance import has_verified_identity as rule
+
+    return rule(user)
+
+
+def trial_days_for_user(agency: Agency, settings: Settings, user: User | None) -> int:
+    """`trial_days_for`, for the user who would start the checkout: 0 unless they have Google.
+
+    A trial needs the agency's record to allow it AND a verified Google identity on the
+    requesting user (`has_verified_identity`, the free scan's rule). `GET /billing` reads
+    this for `trialEligible`, so Settings promises exactly what checkout will give.
+    """
+    return trial_days_for(agency, settings) if has_verified_identity(user) else 0
 
 
 def trial_end_of(subscription: Any) -> datetime | None:
@@ -666,8 +753,14 @@ async def ensure_customer(db: AsyncSession, agency: Agency, *, settings: Setting
     return customer.id
 
 
+_PLAN_PRICE_MISMATCH_DETAIL = (
+    "Subscribing is not available right now because the plan's price is not set up "
+    "correctly. Please try again later."
+)
+
+
 async def create_checkout_session(
-    db: AsyncSession, agency: Agency, *, settings: Settings
+    db: AsyncSession, agency: Agency, *, settings: Settings, user: User | None
 ) -> str:
     """Start a subscription. Returns the URL to send the browser to.
 
@@ -737,6 +830,24 @@ async def create_checkout_session(
     # Recording the FIRST customer id writes a unique-indexed column, which
     # Postgres treats as a key change, so that case takes the full FOR UPDATE
     # (up front, before any Stripe call). A repeat checkout writes no key.
+    # The plan's price (B3, 2026-10-05). Only when the latest price check CONFIRMED a
+    # mismatch is the Price read again, here, BEFORE the lock below: no Stripe read is
+    # made while the agency row is held. That read also updates the record, so a Price
+    # fixed since the last hourly check blocks no one. The answer is kept in
+    # `price_mismatch_now` and acted on only after the two subscription refusals (an
+    # agency that is already subscribed hears its 409, not a price problem) and before
+    # `ensure_customer` and every other Stripe write, so a refusal leaves no customer
+    # and no session. A failed read, a timeout, no check yet or an `ok` record all
+    # proceed, with no extra read on the normal path. A person is waiting on the click, so
+    # the read has its own short limit, `CHECKOUT_PRICE_READ_TIMEOUT_S` (10 s, founder
+    # decision 2026-10-05), and not the hourly watch's: one that is slower is a failed read.
+    price_mismatch_now = False
+    if price_mismatch_confirmed():
+        found = await price_check(
+            settings, trigger="checkout", timeout_s=CHECKOUT_PRICE_READ_TIMEOUT_S
+        )
+        price_mismatch_now = found == _PRICE_MISMATCH
+
     key_share = bool(agency.stripe_customer_id)
     await db.execute(text(f"SET LOCAL lock_timeout = '{CHECKOUT_LOCK_TIMEOUT}'"))
     try:
@@ -760,6 +871,13 @@ async def create_checkout_session(
         raise SubscriptionAlreadyActive(_ALREADY_ACTIVE_DETAIL)
     if is_live_at_stripe(agency.subscription_status):
         raise SubscriptionNeedsAttention(_NEEDS_ATTENTION_DETAIL)
+    if price_mismatch_now:
+        logger.error(
+            "billing.checkout_refused_price_mismatch",
+            agency_id=agency.id,
+            price_id=price_id,
+        )
+        raise PlanPriceMismatch(_PLAN_PRICE_MISMATCH_DETAIL)
 
     # The trial, if there is to be one: the length on offer, unless this agency's own
     # row has had a subscription (`trial_days_for`, the same test `GET /billing` reads for
@@ -861,6 +979,15 @@ async def create_checkout_session(
         if subs.data:
             trial_days = 0
 
+    # The last word on the trial is the USER who starts this checkout (founder decision
+    # 2026-10-05): a trial needs a verified Google identity, the same rule as the free scan
+    # (`has_verified_identity`). Without one the checkout is the plain, no-trial one. Decided
+    # after every other test, so `trial_withheld_no_google` is true only when the trial was
+    # otherwise going to be given.
+    trial_withheld_no_google = trial_days > 0 and not has_verified_identity(user)
+    if trial_withheld_no_google:
+        trial_days = 0
+
     params: SessionCreateParams = {
         "mode": "subscription",
         "customer": customer_id,
@@ -900,6 +1027,9 @@ async def create_checkout_session(
         session_id=session.id,
         # 0 when there was no trial: the setting is off or this agency has had its one.
         trial_days=trial_days,
+        # True when a trial was due but the user starting checkout has no linked Google identity.
+        trial_withheld_no_google=trial_withheld_no_google,
+        user_id=user.id if user is not None else None,
     )
     return session.url
 

@@ -30,7 +30,7 @@ from decimal import Decimal
 
 import anthropic
 import structlog
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from ..config import Settings, get_settings
 from ..models.engine_result import CitationType, EngineResultStatus, Sentiment
@@ -42,14 +42,14 @@ from .serp import NON_COMPETITOR_DOMAINS
 
 logger = structlog.get_logger(__name__)
 
-# Haiku 4.5, pinned snapshot — the cheapest current model ($1 / $5 per MTok
-# against Opus 5's $5 / $25; platform.claude.com/docs/en/about-claude/pricing,
-# read 2026-09-11). This call is NOT the product: the engines being measured
+# Haiku 4.5, pinned snapshot — the cheapest current model (rates: north-star
+# §5.1, from platform.claude.com/docs/en/about-claude/pricing).
+# This call is NOT the product: the engines being measured
 # keep their flagship models (`engines.py`), and this is the three-way
 # categorisation the pipeline runs on top of their answers — the highest-
 # volume paid call in a scan (82 of the 132 Anthropic calls in the measured
 # five-engine run, build log Epic 21.1) and, per the cost brief, more of its
-# $6.50 than any single engine. Chosen on a held-out set, not on price alone:
+# cost than any single engine. Chosen on a held-out set, not on price alone:
 # `scripts/verify_sentiment_models.py`, sixteen excerpts written to cover the
 # rubric's own distinctions, on which Haiku 4.5 agreed with Opus 5 on 15/16
 # (the one split a genuinely ambiguous case), matched the reader's label on
@@ -375,6 +375,22 @@ async def classify_sentiment(
             call.read_anthropic(response)
     except (anthropic.APIError, TimeoutError) as exc:
         logger.warning("extraction.sentiment_failed", error=type(exc).__name__)
+        return None, None
+    except ValidationError as exc:
+        # The model answered and its answer did not fit the schema: pydantic's error, raised
+        # inside the SDK's `parse`, is not an `anthropic.APIError`, so the clause above never saw
+        # it and it escaped into a scan that had been paid for (checklist 3.76). Same handling as
+        # `classify.py` and `fix_generator.py`; the call is still counted (`llm.call`, `ok=False`).
+        errors = [
+            {
+                "field": ".".join(str(part) for part in err.get("loc", ())),
+                "type": err.get("type"),
+                # The LENGTH of the offending value, never the value: it is model-authored.
+                "length": len(v) if isinstance(v := err.get("input"), str) else None,
+            }
+            for err in exc.errors()[:5]
+        ]
+        logger.error("extraction.schema_violation", errors=errors)
         return None, None
 
     if response.stop_reason == "refusal" or response.parsed_output is None:

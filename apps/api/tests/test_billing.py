@@ -42,7 +42,7 @@ from httpx import AsyncClient
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from avp_api.models import Agency, Invitation, StripeWebhookEvent
+from avp_api.models import Agency, Invitation, StripeWebhookEvent, User
 from avp_api.security import token_digest
 from avp_api.services import billing as billing_service
 
@@ -278,6 +278,22 @@ async def _sign_up(
     )
     assert resp.status_code == 201, resp.text
     return resp.json()
+
+
+async def _sign_up_with_google(client: AsyncClient, engine, **kwargs: Any) -> dict:  # noqa: ANN001
+    """`_sign_up`, then link a Google identity to the owner: a free trial needs one (2026-10-05).
+
+    A password-only owner is the plain no-trial checkout; `test_billing_trial_identity.py`
+    holds that rule. The trial tests in this file are about the OTHER rules (one trial per
+    agency, Stripe's list, the setting), so their owner is the kind who may have one.
+    """
+    me = await _sign_up(client, **kwargs)
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+    async with factory() as s:
+        row = (await s.execute(select(User).where(User.id == me["user"]["id"]))).scalar_one()
+        row.google_sub = f"sub-{row.id}"
+        await s.commit()
+    return me
 
 
 async def _become_member(client: AsyncClient, engine, agency_id: str) -> None:  # noqa: ANN001
@@ -1541,6 +1557,8 @@ async def test_a_new_agency_has_no_subscription_and_is_not_gated(
         "trialEndsAt": None,
         # Round two: nothing to promise either: the trial is off by default in this file.
         "trialEligible": False,
+        # 2026-10-05: and no Google to ask for either: there is no trial to need it for.
+        "trialRequiresGoogle": False,
     }
 
     # And READING is never withheld because of it — the gate is on starting a
@@ -2762,7 +2780,7 @@ async def test_with_no_trial_configured_checkout_sends_the_params_it_always_did(
 
 @pytest.mark.parametrize("days", [1, 14, 30, 730])
 async def test_a_new_agency_checks_out_with_the_trial_and_the_card_collected(
-    client: AsyncClient, settings, monkeypatch, stripe_stub: _StripeStub, days: int  # noqa: ANN001
+    client: AsyncClient, engine, settings, monkeypatch, stripe_stub: _StripeStub, days: int  # noqa: ANN001
 ) -> None:
     """`trial_period_days` is the setting, and the card is taken at checkout.
 
@@ -2771,7 +2789,7 @@ async def test_a_new_agency_checks_out_with_the_trial_and_the_card_collected(
     to charge on day 31.
     """
     monkeypatch.setattr(settings, "stripe_trial_days", days)
-    me = await _sign_up(client)
+    me = await _sign_up_with_google(client, engine)
     agency_id = me["agency"]["id"]
 
     with structlog.testing.capture_logs() as events:
@@ -2785,12 +2803,15 @@ async def test_a_new_agency_checks_out_with_the_trial_and_the_card_collected(
     created = _created_lines(events)
     assert len(created) == 1, events
     assert created[0]["trial_days"] == days
-    assert set(created[0]) - {"event", "log_level"} == {"agency_id", "session_id", "trial_days"}
+    assert set(created[0]) - {"event", "log_level"} == {
+        "agency_id", "session_id", "trial_days", "trial_withheld_no_google", "user_id"
+    }
+    assert created[0]["trial_withheld_no_google"] is False
 
 
 @pytest.mark.usefixtures("trial_30")
 async def test_a_returning_customer_who_never_subscribed_gets_the_trial_without_another_round_trip(
-    client: AsyncClient, settings, stripe_stub: _StripeStub  # noqa: ANN001
+    client: AsyncClient, engine, settings, stripe_stub: _StripeStub  # noqa: ANN001
 ) -> None:
     """Someone who opened checkout, left, and came back has never had a subscription.
 
@@ -2798,7 +2819,7 @@ async def test_a_returning_customer_who_never_subscribed_gets_the_trial_without_
     double subscription is refused), and the trial rides on THAT answer: no new
     call, and the same four calls in the same order as without a trial.
     """
-    me = await _sign_up(client)
+    me = await _sign_up_with_google(client, engine)
     agency_id = me["agency"]["id"]
     first = await _checkout_params(client, stripe_stub, agency_id)
     assert first["subscription_data"]["trial_period_days"] == 30
@@ -2846,7 +2867,7 @@ async def test_an_agency_that_has_ever_had_a_subscription_gets_no_trial(
     in practice; the rest are what a half-written row looks like, and they count.
     Checkout itself still works: it is the trial that is not offered.
     """
-    me = await _sign_up(client)
+    me = await _sign_up_with_google(client, engine)
     agency_id = me["agency"]["id"]
     assert (await _checkout_params(client, stripe_stub, agency_id))["subscription_data"][
         "trial_period_days"
@@ -2865,14 +2886,14 @@ async def test_an_agency_that_has_ever_had_a_subscription_gets_no_trial(
 @pytest.mark.usefixtures("trial_30")
 @pytest.mark.parametrize("ended", ["canceled", "incomplete_expired"])
 async def test_a_customer_with_an_ended_subscription_at_stripe_gets_no_trial(
-    client: AsyncClient, settings, stripe_stub: _StripeStub, ended: str  # noqa: ANN001
+    client: AsyncClient, engine, settings, stripe_stub: _StripeStub, ended: str  # noqa: ANN001
 ) -> None:
     """Our row says nothing (the webhook never landed), Stripe remembers.
 
     The customer's subscription list is asked for every status, so an ended one is
     on it. It does not refuse the checkout, and it does end the trial.
     """
-    me = await _sign_up(client)
+    me = await _sign_up_with_google(client, engine)
     agency_id = me["agency"]["id"]
     assert (await _checkout_params(client, stripe_stub, agency_id))["subscription_data"][
         "trial_period_days"
@@ -3471,7 +3492,7 @@ async def test_billing_says_whether_the_agency_would_be_given_the_trial(
     client: AsyncClient, engine, row: dict[str, Any], eligible: bool  # noqa: ANN001
 ) -> None:
     """No `stripe_stub` is requested: a read that reached Stripe would fail on the guard."""
-    me = await _sign_up(client)
+    me = await _sign_up_with_google(client, engine)
     agency_id = me["agency"]["id"]
     await _set_fields(engine, agency_id, **row)
 
@@ -3493,11 +3514,11 @@ async def test_billing_says_no_trial_is_open_when_none_is_configured(
 @pytest.mark.usefixtures("trial_30")
 @pytest.mark.parametrize("missing", ["stripe_secret_key", "stripe_price_id"])
 async def test_billing_says_no_trial_is_open_where_checkout_cannot_start_one(
-    client: AsyncClient, settings, monkeypatch, missing: str  # noqa: ANN001
+    client: AsyncClient, engine, settings, monkeypatch, missing: str  # noqa: ANN001
 ) -> None:
     """The same rule as `GET /billing/plan`: a trial nobody can start is not one to promise."""
     monkeypatch.setattr(settings, missing, None)
-    me = await _sign_up(client)
+    me = await _sign_up_with_google(client, engine)
     body = (await client.get(f"{BASE}/agencies/{me['agency']['id']}/billing")).json()
     assert body["trialEligible"] is False
 
@@ -3524,7 +3545,7 @@ async def test_billing_and_checkout_agree_on_who_gets_the_trial(
     The session checkout makes carries the trial exactly when `trialEligible` was true. Stripe's
     own list is empty here, which is the half of checkout's test a read cannot see.
     """
-    me = await _sign_up(client)
+    me = await _sign_up_with_google(client, engine)
     agency_id = me["agency"]["id"]
     await _set_fields(engine, agency_id, **row)
 
@@ -3658,12 +3679,12 @@ async def test_the_contract_carries_the_trial(client: AsyncClient) -> None:
 
 
 async def test_a_trial_checkout_and_its_events_log_no_key_secret_or_address(
-    client: AsyncClient, settings, monkeypatch, stripe_stub: _StripeStub, caplog, capsys  # noqa: ANN001
+    client: AsyncClient, engine, settings, monkeypatch, stripe_stub: _StripeStub, caplog, capsys  # noqa: ANN001
 ) -> None:
     """The whole trial, start to first charge: ids, numbers and event names only."""
     monkeypatch.setattr(settings, "stripe_trial_days", 30)
     email = "private.owner@billing.example"
-    me = await _sign_up(client, email=email)
+    me = await _sign_up_with_google(client, engine, email=email)
     agency_id = me["agency"]["id"]
     caplog.set_level("DEBUG")
     t = 1780130000

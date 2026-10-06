@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from ..deps import DbDep, PrincipalDep, ScanExecutorDep, SettingsDep
-from ..errors import NotFound, ValidationProblem
+from ..errors import NotFound
 from ..models import EngineResult, Prompt, PromptSet, Scan, ScanStatus
 from ..schemas.common import Page
 from ..schemas.scan import (
@@ -23,11 +23,9 @@ from ..schemas.scan import (
     ScanDetailOut,
     ScanOut,
 )
-from ..services import competitors as detection
-from ..services import scan_allowance
-from ..services.engines import ENGINE_REGISTRY, configured_engines, keyed_engines
+from ..services import scan_allowance, scan_start
 from ..services.intake import get_client
-from ..services.scan_executor import ScanJob, fail_never_started_scans, reap_stale_scans
+from ..services.scan_executor import fail_never_started_scans
 
 router = APIRouter(tags=["scans"])
 
@@ -141,107 +139,16 @@ async def run_scan(
     exempt operators are unaffected.
     """
     client = await get_client(db, agency_id=principal.agency_id, client_id=client_id)
-
-    # Checked BEFORE the reaper runs and before a scan row is created or
-    # adopted: a request that cannot run should leave nothing behind. The
-    # schema has already collapsed duplicates and validated each value against
-    # the Engine enum; this is the second check, against the engines that have
-    # an adapter and a key. `ask_all` subscripts ENGINE_REGISTRY bare, so an
-    # enum-only engine such as `perplexity` used to fail INSIDE the executor —
-    # after competitor detection had been paid for — and land the scan at
-    # FAILED / EXECUTION_FAILED. Now it is a 422 and no scan exists.
-    # The default is the DEFAULT engines with a KEY, not the five with an
-    # adapter — Epic 21. An engine nobody has provisioned would run as 20
-    # failures a scan and read as "Gemini never named you". Naming one
-    # explicitly is refused with the variable to set, the same 422 an
-    # adapter-less engine gets, and for the same reason: it cannot answer.
-    # Naming a REGISTERED, KEYED engine that is not a default is allowed —
-    # that is how `claude_search` runs since it left the default set on
-    # 2026-09-12 — so the second check below asks `keyed_engines`, not the
-    # default set. (Before that date the two sets were identical and the
-    # check read the default set; the suite caught the difference.)
-    live = configured_engines(settings)
-    keyed = keyed_engines(settings)
-    engines = tuple(payload.engines) if payload.engines else live
-    unsupported = [e.value for e in engines if e not in ENGINE_REGISTRY]
-    if unsupported:
-        raise ValidationProblem(
-            detail=(
-                f"No adapter for engine(s): {', '.join(unsupported)}. "
-                f"Supported: {', '.join(e.value for e in ENGINE_REGISTRY)}."
-            )
-        )
-    unkeyed = [e for e in engines if e not in keyed]
-    if unkeyed:
-        raise ValidationProblem(
-            detail=(
-                "No key configured for engine(s): "
-                + ", ".join(
-                    f"{e.value} ({ENGINE_REGISTRY[e].key_setting.upper()})" for e in unkeyed
-                )
-                + ". Keyed: "
-                + (", ".join(e.value for e in ENGINE_REGISTRY if e in keyed) or "none")
-                + "."
-            )
-        )
-
-    # Reap before reusing. A scan stranded at RUNNING by a lost executor would
-    # otherwise be picked up by `get_or_create_scan` and re-run, which dies on
-    # `prompt_sets`' unique constraint as a 500. This is the path where a
-    # stranded row does real harm, so it is the path that clears it.
-    if await reap_stale_scans(db):
-        await db.commit()
-
-    # A scan already in flight is reported, not re-started — and not gated:
-    # nothing is being started. Read before the lock so the common case pays
-    # for no lock at all.
-    existing = await detection.open_scan(db, client.id)
-    if existing is not None and existing.status is ScanStatus.RUNNING:
-        return existing
-
-    # The allowance, under a row lock on the agency that the COMMIT below
-    # releases. Gate off when billing is not configured — see the service.
-    if scan_allowance.gate_enabled(settings):
-        await scan_allowance.assert_can_start(
-            db,
-            principal.agency_id,
-            settings,
-            exclude_scan_id=existing.id if existing is not None else None,
-            user=principal.user,
-        )
-
-    scan = await detection.get_or_create_scan(db, client, user_id=principal.user_id)
-
-    # Stamp the submission BEFORE the commit that releases the allowance lock,
-    # so a concurrent request's count sees this scan holding its slot from now,
-    # not from the (possibly days-old) detection row it adopted. Detection
-    # never sets this. Skipped for RUNNING: nothing is handed off.
-    if scan.status is ScanStatus.QUEUED:
-        scan.submitted_at = datetime.now(UTC)
-
-    # Commit BEFORE handing off. The executor loads the scan on its own session
-    # and would not find it otherwise. This commit also releases the lock.
-    await db.commit()
-    await db.refresh(scan)
-
-    if scan.status is ScanStatus.RUNNING:
-        return scan
-
-    await executor.submit(
-        ScanJob(
-            scan_id=scan.id,
-            client_id=client.id,
-            engines=engines,
-            prompt_limit=payload.prompt_limit,
-        ),
+    # One start path for this route and the monthly rescan (`services/scan_start.py`).
+    return await scan_start.start_scan(
+        db,
         settings=settings,
+        executor=executor,
+        client=client,
+        user=principal.user,
+        engines=payload.engines,
+        prompt_limit=payload.prompt_limit,
     )
-    # Deliberately returns the row as committed — QUEUED — and does not re-read
-    # after handing off. The `202` reports what was accepted, not how far it has
-    # since got; an executor that happens to run synchronously must not change
-    # this endpoint's contract. Completion is observed through
-    # `GET /scans/{scanId}`, which is the one place that answers it.
-    return scan
 
 
 @router.get("/scans/{scanId}", response_model=ScanDetailOut)

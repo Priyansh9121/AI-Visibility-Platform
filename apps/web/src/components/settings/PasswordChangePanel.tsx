@@ -24,6 +24,20 @@
  *
  * The design-from-the-data-model rule: derived from the endpoint and the user goal. No competitor's
  * account screen was referenced.
+ *
+ * THE SUCCESS MESSAGE IS ADDED TO A REGION, NOT MADE WITH ONE (3.85)
+ * ------------------------------------------------------------------
+ * A screen reader announces what a live region gains, and mostly not a region that arrives with its
+ * text already in it. The message used to be a `role="status"` paragraph mounted when the change
+ * worked, so it was often never read. The region is now on the page from the first render, empty,
+ * and the paragraph is added to it, as 3.70 did for "Link copied." and 3.52 for the share bar's.
+ * A press empties it (the state is `working`) and the result fills it, so a second change is a new
+ * element and is read again.
+ *
+ * The region sits in the wrapper around the submit button, not among the form's own children. The
+ * form is a flex column with a gap, and an empty flex item still has a gap beside it, so a region of
+ * its own would have added one gap to a form that has said nothing. The wrapper was a flex item
+ * already, and the message brings the space it had, as `mb-5`, the form's own `gap-5`.
  */
 
 import { useState, type FormEvent, type JSX } from 'react';
@@ -129,14 +143,15 @@ export function PasswordChangePanel({
             </p>
           )}
 
-          {state.kind === 'done' && (
-            <p role="status" className="max-w-measure text-ui-sm leading-prose text-text-secondary">
-              Your password has been changed. Every other device has been signed out; this
-              one is still signed in.
-            </p>
-          )}
-
           <div>
+            <div role="status" data-testid="password-status">
+              {state.kind === 'done' && (
+                <p className="mb-5 max-w-measure text-ui-sm leading-prose text-text-secondary">
+                  Your password has been changed. Every other device has been signed out; this
+                  one is still signed in.
+                </p>
+              )}
+            </div>
             <Button
               type="submit"
               variant="primary"

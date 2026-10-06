@@ -107,7 +107,14 @@ logger = structlog.get_logger(__name__)
 FORMULA_VERSION = "v5"
 
 # Why Technical Foundation can be missing — the reason `compute_score` records.
-# NOT_YET_MEASURED: no audit, or one that could not read the site.
+# NOT_YET_MEASURED: no audit row for the scan. (Until 2026-10-05 it was also what an
+# audit that FAILED for any other reason recorded; stored scores are never re-scored, so
+# old rows keep it for those. Read a stored NOT_YET_MEASURED as "no audit, or a failed
+# audit scored before AUDIT_FAILED existed".)
+# AUDIT_FAILED (2026-10-05, launch checklist 3.87): an audit exists and FAILED for a reason
+# the three crawl reasons below do not cover (a timeout, a busy browser that never started
+# the check, a broken browser, a page that did not respond, an error status from a page
+# that did answer). A label only: it feeds no computation.
 # CRAWL_DISALLOWED (2026-09-29): the site's robots.txt forbids its pages to
 # this crawler.
 # CRAWL_ADDRESS_NOT_PUBLIC: the site's address (or a redirect's) is not a public
@@ -120,7 +127,7 @@ FORMULA_VERSION = "v5"
 # enters the digest only when set.
 TECHNICAL_FOUNDATION_EXCLUSIONS = (
     "NOT_YET_MEASURED", "CRAWL_DISALLOWED", "CRAWL_ADDRESS_NOT_PUBLIC",
-    "CRAWL_POLICY_UNREADABLE",
+    "CRAWL_POLICY_UNREADABLE", "AUDIT_FAILED",
 )
 
 TWO_PLACES = Decimal("0.01")

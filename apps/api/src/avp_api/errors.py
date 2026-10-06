@@ -157,6 +157,19 @@ class FailedScanNotShareable(Conflict):
     title = "Failed scan cannot be shared"
 
 
+class ScanNotExportable(Conflict):
+    """The CSV of a report's figures was asked for a scan that has none to give (409).
+
+    A scan that FAILED (its score is withheld, as for sharing), one still QUEUED or RUNNING
+    (its figures are not final) or any other status that is not SUCCEEDED or PARTIAL. A type
+    of its own, so the web can show the `detail`, which is one plain sentence for the person
+    at the screen and names no code, no figure and nothing about the client.
+    """
+
+    problem_type = "scan-not-exportable"
+    title = "This scan's figures cannot be exported"
+
+
 class EmailAlreadyRegistered(Conflict):
     problem_type = "email-already-registered"
     title = "That email address is already registered"
@@ -215,6 +228,22 @@ class BillingNotConfigured(ProblemError):
     status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     problem_type = "billing-not-configured"
     title = "Billing is not configured on this server"
+
+
+class PlanPriceMismatch(ProblemError):
+    """Checkout refused: the latest price check CONFIRMED the Price is not the plan.
+
+    **503**, like `BillingNotConfigured`: nothing is wrong with the request, and
+    the deployment's Stripe Price (amount, currency, interval or archived state)
+    has to be fixed by whoever runs it before anyone can subscribe. The `detail`
+    is a plain sentence for the person at the screen; it names no amount, no
+    Price id and no setting, and promises nothing about who has been told. A
+    failed or missing price read never raises this: only a confirmed mismatch.
+    """
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    problem_type = "plan-price-mismatch"
+    title = "The plan's price is not set up correctly"
 
 
 class GoogleSignInNotConfigured(ProblemError):

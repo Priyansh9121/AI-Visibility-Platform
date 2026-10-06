@@ -121,7 +121,7 @@ in `tokens/elevation.ts` is Epic 0's set, applied through the paper scope.
 | `PageHead` | **New.** Eyebrow, title in the display face, `aside` for controls. Every Working screen's first line. |
 | `StatTile` | Redrawn as a card: seated surface, 16px, top highlight, hover lifts one tone. The accent is a **dot beside the label**, no longer a left rail; `emphasis` colours the value. |
 | `Card` | Seated by default, 16px, `CardHeader` is a flex row so a title and a live badge sit on one line; a `DataTable` directly inside runs edge to edge. |
-| `Button` | Primary carries `--avp-gradient-accent` with `--avp-on-accent` text; hover brightens. Secondary lifts to `surface-raised` with a beacon edge. |
+| `Button` | Primary carries `--avp-gradient-accent` with `--avp-on-accent` text, sized to the border box (`background-origin: border-box`) so it does not tile into the 1px transparent border as a rim (3.40); hover brightens. Secondary lifts to `surface-raised` with a beacon edge. |
 | `ScoreMeter`, `NavScore`, `NavSubItem` | Painted from `visibilityColorDark`. |
 | `LuminanceLedger` | `palette="working"` (default `'report'`) paints lit segments from the dark ramp and adds `avp-ledger--working`. Void is `--avp-surface-void`. |
 | `TrendChart` | `area` (default `false`) fills under the **subject's** line only, gradient from the series colour to transparent, one `<linearGradient>` per instance via `useId`. `seriesStyle(…, 'working')` now returns the dark beacon and `benchColorDark`. |
@@ -347,12 +347,31 @@ rise toward the viewer — it **illuminates**:
   1.4.11, enforced by `tokens/contrast.test.ts`); the dark theme keeps its 2px
   ring at 70%. Never an outline offset, never a lift. Applied globally in
   `base.css` so no component reimplements it.
-- `--avp-focus-ring-filled` — checklist 3.33: a `primary` or `danger` button sets its
-  ring off its fill with a 2px gap. In the light theme the gap is always
-  `surface-seated`, the card colour: invisible on a card, a faint lighter band on the
-  ground, sunken and void (1.06, 1.12 and 1.23:1). In the report it is the report's
-  own page colour (`paper-000`), in either app theme. The plain ring is 1.0:1 against
-  the primary fill and 1.13:1 against the paper one; dark keeps the plain ring.
+- **The outline under the ring** — checklist 3.40. The ring is a shadow, and forced
+  colours (Windows High Contrast) drops shadows, so the same controls also take
+  `outline: 2px solid transparent`: invisible on a normal screen, painted in a system
+  colour in forced colours. It is its own rule in `base.css`,
+  `html :where(…):focus-visible` at (0,1,1), and not a line in the ring's rule. It has
+  to outrank Tailwind's preflight `:-moz-focusring { outline: auto }` (0,1,0, loaded
+  after the design system, so a tie goes to it), or Firefox draws its own ring inside
+  the shadow, and it has to outrank `.avp-field__input`'s `outline: none`. The ring's
+  rule stays at (0,1,0), so a component's own radius (`.avp-btn`'s 8px) still beats its
+  `border-radius` on file order. A component's own `.x:focus-visible` (0,2,0) outranks
+  the outline rule, which is how `.avp-gapgrid` keeps its accent outline.
+- `--avp-focus-ring-filled` — checklists 3.33 and 3.40: a `primary` or `danger` button
+  sets its ring off its fill with a 2px gap. In the light and the dark theme the gap is
+  always `surface-seated`, the card colour: invisible on a card, a faint band on the
+  ground, sunken and void (light 1.06, 1.12 and 1.23:1; dark 1.08, 1.13 and 1.18:1). In
+  the report it is the report's own page colour (`paper-000`), in either app theme. The
+  plain ring is 1.0:1 against the primary fill and 1.13:1 against the paper one in the
+  light theme; in the dark theme it is 1.6 to 2.0:1 against the primary fill and about
+  1.0 against the danger fill, which is why dark takes the gap too (the gap is 6.0 to
+  11.4:1 against the fills, the ring 5.6:1 or more against the gap).
+- **A focused field is lit once** — checklist 3.40. The ring is on the wrapper,
+  `.avp-field__control:focus-within`; `.avp-field__input:focus-visible` sets
+  `box-shadow: none`, so the global rule no longer draws a second ring on the input
+  inside it. `TextField` and `SelectField` both use these two classes. In forced colours
+  shadows are dropped and the cue is the input's own 2px outline inside the wrapper.
 - `--avp-selected-ring` / `--avp-selected-wash` — reads as lit from within.
 - **Score reveal** — dissolves `vis-00` → true value over 600ms
   `cubic-bezier(0.22, 1, 0.36, 1)`. A count-up says "loading"; an illumination
@@ -696,10 +715,12 @@ lines.
 
 ### A null is a gap, never a zero
 
-The single load-bearing rule. A competitor set is re-detected per scan, so a
-rival can be present, absent, then present again. Joining through zero asserts a
-collapse that was never measured; dropping the series shows fewer rivals than
-the client has, silently. So `trendLayout.segments()` breaks the line into runs
+The single load-bearing rule. A scan's competitor set is the client's list as it
+stood when the scan started: the list someone saved or ran detection for since the
+previous scan, else the previous scan's, carried forward. Someone can save a new
+list or run detection again between scans, so a rival can be present, absent, then
+present again. Joining through zero asserts a collapse that was never measured;
+dropping the series shows fewer rivals than the client has, silently. So `trendLayout.segments()` breaks the line into runs
 of consecutive readings, a lone run draws as a dot, and the hidden data table
 prints **"not measured"** rather than a blank cell.
 

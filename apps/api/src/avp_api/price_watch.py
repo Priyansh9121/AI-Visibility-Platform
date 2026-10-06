@@ -45,7 +45,7 @@ STOP_TIMEOUT_S = 5.0
 async def watch_price(settings: Settings, *, interval_s: float = CHECK_INTERVAL_S) -> None:
     """Check now, then every `interval_s`, until cancelled. Only cancellation ends it."""
     while True:
-        await billing.price_check(settings)
+        await billing.price_check(settings, trigger="watch")
         await asyncio.sleep(interval_s)
 
 

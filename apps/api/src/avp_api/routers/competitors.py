@@ -12,8 +12,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from ..deps import DbDep, PrincipalDep, RedisDep, SettingsDep
-from ..errors import NotFound
-from ..models import CompetitorSet, Scan
+from ..errors import Conflict, NotFound, ValidationProblem
+from ..models import Client, CompetitorSet, ScanStatus
 from ..schemas.competitor import (
     CompetitorOut,
     CompetitorSetOut,
@@ -21,49 +21,98 @@ from ..schemas.competitor import (
 )
 from ..services import competitors as detection
 from ..services import rate_limit, scan_allowance
-from ..services.intake import get_client
+from ..services.intake import checked_domain, encode_hostname, get_client
 
 router = APIRouter(prefix="/clients", tags=["competitors"])
 
 
-async def _load_set(db: Any, scan_id: str) -> CompetitorSet | None:
+async def _load_set(db: Any, set_id: str) -> CompetitorSet | None:
     return (
         await db.execute(
             select(CompetitorSet)
-            .where(CompetitorSet.scan_id == scan_id)
+            .where(CompetitorSet.id == set_id)
             .options(selectinload(CompetitorSet.competitors))
         )
     ).scalar_one_or_none()
 
 
-async def _latest_set_for_client(db: Any, client_id: str) -> CompetitorSet:
-    """Most recent competitor set for a client, or 404.
+def _no_set() -> NotFound:
+    """The 404 for `GET` and `PUT /clients/{clientId}/competitors` on a client with no list yet.
 
-    The 404 is `GET` and `PUT /clients/{clientId}/competitors` on a client that has no set on
-    any scan. Its sentence is true for every caller, so it tells nobody to press the detect
+    Its sentence is true for every caller, so it tells nobody to press the detect
     route: that is for paying agencies (launch checklist 3.61). It says what does make a set:
     a scan, whose competitor phase runs detection for a client with none
     (`competitors.ensure_set_for_scan`). It does not say the scan will be allowed, or will
     succeed: starting one is the scan allowance's question, and a phase can fail.
     """
-    competitor_set = (
-        await db.execute(
-            select(CompetitorSet)
-            .join(Scan, Scan.id == CompetitorSet.scan_id)
-            .where(Scan.client_id == client_id)
-            .order_by(CompetitorSet.id.desc())
-            .limit(1)
-            .options(selectinload(CompetitorSet.competitors))
+    return NotFound(
+        detail=(
+            "No competitor set for this client yet. "
+            "A scan runs detection for a client that has none."
         )
-    ).scalar_one_or_none()
-    if competitor_set is None:
-        raise NotFound(
-            detail=(
-                "No competitor set for this client yet. "
-                "A scan runs detection for a client that has none."
-            )
-        )
-    return competitor_set
+    )
+
+
+async def _next_list_to_replace(
+    db: Any, client: Client, *, naming_rivals: bool
+) -> CompetitorSet:
+    """The set `PUT` writes: always the client's NEXT LIST, never a scan's own set.
+
+    A scan's set never changes once the scan has started, so a save does not edit the set of the
+    client's latest scan, finished or not (launch checklist 3.78/3.79). It writes the list the
+    next scan will adopt:
+
+      * the client's next list, if it has one: edited in place, and locked until the commit, so
+        a scan adopting it at the same moment either takes it first (and the save then starts a
+        new list from what is now that scan's set) or waits for the save;
+      * else a copy of the client's latest set (rows, hand edits and struck rivals), which the
+        replacement is then applied to;
+      * else, for a client with no set on any scan, an empty list that a non-empty replacement
+        fills. It is recorded as every hand edit is: each row `manual`, the status `ok`,
+        `detected_at` null (no detection ran).
+
+    An empty replacement for a client with no set at all stays the 404 and writes nothing: a set
+    with no rivals would be copied by every later scan, and detection would never run for the
+    client, and there is nothing to clear.
+    """
+    next_list = await detection.next_list_for_client(db, client, lock=True)
+    if next_list is not None:
+        return next_list
+    source = await detection.latest_set_for_client(db, client)
+    if source is None and not naming_rivals:
+        raise _no_set()
+    return await detection.create_next_list(db, client, source=source)
+
+
+def _refuse_the_clients_own_domain(client: Client, payload: ReplaceCompetitorsRequest) -> None:
+    """`422` for a rival whose domain is the client's own (3.81), before anything is written.
+
+    The same shape as a schema refusal, `errors[].field` being `competitors.<i>.domain`. The
+    payload's domains are already in the stored form; the client's is compared as DNS carries it.
+    """
+    try:
+        # In its checked form: a client stored before 3.67 as `www.acme.com` is `acme.com`.
+        own = encode_hostname(checked_domain(client.domain) or client.domain)
+    except ValueError:
+        return  # a client stored before 3.67 whose own name is not one: nothing to compare with
+    errors = [
+        {
+            "field": f"competitors.{index}.domain",
+            "message": "That is this client's own domain.",
+            "type": "invalid_domain",
+        }
+        for index, item in enumerate(payload.competitors)
+        if item.domain and _same_host(item.domain, own)
+    ]
+    if errors:
+        raise ValidationProblem(detail="One or more fields were invalid.", errors=errors)
+
+
+def _same_host(domain: str, own: str) -> bool:
+    try:
+        return encode_hostname(domain) == own
+    except ValueError:
+        return False
 
 
 def _sorted(competitor_set: CompetitorSet) -> CompetitorSetOut:
@@ -129,6 +178,15 @@ async def detect_competitors(
 
     Competitors an operator marked as overrides are preserved across runs.
 
+    **Where the result goes (launch checklist 3.78/3.79).** Into the client's NEXT LIST: the list
+    the next scan that starts will adopt, which is what this answers (`scanId` is null, because it
+    belongs to no scan yet). A scan's own set never changes once the scan has started, so a run
+    does not touch a finished scan's set and does not touch a running scan's either. With no next
+    list yet, one is made as a copy of the client's latest set and detection merges into the
+    copy, so rivals an operator named or struck stay named and struck; a client with no set at all
+    starts from an empty list. The open scan this route opens (or reuses, as before) carries no
+    set until it runs.
+
     **Errors:** `401 authentication-required`; `402 subscription-required` ("Running
     competitor detection on its own needs an active subscription. A scan still finds a
     client's competitors the first time it runs."); `404 not-found`; `429 rate-limited`
@@ -149,12 +207,12 @@ async def detect_competitors(
     await rate_limit.claim_detection(
         redis, settings, client_id=client.id, agency_id=principal.agency_id
     )
-    scan = await detection.get_or_create_scan(db, client, user_id=principal.user_id)
+    await detection.get_or_create_scan(db, client, user_id=principal.user_id)
     outcome = await detection.detect_for_client(client, settings=settings)
-    competitor_set = await detection.persist_detection(db, scan, outcome)
+    competitor_set = await detection.persist_detection_for_client(db, client, outcome)
 
     await db.commit()
-    refreshed = await _load_set(db, scan.id)
+    refreshed = await _load_set(db, competitor_set.id)
     return _sorted(refreshed or competitor_set)
 
 
@@ -164,9 +222,17 @@ async def get_competitors(
     db: DbDep,
     client_id: str = Path(alias="clientId"),
 ) -> Any:
-    """The client's most recent competitor set."""
+    """The client's current competitor list: its next list, else its latest scan's set.
+
+    The next list is what a save or the button's detection last wrote and what the next scan
+    will use (launch checklist 3.78/3.79), so it is ahead of the latest scan's own set, which
+    never changes once the scan has started. It belongs to no scan: its `scanId` is null.
+    """
     client = await get_client(db, agency_id=principal.agency_id, client_id=client_id)
-    return _sorted(await _latest_set_for_client(db, client.id))
+    current = await detection.current_list_for_client(db, client)
+    if current is None:
+        raise _no_set()
+    return _sorted(current)
 
 
 @router.put("/{clientId}/competitors", response_model=CompetitorSetOut)
@@ -176,7 +242,19 @@ async def replace_competitors(
     db: DbDep,
     client_id: str = Path(alias="clientId"),
 ) -> Any:
-    """Replace the competitor set by hand.
+    """Replace the client's competitor list by hand: the list its later scans use.
+
+    Writes the client's NEXT LIST, never a scan's own set (launch checklist 3.78/3.79). The next
+    scan that starts adopts it, and a scan that has started keeps the list it started with, so
+    a save moves nothing a finished scan shows: not its score, its report, its client-history
+    figure, or an explicit re-score. With no next list yet, one is made as a copy of the
+    client's latest set and the replacement applied to the copy; for a client with no set on
+    any scan, a non-empty list makes one. An empty list for a client
+    with no set, or a client with no scan at all, is the `404`, and nothing is written.
+
+    While the client's most recent scan is RUNNING the answer is `409` and nothing is written,
+    on every path: a running scan may or may not have taken the client's list yet, and a save
+    cannot say which.
 
     This matters more than a normal CRUD override. `Client.industry` confidence
     is uncalibrated (build-log Epic 2.6/2.8, Finding 2 — open), so a wrong
@@ -193,7 +271,21 @@ async def replace_competitors(
     value would attach a corroboration claim to rows that were never corroborated.
     """
     client = await get_client(db, agency_id=principal.agency_id, client_id=client_id)
-    competitor_set = await _latest_set_for_client(db, client.id)
+    _refuse_the_clients_own_domain(client, payload)
+    latest_scan = await detection.latest_scan_for_client(db, client.id, client.agency_id)
+    if latest_scan is None:
+        # A client that has never been scanned has nothing a list could be for yet.
+        raise _no_set()
+    if latest_scan.status is ScanStatus.RUNNING:
+        # A save does not reach a scan's own set whatever its status, so this is not about
+        # scoring: it is that a running scan may or may not have taken the client's list yet,
+        # and the person cannot be told which. Queued and finished scans are no reason to refuse.
+        raise Conflict(
+            detail="A scan of this client is running. Name the rivals after it finishes."
+        )
+    competitor_set = await _next_list_to_replace(
+        db, client, naming_rivals=bool(payload.competitors)
+    )
 
     await detection.apply_override(
         db,
@@ -202,5 +294,5 @@ async def replace_competitors(
     )
 
     await db.commit()
-    refreshed = await _load_set(db, competitor_set.scan_id)
+    refreshed = await _load_set(db, competitor_set.id)
     return _sorted(refreshed or competitor_set)

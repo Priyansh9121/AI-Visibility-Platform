@@ -327,7 +327,9 @@ export function deriveFixes(
   // A dimension excluded because we have not measured it yet is OUR gap, not
   // the client's. It must never generate a fix telling them to change something.
   const notTheirProblem = new Set(
-    exclusions.filter((e) => e.reason === 'NOT_YET_MEASURED').map((e) => `gap:${e.key}`),
+    exclusions
+      .filter((e) => e.reason === 'NOT_YET_MEASURED' || e.reason === 'AUDIT_FAILED')
+      .map((e) => `gap:${e.key}`),
   );
 
   const ordered = fixes.filter((f) => !notTheirProblem.has(f.id));

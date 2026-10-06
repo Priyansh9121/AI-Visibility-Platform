@@ -3,9 +3,10 @@
 WHY A GATE EXISTS AT ALL
 ------------------------
 Until this date nothing in the product was behind the plan, and the pricing
-card said so. Stripe is wired to a $160 Price (repriced to $150 on 2026-10-04,
-founder decision); no rational agency pays for what it already gets free. And
-a scan is not free to run: about **$1.70 in engine calls** each, plus, on a
+card said so. Stripe is wired to the plan's Price (`services/billing.py` holds the
+amount); no rational agency pays for what it already gets free. And
+a scan is not free to run: it pays for its engine calls (what they cost:
+north-star §5.1), plus, on a
 client's first scan, 6 of the **250 SerpApi searches** the Free tier allows per
 month (up to 12 when searches are retried; a later scan carries the client's
 competitor set forward and spends none) — about 41 new clients platform-wide,
@@ -101,7 +102,7 @@ THE FREE SCAN NEEDS A GOOGLE SIGN-IN (2026-09-29)
 The free scan is per agency, and an agency costs nothing to make. Password
 sign-up (`services/auth.sign_up_agency`) accepts any address, real or not,
 and never verifies it. So the free tier was a farm: sign up, take one scan,
-sign up again. At about $1.70 and 6 SerpApi searches a scan, some 41 fake
+sign up again. At the engine cost of a scan and 6 SerpApi searches, some 41 fake
 sign-ups spend SerpApi's month, and competitor detection then stops for
 every customer at once.
 
@@ -163,8 +164,8 @@ account with no proof the address is theirs — there is no verification step
 and no `email_verified` column. Matching on the string alone meant that on
 any database where the founder's row does not already exist — a new
 environment, a restore, a deleted account — the first person to sign up by
-password with that address would be handed unlimited scans at about $1.70
-each. `google_sub` is set only by `services/google_oauth`, off a token
+password with that address would be handed unlimited scans at the engine
+cost of each. `google_sub` is set only by `services/google_oauth`, off a token
 Google signed, so it is the one credential here that says an outside party
 vouched for this address. A password-only account on a listed address is
 gated like anyone else.
@@ -238,11 +239,10 @@ logger = structlog.get_logger(__name__)
 # and is not a number worth building a second agency to get again.
 FREE_SCAN_ALLOWANCE = 1
 
-# Forty a month on the $150 plan (repriced to $150 on 2026-10-04, founder
-# decision; it was $160). The arithmetic: a scan costs about $1.70 in engine
-# calls (measured, build log 2026-09-12: 20 prompts × 4 engines plus
-# sentiment), so 40 × $1.70 ≈ $68 of engine cost against $150 — about 55% gross
-# margin before SerpApi (about 57% at the old $160). SerpApi's Free tier is 250
+# Forty a month on the plan (founder decision; price in `services/billing.py`).
+# The arithmetic of cost against the plan's price lives in north-star §5.1 and
+# the build log (a scan is 20 prompts × 4 engines plus sentiment, measured
+# 2026-09-12). SerpApi's Free tier is 250
 # searches a month and detection spends 6 per NEW client, so forty scans of
 # forty new clients would be 240 searches; forty re-scans of existing clients
 # spend none. The cap is per calendar month, UTC, because Stripe's billing

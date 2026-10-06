@@ -51,7 +51,8 @@
  *     `lib/report/derive.ts`, `FixList`); the cost of a fix never ranks anything. The new
  *     sentence is the short form of that rule, as the list of claims above says
  *   - a hand-corrected rival list "survives every later re-detection": no screen starts a
- *     re-detection, and a later scan carries the list forward (`carry_forward_set`)
+ *     re-detection, and a later scan takes the saved list, or carries the previous one forward
+ *     (`ensure_set_for_scan`)
  *   - rivals found from "the AI engines": one model is asked, not the four engines
  *     (`services/cocitation.py`)
  *   - rivals found from who "ranks for the niche in search": three of the six search queries
@@ -221,8 +222,7 @@ export function LandingView({
           heading="Find out what AI assistants say when your client's buyers ask."
           lead={
             <>
-              Buyers increasingly ask an assistant before they ask a search engine. This
-              measures whether your client is named in those answers, who is named instead,
+              A scan measures whether your client is named in those answers, who is named instead,
               and what to change — as a report you can put in front of them.
             </>
           }
@@ -463,8 +463,8 @@ export function LandingView({
         >
           <ul className="flex flex-col gap-3">
             <Limit body="It measures four vendors' models today — Claude, ChatGPT, Gemini and Perplexity — and only Perplexity searches the web as it answers. Google's AI Overviews and Copilot are not measured." />
-            <Limit body="White-labelling covers your agency name. Logo and colour control are not built yet." />
-            <Limit body="Nothing tracks whether a fix was actually done, or re-measures what it changed. The report ends at the recommendation." />
+            <Limit body="White-labelling covers your agency name. No screen sets a logo or colour yet." />
+            <Limit body="Nothing tracks whether a fix was actually done, and nothing re-measures on its own; a new scan does. The report ends at the recommendation." />
           </ul>
         </PageSection>
         </Reveal>

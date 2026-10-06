@@ -22,13 +22,13 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import structlog
-from sqlalchemy import Select, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from .. import ids
 from ..config import Settings, get_settings
-from ..models import Client, CompetitorSet, Scan
+from ..models import Client
 from ..models.engine_result import Engine, EngineResultStatus
 from ..models.prompt_run import (
     PromptRun,
@@ -39,6 +39,7 @@ from ..models.prompt_run import (
 )
 from . import engines as engine_service
 from . import extraction as extraction_service
+from .competitors import current_list_for_client
 
 logger = structlog.get_logger(__name__)
 
@@ -158,31 +159,21 @@ async def check_throttle(session: AsyncSession, client_id: str) -> None:
 
 
 async def subject_competitors(
-    session: AsyncSession, client_id: str
+    session: AsyncSession, client: Client
 ) -> list[tuple[str, str | None]]:
-    """The client's most recent competitor set, as extraction wants it.
+    """The client's CURRENT competitor list, as extraction wants it.
 
-    Read from the newest scan that HAS one. A run made before any scan has
-    detected rivals simply has none to look for, which is honest: the run then
-    reports whether the client was named and by whom it was not, rather than
-    inventing a field of competitors to compare against.
+    Its next list if it has one (what a save or the button's detection last wrote), else the set
+    of its most recent scan (`competitors.current_list_for_client`). A run is a new measurement,
+    not a view of an old scan, so rivals named since the last scan are the ones it looks for.
+    Struck rivals (`is_suppressed`) are tombstones and are not looked for. A client with no list
+    has none to look for, which is honest: the run then reports whether the client was named and
+    by whom it was not, rather than inventing a field of competitors to compare against.
     """
-    stmt: Select[tuple[CompetitorSet]] = (
-        select(CompetitorSet)
-        .join(Scan, Scan.id == CompetitorSet.scan_id)
-        .where(Scan.client_id == client_id)
-        .options(selectinload(CompetitorSet.competitors))
-        .order_by(CompetitorSet.id.desc())
-        .limit(1)
-    )
-    found = (await session.execute(stmt)).scalars().first()
+    found = await current_list_for_client(session, client)
     if found is None:
         return []
-    return [
-        (c.name, c.domain)
-        for c in found.competitors
-        if getattr(c, "suppressed_at", None) is None
-    ]
+    return [(c.name, c.domain) for c in found.active_competitors]
 
 
 def verdict_for(results: list[PromptRunResult]) -> PromptRunStatus:
@@ -224,7 +215,7 @@ async def run_prompt(
     text = normalise_prompt(prompt_text)
 
     subject_name = client.brand_name or client.name or client.domain
-    competitors = await subject_competitors(session, client.id)
+    competitors = await subject_competitors(session, client)
 
     answers = await engine_service.ask_all(
         text,

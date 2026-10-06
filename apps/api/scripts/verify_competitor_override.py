@@ -116,7 +116,12 @@ async def main() -> int:  # noqa: C901
         rule("PART 1 — the detected set, as it stands")
         competitor_set = (
             await session.execute(
-                select(CompetitorSet).order_by(CompetitorSet.id.desc()).limit(1)
+                # A scan's OWN set, explicitly: a client's next list has no scan
+                # (`scan_id` NULL) and this script reads the scan.
+                select(CompetitorSet)
+                .join(Scan, Scan.id == CompetitorSet.scan_id)
+                .order_by(Scan.id.desc(), CompetitorSet.id.desc())
+                .limit(1)
             )
         ).scalar_one_or_none()
         if competitor_set is None:

@@ -78,8 +78,16 @@ class BillingStatusOut(ApiModel):
     # test, the customer's subscription list at Stripe: a read never calls Stripe. So true
     # means nothing in our record says no, and checkout can still refuse the trial to a
     # customer Stripe remembers an ended subscription for. The web promises a trial only on
-    # a true and never works it out itself.
+    # a true and never works it out itself. About the REQUESTING user (2026-10-05): it is also
+    # false for a user with no linked Google identity (`trial_requires_google` says that case).
     trial_eligible: bool
+    # True when the trial would be given but for ONE thing: the requesting user has no linked
+    # Google identity — 2026-10-05, founder decision 3.72. A trial needs a verified Google
+    # identity on the user who starts checkout (the free scan's rule). Then `trial_eligible`
+    # is false for them, and the web says subscribing now starts the paid plan at once and
+    # offers Continue with Google, which first gives the trial. False when a trial is not on,
+    # when the agency has had its subscription, and for a user who has Google.
+    trial_requires_google: bool
 
 
 class BillingPlanOut(ApiModel):

@@ -136,6 +136,65 @@ All of this happens in Stripe's **Test mode**. Never use a live key.
 8. **Stop.** Nothing is ever switched to live mode from this runbook. Going
    live is the founder's key swap after Stripe's business verification.
 
+## Clearing test-mode billing state at the live-key swap
+
+**When:** once, when going live. Everything the API stored about Stripe so far
+came from Stripe's Test mode. A live key cannot see any of it, and an agency
+that still holds a test subscription id would look already subscribed. Run this
+**after** the live keys are saved on Render and the API has redeployed, and
+**before anyone subscribes in live mode**: between the key swap and the first
+live checkout (launch checklist 2.2, between steps 3 and 4).
+
+**Where:** only the Render dashboard → the **API** service → **Shell**. The
+script reads the live key from the service's own environment, so it runs only
+there. Open the Shell on the **new deploy**, after the redeploy has finished:
+a Shell opened earlier still has the test key and the script will refuse. If
+there is no Shell tab, stop and ask Claude.
+
+If the key is an `rk_live_` restricted key, it needs read access to
+**Subscriptions** and **Customers**, or every run ends with "could not check".
+
+Dry run first; it writes nothing:
+
+```bash
+cd /app/apps/api && .venv/bin/python scripts/clear_test_billing_state.py
+```
+
+Read the counts, then clear:
+
+```bash
+cd /app/apps/api && .venv/bin/python scripts/clear_test_billing_state.py --confirm
+```
+
+**What it prints:** counts only, never an id, an email, a name, a Stripe id or
+any part of the key. `Before:` lists how many agencies there are in all and how
+many have each Stripe column set (for `subscription_cancel_at_period_end`, how
+many are true), then one `Stripe key:` line. The dry run with a test key says
+`Stripe key: not live; Stripe was not checked; --confirm would refuse.`, which
+means the swap has not reached this Shell. With a live key it says
+`Stripe key: live; Stripe lists no subscription and no customer.`
+
+`--confirm` runs only with a live key. It clears every Stripe column on every
+agency, soft-deleted ones included, in one transaction. It asks Stripe whether
+the live account has any subscription or customer twice: once before touching
+anything, and again while the change is held uncommitted (within 10 seconds).
+It commits only if both reads list none. If a read lists one, or anything fails
+before the commit, nothing changes. It prints `After:`, where every
+Stripe count should be `0`, and `Cleared.`. It leaves the `stripe_webhook_events`
+ledger alone (test and live event ids never collide).
+
+**Exit codes** (every refusal writes nothing; the dry run makes the same Stripe
+reads and refuses the same way):
+
+| Exit code | Meaning | What to do |
+|---|---|---|
+| 0 | Counted (dry run) or cleared (`--confirm`) | Carry on with step 4 |
+| 1 | Bad arguments | Run it as shown above |
+| 2 | The live Stripe account already has a subscription or a customer | Stop. Someone has used live mode; clearing would orphan them. Do not clear by hand; ask Claude |
+| 3 | Stripe could not be asked (error, timeout, or a key that cannot read Subscriptions and Customers) | Check the key's permissions and Stripe's status, then run it again |
+| 4 | `--confirm` with a key that is not live (test, missing or unrecognised) | The live key is not in force in this Shell: check the saved keys and that the redeploy finished, open a new Shell, and start from the dry run |
+| 5 | A database error stopped the run (the database could not be reached, or a statement failed). It prints no detail | Run the dry run to see the current state, then decide; if it repeats, ask Claude |
+
 ## The free trial, and what it depends on in Stripe
 
 `STRIPE_TRIAL_DAYS` on the Render API service is the trial's length; 0, the default, is no
@@ -240,9 +299,18 @@ at Stripe, whatever its `.env` holds. The check is a read; it changes nothing at
   usage, not as the plan. The fix is the founder's: create an active, licensed US$150
   monthly Price in Stripe (test mode until 2.2) and set `STRIPE_PRICE_ID` on the API
   service to its id. The line repeats every hour until then.
+- Each of the three lines above carries `trigger`: `watch` is the hourly task, and
+  `checkout` is a checkout click made while a mismatch is recorded (that click reads the
+  Price again before deciding, and waits at most 10 seconds for Stripe to answer). A
+  `trigger=checkout` line therefore means a customer tried to subscribe while the Price was
+  wrong. If that read confirms the mismatch, the click is refused and
+  `billing.checkout_refused_price_mismatch` (error, `agency_id` and `price_id`) follows it.
 - `billing.price_check_failed error_type=…` (warning): Stripe could not be read (a wrong
   key, the network, a timeout, or an answer that is not a Price). Only the error's class
-  is logged, never its message.
+  is logged, never its message. With `trigger=checkout` and `error_type=TimeoutError`, the
+  click's 10 seconds ran out: the click went on without a price answer (a read that fails
+  never refuses), and the mismatch stays recorded, so the next click reads again. The
+  hourly task waits longer, up to 60 seconds.
 - `billing.half_configured missing=…` (error, once at start, deployed only): billing is
   only part set up. `missing` names the one variable that is not set, and never a value.
   - `STRIPE_SECRET_KEY` or `STRIPE_PRICE_ID`: only one of the two is set. Billing then
@@ -393,6 +461,14 @@ for this reason.
    four-agency cap and the browser slot are per process AND per instance, and the
    API runs one worker per instance: during a deploy's overlap an agency can have
    one read on each instance.
+8. To see why a scan's Technical Foundation was left out, read two lines for the
+   `scan_id`. `audit.completed` carries the audit's `status`, its `error_code` (for
+   example `TIMEOUT`, `BROWSER_BUSY`, `HTTP_503`) and `technical_foundation_reason`, the
+   reason the dimension will be left out under (`AUDIT_FAILED`, or one of the three
+   crawl reasons; empty when the audit did not fail). `scoring.completed` carries the
+   reason it stored for each dimension in `excluded`. `NOT_YET_MEASURED` there means
+   the scan has no audit row; a scan scored before 2026-10-05 whose audit had failed
+   also says it. Launch checklist 3.87.
 
 **Not in the logs:** a number for any one request, and nothing from before the
 last restart: the counters belong to the container, and a restart starts them
@@ -577,8 +653,9 @@ forward, searches nothing and reads nothing.
   status); `connect`, `read`, `write`, `pool` or `total` (no answer within 5 s, and which part
   ran out); `bad_json` or `no_count` (it answered, and the body was not a JSON object, or had no
   whole-number `plan_searches_left`, which would mean SerpApi changed it); `no_key`; or an error's class
-  name. A detection with neither line did not get as far as the read: its searches raised,
-  as they do with no `SERPAPI_KEY`.
+  name. A detection with neither line did not get as far as the read: its searches raised.
+  With no `SERPAPI_KEY` nothing is sent: each search is `SERPAPI_KEY_MISSING`, with a
+  `competitors.serp_failed` line, and the detection runs on the model's answers alone.
 
 **What would justify a change.** The timeouts and the retry are unchanged until there is
 data. This is what the numbers would mean.
@@ -604,10 +681,11 @@ the searches' lines, carries the `client_id` and the `country` the searches were
 ## Reading the usage lines
 
 **When:** you want to know what a scan used: how many requests each provider got, how many
-tokens they reported back, and how many requests were retries or got no answer; or what a scan
-cost to run. The API writes two lines about it, from U1 (2026-10-04): `llm.call`, one line for
-each paid HTTP request, and `scan.usage`, one total for each scan. Both carry counts and
-nothing else: no prompt, no answer, no brand, no domain, no error message and no key.
+tokens they reported back, how many requests were retries and how many prompts never got an
+answer; or what a scan cost to run. The API writes two lines about it, from U1 (2026-10-04):
+`llm.call`, one line for each paid HTTP request, and `scan.usage`, one total for each scan. Both
+carry counts and nothing else: no prompt, no answer, no brand, no domain, no error message and no
+key.
 
 **Where:** the Render dashboard → the **API** service → **Logs**. Search for the event name, or
 for `scan_id=<the scan's id>`, which finds a scan's `scan.usage` line and the `llm.call` lines
@@ -645,7 +723,13 @@ none). `scan.usage` is one line of about one and a half kilobytes for four engin
   leaves them out and OpenAI's and Google's include the cached part. Nothing the API sends is
   cacheable today, so they are 0.
 - `search_invocations`: web searches or grounding queries the request made (Claude's web search,
-  Perplexity's `web_search`, Gemini's grounding queries).
+  Perplexity's search, Gemini's grounding queries). Perplexity's is read from
+  `tool_calls_details.search_web` (U4, 2026-10-05; `web_search` is the fallback key). **Lines
+  written before that change show 0 for every Perplexity call.** Each answered Perplexity call
+  made one search in the measured call, billed at US$0.0025, so to price an old line by hand:
+  answered Perplexity requests (`calls` minus `unanswered`) x US$0.0025, on top of the tokens.
+  That sum is right for those lines, which all come from before U5, when `unanswered` counted
+  every request that got no usage back (see `<line>_unanswered` below).
 - `retry`: this request sent an earlier one again for the same call. Two things do that: the
   Anthropic SDK, which retries once inside a call, and Perplexity, which retries once after a
   429 that names its wait. SerpApi's retry is not an `llm.call`: it is in `serpapi_attempted`.
@@ -663,9 +747,13 @@ none). `scan.usage` is one line of about one and a half kilobytes for four engin
 engine that was asked, such as `engine_claude_calls`), `sentiment`, `prompt_generation`, `fixes`
 and `detection`:
 
-- `<line>_calls`: requests made, retries included.
-- `<line>_unanswered`: of those, how many got no usage back (`ok=False`).
-- `<line>_retries`: of those, how many were sent again.
+- `<line>_calls`: REQUESTS made, retries included. Every request counts, answered or not.
+- `<line>_unanswered`: CALLS that never got an answer (from U5, 2026-10-06). A call is the
+  requests it takes to get one answer: for an engine, one prompt asked of one engine; for the
+  other lines, one request of that kind and any retry of it. A call is unanswered when its LAST
+  request got no usage back (`ok=False`), and counts once however many requests it made. A call
+  that a retry answered is not unanswered.
+- `<line>_retries`: REQUESTS that were sent again: every request of a call but its first.
 - `<line>_input_tokens`, `<line>_output_tokens`, `<line>_reasoning_tokens` (inside the output),
   `<line>_cache_read_tokens`, `<line>_cache_write_tokens`, `<line>_search_invocations`: the sums
   of the `llm.call` lines of that line.
@@ -673,6 +761,29 @@ and `detection`:
   was answered names a model.** A request that failed carries the model the API asked for, which
   can be an alias of the one that answers (`gpt-5.5` for `gpt-5.5-2026-04-23`) and would make one
   model look like two.
+
+**Reading `_calls`, `_retries` and `_unanswered` together.** A prompt that Perplexity refused with
+a 429 and answered on the retry is `_calls` 2 and `_retries` 1, and no `_unanswered`. One refused
+twice (the retry too) is `_calls` 2, `_retries` 1 and `_unanswered` 1: one prompt with no answer,
+not two. One refused and not sent again is `_calls` 1 and `_unanswered` 1. So:
+
+- Prompts asked of an engine: `_calls` less `_retries`. Prompts answered: that, less `_unanswered`.
+- Requests that got no usage back: `_retries` plus `_unanswered`. What they cost is not in the
+  tokens: a request that timed out may have been billed.
+- Against the `llm.call` lines of the same scan with that line's purpose (and, for an engine,
+  that engine): `_calls` is how many there are, `_retries` how many have `retry=True`, and
+  `_unanswered` how many have `ok=False` less how many have `retry=True`.
+- A call that was cancelled (a sibling failed, or the scan ran out of time) logs
+  `error=CancelledError` and never got an answer: one unanswered call. If it had been refused
+  once before, that refusal is its retry.
+
+**A line from before U5 counts `_unanswered` differently.** Then every request that got no usage
+back was counted, one that a retry rescued included: a scan on 2026-10-05 in which one Perplexity
+request was refused with a 429, sent again and answered, and every result was there (80 results,
+no failures), logged `engine_perplexity_unanswered=1`. That is what such a request reads as from
+U5 on: `engine_perplexity_retries=1` and no `_unanswered`. To read an older line as a current one,
+take `_retries` away from `_unanswered`. Nothing else about the lines changed, and
+`--price-usage` prices the two kinds of line the same way, from tokens and searches alone.
 
 **A counter that is zero is left out: read an absent counter as zero.** The three every line
 carries are `_calls`, `_input_tokens` and `_output_tokens`. A `_model` that nobody named is left
@@ -689,7 +800,9 @@ SerpApi, for the scan's detection searches. The first four are always present:
   all but one kind: a 200 whose body could not be read was a 200 to SerpApi, which may have counted
   it as a search. This count cannot tell that kind from the rest (see "What the lines undercount").
 - `serpapi_no_answer`: requests that got no answer (a timeout or a transport failure). Nobody can
-  say whether SerpApi billed them.
+  say whether SerpApi billed them. SerpApi's counts are per request, unlike `<line>_unanswered`:
+  a request that got no answer and was asked again and answered still counts here, because it
+  may have been billed.
 - `serpapi_billed_or_unknown`: `serpapi_ok` plus `serpapi_no_answer`. **An upper bound on what
   SerpApi billed, but for one kind of answer**: an answered search is billed unless SerpApi served
   it from its cache, an error answer is not billed, and a search nobody answered may have been. The
@@ -720,9 +833,12 @@ A scan's own detection and fixes requests, made while the scan runs, are in its 
   `ok=False error=ValidationError`. A run of these in a `_unanswered` count is the sign.
 - A request that timed out may have been billed with nothing to show for it: `ok=False`, `error`
   `APITimeoutError` or `TimeoutError`, zero counts. A request cut by `CancelledError` is the same.
-- A scan's prompt slots that are still running after the scan has failed are not in its total.
-  When one slot raises, the others are not cancelled, so their paid requests go on and are logged
-  after `scan.usage`. Their `llm.call` lines carry the scan's `scan_id`: search for it.
+  In `scan.usage` such a request is in `_retries` when its call went on after it and in
+  `_unanswered` when it was the call's last request, so the requests whose cost the tokens do not
+  show are `_retries` plus `_unanswered`: read the two together.
+- Since 3.77, when one of a scan's prompt slots raises, the scan cancels the others and waits for
+  them to stop before it ends, so their lines are in its total: a request cut short logs
+  `ok=False error=CancelledError` with zero counts, and may still have been billed (above).
 - Whether a SerpApi search with no answer was billed. Only the account's count says.
 - A SerpApi search answered with a 200 whose body could not be read as a page of results. It is
   counted in `serpapi_error`, which is not billed, and it is not in `serpapi_billed_or_unknown`;
@@ -756,6 +872,40 @@ with no rate in the table, a line that more than one model with different rates 
 at all) is listed under MISSING RATES and left out of the total, never priced at nothing. Cached
 tokens are not priced separately, since no cached-token rate is recorded, and the command says
 when a line has some.
+
+## Count the stored domains that fail the hostname check
+
+**When:** once after the deploy that ships launch checklist 3.81, and whenever you want to know
+whether any stored client or competitor domain is not one DNS would carry. 3.67 checks a
+client's domain at intake and 3.81 checks a competitor's (typed, or proposed by the model), but
+nothing re-checks what was stored before; this counts them. It only reads.
+
+**Where:** the Render dashboard, the **API** service, **Shell**. Run:
+
+```bash
+cd /app/apps/api && .venv/bin/python scripts/count_unchecked_domains.py
+```
+
+The shell already has the service's `DATABASE_URL`.
+
+**What it prints:** counts only, never a domain, name or id:
+
+```
+clients.domain: checked=N empty=N not_a_hostname=N no_public_domain=N not_in_checked_form=N
+competitors.domain: checked=N empty=N not_a_hostname=N no_public_domain=N not_in_checked_form=N
+failing the check: N; would be rewritten: N
+```
+
+`not_a_hostname` and `no_public_domain` fail the check. `not_in_checked_form` passes but is not
+the form intake would store (upper case, a `www.` or other subdomain, a scheme or path).
+`empty` is a competitor with no domain, which is allowed. The counts cover every row: clients
+that were soft-deleted, and the competitor sets of past scans (and any next list), not only the
+live ones. The script declares its transaction read only before it reads anything.
+
+**If a count is not zero:** report it to the founder, with the numbers and nothing else. Nothing
+is changed automatically and the script has no option to change anything; which rows to correct
+is a decision, and finding them means reading production domains, which this step does not do.
+All zeros needs no action.
 
 ## Supabase grants check
 

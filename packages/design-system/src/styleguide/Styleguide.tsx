@@ -733,8 +733,9 @@ export function Styleguide(): JSX.Element {
         </div>
 
         <p className="sg-section__note">
-          <strong>A gap is not a zero.</strong> A competitor set is re-detected per scan, so a rival
-          can be present, absent, then present again. Joining through zero would assert a collapse
+          <strong>A gap is not a zero.</strong> A scan&rsquo;s competitor set is the client&rsquo;s list as it stood when
+          the scan started, and someone can save a new list or run detection again between scans, so a
+          rival can be present, absent, then present again. Joining through zero would assert a collapse
           nobody measured; dropping the line would show fewer rivals than the client has, silently.
           The line breaks instead, and the hidden data table reads <em>&ldquo;not measured&rdquo;</em>.
           Two rivals above do exactly this.

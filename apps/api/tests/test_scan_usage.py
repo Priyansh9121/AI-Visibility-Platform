@@ -2,10 +2,12 @@
 
 `scan.usage` is the line a scan's cost is read from. It carries the scan's id and, for each of
 the five things a scan pays for (the engines together and each engine on its own, sentiment,
-prompt generation, fixes, competitor detection), how many requests were made, how many got no
-usage back, how many were a retry, the input, output and reasoning tokens, the cache tokens
-and the search invocations, plus what SerpApi was asked: searches attempted, answered ok,
-answered with an error, and not answered at all.
+prompt generation, fixes, competitor detection), how many requests were made, how many calls
+never got an answer (a call is everything one prompt, one engine took to answer: a request that a
+retry rescued is a retry, not an unanswered call: U5, 2026-10-06), how many requests were a
+retry, the input, output and reasoning tokens, the cache tokens and the search invocations, plus
+what SerpApi was asked: searches attempted, answered ok, answered with an error, and not
+answered at all.
 
 It is built from the same records the per-call `llm.call` lines are, so the one cannot
 disagree with the other. These tests prove that by running the REAL chain — the real executor,
@@ -108,16 +110,22 @@ class Providers:
     The usage each answers with is distinct per purpose, so a total that counted the wrong
     thing would be the wrong number and not an accidentally equal one. `down` names a provider
     that refuses everything; `hangs` one that never answers; `flaky_sentiment` makes the first
-    sentiment request an overloaded 529 the SDK retries.
+    sentiment request an overloaded 529 the SDK retries; `flaky_perplexity` makes the first
+    Perplexity request a 429 that names no wait, which the adapter sends again once and which
+    then answers; `throttled` names a provider whose every request is that 429, so its one
+    retry is refused too.
     """
 
     def __init__(
         self, *, down: frozenset[str] = frozenset(), hangs: frozenset[str] = frozenset(),
         flaky_sentiment: bool = False, serp_script: bool = False,
+        flaky_perplexity: bool = False, throttled: frozenset[str] = frozenset(),
     ) -> None:
         self.down = down
         self.hangs = hangs
         self.flaky_sentiment = flaky_sentiment
+        self.flaky_perplexity = flaky_perplexity
+        self.throttled = throttled
         self.serp_script = serp_script
         self.anthropic_bodies: list[dict[str, Any]] = []
         self.serp_requests: list[str] = []
@@ -125,6 +133,7 @@ class Providers:
         self.keys_seen: set[str] = set()
         self._serp_attempts: dict[str, int] = {}
         self._sentiment_seen = 0
+        self._perplexity_seen = 0
 
     def _key_shown_to_us(self, request: httpx.Request) -> str:
         """The key this request carried, wherever its provider wants it, noted for the test."""
@@ -231,12 +240,20 @@ class Providers:
                           "completion_tokens_details": {"reasoning_tokens": 77}},
             }))
         if host == "api.perplexity.ai":
+            self._perplexity_seen += 1
+            if "perplexity" in self.throttled or (
+                self.flaky_perplexity and self._perplexity_seen == 1
+            ):
+                # A 429 that names a wait of nothing, so the adapter's one retry is taken at once.
+                # Like every refusal here it echoes the key it was shown: nothing may log it.
+                return httpx.Response(429, headers={"Retry-After": "0"}, json={
+                    "error": {"message": f"{ERROR_SENTINEL} {key}"}})
             return self._engine("perplexity", key, httpx.Response(200, json={
                 "status": "completed", "model": "perplexity/sonar",
                 "output": [{"type": "message", "content": [
                     {"type": "output_text", "text": ANSWER, "annotations": []}]}],
                 "usage": {"input_tokens": 1758, "output_tokens": 432,
-                          "tool_calls_details": {"web_search": {"invocation": 2}}},
+                          "tool_calls_details": {"search_web": {"invocation": 2}}},
             }))
         if host == "generativelanguage.googleapis.com":
             return self._engine("gemini", key, httpx.Response(200, json={
@@ -392,10 +409,17 @@ def expected_total(
             assert call["purpose"] == "classification", call["purpose"]
     out: dict[str, Any] = {"scan_id": scan_id}
     for prefix, calls in groups.items():
+        # A call's requests but its first are `retry=True`, and every request but its last got no
+        # usage back, so the lines with no usage, less the lines that were sent again, are the
+        # calls whose last request got none: what `unanswered` counts (U5, 2026-10-06; it counted
+        # every line with no usage, a request a retry rescued included, and the production scan
+        # that answered every prompt said one had gone unanswered).
+        no_usage = sum(1 for c in calls if not c["ok"])
+        resent = sum(1 for c in calls if c["retry"])
         counted = {
             "calls": len(calls),
-            "unanswered": sum(1 for c in calls if not c["ok"]),
-            "retries": sum(1 for c in calls if c["retry"]),
+            "unanswered": no_usage - resent,
+            "retries": resent,
             **{counter: sum(c[counter] for c in calls) for counter in COUNTERS[3:]},
         }
         # The line's own rule: a counter that is zero is left out, except the three every line has.
@@ -492,9 +516,11 @@ class TestAScanThatSucceeds:
         for name in FOUR:
             assert total[f"engine_{name}_calls"] == PROMPTS, name
         assert total["engines_calls"] == PROMPTS * len(FOUR)
-        # Sentiment is asked of every answer, and one request was an overloaded 529 first.
+        # Sentiment is asked of every answer, and one request was an overloaded 529 first, which
+        # the SDK sent again and which was answered: a retry, not a call that went unanswered.
         assert total["sentiment_calls"] == PROMPTS * len(FOUR) + 1
-        assert (total["sentiment_unanswered"], total["sentiment_retries"]) == (1, 1)
+        assert total["sentiment_retries"] == 1
+        assert "sentiment_unanswered" not in total
         assert total["sentiment_model"] == "claude-haiku-4-5-20251001"
         assert total["prompt_generation_calls"] == 1
         assert total["prompt_generation_reasoning_tokens"] == 1800
@@ -577,6 +603,72 @@ class TestAScanThatSucceeds:
 
 
 # ---------------------------------------------------------------------------
+# a request that a retry rescued is a retry, not a prompt that went unanswered
+# ---------------------------------------------------------------------------
+
+
+class TestARetryIsNotAnUnansweredPrompt:
+    """U5, 2026-10-06. The production fact: one Perplexity request was refused with a 429, sent
+    again and answered, every result of the scan was there, and its total said
+    `engine_perplexity_unanswered=1`. `_calls` and `_retries` count requests; `_unanswered` counts
+    the calls (a prompt asked of an engine) that never got an answer."""
+
+    async def test_a_429_that_the_retry_answered_leaves_no_prompt_unanswered(
+        self, client: AsyncClient, session: Any, settings: Any, four_engines: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        Providers(flaky_perplexity=True).install(monkeypatch)
+        account = await Account(client).open()
+
+        job, events = await run(account, settings)
+
+        scan = await status_of(session, job.scan_id)
+        assert scan.status is ScanStatus.SUCCEEDED, (scan.status, scan.error_code)
+        total = assert_the_total_is_the_sum_of_the_lines(
+            events, job.scan_id, {"attempted": 3, "ok": 3, "error": 0, "no_answer": 0})
+        # Every engine answered every prompt, and one Perplexity request was made twice.
+        assert total["engine_perplexity_calls"] == PROMPTS + 1
+        assert total["engine_perplexity_retries"] == 1
+        assert "engine_perplexity_unanswered" not in total
+        assert total["engines_calls"] == PROMPTS * len(FOUR) + 1
+        assert total["engines_retries"] == 1
+        assert "engines_unanswered" not in total
+        # The request that was refused is still a line of its own, with no usage and its reason.
+        refused = [
+            c for c in named(events, "llm.call") if not c["ok"] and c["engine"] == "perplexity"]
+        assert [(c["error"], c["retry"], c["input_tokens"]) for c in refused] == [
+            ("http_429", False, 0)]
+        # How a reader gets the prompts from the line: requests less retries.
+        assert total["engine_perplexity_calls"] - total["engine_perplexity_retries"] == PROMPTS
+
+    async def test_a_429_that_the_retry_got_too_is_one_unanswered_prompt_for_each_prompt(
+        self, client: AsyncClient, session: Any, settings: Any, four_engines: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        Providers(throttled=frozenset({"perplexity"})).install(monkeypatch)
+        account = await Account(client).open()
+
+        job, events = await run(account, settings)
+
+        assert (await status_of(session, job.scan_id)).status is ScanStatus.PARTIAL
+        total = assert_the_total_is_the_sum_of_the_lines(
+            events, job.scan_id, {"attempted": 3, "ok": 3, "error": 0, "no_answer": 0})
+        # Each prompt made two requests and neither was answered: two requests, one retry and ONE
+        # unanswered call for each prompt, not one for each request.
+        assert total["engine_perplexity_calls"] == 2 * PROMPTS
+        assert total["engine_perplexity_retries"] == PROMPTS
+        assert total["engine_perplexity_unanswered"] == PROMPTS
+        assert total["engine_perplexity_input_tokens"] == 0
+        # The other engines are counted on their own and none of them went unanswered.
+        for name in ("claude", "chatgpt", "gemini"):
+            assert total[f"engine_{name}_calls"] == PROMPTS, name
+            assert f"engine_{name}_unanswered" not in total, name
+            assert f"engine_{name}_retries" not in total, name
+        assert total["engines_unanswered"] == PROMPTS
+        assert total["engines_retries"] == PROMPTS
+
+
+# ---------------------------------------------------------------------------
 # a scan that does not succeed still ends with one
 # ---------------------------------------------------------------------------
 
@@ -615,8 +707,8 @@ class TestAScanThatDoesNotSucceedStillEndsWithOne:
             events, job.scan_id, {"attempted": 3, "ok": 3, "error": 0, "no_answer": 0})
         assert total["engines_calls"] == total["engines_unanswered"] == PROMPTS * len(FOUR)
         assert total["engines_input_tokens"] == total["engines_output_tokens"] == 0
-        # An unanswered request names the model that was ASKED for in its own line, so the line
-        # says what was being called, but a scan's total names only models that served an answer:
+        # A request that got no answer names the model that was ASKED for in its own line, so the
+        # line says what was being called, but a scan's total names only models that served one:
         # there are none here, and a total must not call an alias a second model.
         assert {c["model"] for c in named(events, "llm.call") if c["engine"] == "claude"} == {
             engines.ANSWER_MODEL}

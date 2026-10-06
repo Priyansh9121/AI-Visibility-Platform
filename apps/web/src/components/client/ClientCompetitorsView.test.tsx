@@ -188,33 +188,33 @@ describe('the empty voices say what is the case', () => {
     expect(html).toContain('Open the report');
   });
 
-  it('a scan with no competitor set says detection did not run, and sends nobody to make one', () => {
+  it('a scan with no competitor set says detection did not run, and points to the report to name rivals', () => {
     const html = render(shown(noCompetitorSetReport));
     expect(html).toContain('No competitors in this scan');
-    // The whole sentence. The report detects nothing, and with no set it draws no by-hand
-    // editor either, so nothing here says the report is where a set is made.
+    // The whole sentence. The report's editor is drawn for a scan with no set, so the report is
+    // where rivals are named, and the sentence says so.
     expect(text(html)).toContain(
-      'Competitor detection did not run for this scan, so share of voice was left out of its score and there is nobody to compare.',
+      'Competitor detection did not run for this scan, so share of voice was left out of its score and there is nobody to compare. Rivals can be named in the scan’s report, and later scans compare against them.',
     );
     expect(html).not.toMatch(/by hand/i);
-    expect(html).not.toMatch(/is where a competitor set/i);
     expect(html).toContain('Open the report');
     expect(html).not.toContain('avp-ledger');
   });
 
-  it('a set with no rivals says its list is empty, and does not say the report can name them', () => {
-    // A set that exists and is empty (detection found nobody it trusted). The report draws
-    // its by-hand editor only under a table of rivals, so there is none to point at.
+  it('a set with no rivals says rivals named in the report are for later scans', () => {
+    // A set that exists and is empty. A later scan carries it forward, and the report's editor
+    // is drawn for it, so the sentence says both.
     const emptySet = {
       ...REPORT,
       competitorSet: { ...REPORT.competitorSet!, status: 'no_signal', competitors: [] },
     } as unknown as Report;
     const html = render(shown(emptySet));
     expect(html).toContain('No competitors in this scan');
-    expect(text(html)).toContain('This scan’s competitor list is empty, so there is nobody to compare.');
+    expect(text(html)).toContain(
+      'This scan’s competitor list is empty, so there is nobody to compare. Rivals named in the scan’s report are used by later scans; this scan’s list does not change.',
+    );
     expect(text(html)).not.toContain('found nobody');
     expect(html).not.toMatch(/by hand/i);
-    expect(html).not.toMatch(/is where a competitor set/i);
     expect(html).toContain('Open the report');
     expect(html).not.toContain('avp-ledger');
   });
@@ -266,7 +266,9 @@ describe('the empty state prints no status code — the house rule since launch 
     const html = render(shown(emptyWith(status)));
     const t = text(html);
     expect(html).toContain('No competitors in this scan');
-    expect(t).toContain('This scan’s competitor list is empty, so there is nobody to compare.');
+    expect(t).toContain(
+      'This scan’s competitor list is empty, so there is nobody to compare. Rivals named in the scan’s report are used by later scans; this scan’s list does not change.',
+    );
     expect(t).not.toContain('Detection status');
     expect(html).not.toContain('avp-empty__note');
     // No lower-case code, and no underscore-joined word of any kind, anywhere in the text.

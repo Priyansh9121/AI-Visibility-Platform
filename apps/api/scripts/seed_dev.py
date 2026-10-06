@@ -633,13 +633,20 @@ async def main() -> int:
             )
         ).scalar_one()
         newest = (
-            await session.execute(select(CompetitorSet).order_by(CompetitorSet.id.desc()).limit(1))
+            await session.execute(
+                # The set of the newest scan that has one, explicitly: a client's next list
+                # has no scan, and a set's id is not the order its scan ran in.
+                select(CompetitorSet)
+                .join(Scan, Scan.id == CompetitorSet.scan_id)
+                .order_by(Scan.id.desc(), CompetitorSet.id.desc())
+                .limit(1)
+            )
         ).scalar_one()
         checks = [
             ("verify_report: a succeeded scan exists", scan.status is ScanStatus.SUCCEEDED),
             ("verify_report: it is scored", row.status.value == "scored"),
             ("verify_report: an agency exists for PART 3", agency is not None),
-            ("verify_override: the seed's set is the newest by id", newest.id == refreshed.id),
+            ("verify_override: the seed's set is the newest scan's set", newest.id == refreshed.id),
             (f"verify_override: it contains {STRIKE_ME!r}",
              any(c.name == STRIKE_ME for c in refreshed.competitors)),
             ("verify_override: it carries no overrides yet",

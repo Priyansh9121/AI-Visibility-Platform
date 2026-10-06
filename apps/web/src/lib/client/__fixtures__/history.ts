@@ -179,8 +179,8 @@ export const threeScanHistory: ClientHistory = {
 /**
  * THE CASE THAT BREAKS NAIVE IMPLEMENTATIONS.
  *
- * `Fathom Analytics` is in scans 1 and 3 but NOT scan 2 — detection re-runs per
- * scan and did not surface it that day. `Seline` arrives only in scan 3.
+ * `Fathom Analytics` is in scans 1 and 3 but NOT scan 2 — the list changed between
+ * scans and it was not on it that day. `Seline` arrives only in scan 3.
  *
  * A correct chart draws Fathom as two segments with a hole in the middle and
  * Seline as a single late point; it must not join Fathom through zero (which

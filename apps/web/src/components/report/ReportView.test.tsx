@@ -27,6 +27,7 @@ import {
 } from '@/lib/report/strings';
 import {
   addressNotPublicReport,
+  auditFailedExcludedReport,
   crawlDisallowedReport,
   failedAuditReport,
   generatedFixesReport,
@@ -46,6 +47,52 @@ import {
 
 const render = (report: Parameters<typeof ReportView>[0]['report']) =>
   renderToStaticMarkup(<ReportView report={report} animate={false} />);
+
+/** The shared report: the same document, as the person it was sent to opens it. */
+const renderPublic = (report: Report) =>
+  renderToStaticMarkup(<ReportView report={report} animate={false} publicView />);
+
+/** A report whose technical audit failed with `errorCode`, Technical Foundation left out as `AUDIT_FAILED`. */
+const failedWith = (errorCode: string | null): Report => ({
+  ...auditFailedExcludedReport,
+  audit: { ...auditFailedExcludedReport.audit!, errorCode },
+});
+
+/** The proof beat: where the audit's card is drawn. */
+const proofBeat = (html: string): string =>
+  html.slice(html.indexOf('avp-beat--proof'), html.indexOf('avp-beat--fix'));
+
+/**
+ * The card the proof beat draws for an audit that failed with a code the three crawl reasons
+ * do not name, as the markup has it: a title-only line, then its sentence. The crawl-code
+ * cards carry their reason's label as a badge in the title line, so they are not it. Null when
+ * the page has no such card.
+ */
+const auditCard = (html: string): { title: string; sentence: string } | null => {
+  const m = proofBeat(html).match(
+    /<p class="text-ui-base font-medium text-text-primary">([^<]*)<\/p><p class="mt-2 text-ui-sm[^"]*">([^<]*)<\/p>/,
+  );
+  return m ? { title: m[1]!, sentence: m[2]! } : null;
+};
+
+/**
+ * What that card said until 2026-10-05 (launch checklist 3.87, follow-up): that the site "could
+ * not be read" and a crawl "did not complete", though a busy crawler never began one and an
+ * error status was the page's own answer, and a rule about sites the crawler could not read
+ * that said nothing of the score.
+ */
+const OLD_CARD_WORDS = [
+  'The site could not be read',
+  'The crawl of',
+  'did not complete, so nothing was measured from the page',
+  'A site the crawler could not read',
+  'is not a site with a bad technical foundation',
+  'the dimension is left unscored rather than scored zero',
+];
+
+/** The card's sentence: what happened, in the code's own words, then what is true of every failure. */
+const cardSentence = (errorCode: string | null, address: string | null | undefined): string =>
+  `${auditFailureSentence(errorCode)} The technical check of ${address ?? 'the site'} could not be completed for this scan, so nothing was measured from the page and Technical Foundation is left out of the score.`;
 
 describe('the narrative structure is the page', () => {
   it('renders all five beats, in order', () => {
@@ -176,37 +223,35 @@ describe('degraded data renders as degraded, never as bad', () => {
     const html = render(noCompetitorSetReport);
     expect(html).toContain('Share of Voice');
     expect(html).toContain('normally 25% of the score');
-    expect(html).toContain('rather than awarding points for a detection that did not happen');
+    expect(html).toContain('rather than awarding points for a comparison that could not be made');
   });
 
   it('a weak competitor set carries its caveat next to the comparison', () => {
     const html = render(weakSignalReport);
     expect(html).toContain('Weakly corroborated');
-    expect(html).toContain('correct it before sending the report on');
+    expect(html).toContain('Treat this rival set as a starting point.');
+    // A correction never reaches this report, its PDF or its share link, so it is not asked for.
+    expect(html).not.toContain('correct it');
+    expect(html).not.toContain('sending the report on');
   });
 
-  it('a failed audit reads as unreadable, not as a bad site', () => {
-    const html = render(failedAuditReport);
-    expect(html).toContain('The site could not be read');
-    expect(html).toContain('is not a site with a bad technical foundation');
+  it('a failed audit says the technical check could not be completed, and does not blame the site', () => {
+    const html = render(failedWith('FETCH_FAILED'));
+    const card = auditCard(html);
+    // The reason's own label for a title, and a sentence true of every failure, a busy crawler
+    // that never started and a page that answered with an error included: the check could not
+    // be completed, nothing was measured from the page, and the dimension is left out of the
+    // score. It says nothing of a read, and puts nothing on the site.
+    expect(card?.title).toBe(EXCLUSION_REASON.AUDIT_FAILED!.label);
+    expect(card?.sentence).toBe(cardSentence('FETCH_FAILED', 'https://helpscout.com'));
     expect(html).not.toContain('FETCH_FAILED');
     expect(html).toContain(AUDIT_FAILURE_SENTENCE.FETCH_FAILED);
-    // The words around the sentence are true of every failure, a busy crawler and a cut
-    // run included: the crawl did not complete and nothing was measured, which is not
-    // the same as the site being out of reach.
-    expect(html).toContain('did not complete, so nothing was measured from the page.');
-    expect(html).toContain(
-      'A site the crawler could not read is not a site with a bad technical foundation — the dimension is left unscored rather than scored zero.',
-    );
+    for (const words of OLD_CARD_WORDS) expect(html, words).not.toContain(words);
     expect(html).not.toContain('A site we could not reach');
     expect(html).not.toContain('no structural signals were collected');
   });
 
   it('says one plain sentence per failure code, and never the code, signed in or public', () => {
-    const withCode = (errorCode: string): Report => ({
-      ...failedAuditReport,
-      audit: { ...failedAuditReport.audit!, errorCode },
-    });
     const cases: [string, string][] = [
       ['BROWSER_ERROR', AUDIT_FAILURE_SENTENCE.BROWSER_ERROR!],
       ['FETCH_FAILED', AUDIT_FAILURE_SENTENCE.FETCH_FAILED!],
@@ -218,16 +263,56 @@ describe('degraded data renders as degraded, never as bad', () => {
     expect(new Set(cases.map(([, sentence]) => sentence)).size).toBe(cases.length);
     expect(cases[4]![1]).toContain('HTTP 503');
     expect(cases[5]![1]).toBe(AUDIT_FAILURE_GENERIC);
-    for (const [code, sentence] of cases) {
-      for (const html of [
-        render(withCode(code)),
-        renderToStaticMarkup(<ReportView report={withCode(code)} publicView animate={false} />),
-      ]) {
-        expect(html, code).toContain(sentence);
-        expect(html, code).toContain('did not complete, so nothing was measured from the page.');
-        expect(html, code).not.toContain('A site we could not reach');
-        expect(html, code).not.toContain(code);
-        expect(html, code).not.toContain('(HTTP_');
+    // An audit that failed with no code at all says the generic sentence, as an unknown code does.
+    const every: [string | null, string][] = [...cases, [null, AUDIT_FAILURE_GENERIC]];
+    const address = auditFailedExcludedReport.audit!.urlAudited;
+    for (const [code, sentence] of every) {
+      const label = String(code);
+      for (const html of [render(failedWith(code)), renderPublic(failedWith(code))]) {
+        expect(auditCard(html)?.title, label).toBe(EXCLUSION_REASON.AUDIT_FAILED!.label);
+        expect(auditCard(html)?.sentence, label).toBe(cardSentence(code, address));
+        expect(html, label).toContain(sentence);
+        for (const words of OLD_CARD_WORDS) {
+          expect(html, `${label}: ${words}`).not.toContain(words);
+        }
+        expect(html, label).not.toContain('A site we could not reach');
+        if (code !== null) expect(html, label).not.toContain(code);
+        expect(html, label).not.toContain('(HTTP_');
+      }
+    }
+  });
+
+  it('the card keeps the reason’s two claims, with the address it audited, or “the site” when it has none', () => {
+    // The score beat shows the reason (`EXCLUSION_REASON.AUDIT_FAILED`) and this card sits in the
+    // same report, so it must not say less, or other, than that. "This scan" is true here: a
+    // report is of one scan, signed in or shared. If the reason is reworded, this fails.
+    const reason = EXCLUSION_REASON.AUDIT_FAILED!.detail;
+    const checkClaim = 'The technical check of the site could not be completed for this scan';
+    const leftOut = 'Technical Foundation is left out of the score.';
+    expect(reason).toContain(checkClaim);
+    expect(reason).toContain(leftOut);
+    const bare: Report = {
+      ...failedWith('TIMEOUT'),
+      audit: { ...failedWith('TIMEOUT').audit!, urlAudited: null },
+    };
+    for (const html of [render(bare), renderPublic(bare)]) {
+      const sentence = auditCard(html)?.sentence ?? '';
+      expect(sentence).toContain(checkClaim);
+      expect(sentence.endsWith(`and ${leftOut}`)).toBe(true);
+    }
+    for (const html of [render(failedWith('TIMEOUT')), renderPublic(failedWith('TIMEOUT'))]) {
+      expect(auditCard(html)?.sentence).toContain(
+        'The technical check of https://helpscout.com could not be completed for this scan, so nothing was measured from the page',
+      );
+    }
+  });
+
+  it('the three crawl codes never get that card, or its title', () => {
+    // They have their own words. This card is for every other failure and claims nothing of them.
+    for (const code of ['ROBOTS_DISALLOWED', 'ROBOTS_UNREACHABLE', 'ADDRESS_NOT_PUBLIC']) {
+      for (const html of [render(failedWith(code)), renderPublic(failedWith(code))]) {
+        expect(auditCard(html), code).toBeNull();
+        expect(proofBeat(html), code).not.toContain(EXCLUSION_REASON.AUDIT_FAILED!.label);
       }
     }
   });
@@ -950,7 +1035,7 @@ describe('a site whose robots.txt keeps the crawler out — 2026-09-29', () => {
     // Not the other reasons' words: the audit ran, and nothing failed.
     expect(html).not.toContain('Not yet checked');
     expect(html).not.toContain('The site could not be read');
-    expect(html).not.toContain('Audit failed');
+    expect(html).not.toContain(EXCLUSION_REASON.AUDIT_FAILED!.label);
   });
 
   it('still shows what robots.txt itself says, and the blanket block as a fix', () => {
@@ -982,8 +1067,8 @@ describe('a site whose robots.txt keeps the crawler out — 2026-09-29', () => {
     }
   });
 
-  it('a failed crawl is still worded as one', () => {
-    expect(render(failedAuditReport)).toContain('The site could not be read');
+  it('a failed audit that is no refusal is still worded as one, in its own card', () => {
+    expect(auditCard(render(failedWith('TIMEOUT')))?.title).toBe(EXCLUSION_REASON.AUDIT_FAILED!.label);
   });
 });
 
@@ -1206,7 +1291,7 @@ describe('a site whose robots.txt could not be read — launch checklist 3.41', 
     }
     // ...and it is not a failed crawl: the page was never asked for.
     expect(html).not.toContain('The site could not be read');
-    expect(html).not.toContain('Audit failed');
+    expect(html).not.toContain(EXCLUSION_REASON.AUDIT_FAILED!.label);
     expect(html).not.toContain('Not yet checked');
   });
 
@@ -1253,7 +1338,13 @@ describe('a site whose own robots.txt was missing but whose redirect did not ans
   it('still says it could not read robots.txt, and never that the site asks crawlers to stay out', () => {
     expect(html).toContain('The site was not read');
     expect(html).toContain(ROBOTS_UNREACHABLE_SENTENCE);
-    for (const words of ['stay out', 'asks crawlers', 'Blocked by robots.txt', 'The site could not be read']) {
+    for (const words of [
+      'stay out',
+      'asks crawlers',
+      'Blocked by robots.txt',
+      'The site could not be read',
+      EXCLUSION_REASON.AUDIT_FAILED!.label,
+    ]) {
       expect(html, words).not.toContain(words);
     }
   });
@@ -1290,7 +1381,7 @@ describe('a site whose address is not public — the egress guard', () => {
     );
     expect(html).not.toContain('robots.txt');
     expect(html).not.toContain('The site could not be read');
-    expect(html).not.toContain('Audit failed');
+    expect(html).not.toContain(EXCLUSION_REASON.AUDIT_FAILED!.label);
   });
 
   it('derives the exclusion under its own reason', () => {
@@ -1402,5 +1493,56 @@ describe('the signed-in report says how its scan ended — checklist 3.15', () =
     expect(html.indexOf('class="avp-report')).toBeLessThan(html.indexOf(OUTCOME));
     // Not a Badge or a live dot: a finished measurement carries no motion.
     expect(header(html)).not.toContain('avp-badge__pulse');
+  });
+});
+
+/**
+ * A technical audit that failed — launch checklist 3.87. It used to leave Technical
+ * Foundation excluded as NOT_YET_MEASURED, which reads "Not yet checked" of a scan whose
+ * audit exists and failed. It has its own words now, and no code reaches the page.
+ */
+describe('a site whose technical audit failed — launch checklist 3.87', () => {
+  const html = render(auditFailedExcludedReport);
+  const publicHtml = renderToStaticMarkup(
+    <ReportView report={auditFailedExcludedReport} animate={false} publicView />,
+  );
+
+  it('has its own label and sentence in the shared map', () => {
+    expect(EXCLUSION_REASON.AUDIT_FAILED).toEqual({
+      label: 'Technical check failed',
+      detail:
+        'The technical check of the site could not be completed for this scan. Technical Foundation is left out of the score.',
+    });
+  });
+
+  it('shows the reason’s words on the report and the shared report', () => {
+    for (const page of [html, publicHtml]) {
+      expect(page).toContain(EXCLUSION_REASON.AUDIT_FAILED!.label);
+      expect(page).toContain(EXCLUSION_REASON.AUDIT_FAILED!.detail);
+    }
+  });
+
+  it('never says “Not yet checked” of an audit that failed, and shows no machine code', () => {
+    for (const page of [html, publicHtml]) {
+      expect(page).not.toContain('Not yet checked');
+      expect(page).not.toContain(EXCLUSION_REASON.NOT_YET_MEASURED!.detail);
+      for (const code of ['AUDIT_FAILED', 'NOT_YET_MEASURED', 'TIMEOUT']) {
+        expect(page, code).not.toContain(code);
+      }
+    }
+  });
+
+  it('derives the exclusion under its own reason, and no fix telling the client to change anything', () => {
+    const narrative = deriveNarrative(auditFailedExcludedReport);
+    expect(narrative.exclusions.map((e) => [e.key, e.reason])).toEqual([
+      ['technical_foundation', 'AUDIT_FAILED'],
+    ]);
+    expect(narrative.fixes.map((f) => f.id)).not.toContain('gap:technical_foundation');
+  });
+
+  it('a scan with no audit row keeps its own words', () => {
+    const none = render(notYetMeasuredReport);
+    expect(none).toContain(EXCLUSION_REASON.NOT_YET_MEASURED!.label);
+    expect(none).not.toContain(EXCLUSION_REASON.AUDIT_FAILED!.label);
   });
 });

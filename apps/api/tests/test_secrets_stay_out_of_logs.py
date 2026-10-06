@@ -22,7 +22,7 @@ import subprocess
 import sys
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 import httpx
 import pytest
@@ -706,12 +706,60 @@ class TestTheStripeSdkPrintsWhenToldTo:
         assert "price_PRINTSENTINEL" in done.stderr
 
 
+class TestTheAppSwitchesTheSdkPrintingOffItself:
+    """Without the entrypoint: a developer who exports `STRIPE_LOG` and runs `uvicorn` directly.
+
+    `stripe._util` reads the variable into a module global as it is imported, and decides at each
+    call whether to print (`_console_log_level`), so billing, the only module here that imports
+    the SDK, clears that global and `stripe.log` as it is imported.
+    """
+
+    PRINT_ALL = (
+        "from stripe._util import log_info, log_debug\n"
+        f"{SDK_LINE}\n"
+        "log_debug('Stripe API response', body='price_PRINTSENTINEL')\n"
+    )
+
+    @pytest.mark.parametrize("level", ["info", "debug"])
+    def test_importing_billing_makes_the_sdk_print_nothing_whatever_the_variable_says(
+        self, tmp_path: Path, level: str
+    ) -> None:
+        done = _python(
+            f"import avp_api.services.billing\n{self.PRINT_ALL}", tmp_path, STRIPE_LOG=level
+        )
+
+        assert done.returncode == 0, done.stderr[-1500:]
+        assert "PRINTSENTINEL" not in done.stderr
+
+    def test_building_the_app_makes_the_sdk_print_nothing_with_debug_set(
+        self, tmp_path: Path
+    ) -> None:
+        done = _python(
+            f"from avp_api.main import create_app\ncreate_app()\n{self.PRINT_ALL}",
+            tmp_path,
+            STRIPE_LOG="debug",
+        )
+
+        assert done.returncode == 0, done.stderr[-1500:]
+        assert "PRINTSENTINEL" not in done.stderr
+
+    def test_a_module_level_stripe_log_setting_is_cleared_too(self, tmp_path: Path) -> None:
+        done = _python(
+            "import stripe\nstripe.log = 'debug'\nimport avp_api.services.billing\n"
+            f"{self.PRINT_ALL}",
+            tmp_path,
+        )
+
+        assert done.returncode == 0, done.stderr[-1500:]
+        assert "PRINTSENTINEL" not in done.stderr
+
+
 def _run_entrypoint(script: Path, tmp_path: Path, **env: str) -> dict[str, str]:
     """Run an entrypoint script with `alembic` and `uvicorn` replaced by stubs; what each saw.
 
-    The stubs write their arguments, `STRIPE_LOG` (or `<unset>`) and their place in the order to
-    files, and `cd` is a no-op, since the script `cd`s into `/app`. The real script is what runs:
-    its `set -euo pipefail`, its order, its `exec`.
+    The stubs write their arguments, `STRIPE_LOG` and `PYDANTIC_SETTINGS_DEBUG` (each, or
+    `<unset>`) and their place in the order to files, and `cd` is a no-op, since the script `cd`s
+    into `/app`. The real script is what runs: its `set -euo pipefail`, its order, its `exec`.
     """
     bin_dir = tmp_path / "bin"
     out = tmp_path / "out"
@@ -722,6 +770,8 @@ def _run_entrypoint(script: Path, tmp_path: Path, **env: str) -> dict[str, str]:
         stub.write_text(
             "#!/bin/sh\n"
             f'printf \'%s\' "${{STRIPE_LOG-<unset>}}" > "$STUB_OUT/{name}.stripe_log"\n'
+            "printf '%s' \"${PYDANTIC_SETTINGS_DEBUG-<unset>}\" "
+            f'> "$STUB_OUT/{name}.pydantic_settings_debug"\n'
             f'printf \'%s\' "$*" > "$STUB_OUT/{name}.argv"\n'
             f'printf \'%s\\n\' {name} >> "$STUB_OUT/order"\n'
         )
@@ -777,3 +827,443 @@ class TestTheEntrypointSwitchesItOff:
 
         assert seen["alembic.stripe_log"] == "debug"
         assert seen["uvicorn.stripe_log"] == "debug"
+
+
+# ---------------------------------------------------------------------------
+# a failed start prints no setting's value — 2026-10-06
+# ---------------------------------------------------------------------------
+# Pydantic prints a failed validation as its message and `input_value=<the input>`. For a MODEL
+# validator (`_harden_deployed_environments`) the input is the whole settings dict: the raw
+# environment strings, unmasked, cut to 50 characters (the first 25 and the last 24). A refused
+# production start therefore wrote the tail of the last setting that was set (a webhook secret, a
+# session secret, an address) to the deploy log, which Render keeps, and a key pasted into the
+# wrong variable was printed whole by its own field's error. `Settings` hides its input in errors.
+#
+# These start the real thing in a fresh interpreter, from an empty directory (no `.env`), whose
+# environment is ONLY what the test sets, with a sentinel in the setting under test, and read all
+# that it wrote. Each sentinel is 11 characters and ends its value, so that cut would show it whole.
+
+SRC_DIR = Path(avp_api.__file__).resolve().parents[1]
+START_SETTINGS = "from avp_api.config import get_settings\nget_settings()\n"
+START_THE_APP = "import avp_api.main\n"
+UVICORN_START = [sys.executable, "-m", "uvicorn", "avp_api.main:app", "--port", "0"]
+
+# Found from the model, so that a setting added later is in every test below without being named.
+SECRET_SETTINGS = tuple(
+    name
+    for name, field in Settings.model_fields.items()
+    if SecretStr in (field.annotation, *get_args(field.annotation))
+)
+URL_SETTINGS = ("database_url", "redis_url")  # `user:password@host`: credentials on a host
+ADDRESS_SETTINGS = ("feedback_email", "scan_allowance_exempt_emails")  # no address in a log
+SENSITIVE_SETTINGS = (*SECRET_SETTINGS, *URL_SETTINGS, *ADDRESS_SETTINGS)
+
+# A real key pasted into the wrong variable: the value of an unrelated setting, which its own
+# field's error used to print back, whole.
+PASTED = "LEAK-pasted.qz7x"
+# Settings whose own validation can fail on a pasted value: an int, a Literal, a float, a
+# `PositiveInt`, a bool (`REPORT_CSV_ENABLED`, 2026-10-06), and the one with a validator of ours
+# (the cookie name).
+WRONG_PLACE = (
+    "REPORT_CSV_ENABLED",
+    "AUTO_RESCAN_ENABLED",
+    "STRIPE_TRIAL_DAYS",
+    "LOG_LEVEL",
+    "ENVIRONMENT",
+    "SESSION_COOKIE_NAME",
+    "DATABASE_POOL_SIZE",
+    "LOGIN_LIMIT_PER_EMAIL",
+    "REDIS_SOCKET_TIMEOUT_SECONDS",
+)
+
+
+def _sentinel(name: str) -> str:
+    """A marker no other setting's value contains."""
+    return f"LEAK{list(Settings.model_fields).index(name):02d}-qz7x"
+
+
+def _value(name: str) -> str:
+    """The sentinel in the shape its setting has, ending in the sentinel wherever that allows."""
+    mark = _sentinel(name)
+    if name == "database_url":
+        return f"postgresql+asyncpg://u:{mark}@h/d"
+    if name == "redis_url":
+        return f"redis://:{mark}@h/0"
+    if name in ADDRESS_SETTINGS:
+        return f"{mark}@s.example"
+    return mark
+
+
+def _all_set() -> dict[str, str]:
+    """Every sensitive setting at once, each its own sentinel (the app secret is no placeholder)."""
+    return {name.upper(): _value(name) for name in SENSITIVE_SETTINGS}
+
+
+def _start(
+    tmp_path: Path, env: dict[str, str], code: str = START_SETTINGS, argv: list[str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Start `code` (or `argv`) in a fresh interpreter, from an empty directory, with ONLY `env`.
+
+    Nothing of the developer's shell is inherited but `PATH`, so a key exported there can neither
+    be printed by the start nor change how it ends.
+    """
+    full = {"PATH": os.environ["PATH"], "HOME": str(tmp_path), "PYTHONPATH": str(SRC_DIR), **env}
+    return subprocess.run(
+        argv or [sys.executable, "-c", code],
+        env=full, cwd=tmp_path, capture_output=True, text=True, timeout=90, check=False,
+    )
+
+
+def _assert_names_and_hides(
+    done: subprocess.CompletedProcess[str], *, variable: str, sentinels: list[str]
+) -> None:
+    """The start failed, said which variable is wrong, and printed none of the values."""
+    everything = done.stdout + done.stderr
+    assert done.returncode != 0, "the start was expected to fail: " + everything[-1500:]
+    assert variable.lower() in everything.lower(), (variable, everything[-1500:])
+    # Case-folded: a validator may upper-case a value before it refuses it (`LOG_LEVEL`).
+    leaked = [mark for mark in sentinels if mark.lower() in everything.lower()]
+    assert not leaked, ("printed a value", leaked, everything[-1500:])
+    # The marker of every value pydantic echoes, whatever it was cut to.
+    assert "input_value" not in everything, everything[-1500:]
+
+
+class TestTheTestsBelowCanTell:
+    def test_every_secret_setting_is_in_it(self) -> None:
+        """An empty parametrisation is skipped, not failed: so the list is held to its members."""
+        assert {
+            "app_secret", "serpapi_key", "resend_api_key", "anthropic_api_key", "openai_api_key",
+            "perplexity_api_key", "google_ai_api_key", "stripe_secret_key",
+            "stripe_webhook_secret", "google_oauth_client_secret",
+        } <= set(SECRET_SETTINGS)
+        assert set(URL_SETTINGS) | set(ADDRESS_SETTINGS) <= set(Settings.model_fields)
+
+    def test_the_sentinels_are_distinct_and_close_enough_to_the_end_to_be_printed_whole(
+        self,
+    ) -> None:
+        marks = [_sentinel(name) for name in SENSITIVE_SETTINGS]
+        assert len(set(marks)) == len(marks)
+        for name in SENSITIVE_SETTINGS:
+            value = _value(name)
+            # Of an input that ends in this value pydantic shows the last 22 characters of it.
+            assert len(value) - value.index(_sentinel(name)) <= 22, name
+
+    def test_with_the_flag_off_the_same_start_prints_the_tail_of_a_secret(
+        self, tmp_path: Path
+    ) -> None:
+        """The hazard, shown, so that the tests below cannot pass for want of a failing start:
+        the settings with the one flag turned off print the webhook secret's tail and the input.
+        (As they are, the same start prints neither: the `stripe_webhook_secret` case below.)"""
+        env = {
+            "ENVIRONMENT": "production",
+            "STRIPE_WEBHOOK_SECRET": _value("stripe_webhook_secret"),
+        }
+        unhidden = (
+            "from pydantic_settings import SettingsConfigDict\n"
+            "from avp_api.config import Settings\n"
+            "class Unhidden(Settings):\n"
+            "    model_config = SettingsConfigDict(hide_input_in_errors=False)\n"
+            "Unhidden()\n"
+        )
+
+        shown = _start(tmp_path, env, unhidden)
+
+        assert shown.returncode != 0
+        assert _sentinel("stripe_webhook_secret") in shown.stderr
+        assert "input_value" in shown.stderr
+
+
+class TestAFailedStartPrintsNoValue:
+    """Each case is one refused start. It names the variable that is wrong and prints no value."""
+
+    @pytest.mark.parametrize("setting", SENSITIVE_SETTINGS)
+    def test_a_refused_deployed_start_prints_no_setting(
+        self, tmp_path: Path, setting: str
+    ) -> None:
+        """The model validator: `ENVIRONMENT=production` with the app secret left a placeholder,
+        and one sensitive setting set, which is then the last the input holds."""
+        env = {"ENVIRONMENT": "production", setting.upper(): _value(setting)}
+        if setting == "app_secret":
+            # The refusal is the secret itself, still a placeholder: it must not be printed back.
+            env["APP_SECRET"] = f"dev-only-{_value(setting)}"
+
+        done = _start(tmp_path, env)
+
+        _assert_names_and_hides(done, variable="APP_SECRET", sentinels=[_sentinel(setting)])
+
+    def test_a_refused_wildcard_origin_prints_no_setting(self, tmp_path: Path) -> None:
+        env = {"ENVIRONMENT": "production", "CORS_ALLOW_ORIGINS": "*", **_all_set()}
+
+        done = _start(tmp_path, env)
+
+        _assert_names_and_hides(
+            done,
+            variable="CORS_ALLOW_ORIGINS",
+            sentinels=[_sentinel(name) for name in SENSITIVE_SETTINGS],
+        )
+
+    @pytest.mark.parametrize("variable", WRONG_PLACE)
+    def test_a_value_pasted_into_the_wrong_setting_is_not_printed_back(
+        self, tmp_path: Path, variable: str
+    ) -> None:
+        """A field validator: its error printed the value it refused, up to 50 characters."""
+        env = {"ENVIRONMENT": "production", **_all_set(), variable: PASTED}
+
+        done = _start(tmp_path, env)
+
+        _assert_names_and_hides(
+            done,
+            variable=variable,
+            sentinels=[_sentinel(name) for name in SENSITIVE_SETTINGS] + [PASTED],
+        )
+
+    @pytest.mark.parametrize(
+        "bad",
+        [PASTED, f"Name <{PASTED}@s.example>", f"{PASTED}@s.example, other@s.example"],
+        ids=["a pasted key", "a name and an address", "two addresses"],
+    )
+    def test_a_bad_feedback_address_names_the_variable_and_not_the_value(
+        self, tmp_path: Path, bad: str
+    ) -> None:
+        env = {"ENVIRONMENT": "production", **_all_set(), "FEEDBACK_EMAIL": bad}
+        others = [_sentinel(name) for name in SENSITIVE_SETTINGS if name != "feedback_email"]
+
+        done = _start(tmp_path, env)
+
+        _assert_names_and_hides(done, variable="FEEDBACK_EMAIL", sentinels=[*others, PASTED])
+
+    def test_a_pasted_value_fails_the_same_way_when_the_app_is_imported(
+        self, tmp_path: Path
+    ) -> None:
+        """`app = create_app()` runs as `avp_api.main` is imported, which is what uvicorn does."""
+        env = {"ENVIRONMENT": "production", **_all_set(), "STRIPE_TRIAL_DAYS": PASTED}
+
+        done = _start(tmp_path, env, START_THE_APP)
+
+        _assert_names_and_hides(
+            done,
+            variable="STRIPE_TRIAL_DAYS",
+            sentinels=[_sentinel(name) for name in SENSITIVE_SETTINGS] + [PASTED],
+        )
+
+    def test_the_real_start_through_uvicorn_prints_no_value(self, tmp_path: Path) -> None:
+        """The container's own command, `uvicorn avp_api.main:app`: the traceback it ends in."""
+        env = {"ENVIRONMENT": "production", "CORS_ALLOW_ORIGINS": "*", **_all_set()}
+
+        done = _start(tmp_path, env, argv=UVICORN_START)
+
+        _assert_names_and_hides(
+            done,
+            variable="CORS_ALLOW_ORIGINS",
+            sentinels=[_sentinel(name) for name in SENSITIVE_SETTINGS],
+        )
+
+
+class TestSettingsIsTheOnlySettingsClass:
+    def test_it_is_the_only_settings_class_and_it_hides_its_input(self) -> None:
+        """If a second `BaseSettings` is ever added it prints its input unless it says not to:
+        this fails until that class hides its input too, and is told to name it here."""
+        found: list[str] = []
+        for path in sorted(SRC_DIR.joinpath("avp_api").rglob("*.py")):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if isinstance(node, ast.ClassDef) and any(
+                    ast.unparse(base) in ("BaseSettings", "Settings") for base in node.bases
+                ):
+                    found.append(f"{path.name}:{node.name}")
+
+        assert found == ["config.py:Settings"], found
+        assert Settings.model_config.get("hide_input_in_errors") is True
+
+
+class TestTheSettingsObjectKeepsItsCredentialsOutOfItsRepr:
+    """`repr()` of a `SecretStr` is masked and a plain `str` is printed whole: the database and
+    Redis URLs carry `user:password@host` on Render. Nothing prints the object today."""
+
+    @staticmethod
+    def _settings() -> Settings:
+        names = (*SECRET_SETTINGS, *URL_SETTINGS)
+        return Settings(_env_file=None, **{name: _value(name) for name in names})
+
+    def test_neither_repr_nor_str_prints_a_credential(self) -> None:
+        settings = self._settings()
+
+        for text in (repr(settings), str(settings)):
+            printed = [n for n in (*SECRET_SETTINGS, *URL_SETTINGS) if _sentinel(n) in text]
+            assert not printed, printed
+
+    def test_the_two_urls_are_left_out_of_it_by_name(self) -> None:
+        for name in URL_SETTINGS:
+            assert Settings.model_fields[name].repr is False, name
+
+    def test_the_code_that_connects_still_has_them(self) -> None:
+        settings = self._settings()
+
+        assert settings.database_url == _value("database_url")
+        assert settings.redis_url == _value("redis_url")
+        assert _sentinel("database_url") in settings.sync_database_url()
+
+
+# ---------------------------------------------------------------------------
+# pydantic-settings writes every source it reads when told to — 2026-10-06
+# ---------------------------------------------------------------------------
+
+
+class TestPydanticSettingsPrintsWhenToldTo:
+    """`PYDANTIC_SETTINGS_DEBUG=1` makes pydantic-settings write each source's raw values (the
+    environment, a `.env` file) to its own logger at DEBUG, unmasked: provider keys, the Stripe key,
+    the session secret, both URLs. The logger prints where something has set the root logger to
+    DEBUG. The variable is read at each construction, and the entrypoint unsets it, below."""
+
+    DUMP = (
+        "import logging, sys\n"
+        "logging.basicConfig(level=logging.DEBUG, stream=sys.stderr)\n"
+        "from avp_api.config import Settings\n"
+        "Settings()\n"
+    )
+
+    @pytest.mark.parametrize("value", ["1", "true"])
+    def test_with_it_set_and_the_logger_at_debug_every_source_is_written(
+        self, tmp_path: Path, value: str
+    ) -> None:
+        """The hazard, shown, so the entrypoint tests below cannot pass for want of a line."""
+        env = {"PYDANTIC_SETTINGS_DEBUG": value, "SERPAPI_KEY": _value("serpapi_key")}
+
+        done = _start(tmp_path, env, self.DUMP)
+
+        assert done.returncode == 0, done.stderr[-1500:]
+        assert _sentinel("serpapi_key") in done.stderr
+
+    def test_without_it_nothing_is_written(self, tmp_path: Path) -> None:
+        done = _start(tmp_path, {"SERPAPI_KEY": _value("serpapi_key")}, self.DUMP)
+
+        assert done.returncode == 0, done.stderr[-1500:]
+        assert _sentinel("serpapi_key") not in done.stderr
+
+
+class TestTheEntrypointSwitchesPydanticSettingsDebuggingOff:
+    """The container's entrypoint unsets `PYDANTIC_SETTINGS_DEBUG` before it starts anything, as
+    it does `STRIPE_LOG`, so a variable left on the host cannot make the settings write every
+    source."""
+
+    @pytest.mark.parametrize("value", ["1", "true"])
+    def test_neither_alembic_nor_uvicorn_is_given_the_variable(
+        self, tmp_path: Path, value: str
+    ) -> None:
+        seen = _run_entrypoint(ENTRYPOINT, tmp_path, PYDANTIC_SETTINGS_DEBUG=value)
+
+        assert seen["alembic.pydantic_settings_debug"] == "<unset>"
+        assert seen["uvicorn.pydantic_settings_debug"] == "<unset>"
+
+    def test_without_the_line_the_harness_does_see_it(self, tmp_path: Path) -> None:
+        """A control inside the test: the same script minus the unset, so the check above is
+        known to be able to tell."""
+        lines = ENTRYPOINT.read_text().splitlines(keepends=True)
+        kept = [line for line in lines if line.strip() != "unset PYDANTIC_SETTINGS_DEBUG"]
+        assert len(kept) == len(lines) - 1, "the script has no such `unset` line to remove"
+        without = tmp_path / "docker-entrypoint.sh"
+        without.write_text("".join(kept))
+        without.chmod(0o755)
+
+        seen = _run_entrypoint(without, tmp_path, PYDANTIC_SETTINGS_DEBUG="1")
+
+        assert seen["alembic.pydantic_settings_debug"] == "1"
+        assert seen["uvicorn.pydantic_settings_debug"] == "1"
+
+
+# ---------------------------------------------------------------------------
+# the scan-finished emails (F1, 2026-10-06): ids and a reason, never an address, link or name
+# ---------------------------------------------------------------------------
+
+SCAN_EMAIL_ADDRESS = "scanwatcher-SENTINEL@logs.example"
+SCAN_EMAIL_CLIENT = "CLIENTNAMESENTINEL Traders"
+SCAN_EMAIL_BASE = "https://scan-links-sentinel.avp-pilot.example"
+
+
+async def test_the_scan_finished_emails_log_no_address_link_or_client_name(
+    settings: Settings,  # noqa: ANN001
+    engine,  # noqa: ANN001
+    session,  # noqa: ANN001
+    resend_configured,  # noqa: ANN001
+    capsys,  # noqa: ANN001
+    caplog,  # noqa: ANN001
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every outcome of a sweep (sent, a provider failure, a skip, an error) in every channel."""
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from avp_api import ids
+    from avp_api.models import Agency, Alert, AlertKind, Client, Scan, ScanStatus, User, UserRole
+    from avp_api.services import scan_emails
+
+    now = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
+    agency = Agency(id=ids.new_id(ids.AGENCY), name="Log Agency", slug="log-agency")
+    session.add(agency)
+    await session.flush()
+    users = {}
+    for name, address, opted in (("loud", SCAN_EMAIL_ADDRESS, True), ("quiet", STRANGER, False)):
+        users[name] = User(
+            id=ids.new_id(ids.USER), agency_id=agency.id, email=address, full_name="X",
+            role=UserRole.MEMBER, password_hash="x", scan_emails=opted,
+        )
+        session.add(users[name])
+    client_row = Client(
+        id=ids.new_id(ids.CLIENT), agency_id=agency.id, name=SCAN_EMAIL_CLIENT, domain="c.example"
+    )
+    session.add(client_row)
+    await session.flush()
+
+    def scan(user: User, status: ScanStatus, minutes: int) -> Scan:
+        return Scan(
+            id=ids.new_id(ids.SCAN), client_id=client_row.id, agency_id=agency.id,
+            requested_by_user_id=user.id, status=status,
+            finished_at=now - timedelta(minutes=minutes),
+        )
+
+    done, failed, skipped = (
+        scan(users["loud"], ScanStatus.SUCCEEDED, 3),
+        scan(users["loud"], ScanStatus.FAILED, 2),
+        scan(users["quiet"], ScanStatus.SUCCEEDED, 1),
+    )
+    session.add_all([done, failed, skipped])
+    await session.flush()
+    session.add(
+        Alert(
+            id=ids.new_id(ids.ALERT), client_id=client_row.id, agency_id=agency.id,
+            kind=AlertKind.VISIBILITY_DROP, scan_id=done.id, baseline_scan_id=failed.id,
+            detail="x",
+        )
+    )
+    await session.commit()
+
+    on = settings.model_copy(
+        update={
+            "email_scan_notifications": True,
+            "public_web_base_url": SCAN_EMAIL_BASE,
+        }
+    )
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+    caplog.set_level("DEBUG")
+    with structlog.testing.capture_logs() as events:
+        assert await scan_emails.sweep(on, factory=factory, now=now) == 3
+        # The provider is down for the next one: the failure line is searched too.
+        resend_configured.clear()
+        monkeypatch.setattr(
+            email_service.httpx, "AsyncClient",
+            lambda *a, **k: (_ for _ in ()).throw(httpx.ConnectError(SCAN_EMAIL_ADDRESS)),
+        )
+        retry = scan(users["loud"], ScanStatus.SUCCEEDED, 1)
+        session.add(retry)
+        await session.commit()
+        await scan_emails.sweep(on, factory=factory, now=now)
+
+    everything = json.dumps(events, default=str) + capsys.readouterr().out + caplog.text
+    for secret in (
+        SCAN_EMAIL_ADDRESS, STRANGER, "SENTINEL", SCAN_EMAIL_CLIENT, "CLIENTNAMESENTINEL",
+        SCAN_EMAIL_BASE, "scan-links-sentinel", "http://", "https://",
+    ):
+        assert secret not in everything, f"{secret!r} reached the logs"
+    kinds = {e["event"] for e in events}
+    assert {"email.scan_ready.sent", "email.scan_alerts.sent", "email.scan_failed.sent",
+            "scan_emails.skipped", "email.scan_ready.failed"} <= kinds

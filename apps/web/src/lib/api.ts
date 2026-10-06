@@ -11,6 +11,7 @@ import type {
   AcknowledgeAlert,
   AlertFeed,
   AnswerGaps,
+  AutoRescan,
   CrawlerAccess,
   BillingPlan,
   BillingStatus,
@@ -30,6 +31,7 @@ import type {
   PromptRunHistory,
   Report,
   Scan,
+  ScanEmails,
   SeatList,
   ShareLink,
   SignUpRequest,
@@ -235,6 +237,18 @@ export const api = {
     }),
 
   /**
+   * Turn the emails sent when a scan you started finishes on or off — F1.
+   *
+   * Your own choice only: the request names no user. A JSON boolean, answered with the same
+   * `{available, enabled}` that `me()` carries as `scanEmails`.
+   */
+  setScanEmails: (enabled: boolean) =>
+    request<ScanEmails>('/auth/me/scan-emails', {
+      method: 'PUT',
+      body: JSON.stringify({ enabled }),
+    }),
+
+  /**
    * Ask for a password-reset link — Epic 9.13.
    *
    * **Always resolves.** The endpoint answers 200 with the same body whether or
@@ -318,7 +332,7 @@ export const api = {
    * the endpoint asynchronous; it previously blocked for the whole ~303s run.
    *
    * Completion is observed with `GET /scans/{scanId}`, or by re-reading the
-   * dashboard. This client does not poll — building the poller is a follow-up.
+   * dashboard, which polls it (`lib/dashboard/polling.ts`).
    */
   runScan: (clientId: string) =>
     request<Scan>(`/clients/${clientId}/scans`, {
@@ -336,6 +350,21 @@ export const api = {
   clients: () => request<{ data: Client[]; nextCursor: string | null }>('/clients'),
 
   client: (clientId: string) => request<Client>(`/clients/${clientId}`),
+
+  /**
+   * Whether this client is rescanned every month, and why the last try started nothing — F2.
+   *
+   * `available` is false (everything else empty) unless the API has automatic rescans on and the
+   * caller is an owner or admin: the screen draws nothing then.
+   */
+  autoRescan: (clientId: string) => request<AutoRescan>(`/clients/${clientId}/auto-rescan`),
+
+  /** Switch "Rescan every month" on or off for one client (owner or admin). A JSON boolean. */
+  setAutoRescan: (clientId: string, enabled: boolean) =>
+    request<AutoRescan>(`/clients/${clientId}/auto-rescan`, {
+      method: 'PUT',
+      body: JSON.stringify({ enabled }),
+    }),
 
   /**
    * A client's whole scan history, shaped for a trend — Epic 9.20.
@@ -558,6 +587,17 @@ export const api = {
   reportPdf: (scanId: string) => requestBlob(`/scans/${scanId}/report.pdf`),
 
   /**
+   * The report's figures as one CSV — F3, 2026-10-06. Signed in only, and off unless the API's
+   * `REPORT_CSV_ENABLED` is on: the report says so itself (`csvExportAvailable`), and the page
+   * draws the button from that and nothing else.
+   *
+   * There is no share-token form of this and there will not be one. It is a GET by scan id, so
+   * the same rule as the PDF applies to a refusal: it arrives as a problem and is thrown as one
+   * (a 409 `/problems/scan-not-exportable` carries one sentence for the person at the screen).
+   */
+  reportCsv: (scanId: string) => requestBlob(`/scans/${scanId}/report.csv`),
+
+  /**
    * The same PDF, by share token — Epic 9.14, unauthenticated.
    *
    * A stranger holding the link can download the file as well as read the
@@ -633,13 +673,30 @@ export const api = {
     }),
 
   /**
-   * Replace a client's competitor set by hand — Epic 3.
+   * The client's current competitor list: its next list (what a save or a detection run last
+   * wrote, and what the next scan will use), else the set of its most recent scan. It is what a
+   * save replaces, which on an older scan is not the list that scan shows. Null when the client
+   * has neither: the API answers 404 for that.
+   */
+  competitorSet: async (clientId: string): Promise<CompetitorSet | null> => {
+    try {
+      return await request<CompetitorSet>(`/clients/${clientId}/competitors`);
+    } catch (err) {
+      if (err instanceof ApiProblem && err.status === 404) return null;
+      throw err;
+    }
+  },
+
+  /**
+   * Replace a client's competitor list by hand — Epic 3. The list is saved for the client's LATER
+   * scans: the API writes its next list, and a scan that has started keeps the list it started
+   * with (launch checklist 3.78, 3.79).
    *
-   * A PUT, not a PATCH, because the endpoint replaces the set wholesale: an
+   * A PUT, not a PATCH, because the endpoint replaces the list wholesale: an
    * operator correcting a bad detection is asserting "these are the rivals",
    * and every competitor supplied is marked `isManualOverride` so a later
    * re-detection cannot silently undo the correction. Callers must send the
-   * full intended set, not a delta.
+   * full intended list, not a delta.
    */
   replaceCompetitors: (clientId: string, competitors: CompetitorInput[]) =>
     request<CompetitorSet>(`/clients/${clientId}/competitors`, {

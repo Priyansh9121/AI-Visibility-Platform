@@ -41,6 +41,15 @@ export interface paths {
          *     asks Stripe), so true means "nothing in our record says no": checkout can still refuse the
          *     trial to a customer Stripe remembers an ended subscription for.
          *
+         *     **Both trial fields are about the REQUESTING user** (2026-10-05, founder decision 3.72): a
+         *     trial needs a verified Google identity on the user who starts checkout, so two seats of
+         *     one agency can read them differently. `trialEligible` is true only when the agency's
+         *     record allows a trial (above) AND this user has a linked Google identity: it is what a
+         *     Subscribe from this sign-in would get. `trialRequiresGoogle` is true exactly when the
+         *     record allows a trial and the ONLY thing missing is that identity: checkout would give
+         *     this user no trial, and continuing with Google on the same address would. The two are
+         *     never both true.
+         *
          *     Every field comes off the `agencies` row the webhook maintains. A settings
          *     screen that called a payment processor on page load would be slower, would
          *     fail whenever Stripe was slow, and would put a third party in the render
@@ -90,7 +99,10 @@ export interface paths {
          *     asks Stripe for that many trial days and for the card at checkout, and Stripe
          *     charges when the trial ends unless the agency cancels. One trial per agency, ever:
          *     an agency that has had any subscription, or whose Stripe customer has, gets the
-         *     plain checkout. The response is the same either way, a URL.
+         *     plain checkout. **And only for a user with a linked Google identity** (2026-10-05):
+         *     the rule is on the user who starts the checkout, not the agency, so a password-only
+         *     user gets the plain checkout (no trial, the same session otherwise). The response is
+         *     the same either way, a URL.
          *
          *     **Errors:**
          *
@@ -119,6 +131,10 @@ export interface paths {
          *       still the `409`. Nothing is created in any of these.
          *     - `503 billing-not-configured` when `STRIPE_SECRET_KEY` or `STRIPE_PRICE_ID`
          *       is unset, carrying a detail that names the variable.
+         *     - `503 plan-price-mismatch` when the latest price check found the Price is not
+         *       the plan (amount, currency, interval or archived) and a fresh read made for
+         *       this request confirms it. Checked after the two `409` refusals and before
+         *       anything is created at Stripe. A price read that fails never refuses.
          */
         post: operations["start_checkout_api_v1_agencies__agencyId__billing_checkout_post"];
         delete?: never;
@@ -595,9 +611,43 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Me */
+        /**
+         * Me
+         * @description The signed-in context, in one call. **Auth required.**
+         *
+         *     `feedbackEmail` (2026-10-06) is `FEEDBACK_EMAIL`, null when it is unset: the address the
+         *     shell's "Send feedback" link writes to. It is on this response, and on the other responses
+         *     that return the same context to someone who has just signed in, and on no other.
+         */
         get: operations["me_api_v1_auth_me_get"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/me/scan-emails": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set Scan Emails
+         * @description Turn the emails sent when a scan you started finishes on or off. **Auth required.**
+         *
+         *     **Only your own choice.** There is no user id anywhere in the request: the row written is the
+         *     caller's, matched by user id AND agency id, and a body that names anything but `enabled` is a
+         *     `422`. Accepted whether or not the feature is on (`available` in the answer says), because it
+         *     writes one boolean nothing reads while the feature is off. Idempotent.
+         *
+         *     **Errors:** `401 authentication-required`, `422 validation-failed` (not a JSON true or false).
+         */
+        put: operations["set_scan_emails_api_v1_auth_me_scan_emails_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -988,6 +1038,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/clients/{clientId}/auto-rescan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Client Auto Rescan
+         * @description Whether this client is rescanned every month, and why the last try started nothing.
+         *
+         *     **Reads. Starts nothing.** `available` is false (and every other field empty) unless the API
+         *     has automatic rescans on (`AUTO_RESCAN_ENABLED`) and the caller is an owner or admin, so the
+         *     screen draws the switch only when it can be used. Scoped to the caller's agency by
+         *     `get_client`, which 404s on another agency's id.
+         *
+         *     **Errors:** `401`, `404`.
+         */
+        get: operations["get_client_auto_rescan_api_v1_clients__clientId__auto_rescan_get"];
+        /**
+         * Set Client Auto Rescan
+         * @description Switch "Rescan every month" on or off for this client (owner or admin).
+         *
+         *     On: from the next wake of the loop (every 10 minutes), the client is rescanned whenever its
+         *     latest scan started 30 or more days ago, as the person who switched it on, through the Run
+         *     button's own start path (the allowance applies). Off: nothing is started and the skip
+         *     notice is cleared. Switching it on again as a different user hands the rescans to that user;
+         *     pressing it on again as the same user changes nothing.
+         *
+         *     **Errors:** `401`; `403 permission-denied` for a member; `404` when the API has automatic
+         *     rescans off (the body an unknown path gets) or the client is not the caller's agency's.
+         */
+        put: operations["set_client_auto_rescan_api_v1_clients__clientId__auto_rescan_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/clients/{clientId}/competitors": {
         parameters: {
             query?: never;
@@ -997,12 +1087,28 @@ export interface paths {
         };
         /**
          * Get Competitors
-         * @description The client's most recent competitor set.
+         * @description The client's current competitor list: its next list, else its latest scan's set.
+         *
+         *     The next list is what a save or the button's detection last wrote and what the next scan
+         *     will use (launch checklist 3.78/3.79), so it is ahead of the latest scan's own set, which
+         *     never changes once the scan has started. It belongs to no scan: its `scanId` is null.
          */
         get: operations["get_competitors_api_v1_clients__clientId__competitors_get"];
         /**
          * Replace Competitors
-         * @description Replace the competitor set by hand.
+         * @description Replace the client's competitor list by hand: the list its later scans use.
+         *
+         *     Writes the client's NEXT LIST, never a scan's own set (launch checklist 3.78/3.79). The next
+         *     scan that starts adopts it, and a scan that has started keeps the list it started with, so
+         *     a save moves nothing a finished scan shows: not its score, its report, its client-history
+         *     figure, or an explicit re-score. With no next list yet, one is made as a copy of the
+         *     client's latest set and the replacement applied to the copy; for a client with no set on
+         *     any scan, a non-empty list makes one. An empty list for a client
+         *     with no set, or a client with no scan at all, is the `404`, and nothing is written.
+         *
+         *     While the client's most recent scan is RUNNING the answer is `409` and nothing is written,
+         *     on every path: a running scan may or may not have taken the client's list yet, and a save
+         *     cannot say which.
          *
          *     This matters more than a normal CRUD override. `Client.industry` confidence
          *     is uncalibrated (build-log Epic 2.6/2.8, Finding 2 — open), so a wrong
@@ -1065,6 +1171,15 @@ export interface paths {
          *     limit and does not use the day up; neither does replacing the set by hand with `PUT`.
          *
          *     Competitors an operator marked as overrides are preserved across runs.
+         *
+         *     **Where the result goes (launch checklist 3.78/3.79).** Into the client's NEXT LIST: the list
+         *     the next scan that starts will adopt, which is what this answers (`scanId` is null, because it
+         *     belongs to no scan yet). A scan's own set never changes once the scan has started, so a run
+         *     does not touch a finished scan's set and does not touch a running scan's either. With no next
+         *     list yet, one is made as a copy of the client's latest set and detection merges into the
+         *     copy, so rivals an operator named or struck stay named and struck; a client with no set at all
+         *     starts from an empty list. The open scan this route opens (or reuses, as before) carries no
+         *     set until it runs.
          *
          *     **Errors:** `401 authentication-required`; `402 subscription-required` ("Running
          *     competitor detection on its own needs an active subscription. A scan still finds a
@@ -1636,9 +1751,63 @@ export interface paths {
          *     the site was never audited — in each case the report says so rather than
          *     quietly omitting a beat.
          *
+         *     **`csvExportAvailable`** says whether this report may offer "Download figures (CSV)"
+         *     (`GET /scans/{scanId}/report.csv`): the `REPORT_CSV_ENABLED` setting is on and this scan's
+         *     status is one the file is made for. It is set here and nowhere else, so it is false on the
+         *     PDF and on every public route; the web draws the link from it alone.
+         *
          *     **Errors:** `401`, `404` (unknown scan, or another agency's).
          */
         get: operations["get_report_api_v1_scans__scanId__report_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/scans/{scanId}/report.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Report Csv
+         * @description The report's figures as one CSV — F3, off unless `REPORT_CSV_ENABLED` is on.
+         *
+         *     **A rendering target, not a second report.** It calls the same `build_report` the JSON route
+         *     calls and writes what comes back (`services/report_csv.py`): no second query, no second
+         *     aggregation, and nothing the signed-in report does not already show. One long table, one
+         *     header row (`Section, Engine, Prompt, Item, Measure, Value`) and plain labels with their
+         *     units; the module says what each of its six sections holds (the first says whose scan it is,
+         *     its date, whether it is complete and its overall score) and what it leaves out.
+         *
+         *     **There is no token route, and there will not be one here.** A share link opens the report and
+         *     its PDF; it does not open this. The route is the agency's, scoped to the agency as the report
+         *     is, and `csvExportAvailable` is false on every public response.
+         *
+         *     **Off, it is not there.** With the setting off a signed-in caller gets a `404` with the body
+         *     an unknown path gets, whatever the scan, so it says nothing about the scan either. A signed-out
+         *     caller gets the `401` every signed-in route here gives.
+         *
+         *     **A scan with no figures to give is `409`** `/problems/scan-not-exportable`, with one plain
+         *     sentence: a FAILED scan (its score is withheld, as for sharing), a QUEUED or RUNNING one (its
+         *     figures are not final). The agency check runs first, so another agency's scan is a `404`
+         *     in every status and never a `409` that says how it ended. SUCCEEDED and PARTIAL are exported.
+         *
+         *     **Excel-safe:** a UTF-8 byte-order mark, and a leading apostrophe on any cell that begins
+         *     with `=`, `+`, `-`, `@`, a tab, a carriage return or a full-width `＝＋－＠` (white space in
+         *     front does not hide it), and straight after a `;`, a tab or a line break inside a cell (each
+         *     starts a new cell or a new record in a spreadsheet), so a name somebody typed cannot become a
+         *     formula. The file is named `<client>-ai-visibility-<date>.csv`, the client reduced as the
+         *     PDF's name is.
+         *
+         *     **Errors:** `401`, `404` (off, or unknown scan, or another agency's), `409` (no figures yet).
+         */
+        get: operations["get_report_csv_api_v1_scans__scanId__report_csv_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2246,6 +2415,32 @@ export interface components {
          */
         AuditStatus: "ok" | "partial" | "failed";
         /**
+         * AutoRescanOut
+         * @description A client's monthly-rescan setting, as the caller may see it.
+         *
+         *     `available` is true only when the API has automatic rescans on (`AUTO_RESCAN_ENABLED`) AND the
+         *     caller is an owner or admin. When it is false everything else is its empty value, whatever
+         *     the client holds, and the web draws nothing. `skipReason` is one of our own codes
+         *     (`AGENCY_NOT_PAID`, `ALLOWANCE_USED`, `USER_NOT_ADMIN`, `COULD_NOT_START`) or null; with it,
+         *     `skippedAt` is when the last attempt started no scan and `retriesAt` is the first instant of
+         *     the next UTC calendar month, when it is tried again.
+         */
+        AutoRescanOut: {
+            /** Available */
+            available: boolean;
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /** Retriesat */
+            retriesAt?: string | null;
+            /** Skipreason */
+            skipReason?: string | null;
+            /** Skippedat */
+            skippedAt?: string | null;
+        };
+        /**
          * BillingPlanOut
          * @description What the plan offers the public — today, only the length of its free trial.
          *
@@ -2306,6 +2501,8 @@ export interface components {
             trialEligible: boolean;
             /** Trialendsat */
             trialEndsAt: string | null;
+            /** Trialrequiresgoogle */
+            trialRequiresGoogle: boolean;
         };
         /** BrandMentionOut */
         BrandMentionOut: {
@@ -2637,7 +2834,7 @@ export interface components {
             /** Id */
             id: string;
             /** Scanid */
-            scanId: string;
+            scanId?: string | null;
             /** Serpqueriesrun */
             serpQueriesRun: number;
             status: components["schemas"]["DetectionStatus"];
@@ -3116,6 +3313,9 @@ export interface components {
          */
         MeOut: {
             agency: components["schemas"]["AgencyOut"];
+            /** Feedbackemail */
+            feedbackEmail: string | null;
+            scanEmails: components["schemas"]["ScanEmailsOut"];
             seats: components["schemas"]["SeatUsageOut"];
             user: components["schemas"]["UserOut"];
         };
@@ -3600,6 +3800,11 @@ export interface components {
             agency: components["schemas"]["ReportAgencyOut"];
             audit: components["schemas"]["ReportAuditOut"] | null;
             competitorSet: components["schemas"]["ReportCompetitorSetOut"] | null;
+            /**
+             * Csvexportavailable
+             * @default false
+             */
+            csvExportAvailable: boolean;
             /** Dimensions */
             dimensions: components["schemas"]["ReportDimensionOut"][];
             /**
@@ -3786,6 +3991,27 @@ export interface components {
              * Format: date-time
              */
             updatedAt: string;
+        };
+        /**
+         * ScanEmailsOut
+         * @description The scan-finished email switch, for the signed-in caller only (F1, 2026-10-06).
+         *
+         *     `available` is a fact about the deployment: `EMAIL_SCAN_NOTIFICATIONS` is on AND email is
+         *     configured, the same for every user. `enabled` is this caller's own choice.
+         */
+        ScanEmailsOut: {
+            /** Available */
+            available: boolean;
+            /** Enabled */
+            enabled: boolean;
+        };
+        /**
+         * ScanEmailsRequest
+         * @description Set your own choice. Strict (a JSON true or false) and nothing else may be in the body.
+         */
+        ScanEmailsRequest: {
+            /** Enabled */
+            enabled: boolean;
         };
         /** ScanOut */
         ScanOut: {
@@ -4006,6 +4232,14 @@ export interface components {
          * @enum {string}
          */
         Sentiment: "positive" | "neutral" | "negative";
+        /**
+         * SetAutoRescanRequest
+         * @description Switch "Rescan every month" on or off for one client.
+         */
+        SetAutoRescanRequest: {
+            /** Enabled */
+            enabled: boolean;
+        };
         /**
          * ShareLinkOut
          * @description The public link for a report — Epic 9.8.
@@ -4757,6 +4991,39 @@ export interface operations {
             };
         };
     };
+    set_scan_emails_api_v1_auth_me_scan_emails_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScanEmailsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScanEmailsOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     confirm_password_reset_api_v1_auth_reset_password_confirm_post: {
         parameters: {
             query?: never;
@@ -5089,6 +5356,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AnswerGapsOut"] | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_client_auto_rescan_api_v1_clients__clientId__auto_rescan_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                clientId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRescanOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_client_auto_rescan_api_v1_clients__clientId__auto_rescan_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                clientId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetAutoRescanRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRescanOut"];
                 };
             };
             /** @description Validation Error */
@@ -5755,6 +6088,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReportOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_report_csv_api_v1_scans__scanId__report_csv_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scanId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": unknown;
                 };
             };
             /** @description Validation Error */

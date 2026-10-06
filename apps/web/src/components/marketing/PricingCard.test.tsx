@@ -150,7 +150,11 @@ describe('what the card is not allowed to say', () => {
     // The plan gates STARTING a scan: forty a month, one free for life. It
     // never gates reading. The card says both, and claims nothing unlimited.
     expect(out).toContain('40 scans a month');
-    expect(out).toContain('Viewing, sharing and exporting reports is never limited');
+    expect(out).toContain(
+      'Viewing a report or exporting it as a PDF does not use a scan. A shared link works for 30 days and can be withdrawn sooner.',
+    );
+    expect(out).not.toContain('never limited');
+    expect(out).not.toContain('Viewing, sharing and exporting');
     expect(out.toLowerCase()).not.toContain('unlimited');
     expect(out).not.toContain('not metered');
   });
@@ -189,6 +193,10 @@ describe('the free trial — 2026-10-04', () => {
   // `lib/billing/trial.test.tsx` mounts the card and drives the request itself.
   const SENTENCE =
     'The first 30 days after you subscribe are free. You enter your card at checkout, and it is charged on day\u00a031 unless you cancel first. One free trial per agency.';
+  // The signed-out card cannot know the visitor, and a trial needs a Google sign-in on the user
+  // who subscribes (2026-10-05): it says the condition.
+  const SENTENCE_SIGNED_OUT =
+    'The first 30 days after you subscribe are free, if you subscribe from an account signed in with Google. You enter your card at checkout, and it is charged on day\u00a031 unless you cancel first. One free trial per agency.';
 
   it('says nothing about a trial before the API has answered, signed in or out', () => {
     for (const out of [render(), render({ signedIn: false }), render({ signedIn: true })]) {
@@ -200,7 +208,7 @@ describe('the free trial — 2026-10-04', () => {
   });
 
   it('says it, word for word, once the API has said 30 days', () => {
-    expect(render({ initialTrialDays: 30 })).toContain(SENTENCE);
+    expect(render({ initialTrialDays: 30 })).toContain(SENTENCE_SIGNED_OUT);
   });
 
   it('says it on the signed-in card for an agency that can still have the trial', () => {
@@ -221,17 +229,24 @@ describe('the free trial — 2026-10-04', () => {
 
   it('takes every number in it from the days the API gave', () => {
     const out = render({ initialTrialDays: 14 });
-    expect(out).toContain('The first 14 days after you subscribe are free.');
+    expect(out).toContain(
+      'The first 14 days after you subscribe are free, if you subscribe from an account signed in with Google.',
+    );
     expect(out).toContain('charged on day\u00a015 unless you cancel first');
-    // No 30 left over from anywhere: the length is not typed on this card.
-    expect(out).not.toContain('30 days');
+    // No 30 left over from anywhere: the length is not typed on this card. The one
+    // 30 days it does carry is the share link's, a different number (3.86), so that
+    // sentence is taken out before the trial's is checked.
+    expect(out).toContain('A shared link works for 30 days');
+    expect(out.replace('A shared link works for 30 days', '')).not.toContain('30 days');
     expect(out).not.toContain('day\u00a031');
     expect(out).not.toContain('day 31');
   });
 
   it('a single day is a day, not "1 days"', () => {
     const out = render({ initialTrialDays: 1 });
-    expect(out).toContain('The first day after you subscribe is free.');
+    expect(out).toContain(
+      'The first day after you subscribe is free, if you subscribe from an account signed in with Google.',
+    );
     expect(out).toContain('charged on day\u00a02 unless you cancel first');
     expect(out).not.toContain('1 days');
   });
@@ -246,8 +261,18 @@ describe('the free trial — 2026-10-04', () => {
 
   it('puts the terms with the price, above the footnote and the button', () => {
     const out = render({ initialTrialDays: 30 });
-    expect(out.indexOf('per month')).toBeLessThan(out.indexOf(SENTENCE));
-    expect(out.indexOf(SENTENCE)).toBeLessThan(out.indexOf('Get started'));
+    expect(out.indexOf('per month')).toBeLessThan(out.indexOf(SENTENCE_SIGNED_OUT));
+    expect(out.indexOf(SENTENCE_SIGNED_OUT)).toBeLessThan(out.indexOf('Get started'));
+  });
+
+  it('tells a visitor the trial is for an account signed in with Google; the signed-in card does not', () => {
+    // The public card cannot know the visitor, so it says the condition. The signed-in card is
+    // shown the trial only where the API says THIS user would get it, so it has no condition.
+    expect(render({ initialTrialDays: 30 })).toContain('signed in with Google');
+    expect(render({ signedIn: false, initialTrialDays: 30 })).not.toContain(SENTENCE);
+    const signedIn = render({ signedIn: true, trialEligible: true, initialTrialDays: 30 });
+    expect(signedIn).toContain(SENTENCE);
+    expect(signedIn).not.toContain('Google');
   });
 
   it('is exactly as true as it sounds: nothing is charged at checkout, and no card number here', () => {

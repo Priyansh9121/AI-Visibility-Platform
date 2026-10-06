@@ -62,10 +62,11 @@ of them is still written. `ANTHROPIC_LOG` therefore changes nothing in this app.
 
 ONE THING THE PIN CANNOT REACH: `STRIPE_LOG`. With it set to `info` or `debug` the Stripe SDK
 does not only log those lines, it PRINTS them to stderr (`print(..., file=sys.stderr)`), past every
-logger level, and Render's log collects stderr as it does stdout. The SDK reads the variable once,
-as it is imported, so the protection cannot be Python code that runs later: `docker-entrypoint.sh`
-unsets it before it starts anything, and `tests/test_secrets_stay_out_of_logs.py` runs that
-script to prove it.
+logger level, and Render's log collects stderr as it does stdout. The SDK keeps the variable in a
+module global as it is imported and checks it, and `stripe.log`, at each call, so
+`services/billing.py` clears both as it is imported: that holds in every process that loads the
+app. `docker-entrypoint.sh` also unsets the variable before it starts anything (it covers Alembic,
+which never imports billing), and `tests/test_secrets_stay_out_of_logs.py` runs both.
 """
 
 from __future__ import annotations
@@ -84,7 +85,7 @@ ACCESS_LOGGER = "uvicorn.access"
 # options at DEBUG, the prompt text in them: client-site content and, for sentiment, the
 # engine's answer text, which the facts-only rule says not to keep; `stripe` writes each
 # request's URL and Stripe's error messages at INFO and the request and response bodies at
-# DEBUG (its stderr printing, `STRIPE_LOG`, is switched off in `docker-entrypoint.sh`).
+# DEBUG (its stderr printing, `STRIPE_LOG`, is switched off in `services/billing.py`).
 QUIET_LOGGERS = ("httpx", "httpcore", "anthropic", "stripe")
 REDACTED = "…"
 

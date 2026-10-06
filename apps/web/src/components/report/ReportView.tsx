@@ -50,6 +50,7 @@ import { scanOutcomeSentence } from '@/lib/scans/scanOutcome';
 import {
   DEGRADATION_FLAG,
   DETECTION_STATUS,
+  NO_COMPETITOR_LIST,
   DIMENSION_NOTE,
   EXCLUSION_REASON,
   PARTIAL_AUDIT_LABEL,
@@ -843,16 +844,20 @@ function ProofBeat({
             {competitorEditor}
           </div>
         ) : (
-          <Card elevation="flat">
-            <CardBody>
-              <p className="text-ui-base font-medium text-text-primary">
-                {DETECTION_STATUS.no_signal.label}
-              </p>
-              <p className="mt-2 text-ui-sm leading-prose text-text-secondary">
-                {DETECTION_STATUS.no_signal.detail}
-              </p>
-            </CardBody>
-          </Card>
+          <div>
+            <Card elevation="flat">
+              <CardBody>
+                {/* An h3, like the table's heading in the other branch, so the open editor's h4 follows an h3. */}
+                <h3 className="text-ui-base font-medium text-text-primary">
+                  {(report.competitorSet ? DETECTION_STATUS.no_signal : NO_COMPETITOR_LIST).label}
+                </h3>
+                <p className="mt-2 text-ui-sm leading-prose text-text-secondary">
+                  {(report.competitorSet ? DETECTION_STATUS.no_signal : NO_COMPETITOR_LIST).detail}
+                </p>
+              </CardBody>
+            </Card>
+            {competitorEditor}
+          </div>
         )}
 
         {/* --- where the engines disagree (Epic 9.23, Layer 3) -------------- */}
@@ -1139,19 +1144,28 @@ function AuditEvidence({ report }: { report: Report }) {
     );
   }
 
+  // Every failed audit but the three crawl reasons, which have words of their own (above,
+  // and `disallowed` below): a timeout, a crawler too busy to start the check, a browser
+  // that broke, a page that did not respond, an error status from a page that did answer,
+  // or no code (launch checklist 3.87, follow-up of 2026-10-05). The title is the label of
+  // `EXCLUSION_REASON.AUDIT_FAILED`, which the score beat shows for the same audit, and the
+  // sentence after the code's own claims only what all of them share, and blames no one:
+  // the check could not be completed for this scan (a report is of one scan, signed in or
+  // shared), nothing was measured from the page (a failed audit keeps one check,
+  // `site_reachable`, and no page reading), and Technical Foundation is left out of the
+  // score. It says nothing of a read: a busy crawler never began one, and an error status
+  // is the page's own answer.
   if (audit.status === 'failed' && !disallowed) {
     return (
       <Card elevation="flat">
         <CardBody>
-          <p className="flex items-center gap-3 text-ui-base font-medium text-text-primary">
-            The site could not be read
-            <Badge tone="warn">Audit failed</Badge>
+          <p className="text-ui-base font-medium text-text-primary">
+            {EXCLUSION_REASON.AUDIT_FAILED!.label}
           </p>
           <p className="mt-2 text-ui-sm leading-prose text-text-secondary">
-            {auditFailureSentence(audit.errorCode)} The crawl of{' '}
-            {audit.urlAudited ?? 'the site'} did not complete, so nothing was measured from the
-            page. A site the crawler could not read is not a site with a bad technical
-            foundation — the dimension is left unscored rather than scored zero.
+            {auditFailureSentence(audit.errorCode)} The technical check of{' '}
+            {audit.urlAudited ?? 'the site'} could not be completed for this scan, so nothing
+            was measured from the page and Technical Foundation is left out of the score.
           </p>
         </CardBody>
       </Card>

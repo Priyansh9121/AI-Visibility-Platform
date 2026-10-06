@@ -18,6 +18,14 @@ set -euo pipefail
 # own logger quiet.)
 unset STRIPE_LOG
 
+# `PYDANTIC_SETTINGS_DEBUG`, set to a true value, makes pydantic-settings write what each source
+# it reads supplied for a setting (the environment, a `.env` file), unmasked, to its own logger
+# at DEBUG: the provider keys, the Stripe key, the session secret, both URLs. Wherever that
+# logger reaches a handler, a stderr one included, it is printed, and the platform keeps stderr.
+# The API never needs it, so it is gone before anything starts, as STRIPE_LOG is.
+# (tests/test_secrets_stay_out_of_logs.py runs this script to prove it.)
+unset PYDANTIC_SETTINGS_DEBUG
+
 cd /app/infra/db
 echo "entrypoint: alembic upgrade head"
 alembic upgrade head
