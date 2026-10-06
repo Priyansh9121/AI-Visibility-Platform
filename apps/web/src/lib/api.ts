@@ -558,6 +558,17 @@ export const api = {
   reportPdf: (scanId: string) => requestBlob(`/scans/${scanId}/report.pdf`),
 
   /**
+   * The report's figures as one CSV — F3, 2026-10-06. Signed in only, and off unless the API's
+   * `REPORT_CSV_ENABLED` is on: the report says so itself (`csvExportAvailable`), and the page
+   * draws the button from that and nothing else.
+   *
+   * There is no share-token form of this and there will not be one. It is a GET by scan id, so
+   * the same rule as the PDF applies to a refusal: it arrives as a problem and is thrown as one
+   * (a 409 `/problems/scan-not-exportable` carries one sentence for the person at the screen).
+   */
+  reportCsv: (scanId: string) => requestBlob(`/scans/${scanId}/report.csv`),
+
+  /**
    * The same PDF, by share token — Epic 9.14, unauthenticated.
    *
    * A stranger holding the link can download the file as well as read the

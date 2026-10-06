@@ -3858,6 +3858,11 @@
               }
             ]
           },
+          "csvExportAvailable": {
+            "default": false,
+            "title": "Csvexportavailable",
+            "type": "boolean"
+          },
           "dimensions": {
             "items": {
               "$ref": "#/components/schemas/ReportDimensionOut"
@@ -7543,7 +7548,7 @@
     },
     "/api/v1/scans/{scanId}/report": {
       "get": {
-        "description": "Everything the narrative report needs, in one response.\n\n**Presents; does not compute.** Score, competitors and audit are read from\nthe rows Epics 3-6 wrote. The only new numbers are aggregates \u2014 citation\ncounts per domain, mention shares, per-engine coverage \u2014 and each is a\ncount over stored facts.\n\nDegraded data is reported, never smoothed over. `score` is null when the\nscan was never scored, and a score with `status: \"insufficient_data\"` is a\ndifferent thing again: an unrunnable scan is never rendered as a low score.\n`competitorSet` is null when detection never ran, and `audit` is null when\nthe site was never audited \u2014 in each case the report says so rather than\nquietly omitting a beat.\n\n**Errors:** `401`, `404` (unknown scan, or another agency's).",
+        "description": "Everything the narrative report needs, in one response.\n\n**Presents; does not compute.** Score, competitors and audit are read from\nthe rows Epics 3-6 wrote. The only new numbers are aggregates \u2014 citation\ncounts per domain, mention shares, per-engine coverage \u2014 and each is a\ncount over stored facts.\n\nDegraded data is reported, never smoothed over. `score` is null when the\nscan was never scored, and a score with `status: \"insufficient_data\"` is a\ndifferent thing again: an unrunnable scan is never rendered as a low score.\n`competitorSet` is null when detection never ran, and `audit` is null when\nthe site was never audited \u2014 in each case the report says so rather than\nquietly omitting a beat.\n\n**`csvExportAvailable`** says whether this report may offer \"Download figures (CSV)\"\n(`GET /scans/{scanId}/report.csv`): the `REPORT_CSV_ENABLED` setting is on and this scan's\nstatus is one the file is made for. It is set here and nowhere else, so it is false on the\nPDF and on every public route; the web draws the link from it alone.\n\n**Errors:** `401`, `404` (unknown scan, or another agency's).",
         "operationId": "get_report_api_v1_scans__scanId__report_get",
         "parameters": [
           {
@@ -7579,6 +7584,45 @@
           }
         },
         "summary": "Get Report",
+        "tags": [
+          "reports"
+        ]
+      }
+    },
+    "/api/v1/scans/{scanId}/report.csv": {
+      "get": {
+        "description": "The report's figures as one CSV \u2014 F3, off unless `REPORT_CSV_ENABLED` is on.\n\n**A rendering target, not a second report.** It calls the same `build_report` the JSON route\ncalls and writes what comes back (`services/report_csv.py`): no second query, no second\naggregation, and nothing the signed-in report does not already show. One long table, one\nheader row (`Section, Engine, Prompt, Item, Measure, Value`) and plain labels with their\nunits; the module says what each of its six sections holds (the first says whose scan it is,\nits date, whether it is complete and its overall score) and what it leaves out.\n\n**There is no token route, and there will not be one here.** A share link opens the report and\nits PDF; it does not open this. The route is the agency's, scoped to the agency as the report\nis, and `csvExportAvailable` is false on every public response.\n\n**Off, it is not there.** With the setting off a signed-in caller gets a `404` with the body\nan unknown path gets, whatever the scan, so it says nothing about the scan either. A signed-out\ncaller gets the `401` every signed-in route here gives.\n\n**A scan with no figures to give is `409`** `/problems/scan-not-exportable`, with one plain\nsentence: a FAILED scan (its score is withheld, as for sharing), a QUEUED or RUNNING one (its\nfigures are not final). The agency check runs first, so another agency's scan is a `404`\nin every status and never a `409` that says how it ended. SUCCEEDED and PARTIAL are exported.\n\n**Excel-safe:** a UTF-8 byte-order mark, and a leading apostrophe on any cell that begins\nwith `=`, `+`, `-`, `@`, a tab, a carriage return or a full-width `\uff1d\uff0b\uff0d\uff20` (white space in\nfront does not hide it), and straight after a `;`, a tab or a line break inside a cell (each\nstarts a new cell or a new record in a spreadsheet), so a name somebody typed cannot become a\nformula. The file is named `<client>-ai-visibility-<date>.csv`, the client reduced as the\nPDF's name is.\n\n**Errors:** `401`, `404` (off, or unknown scan, or another agency's), `409` (no figures yet).",
+        "operationId": "get_report_csv_api_v1_scans__scanId__report_csv_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scanId",
+            "required": true,
+            "schema": {
+              "title": "Scanid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/csv": {}
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Report Csv",
         "tags": [
           "reports"
         ]

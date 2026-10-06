@@ -1,0 +1,22 @@
+{
+  "a scored scan": {
+    "score": { "status": "scored", "composite": "58.24" },
+    "fileSaysNotScored": false
+  },
+  "a scan that was never scored": {
+    "score": null,
+    "fileSaysNotScored": true
+  },
+  "a scan with too little data to score": {
+    "score": { "status": "insufficient_data", "composite": null },
+    "fileSaysNotScored": true
+  },
+  "a scored status with no composite": {
+    "score": { "status": "scored", "composite": null },
+    "fileSaysNotScored": true
+  },
+  "too little data, whatever composite the row holds": {
+    "score": { "status": "insufficient_data", "composite": "40.00" },
+    "fileSaysNotScored": true
+  }
+}

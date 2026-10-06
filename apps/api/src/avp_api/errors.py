@@ -157,6 +157,19 @@ class FailedScanNotShareable(Conflict):
     title = "Failed scan cannot be shared"
 
 
+class ScanNotExportable(Conflict):
+    """The CSV of a report's figures was asked for a scan that has none to give (409).
+
+    A scan that FAILED (its score is withheld, as for sharing), one still QUEUED or RUNNING
+    (its figures are not final) or any other status that is not SUCCEEDED or PARTIAL. A type
+    of its own, so the web can show the `detail`, which is one plain sentence for the person
+    at the screen and names no code, no figure and nothing about the client.
+    """
+
+    problem_type = "scan-not-exportable"
+    title = "This scan's figures cannot be exported"
+
+
 class EmailAlreadyRegistered(Conflict):
     problem_type = "email-already-registered"
     title = "That email address is already registered"

@@ -223,11 +223,14 @@ async def build_public_report(session: AsyncSession, scan: Scan) -> ReportOut:
     `EXECUTOR_LOST`), which tells the agency whether the scan used up one of its
     scans and tells a stranger about how this platform runs, so it is null on
     every public route. `share_expires_at` (when the agency's link ends) is blanked
-    the same way. The status stays, as it always has been public.
+    the same way, and so is `csv_export_available`: it is false here, because no share
+    link has a CSV (`build_report` leaves it false and only the signed-in route sets it,
+    so this says it again). The status stays, as it always has been public.
     """
     report = await build_report(session, scan)
     report.scan_error_code = None
     report.share_expires_at = None
+    report.csv_export_available = False
     return report
 
 

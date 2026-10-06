@@ -18,10 +18,11 @@ from fastapi import APIRouter, Path, Response, status
 from sqlalchemy import select
 
 from ..deps import DbDep, PrincipalDep, SettingsDep
-from ..errors import FailedScanNotShareable, NotFound
+from ..errors import FailedScanNotShareable, NotFound, ScanNotExportable
 from ..models import Scan, ScanStatus
 from ..schemas.report import ReportOut, SharedReportRequest, ShareLinkOut
 from ..services import report as report_service
+from ..services import report_csv as csv_service
 from ..services import report_pdf as pdf_service
 from ..services import share as share_service
 from ..services.links import share_link
@@ -73,6 +74,7 @@ def _pdf_response(report: ReportOut) -> Response:
 async def get_report(
     principal: PrincipalDep,
     db: DbDep,
+    settings: SettingsDep,
     scan_id: str = Path(alias="scanId"),
 ) -> Any:
     """Everything the narrative report needs, in one response.
@@ -89,6 +91,11 @@ async def get_report(
     the site was never audited — in each case the report says so rather than
     quietly omitting a beat.
 
+    **`csvExportAvailable`** says whether this report may offer "Download figures (CSV)"
+    (`GET /scans/{scanId}/report.csv`): the `REPORT_CSV_ENABLED` setting is on and this scan's
+    status is one the file is made for. It is set here and nowhere else, so it is false on the
+    PDF and on every public route; the web draws the link from it alone.
+
     **Errors:** `401`, `404` (unknown scan, or another agency's).
     """
     scan = (
@@ -100,7 +107,9 @@ async def get_report(
         # 404, never 403 — confirming an id exists is a cross-tenant leak.
         raise NotFound(detail="No scan with that identifier.")
 
-    return await report_service.build_report(db, scan)
+    report = await report_service.build_report(db, scan)
+    report.csv_export_available = csv_service.is_available(settings.report_csv_enabled, scan.status)
+    return report
 
 
 @router.get(
@@ -144,6 +153,106 @@ async def get_report_pdf(
         raise NotFound(detail="No scan with that identifier.")
 
     return _pdf_response(await report_service.build_report(db, scan))
+
+
+def _csv_filename(report: ReportOut) -> str:
+    """`<client>-ai-visibility-<date>.csv`, with `ai-visibility-<date>.csv` when no client is left.
+
+    The client's name is reduced exactly as `_pdf_response` reduces it, by the same
+    `_UNSAFE_FILENAME`: a client's name is caller-supplied data and a `Content-Disposition` header
+    is a header, so a run of characters other than `A-Za-z0-9._-` (a quote, a semicolon, a line
+    break, a space) becomes a hyphen, a hyphen or a dot at either end is dropped, and the stem is at
+    most 60 characters. What follows it is the fixed words and the scan's date
+    (`report_csv.scan_date`, the one the file's own `Scan date` row gives): nothing else an
+    operator typed is in it. A name with nothing left after the reduction leaves no stem, and the
+    file is then named for the fixed words and the date alone: the date stays, so two scans of two
+    such clients are two names in a download list.
+    """
+    stem = _UNSAFE_FILENAME.sub(
+        "-", report.subject.brand_name or report.subject.name
+    ).strip("-.")[:60]
+    if not stem:
+        return f"ai-visibility-{csv_service.scan_date(report)}.csv"
+    return f"{stem}-ai-visibility-{csv_service.scan_date(report)}.csv"
+
+
+def _csv_response(report: ReportOut) -> Response:
+    """One place where a report's figures become a downloadable file.
+
+    The name is `_csv_filename`'s. `Cache-Control: private, no-store`, as the PDF and the public
+    report send: a signed-in response is for the person who asked, and the figures change when a
+    scan is re-scored.
+    """
+    return Response(
+        content=csv_service.render_report_csv(report),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{_csv_filename(report)}"',
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
+@router.get(
+    "/scans/{scanId}/report.csv",
+    response_class=Response,
+    responses={200: {"content": {"text/csv": {}}}},
+)
+async def get_report_csv(
+    principal: PrincipalDep,
+    db: DbDep,
+    settings: SettingsDep,
+    scan_id: str = Path(alias="scanId"),
+) -> Response:
+    """The report's figures as one CSV — F3, off unless `REPORT_CSV_ENABLED` is on.
+
+    **A rendering target, not a second report.** It calls the same `build_report` the JSON route
+    calls and writes what comes back (`services/report_csv.py`): no second query, no second
+    aggregation, and nothing the signed-in report does not already show. One long table, one
+    header row (`Section, Engine, Prompt, Item, Measure, Value`) and plain labels with their
+    units; the module says what each of its six sections holds (the first says whose scan it is,
+    its date, whether it is complete and its overall score) and what it leaves out.
+
+    **There is no token route, and there will not be one here.** A share link opens the report and
+    its PDF; it does not open this. The route is the agency's, scoped to the agency as the report
+    is, and `csvExportAvailable` is false on every public response.
+
+    **Off, it is not there.** With the setting off a signed-in caller gets a `404` with the body
+    an unknown path gets, whatever the scan, so it says nothing about the scan either. A signed-out
+    caller gets the `401` every signed-in route here gives.
+
+    **A scan with no figures to give is `409`** `/problems/scan-not-exportable`, with one plain
+    sentence: a FAILED scan (its score is withheld, as for sharing), a QUEUED or RUNNING one (its
+    figures are not final). The agency check runs first, so another agency's scan is a `404`
+    in every status and never a `409` that says how it ended. SUCCEEDED and PARTIAL are exported.
+
+    **Excel-safe:** a UTF-8 byte-order mark, and a leading apostrophe on any cell that begins
+    with `=`, `+`, `-`, `@`, a tab, a carriage return or a full-width `＝＋－＠` (white space in
+    front does not hide it), and straight after a `;`, a tab or a line break inside a cell (each
+    starts a new cell or a new record in a spreadsheet), so a name somebody typed cannot become a
+    formula. The file is named `<client>-ai-visibility-<date>.csv`, the client reduced as the
+    PDF's name is.
+
+    **Errors:** `401`, `404` (off, or unknown scan, or another agency's), `409` (no figures yet).
+    """
+    if not settings.report_csv_enabled:
+        # The body an unknown path gets (Starlette's own detail), so off is not a tell.
+        raise NotFound(detail="Not Found")
+
+    scan = (
+        await db.execute(
+            select(Scan).where(Scan.id == scan_id, Scan.agency_id == principal.agency_id)
+        )
+    ).scalar_one_or_none()
+    if scan is None:
+        # 404, never 403, and before any word about the scan's status.
+        raise NotFound(detail="No scan with that identifier.")
+
+    refusal = csv_service.refusal_detail(scan.status)
+    if refusal is not None:
+        raise ScanNotExportable(detail=refusal)
+
+    return _csv_response(await report_service.build_report(db, scan))
 
 
 @router.post(

@@ -443,6 +443,13 @@ class ReportOut(ApiModel):
     # when none is live. Never the token or the URL. For the AGENCY only: null on
     # the public routes (`build_public_report`), like `scan_error_code`.
     share_expires_at: datetime | None = None
+    # Whether the signed-in report may offer "Download figures (CSV)": the setting
+    # `REPORT_CSV_ENABLED` is on AND this scan's status is one the file can be made for
+    # (`services/report_csv.EXPORT_STATUSES`). The web draws the link from this and from nothing
+    # else, and the route answers 200 exactly when this is true. For the AGENCY only, and false
+    # unless `GET /scans/{id}/report` says otherwise: the PDF, `POST /reports/shared` and its
+    # PDF never carry it (`build_public_report` says so again), because no share link has a CSV.
+    csv_export_available: bool = False
     generated_at: datetime
     scanned_at: datetime | None = None
 
