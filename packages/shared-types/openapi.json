@@ -718,6 +718,60 @@
         "title": "AuditStatus",
         "type": "string"
       },
+      "AutoRescanOut": {
+        "description": "A client's monthly-rescan setting, as the caller may see it.\n\n`available` is true only when the API has automatic rescans on (`AUTO_RESCAN_ENABLED`) AND the\ncaller is an owner or admin. When it is false everything else is its empty value, whatever\nthe client holds, and the web draws nothing. `skipReason` is one of our own codes\n(`AGENCY_NOT_PAID`, `ALLOWANCE_USED`, `USER_NOT_ADMIN`, `COULD_NOT_START`) or null; with it,\n`skippedAt` is when the last attempt started no scan and `retriesAt` is the first instant of\nthe next UTC calendar month, when it is tried again.",
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "retriesAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retriesat"
+          },
+          "skipReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skipreason"
+          },
+          "skippedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skippedat"
+          }
+        },
+        "required": [
+          "available"
+        ],
+        "title": "AutoRescanOut",
+        "type": "object"
+      },
       "BillingPlanOut": {
         "description": "What the plan offers the public \u2014 today, only the length of its free trial.\n\n`GET /billing/plan`, with no session, no agency and nothing secret in it:\nit is read by the public pricing card and landing page, before anybody has\nsigned up. `trialDays` is `STRIPE_TRIAL_DAYS`, the one place the length of\nthe trial is stated, so what a page says and what checkout does cannot\ndisagree. **0 means there is no trial**, and is also the answer on a\ndeployment where checkout is not configured (a trial nobody can start is\nnot one to promise). A page says \"the first N days after you subscribe are\nfree\" only for an N above 0.\n\nIt describes the offer to a NEW agency. Whether a particular agency still\ngets the trial is not here: that is the agency's own history, and checkout\ndecides it (`services/billing.create_checkout_session`).",
         "properties": {
@@ -4974,6 +5028,21 @@
         "title": "Sentiment",
         "type": "string"
       },
+      "SetAutoRescanRequest": {
+        "additionalProperties": false,
+        "description": "Switch \"Rescan every month\" on or off for one client.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "SetAutoRescanRequest",
+        "type": "object"
+      },
       "ShareLinkOut": {
         "description": "The public link for a report \u2014 Epic 9.8.\n\nCarries the complete URL, not just the token, because the operator's next\naction is to paste it into an email. Returning a bare token would force\nevery caller to rebuild the same string, which is how a frontend and a\nbackend end up disagreeing about a path.\n\n`token` is exposed alongside it deliberately: it is the operator's OWN\ncapability for their OWN scan, already implied by the URL beside it, and\ntests assert on it without having to parse a URL apart.\n\n`expiresAt` is returned because the operator is about to paste this URL\ninto an email and the one thing they cannot see from the URL is when it\nstops working \u2014 Epic 9.21. It is the end the link was given when it was\nmade: a press on a live link returns the same value, and only a press when\nno link is live (never shared, withdrawn, or ended) makes a new link with a\nfresh 30 days (checklist 3.28).",
         "properties": {
@@ -6744,6 +6813,100 @@
           }
         },
         "summary": "Get Client Answer Gaps",
+        "tags": [
+          "clients"
+        ]
+      }
+    },
+    "/api/v1/clients/{clientId}/auto-rescan": {
+      "get": {
+        "description": "Whether this client is rescanned every month, and why the last try started nothing.\n\n**Reads. Starts nothing.** `available` is false (and every other field empty) unless the API\nhas automatic rescans on (`AUTO_RESCAN_ENABLED`) and the caller is an owner or admin, so the\nscreen draws the switch only when it can be used. Scoped to the caller's agency by\n`get_client`, which 404s on another agency's id.\n\n**Errors:** `401`, `404`.",
+        "operationId": "get_client_auto_rescan_api_v1_clients__clientId__auto_rescan_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clientId",
+            "required": true,
+            "schema": {
+              "title": "Clientid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutoRescanOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Client Auto Rescan",
+        "tags": [
+          "clients"
+        ]
+      },
+      "put": {
+        "description": "Switch \"Rescan every month\" on or off for this client (owner or admin).\n\nOn: from the next wake of the loop (every 10 minutes), the client is rescanned whenever its\nlatest scan started 30 or more days ago, as the person who switched it on, through the Run\nbutton's own start path (the allowance applies). Off: nothing is started and the skip\nnotice is cleared. Switching it on again as a different user hands the rescans to that user;\npressing it on again as the same user changes nothing.\n\n**Errors:** `401`; `403 permission-denied` for a member; `404` when the API has automatic\nrescans off (the body an unknown path gets) or the client is not the caller's agency's.",
+        "operationId": "set_client_auto_rescan_api_v1_clients__clientId__auto_rescan_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clientId",
+            "required": true,
+            "schema": {
+              "title": "Clientid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetAutoRescanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutoRescanOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Client Auto Rescan",
         "tags": [
           "clients"
         ]

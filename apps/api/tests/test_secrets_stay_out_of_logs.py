@@ -866,6 +866,7 @@ PASTED = "LEAK-pasted.qz7x"
 # (the cookie name).
 WRONG_PLACE = (
     "REPORT_CSV_ENABLED",
+    "AUTO_RESCAN_ENABLED",
     "STRIPE_TRIAL_DAYS",
     "LOG_LEVEL",
     "ENVIRONMENT",
