@@ -1684,9 +1684,63 @@ export interface paths {
          *     the site was never audited — in each case the report says so rather than
          *     quietly omitting a beat.
          *
+         *     **`csvExportAvailable`** says whether this report may offer "Download figures (CSV)"
+         *     (`GET /scans/{scanId}/report.csv`): the `REPORT_CSV_ENABLED` setting is on and this scan's
+         *     status is one the file is made for. It is set here and nowhere else, so it is false on the
+         *     PDF and on every public route; the web draws the link from it alone.
+         *
          *     **Errors:** `401`, `404` (unknown scan, or another agency's).
          */
         get: operations["get_report_api_v1_scans__scanId__report_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/scans/{scanId}/report.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Report Csv
+         * @description The report's figures as one CSV — F3, off unless `REPORT_CSV_ENABLED` is on.
+         *
+         *     **A rendering target, not a second report.** It calls the same `build_report` the JSON route
+         *     calls and writes what comes back (`services/report_csv.py`): no second query, no second
+         *     aggregation, and nothing the signed-in report does not already show. One long table, one
+         *     header row (`Section, Engine, Prompt, Item, Measure, Value`) and plain labels with their
+         *     units; the module says what each of its six sections holds (the first says whose scan it is,
+         *     its date, whether it is complete and its overall score) and what it leaves out.
+         *
+         *     **There is no token route, and there will not be one here.** A share link opens the report and
+         *     its PDF; it does not open this. The route is the agency's, scoped to the agency as the report
+         *     is, and `csvExportAvailable` is false on every public response.
+         *
+         *     **Off, it is not there.** With the setting off a signed-in caller gets a `404` with the body
+         *     an unknown path gets, whatever the scan, so it says nothing about the scan either. A signed-out
+         *     caller gets the `401` every signed-in route here gives.
+         *
+         *     **A scan with no figures to give is `409`** `/problems/scan-not-exportable`, with one plain
+         *     sentence: a FAILED scan (its score is withheld, as for sharing), a QUEUED or RUNNING one (its
+         *     figures are not final). The agency check runs first, so another agency's scan is a `404`
+         *     in every status and never a `409` that says how it ended. SUCCEEDED and PARTIAL are exported.
+         *
+         *     **Excel-safe:** a UTF-8 byte-order mark, and a leading apostrophe on any cell that begins
+         *     with `=`, `+`, `-`, `@`, a tab, a carriage return or a full-width `＝＋－＠` (white space in
+         *     front does not hide it), and straight after a `;`, a tab or a line break inside a cell (each
+         *     starts a new cell or a new record in a spreadsheet), so a name somebody typed cannot become a
+         *     formula. The file is named `<client>-ai-visibility-<date>.csv`, the client reduced as the
+         *     PDF's name is.
+         *
+         *     **Errors:** `401`, `404` (off, or unknown scan, or another agency's), `409` (no figures yet).
+         */
+        get: operations["get_report_csv_api_v1_scans__scanId__report_csv_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3652,6 +3706,11 @@ export interface components {
             agency: components["schemas"]["ReportAgencyOut"];
             audit: components["schemas"]["ReportAuditOut"] | null;
             competitorSet: components["schemas"]["ReportCompetitorSetOut"] | null;
+            /**
+             * Csvexportavailable
+             * @default false
+             */
+            csvExportAvailable: boolean;
             /** Dimensions */
             dimensions: components["schemas"]["ReportDimensionOut"][];
             /**
@@ -5807,6 +5866,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReportOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_report_csv_api_v1_scans__scanId__report_csv_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scanId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": unknown;
                 };
             };
             /** @description Validation Error */

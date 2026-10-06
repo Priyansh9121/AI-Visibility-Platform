@@ -862,8 +862,10 @@ SENSITIVE_SETTINGS = (*SECRET_SETTINGS, *URL_SETTINGS, *ADDRESS_SETTINGS)
 # field's error used to print back, whole.
 PASTED = "LEAK-pasted.qz7x"
 # Settings whose own validation can fail on a pasted value: an int, a Literal, a float, a
-# `PositiveInt`, and the one with a validator of ours (the cookie name).
+# `PositiveInt`, a bool (`REPORT_CSV_ENABLED`, 2026-10-06), and the one with a validator of ours
+# (the cookie name).
 WRONG_PLACE = (
+    "REPORT_CSV_ENABLED",
     "STRIPE_TRIAL_DAYS",
     "LOG_LEVEL",
     "ENVIRONMENT",

@@ -26491,3 +26491,63 @@ Since 3.81, `PUT /clients/{clientId}/competitors` accepts a rival's domain only 
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# A report's figures as a CSV for agencies: off until `REPORT_CSV_ENABLED` is set, then a download beside the PDF on the signed-in report, guarded against spreadsheet formulas
+
+**2026-10-06, the thirteenth entry of the day; branch `pilot-fixes-6`, pilot feature F3 (the founder's brief of 2026-10-05; design note in this log, "Design notes for the four pilot features").** API and web, built over five rounds, with a security review, a UI review, their re-checks and its own bar.
+
+**Render: nothing to set for the code to be safe; the feature is off until `REPORT_CSV_ENABLED=true` is set on the API service** (launch checklist 1.1h).
+
+Drift check (north-star §8): Layer 5, Distribution; lifecycle phase: Sales Enablement (the figures an agency takes into its own deck).
+
+## 1. What changed
+
+- **The route:** `GET /api/v1/scans/{scanId}/report.csv`, signed in. In order: the session (401), the setting (off: a 404 with the body an unknown path gets, whatever the scan), the scan looked up within the caller's agency (another agency's scan is a 404 in every status, never a 409), then the status: a succeeded or partial scan gets the file; failed, queued and running get a 409 (`/problems/scan-not-exportable`) with one fixed sentence each, the failed one "This scan failed, so its figures cannot be exported." No share or token route reaches it. `private, no-store`, as the PDF.
+- **The file** (`services/report_csv.py`), built from the same projection the signed-in report serves, so it cannot carry anything the report does not: one table, `Section,Engine,Prompt,Item,Measure,Value`, in six sections:
+  - **Scan:** the client's name, the scan date (ISO, UTC), its status (`Complete`, or the PDF cover's own sentence for a partial scan), and the overall score out of 100 or `Not scored`;
+  - **Dimension scores**, each out of 100 or with the reason it was left out; **Share of voice**; **Answers** (per engine: prompts asked, prompts listed, answers received, answers naming the client, sentiment out of 100; per prompt: answered, named the client, position when named); **Cited domains** (citations, attributed to the client or a third party); **Fixes** (priority, effort S/M/L, points the score gains).
+  - Plain labels with units; the client's name, never an internal word for it. Scores, shares and sentiment keep two decimal places, as stored; the page rounds some of them, and the button says so.
+  - It follows the report's own caps (20 prompts on the Answer Shelf, 12 domains a table) and says so.
+- **Spreadsheet safety:** a UTF-8 byte-order mark; Python's `csv` quoting; and an apostrophe before any formula start (`=`, `+`, `-`, `@`, their full-width forms, a tab or a carriage return) at a cell's start, after leading whitespace, and straight after a `;`, a tab or a line break inside a cell, since each starts a new cell or record in a spreadsheet whose list separator is `;` (most of continental Europe). Run over the 135 strings in the shared report fixtures, it changes none.
+- **The file name:** `<client>-ai-visibility-<date>.csv`, the client's name reduced exactly as the PDF route reduces it (ASCII letters, digits, `.`, `_`, `-`; at most 60 characters), so no header can be split; with nothing left after the reduction, `ai-visibility-<date>.csv`.
+- **The setting:** `REPORT_CSV_ENABLED`, a boolean, default off; a value that is not one stops the start, naming the variable and not the value.
+- **The web** (`DownloadCsvButton.tsx`): "Download figures (CSV)" sits with "Download PDF" on the signed-in report, only when the report says the export is available (`ReportOut.csvExportAvailable`, true only from the signed-in route and only for a scan the route would serve; false on the share response and the PDF). It fetches the file as the PDF button does, so a refusal shows a sentence, and a 404 says "The figures file is not available for this report." Beside it: "Some of this report’s figures, one fact to a row, to open in a spreadsheet: the scan’s date and whether it was complete or partial, the overall score, each dimension’s score (or why it was left out), share of voice, whether each engine named the client and where, the domains cited (up to 12 in each of the report’s two tables) and the fix list." Below it: "The file does not have the weights, who else the answers named, the rivals’ mention rate, citation strength or average position, or the audit’s checks. Scores, shares and sentiment keep two decimal places; the page rounds some of them." For a scan the file calls "Not scored" (never scored, too little data, or no composite: one rule, held to one shared fixture by an API test and a web test), the score clause goes and "This scan has no score, so the file says “Not scored” and has no dimension scores." follows the list. Nothing on the share page or the PDF.
+- **`docs/api-contracts.md`:** the route, its refusals and the guard. OpenAPI and the generated types are regenerated.
+
+## 2. The reviews
+
+**Security review: no Blocker or High; one Medium and two Lows, all fixed; its re-check found the Medium half closed, fixed in round 4.**
+- **Medium:** the guard looked only at a cell's first character, and `csv` does not quote a cell for `;` or a tab, so a competitor named `Acme;=1+1` (any 1 to 200 characters through the API, or a model's name from co-citation) reached a `;`-locale Excel as a formula in its own cell. Round 2 guarded after `;` and a tab; the re-check showed a line break inside a quoted cell does the same in such a reader (`Acme\n=1+1;`), and round 4 guarded after it too. A test now reads every output as a `;`-locale reader would, splitting on `;`, tabs and line breaks, and finds no piece that starts a formula; it runs over every hostile case and the six shared reports.
+- **Lows:** the full-width formula characters; and a check that does not rely on the projection having stripped leading whitespace.
+- **The re-check of the file name** (new in round 2): clean; the client's name is the caller's own, as in the PDF's name since 9.14.
+- **Checked clean:** the access order and the agency scope; no token route; the availability flag; headers; the BOM and quoting; facts only (the builder reads only our prompt text and fix titles, pinned by a syntax-tree test); the setting; no log line; read-only; size bounded by the report's caps; no new rate limit needed, as the JSON report has none.
+- Round 4 and round 5 were not sent back for a security review: round 4's whole-file test and its negative control stand in.
+
+**UI review: one Blocker and eight Should-fix, all taken; its re-check: the Blocker closed, one Should-fix and nits taken in round 5.**
+- **Blocker:** a partial scan's file never said so and had no date or client name, so it read as complete. The Scan section above fixes it, with the PDF cover's own sentence.
+- **Should-fix, taken:** the silent caps; code-identifier labels with no units; the button promising every figure; two decimals against the page's one; the bare "Not Found"; a failed-scan sentence that was not true of every failed scan; a file name that named no client and carried our code name. And, from the re-check: the button still promised "the figures this report shows".
+- **Nits, taken:** the two downloads grouped; the section order; effort's legend; the paragraph split in two; "complete or partial"; the fallback name dated.
+
+## Found, not fixed
+
+- **Not in the file:** the dimension weights; rivals' mention rate, citation strength and average position; who else each answer named; the engines' agreement figure; citation totals; a fix's explanation; the audit's checks. Per-prompt sentiment is not in the report, so not in the file.
+- **`Prompts asked (count)`** counts the prompts with a result; after a scan that ran out of time it is the prompts that finished. The Scan status row says the scan was partial.
+- **`/privacy` and `/terms`:** nothing becomes untrue; the terms' "exporting reports is never limited" stays true of this route, which is neither limited nor counted.
+- **`docs/api-contracts.md`'s header** still gives an older count of paths and operations.
+
+## Verified
+
+**API pytest 4990 → 5332 (+342); web vitest 2491 → 2547 (+56); floors raised to match.**
+- **API, 342 new tests:** `test_report_csv.py` (new, 274: the builder, each section and label, the guard over every hostile and tricky input and every separator, the whole-file `;`-reader property over the six shared reports, the decimals, the shared "Not scored" cases, no negative number), `test_report_csv_endpoint.py` (new, 53: off, signed out, another agency's scan in every status, each refusal, the file for a seeded scan end to end with hostile names, partial, never scored and too little data, the file name and its fallback, the headers), `test_facts_only.py` 88 → 101 (the CSV through the facts-only harness), and one case each in the logging and secrets tests for the new setting.
+- **Web, 56 new tests:** the button (both sentences, the two paragraphs, busy, refusal, 404 and failure states), the report page drawing it only when available, `csvScore.ts`'s rule, the client call, and the share page never drawing it.
+- **Before each round's code,** its new tests failed: round 1, the two new API files could not load (127 tests) and 21 web tests failed or could not load; round 2, 168 of 354 API and 14 web; round 3, 1 API and 7 web; round 4, 44 of 427; round 5, 5 API and 7 web.
+- **The implementer's negative controls** (each restored): the guard removed, 20 fail; the status check removed, 6; the agency scope removed, 2; the setting check removed, 2; the BOM dropped, 63; round 2: the separator rule, 36; the full-width forms, 27; the `lstrip` check, 32; the Scan section removed, 40; a partial called complete, 2; "Not scored" written as 0.00, 4; "Subject" back, 27; the old file name, 19; round 3: a score at one place, 12; the button's rule back to the PDF's, 6; round 4: the lookbehind back to `;` and tab only, 42 of 427; round 5: the old lead, 5; "who else the answers named" removed, 5; the fallback name undated, 4.
+- **On this tree:** in `test_report_csv.py` and `test_report_csv_endpoint.py` (327 tests): the guard removed, 150 fail; the status check removed, 6; the setting check removed, 2. Each file was restored and the tree's checksums matched.
+- **The rest of the bar** (this tree, one run, 15:24 to 15:30):
+  - Counts: API 5332, workers 27, shared-types 53 (0 fail), design-system 967, web 2547, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7945e69b06e5`) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

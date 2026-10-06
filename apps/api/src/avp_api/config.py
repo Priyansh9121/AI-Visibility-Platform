@@ -342,6 +342,21 @@ class Settings(BaseSettings):
     # has no variable for it.
     feedback_email: str | None = None
 
+    # --- the report's CSV (2026-10-06) ---------------------------------------------------------
+    # Whether the signed-in report offers "Download figures (CSV)", and the route
+    # `GET /scans/{scanId}/report.csv` answers. Off, the DEFAULT, the route is a 404 that says
+    # what an unknown path says, the report says the export is not available
+    # (`csvExportAvailable: false`), the web draws no link, and nothing a user sees changes.
+    # On, the file carries the figures the signed-in report already shows, built from the same
+    # projection, for a finished scan only. A share link never has it, whatever this says. NOT a
+    # secret, and read by no log line. Set it on the API service only; the web has no variable
+    # for it.
+    #
+    # A blank is off, like every other blank setting. A value that is not a boolean stops the API
+    # from starting, naming this setting (the validator below): a typo that quietly left it off
+    # would be a switch somebody believes they set.
+    report_csv_enabled: bool = False
+
     @field_validator(*PROVIDER_SETTINGS, mode="before")
     @classmethod
     def _blank_provider_setting_is_unset(cls, value: object) -> object:
@@ -363,6 +378,16 @@ class Settings(BaseSettings):
         # claim one. Whitespace around a number is not part of it.
         if isinstance(value, str):
             return value.strip() or 0
+        return value
+
+    @field_validator("report_csv_enabled", mode="before")
+    @classmethod
+    def _a_blank_csv_switch_is_off(cls, value: object) -> object:
+        # `REPORT_CSV_ENABLED=` is what `cp .env.example .env` and a cleared Render variable leave
+        # behind. It is off, the safe direction, and never a refusal to start. Anything else is
+        # read as a boolean by pydantic (`true`, `1`, `no`, `off`...), whitespace around it aside.
+        if isinstance(value, str):
+            return value.strip() or False
         return value
 
     @field_validator("feedback_email", mode="before")

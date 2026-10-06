@@ -30,6 +30,7 @@ from avp_api.models import (
     TechnicalAudit,
     TechnicalAuditCheck,
 )
+from avp_api.schemas.report import ReportOut
 
 # Tables holding data derived from third-party sources (AI engine answers,
 # competitor pages). These may hold facts only.
@@ -1321,3 +1322,252 @@ def test_a_scans_outcome_reaches_the_screens_as_our_own_code_and_never_its_detai
     column = Scan.__table__.c.error_code
     assert isinstance(column.type, String)
     assert column.type.length is not None and column.type.length <= 64
+
+
+# ---------------------------------------------------------------------------
+# F3 — the CSV of a report's figures (2026-10-06).
+#
+# A file is the one place collected facts leave the product to be kept: an agency opens it in a
+# spreadsheet and takes it into its own deck, where nothing can withdraw it. So the rule is held
+# on the file, not only on the projection it is built from: what the builder is allowed to read,
+# what it is allowed to import, and, over the six real and degraded reports the product's own
+# tests share, that every cell it writes is a name, a domain, a count, a number, a date, one of
+# our own words, our own generated prompt or the title of one of our own fixes, and nothing else.
+# ---------------------------------------------------------------------------
+
+
+# The attribute names a report projection's prose-bearing fields go by, as the sweep over
+# `schemas/report.py` has them, and two more the CSV has its own reasons to keep out: a fix's
+# paragraph (`detail`, which the brief leaves out) and the machine code beside an audit finding.
+_CSV_FORBIDDEN_ATTRIBUTES = {
+    "text", "answer", "answer_text", "response", "response_text", "snippet", "excerpt", "quote",
+    "body", "content", "html", "raw", "description", "tagline", "summary", "positioning", "about",
+    "title", "headline", "context", "sentence", "commentary", "narrative", "rationale",
+    "meta_description", "copy", "prompt_text", "detail", "detail_code",
+}
+# The two the builder reads, by name, and why they are not third-party prose: the prompt is OUR
+# generated question (`PromptShelfOut.prompt_text`, the exception the report sweep registers),
+# and a fix's title is OUR wording, from our own tables or our own generator (`ActionItem`).
+_CSV_SANCTIONED_ATTRIBUTES = {"prompt_text", "title"}
+
+
+def _csv_module_source() -> str:
+    import inspect
+
+    from avp_api.services import report_csv
+
+    return inspect.getsource(report_csv)
+
+
+def test_the_report_csv_builder_never_reaches_for_answer_text() -> None:
+    """The report service's own guard, applied to the builder that reads its output."""
+    import re
+
+    source = _csv_module_source()
+    for forbidden in (".answer", ".snippet", ".excerpt"):
+        assert not re.search(re.escape(forbidden) + r"\b", source), f"the CSV touches {forbidden}"
+    for forbidden in ("response_text", "answer_text", "raw_response", "text_extract"):
+        assert forbidden not in source, f"the CSV touches {forbidden}"
+
+
+def test_the_report_csv_builder_reads_two_prose_bearing_fields_and_both_are_ours() -> None:
+    """Every attribute the module reads, held against the names a prose field goes by.
+
+    Read from the module's syntax tree, so a field added to the file later is caught by what it
+    is called, not by anybody remembering to extend a list. The sanctioned two are asserted to
+    be read, so the exception cannot outlive the reading it was written for.
+    """
+    import ast
+
+    tree = ast.parse(_csv_module_source())
+    read = {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+    leaks = (read & _CSV_FORBIDDEN_ATTRIBUTES) - _CSV_SANCTIONED_ATTRIBUTES
+    assert not leaks, f"the CSV builder reads {sorted(leaks)}, which could carry third-party prose"
+    assert read >= _CSV_SANCTIONED_ATTRIBUTES, "a sanctioned field is no longer read: drop it"
+
+
+def test_the_report_csv_builder_takes_the_projection_and_nothing_else() -> None:
+    """No session, no model, no query: it cannot reach a table the report does not read.
+
+    A builder that could read a row could read one the facts-only schema tests do not sweep. Its
+    inputs are the `ReportOut` the report endpoint serves, and the only things imported from the
+    models are three enums.
+    """
+    import ast
+    import inspect
+
+    from avp_api.services import report_csv
+
+    for fn in (report_csv.render_report_csv, report_csv.report_rows, report_csv.scan_date):
+        params = inspect.signature(fn).parameters
+        assert list(params) == ["report"], fn.__name__
+        assert params["report"].annotation in (ReportOut, "ReportOut"), fn.__name__
+
+    tree = ast.parse(_csv_module_source())
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            imported.add("." * node.level + (node.module or ""))
+            imported.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+    assert not {name for name in imported if name.split(".")[0] in {"sqlalchemy", "httpx", "redis"}}
+    enums = {"..models.engine_result", "..models.scan", "..models.score"}
+    assert enums <= imported
+    assert not {n for n in imported if n.startswith("..models") and n not in enums}
+    assert "AsyncSession" not in imported and "Session" not in imported
+
+
+# The words the file says that are ours, written out here and not read from the module: the
+# header, the sections, every measure (a figure carries its unit), and the few values that are
+# words. A label the builder grows later is a cell that is none of these, and fails.
+_CSV_COLUMNS = {"Section", "Engine", "Prompt", "Item", "Measure", "Value"}
+_CSV_SECTIONS = {
+    "Scan", "Dimension scores", "Share of voice", "Answers", "Cited domains", "Fixes",
+}
+_CSV_MEASURES = {
+    "Scan date", "Scan status", "Overall score (out of 100)",
+    "Score (out of 100)", "Left out of the score because",
+    "Share of voice (out of 100)",
+    "Prompts asked (count)", "Prompts listed below (count)", "Answers received (count)",
+    "Answers naming the client (count)", "Sentiment (out of 100)",
+    "Answered (yes/no)", "Named the client (yes/no)", "Position when named (1 = first)",
+    "Citations (count)", "Attributed to",
+    "Priority", "Effort (S, M or L)", "Points the score gains",
+}
+_CSV_OUR_VALUES = {
+    "yes", "no", "Third party", "Complete", "Not scored", "high", "medium", "low", "S", "M", "L",
+    # The PDF cover's sentence for a partial scan.
+    "This scan is partial: not every planned question was answered, so these results rest on "
+    "fewer answers than planned.",
+}
+
+
+def _csv_cells_outside_the_vocabulary(report: ReportOut, rows: list[list[str]]) -> list[str]:
+    """The cells of a CSV that are not a fact the report holds or a word of ours."""
+    import re
+
+    from avp_api.services import report_narrative as narrative
+
+    cited_domains = (*report.proof.subject_cited_domains, *report.proof.competitor_cited_domains)
+    domains = {cited.domain for cited in cited_domains}
+    allowed: set[str] = {
+        "",
+        *_CSV_COLUMNS,
+        *_CSV_SECTIONS,
+        *_CSV_MEASURES,
+        *_CSV_OUR_VALUES,
+        *narrative.ENGINE_LABEL.values(),
+        *narrative.DIMENSION_LABEL.values(),
+        *narrative.EXCLUSION_REASON.values(),
+        # Names: the client's (also where the file used to say "Subject"), each competitor's, and
+        # whoever a citation was credited to.
+        report.subject.name,
+        report.subject.brand_name or "",
+        *(c.name for c in (report.competitor_set.competitors if report.competitor_set else [])),
+        *(cited.competitor_name or "" for cited in cited_domains),
+        # Domains a citation names.
+        *domains,
+        # Our own generated questions.
+        *(row.prompt_text for row in report.proof.prompt_shelf),
+        # The titles of our own fixes: from our tables, from our generator, or our one template
+        # that names a domain.
+        *(title for title, _detail, _effort in narrative.FIX_FOR_DIMENSION.values()),
+        *(title for title, _detail, _effort in narrative.FIX_FOR_DETAIL_CODE.values()),
+        *(item.title for item in report.action_items),
+        *(f"Get onto {domain} — the source these answers keep citing" for domain in domains),
+    }
+    number = re.compile(r"\d+(\.\d+)?")
+    day = re.compile(r"\d{4}-\d{2}-\d{2}")
+    return [
+        cell
+        for row in rows
+        for cell in row
+        if cell not in allowed and not number.fullmatch(cell) and not day.fullmatch(cell)
+    ]
+
+
+def _csv_rows_of(report: ReportOut) -> list[list[str]]:
+    import csv
+    import io
+
+    from avp_api.services import report_csv
+
+    text = report_csv.render_report_csv(report).decode("utf-8")
+    assert text.startswith("\N{ZERO WIDTH NO-BREAK SPACE}")
+    return list(csv.reader(io.StringIO(text[1:], newline="")))
+
+
+def _csv_shared_reports() -> dict[str, ReportOut]:
+    import json
+    from pathlib import Path
+
+    fixtures = Path(__file__).resolve().parents[3] / "packages" / "shared-types" / "fixtures"
+    cases = json.loads((fixtures / "report-cases.json").read_text())
+    return {name: ReportOut.model_validate(case) for name, case in cases.items()}
+
+
+@pytest.mark.parametrize("name", sorted(_csv_shared_reports()))
+def test_every_cell_of_a_report_csv_is_a_fact_or_our_own_words(name: str) -> None:
+    """The harness, run over the file: no cell is anything but what the report holds.
+
+    A name, a domain, a count, a number, a date, a yes or a no, one of our labels, a generated
+    prompt or the title of one of our fixes. An answer's text, a page's text or a competitor's
+    copy has no cell to be in, and a column added later that carried one would put a cell here
+    that is none of those, and fail.
+    """
+    report = _csv_shared_reports()[name]
+    rows = _csv_rows_of(report)
+    assert len(rows) > 1
+    stray = _csv_cells_outside_the_vocabulary(report, rows)
+    assert not stray, f"{name}: cells that are neither a fact the report holds nor ours: {stray}"
+
+
+@pytest.mark.parametrize("status", ["succeeded", "partial"])
+def test_the_scan_section_adds_no_prose_for_either_status_a_file_is_made_for(status: str) -> None:
+    """The new first section: the client's name, a date, a status word or our one sentence, and
+    a score. Nothing about the scan but those, for a finished scan and a partial one."""
+    report = _csv_shared_reports()["scored-with-generated-fixes"].model_copy(deep=True)
+    report.scan_status = status
+    rows = _csv_rows_of(report)
+    scan = [row for row in rows if row[0] == "Scan"]
+    assert len(scan) == 3
+    assert not _csv_cells_outside_the_vocabulary(report, rows)
+    assert {row[4] for row in scan} == {"Scan date", "Scan status", "Overall score (out of 100)"}
+
+
+def test_the_csv_vocabulary_check_still_catches_what_it_is_for() -> None:
+    """The check above passing tells you nothing unless it fails on prose; this makes it.
+
+    Planted in a row: an engine's answer, a competitor's copy and a page's text. Each is a cell
+    the report holds no field for, and each must be found. So is a label of ours that is not on
+    the list, and the word the file no longer uses for the client.
+    """
+    report = _csv_shared_reports()["scored-with-generated-fixes"]
+    rows = _csv_rows_of(report)
+    assert not _csv_cells_outside_the_vocabulary(report, rows)
+
+    planted = [
+        "Zendesk is popular. Help Scout is simpler and well liked.",  # an engine's answer
+        "The all-in-one platform trusted by 100,000 teams",  # a competitor's marketing copy
+        "Welcome to our help centre. Browse articles below.",  # a page's text
+    ]
+    poisoned = [
+        *rows,
+        *[["Answers", "Claude", "", "Help Scout", "answer_text", text] for text in planted],
+        ["Cited domains", "", "", "g2.com", "Attributed to", "Subject"],
+    ]
+    found = _csv_cells_outside_the_vocabulary(report, poisoned)
+    assert set(planted) <= set(found)
+    assert "answer_text" in found, "a column of ours that is not one of ours is found too"
+    assert "Subject" in found, "the client is named, never called the subject"
+
+
+def test_a_report_csv_has_no_cell_for_a_fixs_paragraph_or_a_pages_address() -> None:
+    """Left out on purpose, so asserted: the detail beside a title, and any address at all."""
+    for name, report in _csv_shared_reports().items():
+        text = "\n".join(",".join(row) for row in _csv_rows_of(report))
+        assert "http://" not in text and "https://" not in text, name
+        details = [item.detail for item in report.action_items if item.detail]
+        for detail in details:
+            assert detail[:40] not in text, name

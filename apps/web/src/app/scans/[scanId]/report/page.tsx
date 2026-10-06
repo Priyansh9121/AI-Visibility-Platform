@@ -17,6 +17,8 @@ import { ReportView } from '@/components/report/ReportView';
 import { CompetitorEditor } from '@/components/report/CompetitorEditor';
 import { ShareLinkBar } from '@/components/report/ShareLinkBar';
 import { DownloadPdfButton } from '@/components/report/DownloadPdfButton';
+import { DownloadCsvButton } from '@/components/report/DownloadCsvButton';
+import { fileSaysNotScored } from '@/lib/report/csvScore';
 import { WorkspaceShell } from '@/components/shell/WorkspaceShell';
 
 type View =
@@ -134,12 +136,25 @@ export default function ReportPageRoute({
           scanStatus={view.report.scanStatus}
           shareExpiresAt={view.report.shareExpiresAt}
         />
-        <div className="mt-4 mb-6">
+        <div className="mt-4 mb-6 flex flex-col gap-3">
           <DownloadPdfButton
             scanId={scanId}
             subjectName={view.report.subject.brandName || view.report.subject.name}
             unscored={view.report.score === null}
           />
+          {/*
+            The figures as a spreadsheet (F3), only when the report says it is available: the
+            API's switch is on and the scan is finished. `=== true`, so a report from an API that
+            has no such field yet draws nothing. One wrapper for both downloads, so they sit one
+            above the other with the same gap. The control is told whether the scan is unscored by
+            the rule the file uses for "Not scored" (never scored, too little data, or no
+            composite), which is wider than the PDF control's `score === null`; the PDF control is
+            told what it always was. Operator chrome like the PDF, above the document and not in
+            it, and on this screen only: `/share` does not import the control.
+          */}
+          {view.report.csvExportAvailable === true && (
+            <DownloadCsvButton scanId={scanId} unscored={fileSaysNotScored(view.report.score)} />
+          )}
         </div>
       </div>
       <div className="avp-report-frame">

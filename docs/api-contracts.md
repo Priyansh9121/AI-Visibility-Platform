@@ -114,6 +114,7 @@ make it `unparsed`.
 | `/problems/not-found` | 404 | No such resource in the caller's agency |
 | `/problems/conflict` | 409 | Generic conflict |
 | `/problems/failed-scan-not-shareable` | 409 | `POST /scans/{scanId}/share` for a scan whose status is `failed`. `detail` is "This scan failed, so its report cannot be shared." (2026-10-02, checklist 3.24) |
+| `/problems/scan-not-exportable` | 409 | `GET /scans/{scanId}/report.csv` (when `REPORT_CSV_ENABLED` is on) for a scan whose status is not `succeeded` or `partial`. `detail` is one plain sentence per status (failed, queued, running, any other), naming no code and no figure (2026-10-06, F3) |
 | `/problems/email-already-registered` | 409 | Signup email in use |
 | `/problems/seat-limit-reached` | 409 | Carries `seatsUsed`, `seatLimit` |
 | `/problems/subscription-already-active` | 409 | Checkout refused: the agency's subscription is `active` or `trialing`. `detail` points at the billing portal |
@@ -2644,6 +2645,7 @@ place that `tests/test_facts_only.py` can assert over.
 ```json
 {
   "scanId": "scan_01J...", "scanStatus": "succeeded", "scanErrorCode": null,
+  "csvExportAvailable": false,
   "generatedAt": "2026-08-22T00:18:31Z", "scannedAt": "2026-08-21T05:49:24Z",
   "agency": { "id": "agcy_01J...", "name": "Acme SEO", "slug": "acme-seo" },
   "subject": { "clientId": "clnt_01J...", "name": "Help Scout",
@@ -2714,6 +2716,17 @@ and always `null` on the shared report and its PDF, like `scanErrorCode`. A
 `failed` scan's token still counts (checklist 3.29): that link no longer opens
 the report, but the token stays so the agency can withdraw it, and this field is
 how the page knows to offer that.
+
+**`csvExportAvailable` (2026-10-06, F3)** says whether this report may offer
+"Download figures (CSV)": `true` only when the API's `REPORT_CSV_ENABLED` is on
+**and** the scan's status is `succeeded` or `partial`. It is a required boolean
+(the key is always there) and `false` by default, so with the setting unset
+nothing about the report moves but this one key. It is set by this route alone:
+the PDF, `POST /reports/shared` and its PDF carry `false` whatever the setting
+says, because no share link has a CSV. The report and
+`GET /scans/{scanId}/report.csv` use one rule, so the report never offers a file
+the route would refuse. The web draws the control from this field and from nothing
+else.
 
 **`dimensions` is ordered heaviest-weight first.** The Luminance Ledger stacks
 the heaviest segment at the bottom and consumes this list directly, so the order
@@ -2885,6 +2898,87 @@ read the same checked-in fixtures and assert the same checked-in expected
 output, so changing either derivation reddens one of them.
 
 **Errors:** `401`, `404` (unknown scan, or another agency's).
+
+#### `GET /api/v1/scans/{scanId}/report.csv`
+**Auth required. Off unless `REPORT_CSV_ENABLED` is on** (2026-10-06, F3; labels and sections as
+revised after review the same day). The report's figures as one CSV file: the facts the
+signed-in report already shows, for an agency to take into its own spreadsheet or deck.
+
+**A rendering target, not a second report.** It calls the same `build_report` the JSON
+route calls and writes what comes back (`services/report_csv.py`): no second query, no
+second aggregation, and nothing the report does not already hold. Makes no provider call
+and costs nothing; built in memory per request.
+
+**One long table, one header row, six columns:** `Section,Engine,Prompt,Item,Measure,Value`.
+Every row is one fact, every label is plain words, and a figure carries its unit in its
+`Measure`. Six sections, in this order:
+
+| `Section` | One row per | `Measure` and `Value` |
+|---|---|---|
+| `Scan` | fact about the scan (three rows) | `Item` is the client's name. `Scan date` (an ISO date, UTC); `Scan status` (`Complete`, or for a `partial` scan the PDF cover's own sentence, "This scan is partial: not every planned question was answered, so these results rest on fewer answers than planned."); `Overall score (out of 100)` (the stored composite, or `Not scored` for a scan never scored or with too little data, never a zero) |
+| `Dimension scores` | dimension, heaviest first | `Score (out of 100)`, or `Left out of the score because` with the reason as the report words it (`Not yet checked`). Never a zero for a dimension left out; no rows for a scan never scored |
+| `Share of voice` | the client and each competitor, as the report's "Rivals in the same answers" table lists them | `Share of voice (out of 100)` (a blank when the scan made no comparison, never `0`). No rows when the scan has no competitors |
+| `Answers` | engine (`Prompt` blank), and engine and prompt | per engine, for the whole scan: `Prompts asked (count)`, `Prompts listed below (count)` (the report lists the first 20 prompts of a scan, so this says how many of the asked ones are below), `Answers received (count)`, `Answers naming the client (count)` and `Sentiment (out of 100)` (when the engine named the client at all); per prompt: `Answered (yes/no)` and, if it answered, `Named the client (yes/no)` and `Position when named (1 = first)` (when it was named and the position was stored). `Item` is the client's name. The prompt text is ours, generated |
+| `Cited domains` | domain cited | `Citations (count)` and `Attributed to` (the client's name for its own pages, a competitor's name, or `Third party`). Both of the report's citation tables, each as capped by the report (12 domains) |
+| `Fixes` | fix on the report's list | `Priority`, `Effort (S, M or L)` and `Points the score gains` (none for an audit fix, which has no measurable value). The title is `Item` |
+
+**The fix list is the report's, not the projection's `actionItems`.** The report derives
+which fixes exist, their order and their points itself, and generated wording is laid on
+by key; the CSV takes that derivation (`report_narrative.derive_narrative`, the one the PDF
+runs), so a scan whose fixes were never generated has the list its page shows. A fix's
+`detail` is not in the file.
+
+**Numbers are written as the report serves them**: a decimal as stored (two places, never
+an exponent), counts as integers, a fix's points to one place as the page shows them. The
+web page rounds its tables to one place; the file keeps the stored figure, as the PDF does,
+and the button says so. A figure that does not exist is not a row; one the report shows as a
+dash is a blank cell. Left out because the brief did not name them: the weights, a rival's
+mention rate, citation strength and average position, a citation's page address, the audit's
+checks and a fix's detail.
+
+**Response `200`** — `text/csv; charset=utf-8`, with
+`Content-Disposition: attachment; filename="<client>-ai-visibility-<date>.csv"` and
+`Cache-Control: private, no-store`. The client's name is reduced to `[A-Za-z0-9._-]` exactly as
+the PDF's name is (a run of any other characters becomes `-`, a leading or trailing `-` or `.` is
+dropped, 60 characters at most), because a client's name is caller-supplied data and a header is
+a header; `<date>` is the scan's date in UTC, or the day the report was made when the scan has
+none; a name with nothing left after the reduction gives `ai-visibility-<date>.csv`, which
+keeps the date. Nothing else an operator typed is in it. The body starts with a UTF-8
+byte-order mark and rows end `\r\n`.
+**Excel-safe:** every cell that begins with `=`, `+`, `-`, `@`, a tab, a carriage return or a
+full-width `＝`, `＋`, `－`, `＠` (OWASP's list, and the full-width forms), with white space in
+front of it or not, gets a leading apostrophe; and an apostrophe goes straight after a `;`, a
+tab, a carriage return or a line feed inside a cell when a formula character follows it (white
+space between or not), because a spreadsheet that splits on `;` or a tab starts a new cell there,
+and one in a `;` locale ends the record at a line break even inside the quotes `csv` writes, so
+what follows starts a record of its own. `csv` quotes a cell for a comma, a quote or a line break
+and for neither a `;` nor a tab. Where a `;` and a line break both come before a formula, the
+apostrophe goes after both, so the new line begins with `'`. The header and our own words are
+guarded the same, so a client name, a competitor name, a prompt or a fix title is text and
+never a formula. Quoting is Python's `csv` module.
+
+**Facts only.** Every cell is a name, a domain, a count, an ordinal, a yes or a no, a number, a
+date, one of our own words, our own generated prompt, or the title of one of our fixes.
+`tests/test_facts_only.py` holds the builder to that.
+
+**No token route.** A share link opens the report and its PDF and never this file; there is
+no `POST /reports/shared/csv`, and `csvExportAvailable` is `false` on every public response.
+
+**Errors:** `401` (signed out, whatever the setting); `404` (unknown scan, another agency's, **or
+the setting is off**, with the body an unknown path gets: type `/problems/not-found`, detail
+`Not Found`); `409` `/problems/scan-not-exportable` for a scan with no figures to give. The
+agency check runs first, so another agency's scan is a `404` in every status and never a
+`409`. The `detail` is one plain sentence, and names no code and no figure:
+
+| Scan status | `detail` |
+|---|---|
+| `failed` (its score is withheld, as for sharing) | "This scan failed, so its figures cannot be exported." |
+| `queued` | "This scan has not started yet, so there are no figures to export. Try again when it has finished." |
+| `running` | "This scan is still running, so its figures are not final. Try again when it has finished." |
+| any other status except `succeeded` and `partial` (`cancelled`, which nothing writes today) | "This scan did not finish, so its figures cannot be exported." |
+
+`succeeded` and `partial` are exported: the list is an allow-list, so a status added later is
+refused until somebody says it should be exported.
 
 #### `POST /api/v1/reports/shared/pdf`
 **No auth.** The signed report as a PDF, by share token.
