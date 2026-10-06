@@ -318,7 +318,7 @@ export const api = {
    * the endpoint asynchronous; it previously blocked for the whole ~303s run.
    *
    * Completion is observed with `GET /scans/{scanId}`, or by re-reading the
-   * dashboard. This client does not poll — building the poller is a follow-up.
+   * dashboard, which polls it (`lib/dashboard/polling.ts`).
    */
   runScan: (clientId: string) =>
     request<Scan>(`/clients/${clientId}/scans`, {

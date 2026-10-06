@@ -26359,3 +26359,45 @@ When the API's settings failed validation at start, pydantic's error printed `in
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# While a scan runs, the dashboard asks every 5 seconds at first, backs off to 15 as the scan ages, and stops asking while its tab is hidden
+
+**2026-10-06, the tenth entry of the day; branch `pilot-fixes-6`, the founder's brief item U7.** Web only, with its own bar.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 1, Delivery (the self-updating dashboard); lifecycle phase: Activation (watching the first scan finish).
+
+## 1. What changed
+
+The dashboard is the only screen that polls a running scan (`GET /dashboard`, through `createPoller` in `lib/dashboard/polling.ts`, wired by `app/dashboard/page.tsx`); the report page, the competitors page, the intake result and the sidebar's client list each read once. It asked every 5 seconds for as long as a scan ran, and a hidden tab kept its timer and skipped the work.
+
+- **The schedule:** every 5 s for a scan's first 2 minutes, 10 s from 2 to 4 minutes, then 15 s. The first poll is still 5 s after polling begins. Finished scans measured on 2026-10-03 took about 4 to 6 minutes; a 6.5-minute scan now costs 46 polls instead of 78, and a 15-minute one 80 instead of 180.
+- **The ceiling is 15 s,** the low end of the brief's 15 to 30: Epic 9.7 rejected 30 s as reading as broken.
+- **A scan's age is counted from when polling began,** because the dashboard gives no start time (`createdAt` can be days old for a scan that took over a detection's queued row). A scan that joins the polled set starts the clock again, so a Re-run beside an old scan polls at 5 s.
+- **A hidden tab has no timer.** When it is shown again it polls at once, then at the pace the age sets; time spent hidden counts toward the age.
+- **A failed poll is retried at 5 s,** so "Live updates have stopped" still shows after three failures, about 15 s in. The next poll is set one delay after the previous answer, so a slow answer never has another stacked behind it.
+- **No visible change:** the same states and sentences; the user-visible text never named an interval. Comments that said "every 5s" are corrected, and so is `api.ts`'s "This client does not poll", stale since Epic 9.7.
+
+## Found, not fixed
+
+- **`request()` in `api.ts` has no timeout,** so a GET that never answers leaves a poll in flight and the poller waits. As before this change.
+- **`docs/north-star.md`'s row for Epic 9.7** says "5s interval, costed": true of what that epic shipped.
+- **A scan's real start time** (`startedAt` on the dashboard's scan summary) would let the age be the scan's own. API change, not made.
+
+## Verified
+
+**Web vitest 2452 → 2490 (+38); floor raised to match.** API is unchanged at 4961.
+- **`polling.test.ts` 22 → 49:** the schedule at each step and the ceiling; the clock restarting when a scan joins; hidden clears the timer, shown polls at once then keeps the pace; failures retried at 5 s and the notice after three; stop clears everything; no second timer; no poll stacked behind a slow answer; an answer that lands after stop reaches nothing; an injected clock. Two tests whose premise the brief removed (the timer kept while hidden; `pokeNow`) are gone.
+- **`app/dashboard/page.test.tsx` (new, 11),** the real route with the API mocked at its edge: the first poll at 5 s; it stops when the scan lands; the visibility listener added, told to the poller and removed; the timer cleared on unmount; a late answer logs nothing.
+- **Before the change,** 30 of the 59 failed; the 5 page tests that passed are the guards that nothing visible changes.
+- **The implementer's negative controls** (of 59, each restored): a flat 5 s poller, 10 fail; the schedule itself flat, 13; no visibility pause, 6; hiding keeps the timer, 2; showing does not poll at once, 7; stop leaves the timer, 2; a second timer, 1; no in-flight guard, 2; a joining scan does not restart the clock, 2; a failed poll retried at the age's pace, 1; an answer after stop reaching the page, 1; the page's listener not removed, 2, or not telling the poller, 3; the injected clock ignored, 1.
+- **On this tree:** in `src/lib/dashboard`, `src/app/dashboard` and `src/components/dashboard`: the schedule flattened to 5 s, see the result above (`nc-iU7`). The file was restored and the tree's checksums matched.
+- **The rest of the bar** (this tree, one run, 12:42 to 12:50):
+  - Counts: API 4961, workers 27, shared-types 53 (0 fail), design-system 935, web 2490, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7945e69b06e5`) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
