@@ -2747,6 +2747,9 @@
             ],
             "title": "Feedbackemail"
           },
+          "scanEmails": {
+            "$ref": "#/components/schemas/ScanEmailsOut"
+          },
           "seats": {
             "$ref": "#/components/schemas/SeatUsageOut"
           },
@@ -2758,7 +2761,8 @@
           "user",
           "agency",
           "seats",
-          "feedbackEmail"
+          "feedbackEmail",
+          "scanEmails"
         ],
         "title": "MeOut",
         "type": "object"
@@ -4314,6 +4318,40 @@
           "updatedAt"
         ],
         "title": "ScanDetailOut",
+        "type": "object"
+      },
+      "ScanEmailsOut": {
+        "description": "The scan-finished email switch, for the signed-in caller only (F1, 2026-10-06).\n\n`available` is a fact about the deployment: `EMAIL_SCAN_NOTIFICATIONS` is on AND email is\nconfigured, the same for every user. `enabled` is this caller's own choice.",
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "available",
+          "enabled"
+        ],
+        "title": "ScanEmailsOut",
+        "type": "object"
+      },
+      "ScanEmailsRequest": {
+        "additionalProperties": false,
+        "description": "Set your own choice. Strict (a JSON true or false) and nothing else may be in the body.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "ScanEmailsRequest",
         "type": "object"
       },
       "ScanOut": {
@@ -6141,6 +6179,48 @@
           }
         },
         "summary": "Me",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/me/scan-emails": {
+      "put": {
+        "description": "Turn the emails sent when a scan you started finishes on or off. **Auth required.**\n\n**Only your own choice.** There is no user id anywhere in the request: the row written is the\ncaller's, matched by user id AND agency id, and a body that names anything but `enabled` is a\n`422`. Accepted whether or not the feature is on (`available` in the answer says), because it\nwrites one boolean nothing reads while the feature is off. Idempotent.\n\n**Errors:** `401 authentication-required`, `422 validation-failed` (not a JSON true or false).",
+        "operationId": "set_scan_emails_api_v1_auth_me_scan_emails_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScanEmailsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanEmailsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Scan Emails",
         "tags": [
           "auth"
         ]

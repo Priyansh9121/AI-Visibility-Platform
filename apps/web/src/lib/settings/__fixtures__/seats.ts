@@ -83,6 +83,8 @@ export const ownerMe: Me = {
   seats: { used: 3, limit: 3 },
   // `FEEDBACK_EMAIL` unset, which is every deployment's default: no "Send feedback" link.
   feedbackEmail: null,
+  // The scan-finished email switch, unavailable: every deployment's default.
+  scanEmails: { available: false, enabled: true },
 };
 
 export const memberMe: Me = {

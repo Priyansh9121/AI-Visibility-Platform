@@ -30,6 +30,7 @@ import type {
   PromptRunHistory,
   Report,
   Scan,
+  ScanEmails,
   SeatList,
   ShareLink,
   SignUpRequest,
@@ -232,6 +233,18 @@ export const api = {
     request<Me>('/auth/change-password', {
       method: 'POST',
       body: JSON.stringify({ currentPassword, newPassword }),
+    }),
+
+  /**
+   * Turn the emails sent when a scan you started finishes on or off — F1.
+   *
+   * Your own choice only: the request names no user. A JSON boolean, answered with the same
+   * `{available, enabled}` that `me()` carries as `scanEmails`.
+   */
+  setScanEmails: (enabled: boolean) =>
+    request<ScanEmails>('/auth/me/scan-emails', {
+      method: 'PUT',
+      body: JSON.stringify({ enabled }),
     }),
 
   /**

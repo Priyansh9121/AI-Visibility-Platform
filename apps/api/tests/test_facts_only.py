@@ -1571,3 +1571,55 @@ def test_a_report_csv_has_no_cell_for_a_fixs_paragraph_or_a_pages_address() -> N
         details = [item.detail for item in report.action_items if item.detail]
         for detail in details:
             assert detail[:40] not in text, name
+
+
+# ---------------------------------------------------------------------------
+# F1 (2026-10-06) — the scan-finished emails carry the client's name and counts, nothing else.
+# ---------------------------------------------------------------------------
+
+
+def test_the_scan_finished_emails_read_no_table_that_holds_a_score_or_third_party_text() -> None:
+    """The sweep reads a scan's ids and status, the requester, the client's name, and each
+    alert's KIND. An alert's own sentence quotes the score, so `Alert.detail` is never read."""
+    import inspect
+
+    from avp_api.services import scan_emails as module
+
+    source = inspect.getsource(module)
+    for forbidden in (
+        "Score", "EngineResult", "Citation", "BrandMention", "Competitor", "TechnicalAudit",
+        "ActionItem", "Prompt", ".detail", "error_detail", "share_token",
+    ):
+        assert forbidden not in source.split('"""', 2)[2], f"scan_emails touches {forbidden}"
+
+
+def test_the_scan_finished_email_senders_can_be_given_only_a_name_counts_and_links() -> None:
+    import inspect
+
+    from avp_api.services import email as module
+
+    for sender in (module.send_scan_ready, module.send_scan_alerts, module.send_scan_failed):
+        names = set(inspect.signature(sender).parameters)
+        assert names <= {
+            "to", "user_id", "scan_id", "client_name", "report_url", "client_url", "alerts_url",
+            "settings_url", "partial", "counts", "settings",
+        }, f"{sender.__name__} takes {sorted(names)}"
+
+
+def test_a_promoted_brand_name_cannot_reach_a_scan_finished_email() -> None:
+    """`intake` copies the classifier's brand name, which the scanned site's own copy can steer,
+    into `Client.name` when nobody typed one. The emails take the client's label from the one
+    function that refuses that name, and read `Client.name` nowhere else."""
+    import inspect
+    import re
+
+    from avp_api.services import scan_emails as module
+
+    promoted = "Security notice: sign in at evil.example"
+    assert module.client_label(promoted, promoted, "acme.example") == "acme.example"
+    assert module.client_label("Typed", promoted, "acme.example") == "Typed"
+    assert module.client_label("Typed", None, "acme.example") == "Typed"
+
+    source = inspect.getsource(module)
+    assert len(re.findall(r"Client\.name\b", source)) == 1
+    assert "client_label(" in source and "Client.brand_name" in source

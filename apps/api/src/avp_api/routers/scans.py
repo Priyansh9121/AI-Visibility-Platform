@@ -218,6 +218,9 @@ async def run_scan(
     # never sets this. Skipped for RUNNING: nothing is handed off.
     if scan.status is ScanStatus.QUEUED:
         scan.submitted_at = datetime.now(UTC)
+        # Whoever presses Run starts the scan, even on a row a colleague's detection opened:
+        # the scan-finished email goes to its requester, and their opt-out is the one that applies.
+        scan.requested_by_user_id = principal.user_id
 
     # Commit BEFORE handing off. The executor loads the scan on its own session
     # and would not find it otherwise. This commit also releases the lock.

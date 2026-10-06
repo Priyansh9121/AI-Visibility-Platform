@@ -9,7 +9,7 @@ from typing import Any
 import structlog
 from fastapi import APIRouter, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from ..config import Settings
 from ..deps import (
@@ -22,6 +22,7 @@ from ..deps import (
     SettingsDep,
 )
 from ..errors import (
+    AuthenticationRequired,
     GoogleSignInNotConfigured,
     InvalidCredentials,
     InvalidGoogleTicket,
@@ -43,6 +44,8 @@ from ..schemas.auth import (
     ResetPasswordConfirm,
     ResetPasswordRequest,
     ResetRequestOut,
+    ScanEmailsOut,
+    ScanEmailsRequest,
     SeatUsageOut,
     SignUpRequest,
     UserOut,
@@ -58,6 +61,11 @@ from ..services import seats as seat_service
 logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _scan_emails_for(user: User, settings: Settings) -> ScanEmailsOut:
+    """The scan-finished email switch as this user sees it (F1)."""
+    return ScanEmailsOut(available=settings.scan_emails_available, enabled=user.scan_emails)
 
 
 def _set_session_cookie(response: Response, token: str, settings: Settings) -> None:
@@ -127,6 +135,7 @@ async def sign_up(
         agency=AgencyOut.model_validate(agency),
         seats=SeatUsageOut(used=used, limit=limit),
         feedback_email=settings.feedback_email,
+        scan_emails=_scan_emails_for(user, settings),
     )
 
 
@@ -173,6 +182,7 @@ async def login(
         agency=AgencyOut.model_validate(agency),
         seats=SeatUsageOut(used=used, limit=limit),
         feedback_email=settings.feedback_email,
+        scan_emails=_scan_emails_for(user, settings),
     )
 
 
@@ -305,6 +315,7 @@ async def change_password(
         agency=AgencyOut.model_validate(agency),
         seats=SeatUsageOut(used=used, limit=limit),
         feedback_email=settings.feedback_email,
+        scan_emails=_scan_emails_for(user, settings),
     )
 
 
@@ -492,6 +503,7 @@ async def accept_invitation(
         agency=AgencyOut.model_validate(agency),
         seats=SeatUsageOut(used=used, limit=limit),
         feedback_email=settings.feedback_email,
+        scan_emails=_scan_emails_for(user, settings),
     )
 
 
@@ -822,6 +834,7 @@ async def google_complete(
         agency=AgencyOut.model_validate(agency),
         seats=SeatUsageOut(used=used, limit=limit),
         feedback_email=settings.feedback_email,
+        scan_emails=_scan_emails_for(user, settings),
     )
 
 
@@ -839,4 +852,35 @@ async def me(principal: PrincipalDep, db: DbDep, settings: SettingsDep) -> Any:
         agency=AgencyOut.model_validate(principal.agency),
         seats=SeatUsageOut(used=used, limit=limit),
         feedback_email=settings.feedback_email,
+        scan_emails=_scan_emails_for(principal.user, settings),
     )
+
+
+@router.put("/me/scan-emails", response_model=ScanEmailsOut)
+async def set_scan_emails(
+    payload: ScanEmailsRequest,
+    principal: PrincipalDep,
+    db: DbDep,
+    settings: SettingsDep,
+) -> Any:
+    """Turn the emails sent when a scan you started finishes on or off. **Auth required.**
+
+    **Only your own choice.** There is no user id anywhere in the request: the row written is the
+    caller's, matched by user id AND agency id, and a body that names anything but `enabled` is a
+    `422`. Accepted whether or not the feature is on (`available` in the answer says), because it
+    writes one boolean nothing reads while the feature is off. Idempotent.
+
+    **Errors:** `401 authentication-required`, `422 validation-failed` (not a JSON true or false).
+    """
+    row = (
+        await db.execute(
+            update(User)
+            .where(User.id == principal.user_id, User.agency_id == principal.agency_id)
+            .values(scan_emails=payload.enabled)
+            .returning(User.scan_emails)
+        )
+    ).scalar_one_or_none()
+    await db.commit()
+    if row is None:
+        raise AuthenticationRequired(detail="This account is no longer active.")
+    return ScanEmailsOut(available=settings.scan_emails_available, enabled=row)

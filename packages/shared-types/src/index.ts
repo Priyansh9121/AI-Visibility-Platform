@@ -29,6 +29,7 @@ export type User = Schemas['UserOut'];
 export type Agency = Schemas['AgencyOut'];
 export type SeatUsage = Schemas['SeatUsageOut'];
 export type Me = Schemas['MeOut'];
+export type ScanEmails = Schemas['ScanEmailsOut'];
 export type Dashboard = Schemas['DashboardOut'];
 export type Client = Schemas['ClientOut'];
 export type ClientDetail = Schemas['ClientDetailOut'];

@@ -92,4 +92,6 @@ export const clientsMe: Me = {
   seats: { used: 2, limit: 3 },
   // `FEEDBACK_EMAIL` unset, which is every deployment's default: no "Send feedback" link.
   feedbackEmail: null,
+  // The scan-finished email switch, unavailable: every deployment's default.
+  scanEmails: { available: false, enabled: true },
 };

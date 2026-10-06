@@ -628,6 +628,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/me/scan-emails": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set Scan Emails
+         * @description Turn the emails sent when a scan you started finishes on or off. **Auth required.**
+         *
+         *     **Only your own choice.** There is no user id anywhere in the request: the row written is the
+         *     caller's, matched by user id AND agency id, and a body that names anything but `enabled` is a
+         *     `422`. Accepted whether or not the feature is on (`available` in the answer says), because it
+         *     writes one boolean nothing reads while the feature is off. Idempotent.
+         *
+         *     **Errors:** `401 authentication-required`, `422 validation-failed` (not a JSON true or false).
+         */
+        put: operations["set_scan_emails_api_v1_auth_me_scan_emails_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/reset-password/confirm": {
         parameters: {
             query?: never;
@@ -3222,6 +3249,7 @@ export interface components {
             agency: components["schemas"]["AgencyOut"];
             /** Feedbackemail */
             feedbackEmail: string | null;
+            scanEmails: components["schemas"]["ScanEmailsOut"];
             seats: components["schemas"]["SeatUsageOut"];
             user: components["schemas"]["UserOut"];
         };
@@ -3897,6 +3925,27 @@ export interface components {
              * Format: date-time
              */
             updatedAt: string;
+        };
+        /**
+         * ScanEmailsOut
+         * @description The scan-finished email switch, for the signed-in caller only (F1, 2026-10-06).
+         *
+         *     `available` is a fact about the deployment: `EMAIL_SCAN_NOTIFICATIONS` is on AND email is
+         *     configured, the same for every user. `enabled` is this caller's own choice.
+         */
+        ScanEmailsOut: {
+            /** Available */
+            available: boolean;
+            /** Enabled */
+            enabled: boolean;
+        };
+        /**
+         * ScanEmailsRequest
+         * @description Set your own choice. Strict (a JSON true or false) and nothing else may be in the body.
+         */
+        ScanEmailsRequest: {
+            /** Enabled */
+            enabled: boolean;
         };
         /** ScanOut */
         ScanOut: {
@@ -4864,6 +4913,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MeOut"];
+                };
+            };
+        };
+    };
+    set_scan_emails_api_v1_auth_me_scan_emails_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScanEmailsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScanEmailsOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
