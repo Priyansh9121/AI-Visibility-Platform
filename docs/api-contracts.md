@@ -1833,7 +1833,7 @@ converted into each other). A page, a path, a scheme, a port or a subdomain
 (`https://www.g2.com/products/x`, `shop.rival.com`) is refused, not cut down to the site it would
 name. A domain equal to the client's own (compared in its checked form, so a client stored as `www.acme.com` is `acme.com`, and either spelling of an internationalised name) is refused too. The web editor's Add refuses a pasted page (a `/`, `:`, `@`, `?`, `#` or a space) with the same sentence before Save; the server stays the authority. Every refusal is **`422
 validation-failed`** before anything is written, the rest of the list included, with
-`errors[].field` `competitors.<index>.domain`, `errors[].type` `invalid_domain` for each of the four
+`errors[].field` `competitors.<index>.domain`, `errors[].type` `invalid_domain` for each of the five
 below, and `errors[].message` one plain sentence that quotes nothing typed:
 
 - not a hostname: "That is not a valid website name. Names can only contain letters, numbers and
@@ -1843,6 +1843,25 @@ below, and `errors[].message` one plain sentence that quotes nothing typed:
 - a page, path or subdomain: "Enter just the domain, like rival.com: no https://, page path or
   subdomain."
 - the client's own domain: "That is this client's own domain."
+- a platform or publisher: "That is a platform or publisher, so it cannot be added as a rival."
+
+**A platform or publisher is refused** (launch checklist 3.90, the founder's decision of
+2026-10-06). After the checks above, the domain as it would be stored must not be on the list of
+domains detection itself never proposes as rivals (`NON_COMPETITOR_DOMAINS` in `services/serp.py`,
+compared as `is_plausible_competitor` compares): review sites and software directories, social
+networks and forums, wikis, local directories, marketplaces, publishers and press, job boards and
+company databases, search engines and the large platforms (an app store is its operator's domain,
+`apple.com` or `google.com`). Stored as a rival, such a domain would type every citation of that
+platform as the rival's. So `g2.com`, `WWW.LinkedIn.com.` and `wikipedia.org` are refused with the
+sentence above, whatever their spelling. The match is exact: a regional variant (`amazon.co.uk`)
+is refused only if the list holds it, and a name that only contains a listed one (`g2labs.com`) is
+a rival as before. A platform's own page or subdomain (`apps.apple.com`) is still refused as a
+page, with that sentence. The check is part of request validation, so it comes before the
+client's own-domain check, which needs the client: a list with a row of each kind is refused for
+the platform row first. A rival can still be named without a domain. **Nothing already stored is
+changed or rechecked on read:** a list an older version stored with a platform domain on a row is
+returned as it is, and is refused when it is saved again, naming that row, until the row is
+removed or its domain is cleared.
 
 No new problem type.
 

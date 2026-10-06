@@ -198,11 +198,19 @@ QUOTA_LOW_BELOW = 50
 # are publishers, marketplaces, directories and social platforms writing ABOUT
 # the category.
 #
+# One list, two paths (`is_non_competitor_domain`): detection never proposes these
+# (`is_plausible_competitor`), and `PUT /clients/{clientId}/competitors` refuses one typed as
+# a rival (launch checklist 3.90), because stored as a rival it would type every citation of
+# that platform as the rival's.
+#
 # This list is a heuristic and is knowingly incomplete. It is deliberately
 # biased toward false negatives: wrongly excluding a real competitor costs one
-# slot in a ranked set an operator can edit, while wrongly *including*
-# Wikipedia as a rival makes the whole report look unserious to the client.
-# Judged by registrable domain, so regional variants (amazon.co.uk) match.
+# slot in a ranked set, and since 3.90 an operator cannot add that domain by
+# hand either (the typed path refuses a listed domain too; the rival can still
+# be named without one), while wrongly *including* Wikipedia as a rival makes
+# the whole report look unserious to the client.
+# Judged by registrable domain, exactly as listed: a regional variant matches
+# only if it is listed itself (bbc.co.uk is, amazon.co.uk is not).
 NON_COMPETITOR_DOMAINS: frozenset[str] = frozenset({
     # Encyclopaedic / reference
     "wikipedia.org", "wikimedia.org", "britannica.com", "fandom.com",
@@ -739,6 +747,19 @@ async def quota_left(settings: Settings | None = None) -> int | None:
         return _quota_unavailable(_failure_kind(exc))
 
 
+def is_non_competitor_domain(domain: str) -> bool:
+    """Whether a registrable domain is on `NON_COMPETITOR_DOMAINS`: a publisher, marketplace,
+    directory or platform.
+
+    The one comparison behind both paths that keep such a domain out of a competitor list:
+    `is_plausible_competitor` below, for what detection finds, and the refusal of a typed rival
+    on `PUT /clients/{clientId}/competitors` (launch checklist 3.90). `domain` is a registrable
+    domain in the lower-case form a search hit has and `intake.rival_domain` returns. An exact
+    match, as the list's comment says.
+    """
+    return domain in NON_COMPETITOR_DOMAINS
+
+
 def is_plausible_competitor(domain: str, *, subject_domain: str) -> bool:
     """Whether a domain could be a competitor rather than a publisher.
 
@@ -747,4 +768,4 @@ def is_plausible_competitor(domain: str, *, subject_domain: str) -> bool:
     """
     if not domain or domain == subject_domain:
         return False
-    return domain not in NON_COMPETITOR_DOMAINS
+    return not is_non_competitor_domain(domain)

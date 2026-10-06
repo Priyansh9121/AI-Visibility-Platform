@@ -42,6 +42,8 @@ const setOf = (...names: string[]) =>
   ({ competitors: names.map((n) => rival(n)) }) as unknown as CompetitorSet;
 
 const DOMAIN_SENTENCE = 'Enter just the domain, like rival.com: no https://, page path or subdomain.';
+// The API's refusal of a platform or publisher typed as a rival (launch checklist 3.90).
+const PLATFORM_SENTENCE = 'That is a platform or publisher, so it cannot be added as a rival.';
 const fieldFor = (label: string) =>
   [...host.querySelectorAll('label')].find((l) => l.textContent === label)!.getAttribute('for')!;
 
@@ -246,6 +248,54 @@ describe('focus', () => {
     const brandField = host.querySelector(`#${CSS.escape(fieldFor('Brand'))}`)!;
     expect(brandField.getAttribute('aria-describedby')).toBeNull();
     expect(text()).not.toContain('One or more fields were invalid.');
+  });
+
+  it('a platform stored before 3.90 is named by the refusal, and removing its row lets the save through', async () => {
+    // The API refuses a platform or publisher typed as a rival, but a list an older version
+    // stored may still hold one. The editor reads that list as it is and sends it back with
+    // whatever else changed, so the refusal names the row (any `competitors.<i>.domain` error
+    // does) and the operator takes it off.
+    const stored = [rival('Zendesk'), rival('G2', 'g2.com')];
+    competitorSet.mockResolvedValue({ competitors: stored } as unknown as CompetitorSet);
+    replaceCompetitors.mockRejectedValueOnce(
+      new ApiProblem({
+        type: '/problems/validation-failed',
+        title: 'Request validation failed',
+        status: 422,
+        instance: '/api/v1/clients/cli_1/competitors',
+        detail: 'One or more fields were invalid.',
+        errors: [
+          { field: 'competitors.1.domain', message: PLATFORM_SENTENCE, type: 'invalid_domain' },
+        ],
+      } as never),
+    );
+    replaceCompetitors.mockResolvedValueOnce(setOf('Zendesk', 'Other'));
+    const onSaved = vi.fn();
+    await mount({ competitors: stored, onSaved });
+    await click(button('Correct this list'));
+    await type('Brand', 'Other');
+    await click(button('Add'));
+    await click(button('Save the list'));
+
+    expect(replaceCompetitors).toHaveBeenNthCalledWith(1, 'cli_1', [
+      { name: 'Zendesk', domain: null },
+      { name: 'G2', domain: 'g2.com' },
+      { name: 'Other', domain: null },
+    ]);
+    const alert = host.querySelector('p[role="alert"]')!;
+    expect(alert.textContent).toBe(`G2: ${PLATFORM_SENTENCE}`);
+    expect(text()).not.toContain('One or more fields were invalid.');
+    expect(onSaved).not.toHaveBeenCalled();
+
+    await click(host.querySelector('button[aria-label="Remove G2"]')!);
+    expect(host.querySelector('p[role="alert"]')).toBeNull();
+    await click(button('Save the list'));
+
+    expect(replaceCompetitors).toHaveBeenNthCalledWith(2, 'cli_1', [
+      { name: 'Zendesk', domain: null },
+      { name: 'Other', domain: null },
+    ]);
+    expect(onSaved).toHaveBeenCalledTimes(1);
   });
 
   it.each(['https://www.g2.com/products/x', 'g2.com/x', 'rival.com:80', 'a@rival.com', 'rival.com?x', 'rival.com#x', 'riv al.com'])(
