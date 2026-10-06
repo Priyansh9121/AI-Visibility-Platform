@@ -26310,3 +26310,52 @@ The founder's brief: a small link in the signed-in footer and Settings that open
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# A settings error at start no longer prints the settings' values into the log
+
+**2026-10-06, the ninth entry of the day; branch `pilot-fixes-6`, found by F4's implementer and confirmed by its security review.** API only, a security fix, with its own bar.
+
+**Render: nothing to set.** From this deploy, an API that refuses to start says which variable is wrong and prints no value. A deploy log written before it, by a start that failed the settings' checks, may hold the tail of a secret; the founder can look at past failed API deploys' logs.
+
+Drift check (north-star §8): no product layer (logging hygiene: CLAUDE.md, "No secret, token or email in a log"); lifecycle phase: none.
+
+## 1. What changed
+
+When the API's settings failed validation at start, pydantic's error printed `input_value=` with the input. For the model-level check that refuses a production start with a placeholder `APP_SECRET` or a wildcard CORS list, the input is the whole settings dict: plain strings, not masked, cut to about its first and last 25 characters. It always began `{'environment': 'producti` and ended in the tail of the last setting that was set, which could be up to about 22 characters of the Stripe webhook secret or the Google client secret (with F4's `FEEDBACK_EMAIL` set, the address). A value pasted into the wrong variable was printed whole by that field's own error. The traceback goes to stderr at `create_app()`, which Render keeps in the deploy log.
+
+- **`hide_input_in_errors=True`** on `Settings.model_config`: every settings error, model and field alike, prints without its input. Every message still names the variable. Settings is the only settings class (the workers use their own dataclass, and Alembic reads `DATABASE_URL` itself); a test now holds that.
+- **`database_url` and `redis_url`** are `repr=False`. `repr(Settings)` masks the secret fields but printed both URLs in full, credentials included. Nothing prints the object today; this closes it for the day something does.
+- **`docker-entrypoint.sh`** unsets `PYDANTIC_SETTINGS_DEBUG` beside `STRIPE_LOG`. With it set and the library's logger at DEBUG, pydantic-settings dumps every source's raw values.
+- **Not covered, on purpose:** `ValidationError.errors()` and `.json()` still carry the input, and no code catches a settings error; a comment says so.
+
+## 2. The review
+
+**F4's security review found it; its re-check of the fix: clean, no Blocker, High or Medium.**
+- The flag covers every error Settings' own validation raises: the production refusal (whose input is the whole settings dict), the cookie-name check and every type error. Each now prints its message and the setting's name, without `input_value`. Both list settings skip pydantic-settings' JSON decoding, so that path cannot echo either. SQLAlchemy's and redis-py's URL errors name no value.
+- The tests would catch a regression: each sensitive setting is set alone, so it is the input's last entry and inside the part pydantic would print; a general "no `input_value`" check catches any echo however it is cut; both start paths are run; no `.env` or developer key can reach a test.
+- **Nits, recorded:** the entrypoint's comment says a handler is enough for the dump, but it also needs the `pydantic_settings` logger at DEBUG; `repr(Settings)` could hide the two address settings as well.
+- **Low, deferred until the worker is deployed:** the workers' timeout parse, below (the repo has no deploy files for the worker).
+
+## Found, not fixed
+
+- **The workers' `_positive_seconds`** (`apps/workers/src/avp_workers/config.py`) uses a bare `float()`, so a key pasted by mistake into `REDIS_*_TIMEOUT_SECONDS` is printed whole at worker start. The fix is to raise a message that names the variable, from `None`; the worker has no deploy files yet.
+- **`repr(Settings)` still prints `feedback_email` (public by design) and `scan_allowance_exempt_emails` (users' addresses).** Nothing prints the object; `repr=False` on both would match "no email in a log".
+- **`PYDANTIC_SETTINGS_DEBUG` is unset only in the container;** a local `uvicorn` started with it set and DEBUG logging would still dump.
+
+## Verified
+
+**API pytest 4919 → 4961 (+42); floor raised to match.**
+- **`test_secrets_stay_out_of_logs.py` 67 → 107,** each a real start in a fresh process, from an empty directory, with only the test's environment: the production refusal with a sentinel in each of the 14 sensitive settings, one at a time and all at once; seven values pasted into the wrong variable; three bad `FEEDBACK_EMAIL` values; a start by importing the app and one by `python -m uvicorn`. Each fails, names the variable, and prints neither the sentinel nor `input_value`. Plus: the hazard shown with the flag off; settings is the only settings class and hides its input; three `repr` tests; `PYDANTIC_SETTINGS_DEBUG` dumping when set and silent when unset; the entrypoint unsetting it.
+- **`test_dockerfile.py` 15 → 17:** the unset line's place and the reason above it.
+- **Before the fix,** 32 of the 42 new tests failed; the refusal leaked for all 14 settings.
+- **The implementer's runs:** every test file that builds `Settings` (33 files), 1598 passed; ruff clean; mypy 42.
+- **The implementer's negative controls,** each restored: the flag removed, 25 fail; `repr=False` removed, 2; the entrypoint's unset removed, 5; all reverted, 32.
+- **On this tree:** in `test_secrets_stay_out_of_logs.py` (107 tests): the flag removed, 25 fail. The file was restored and the tree's checksums matched.
+- **The rest of the bar** (this tree, one run, 12:27 to 12:34):
+  - Counts: API 4961, workers 27, shared-types 53 (0 fail), design-system 935, web 2452, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7945e69b06e5`) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
