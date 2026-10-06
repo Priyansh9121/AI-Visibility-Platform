@@ -26680,3 +26680,37 @@ The design note's conclusion: no new paid service. Scans run inside the API, so 
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# How to merge `pilot-fixes-6` and turn each pilot feature on (launch checklist 1.1h), the rows this branch closed, and the FastAPI/Starlette review (3.43)
+
+**2026-10-06, the sixteenth entry of the day; branch `pilot-fixes-6`, the founder's brief of 2026-10-05 ("Finish") and the decisions of 2026-10-06.** Docs only; the branch's final bar.
+
+**Render: nothing to set for the code to be safe.** 1.1h lists, in order, what to check after the deploy and how to turn each feature on.
+
+Drift check (north-star §8): no product layer (the launch checklist and a dependency review); lifecycle phase: none.
+
+## 1. What changed
+
+- **Launch checklist 1.1h** (`docs/launch-checklist.md`): merging this branch's PR. Nothing has to be set for the code to be safe. Three migrations run in the API container before it serves (`7945e69b06e5`, `b3f1c8e2a9d4`, `c4a9e17d2b58`); deploy while no scan or ad hoc prompt run is in flight, because B4's migration waits only 5 s for a lock an old instance's scan holds. After the deploy: the start lines; the read-only count of stored domains that fail the hostname check (3.81); the logs of any earlier API deploy that failed at start (before 8497433 such a failure printed part of the settings); a log alert on `billing.checkout_created` with `trial_days` above 0. Then the free trial (only now that B1 is deployed), and each pilot feature with its setting, what to click and which log line to expect: F4 (`FEEDBACK_EMAIL`, a dedicated mailbox, public by design), F3 (`REPORT_CSV_ENABLED`), F1 (`EMAIL_SCAN_NOTIFICATIONS`, after 2.3 and decision 3.93), F2 (`AUTO_RESCAN_ENABLED`, not before the lawyer fixes `/crawler`, and with billing configured). It ends with the open decisions, blocking first.
+- **Rows closed or decided:** 3.72 (B1; trial abuse accepted for the pilot, the Radar rule deferred, `STRIPE_TRIAL_DAYS` only after this deploys), 3.74 (B3), 3.76, 3.77, 3.82, 3.91 (kept, the founder's decision of 2026-10-06), and 3.43 (reviewed, below). 2.4 gains the sentences F1, F2 and F4 make untrue or incomplete on `/privacy` and `/crawler`, for the lawyer. The status paragraph at the top names this branch.
+
+## 2. The FastAPI/Starlette review (3.43), review only
+
+The founder's decision (2026-10-06): "3.43 yes, review only." Nothing was upgraded and no manifest or lock changed. The review read the repo and the projects' release notes, changelogs and advisories (PyPI, GitHub releases and advisories; a summarising fetch of FastAPI's docs site invented content, so every FastAPI claim was re-checked against the GitHub release pages or the source).
+
+- **Why the cap:** `apps/api/pyproject.toml` pins `fastapi>=0.117.1,<0.118`. The floor stops Pydantic's alias warnings; the cap exists because 0.118.0 closes `yield` dependencies after the response, which moves when `db_session` closes relative to a scan's background task; and FastAPI 0.117 requires Starlette below 0.49. Installed: FastAPI 0.117.1 and Starlette 0.48.0 (the workers through the API's path dependency only). Latest: FastAPI 0.142.2 and Starlette 1.7.0.
+- **Advisories:** six Starlette advisories since 0.48.0; none reaches AVP's code today. The Range-header denial of service needs `FileResponse` or `StaticFiles` (not used; the CSV and the PDF are in-memory responses); a Host header can poison `request.url.path`, which AVP only echoes into a problem body's `instance` (the Origin check reads the raw path); `HTTPEndpoint` and `StaticFiles` on Windows are not used; `request.url.hostname` is not read; `request.form()`'s limits do not matter with no form routes (the webhook reads the raw body). FastAPI has none since 2021.
+- **What an upgrade would break, silently:** from 0.118 (with 0.121's default scope) the start route's `db_session` would stay open, idle in transaction, for the whole scan, unless the dependency is scoped to the function; from 0.137 `app.routes` holds included routers, so the code that lists each route's methods would leave CORS with an empty method list (tests would catch this one loudly). 0.142 turns OpenTelemetry on by default and adds `opentelemetry-api`; 0.132 requires a JSON content type on JSON bodies; the validation error's schema gains fields, so `openapi.json` changes.
+- **Licences:** FastAPI MIT, Starlette BSD-3-Clause; new transitive `annotated-doc` (MIT) and `opentelemetry-api` (Apache-2.0), all allowed by the policy.
+- **Recommendation, recorded in row 3.43:** lift the cap before the API serves files (any `FileResponse`, `StaticFiles`, form or upload route), as its own item, straight to the latest versions, not on a launch branch. Lifting now gains almost nothing that reaches AVP and risks the two silent faults above; waiting with no date makes the jump larger.
+
+## Verified
+
+The final bar, on this branch's whole tree with this entry's docs (one run, 17:19 to 17:43):
+- Counts: API 5544, workers 27, shared-types 53 (0 fail), design-system 967, web 2570, mypy 42 (ceiling 50). All six count gates pass through `assert_count.py`, each at its floor.
+- Ruff is clean, all typechecks pass, and the styleguide builds.
+- Both `uv lock --check` runs pass, and Alembic upgrade (through `7945e69b06e5`, `b3f1c8e2a9d4` and `c4a9e17d2b58`) and check pass on an empty database.
+- The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+- OpenAPI and `api.gen.ts` regenerate with no change.
+- CI's image job (build the container, refuse to boot on the placeholder secret, migrate and serve) needs Docker, which is not running on this machine; its refusal check was run directly instead: a production start with the placeholder secret exits 1 saying "APP_SECRET is still the development placeholder", with no `input_value` printed.
+- Exit codes were read from files.
