@@ -95,12 +95,15 @@ export default function DashboardRoute() {
     };
   }, [apply]);
 
-  // A backgrounded tab keeps its timer but does no work. Refocusing polls at
-  // once rather than making the user wait out an interval on a stale view.
+  // A hidden tab is not polled: hiding it clears the poller's timer, and
+  // showing it polls once at once rather than making the user wait out an
+  // interval on a stale view, after which the schedule carries on. The poller
+  // reads the tab's state itself; this only tells it when that changes, and the
+  // listener is taken off with the page. It reads `poller.current` when the
+  // event fires, so it always reaches the live poller (StrictMode builds a
+  // second one) and a late event after unmount reaches none.
   useEffect(() => {
-    const onVisibility = () => {
-      if (document.visibilityState === 'visible') poller.current?.pokeNow();
-    };
+    const onVisibility = () => poller.current?.visibilityChanged();
     document.addEventListener('visibilitychange', onVisibility);
     return () => document.removeEventListener('visibilitychange', onVisibility);
   }, []);
