@@ -12,6 +12,7 @@ import { use, useEffect, useState } from 'react';
 import { Button, ErrorState, LoadingState } from '@avp/design-system';
 import type { Report } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
+import { useFeedbackEmail } from '@/lib/feedback/useFeedbackEmail';
 import { ReportView } from '@/components/report/ReportView';
 import { CompetitorEditor } from '@/components/report/CompetitorEditor';
 import { ShareLinkBar } from '@/components/report/ShareLinkBar';
@@ -30,6 +31,9 @@ export default function ReportPageRoute({
 }) {
   const { scanId } = use(params);
   const [view, setView] = useState<View>({ kind: 'loading' });
+  // This page reads no `me`, so the footer's "Send feedback" link asks for its address here
+  // (2026-10-06): null, and no link, until it is told one.
+  const feedbackEmail = useFeedbackEmail();
 
   // No reload after the competitor editor saves. A saved list is for the client's later scans
   // (the API writes its next list), so the scan on screen, its figures and everything derived from
@@ -71,7 +75,7 @@ export default function ReportPageRoute({
 
   if (view.kind === 'loading') {
     return (
-      <WorkspaceShell current="dashboard" wide>
+      <WorkspaceShell current="dashboard" feedbackEmail={feedbackEmail} wide>
         <LoadingState message="Assembling the report…" />
       </WorkspaceShell>
     );
@@ -79,7 +83,7 @@ export default function ReportPageRoute({
 
   if (view.kind === 'error') {
     return (
-      <WorkspaceShell current="dashboard" wide>
+      <WorkspaceShell current="dashboard" feedbackEmail={feedbackEmail} wide>
         <ErrorState
           title={view.title}
           detail={view.detail}
@@ -117,7 +121,7 @@ export default function ReportPageRoute({
       beats and its tokens are untouched, which ReportView.test.tsx and
       reportIsolation.test.ts keep asserting.
     */
-    <WorkspaceShell current="dashboard" wide>
+    <WorkspaceShell current="dashboard" feedbackEmail={feedbackEmail} wide>
       {/*
         Operator chrome, deliberately ABOVE the report rather than inside it.
         ReportView is the document that gets sent; anything to do with sending

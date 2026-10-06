@@ -26254,3 +26254,59 @@ Production, 2026-10-05: one Perplexity request was refused with a 429, re-sent a
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# "Send feedback" for pilots: off until `FEEDBACK_EMAIL` is set, then a link in the signed-in sidebar and on Settings that opens an email naming only the kind of screen
+
+**2026-10-06, the eighth entry of the day; branch `pilot-fixes-6`, pilot feature F4 (the founder's brief of 2026-10-05; design note in this log, "Design notes for the four pilot features").** API and web, with a security review, a UI review and its own bar.
+
+**Render: nothing to set for the code to be safe; the feature is off until `FEEDBACK_EMAIL` is set on the API service** (launch checklist 1.1h).
+
+Drift check (north-star §8): Layer 1, Delivery (the signed-in shell); lifecycle phase: Activation (pilots telling the founder what is wrong).
+
+## 1. What changed
+
+The founder's brief: a small link in the signed-in footer and Settings that opens a mailto to a configured address, `FEEDBACK_EMAIL` (unset means no link), with the page path in the subject, never ids, tokens or client names. The design note's conclusion: no paid service, no decision outside the brief.
+
+- **The setting** (`config.py`): `FEEDBACK_EMAIL`, an API setting. Blank means unset. A value that is not one email address stops the API from starting with a message that names the variable and never the value (a `RuntimeError`, because pydantic echoes a `ValueError`'s input). `.env.example` documents it, blank.
+- **How it reaches the web:** `MeOut.feedbackEmail` (null when unset) on the six responses that carry the signed-in user: `GET /auth/me`, sign-up, login, change-password, invitation acceptance and Google sign-in. Each builds it only on success, after the session is set. The contracts and `docs/api-contracts.md` say so.
+- **The subject carries the route's shape, never its values** (`lib/feedback/subject.ts`): a path segment is kept only when it is one of the app's own fixed segment names; any other segment becomes "…", and the query and fragment are dropped, so a subject reads like `AVP feedback: /clients/…/alerts`. The address and the subject are encoded into the `mailto:`, so neither can add a header.
+- **The link** (`components/shell/FeedbackLink.tsx`): "Send feedback", with "by email" for screen readers, at the foot of the signed-in sidebar between the seats line and Sign out, on every screen that draws the shell (dashboard, Compare, Clients, a client, a report, Settings). It never wraps and is 25.5 px tall (`py-1`). Signed out (the landing page, share, invite and reset pages) there is no shell and no link.
+- **Settings** gains a "Tell us what you think." section after Billing, with the address: "Opens an email to {address} in your email app. The subject names the kind of screen you are on, never a client's name or an id. Nothing is sent until you send it. If nothing opens, write to that address yourself."
+- **Unset, nothing changes:** no link, no section, no node and no gap. The dashboard takes the address from the `/auth/me` it already reads; the report page reads `/auth/me` once for it, because it reads no other.
+
+## 2. The reviews
+
+**Security review: no Blocker, High or Medium.**
+- **Its verdict on where the address goes:** keep it on all six responses. Sign-up is open and needs no verified email, so anyone can become signed in; limiting it to `/auth/me` would hide nothing. **The address is public by design:** the founder should use a dedicated mailbox with spam filtering (launch checklist 1.1h).
+- **Low, closed by the next entry:** with `FEEDBACK_EMAIL` set, a deployed start that failed the settings' production checks would have printed the tail of the address in pydantic's echo of the settings. The next commit stops that echo for every setting, before anything is pushed.
+- **Clean:** the setting's error carries no value; no log line reads it; the subject's filter keeps only exact fixed names, so no id, token, name, query or fragment can pass; the `mailto:` cannot gain a header; the address is never in server-rendered HTML; the hook ignores a 401.
+
+**UI review: no Blocker; three Should-fix and three nits, all taken in round 2.**
+- The link wrapped to two lines in the narrow sidebar and grew it; it does not wrap now.
+- Its name said nothing about email; it is "Send feedback by email" to a screen reader.
+- "in your email app" was untrue where no mail app opens a `mailto:`; the lead now says what to do then.
+- Nits taken: a 25.5 px target, shorter sentences, and no second `/auth/me` read on the dashboard.
+- **Found while measuring round 2:** the hidden " by email" is absolutely positioned and, in the 360 px strip, gave the page a sideways scroll; the link is `relative` now, measured at nine widths from 1280 to 320 px in both themes.
+- The round was not sent back for review; its negative controls are below.
+
+## Found, not fixed
+
+- **`/privacy` says nothing about feedback emails** held in the `FEEDBACK_EMAIL` mailbox ("What is stored" and the providers list), and a second contact address now exists. For the lawyer (launch checklist 2.4); not edited.
+- **The dashboard's loading and error frames have no link,** because no agency has been read yet.
+- **`docs/api-contracts.md`'s header** says "49 paths, 57 operations"; the export says 50 and 58.
+
+## Verified
+
+**API pytest 4885 → 4919 (+34); web vitest 2156 → 2452 (+296); floors raised to match.**
+- **API, `test_feedback_email.py` (new, 34):** blank, whitespace, a bad value and a good one; the start error names the variable and carries no value; the address on each of the six responses when set and null when not; a failed invitation acceptance carries no address. Before the code, 27 failed and 6 errored.
+- **Web, 296 new tests:** the subject builder against every route in the app's tree with ids, tokens, share tokens, names, queries and fragments (197); the hook; the link (nowrap, `py-1`, `relative`, the hidden "by email"); the shell, Settings and the wiring on every screen that draws the shell; unset changes nothing. Round 1's, run against the code before F4: 3 files could not load and 21 of the 44 that loaded failed (the 23 that passed are the "unset changes nothing" tests). Round 2's: 34 of 99 failed before.
+- **The implementer's negative controls:** the subject keeping every segment, 92 fail; the link drawn when unset, 16; the Settings section drawn when unset, 1; the report or Compare not passing the address, 2 each; a client id in the allow-list, 27; `/auth/me` returning no address, 4; a `ValueError` in place of the `RuntimeError`, 13; round 2: nowrap, the hidden span, the lead, `py-1`, the dashboard's second read, the standing hook's address and `relative`, each 1 to 5.
+- **On this tree:** the subject keeping every segment, 96 of 288 web tests fail (`src/lib/feedback`, `src/components/shell` and the Settings test); `GET /auth/me` dropping the address, 4 of 34 in `test_feedback_email.py`. Each file was restored and the tree's checksums matched.
+- **The rest of the bar** (this tree, one run, 12:16 to 12:24):
+  - Counts: API 4919, workers 27, shared-types 53 (0 fail), design-system 935, web 2452, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7945e69b06e5`) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

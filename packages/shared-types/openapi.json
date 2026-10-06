@@ -2736,6 +2736,17 @@
           "agency": {
             "$ref": "#/components/schemas/AgencyOut"
           },
+          "feedbackEmail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feedbackemail"
+          },
           "seats": {
             "$ref": "#/components/schemas/SeatUsageOut"
           },
@@ -2746,7 +2757,8 @@
         "required": [
           "user",
           "agency",
-          "seats"
+          "seats",
+          "feedbackEmail"
         ],
         "title": "MeOut",
         "type": "object"
@@ -6109,6 +6121,7 @@
     },
     "/api/v1/auth/me": {
       "get": {
+        "description": "The signed-in context, in one call. **Auth required.**\n\n`feedbackEmail` (2026-10-06) is `FEEDBACK_EMAIL`, null when it is unset: the address the\nshell's \"Send feedback\" link writes to. It is on this response, and on the other responses\nthat return the same context to someone who has just signed in, and on no other.",
         "operationId": "me_api_v1_auth_me_get",
         "responses": {
           "200": {

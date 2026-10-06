@@ -190,7 +190,12 @@ export default function Home() {
   // Dashboard / Sign out buttons that used to live in this header moved into
   // the sidebar where every screen can reach them.
   return (
-    <WorkspaceShell current="compare" agencyName={me?.agency.name} seats={me?.seats}>
+    <WorkspaceShell
+      current="compare"
+      agencyName={me?.agency.name}
+      seats={me?.seats}
+      feedbackEmail={me?.feedbackEmail}
+    >
       <header className="mb-14 border-b border-line-hairline pb-8">
         <p className="text-ui-2xs uppercase tracking-caps text-text-tertiary">
           Compare

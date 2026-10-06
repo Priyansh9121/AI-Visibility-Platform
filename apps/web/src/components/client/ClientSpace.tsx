@@ -137,6 +137,7 @@ export function ClientSpace({
       current="clients"
       agencyName={me?.agency.name}
       seats={me?.seats}
+      feedbackEmail={me?.feedbackEmail}
       wide
       client={{
         id: client.id,
