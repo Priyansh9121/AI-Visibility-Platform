@@ -269,10 +269,11 @@
      then the halo out to 8px; ring and halo are --avp-focus-ring's own values.
      Seated, because cards hold the forms and their actions; on the page ground,
      sunken and void the gap is a faint lighter band (1.06, 1.12 and 1.23:1), and
-     always this one colour in the light theme. The dark theme below aliases the
-     plain ring, so nothing there moves; the report declares the same ring over a
-     paper gap of its own, which a report inside a dark app keeps. contrast.test.ts
-     holds the 3:1 of the gap against both ends of the fill and against the ring. */
+     always this one colour in the light theme. The dark theme below spells the same
+     three layers over its own seated surface (checklist 3.40); the report declares
+     the same ring over a paper gap of its own, which a report inside a dark app
+     keeps. contrast.test.ts holds the 3:1 of the gap against both ends of the fill
+     and against the ring. */
   --avp-focus-ring-filled: 0 0 0 2px var(--avp-surface-seated), 0 0 0 4px oklch(0.53 0.09 200),
     0 0 0 8px oklch(0.72 0.11 200 / 0.12);
   --avp-selected-ring: inset 0 0 0 1px oklch(0.53 0.09 200);
@@ -393,9 +394,18 @@
   --avp-scrim: oklch(0.08 0.01 265 / 0.7);
 
   --avp-focus-ring: 0 0 0 2px oklch(0.8 0.13 200 / 0.7), 0 0 0 6px oklch(0.8 0.13 200 / 0.15);
-  /* Dark keeps its plain ring on a filled button (3.33 is the light theme's and
-     the report's). */
-  --avp-focus-ring-filled: var(--avp-focus-ring);
+  /* The same gap-then-ring on a filled button as the light theme's, checklist 3.40.
+     The plain ring is the primary fill's own colour at 70%: 1.6 to 2.0:1 against the
+     primary fill and about 1.0 against the danger fill, so on either its inner edge is
+     lost. A 2px gap in the card surface (seated, as in the light theme) sits between
+     fill and ring, then the 2px ring, then the halo out to 8px; ring and halo are
+     --avp-focus-ring's own values. The gap is 6.0 to 11.4:1 against the fills and the
+     ring, as painted, 5.6:1 or more against the gap; on the page ground, sunken and
+     raised the gap is a faint band (1.08, 1.13 and 1.10:1). The report redeclares the
+     token over its paper, so a report inside a dark app does not get this one.
+     contrast.test.ts holds the ratios. */
+  --avp-focus-ring-filled: 0 0 0 2px var(--avp-surface-seated), 0 0 0 4px oklch(0.8 0.13 200 / 0.7),
+    0 0 0 8px oklch(0.8 0.13 200 / 0.15);
   --avp-selected-ring: inset 0 0 0 1px oklch(0.8 0.13 200);
   --avp-selected-wash: oklch(0.8 0.13 200 / 0.08);
 }

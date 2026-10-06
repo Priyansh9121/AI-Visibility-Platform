@@ -26401,3 +26401,53 @@ The dashboard is the only screen that polls a running scan (`GET /dashboard`, th
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# Every control shows keyboard focus in forced colours, a text field is lit once, and the dark theme's focus ring stands off a filled button
+
+**2026-10-06, the eleventh entry of the day; branch `pilot-fixes-6`, launch checklist 3.40 (found in 3.33; the founder's go in the brief of 2026-10-05).** Design system only, with a UI review and its own bar.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): no product layer (the design system's focus styles, WCAG 2.4.7 and 1.4.11); lifecycle phase: none.
+
+## 1. What changed
+
+3.33 fixed the focus ring on filled buttons in the light theme and left four gaps: in forced colours (Windows High Contrast, where shadows are dropped) no other control showed focus, because the global focus style is a shadow with `outline: none`; Firefox drew its own ring inside the shadow; a focused text field drew a ring on its wrapper and a second on the input; the dark theme's ring against a primary fill was about 1.6 to 2.0:1 (1.0 against the danger fill); and every primary button had a 1px rim of its gradient's other end.
+
+- **Forced colours and Firefox** (`base.css`): the ring rule no longer says `outline: none`, and a new rule, `html :where(a, button, input, select, textarea, [tabindex]):focus-visible { outline: 2px solid transparent }`, gives every focusable control a transparent outline. In normal colours it shows nothing and replaces Firefox's own ring; in forced colours it is what shows. It is a rule of its own, not one line on the ring rule as the row said, because one line loses on specificity: in Firefox to Tailwind's `:-moz-focusring` (equal weight, loaded later) and in Chromium to the field's own `outline: none`. At (0,1,1) it beats both by weight alone and still loses to every component's own focus rule, so `.avp-gapgrid` keeps its accent outline and `.avp-btn` its 8px radius.
+- **The Google sign-in link** (`.avp-google-btn`) had its own `outline: none` on focus, so in forced colours it alone still showed nothing (found by the UI review). The line is gone: in forced colours it now paints the system focus colour, and in normal colours nothing changed (a pixel diff of every focused control, both engines and themes, is 0). A test now refuses any component focus rule that says `outline: none` or `0`, in any spelling.
+- **A text field is lit once** (`components.css`): `.avp-field__input:focus-visible` has no shadow, and the wrapper keeps the one ring. In forced colours the cue is the input's own outline inside the wrapper.
+- **The dark theme's filled buttons** (`tokens.css`): `--avp-focus-ring-filled` in the dark theme is now a 2px gap in the seated surface, then the dark ring and its halo, as the light theme's is. Measured in Chromium: before, ring against the primary fill 1.90:1 and the danger fill 1.02:1; after, the gap against the fills 11.27 and 6.06, the ring against the gap 5.92 (hovered and focused 13.02, 6.22, 6.69). The light theme and the report are unchanged, and a report inside a dark app keeps its paper gap.
+- **The rim** (`components.css`): `.avp-btn--primary` paints its gradient over the border box (`background-origin: border-box`), so no stripe of the other end tiles into the transparent border. The 1px edge's colour distance from the row inside it went from 13 to 67 to 1.4 or less in Chromium, Firefox and WebKit; size unchanged.
+- **Nothing else visibly changed:** focused screenshots of the secondary, ghost and link buttons, a tabindex region and the Google button are identical before and after in both themes. `docs/design-system.md`'s focus section says all of this; the styleguide's "Focus is a beacon ring and halo." stays true.
+
+## 2. The review
+
+**UI review: no Blocker; one Should-fix, taken in round 2; the deviation holds.**
+- **Should-fix, taken:** the Google sign-in link's own `outline: none`, above.
+- **The deviation checked:** the new rule sits first in file order yet wins on weight alone, (0,1,1) against preflight's and the field's (0,1,0), and loses to every component's own (0,2,0) focus rule; the only order dependence left is the button radius, by design and pinned.
+- **Nits, taken:** the field's outline stays on the input (moved to the wrapper, Chromium paints it the colour of the wrapper's own border), and the docs say what the cue is in forced colours; stale wording in two tests and a comment.
+- **Checked clean by the reviewer's own run:** every button variant, the link, a tabindex region, both text fields and the select show a solid 2px outline in forced colours in both engines; Firefox's native ring is gone; `.avp-gapgrid` keeps its own outline; the dark ring's figures recomputed; the light theme and the report untouched.
+- The round was not sent back for review; its negative controls are below.
+
+## Found, not fixed
+
+- **In forced colours the Google sign-in link has no edge at all:** its 1px border is an inset shadow, which forced colours drops (launch checklist 3.92).
+- **WebKit's focus styles were not measured:** Playwright's WebKit has no forced-colours emulation and does not Tab onto buttons.
+- **The visual claims rest on pixel numbers and computed styles,** measured on a compiled copy of the CSS in Chromium and Firefox (and WebKit for the rim), and checked by the reviewer's own run and an independent colour calculation.
+
+## Verified
+
+**Design-system vitest 935 → 967; floor raised to match.** API and web are unchanged at 4961 and 2490.
+- **`contrast.test.ts` 89 → 119** and **`render.test.tsx` 144 → 146:** the outline rule's weight against Tailwind's preflight (read from the installed file) and the field's rule; the ring rule keeping no `outline: none`; the field input without its own shadow and TextField and SelectField keeping the classes the rule keys on; the dark filled ring's gap and ring against every fill and surface, hovered too; the rim's `background-origin`; no component focus rule saying `outline: none` or `0`, with a positive control that feeds the check the old Google rule. Before the change, 23 of 263 failed; before round 2's guard, 1 failed.
+- **The implementer's negative controls,** each restored and checked with `cmp`: the outline reverted, 5 fail; the outline rule without `html`, 2; `outline: none` back in the ring rule, 1; the ring rule made heavier, 4; the field rule removed, 2; the dark token back to the plain ring, 15; a too-light dark gap, 8; `background-origin` removed, 1; the Google `outline: none` back, 1; `outline: 0` instead, 1.
+- **Production `next build`** in the worktree: the shipped CSS keeps the new rules, with preflight last.
+- **On this tree:** in the design-system suite (967 tests): the global transparent outline removed, 4 fail; the dark filled ring back to the plain ring, 15 fail; the primary rim's `background-origin` removed, 1 fails. Each file was restored and the tree's checksums matched.
+- **The rest of the bar** (this tree, one run, 14:25 to 14:36):
+  - Counts: API 4961, workers 27, shared-types 53 (0 fail), design-system 967, web 2490, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade (to `7945e69b06e5`) and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
