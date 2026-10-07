@@ -26925,3 +26925,37 @@ Moving the gate alone would have been wrong: the paragraph's other branch says "
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# Launch checklist 1.1i says how to merge `pilot-fixes-7` and re-run RMIT University, closes the rows this branch finished, and corrects the trial alert in 1.1h
+
+**2026-10-08; branch `pilot-fixes-7`.** Documentation only: `docs/launch-checklist.md`.
+
+**Render: nothing to set by this commit.** It describes what the founder sets and checks after the branch is merged.
+
+Drift check (north-star §8): no layer — this is the founder's operating document for the deploy, serving the Activation phase the branch's three items sit in.
+
+## 1. What changed
+
+- **1.1h is marked merged** (PR #10, `main` at `607f655`), and **its step 4 is corrected**. It told the founder to "add a Render log alert on `billing.checkout_created`". **Render has no log-based alerts.** The step now says to check Stripe's Subscriptions list filtered to **Trialing**, or to send the API's logs to a log stream (Better Stack or Papertrail, under the service's log streams) and alert there. It also notes that a log stream receives the API's log lines — ids and event names, never a secret, token or email — so it becomes a processor `/privacy` must name, which is 2.4's open list.
+- **1.1i is new:** how to merge this branch (no migration, no new setting, no new host), what each of its three items changes, and the steps to re-run RMIT University afterwards — remove Shiksha and collegedunia.com from the rival list first, because a save is refused while either is on it (3.90); the new scan costs one of the agency's 40 and about US$1.45 to 1.50 of provider spend; the 2026-10-05 scan keeps its `v5` score and cannot be re-matched, because answer text is not stored.
+- **The status line** names this branch and PR #10 as merged.
+- **Rows closed:** 3.94 (short-name matching, `26cc941`), 3.95 (generated fixes name only cited sites, `88b9663`), 3.96 (the report's typesetting and the pitch heading, `7f63842`), 3.99 (the pitch paragraph's gate, `8f0df7b`).
+- **Rows added:** 3.97, decided and queued; 3.98, open for Claude when a scan shows it.
+
+## 2. The two rows that are not closed
+
+- **3.97 — decided 2026-10-08: refuse.** An explicit re-score of a scan matched before `v7` must be refused, with a plain reason pointing at re-running the scan. **Not built here, because nothing records which matcher made a scan's matches:** `Scan.formula_version` is never written anywhere in `src` (every row still holds its `v1` default), `BrandMention` has no version column, and `Score.formula_version` is the scoring version rather than the matching rule, so a pre-`v7` scan that was never scored has no row to read. The row names what it needs: a matching-version column on `scans` written at scan time, an Alembic revision, a backfill marking existing rows pre-`v7`, the 409 and its `/problems` slug, `api-contracts.md`, and tests.
+- **3.98 — open.** A short form inside a rival's longer name still names the subject ("RMIT Vietnam" names RMIT University), as a long name already can. For Claude when a scan shows it.
+
+## Found, not fixed
+
+- **A cheaper 3.97 exists and was not taken:** refusing when the scan's newest `Score` row is pre-`v7`. It misses any pre-`v7` scan that was never scored, so it would read as a guard while leaving the case open. Named here rather than built.
+
+## Verified
+
+**No code changed, so no count moves: API pytest 5659, web vitest 2584, both as the floors stand.**
+
+- `docs/launch-checklist.md` is the only file this commit touches besides this entry.
+- Every commit hash named in the new and closed rows was read from `git log` on this branch: `26cc941`, `88b9663`, `7f63842`, `8f0df7b`.
+- The edits were applied by a script that asserts each replacement matches exactly once, run first against a copy and diffed before being run for real.
+- The branch's full bar is run after this commit; its counts are recorded in the entry above this one.
