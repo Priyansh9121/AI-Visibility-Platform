@@ -233,6 +233,9 @@ NON_COMPETITOR_DOMAINS: frozenset[str] = frozenset({
     "theguardian.com", "bbc.co.uk", "bbc.com", "cnn.com", "wired.com",
     "theverge.com", "cnet.com", "zdnet.com", "pcmag.com", "wirecutter.com",
     "nerdwallet.com", "investopedia.com", "inc.com", "entrepreneur.com",
+    # Education directories and publishers (pilot-fixes-7: shiksha.com surfaced as
+    # a rival of a university with zeros everywhere)
+    "shiksha.com", "collegedunia.com",
     # Job boards and company databases
     "indeed.com", "glassdoor.com", "crunchbase.com", "pitchbook.com",
     "zoominfo.com", "owler.com", "bloomberg.com",

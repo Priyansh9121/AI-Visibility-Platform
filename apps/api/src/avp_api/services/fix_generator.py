@@ -51,6 +51,7 @@ place. The degradation is weaker wording, never a wrong claim.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from decimal import Decimal
 
@@ -62,6 +63,7 @@ from ..config import Settings, get_settings
 from ..models.action_item import ActionItemSource, Effort, Priority
 from . import usage
 from .call_bounds import CallBound
+from .domain_authority import normalise_domain
 
 logger = structlog.get_logger(__name__)
 
@@ -139,6 +141,55 @@ BANNED_CLAIMS = (
     "limited time",
 )
 
+# Words that state a proportion instead of giving the count (2026-10-07). A
+# generated fix once described where a client's descriptions come from with one
+# of these while the scan's own counts said otherwise; a count from the facts
+# ("72 of 200 citations") cannot be wrong that way, so a fix that reaches for
+# the word is rejected. Whole words, case-insensitive.
+PROPORTION_WORDS = (
+    "largely",
+    "mostly",
+    "mainly",
+    "chiefly",
+    "primarily",
+    "predominantly",
+    "overwhelmingly",
+    "the majority",
+    "most of",
+    "the bulk",
+    "almost all",
+    "nearly all",
+    "the vast majority",
+)
+# "make the most of your FAQ page" is an idiom, not a proportion: "most of" is
+# not matched when "the " comes right before it.
+_NOT_AFTER = {"most of": "the "}
+_PROPORTION_RE = re.compile(
+    r"\b(?:"
+    + "|".join(
+        (f"(?<!{re.escape(_NOT_AFTER[w])})" if w in _NOT_AFTER else "") + re.escape(w)
+        for w in PROPORTION_WORDS
+    )
+    + r")\b",
+    re.IGNORECASE,
+)
+
+# A hostname-like token: dot-separated labels of letters, digits and hyphens, a
+# last label of 2-63 letters. A trailing full stop is not matched, so it stays
+# punctuation. "e.g." and "3.7" never match (a one-letter or numeric last label).
+_HOSTNAME_RE = re.compile(
+    r"(?<![A-Za-z0-9-])"
+    r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,63}"
+    r"(?![A-Za-z0-9-])"
+)
+# A last label that is a file extension makes the token a file name, not a site.
+_FILE_EXTENSIONS = frozenset(
+    {
+        "txt", "xml", "html", "htm", "json", "js", "md",
+        "pdf", "csv", "php", "css", "png", "jpg", "svg",
+    }
+)
+
 
 # --------------------------------------------------------------------------
 # transient inputs — none of these is a database model
@@ -207,6 +258,10 @@ class FixFacts:
     citations_to_subject: int = 0
     # (domain, count) — "URLs and domains that were cited", never their content.
     top_cited_domains: list[tuple[str, int]] = field(default_factory=list)
+    # Every distinct domain cited in the scan's answered results, the client's
+    # own included and uncapped. NOT printed into the prompt: `accept` uses it
+    # to refuse a fix that names a site the scan never recorded as cited.
+    cited_domains: frozenset[str] = frozenset()
 
     # Structural signals only: schema.org TYPE NAMES, counts, booleans.
     schema_types: list[str] = field(default_factory=list)
@@ -325,6 +380,11 @@ about what a change will earn — never imply one.
 codes like NO_FAQ_SCHEMA are how this system talks to itself; the client sees \
 what they MEAN. Write "the site declares no FAQ markup", not "the schema_faq \
 check returned NO_FAQ_SCHEMA".
+- Name a website only if it is in the cited-domain list you are given or is \
+the client's own domain. Rivals are not sources unless they are in that list. \
+Call markup "schema markup", never by a website.
+- Give counts from the facts ("72 of 200 citations"), never words such as \
+largely or mostly.
 - Plain professional English. No marketing language, no superlatives, no \
 urgency, no promises about outcomes.
 - LENGTH IS A HARD LIMIT, not a preference. A title is ONE short sentence of \
@@ -583,8 +643,33 @@ def machine_code_in(text: str, candidate: FixCandidate) -> str | None:
     return None
 
 
+def proportion_word_in(text: str) -> str | None:
+    """The first proportion word `text` uses in place of a count, or None."""
+    match = _PROPORTION_RE.search(text)
+    return match.group(0).lower() if match else None
+
+
+def uncited_domain_in(text: str, facts: FixFacts) -> str | None:
+    """The first site `text` names that the scan did not cite, or None.
+
+    Allowed: a domain the scan cited, the client's own domain, and any
+    subdomain or parent of one of those. File names (`llms.txt`) are not sites.
+    A rival the scan never saw cited is not allowed, which is the point.
+    """
+    allowed = {normalise_domain(d) for d in facts.cited_domains}
+    allowed.add(normalise_domain(facts.domain))
+    for token in _HOSTNAME_RE.findall(text):
+        host = normalise_domain(token)
+        if host.rsplit(".", 1)[-1] in _FILE_EXTENSIONS:
+            continue
+        if any(host == a or host.endswith("." + a) or a.endswith("." + host) for a in allowed):
+            continue
+        return host
+    return None
+
+
 def accept(
-    parsed: GeneratedFixSet, candidates: list[FixCandidate]
+    parsed: GeneratedFixSet, candidates: list[FixCandidate], facts: FixFacts
 ) -> tuple[list[PersistableFix], list[str]]:
     """Match generated fixes back onto candidates, dropping anything unsound.
 
@@ -621,6 +706,18 @@ def accept(
         leaked = machine_code_in(f"{title} {detail}", candidate)
         if leaked is not None:
             logger.warning("fixes.code_rejected", candidate=key, identifier=leaked)
+            rejected.append(key)
+            continue
+        proportion = proportion_word_in(f"{title} {detail}")
+        if proportion is not None:
+            logger.warning("fixes.proportion_rejected", candidate=key, reason="PROPORTION_WORD")
+            rejected.append(key)
+            continue
+        uncited = uncited_domain_in(f"{title} {detail}", facts)
+        if uncited is not None:
+            logger.warning(
+                "fixes.domain_rejected", candidate=key, reason="UNCITED_DOMAIN", domain=uncited
+            )
             rejected.append(key)
             continue
 
@@ -759,7 +856,7 @@ async def generate_fixes(
     if parsed is None:
         return FixOutcome(status="failed", reason_code="PROVIDER_NO_OUTPUT")
 
-    accepted, rejected = accept(parsed, candidates)
+    accepted, rejected = accept(parsed, candidates, facts)
 
     # Debug-only. Model-authored reasoning, never persisted, never returned.
     for generated in parsed.fixes:

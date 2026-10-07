@@ -26769,3 +26769,44 @@ Drift check (north-star §8): Layer 2, Measurement (what counts as a mention); l
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# A generated fix may name only a site the scan cited or the client's own, and never says "largely" where a count belongs; shiksha.com and collegedunia.com are publishers, not rivals
+
+**2026-10-07, the second entry of the day; branch `pilot-fixes-7`, item 2 of the founder's brief of 2026-10-07 (the RMIT University report).** API only, with its own bar.
+
+**Render: nothing to set.** The next scan's generated fixes are checked as below; stored fixes are not rewritten.
+
+Drift check (north-star §8): Layer 4, Prescription (the generated fixes); lifecycle phase: Activation (Epic 9), a pilot's report saying only what its scan found.
+
+## 1. What was wrong
+
+- **RMIT University's fix #3** (scan of 2026-10-05) said the client's descriptions came "largely" from third-party sites "such as shiksha.com and collegedunia.com". shiksha.com was not among the scan's cited domains: it was one of the scan's rivals, with zeros everywhere, and the model turned it into a cited source. The client's own site was the largest single source, 72 of 200 citations, which "largely" does not say.
+- **Nothing checked a generated fix against the scan.** The model is given `citations_total`, `citations_to_subject`, the top 8 third-party cited domains and the rivals (name and domain); `accept` refused banned claims and internal codes, not a site the scan never cited or a proportion word.
+
+## 2. What changed
+
+- **Sites (`fix_generator.py`, `uncited_domain_in`).** Every hostname-like token in a fix's title and detail is checked against the scan's cited domains (every distinct domain cited in its answered results, the client's own included, uncapped; built in `fix_runner.collect_facts` and never printed into the prompt) plus the client's own domain, and a subdomain or a parent of one of those. Anything else rejects that fix as `UNCITED_DOMAIN`. A rival the scan never saw cited is refused, which is the production case; a rival the scan cited is allowed. File names (`llms.txt`, `sitemap.xml`) and "e.g." are not sites. There is no exception list, not even schema.org: the prompt now says to call it schema markup.
+- **Proportion words (`proportion_word_in`, `PROPORTION_WORDS`).** largely, mostly, mainly, chiefly, primarily, predominantly, overwhelmingly, "the majority", "most of" (not in "make the most of"), "the bulk", "almost all", "nearly all" and "the vast majority" reject that fix as `PROPORTION_WORD`; a count from the facts ("72 of 200 citations") cannot be wrong that way.
+- **The prompt** gains two lines: name a website only if it is in the cited-domain list or is the client's own domain (rivals are not sources unless listed), and give counts, never words such as largely or mostly.
+- **A rejected fix is dropped, as before:** the others are kept, and when every fix is rejected the report falls back to the deterministic list (`NO_USABLE_FIXES`). Each rejection logs `fixes.domain_rejected` (with the domain, a fact) or `fixes.proportion_rejected`, never the fix's text.
+- **shiksha.com and collegedunia.com** join `NON_COMPETITOR_DOMAINS` (`serp.py`, a new group, education directories and publishers; collegedunia.com by the founder's decision of 2026-10-07). Detection drops them as candidates, and `PUT /clients/{clientId}/competitors` refuses them with 3.90's sentence. A list that already holds one is refused on its next save, naming the row (3.90), so RMIT's list must lose Shiksha before its next save.
+
+## Found, not fixed
+
+- **Report copy outside the fix generator** is not covered: `apps/web/src/lib/report/strings.ts:488` says "the two detection signals largely disagreed", and the deterministic fix copy (`report_narrative.py:388`) says "schema.org structured data". Neither is generated, and neither names a site the scan did not record.
+- **A parent of a cited domain is allowed** (`co.uk` when `x.co.uk` is cited); it names no third party.
+
+## Verified
+
+**API pytest 5569 → 5616 (+47); the floor is raised to match. Web vitest unchanged at 2570.**
+- **New:** in `test_fix_generator.py` (now 107 tests): the RMIT case (shiksha.com refused, the same fix naming only collegedunia.com accepted, "72 of 200 citations" accepted); capitals, a trailing full stop, a subdomain, a parent, a lookalike, the client's own domain, schema.org refused; file names and "e.g." not sites; all 13 proportion words; "make the most of" accepted and "most of the citations" refused; the log reasons; every fix rejected gives `NO_USABLE_FIXES`. `test_fix_runner.py` +1 (the cited set includes the subject's citations and is not the top 8); `test_competitors.py` +3 (both domains refused as rivals, and detection drops them); `test_competitor_domain_check.py` +2 cases (the PUT refuses both). The seven existing `accept` calls pass the scan's facts.
+- **The implementer's negative controls,** each restored: the domain check always passing, 8 fail; the proportion check off, 19; "make the most of" no longer excepted, 1; the two domains off the list, 5.
+- **On this tree:** the domain guard off, 8 of the 107 tests in `test_fix_generator.py` fail; the proportion guard off, 19 of 107; the two sites off the platform list, 5 of 155 in `test_competitors.py` and `test_competitor_domain_check.py`. Each file was restored and its checksum matched.
+- **The rest of the bar** (this tree, one run, 15:21 to 15:28):
+  - Counts: API 5616, workers 27, shared-types 53 (0 fail), design-system 967, web 2570, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
