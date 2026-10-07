@@ -63,6 +63,9 @@ PAGE_HEIGHT = 841.89
 MARGIN_X = 56.0
 MARGIN_TOP = 64.0
 MARGIN_BOTTOM = 56.0
+# The last page's footer baseline: inside the page, below the content area.
+FOOTER_Y = 34.0
+_HEADING_ROOM = 15.0 * 1.4 + 26  # a default heading's own height plus a line after it
 
 CONTENT_WIDTH = PAGE_WIDTH - (2 * MARGIN_X)
 
@@ -131,12 +134,12 @@ _WINANSI_EXTRA: dict[str, tuple[int, int, int]] = {
     "…": (0o205, 1000, 1000),  # ellipsis
     "£": (0o243, 556, 556),   # pound
     "é": (0o351, 556, 611),   # e-acute — common in agency and brand names
+    "\u00a0": (0o240, 278, 278),  # no-break space — holds "(58 + 41)." on one line
 }
 
 # Anything outside the two tables above becomes its nearest printable ASCII.
 # A '?' in a client's report is worse than a slightly plainer character.
 _TRANSLITERATE = {
-    " ": " ",
     "‑": "-",
     "−": "-",
     "«": '"',
@@ -215,8 +218,11 @@ def wrap(text: str, font: str, size: float, width: float) -> list[str]:
     A word longer than the measure is broken mid-word rather than allowed to
     overrun — a URL or a long domain is the realistic case, and both appear in
     this report.
+
+    Only the plain space breaks a line. A no-break space (U+00A0) is carried
+    into the word it joins, which is how "(58 + 41)." stays whole.
     """
-    words = normalise(text).split()
+    words = [word for word in normalise(text).split(" ") if word]
     if not words:
         return [""]
 
@@ -264,6 +270,7 @@ class PdfDocument:
 
     def __init__(self) -> None:
         self._pages: list[_Page] = []
+        self._footer: str | None = None
         self._y = 0.0
         self._new_page()
 
@@ -276,6 +283,40 @@ class PdfDocument:
     def _ensure(self, needed: float) -> None:
         if self._y - needed < MARGIN_BOTTOM:
             self._new_page()
+
+    def _keep_with_next(self, own: float, follow: float) -> None:
+        """The one check for anything that must not end a page: start a new page
+        unless `own` plus at least the first `follow` points of what comes next
+        fit. Used by the label, heading and subheading calls."""
+        self._ensure(own + follow)
+
+    def _plan_paragraph(self, count: int, leading: float) -> int:
+        """The one widow and orphan rule for every wrapped paragraph.
+
+        A paragraph of three lines or fewer never splits. A longer one never
+        leaves fewer than two lines at the foot of a page or on the next. Starts
+        a new page itself when the whole paragraph, or all but a safe split,
+        must move; returns the index of the line a page break is forced before
+        (`count` when none is).
+        """
+        fits = max(0, int((self._y - MARGIN_BOTTOM) / leading + 1e-9))
+        if fits >= count:
+            return count
+        if count <= 3 or fits < 2:
+            self._new_page()
+            return count
+        return min(fits, count - 2)
+
+    def keep_together(self, height: float) -> None:
+        """Start a new page unless `height` points fit here (a beat's rule,
+        label and heading travel together)."""
+        self._ensure(height)
+
+    def footer(self, text: str) -> None:
+        """A line drawn once, in the bottom margin of the LAST page, at a fixed
+        position below the content area. It is outside the flow, so it costs no
+        flow space and can never start a page of its own."""
+        self._footer = text
 
     @property
     def page_count(self) -> int:
@@ -334,7 +375,11 @@ class PdfDocument:
     ) -> None:
         """A wrapped paragraph."""
         width = CONTENT_WIDTH - indent
-        for line in wrap(body, font, size, width):
+        lines = wrap(body, font, size, width)
+        split = self._plan_paragraph(len(lines), leading)
+        for index, line in enumerate(lines):
+            if index == split:
+                self._new_page()
             self._ensure(leading)
             self._y -= leading
             if grey:
@@ -347,24 +392,29 @@ class PdfDocument:
     def eyebrow(self, label: str) -> None:
         """A small structural label. Upper-cased here rather than by the caller
         so every one of them is treated the same way."""
+        # Followed by a heading, so it carries the heading's room with it.
+        self._keep_with_next(11, _HEADING_ROOM)
         self.text(label.upper(), font=BOLD, size=7.5, leading=11, grey=True)
 
     def heading(self, body: str, *, size: float = 15.0) -> None:
         # Kept with what follows: a heading alone at the foot of a page is a
         # widow, and a report is a document before it is a data dump.
-        self._ensure(size * 1.4 + 26)
+        self._keep_with_next(size * 1.4, 26)
         self.space(4)
         self.text(body, font=BOLD, size=size, leading=size * 1.32, space_after=4)
 
     def subheading(self, body: str) -> None:
-        self._ensure(34)
+        self._keep_with_next(20, 14)
         self.space(6)
         self.text(body, font=BOLD, size=10.5, leading=14, space_after=2)
 
     def bullet(self, body: str, *, marker: str = "•") -> None:
         marker_width = 14.0
         lines = wrap(body, REGULAR, 10.0, CONTENT_WIDTH - marker_width)
+        split = self._plan_paragraph(len(lines), 14)
         for index, line in enumerate(lines):
+            if index == split:
+                self._new_page()
             self._ensure(14)
             self._y -= 14
             if index == 0:
@@ -393,43 +443,60 @@ class PdfDocument:
         *,
         widths: list[float] | None = None,
     ) -> None:
-        """A plain column table. No borders, no spanning, no wrapping inside a
-        cell — a cell that does not fit is truncated with an ellipsis, because a
-        row that silently reflows into two makes a table stop being scannable.
+        """A plain column table. No borders and no spanning.
+
+        A cell that does not fit on one line wraps onto a second; text longer
+        than two lines is cut with an ellipsis at the end of the second. A row
+        is as tall as its tallest cell and never splits across a page: a row
+        that does not fit moves whole to the next page. A table that continues
+        on a new page repeats its header there, drawn exactly as the first one
+        (rule and extra space for a two-line header included).
         """
         columns = len(headers)
         if widths is None:
             widths = [CONTENT_WIDTH / columns] * columns
 
-        def row_line(values: list[str], font: str, size: float, grey: bool) -> None:
-            self._ensure(14)
-            self._y -= 14
+        def draw_row(values: list[str], font: str, size: float, grey: bool) -> None:
+            height = row_height(values, widths, font, size)
+            self._ensure(height)
+            top = self._y
             if grey:
                 self._draw(b"0.42 0.42 0.42 rg")
             x = MARGIN_X
             for index in range(columns):
                 cell = values[index] if index < len(values) else ""
-                self._line(_truncate(cell, font, size, widths[index] - 6), font, size, x, self._y)
+                for offset, line in enumerate(cell_lines(cell, font, size, widths[index] - 6)):
+                    self._line(line, font, size, x, top - ROW_LEADING * (offset + 1))
                 x += widths[index]
             if grey:
                 self._draw(b"0 0 0 rg")
+            self._y = top - height
 
         # A header with no rows under it is not a table, it is a promise.
-        self._ensure(14 * (min(len(rows), 3) + 2))
-        row_line(headers, BOLD, 8.5, True)
-        self._y -= 2
-        self._draw(
-            b"0.82 0.82 0.82 rg "
-            + _num(MARGIN_X)
-            + b" "
-            + _num(self._y)
-            + b" "
-            + _num(CONTENT_WIDTH)
-            + b" 0.6 re f 0 0 0 rg"
+        self._ensure(
+            row_height(headers, widths, BOLD, 8.5)
+            + ROW_LEADING * (min(len(rows), 3) + 1)
         )
-        self._y -= 2
+        def draw_header() -> None:
+            draw_row(headers, BOLD, 8.5, True)
+            self._y -= 2
+            self._draw(
+                b"0.82 0.82 0.82 rg "
+                + _num(MARGIN_X)
+                + b" "
+                + _num(self._y)
+                + b" "
+                + _num(CONTENT_WIDTH)
+                + b" 0.6 re f 0 0 0 rg"
+            )
+            self._y -= 2
+
+        draw_header()
         for row in rows:
-            row_line(row, REGULAR, 9.5, False)
+            if self._y - row_height(row, widths, REGULAR, 9.5) < MARGIN_BOTTOM:
+                self._new_page()
+                draw_header()
+            draw_row(row, REGULAR, 9.5, False)
 
     # --- output ------------------------------------------------------------
 
@@ -468,8 +535,30 @@ class PdfDocument:
         )
 
         page_nums: list[int] = []
-        for page in self._pages:
-            stream = zlib.compress(b"\n".join(page.ops), 9)
+        for number, page in enumerate(self._pages):
+            ops = list(page.ops)
+            if self._footer is not None and number == len(self._pages) - 1:
+                ops.append(
+                    b"0.82 0.82 0.82 rg "
+                    + _num(MARGIN_X)
+                    + b" "
+                    + _num(FOOTER_Y + 14)
+                    + b" "
+                    + _num(CONTENT_WIDTH)
+                    + b" 0.6 re f"
+                )
+                ops.append(b"0.42 0.42 0.42 rg")
+                ops.append(
+                    b"BT /F1 8 Tf "
+                    + _num(MARGIN_X)
+                    + b" "
+                    + _num(FOOTER_Y)
+                    + b" Td ("
+                    + _encode(self._footer)
+                    + b") Tj ET"
+                )
+                ops.append(b"0 0 0 rg")
+            stream = zlib.compress(b"\n".join(ops), 9)
             content_num = add(
                 b"<< /Length "
                 + str(len(stream)).encode("ascii")
@@ -536,14 +625,33 @@ def _num(value: float) -> bytes:
     return f"{value:.3f}".rstrip("0").rstrip(".").encode("ascii") or b"0"
 
 
-def _truncate(text: str, font: str, size: float, width: float) -> str:
-    text = normalise(text)
-    if text_width(text, font, size) <= width:
-        return text
-    ellipsis = "…"
-    out = ""
-    for char in text:
-        if text_width(out + char + ellipsis, font, size) > width:
-            break
-        out += char
-    return out + ellipsis
+ROW_LEADING = 14.0
+# Extra space under a row (or header) that wrapped, so it reads apart from the next.
+MULTILINE_PAD = 2.0
+_CELL_MAX_LINES = 2
+_ELLIPSIS = "…"
+
+
+def cell_lines(text: str, font: str, size: float, width: float) -> list[str]:
+    """The lines a table cell prints: wrapped to `width`, at most two.
+
+    Text that needs more than two lines is cut at the end of the second with an
+    ellipsis, so a cell is never taller than two lines.
+    """
+    lines = wrap(text, font, size, width)
+    if len(lines) <= _CELL_MAX_LINES:
+        return lines
+    last = lines[_CELL_MAX_LINES - 1]
+    while last and text_width(last + _ELLIPSIS, font, size) > width:
+        last = last[:-1]
+    return [*lines[: _CELL_MAX_LINES - 1], last.rstrip() + _ELLIPSIS]
+
+
+def row_height(values: list[str], widths: list[float], font: str, size: float) -> float:
+    """A table row's height: its tallest cell's line count times the leading,
+    plus `MULTILINE_PAD` when any cell wrapped. One-line rows are unchanged."""
+    count = 1
+    for index, width in enumerate(widths):
+        cell = values[index] if index < len(values) else ""
+        count = max(count, len(cell_lines(cell, font, size, width - 6)))
+    return count * ROW_LEADING + (MULTILINE_PAD if count > 1 else 0.0)

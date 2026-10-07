@@ -7,10 +7,10 @@ session can do it, on a branch, with the full bar and a build-log entry, and
 only after the founder says go. Nothing here is pushed to `main` without the
 founder's OK; Render deploys `main` before CI finishes.
 
-Status on 2026-10-06: PRs #2 to #9 are merged. This checklist was last updated on branch
-`pilot-fixes-6` (the founder's brief "clear the board, harden billing, and four pilot
-features"), whose PR targets `main`. Rows that branch closed say **Done** or **Decided**
-and name the commit; its merge steps, and how to turn each new feature on, are 1.1h.
+Status on 2026-10-07: PRs #2 to #10 are merged. This checklist was last updated on branch
+`pilot-fixes-7` (the founder's brief of 2026-10-07, from the RMIT University report), whose
+PR targets `main`. Rows that branch closed say **Done** and name the commit; its merge
+steps, and how to re-run RMIT University afterwards, are 1.1i.
 
 ## 1. Merge and deploy what is built
 
@@ -269,7 +269,7 @@ exactly what it was.
      trial_days=30`;
    - a Stripe test clock in the dashboard can rehearse the end of a trial.
 
-### 1.1h Merge `pilot-fixes-6`'s PR — Founder
+### 1.1h Merge `pilot-fixes-6`'s PR — Founder — **Merged 2026-10-06** (PR #10, `main` at `607f655`)
 **Nothing has to be set for the code to be safe.** Every new feature is off until its
 variable is set; the free trial stays off until `STRIPE_TRIAL_DAYS` is set.
 - **Three migrations** run in the API container before it serves, in this order, each
@@ -301,8 +301,12 @@ The founder's decisions this branch carries:
 3. Look at the logs of any earlier API deploy that **failed at start**: before this branch,
    a settings error printed the tail of the last setting that was set, which could be part
    of a secret. If one did, rotate that secret.
-4. Add a Render log alert on `billing.checkout_created` with `trial_days` greater than 0, so
-   every trial that starts reaches you.
+4. **Render has no log-based alerts** (corrected 2026-10-07). To see every trial that starts,
+   check Stripe's Subscriptions list filtered to **Trialing**, or send the API's logs to a log
+   stream (Better Stack or Papertrail, set under the service's log streams on Render) and alert
+   there on `billing.checkout_created` with `trial_days` greater than 0. A log stream receives
+   the API's log lines (ids and event names, never a secret, token or email), so it becomes a
+   processor `/privacy` must name (2.4).
 
 **Turning the free trial on** (after step 1): Render → API → `STRIPE_TRIAL_DAYS=30`, as 1.1g
 steps 5 to 7 describe. Checkout logs `billing.checkout_created … trial_days=30`, and
@@ -346,6 +350,35 @@ API service only, Save, and Render redeploys):
 new sentences before F2 is turned on; 3.88 (Tier B, needs a `FORMULA_VERSION` bump); 3.89
 (detect's queued scan); 3.86's "A page like this usually stops before this section"; 3.92
 (the Google link's edge in forced colours, Claude's when convenient).
+
+### 1.1i Merge `pilot-fixes-7`'s PR — Founder
+**Nothing has to be set.** No migration, no new setting, no new host.
+- **Scores written after this deploy carry `formula_version` `v7`** (3.94): a brand's 2-4
+  character short form written in capitals ("RMIT", "UTS") counts as a mention. Stored rows keep
+  their version and numbers and nothing is re-scored; the visibility alert does not compare a
+  `v7` score with a `v5` one (`alerts.formula_changed` in the log instead).
+- **Generated fixes name only sites the scan cited, or the client's own,** and say no
+  "largely" (3.95). shiksha.com and collegedunia.com are refused as rivals.
+- **The report** (3.96, 3.99): no agency slug and no beat names on the PDF or the web report; PDF
+  tables wrap instead of cutting names, a continued table repeats its header, and nothing is
+  stranded at a page foot; the pitch heading reads as arithmetic, and when the points a fix
+  recovers do not move the printed score the report says so instead of printing it twice.
+
+**Re-running RMIT University after the deploy:**
+1. In the API logs, check `entrypoint: serving on :<port>` and `billing.price_check ok=True`.
+2. Remove Shiksha (and collegedunia.com, if it is listed) from RMIT University's rival list.
+   While the list holds either, a save is refused, naming the row (3.90); the next scan takes
+   the list as it stands.
+3. Run a new scan from the client's page. It is one of the agency's 40 scans and about
+   US$1.45 to 1.50 of provider spend (north-star §5.1).
+4. When it finishes, check the CSV: "Named the client" should read yes on answers that write
+   "RMIT". Mention Rate and Share of Voice will rise: that is the matching, not RMIT's market.
+   The 2026-10-05 scan keeps its `v5` score; it cannot be re-matched, because answer text is
+   not stored.
+
+**Queued from this branch, nothing to decide:** 3.97 (refusing an explicit re-score of a scan
+matched before `v7` — decided, and its own item because nothing yet records which matcher made a
+scan's matches), 3.98 (a short form inside a rival's longer name, Claude's when it bites).
 
 ### 1.2 `STRIPE_PRICE_ID` is the US$150 Price — Founder
 The price is US$150 a month since 2026-10-04 (founder decision; it was $160). This is
@@ -580,3 +613,9 @@ every one marked (sec).
 | 3.91 | **Decided 2026-10-06: kept.** Removing any seat clears the invitation link shown once, as 3.70 decided and tested. | — | — |
 | 3.92 | **The Google sign-in link has no edge in forced colours** (3.40's review): its 1px border is an inset shadow, which forced colours drops, so the link has no visible outline at rest (it shows focus since 3.40). | Claude + ui-reviewer | A real border (or an outline) that forced colours keeps. |
 | 3.93 | **F1 emails addresses nobody has verified** (F1's security review): scan emails are on by default for every user once the founder turns F1 on, and no address is verified (no email verification exists), so a password sign-up made with someone else's address could make us email that person client names it chose. Bounded by the scan allowance and a card on file; the invitation email has the same exposure today. | Founder | Accept for the pilot, or send scan emails only to users with a Google sign-in. |
+| 3.94 | **Done on `pilot-fixes-7`** (`26cc941`, the founder's brief of 2026-10-07): a brand's 2-4 character short form (the domain label or the name, ASCII), upper-cased, counts as a mention when it appears in capitals as a whole word, for the subject and rivals alike; "rmit", "Rmit" and "RMIT-accredited" do not; a stop list of ordinary capitalised words and generic acronyms (IT, AI, HR, SEO, NSW, …) is skipped, ART is not; a short form two brands share goes to the subject, else the first rival listed. `FORMULA_VERSION` `v7` (`v6` was the rejected experiment, never stored); nothing re-scored. | — | — |
+| 3.95 | **Done on `pilot-fixes-7`** (`88b9663`): a generated fix that names a domain the scan did not cite (the client's own is allowed), or uses a proportion word such as "largely" instead of a count, is dropped; shiksha.com and collegedunia.com join detection's platform-and-publisher list. | — | — |
+| 3.96 | **Done on `pilot-fixes-7`** (`7f63842`): the PDF and the web report drop the agency's slug and the beat names; PDF table cells and headers wrap to two lines, a continued table repeats its header, a heading never ends a page and the footer never takes a page of its own; the pitch heading reads "<t> today. Up to <a> if these fixes close every gap they address (<t> + <d>).", <d> the difference of the two printed numbers. | — | — |
+| 3.97 | **Decided 2026-10-08: refuse it.** An explicit re-score (`POST /scans/{scanId}/score`) of a scan whose matches were made before `v7` re-scores from those stored matches, which used the old rule, and writes a row labelled `v7`. Answer text is not stored, so the matches cannot be re-made: the refusal says so plainly and points at re-running the scan. **Not built on this branch — nothing records which matcher produced a scan's matches:** `Scan.formula_version` is never written anywhere in `src` (every row still holds its `v1` default), `BrandMention` has no version column, and `Score.formula_version` is the scoring version, not the matching rule, so a pre-`v7` scan that was never scored has no row to read. | Claude | Its own item: a matching-version column on `scans` written at scan time, an Alembic revision, a backfill marking existing rows pre-`v7`, the 409 and its `/problems` slug, `api-contracts.md`, and tests. |
+| 3.98 | **A short form inside a rival's longer name still names the subject** (3.94's review): "RMIT Vietnam is cheaper" names RMIT University too, as a long name already can ("Monash" inside "Monash Malaysia"). | Claude | When a scan shows it: drop a brand's match that lies inside a longer rival's match. |
+| 3.99 | **Done on `pilot-fixes-7`** (`8f0df7b`, the founder's decision of 2026-10-08; found by 3.96's UI review): the pitch heading asked whether the two PRINTED figures differ while the paragraph under it, and the PDF's figure rows, asked whether the RAW recoverable points were above zero. They disagreed when points worth recovering did not move the rounded score (reachable through the cap: 99.6 prints as 100, and 2.0 points recovered still print as 100), so the paragraph printed the same number either side of a gain. One helper now feeds both, and that case reads "Closing the gaps listed above recovers 2.0 points, which does not change the rounded score of 100." on the web and the PDF alike. | — | — |

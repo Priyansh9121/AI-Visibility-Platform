@@ -67,6 +67,7 @@ from ..models.engine_result import ANSWERED_STATUSES
 from ..models.score import DEFAULT_WEIGHTS, DIMENSION_KEYS, ScoreStatus
 from ..models.technical_audit import CheckStatus
 from . import fix_generator, scoring_runner
+from .domain_authority import normalise_domain
 from .fix_generator import DimensionFact, FixCandidate, FixFacts, FixOutcome, PersistableFix
 
 logger = structlog.get_logger(__name__)
@@ -239,6 +240,8 @@ async def collect_facts(session: AsyncSession, scan: Scan, client: Client) -> Fi
     answered = [r for r in results if r.status in ANSWERED_STATUSES]
     citations = [c for r in answered for c in r.citations]
     domains = Counter(c.source_domain for c in citations if not c.cites_subject)
+    # Every cited domain, the subject's own included: the fix guard's allowed set.
+    cited_domains = frozenset(normalise_domain(c.source_domain) for c in citations)
 
     competitors: list[tuple[str, str]] = []
     if competitor_set is not None:
@@ -262,6 +265,7 @@ async def collect_facts(session: AsyncSession, scan: Scan, client: Client) -> Fi
         citations_total=len(citations),
         citations_to_subject=sum(1 for c in citations if c.cites_subject),
         top_cited_domains=domains.most_common(MAX_CITED_DOMAINS),
+        cited_domains=cited_domains,
         schema_types=sorted(audit.schema_types or []) if audit is not None else [],
         word_count=audit.word_count if audit is not None else None,
         h1_count=audit.h1_count if audit is not None else None,

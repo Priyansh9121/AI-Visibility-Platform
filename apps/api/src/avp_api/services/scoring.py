@@ -103,8 +103,15 @@ logger = structlog.get_logger(__name__)
 # more than 10 points. Rows carrying v4 keep their numbers.
 # A v6 — shrinking each brand's mean toward the scan's pooled mean — was
 # measured the same day and rejected by the rule fixed before it ran; see the
-# note on `authority_when_named`. v5 stands.
-FORMULA_VERSION = "v5"
+# note on `authority_when_named`. v5 stood, and no stored row carries "v6".
+# v7 — what counts as a mention (2026-10-07). A brand's 2-4 character short form
+# written in capitals ("RMIT", "UTS", "VU") now names the brand, so answers that wrote
+# only the short form stop reading "not named". An INPUT change, not a formula change:
+# it moves Mention Rate, Share of Voice, Sentiment and Citation Strength (whose
+# population is the answers that name the brand) for brands with such a short form.
+# Rows carrying v5 keep their numbers. Answer text is not stored, so a scan matched
+# before v7 cannot be re-matched: an explicit re-score of one uses its stored matches.
+FORMULA_VERSION = "v7"
 
 # Why Technical Foundation can be missing — the reason `compute_score` records.
 # NOT_YET_MEASURED: no audit row for the scan. (Until 2026-10-05 it was also what an

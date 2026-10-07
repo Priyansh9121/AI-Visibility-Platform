@@ -210,6 +210,95 @@ class TestBrandMatching:
         assert find_brand("nothing relevant here", name="Zendesk", domain="zendesk.com") is None
 
 
+class TestShortFormInCapitals:
+    """A brand's 2-4 character short form counts when written in capitals (v7).
+
+    RMIT University, scan of 2026-10-05: every answer wrote "RMIT" and none
+    matched, because the label "rmit" is under SHORT_NAME_CHARS and the slug
+    pass wants 6 characters.
+    """
+
+    RMIT = {"name": "RMIT University", "domain": "rmit.edu.au"}
+
+    @pytest.mark.parametrize(
+        ("text", "index"),
+        [
+            ("RMIT is a strong choice for design.", 0),
+            ("RMIT's design school is well regarded.", 0),
+            ("Options include Monash (RMIT) and Deakin.", 24),
+            ("Many people pick RMIT.", 17),
+            ("RMIT. Then Monash.", 0),
+        ],
+    )
+    def test_the_capitals_short_form_is_a_mention(self, text: str, index: int) -> None:
+        assert find_brand(text, **self.RMIT) == index
+
+    def test_the_earliest_of_name_domain_and_short_form_wins(self) -> None:
+        text = "RMIT is big. RMIT University also runs short courses."
+        assert find_brand(text, **self.RMIT) == 0
+        later = "Short courses at RMIT University. Also RMIT."
+        assert find_brand(later, **self.RMIT) == later.index("RMIT")
+
+    def test_the_short_form_can_precede_the_full_name(self) -> None:
+        text = "Deakin is fine, RMIT is better, and RMIT University has a campus."
+        assert find_brand(text, **self.RMIT) == text.index("RMIT")
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Its RMIT-accredited partners offer short courses.",
+            "is rmit worth it for a masters",
+            "Rmit has a campus in the city.",
+            "RMITs campus is large.",
+        ],
+    )
+    def test_prose_and_hyphenated_forms_are_not_mentions(self, text: str) -> None:
+        assert find_brand(text, **self.RMIT) is None
+
+    def test_a_rival_is_found_by_its_capitals_short_form(self) -> None:
+        uts = {"name": "University of Technology Sydney", "domain": "uts.edu.au"}
+        assert find_brand("UTS ranks well for IT.", **uts) == 0
+        assert find_brand("uts ranks well", **uts) is None
+
+    def test_a_two_character_short_form_counts(self) -> None:
+        vu = {"name": "Victoria University", "domain": "vu.edu.au"}
+        assert find_brand("Try VU for a diploma.", **vu) == 4
+        assert find_brand("a vu of the city", **vu) is None
+
+    def test_a_stop_listed_form_is_not_a_mention(self) -> None:
+        it = {"name": "IT Partners", "domain": "it.com.au"}
+        assert find_brand("IT support is in demand", **it) is None
+
+    def test_a_form_off_the_stop_list_is_a_mention(self) -> None:
+        art = {"name": "Australian Retirement Trust", "domain": "art.com.au"}
+        assert find_brand("ART has low fees", **art) == 0
+
+    def test_the_stop_list_is_what_the_brief_fixed(self) -> None:
+        from avp_api.services import extraction
+
+        stop = extraction.SHORT_FORM_STOP_LIST
+        for word in ("IN", "AI", "SEO", "THE", "ATAR", "NSW", "B2B", "USA", "PS"):
+            assert word in stop
+        for word in ("ART", "ANZ", "IBM", "UTS", "VU", "HP", "RMIT"):
+            assert word not in stop
+
+    def test_a_short_name_gives_a_short_form_too(self) -> None:
+        """No domain label to lean on: a 3-character name in capitals."""
+        assert find_brand("IBM leads in mainframes.", name="IBM", domain=None) == 0
+        assert find_brand("ibm leads in mainframes.", name="IBM", domain=None) is None
+
+    def test_a_name_equal_to_its_label_is_one_form(self) -> None:
+        from avp_api.services.extraction import short_forms
+
+        assert short_forms("RMIT", "rmit.edu.au") == ("RMIT",)
+        assert short_forms("Zürich", "zu.ch") == ("ZU",)
+        assert short_forms("Æon", None) == ()
+
+    def test_a_label_of_five_characters_is_unchanged(self) -> None:
+        """Case-insensitive label pass, as before (and not a capitals-only rule)."""
+        assert find_brand("we use zendesk daily", name="Nope", domain="zendesk.com") == 7
+
+
 class TestExtraction:
     SUBJECT = {"subject_name": "Help Scout", "subject_domain": "helpscout.com"}
     COMPS = [("Zendesk", "zendesk.com"), ("Front", "front.com"), ("Intercom", "intercom.com")]
@@ -283,6 +372,74 @@ class TestExtraction:
         assert not facts.mentioned
         assert facts.brands_mentioned == 0
         assert facts.citations == []
+
+    def test_the_short_form_orders_the_subject_after_a_rival_named_first(self) -> None:
+        facts = extract_facts(
+            answer("Swinburne University of Technology and RMIT both teach design."),
+            subject_name="RMIT University", subject_domain="rmit.edu.au",
+            competitors=[("Swinburne University of Technology", "swinburne.edu.au")],
+        )
+        assert [h.name for h in facts.brand_hits] == [
+            "Swinburne University of Technology", "RMIT University",
+        ]
+        assert facts.mentioned
+        assert facts.position == 2
+        assert facts.brands_mentioned == 2
+
+    def test_a_rival_found_only_by_its_short_form_takes_a_position(self) -> None:
+        facts = extract_facts(
+            answer("UTS ranks above RMIT University for IT."),
+            subject_name="RMIT University", subject_domain="rmit.edu.au",
+            competitors=[("University of Technology Sydney", "uts.edu.au")],
+        )
+        by_name = {h.name: h.position for h in facts.brand_hits}
+        assert by_name == {"University of Technology Sydney": 1, "RMIT University": 2}
+
+    def test_the_short_form_moves_the_subject_ahead_of_a_rival(self) -> None:
+        """Before v7 the subject was unmatched here; with it the subject leads."""
+        facts = extract_facts(
+            answer("RMIT is a strong choice, and so is Swinburne University of Technology."),
+            subject_name="RMIT University", subject_domain="rmit.edu.au",
+            competitors=[("Swinburne University of Technology", "swinburne.edu.au")],
+        )
+        assert facts.mentioned
+        assert facts.position == 1
+        assert facts.brands_mentioned == 2
+
+    def test_a_short_form_shared_with_a_rival_names_the_subject_only(self) -> None:
+        facts = extract_facts(
+            answer("RMIT is a strong choice."),
+            subject_name="RMIT University", subject_domain="rmit.edu.au",
+            competitors=[("RMIT Vietnam", "rmit.edu.vn")],
+        )
+        assert [h.name for h in facts.brand_hits] == ["RMIT University"]
+        assert facts.position == 1
+        assert facts.brands_mentioned == 1
+
+    def test_the_rival_with_the_shared_short_form_is_still_found_by_its_full_name(self) -> None:
+        facts = extract_facts(
+            answer("RMIT Vietnam is cheaper."),
+            subject_name="RMIT University", subject_domain="rmit.edu.au",
+            competitors=[("RMIT Vietnam", "rmit.edu.vn")],
+        )
+        # The subject owns "RMIT", and "RMIT Vietnam" contains it as a bounded word, so
+        # the subject is named too: a limit of a short form, reported with v7.
+        assert "RMIT Vietnam" in [h.name for h in facts.brand_hits]
+        rival = next(h for h in facts.brand_hits if h.name == "RMIT Vietnam")
+        assert rival.first_index == 0 and not rival.is_subject
+
+    def test_two_rivals_sharing_a_short_form_go_to_the_first_listed(self) -> None:
+        facts = extract_facts(
+            answer("UTS ranks above Monash."),
+            subject_name="Monash University", subject_domain="monash.edu",
+            competitors=[
+                ("University of Technology Sydney", "uts.edu.au"),
+                ("UTS Insearch", "uts.edu.cn"),
+            ],
+        )
+        assert [h.name for h in facts.brand_hits] == [
+            "University of Technology Sydney", "Monash University",
+        ]
 
     def test_sentiment_is_not_set_by_pure_extraction(self) -> None:
         """Sentiment needs a model call and is applied by the runner, only when
