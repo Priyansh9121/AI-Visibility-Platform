@@ -529,7 +529,7 @@ class TestASiteWhoseRobotsTxtCannotBeRead:
         assert "TECHNICAL_FOUNDATION_NOT_MEASURED" not in score.degradation_flags
         assert "technical_foundation" not in score.weights
         assert score.composite is not None
-        assert score.formula_version == "v5"
+        assert score.formula_version == "v7"
 
         # No fix tells the client to publish a robots.txt that may well exist.
         fixes = await _rows(engine, ActionItem, sid)

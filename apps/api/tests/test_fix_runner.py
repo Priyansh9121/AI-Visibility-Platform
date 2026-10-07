@@ -169,6 +169,24 @@ class TestCollectFactsPopulation:
         assert facts.citations_to_subject == 4
         assert dict(facts.top_cited_domains) == {"g2.com": 2, "capterra.com": 2}
 
+    async def test_the_cited_set_holds_every_cited_domain_subject_citations_included(
+        self, client: AsyncClient, session, stub_mixed_engines
+    ) -> None:  # noqa: ANN001
+        """The fix guard's allowed set: what the scan cited, the client's own site too.
+
+        `top_cited_domains` leaves the subject's citations out and stops at eight;
+        the set must not, or a fix naming the client's own site is refused.
+        """
+        await _sign_up(client)
+        sid = await _mixed_scan(client)
+        scan = await session.get(Scan, sid)
+        subject = await session.get(Client, scan.client_id)
+
+        facts = await fix_runner.collect_facts(session, scan, subject)
+
+        assert facts.cited_domains == frozenset({"g2.com", "capterra.com", "helpscout.com"})
+        assert "helpscout.com" not in dict(facts.top_cited_domains)
+
     async def test_the_facts_agree_with_the_proof_beat_for_the_same_scan(
         self, client: AsyncClient, session, stub_mixed_engines
     ) -> None:  # noqa: ANN001

@@ -642,11 +642,13 @@ class TestAudit:
         assert side.sitemap_present is True and side.sitemap_refusal is None
 
 
-# Digests of RESULTS/COMPETITORS below, computed before ADDRESS_NOT_PUBLIC existed.
+# Digests of RESULTS/COMPETITORS below. Pinned before ADDRESS_NOT_PUBLIC existed, and
+# re-pinned on 2026-10-07 when FORMULA_VERSION moved to v7: the version is part of the
+# digest, so every pin moves with it; the check is still that a new reason changes none.
 PINNED_DIGESTS: dict[str, str] = {
-    "none": "1326be29c2fcf015b5053b7a7862caca93a05a252c3d100a88f8007d67953778",
-    "not_yet_measured": "43b9782e5ec5d182842149f8290648a0bb124e748ccf62fb7855ffc35f02c7b7",
-    "crawl_disallowed": "91c56f3607d7d3da41a69e5f9d802d709d52792c0a5246e34268900ef5788419",
+    "none": "af7af0f04640a34bc88bcd5ada8cfa045a42233e77a0c661a17f79b986d6b0f7",
+    "not_yet_measured": "ea7d17f3ab739d572ecdee2a7400123bc44444186398d8f487100773556d36fb",
+    "crawl_disallowed": "2b80f2d7953f692bb490fa845c865fc3d018cb2f6d8c692f4e1bbae3fe14cf87",
 }
 
 # ---------------------------------------------------------------------------
@@ -687,7 +689,7 @@ class TestScoring:
         assert {d: s.weight for d, s in disallowed.sub_scores.items() if s.included} == {
             d: s.weight for d, s in excluded.sub_scores.items() if s.included
         }
-        assert FORMULA_VERSION == "v5"
+        assert FORMULA_VERSION == "v7"
 
     def test_it_is_excluded_under_its_own_reason(self) -> None:
         disallowed = _score(
@@ -728,7 +730,7 @@ class TestScoring:
             d: s.weight for d, s in not_measured.sub_scores.items() if s.included
         }
         # No re-scoring of history: a new reason is not a formula change.
-        assert FORMULA_VERSION == "v5"
+        assert FORMULA_VERSION == "v7"
 
     def test_digests_computed_before_the_new_reason_are_unchanged(self) -> None:
         # Pinned from the code as it stood before ADDRESS_NOT_PUBLIC existed.
@@ -3135,7 +3137,7 @@ class TestAnUnreadableRobotsTxtInTheScore:
         assert unreadable.composite != _score(technical_foundation=Decimal("0")).composite
         # "had not been audited" would be false: the audit ran.
         assert "TECHNICAL_FOUNDATION_NOT_MEASURED" not in unreadable.degradation_flags
-        assert FORMULA_VERSION == "v5"
+        assert FORMULA_VERSION == "v7"
 
     def test_every_digest_computed_before_it_is_unchanged_and_it_has_its_own(self) -> None:
         # The pins are the existing ones (test_digests_computed_before_the_new_reason...).

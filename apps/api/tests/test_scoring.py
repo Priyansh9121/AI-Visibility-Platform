@@ -101,8 +101,10 @@ class TestFormulaConstants:
         # population change, v2's precedent again — shipping with the
         # market-participant exclusion from Tier B. v5 when Citation Strength
         # became the mean authority per answer naming the brand: under v4 it
-        # tracked Mention Rate (Spearman 0.781, zeros excluded, n = 83).
-        assert FORMULA_VERSION == "v5"
+        # tracked Mention Rate (Spearman 0.781, zeros excluded, n = 83). v7 when a
+        # 2-4 character short form in capitals began to count as a mention (an input
+        # change; v6 was the rejected shrinkage experiment and was never stored).
+        assert FORMULA_VERSION == "v7"
 
     def test_authority_values_say_the_ordering_and_nothing_more_precise(self) -> None:
         # The ratios are what the normalisation reads. Curated is the ceiling

@@ -26714,3 +26714,248 @@ The final bar, on this branch's whole tree with this entry's docs (one run, 17:1
 - OpenAPI and `api.gen.ts` regenerate with no change.
 - CI's image job (build the container, refuse to boot on the placeholder secret, migrate and serve) needs Docker, which is not running on this machine; its refusal check was run directly instead: a production start with the placeholder secret exits 1 saying "APP_SECRET is still the development placeholder", with no `input_value` printed.
 - Exit codes were read from files.
+
+# A brand's short form written in capitals counts as a mention, so "RMIT is a strong choice" names RMIT University (`FORMULA_VERSION` v7)
+
+**2026-10-07, the first entry of the day; branch `pilot-fixes-7`, item 1 of the founder's brief of 2026-10-07 (the RMIT University report).** API only, with a backend code review and its own bar.
+
+**Render: nothing to set.** Scores written after this deploy carry `formula_version` `v7`; every stored row keeps its version and its numbers, and nothing is re-scored.
+
+Drift check (north-star §8): Layer 2, Measurement (what counts as a mention); lifecycle phase: Activation (Epic 9), a pilot's report measuring its prospect correctly.
+
+## 1. What was wrong
+
+- **The production report for RMIT University** (scan of 2026-10-05) showed "Named the client: no" from all four engines on prompts that name RMIT ("is rmit worth it for a masters…", "rmit vs swinburne…", "university of melbourne vs rmit…"). `find_brand` (`services/extraction.py`) needed "RMIT University" in full: the domain-label pass skips "rmit" (4 characters, under `SHORT_NAME_CHARS` 5) and the slug pass skips it (under `MIN_SLUG_MATCH_CHARS` 6), so an answer saying "RMIT is a strong choice" was not a mention.
+- **The same hits any client or rival whose short form is 2 to 4 characters** (UTS, VU, IBM, ANZ, HP). It lowers Mention Rate, Share of Voice and Sentiment, shrinks Citation Strength's population (the answers that name the brand), and makes the "rivals named instead" fix partly an artefact.
+
+## 2. What changed
+
+- **The capitals pass.** A brand whose domain label (`rmit` of `rmit.edu.au`) or name is 2 to 4 ASCII letters or digits is also found by that short form UPPER-CASED, matched case-sensitively with the existing word boundary. It runs inside the first pass, so a brand's index is the earliest of its name, its full domain and its short form ("RMIT … RMIT University" places RMIT at the first "RMIT"). Labels of 5 or more characters and the slug pass are unchanged, so no brand without such a short form moves.
+- **The founder's decisions on the edge cases**, each tested:
+  - "rmit" and "Rmit" in prose are never a mention, nor is "RMITs".
+  - "RMIT-accredited" is not a mention: the existing boundary treats a hyphen as part of the word for every brand ("Front" is not found in "front-end"), so a short form like "IT" is not found in "IT-related" either.
+  - `SHORT_FORM_STOP_LIST`: two-letter words, generic acronyms (AI, HR, SEO, MBA, CEO, …), heading words (BEST, NOTE, PROS, …) and Australian terms (ATAR, NSW, TAFE, …) are skipped by the capitals pass; a brand with such a short form is still found by its full name, full domain and the longer passes. "ART" is not on it: Australian Retirement Trust is `art.com.au`, and answers call it ART.
+- **A short form two brands share goes to one of them** (the review's Should-fix, below): the subject claims its forms first, then each rival in list order, and a brand whose form is already claimed gets no capitals pass for it. "RMIT is a strong choice" names RMIT University and not a rival "RMIT Vietnam" (`rmit.edu.vn`), which is still found by its full name.
+- **`FORMULA_VERSION` `v5` → `v7`** (the founder's decision). `v6` names the shrinkage experiment measured and rejected on 2026-09-29; no stored row carries it. The spec gives no rule for an input change (rule 5 names the weights, and `v2.2`, the last input change, was a changelog line only), so the founder decided: the change moves composites for brands with a short form, and `alerts.py` already declines to compare scores across a version, so the first `v7` scan raises no "Visibility fell" alert against a `v5` baseline. `docs/scoring-spec.md` gains the `v7` changelog row, and its "a mention is a text match" passage now says what the match is; `scoring.py`'s version comment says the same. Answer text is not stored, so a scan matched before v7 cannot be re-matched.
+- **The scoring inputs digest includes the version** (`scoring.py:448`), so the three `PINNED_DIGESTS` in `test_robots_obeyed.py` were re-pinned, with a comment; the check they make (a new exclusion reason moves none of them) is unchanged.
+- **Cost:** sentiment is classified once per answer that names the subject (`scan_runner.py:349-355`). A short-named client now reaches that branch more often; the bound is unchanged, at most one call per answered result, as for any brand named in every answer.
+
+## 3. The review
+
+**Backend code review: no Blocker; one Should-fix and three nits taken in round 2; one Should-fix is the founder's.**
+- **Should-fix, fixed:** a rival sharing the subject's short form (RMIT University and RMIT Vietnam) would have been named by every "RMIT", taking Share of Voice from mentions of the client, and ordered first at the same index by name. Now the form goes to the subject, else the first rival listed.
+- **Nits, fixed:** each short-form pattern is built once (`lru_cache`); a name equal to its label gives one form; the docstring describes the passes as they are; the spec says ASCII.
+- **The founder's decision (launch checklist 3.97):** an explicit re-score (`POST /scans/{scanId}/score`) of a scan matched before v7 writes a `v7` row from its stored, pre-v7 matches, and nothing the report prints says so.
+- **Checked clean:** brands without a short form keep their index and order; lowercase and title case never match; no test was weakened; no other code matches brand names in text; every other reader of the version (alerts, `previousFormulaVersions`, one row per scan and version, the CSV, the web) needs no change.
+
+## Found, not fixed
+
+- **A short form inside a rival's longer name still names the subject** ("RMIT Vietnam is cheaper" names RMIT University too), as a long name already can ("Monash" inside "Monash Malaysia"). Launch checklist 3.98.
+- **The stop list is the founder's list;** the review named more all-caps words it does not hold (COST, FEES, FROM, WHAT, …). A false mention needs both an all-caps word in an answer and a brand whose short form is that word.
+- **A rival never named still claims its short form**, because the claim is decided from the list, not the answer.
+
+## Verified
+
+**API pytest 5544 → 5569 (+25); the floor is raised to match. Web vitest unchanged at 2570.**
+- **New, `test_prompts_extraction.py`** (45 → 63 functions; 14 failed before the fix): the short form first, with "'s", in brackets, at a sentence end and before the full name; the five non-mentions; UTS and VU as rivals; the stop list ("IT" not found, "ART" found); IBM by name; a 5-character label unchanged; the shared form (subject only; the rival by full name; two rivals, the first listed); one form for a name equal to its label, and ASCII only; ordering (Swinburne then RMIT; "UTS ranks above RMIT University"; the subject moving ahead of a rival it used to follow).
+- **Updated to `v7`:** the current-version assertions in `test_scoring.py`, `test_score_endpoints.py` (renamed `test_a_v4_row_is_not_re_scored_under_v7`), `test_robots_obeyed.py` (and its three pinned digests), `test_failed_audit_reason.py` and `test_scan_chain.py`. Fixtures that store a `v5` row are unchanged.
+- **The implementer's negative controls,** each restored: the capitals pass removed, 16 fail; the stop-list skip removed, 1; the match made case-insensitive, 5; the claim rule removed, 2; the version back to `v5`, 4.
+- **On this tree:** the capitals pass removed, 15 of the 63 tests in `test_prompts_extraction.py` fail; the version back to `v5`, 7 of 450 in `test_scoring.py`, `test_score_endpoints.py` and `test_robots_obeyed.py`. Each file was restored and its checksum matched.
+- **The rest of the bar** (this tree, one run, 15:08 to 15:19):
+  - Counts: API 5569, workers 27, shared-types 53 (0 fail), design-system 967, web 2570, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# A generated fix may name only a site the scan cited or the client's own, and never says "largely" where a count belongs; shiksha.com and collegedunia.com are publishers, not rivals
+
+**2026-10-07, the second entry of the day; branch `pilot-fixes-7`, item 2 of the founder's brief of 2026-10-07 (the RMIT University report).** API only, with its own bar.
+
+**Render: nothing to set.** The next scan's generated fixes are checked as below; stored fixes are not rewritten.
+
+Drift check (north-star §8): Layer 4, Prescription (the generated fixes); lifecycle phase: Activation (Epic 9), a pilot's report saying only what its scan found.
+
+## 1. What was wrong
+
+- **RMIT University's fix #3** (scan of 2026-10-05) said the client's descriptions came "largely" from third-party sites "such as shiksha.com and collegedunia.com". shiksha.com was not among the scan's cited domains: it was one of the scan's rivals, with zeros everywhere, and the model turned it into a cited source. The client's own site was the largest single source, 72 of 200 citations, which "largely" does not say.
+- **Nothing checked a generated fix against the scan.** The model is given `citations_total`, `citations_to_subject`, the top 8 third-party cited domains and the rivals (name and domain); `accept` refused banned claims and internal codes, not a site the scan never cited or a proportion word.
+
+## 2. What changed
+
+- **Sites (`fix_generator.py`, `uncited_domain_in`).** Every hostname-like token in a fix's title and detail is checked against the scan's cited domains (every distinct domain cited in its answered results, the client's own included, uncapped; built in `fix_runner.collect_facts` and never printed into the prompt) plus the client's own domain, and a subdomain or a parent of one of those. Anything else rejects that fix as `UNCITED_DOMAIN`. A rival the scan never saw cited is refused, which is the production case; a rival the scan cited is allowed. File names (`llms.txt`, `sitemap.xml`) and "e.g." are not sites. There is no exception list, not even schema.org: the prompt now says to call it schema markup.
+- **Proportion words (`proportion_word_in`, `PROPORTION_WORDS`).** largely, mostly, mainly, chiefly, primarily, predominantly, overwhelmingly, "the majority", "most of" (not in "make the most of"), "the bulk", "almost all", "nearly all" and "the vast majority" reject that fix as `PROPORTION_WORD`; a count from the facts ("72 of 200 citations") cannot be wrong that way.
+- **The prompt** gains two lines: name a website only if it is in the cited-domain list or is the client's own domain (rivals are not sources unless listed), and give counts, never words such as largely or mostly.
+- **A rejected fix is dropped, as before:** the others are kept, and when every fix is rejected the report falls back to the deterministic list (`NO_USABLE_FIXES`). Each rejection logs `fixes.domain_rejected` (with the domain, a fact) or `fixes.proportion_rejected`, never the fix's text.
+- **shiksha.com and collegedunia.com** join `NON_COMPETITOR_DOMAINS` (`serp.py`, a new group, education directories and publishers; collegedunia.com by the founder's decision of 2026-10-07). Detection drops them as candidates, and `PUT /clients/{clientId}/competitors` refuses them with 3.90's sentence. A list that already holds one is refused on its next save, naming the row (3.90), so RMIT's list must lose Shiksha before its next save.
+
+## Found, not fixed
+
+- **Report copy outside the fix generator** is not covered: `apps/web/src/lib/report/strings.ts:488` says "the two detection signals largely disagreed", and the deterministic fix copy (`report_narrative.py:388`) says "schema.org structured data". Neither is generated, and neither names a site the scan did not record.
+- **A parent of a cited domain is allowed** (`co.uk` when `x.co.uk` is cited); it names no third party.
+
+## Verified
+
+**API pytest 5569 → 5616 (+47); the floor is raised to match. Web vitest unchanged at 2570.**
+- **New:** in `test_fix_generator.py` (now 107 tests): the RMIT case (shiksha.com refused, the same fix naming only collegedunia.com accepted, "72 of 200 citations" accepted); capitals, a trailing full stop, a subdomain, a parent, a lookalike, the client's own domain, schema.org refused; file names and "e.g." not sites; all 13 proportion words; "make the most of" accepted and "most of the citations" refused; the log reasons; every fix rejected gives `NO_USABLE_FIXES`. `test_fix_runner.py` +1 (the cited set includes the subject's citations and is not the top 8); `test_competitors.py` +3 (both domains refused as rivals, and detection drops them); `test_competitor_domain_check.py` +2 cases (the PUT refuses both). The seven existing `accept` calls pass the scan's facts.
+- **The implementer's negative controls,** each restored: the domain check always passing, 8 fail; the proportion check off, 19; "make the most of" no longer excepted, 1; the two domains off the list, 5.
+- **On this tree:** the domain guard off, 8 of the 107 tests in `test_fix_generator.py` fail; the proportion guard off, 19 of 107; the two sites off the platform list, 5 of 155 in `test_competitors.py` and `test_competitor_domain_check.py`. Each file was restored and its checksum matched.
+- **The rest of the bar** (this tree, one run, 15:21 to 15:28):
+  - Counts: API 5616, workers 27, shared-types 53 (0 fail), design-system 967, web 2570, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# The PDF report is typeset: cells wrap instead of being cut, a continued table repeats its header, nothing is stranded at a page foot, and the pitch beat says what the second number would take
+
+**2026-10-07 (built, barred and controlled that evening; committed 2026-10-08), the third entry of the day; branch `pilot-fixes-7`, item 3 of the founder's brief of 2026-10-07 (the RMIT University report).** The PDF writer, the PDF document and the web report, with one bar.
+
+**Render: nothing to set.** The change is in how a report is drawn and worded. No stored report is rewritten; the next one a client opens or downloads reads as below.
+
+Drift check (north-star §8): Layer 5, Presentation (the report a client reads, on screen and as a PDF); lifecycle phase: Activation (Epic 9), the artefact the pilot agency actually hands over.
+
+## 1. What was wrong
+
+Five cosmetic defects, all seen in the RMIT University report of 2026-10-05:
+
+- **Table cells were cut, not wrapped.** `_truncate` cut any cell that did not fit on one line, so the rival column printed "Swinburne University of Tec…". A client's own competitor set is the one thing in the report they can check by eye, and the names were unreadable.
+- **A table that ran onto a new page lost its header.** Page 3 opened with a bare row, `desk365.io  1  —`, under no columns.
+- **Labels and headings could end a page.** "03 THE EVIDENCE" sat alone at the foot of page 1, its heading overleaf.
+- **A paragraph could leave one line behind.** The widow and orphan cases were not handled at all; the colophon's rule and text were in the flow, so the footer could take a page of its own.
+- **The pitch beat's second number was unexplained.** It read "58 today. 99 with the fixes above." — a number with no stated basis, and the only arithmetic a reader could do (99 − 58) was not printed. The cover and the web letterhead also printed the agency's URL slug beside its name, and the web report ended on a "Beats score · gap · proof · fix · pitch" line, which names this system's internals rather than anything the scan found.
+
+## 2. What changed
+
+**The writer (`pdf.py`).**
+
+- **Cells wrap.** `cell_lines()` wraps a cell to at most two lines and cuts the second with an ellipsis; `row_height()` makes a row as tall as its tallest cell, plus `MULTILINE_PAD` when any cell wrapped. A row never splits across a page: one that does not fit moves whole. `_truncate` is gone.
+- **A continued table repeats its header.** `draw_header()` draws the header, its rule and its spacing; `table()` calls it again on every page the rows continue onto, so a header is never two lines on one page and one on the next.
+- **Nothing is stranded.** `_keep_with_next(own, follow)` is the single check behind the eyebrow, heading and subheading calls: it starts a new page unless the element plus the first `follow` points of what comes next fit. `keep_together(height)` holds a beat's rule, label and heading's first line together.
+- **One widow and orphan rule.** `_plan_paragraph(count, leading)` is used by both `text()` and `bullet()`: a paragraph of three lines or fewer never splits; a longer one never leaves fewer than two lines on either side of a break.
+- **The footer is drawn in the bottom margin of the last page**, at `FOOTER_Y`, with its own hairline, outside the flow — so it costs no flow space and can never start a page of its own. `footer(text)` stores it; `render()` appends its operators to the last page only.
+- **The no-break space is a character this writer can draw.** U+00A0 joins `_WINANSI_EXTRA` as WinAnsi 0o240 at the space's own width, its transliteration to a plain space is dropped, and `wrap()` splits on the plain space only, so a no-break space is carried into the word it joins.
+
+**The document (`report_pdf.py`) and the web report (`ReportView.tsx`).**
+
+- **The pitch heading** is now "{t} today. Up to {a} if these fixes close every gap they address ({t} + {d})." — `t` and `a` are the two **printed** (rounded) figures and `d` is the difference **of those two printed figures**, never a separately rounded one, so the sum always equals the number beside it (58.24 and 98.84 print "58 today. Up to 99 … (58 + 41).", not "58 + 40"). When the two printed numbers are equal there is nothing to add and it prints only "{t} today." The parenthetical is joined by no-break spaces, on the PDF and on the web, so it is never split across two lines. `_pitch_heading` and `pitchHeading` produce the same sentence character for character and each names the other.
+- **The row label** "Composite if they all land" is now "Composite if every gap they address closes", which says what the figure is conditional on.
+- **The agency slug is gone** from the PDF cover and the web letterhead (the agency's name stays), and the web report's "Beats …" line is gone. Neither was anything the scan measured.
+
+## Found, not fixed
+
+- **The last page can hold very little.** In the RMIT report the closing three-line paragraph does not fit under the figure rows on page 3 — it would cross the bottom margin — so the widow rule moves it whole and page 4 carries it and the footer alone. That is the rule working; a page that is mostly white is the cost of never stranding a line.
+- **The heading and the paragraph under it are gated differently** (the UI review's only should-fix, and the same split on the PDF). The heading now asks whether the two **printed** figures differ; the web's `canProject` and the PDF's figure rows still ask whether the **raw** recoverable points are above zero. They disagree in one case: raw points above zero but too small to move the rounded composite (composite 62.6, potential 62.9, recoverable 0.3 — a pair the suite already pins). The heading then reads "63 today." while the paragraph below reads "scores 63 today … recovers 0.3 points, which is a composite of 63": both sentences are true, and the paragraph says outright that the figure is the same weighted sum, but it prints the same rounded number either side of a gain, which is the confusion the heading change was made to remove. **Not changed here, because the fix needs copy the founder has not seen:** simply moving `canProject` onto the printed figures would fall through to "There is no projection to make from this scan … this scan does not have one yet", which is false for a scan that has a score. It is checklist row 3.99.
+- **A cell longer than two lines is still cut** with an ellipsis. Two lines is the cap that keeps a table scannable; the web report does not truncate these names at all.
+- **The web beat heading's measure is capped at 22 characters** (`.avp-beat__heading`, unchanged here). Every beat heading already wraps against it; this one is now the longest in the report (73 characters against 43 to 64 for the others), so it wraps about one line further than its siblings. Worth the founder's eye on a rendered report.
+- **The footnote under the fix list is tight** against the list above it.
+
+## Verified
+
+**API pytest 5616 → 5656 (+40); web vitest 2570 → 2581 (+11). Both floors are raised to match.**
+
+- **New:** `test_report_pdf.py` 66 → 106 tests covering, each against the drawn page rather than the source: wrapped cells and their alignment, the two-line cap and its ellipsis, row height and the multi-line pad, a row moving whole, the repeated header on a continuation page, keep-with-next for the eyebrow, heading and subheading, the beat's rule-label-heading group, the widow and orphan rule and its split point, the footer drawn once in the last page's bottom margin, the pitch sentence for six composite/potential pairs including the two equal cases, the no-break space surviving `normalise` and emitted as WinAnsi 0o240, the sum held whole at five measures, a plain space still breaking a line, and the renamed row label. The web suite pins the same six pairs, the no-break spaces in the rendered report, and the absence of the slug and the "Beats …" line.
+- **The test's text extractor no longer collapses the no-break space.** It joined and collapsed with `\s+`, which flattens U+00A0 — an assertion could then pass against a sentence the writer never produced. It now collapses every whitespace character but that one.
+- **On this tree,** each file restored and its bytes checked after:
+  - the sum joined by plain spaces again: 6 of the 106 tests in `test_report_pdf.py` fail.
+  - `wrap()` breaking on every space again: 2.
+  - the no-break space off the WinAnsi table (so it is dropped rather than drawn): 3.
+  - the renamed row label reverted: 1.
+  - the widow and orphan rule off: 3.
+  - keep-with-next off: 2.
+  - the web sum joined by plain spaces again: 8 of the 445 report-component tests fail.
+- **The rest of the bar** (this tree, one run, 19:13 to 19:20):
+  - Counts: API 5656, workers 27, shared-types 53 (0 fail), design-system 967, web 2581, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- **Every page was looked at.** The RMIT/Swinburne fixture renders to four pages: the cover with beats 01 and 02; "03 THE EVIDENCE" opening page 2 with its tables; page 3 repeating the sources header, then beat 04 and the pitch heading and figure rows; page 4 the closing paragraph and the footer. No stranded heading, no lone body line, no cut rival name, and the sum whole on one line.
+- Exit codes were read from files.
+
+# When the points a fix recovers do not move the printed score, the report says so rather than printing the same number twice
+
+**2026-10-08; branch `pilot-fixes-7`, checklist 3.99, the founder's decision of 2026-10-08.** The PDF document and the web report, with its own bar.
+
+**Render: nothing to set.** Wording and a gate; no stored report is rewritten.
+
+Drift check (north-star §8): Layer 5, Presentation (the report a client reads, on screen and as a PDF); lifecycle phase: Activation (Epic 9).
+
+## 1. What was wrong
+
+The pitch heading and the paragraph under it asked different questions, found by the UI review of item 3 (`7f63842`).
+
+- **The heading** asks whether the two **printed** figures differ: when they do not, it prints only "100 today." and claims no uplift.
+- **The paragraph under it, and the PDF's figure rows,** still asked whether the **raw** recoverable points were above zero.
+
+They disagree whenever points worth recovering do not move the rounded score. The reachable case is the cap: a composite of 99.6 already prints as 100, and `potentialComposite` is `min(100, …)`, so 2.0 points recovered still print as 100. The heading then read "100 today." while the paragraph under it read "scores 100 today … recovers 2.0 points, which is a composite of 100" — the same number either side of a gain, which is the confusion the heading change in `7f63842` was made to remove.
+
+Moving the gate alone would have been wrong: the paragraph's other branch says "There is no projection to make from this scan … this scan does not have one yet", which is false for a scan that has a score.
+
+## 2. What changed
+
+- **One source for the two printed figures.** `_printed_figures(story)` in `report_pdf.py` and `printedFigures(narrative)` in `ReportView.tsx` return the two rounded numbers and their difference, or nothing when there is no score. The heading and the paragraph both read it, so they can no longer disagree about whether there is an uplift to state.
+- **A third branch, for points that do not move the printed score.** The report says: "Closing the gaps listed above recovers 2.0 points, which does not change the rounded score of 100." The same sentence on the web and on the PDF, by the founder's decision of 2026-10-08.
+- **The figures are still printed.** The PDF keeps its three rows: the exact composites do differ (99.60 and 100.00), and it is only the rounded pair that does not. The sentence sits above the existing arithmetic note, so what the rows mean is still stated.
+- **The no-score branch is untouched** and still reached only when there is no score or nothing to recover.
+
+## Found, not fixed
+
+- **The cap is the only case that reaches this in practice.** Below 100 a dimension fix needs a gap of at least 2 points (`MIN_GAP_POINTS`), and 2 points always move the rounded score; so the branch is exercised by a near-perfect score whose uplift is capped at 100. It is written for the general case rather than the cap.
+
+## Verified
+
+**API pytest 5656 → 5659 (+3); web vitest 2581 → 2584 (+3). Both floors are raised to match.**
+
+- **New:** `test_report_pdf.py` 106 → 109 — the pitch beat drawn on its own and read back: the sentence appears when the printed score does not move, with the rows still printed; it does not appear when the score does move; and `_printed_figures` returns the same pair for the heading and the figures, or nothing when unscored. `ReportView.test.tsx` +3 — a report whose uplift is capped at 100 prints "100 today." and "does not change the rounded score of 100" and neither "which is a composite of" nor the no-score fallback; a report whose score does move still names the composite; a scan with no score still gets the fallback.
+- **On this tree,** each file restored and its bytes checked after:
+  - the equal-score sentence removed: 1 of the 109 tests in `test_report_pdf.py` fails.
+  - the PDF figures gated on the raw points again: 1.
+  - the web paragraph gated on the raw points again: 1 of the 448 report-component tests fails.
+- **The rest of the bar** (this tree, one run, 09:15 to 09:22):
+  - Counts: API 5659, workers 27, shared-types 53 (0 fail), design-system 967, web 2584, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# Launch checklist 1.1i says how to merge `pilot-fixes-7` and re-run RMIT University, closes the rows this branch finished, and corrects the trial alert in 1.1h
+
+**2026-10-08; branch `pilot-fixes-7`.** Documentation only: `docs/launch-checklist.md`.
+
+**Render: nothing to set by this commit.** It describes what the founder sets and checks after the branch is merged.
+
+Drift check (north-star §8): no layer — this is the founder's operating document for the deploy, serving the Activation phase the branch's three items sit in.
+
+## 1. What changed
+
+- **1.1h is marked merged** (PR #10, `main` at `607f655`), and **its step 4 is corrected**. It told the founder to "add a Render log alert on `billing.checkout_created`". **Render has no log-based alerts.** The step now says to check Stripe's Subscriptions list filtered to **Trialing**, or to send the API's logs to a log stream (Better Stack or Papertrail, under the service's log streams) and alert there. It also notes that a log stream receives the API's log lines — ids and event names, never a secret, token or email — so it becomes a processor `/privacy` must name, which is 2.4's open list.
+- **1.1i is new:** how to merge this branch (no migration, no new setting, no new host), what each of its three items changes, and the steps to re-run RMIT University afterwards — remove Shiksha and collegedunia.com from the rival list first, because a save is refused while either is on it (3.90); the new scan costs one of the agency's 40 and about US$1.45 to 1.50 of provider spend; the 2026-10-05 scan keeps its `v5` score and cannot be re-matched, because answer text is not stored.
+- **The status line** names this branch and PR #10 as merged.
+- **Rows closed:** 3.94 (short-name matching, `26cc941`), 3.95 (generated fixes name only cited sites, `88b9663`), 3.96 (the report's typesetting and the pitch heading, `7f63842`), 3.99 (the pitch paragraph's gate, `8f0df7b`).
+- **Rows added:** 3.97, decided and queued; 3.98, open for Claude when a scan shows it.
+
+## 2. The two rows that are not closed
+
+- **3.97 — decided 2026-10-08: refuse.** An explicit re-score of a scan matched before `v7` must be refused, with a plain reason pointing at re-running the scan. **Not built here, because nothing records which matcher made a scan's matches:** `Scan.formula_version` is never written anywhere in `src` (every row still holds its `v1` default), `BrandMention` has no version column, and `Score.formula_version` is the scoring version rather than the matching rule, so a pre-`v7` scan that was never scored has no row to read. The row names what it needs: a matching-version column on `scans` written at scan time, an Alembic revision, a backfill marking existing rows pre-`v7`, the 409 and its `/problems` slug, `api-contracts.md`, and tests.
+- **3.98 — open.** A short form inside a rival's longer name still names the subject ("RMIT Vietnam" names RMIT University), as a long name already can. For Claude when a scan shows it.
+
+## Found, not fixed
+
+- **A cheaper 3.97 exists and was not taken:** refusing when the scan's newest `Score` row is pre-`v7`. It misses any pre-`v7` scan that was never scored, so it would read as a guard while leaving the case open. Named here rather than built.
+
+## Verified
+
+**No code changed, so no count moves: API pytest 5659, web vitest 2584, both as the floors stand.**
+
+- `docs/launch-checklist.md` is the only file this commit touches besides this entry.
+- Every commit hash named in the new and closed rows was read from `git log` on this branch: `26cc941`, `88b9663`, `7f63842`, `8f0df7b`.
+- The edits were applied by a script that asserts each replacement matches exactly once, run first against a copy and diffed before being run for real.
+- The branch's full bar is run after this commit; its counts are recorded in the entry above this one.

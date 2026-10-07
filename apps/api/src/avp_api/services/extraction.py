@@ -27,6 +27,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from decimal import Decimal
+from functools import lru_cache
 
 import anthropic
 import structlog
@@ -85,8 +86,38 @@ SENTIMENT_BOUND = CallBound(timeout=30.0, max_retries=1)  # ceiling: 62.0s
 
 # Brand names shorter than this are matched case-sensitively. "On" (the running
 # brand) and "Front" would otherwise match "on" and "front" in ordinary prose
-# and report a mention on almost every answer.
+# and report a mention on almost every answer. Since v7 (2026-10-07) a brand whose
+# domain label or name is 2-4 characters ("rmit", "uts", "vu") is ALSO found by that
+# short form UPPER-CASED, case-sensitively: "RMIT is a strong choice" names RMIT
+# University, "is rmit worth it" and "Rmit" do not. See `SHORT_FORM_STOP_LIST`.
 SHORT_NAME_CHARS = 5
+
+# Short forms that are skipped, 2026-10-07. A 2-4 character brand form is matched in
+# capitals, and these appear in capitals in ordinary answers without naming one
+# organisation: two-letter words, generic acronyms, heading words and Australian
+# terms. A brand whose short form is on it (IT Partners, "it.com.au") is still found
+# by its full name, its full domain and the 5+ character passes. ART, ANZ, IBM, UTS,
+# VU, HP and RMIT are deliberately NOT here.
+SHORT_FORM_STOP_LIST = frozenset(
+    {
+        # two-letter words
+        "AM", "AN", "AS", "AT", "BE", "BY", "DO", "GO", "HE", "IF", "IN", "IS", "IT",
+        "ME", "MY", "NO", "OF", "OK", "ON", "OR", "PM", "SO", "TO", "UP", "US", "WE",
+        # generic acronyms
+        "AI", "AR", "VR", "UX", "UI", "QA", "HR", "PR", "ID", "CV", "TV", "PC", "HD",
+        "EU", "UK", "UN", "USA", "CEO", "CFO", "CTO", "COO", "SEO", "SEM", "API", "URL",
+        "PDF", "FAQ", "MBA", "GPA", "KPI", "ROI", "CRM", "ERP", "SME", "SMB", "B2B",
+        "B2C", "DIY", "GPS", "ATM", "VPN", "CPU", "GPU", "RAM", "SSD", "USB", "LED",
+        "IPO", "LLC", "INC", "LTD", "PTY", "NB", "PS",
+        # heading words
+        "ALL", "AND", "ARE", "BEST", "BUT", "CAN", "CONS", "FOR", "FREE", "HOW", "NEW",
+        "NOT", "NOTE", "NOW", "ONE", "OUR", "OUT", "PRO", "PROS", "THE", "TIP", "TIPS",
+        "TOP", "TWO", "USE", "WHY", "YES", "YOU",
+        # Australian terms
+        "ATAR", "VCE", "HSC", "TAFE", "NSW", "VIC", "QLD", "ACT", "TAS", "WA", "SA",
+        "NT", "CBD", "GST", "AUD",
+    }
+)
 
 # Minimum slug length for the separator-insensitive pass below. Short slugs
 # match inside unrelated words once separators are stripped ("on" inside
@@ -143,6 +174,32 @@ class ExtractedFacts:
     status: EngineResultStatus = EngineResultStatus.OK
 
 
+# A 2-4 character form made of letters and digits (the capitals short-form pass).
+_SHORT_FORM = re.compile(r"[A-Za-z0-9]{2,4}", re.ASCII)
+
+
+@lru_cache(maxsize=512)
+def _short_form_pattern(form: str) -> re.Pattern[str]:
+    """Case-sensitive, word-bounded matcher for an upper-cased short form."""
+    return re.compile(rf"(?<![\w-]){re.escape(form)}(?![\w-])")
+
+
+def short_forms(name: str | None, domain: str | None) -> tuple[str, ...]:
+    """The capitals short forms a brand can be found by (v7), without duplicates.
+
+    The domain label and the name, each when 2-4 ASCII letters or digits, upper-cased,
+    less `SHORT_FORM_STOP_LIST`. Name "RMIT" with rmit.edu.au gives one form, "RMIT".
+    """
+    label = domain.split(".")[0] if domain else None
+    forms: list[str] = []
+    for short in (label, name.strip() if name else None):
+        if short and _SHORT_FORM.fullmatch(short):
+            form = short.upper()
+            if form not in SHORT_FORM_STOP_LIST and form not in forms:
+                forms.append(form)
+    return tuple(forms)
+
+
 def _name_pattern(name: str) -> re.Pattern[str] | None:
     """Word-boundary matcher for a brand name."""
     cleaned = name.strip()
@@ -176,13 +233,26 @@ def _slug_index(text: str, slug: str) -> int | None:
     return origin[found] if found != -1 else None
 
 
-def find_brand(text: str, *, name: str | None, domain: str | None) -> int | None:
+def find_brand(
+    text: str,
+    *,
+    name: str | None,
+    domain: str | None,
+    claimed_forms: frozenset[str] = frozenset(),
+) -> int | None:
     """First character index at which a brand is referenced, or None.
 
-    Three passes, cheapest and most precise first:
+    Three stages, cheapest and most precise first; stage 1 is itself three
+    searches, and the earliest index among them wins:
 
-    1. The name with word boundaries.
-    2. The bare domain, and its registrable label ("front.com" -> "Front").
+    1. (a) The name with word boundaries; (b) the full domain; (c) since v7 the
+       brand's 2-4 character short form in CAPITALS: the domain label or the
+       name, upper-cased, case-sensitive, skipped when on `SHORT_FORM_STOP_LIST`
+       ("RMIT is strong" names RMIT University; "rmit" and "Rmit" do not).
+       `claimed_forms` are short forms another brand already owns; (c) skips
+       them (`extract_facts` decides that, subject first, then rivals in list
+       order). Default: none claimed.
+    2. The registrable label of 5+ characters ("front.com" -> "Front").
     3. A separator-insensitive slug match, so "helpscout.com" or "HelpScout"
        finds "Help Scout".
 
@@ -206,6 +276,13 @@ def find_brand(text: str, *, name: str | None, domain: str | None) -> int | None
                 consider(match.start())
 
     label = domain.split(".")[0] if domain else None
+    for form in short_forms(name, domain):
+        if form in claimed_forms:
+            continue
+        match = _short_form_pattern(form).search(text)
+        if match:
+            consider(match.start())
+
     if best is None and label and len(label) >= SHORT_NAME_CHARS:
         pattern = _name_pattern(label)
         if pattern is not None:
@@ -258,6 +335,10 @@ def extract_facts(
     text = answer.text
 
     hits: list[BrandHit] = []
+    # A short form belongs to the first brand that has it: the subject, then the rivals
+    # in list order, decided from the list alone. Without this "RMIT" in an answer
+    # would name RMIT University and RMIT Vietnam alike.
+    claimed: set[str] = set(short_forms(subject_name, subject_domain))
     subject_index = find_brand(text, name=subject_name, domain=subject_domain)
     if subject_index is not None:
         hits.append(
@@ -269,7 +350,10 @@ def extract_facts(
         slug = slugify(comp_name)
         if slug in seen_slugs:
             continue
-        index = find_brand(text, name=comp_name, domain=comp_domain)
+        index = find_brand(
+            text, name=comp_name, domain=comp_domain, claimed_forms=frozenset(claimed)
+        )
+        claimed.update(short_forms(comp_name, comp_domain))
         if index is not None:
             seen_slugs.add(slug)
             hits.append(

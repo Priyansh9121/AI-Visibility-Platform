@@ -66,7 +66,11 @@ def _visible_text(pdf: bytes) -> str:
     # happens to wrap across two lines is still that sentence to a reader, and
     # an assertion that broke on where the wrap fell would be testing the
     # wrapper rather than the document.
-    return re.sub(r"\s+", " ", " ".join(out))
+    #
+    # The no-break space is deliberately NOT collapsed: it is a character the
+    # document draws on purpose, and flattening it here would let a reader
+    # assert on a sentence the writer never produced.
+    return re.sub(r"[^\S\u00a0]+", " ", " ".join(out))
 
 
 def _octal(digits: bytes) -> bytes:
@@ -764,3 +768,502 @@ def test_the_pdf_prints_the_reworded_audit_fix_and_none_of_what_it_used_to_say(c
         assert phrase not in text.lower(), phrase
     # A code is a machine's word for it: the PDF says the sentence and never the code.
     assert code not in text
+
+
+# ---------------------------------------------------------------------------
+# report cosmetics (pilot-fixes-7 item 3)
+# ---------------------------------------------------------------------------
+
+
+def _university_case() -> dict[str, Any]:
+    """A scored report whose subject and a rival have long names, as in production."""
+    case = json.loads(json.dumps(CASES["scored-no-generated-fixes"]))
+    case["subject"]["name"] = "RMIT University"
+    case["subject"]["brandName"] = "RMIT University"
+    case["competitorSet"]["competitors"][0]["name"] = "Swinburne University of Technology"
+    case["agency"]["slug"] = "psm-digital-agency"
+    return case
+
+
+def _university_text(case: dict[str, Any] | None = None) -> str:
+    body = case or _university_case()
+    return _visible_text(render_report_pdf(ReportOut.model_validate(body)))
+
+
+def _placed(pdf: bytes) -> list[tuple[float, float, str]]:
+    """(x, y, text) of every drawn string, in drawing order."""
+    out: list[tuple[float, float, str]] = []
+    for match in re.finditer(rb"stream\n(.*?)\nendstream", pdf, re.S):
+        content = zlib.decompress(match.group(1))
+        for op in re.finditer(rb"([\d.]+) ([\d.]+) Td \((.*?)\) Tj", content, re.S):
+            out.append((float(op.group(1)), float(op.group(2)), op.group(3).decode("cp1252")))
+    return out
+
+
+def test_the_cover_does_not_print_the_agencys_slug() -> None:
+    text = _university_text()
+    assert "psm-digital-agency" not in text
+    assert "AI visibility report" in text
+
+
+def test_the_footer_has_the_scan_and_the_date_and_no_beat_names() -> None:
+    case = _university_case()
+    text = _university_text(case)
+    assert f"Scan {case['scanId']} · generated " in text
+    assert "beats" not in text
+    assert "score · gap · proof" not in text
+
+
+def test_a_long_table_header_and_a_long_rival_name_are_printed_in_full() -> None:
+    text = _university_text()
+    assert "Named RMIT University" in text
+    assert "Swinburne University of Technology" in text
+    assert "Unive…" not in text
+    assert "Tec…" not in text
+
+
+def test_a_name_too_long_for_two_lines_ends_with_an_ellipsis() -> None:
+    case = _university_case()
+    long_name = "The Very Long Named Institute of Advanced Interdisciplinary Studies and Technology"
+    case["competitorSet"]["competitors"][0]["name"] = long_name
+    text = _university_text(case)
+    assert long_name not in text
+    # Rival column is 135 wide, less the 6 pt gutter, at 9.5 pt regular.
+    lines = pdf_writer.cell_lines(long_name, pdf_writer.REGULAR, 9.5, 129)
+    assert len(lines) == 2
+    assert lines[1].endswith("…")
+    assert f"{lines[0]} {lines[1]}" in text
+
+
+def test_cell_lines_wrap_to_two_lines_and_cut_the_second() -> None:
+    font, size, width = pdf_writer.REGULAR, 9.5, 129.0
+    assert pdf_writer.cell_lines("Zendesk", font, size, width) == ["Zendesk"]
+    two = pdf_writer.cell_lines("Swinburne University of Technology", font, size, width)
+    assert len(two) == 2
+    assert " ".join(two) == "Swinburne University of Technology"
+    long = pdf_writer.cell_lines(
+        "The Very Long Named Institute of Advanced Interdisciplinary Studies", font, size, width
+    )
+    assert len(long) == 2
+    assert long[1].endswith("…")
+    assert not long[0].endswith("…")
+    for line in long:
+        assert pdf_writer.text_width(line, font, size) <= width
+
+
+def test_a_row_is_as_tall_as_its_tallest_cell() -> None:
+    font, size, widths = pdf_writer.REGULAR, 9.5, [135.0, 72.0]
+    one = pdf_writer.row_height(["Zendesk", "1.0"], widths, font, size)
+    two = pdf_writer.row_height(["Swinburne University of Technology", "1.0"], widths, font, size)
+    assert one == pdf_writer.ROW_LEADING
+    assert two == 2 * pdf_writer.ROW_LEADING + 2.0
+
+
+def test_a_two_line_row_does_not_overlap_the_next_row() -> None:
+    doc = pdf_writer.PdfDocument()
+    doc.table(
+        ["Brand", "Share"],
+        [["Swinburne University of Technology", "1"], ["Zendesk", "2"]],
+        widths=[120, 60],
+    )
+    placed = _placed(doc.render())
+    ys = {t: y for _, y, t in placed}
+    name = "Swinburne University of Technology"
+    lines = pdf_writer.cell_lines(name, pdf_writer.REGULAR, 9.5, 114)
+    assert len(lines) == 2
+    first, second = ys[lines[0]], ys[lines[1]]
+    assert first - second == pdf_writer.ROW_LEADING
+    assert second - ys["Zendesk"] >= pdf_writer.ROW_LEADING + 2.0
+    # The figure beside a wrapped name sits on the name's first line.
+    assert ys["1"] == first
+
+
+def test_a_row_that_does_not_fit_moves_whole_to_the_next_page() -> None:
+    doc = pdf_writer.PdfDocument()
+    rows = [[f"Row {i}", "x"] for i in range(40)]
+    doc.table(["Brand", "Share"], rows, widths=[120, 60])
+    # fill to the point that a two-line row cannot fit, then add it
+    while doc._y - 2 * pdf_writer.ROW_LEADING >= pdf_writer.MARGIN_BOTTOM + 5:  # noqa: SLF001
+        doc.text("filler")
+    pages_before = doc.page_count
+    doc.table(["A"], [["Swinburne University of Technology"]], widths=[100])
+    pdf = doc.render()
+    assert doc.page_count >= pages_before
+    placed = _placed(pdf)
+    ys = {t: y for _, y, t in placed}
+    lines = pdf_writer.cell_lines("Swinburne University of Technology", pdf_writer.REGULAR, 9.5, 94)
+    assert len(lines) == 2
+    assert ys[lines[0]] - ys[lines[1]] == pdf_writer.ROW_LEADING
+    assert ys[lines[1]] >= pdf_writer.MARGIN_BOTTOM
+
+
+@pytest.mark.parametrize(
+    ("composite", "potential", "expected"),
+    [
+        (
+            62.6,
+            93.2,
+            "63 today. Up to 93 if these fixes close every gap they address (63\u00a0+\u00a030).",
+        ),
+        (
+            58.24,
+            98.84,
+            "58 today. Up to 99 if these fixes close every gap they address (58\u00a0+\u00a041).",
+        ),
+        (
+            97.5,
+            100.0,
+            "98 today. Up to 100 if these fixes close every gap they address (98\u00a0+\u00a02).",
+        ),
+        (40.0, 40.0, "40 today."),
+        (
+            62.4,
+            62.6,
+            "62 today. Up to 63 if these fixes close every gap they address (62\u00a0+\u00a01).",
+        ),
+        (62.6, 62.9, "63 today."),
+    ],
+)
+def test_the_pitch_heading_sums_the_two_printed_figures(
+    composite: float, potential: float, expected: str
+) -> None:
+    from types import SimpleNamespace
+
+    from avp_api.services.report_pdf import _pitch_heading
+
+    story = SimpleNamespace(status="scored", composite=composite, potential_composite=potential)
+    assert _pitch_heading(story, "Acme") == expected  # type: ignore[arg-type]
+
+
+def test_the_pitch_heading_for_an_unscored_report_is_unchanged() -> None:
+    from types import SimpleNamespace
+
+    from avp_api.services.report_pdf import _pitch_heading
+
+    story = SimpleNamespace(status="insufficient_data", composite=None, potential_composite=None)
+    assert _pitch_heading(story, "Acme") == "What a complete scan would tell you about Acme."  # type: ignore[arg-type]
+
+
+def test_the_pdf_prints_the_new_pitch_sentence_and_not_the_old_one() -> None:
+    text = _visible_text(_render("scored-no-generated-fixes"))
+    sentence = "58 today. Up to 99 if these fixes close every gap they address (58\u00a0+\u00a041)."
+    assert sentence in text
+    assert "with the fixes above" not in text
+
+
+def test_the_sum_in_the_pitch_heading_never_breaks_across_two_lines() -> None:
+    """The parenthetical is read as one figure, so it is never split in two.
+
+    The heading is set at whatever measure the page gives it; at none of them
+    may "(58" end a line with "41)." beginning the next.
+    """
+    from types import SimpleNamespace
+
+    from avp_api.services.report_pdf import _pitch_heading
+
+    story = SimpleNamespace(status="scored", composite=58.24, potential_composite=98.84)
+    heading = _pitch_heading(story, "Acme")  # type: ignore[arg-type]
+    for measure in (pdf_writer.CONTENT_WIDTH, 400.0, 300.0, 250.0, 200.0):
+        lines = pdf_writer.wrap(heading, pdf_writer.BOLD, 19, measure)
+        whole = [line for line in lines if "(58" in line]
+        assert len(whole) == 1
+        assert whole[0].endswith("(58\u00a0+\u00a041).")
+
+
+def test_a_no_break_space_is_drawn_rather_than_dropped_or_flattened() -> None:
+    """It survives `normalise`, is emitted as WinAnsi 0o240, and reads back.
+
+    Were it transliterated to a plain space the wrap above would pass while the
+    drawn line still broke, which is the failure this pins.
+    """
+    assert pdf_writer.normalise("a\u00a0b") == "a\u00a0b"
+    assert b"\\240" in pdf_writer._encode("a\u00a0b")
+    assert pdf_writer.text_width("a\u00a0b", pdf_writer.BOLD, 10) == pytest.approx(
+        pdf_writer.text_width("a b", pdf_writer.BOLD, 10)
+    )
+
+
+def test_a_plain_space_still_breaks_a_line() -> None:
+    """The change narrows what breaks; it must not stop breaking altogether."""
+    lines = pdf_writer.wrap("alpha beta gamma delta", pdf_writer.REGULAR, 10, 40)
+    assert len(lines) > 1
+
+
+def _pitch_text(composite: float, potential: float, recoverable: float) -> str:
+    """The pitch beat alone, drawn onto an empty document and read back."""
+    from types import SimpleNamespace
+
+    from avp_api.services.report_pdf import _pitch_beat
+
+    doc = pdf_writer.PdfDocument()
+    story = SimpleNamespace(
+        status="scored",
+        composite=composite,
+        potential_composite=potential,
+        recoverable_points=recoverable,
+        ahead_on_dimensions=[],
+    )
+    _pitch_beat(doc, {}, story, "Acme")  # type: ignore[arg-type]
+    return _visible_text(doc.render())
+
+
+def test_the_pitch_says_so_when_the_recovered_points_do_not_move_the_score() -> None:
+    """99.6 already prints as 100 and the uplift is capped there, so both
+    printed figures are 100. The rows still show 99.60 and 100.00; the sentence
+    stops the two 100s being read as a gain."""
+    text = _pitch_text(99.6, 100.0, 2.0)
+    assert "100 today." in text
+    assert "recovers 2.0 points, which does not change the rounded score of 100." in text
+    # The rows are still printed: the exact figures do differ.
+    assert "Composite today" in text
+    assert "Composite if every gap they address closes" in text
+
+
+def test_the_pitch_does_not_say_it_when_the_score_does_move() -> None:
+    text = _pitch_text(58.24, 98.84, 40.6)
+    assert "does not change the rounded score" not in text
+    assert "58 today. Up to 99" in text
+
+
+def test_the_heading_and_the_figures_read_the_same_two_printed_numbers() -> None:
+    """One helper decides both, so a heading claiming no uplift can never sit
+    above a paragraph claiming one."""
+    from types import SimpleNamespace
+
+    from avp_api.services.report_pdf import _printed_figures
+
+    assert _printed_figures(
+        SimpleNamespace(status="scored", composite=99.6, potential_composite=100.0)  # type: ignore[arg-type]
+    ) == (100, 100, 0)
+    assert _printed_figures(
+        SimpleNamespace(status="scored", composite=58.24, potential_composite=98.84)  # type: ignore[arg-type]
+    ) == (58, 99, 41)
+    assert (
+        _printed_figures(
+            SimpleNamespace(  # type: ignore[arg-type]
+                status="insufficient_data", composite=None, potential_composite=None
+            )
+        )
+        is None
+    )
+
+
+def test_the_pdf_names_the_figure_the_fixes_would_reach() -> None:
+    text = _visible_text(_render("scored-no-generated-fixes"))
+    assert "Composite if every gap they address closes" in text
+    assert "Composite if they all land" not in text
+
+
+def _rule_gap(header: list[str], widths: list[float]) -> float:
+    """Distance from the header's last baseline to the rule beneath it."""
+    doc = pdf_writer.PdfDocument()
+    doc.table(header, [["x"] * len(header)], widths=widths)
+    pdf = doc.render()
+    content = zlib.decompress(re.search(rb"stream\n(.*?)\nendstream", pdf, re.S).group(1))
+    rule_y = float(re.search(rb"[\d.]+ ([\d.]+) [\d.]+ 0\.6 re f", content).group(1))
+    lines = {
+        line
+        for cell, width in zip(header, widths, strict=True)
+        for line in pdf_writer.cell_lines(cell, pdf_writer.BOLD, 8.5, width - 6)
+    }
+    last = min(y for _, y, t in _placed(pdf) if t in lines)
+    return last - rule_y
+
+
+def test_a_two_line_header_leaves_more_room_above_its_rule_than_a_one_line_one() -> None:
+    one = _rule_gap(["Engine", "Asked"], [100, 60])
+    two = _rule_gap(["Engine", "Named RMIT University"], [100, 60])
+    assert two - one >= 2.0
+
+
+def _per_page(pdf: bytes) -> list[list[tuple[float, float, str]]]:
+    pages = []
+    for match in re.finditer(rb"stream\n(.*?)\nendstream", pdf, re.S):
+        content = zlib.decompress(match.group(1))
+        pages.append(
+            [
+                (float(m.group(1)), float(m.group(2)), re.sub(
+                    rb"\\([0-7]{3})", lambda o: _octal(o.group(1)), m.group(3)
+                ).decode("cp1252"))
+                for m in re.finditer(rb"([\d.]+) ([\d.]+) Td \((.*?)\) Tj", content, re.S)
+            ]
+        )
+    return pages
+
+
+def test_the_footer_is_on_the_last_page_below_the_content_and_never_alone() -> None:
+    case = _university_case()
+    pages = _per_page(render_report_pdf(ReportOut.model_validate(case)))
+    footer_prefix = f"Scan {case['scanId']} · generated "
+    holders = [
+        i for i, page in enumerate(pages) if any(t.startswith(footer_prefix) for *_, t in page)
+    ]
+    assert holders == [len(pages) - 1]
+    last = pages[-1]
+    footer_y = next(y for _, y, t in last if t.startswith(footer_prefix))
+    others = [y for _, y, t in last if not t.startswith(footer_prefix)]
+    assert footer_y == pdf_writer.FOOTER_Y < pdf_writer.MARGIN_BOTTOM
+    assert others, "the footer must not be the only thing on a page"
+    assert min(others) >= pdf_writer.MARGIN_BOTTOM
+    for page in pages:
+        assert len([t for *_, t in page if not t.startswith(footer_prefix)]) > 0
+
+
+def test_a_footer_costs_no_flow_space() -> None:
+    doc = pdf_writer.PdfDocument()
+    doc.text("x")
+    before = doc._y  # noqa: SLF001
+    doc.footer("Scan s · generated d")
+    assert doc._y == before  # noqa: SLF001
+    assert doc.page_count == 1
+
+
+def _fill_to(doc: pdf_writer.PdfDocument, room: float) -> None:
+    while doc._y - 14 >= pdf_writer.MARGIN_BOTTOM + room:  # noqa: SLF001
+        doc.text("filler")
+
+
+@pytest.mark.parametrize("call", ["eyebrow", "heading", "subheading"])
+def test_a_label_or_heading_near_the_page_foot_moves_with_what_follows(call: str) -> None:
+    doc = pdf_writer.PdfDocument()
+    _fill_to(doc, 20)  # room for the heading's own line, not for a line after it
+    getattr(doc, call)("A HEADING" if call == "eyebrow" else "A heading")
+    doc.text("First line after it.")
+    pages = _per_page(doc.render())
+    assert len(pages) == 2
+    texts = [[t for *_, t in page] for page in pages]
+    marker = "A HEADING" if call == "eyebrow" else "A heading"
+    assert marker not in texts[0]
+    assert marker in texts[1]
+    assert "First line after it." in texts[1]
+
+
+def test_a_heading_with_room_for_its_first_line_stays_on_the_page() -> None:
+    doc = pdf_writer.PdfDocument()
+    _fill_to(doc, 120)
+    doc.heading("A heading")
+    doc.text("First line after it.")
+    assert doc.page_count == 1
+
+
+def _rules_per_page(pdf: bytes) -> list[int]:
+    return [
+        len(re.findall(rb"0\.6 re f", zlib.decompress(m.group(1))))
+        for m in re.finditer(rb"stream\n(.*?)\nendstream", pdf, re.S)
+    ]
+
+
+def test_a_table_that_continues_on_a_new_page_repeats_its_header() -> None:
+    doc = pdf_writer.PdfDocument()
+    _fill_to(doc, 100)
+    rows = [[f"Row {i}", "x"] for i in range(12)]
+    doc.table(["Brand", "Share"], rows, widths=[120, 60])
+    pdf = doc.render()
+    pages = _per_page(pdf)
+    assert len(pages) == 2
+    for page in pages[1:]:
+        texts = [t for *_, t in page]
+        assert texts[0] == "Brand"
+        header_y = page[0][1]
+        first_row_y = next(y for _, y, t in page if t.startswith("Row "))
+        assert first_row_y < header_y - pdf_writer.ROW_LEADING
+    assert _rules_per_page(pdf)[1] == 1
+    on_first = [t for *_, t in pages[0] if t.startswith("Row ")]
+    on_second = [t for *_, t in pages[1] if t.startswith("Row ")]
+    assert len(on_first) + len(on_second) == 12
+    assert on_first and on_second
+
+
+def test_a_table_that_fits_prints_its_header_once() -> None:
+    doc = pdf_writer.PdfDocument()
+    doc.table(["Brand", "Share"], [[f"Row {i}", "x"] for i in range(5)], widths=[120, 60])
+    pages = _per_page(doc.render())
+    assert len(pages) == 1
+    assert [t for *_, t in pages[0]].count("Brand") == 1
+
+
+def test_a_repeated_two_line_header_keeps_its_extra_space_above_the_rule() -> None:
+    doc = pdf_writer.PdfDocument()
+    _fill_to(doc, 100)
+    doc.table(
+        ["Brand", "Named RMIT University"],
+        [[f"Row {i}", "x"] for i in range(12)],
+        widths=[120, 60],
+    )
+    pdf = doc.render()
+    page = _per_page(pdf)[1]
+    header_lines = [y for _, y, t in page[:3]]
+    assert len(set(header_lines)) == 2
+    assert page[0][2] == "Brand"
+
+
+def test_a_beat_opener_does_not_leave_its_rule_alone_at_the_page_foot() -> None:
+    from avp_api.services.report_pdf import _beat
+
+    doc = pdf_writer.PdfDocument()
+    _fill_to(doc, 40)  # the rule alone would fit; the rule, label and heading would not
+    _beat(doc, 3, "The evidence", "A claim.")
+    pdf = doc.render()
+    pages = _per_page(pdf)
+    assert len(pages) == 2
+    assert _rules_per_page(pdf) == [0, 1]
+    assert "03 THE EVIDENCE" in [t for *_, t in pages[1]]
+
+
+def _para(lines: int) -> str:
+    """A paragraph that wraps to exactly `lines` lines at the default measure."""
+    words = " ".join(f"w{i:03d}" for i in range(1000))
+    out = pdf_writer.wrap(words, pdf_writer.REGULAR, 10.0, pdf_writer.CONTENT_WIDTH)[:lines]
+    assert len(out) == lines
+    return " ".join(out)
+
+
+def _fill_lines(doc: pdf_writer.PdfDocument, room_lines: int) -> None:
+    while int((doc._y - pdf_writer.MARGIN_BOTTOM) / 14) > room_lines:  # noqa: SLF001
+        doc.text("filler")
+
+
+def _body_counts(pdf: bytes, marker: str = "w") -> list[int]:
+    return [len([t for *_, t in page if t.startswith(marker)]) for page in _per_page(pdf)]
+
+
+@pytest.mark.parametrize("room", [1, 2, 3, 4, 5])
+def test_a_long_paragraph_never_leaves_fewer_than_two_lines_on_either_side(room: int) -> None:
+    doc = pdf_writer.PdfDocument()
+    _fill_lines(doc, room)
+    doc.text(_para(8))
+    counts = [c for c in _body_counts(doc.render()) if c]
+    assert sum(counts) == 8
+    if len(counts) > 1:
+        assert all(c >= 2 for c in counts)
+
+
+def test_a_three_line_paragraph_moves_whole_rather_than_splitting() -> None:
+    doc = pdf_writer.PdfDocument()
+    _fill_lines(doc, 2)
+    doc.text(_para(3))
+    assert [c for c in _body_counts(doc.render()) if c] == [3]
+
+
+def test_a_paragraph_that_fits_stays_where_it_is() -> None:
+    doc = pdf_writer.PdfDocument()
+    _fill_lines(doc, 10)
+    doc.text(_para(8))
+    assert doc.page_count == 1
+
+
+def test_a_bulleted_item_follows_the_same_rule() -> None:
+    doc = pdf_writer.PdfDocument()
+    _fill_lines(doc, 1)
+    doc.bullet(_para(2))
+    assert doc.page_count == 2
+
+
+def test_no_page_of_the_report_holds_a_single_line_of_body_text() -> None:
+    case = _university_case()
+    pages = _per_page(render_report_pdf(ReportOut.model_validate(case)))
+    prefix = f"Scan {case['scanId']} · generated "
+    for page in pages:
+        body = [t for *_, t in page if not t.startswith(prefix)]
+        assert len(body) > 1, body
+    assert pages[-1][-1][2].startswith(prefix)

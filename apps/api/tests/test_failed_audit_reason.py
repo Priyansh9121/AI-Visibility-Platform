@@ -14,7 +14,7 @@ exists and failed. It is now `AUDIT_FAILED`. What these tests hold:
    weights are the same whichever reason Technical Foundation is excluded under (and equal to
    the composite of a scan with no audit at all). Only `excluded_dimensions`, the flag a
    `NOT_YET_MEASURED` raises, and the digest (which has always recorded the reason) differ.
-   `FORMULA_VERSION` stays `v5`.
+   `FORMULA_VERSION` was not bumped by this change (`v5` then, `v7` since 2026-10-07).
 4. **The lines say it.** `scoring.completed` carries the reason in `excluded`;
    `audit.completed` carries the audit's status, its error code and the reason Technical
    Foundation will be left out under, codes only.
@@ -225,7 +225,7 @@ class TestScoringDidNotMove:
         ]
         assert len({r.composite for r in results}) == 1
         assert len({r.formula_version for r in results}) == 1
-        assert FORMULA_VERSION == "v5"
+        assert FORMULA_VERSION == "v7"
 
 
 class TestTheAuditLine:
