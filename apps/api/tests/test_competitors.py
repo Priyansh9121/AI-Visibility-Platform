@@ -27,6 +27,7 @@ from avp_api.services.serp import (
     SerpHit,
     SerpResult,
     build_queries,
+    is_non_competitor_domain,
     is_plausible_competitor,
 )
 
@@ -116,6 +117,20 @@ class TestPublisherFiltering:
     )
     def test_publishers_are_not_competitors(self, domain: str) -> None:
         assert not is_plausible_competitor(domain, subject_domain="acme.com")
+
+    @pytest.mark.parametrize("domain", ["shiksha.com", "collegedunia.com"])
+    def test_education_directories_are_not_competitors(self, domain: str) -> None:
+        """Pilot-fixes-7 item 2: shiksha.com showed up as an RMIT rival with zeros everywhere."""
+        assert is_non_competitor_domain(domain)
+        assert not is_plausible_competitor(domain, subject_domain="rmit.edu.au")
+
+    def test_detection_drops_an_education_directory_as_a_candidate(self) -> None:
+        merged = merge_candidates(
+            [serp("best universities", ["shiksha.com", "collegedunia.com", "monash.edu"])],
+            [cocit("p", [("Shiksha", "shiksha.com"), ("Monash University", "monash.edu")])],
+            subject_domain="rmit.edu.au", subject_name="RMIT University",
+        )
+        assert [c.domain for c in merged] == ["monash.edu"]
 
     def test_the_subject_is_not_its_own_competitor(self) -> None:
         assert not is_plausible_competitor("acme.com", subject_domain="acme.com")

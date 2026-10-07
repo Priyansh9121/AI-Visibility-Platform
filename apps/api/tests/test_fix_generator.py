@@ -223,7 +223,7 @@ class TestAcceptance:
         producing them. A fix keyed to an unmeasured dimension is an invention."""
         candidates = build_candidates(HELPSCOUT, HELPSCOUT_FINDINGS)
         accepted, rejected = accept(
-            GeneratedFixSet(fixes=[generated("gap:backlink_authority")]), candidates
+            GeneratedFixSet(fixes=[generated("gap:backlink_authority")]), candidates, facts()
         )
         assert accepted == []
         assert rejected == ["gap:backlink_authority"]
@@ -231,7 +231,7 @@ class TestAcceptance:
     def test_rank_and_upside_come_from_the_candidate_not_the_model(self) -> None:
         candidates = build_candidates(HELPSCOUT, HELPSCOUT_FINDINGS)
         accepted, _ = accept(
-            GeneratedFixSet(fixes=[generated("audit:schema_faq")]), candidates
+            GeneratedFixSet(fixes=[generated("audit:schema_faq")]), candidates, facts()
         )
         assert accepted[0].rank == 4
         assert accepted[0].points_upside is None
@@ -245,6 +245,7 @@ class TestAcceptance:
                 fixes=[generated("gap:sentiment", priority=Priority.LOW, effort=Effort.L)]
             ),
             candidates,
+            facts(),
         )
         assert accepted[0].priority is Priority.LOW
         assert accepted[0].effort is Effort.L
@@ -256,6 +257,7 @@ class TestAcceptance:
                 fixes=[generated("audit:schema_faq"), generated("audit:schema_faq")]
             ),
             candidates,
+            facts(),
         )
         assert len(accepted) == 1
         assert rejected == ["audit:schema_faq"]
@@ -270,6 +272,7 @@ class TestAcceptance:
                 ]
             ),
             candidates,
+            facts(),
         )
         assert [f.source_key for f in accepted] == ["citation_strength", "schema_faq"]
 
@@ -300,6 +303,7 @@ class TestUnsupportableClaims:
                 ]
             ),
             candidates,
+            facts(),
         )
         assert accepted == []
         assert rejected == ["audit:schema_faq"]
@@ -311,6 +315,212 @@ class TestUnsupportableClaims:
             "revenue", "roi", "traffic", "leads", "conversion", "guarantee",
             "million", "x more", "skyrocket", "dominate", "act now", "limited time",
         }
+
+
+# ---------------------------------------------------------------------------
+# domains and proportions — pilot-fixes-7 item 2 (RMIT, scan of 2026-10-05)
+# ---------------------------------------------------------------------------
+
+# The shape of the production scan: the client's own site, a directory the scan
+# cited, and a rival the scan never saw cited.
+RMIT_CITED = frozenset({"rmit.edu.au", "collegedunia.com", "wikipedia.org"})
+
+
+def rmit_facts(**kw) -> FixFacts:  # noqa: ANN003
+    base = {
+        "domain": "rmit.edu.au",
+        "brand_name": "RMIT University",
+        "dimensions": HELPSCOUT,
+        "competitor_names": [("Shiksha", "shiksha.com"), ("Monash", "monash.edu")],
+        "citations_total": 200,
+        "citations_to_subject": 72,
+        "top_cited_domains": [("collegedunia.com", 31), ("wikipedia.org", 12)],
+        "cited_domains": RMIT_CITED,
+    }
+    base.update(kw)
+    return FixFacts(**base)
+
+
+def _verdict(text: str, *, facts_: FixFacts | None = None, field: str = "detail"):  # noqa: ANN202
+    candidates = build_candidates(HELPSCOUT, HELPSCOUT_FINDINGS)
+    accepted, rejected = accept(
+        GeneratedFixSet(fixes=[generated("audit:schema_faq", **{field: text})]),
+        candidates,
+        facts_ or rmit_facts(),
+    )
+    return accepted, rejected
+
+
+class TestNamedDomains:
+    def test_a_rival_the_scan_never_cited_is_rejected(self) -> None:
+        """The production defect: a rival's domain turned into a cited source."""
+        accepted, rejected = _verdict(
+            "Descriptions come from third-party sites such as shiksha.com and collegedunia.com."
+        )
+        assert accepted == []
+        assert rejected == ["audit:schema_faq"]
+
+    def test_the_same_fix_naming_only_a_cited_domain_is_accepted(self) -> None:
+        accepted, rejected = _verdict(
+            "Third-party sites such as collegedunia.com describe the university; "
+            "72 of 200 citations point to rmit.edu.au."
+        )
+        assert [f.source_key for f in accepted] == ["schema_faq"]
+        assert rejected == []
+
+    def test_the_title_is_checked_as_well_as_the_detail(self) -> None:
+        accepted, rejected = _verdict("Get listed on shiksha.com", field="title")
+        assert accepted == []
+        assert rejected == ["audit:schema_faq"]
+
+    def test_the_reason_is_logged_with_the_domain_and_never_the_text(self, capsys) -> None:  # noqa: ANN001
+        _verdict("Ask shiksha.com to update the page, then restate the secret-sentence.")
+        logged = capsys.readouterr().out
+        assert "UNCITED_DOMAIN" in logged
+        assert "shiksha.com" in logged
+        assert "secret-sentence" not in logged
+
+    def test_a_rival_the_scan_did_cite_is_allowed(self) -> None:
+        cited = rmit_facts(cited_domains=RMIT_CITED | {"shiksha.com"})
+        accepted, _ = _verdict("shiksha.com was cited in the scan.", facts_=cited)
+        assert len(accepted) == 1
+
+    def test_capitals_are_not_a_way_round_it(self) -> None:
+        accepted, rejected = _verdict("Shiksha.com lists the courses.")
+        assert accepted == []
+        assert rejected == ["audit:schema_faq"]
+
+    def test_a_cited_domain_in_capitals_is_allowed(self) -> None:
+        accepted, _ = _verdict("CollegeDunia.COM lists the courses.")
+        assert len(accepted) == 1
+
+    def test_a_full_stop_after_the_domain_is_punctuation(self) -> None:
+        accepted, rejected = _verdict("The listing sits on shiksha.com. It is out of date.")
+        assert accepted == [] and rejected == ["audit:schema_faq"]
+        accepted, _ = _verdict("The listing sits on collegedunia.com.")
+        assert len(accepted) == 1
+
+    def test_a_subdomain_of_a_cited_domain_is_allowed(self) -> None:
+        accepted, _ = _verdict("Update study.rmit.edu.au and en.wikipedia.org pages.")
+        assert len(accepted) == 1
+
+    def test_the_parent_of_a_cited_domain_is_allowed(self) -> None:
+        cited = rmit_facts(cited_domains=frozenset({"blog.example.com"}), domain="x.org")
+        accepted, _ = _verdict("example.com is the parent site.", facts_=cited)
+        assert len(accepted) == 1
+
+    def test_a_lookalike_is_not_a_subdomain(self) -> None:
+        accepted, _ = _verdict("Visit notrmit.edu.au for the page.")
+        assert accepted == []
+
+    def test_the_clients_own_domain_is_allowed_even_when_the_scan_never_cited_it(self) -> None:
+        own = rmit_facts(cited_domains=frozenset({"collegedunia.com"}))
+        accepted, _ = _verdict("Publish llms.txt at rmit.edu.au.", facts_=own)
+        assert len(accepted) == 1
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Publish llms.txt at the site root.",
+            "Add a sitemap.xml and a robots.txt file.",
+            "Serve index.html and schema.json, keep README.md and guide.pdf.",
+            "Use e.g. a short answer, or i.e. a table.",
+            "Scores rose from 3.7 to 4.5 in version 1.2.3.",
+        ],
+    )
+    def test_file_names_and_abbreviations_are_not_domains(self, text: str) -> None:
+        accepted, rejected = _verdict(text)
+        assert len(accepted) == 1, rejected
+
+    def test_there_is_no_exception_for_schema_org(self) -> None:
+        accepted, rejected = _verdict("Declare the type from schema.org on the page.")
+        assert accepted == [] and rejected == ["audit:schema_faq"]
+
+    def test_the_system_prompt_states_the_rule(self) -> None:
+        assert "cited-domain list" in fix_generator.SYSTEM_PROMPT
+        assert "schema markup" in fix_generator.SYSTEM_PROMPT
+
+    def test_the_cited_set_is_not_printed_into_the_prompt(self) -> None:
+        candidates = build_candidates(HELPSCOUT, HELPSCOUT_FINDINGS)
+        prompt = build_fix_prompt(
+            rmit_facts(cited_domains=frozenset({"only-in-the-set.example"})), candidates
+        )
+        assert "only-in-the-set.example" not in prompt
+
+
+class TestProportionWords:
+    @pytest.mark.parametrize(
+        "phrase",
+        [
+            "largely", "mostly", "mainly", "chiefly", "primarily", "predominantly",
+            "overwhelmingly", "the majority", "most of", "the bulk", "almost all",
+            "nearly all", "the vast majority",
+        ],
+    )
+    def test_a_proportion_word_is_rejected(self, phrase: str) -> None:
+        accepted, rejected = _verdict(f"Descriptions come {phrase} from other sites.")
+        assert accepted == [] and rejected == ["audit:schema_faq"]
+
+    def test_the_title_is_checked_too_and_case_does_not_matter(self) -> None:
+        accepted, _ = _verdict("Mostly rewrite the page", field="title")
+        assert accepted == []
+
+    def test_the_idiom_make_the_most_of_is_not_a_proportion(self) -> None:
+        accepted, _ = _verdict("Make the most of your FAQ page by marking each answer up.")
+        assert len(accepted) == 1
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Most of the citations point to other sites.",
+            "Descriptions on most of the 200 citations come from other sites.",
+        ],
+    )
+    def test_most_of_as_a_proportion_is_still_rejected(self, text: str) -> None:
+        accepted, rejected = _verdict(text)
+        assert accepted == [] and rejected == ["audit:schema_faq"]
+
+    def test_a_count_passes(self) -> None:
+        accepted, _ = _verdict("72 of 200 citations point to the client's own site.")
+        assert len(accepted) == 1
+
+    def test_whole_words_only(self) -> None:
+        accepted, _ = _verdict("Keep the mainframe docs and the primarily-named page; mostly-free.")
+        # "mostly-free" is still the word "mostly" at a word boundary; this one is rejected.
+        assert accepted == []
+        accepted, _ = _verdict("Add a mainstream summary beside the bulkhead diagram.")
+        assert len(accepted) == 1
+
+    def test_the_reason_is_logged_and_the_system_prompt_states_the_rule(self, capsys) -> None:  # noqa: ANN001
+        _verdict("Descriptions come largely from other sites.")
+        assert "PROPORTION_WORD" in capsys.readouterr().out
+        assert "never words such as largely or mostly" in fix_generator.SYSTEM_PROMPT
+
+
+class TestEveryFixRejectedByTheGuards:
+    async def test_all_rejected_is_no_usable_fixes(self, settings, monkeypatch) -> None:  # noqa: ANN001
+        import anthropic
+
+        class FakeResponse:
+            stop_reason = "end_turn"
+            parsed_output = GeneratedFixSet(
+                fixes=[
+                    generated("audit:schema_faq", detail="Listed on shiksha.com."),
+                    generated("audit:schema_product_or_service", detail="Largely off-site."),
+                ]
+            )
+
+        async def fake(**kwargs):  # noqa: ANN003, ARG001
+            return FakeResponse()
+
+        monkeypatch.setattr(
+            anthropic.resources.messages.AsyncMessages, "parse", lambda self, **kw: fake(**kw)
+        )
+        candidates = build_candidates(HELPSCOUT, HELPSCOUT_FINDINGS)
+        outcome = await fix_generator.generate_fixes(rmit_facts(), candidates, settings=settings)
+        assert outcome.status == "failed"
+        assert outcome.reason_code == "NO_USABLE_FIXES"
+        assert outcome.rejected == ["audit:schema_faq", "audit:schema_product_or_service"]
 
 
 # ---------------------------------------------------------------------------
@@ -359,6 +569,7 @@ class TestInternalIdentifiers:
                 ]
             ),
             candidates,
+            facts(),
         )
         assert accepted == []
         assert rejected == ["audit:schema_faq"]
