@@ -12,9 +12,10 @@
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { BEAT_SEQUENCE, layoutLedger } from '@avp/design-system';
-import { ReportView } from './ReportView';
+import { ReportView, pitchHeading } from './ReportView';
 import type { Report } from '@avp/shared-types';
 import { deriveNarrative, toLedgerDimensions } from '@/lib/report/derive';
+import type { DerivedNarrative as Narrative } from '@/lib/report/derive';
 import {
   AUDIT_FAILURE_GENERIC,
   AUDIT_FAILURE_SENTENCE,
@@ -380,7 +381,50 @@ describe('the fix beat names specific changes', () => {
 describe('the pitch is arithmetic, not sales language', () => {
   it('projects a composite from the points on the page', () => {
     const html = render(helpscoutReport);
-    expect(html).toContain('58 today. 99 with the fixes above.');
+    expect(html).toContain('58 today. Up to 99 if these fixes close every gap they address (58\u00a0+\u00a041).');
+  });
+
+  it('does not print the old forecast wording', () => {
+    expect(render(helpscoutReport)).not.toContain('with the fixes above');
+  });
+
+  const story = (composite: number | null, potential: number | null, status = 'scored') =>
+    ({ status, composite, potentialComposite: potential }) as unknown as Narrative;
+
+  it.each([
+    [62.6, 93.2, '63 today. Up to 93 if these fixes close every gap they address (63\u00a0+\u00a030).'],
+    [58.24, 98.84, '58 today. Up to 99 if these fixes close every gap they address (58\u00a0+\u00a041).'],
+    [97.5, 100, '98 today. Up to 100 if these fixes close every gap they address (98\u00a0+\u00a02).'],
+    [62.4, 62.6, '62 today. Up to 63 if these fixes close every gap they address (62\u00a0+\u00a01).'],
+    [40, 40, '40 today.'],
+    [62.6, 62.9, '63 today.'],
+  ])('sums the two printed figures: %s and %s', (composite, potential, expected) => {
+    expect(pitchHeading(story(composite, potential), 'Acme')).toBe(expected);
+  });
+
+  it('keeps the unscored fallback', () => {
+    expect(pitchHeading(story(null, null, 'insufficient_data'), 'Acme')).toBe(
+      'What a complete scan would tell you about Acme.',
+    );
+  });
+
+  it('joins the sum with no-break spaces, so it never wraps mid-figure', () => {
+    const heading = pitchHeading(story(58.24, 98.84), 'Acme');
+    expect(heading).toContain('(58\u00a0+\u00a041).');
+    expect(heading).not.toContain('(58 + 41).');
+    // Only the parenthetical is joined; the sentence still wraps normally.
+    expect(heading.slice(0, heading.indexOf('(')).includes('\u00a0')).toBe(false);
+  });
+
+  it('prints the sum as a non-breaking group in the rendered report', () => {
+    expect(render(helpscoutReport)).toContain('\u00a0+\u00a0');
+  });
+
+  it('prints no agency slug and no beat names', () => {
+    const html = render(helpscoutReport);
+    expect(html).toContain('AI visibility report');
+    expect(html).not.toContain(helpscoutReport.agency.slug);
+    expect(html).not.toContain('Beats score');
   });
 
   it('makes no claim it cannot support', () => {
@@ -526,7 +570,7 @@ describe('the fix beat with Epic 8 generated copy', () => {
   it('still shows the same point figures the chart drew', () => {
     // The generator never touched these. Same chip, same arithmetic.
     expect(html).toContain('+19.3 pts');
-    expect(html).toContain('58 today. 99 with the fixes above.');
+    expect(html).toContain('58 today. Up to 99 if these fixes close every gap they address (58\u00a0+\u00a041).');
   });
 
   it('makes no claim it cannot support, in GENERATED copy', () => {

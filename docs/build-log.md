@@ -26810,3 +26810,70 @@ Drift check (north-star §8): Layer 4, Prescription (the generated fixes); lifec
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# The PDF report is typeset: cells wrap instead of being cut, a continued table repeats its header, nothing is stranded at a page foot, and the pitch beat says what the second number would take
+
+**2026-10-07 (built, barred and controlled that evening; committed 2026-10-08), the third entry of the day; branch `pilot-fixes-7`, item 3 of the founder's brief of 2026-10-07 (the RMIT University report).** The PDF writer, the PDF document and the web report, with one bar.
+
+**Render: nothing to set.** The change is in how a report is drawn and worded. No stored report is rewritten; the next one a client opens or downloads reads as below.
+
+Drift check (north-star §8): Layer 5, Presentation (the report a client reads, on screen and as a PDF); lifecycle phase: Activation (Epic 9), the artefact the pilot agency actually hands over.
+
+## 1. What was wrong
+
+Five cosmetic defects, all seen in the RMIT University report of 2026-10-05:
+
+- **Table cells were cut, not wrapped.** `_truncate` cut any cell that did not fit on one line, so the rival column printed "Swinburne University of Tec…". A client's own competitor set is the one thing in the report they can check by eye, and the names were unreadable.
+- **A table that ran onto a new page lost its header.** Page 3 opened with a bare row, `desk365.io  1  —`, under no columns.
+- **Labels and headings could end a page.** "03 THE EVIDENCE" sat alone at the foot of page 1, its heading overleaf.
+- **A paragraph could leave one line behind.** The widow and orphan cases were not handled at all; the colophon's rule and text were in the flow, so the footer could take a page of its own.
+- **The pitch beat's second number was unexplained.** It read "58 today. 99 with the fixes above." — a number with no stated basis, and the only arithmetic a reader could do (99 − 58) was not printed. The cover and the web letterhead also printed the agency's URL slug beside its name, and the web report ended on a "Beats score · gap · proof · fix · pitch" line, which names this system's internals rather than anything the scan found.
+
+## 2. What changed
+
+**The writer (`pdf.py`).**
+
+- **Cells wrap.** `cell_lines()` wraps a cell to at most two lines and cuts the second with an ellipsis; `row_height()` makes a row as tall as its tallest cell, plus `MULTILINE_PAD` when any cell wrapped. A row never splits across a page: one that does not fit moves whole. `_truncate` is gone.
+- **A continued table repeats its header.** `draw_header()` draws the header, its rule and its spacing; `table()` calls it again on every page the rows continue onto, so a header is never two lines on one page and one on the next.
+- **Nothing is stranded.** `_keep_with_next(own, follow)` is the single check behind the eyebrow, heading and subheading calls: it starts a new page unless the element plus the first `follow` points of what comes next fit. `keep_together(height)` holds a beat's rule, label and heading's first line together.
+- **One widow and orphan rule.** `_plan_paragraph(count, leading)` is used by both `text()` and `bullet()`: a paragraph of three lines or fewer never splits; a longer one never leaves fewer than two lines on either side of a break.
+- **The footer is drawn in the bottom margin of the last page**, at `FOOTER_Y`, with its own hairline, outside the flow — so it costs no flow space and can never start a page of its own. `footer(text)` stores it; `render()` appends its operators to the last page only.
+- **The no-break space is a character this writer can draw.** U+00A0 joins `_WINANSI_EXTRA` as WinAnsi 0o240 at the space's own width, its transliteration to a plain space is dropped, and `wrap()` splits on the plain space only, so a no-break space is carried into the word it joins.
+
+**The document (`report_pdf.py`) and the web report (`ReportView.tsx`).**
+
+- **The pitch heading** is now "{t} today. Up to {a} if these fixes close every gap they address ({t} + {d})." — `t` and `a` are the two **printed** (rounded) figures and `d` is the difference **of those two printed figures**, never a separately rounded one, so the sum always equals the number beside it (58.24 and 98.84 print "58 today. Up to 99 … (58 + 41).", not "58 + 40"). When the two printed numbers are equal there is nothing to add and it prints only "{t} today." The parenthetical is joined by no-break spaces, on the PDF and on the web, so it is never split across two lines. `_pitch_heading` and `pitchHeading` produce the same sentence character for character and each names the other.
+- **The row label** "Composite if they all land" is now "Composite if every gap they address closes", which says what the figure is conditional on.
+- **The agency slug is gone** from the PDF cover and the web letterhead (the agency's name stays), and the web report's "Beats …" line is gone. Neither was anything the scan measured.
+
+## Found, not fixed
+
+- **The last page can hold very little.** In the RMIT report the closing three-line paragraph does not fit under the figure rows on page 3 — it would cross the bottom margin — so the widow rule moves it whole and page 4 carries it and the footer alone. That is the rule working; a page that is mostly white is the cost of never stranding a line.
+- **The heading and the paragraph under it are gated differently** (the UI review's only should-fix, and the same split on the PDF). The heading now asks whether the two **printed** figures differ; the web's `canProject` and the PDF's figure rows still ask whether the **raw** recoverable points are above zero. They disagree in one case: raw points above zero but too small to move the rounded composite (composite 62.6, potential 62.9, recoverable 0.3 — a pair the suite already pins). The heading then reads "63 today." while the paragraph below reads "scores 63 today … recovers 0.3 points, which is a composite of 63": both sentences are true, and the paragraph says outright that the figure is the same weighted sum, but it prints the same rounded number either side of a gain, which is the confusion the heading change was made to remove. **Not changed here, because the fix needs copy the founder has not seen:** simply moving `canProject` onto the printed figures would fall through to "There is no projection to make from this scan … this scan does not have one yet", which is false for a scan that has a score. It is checklist row 3.99.
+- **A cell longer than two lines is still cut** with an ellipsis. Two lines is the cap that keeps a table scannable; the web report does not truncate these names at all.
+- **The web beat heading's measure is capped at 22 characters** (`.avp-beat__heading`, unchanged here). Every beat heading already wraps against it; this one is now the longest in the report (73 characters against 43 to 64 for the others), so it wraps about one line further than its siblings. Worth the founder's eye on a rendered report.
+- **The footnote under the fix list is tight** against the list above it.
+
+## Verified
+
+**API pytest 5616 → 5656 (+40); web vitest 2570 → 2581 (+11). Both floors are raised to match.**
+
+- **New:** `test_report_pdf.py` 66 → 106 tests covering, each against the drawn page rather than the source: wrapped cells and their alignment, the two-line cap and its ellipsis, row height and the multi-line pad, a row moving whole, the repeated header on a continuation page, keep-with-next for the eyebrow, heading and subheading, the beat's rule-label-heading group, the widow and orphan rule and its split point, the footer drawn once in the last page's bottom margin, the pitch sentence for six composite/potential pairs including the two equal cases, the no-break space surviving `normalise` and emitted as WinAnsi 0o240, the sum held whole at five measures, a plain space still breaking a line, and the renamed row label. The web suite pins the same six pairs, the no-break spaces in the rendered report, and the absence of the slug and the "Beats …" line.
+- **The test's text extractor no longer collapses the no-break space.** It joined and collapsed with `\s+`, which flattens U+00A0 — an assertion could then pass against a sentence the writer never produced. It now collapses every whitespace character but that one.
+- **On this tree,** each file restored and its bytes checked after:
+  - the sum joined by plain spaces again: 6 of the 106 tests in `test_report_pdf.py` fail.
+  - `wrap()` breaking on every space again: 2.
+  - the no-break space off the WinAnsi table (so it is dropped rather than drawn): 3.
+  - the renamed row label reverted: 1.
+  - the widow and orphan rule off: 3.
+  - keep-with-next off: 2.
+  - the web sum joined by plain spaces again: 8 of the 445 report-component tests fail.
+- **The rest of the bar** (this tree, one run, 19:13 to 19:20):
+  - Counts: API 5656, workers 27, shared-types 53 (0 fail), design-system 967, web 2581, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- **Every page was looked at.** The RMIT/Swinburne fixture renders to four pages: the cover with beats 01 and 02; "03 THE EVIDENCE" opening page 2 with its tables; page 3 repeating the sources header, then beat 04 and the pitch heading and figure rows; page 4 the closing paragraph and the footer. No stranded heading, no lone body line, no cut rival name, and the sum whole on one line.
+- Exit codes were read from files.

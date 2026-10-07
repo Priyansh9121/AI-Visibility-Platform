@@ -53,7 +53,8 @@ describe('the report of a failed scan', () => {
   it('draws no ledger column and no score numeral', () => {
     const html = render(failedWithScore);
     expect(html).not.toContain('Help Scout scores');
-    expect(html).not.toContain('with the fixes above');
+    expect(html).not.toContain('if these fixes close every gap');
+    expect(html).not.toContain(' today.');
   });
 
   it('leaves every other status with its own copy', () => {
