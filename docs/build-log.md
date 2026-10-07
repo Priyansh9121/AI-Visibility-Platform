@@ -26714,3 +26714,58 @@ The final bar, on this branch's whole tree with this entry's docs (one run, 17:1
 - OpenAPI and `api.gen.ts` regenerate with no change.
 - CI's image job (build the container, refuse to boot on the placeholder secret, migrate and serve) needs Docker, which is not running on this machine; its refusal check was run directly instead: a production start with the placeholder secret exits 1 saying "APP_SECRET is still the development placeholder", with no `input_value` printed.
 - Exit codes were read from files.
+
+# A brand's short form written in capitals counts as a mention, so "RMIT is a strong choice" names RMIT University (`FORMULA_VERSION` v7)
+
+**2026-10-07, the first entry of the day; branch `pilot-fixes-7`, item 1 of the founder's brief of 2026-10-07 (the RMIT University report).** API only, with a backend code review and its own bar.
+
+**Render: nothing to set.** Scores written after this deploy carry `formula_version` `v7`; every stored row keeps its version and its numbers, and nothing is re-scored.
+
+Drift check (north-star §8): Layer 2, Measurement (what counts as a mention); lifecycle phase: Activation (Epic 9), a pilot's report measuring its prospect correctly.
+
+## 1. What was wrong
+
+- **The production report for RMIT University** (scan of 2026-10-05) showed "Named the client: no" from all four engines on prompts that name RMIT ("is rmit worth it for a masters…", "rmit vs swinburne…", "university of melbourne vs rmit…"). `find_brand` (`services/extraction.py`) needed "RMIT University" in full: the domain-label pass skips "rmit" (4 characters, under `SHORT_NAME_CHARS` 5) and the slug pass skips it (under `MIN_SLUG_MATCH_CHARS` 6), so an answer saying "RMIT is a strong choice" was not a mention.
+- **The same hits any client or rival whose short form is 2 to 4 characters** (UTS, VU, IBM, ANZ, HP). It lowers Mention Rate, Share of Voice and Sentiment, shrinks Citation Strength's population (the answers that name the brand), and makes the "rivals named instead" fix partly an artefact.
+
+## 2. What changed
+
+- **The capitals pass.** A brand whose domain label (`rmit` of `rmit.edu.au`) or name is 2 to 4 ASCII letters or digits is also found by that short form UPPER-CASED, matched case-sensitively with the existing word boundary. It runs inside the first pass, so a brand's index is the earliest of its name, its full domain and its short form ("RMIT … RMIT University" places RMIT at the first "RMIT"). Labels of 5 or more characters and the slug pass are unchanged, so no brand without such a short form moves.
+- **The founder's decisions on the edge cases**, each tested:
+  - "rmit" and "Rmit" in prose are never a mention, nor is "RMITs".
+  - "RMIT-accredited" is not a mention: the existing boundary treats a hyphen as part of the word for every brand ("Front" is not found in "front-end"), so a short form like "IT" is not found in "IT-related" either.
+  - `SHORT_FORM_STOP_LIST`: two-letter words, generic acronyms (AI, HR, SEO, MBA, CEO, …), heading words (BEST, NOTE, PROS, …) and Australian terms (ATAR, NSW, TAFE, …) are skipped by the capitals pass; a brand with such a short form is still found by its full name, full domain and the longer passes. "ART" is not on it: Australian Retirement Trust is `art.com.au`, and answers call it ART.
+- **A short form two brands share goes to one of them** (the review's Should-fix, below): the subject claims its forms first, then each rival in list order, and a brand whose form is already claimed gets no capitals pass for it. "RMIT is a strong choice" names RMIT University and not a rival "RMIT Vietnam" (`rmit.edu.vn`), which is still found by its full name.
+- **`FORMULA_VERSION` `v5` → `v7`** (the founder's decision). `v6` names the shrinkage experiment measured and rejected on 2026-09-29; no stored row carries it. The spec gives no rule for an input change (rule 5 names the weights, and `v2.2`, the last input change, was a changelog line only), so the founder decided: the change moves composites for brands with a short form, and `alerts.py` already declines to compare scores across a version, so the first `v7` scan raises no "Visibility fell" alert against a `v5` baseline. `docs/scoring-spec.md` gains the `v7` changelog row, and its "a mention is a text match" passage now says what the match is; `scoring.py`'s version comment says the same. Answer text is not stored, so a scan matched before v7 cannot be re-matched.
+- **The scoring inputs digest includes the version** (`scoring.py:448`), so the three `PINNED_DIGESTS` in `test_robots_obeyed.py` were re-pinned, with a comment; the check they make (a new exclusion reason moves none of them) is unchanged.
+- **Cost:** sentiment is classified once per answer that names the subject (`scan_runner.py:349-355`). A short-named client now reaches that branch more often; the bound is unchanged, at most one call per answered result, as for any brand named in every answer.
+
+## 3. The review
+
+**Backend code review: no Blocker; one Should-fix and three nits taken in round 2; one Should-fix is the founder's.**
+- **Should-fix, fixed:** a rival sharing the subject's short form (RMIT University and RMIT Vietnam) would have been named by every "RMIT", taking Share of Voice from mentions of the client, and ordered first at the same index by name. Now the form goes to the subject, else the first rival listed.
+- **Nits, fixed:** each short-form pattern is built once (`lru_cache`); a name equal to its label gives one form; the docstring describes the passes as they are; the spec says ASCII.
+- **The founder's decision (launch checklist 3.97):** an explicit re-score (`POST /scans/{scanId}/score`) of a scan matched before v7 writes a `v7` row from its stored, pre-v7 matches, and nothing the report prints says so.
+- **Checked clean:** brands without a short form keep their index and order; lowercase and title case never match; no test was weakened; no other code matches brand names in text; every other reader of the version (alerts, `previousFormulaVersions`, one row per scan and version, the CSV, the web) needs no change.
+
+## Found, not fixed
+
+- **A short form inside a rival's longer name still names the subject** ("RMIT Vietnam is cheaper" names RMIT University too), as a long name already can ("Monash" inside "Monash Malaysia"). Launch checklist 3.98.
+- **The stop list is the founder's list;** the review named more all-caps words it does not hold (COST, FEES, FROM, WHAT, …). A false mention needs both an all-caps word in an answer and a brand whose short form is that word.
+- **A rival never named still claims its short form**, because the claim is decided from the list, not the answer.
+
+## Verified
+
+**API pytest 5544 → 5569 (+25); the floor is raised to match. Web vitest unchanged at 2570.**
+- **New, `test_prompts_extraction.py`** (45 → 63 functions; 14 failed before the fix): the short form first, with "'s", in brackets, at a sentence end and before the full name; the five non-mentions; UTS and VU as rivals; the stop list ("IT" not found, "ART" found); IBM by name; a 5-character label unchanged; the shared form (subject only; the rival by full name; two rivals, the first listed); one form for a name equal to its label, and ASCII only; ordering (Swinburne then RMIT; "UTS ranks above RMIT University"; the subject moving ahead of a rival it used to follow).
+- **Updated to `v7`:** the current-version assertions in `test_scoring.py`, `test_score_endpoints.py` (renamed `test_a_v4_row_is_not_re_scored_under_v7`), `test_robots_obeyed.py` (and its three pinned digests), `test_failed_audit_reason.py` and `test_scan_chain.py`. Fixtures that store a `v5` row are unchanged.
+- **The implementer's negative controls,** each restored: the capitals pass removed, 16 fail; the stop-list skip removed, 1; the match made case-insensitive, 5; the claim rule removed, 2; the version back to `v5`, 4.
+- **On this tree:** the capitals pass removed, 15 of the 63 tests in `test_prompts_extraction.py` fail; the version back to `v5`, 7 of 450 in `test_scoring.py`, `test_score_endpoints.py` and `test_robots_obeyed.py`. Each file was restored and its checksum matched.
+- **The rest of the bar** (this tree, one run, 15:08 to 15:19):
+  - Counts: API 5569, workers 27, shared-types 53 (0 fail), design-system 967, web 2570, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
