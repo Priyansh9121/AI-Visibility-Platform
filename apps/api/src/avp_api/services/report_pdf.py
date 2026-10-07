@@ -109,7 +109,7 @@ def _cover(doc: PdfDocument, data: dict[str, Any], subject_name: str) -> None:
     agency = data["agency"]
     doc.text(agency["name"], font=BOLD, size=11, leading=15)
     doc.text(
-        f"{agency['slug']} · AI visibility report",
+        "AI visibility report",
         font=REGULAR,
         size=8,
         leading=12,
@@ -524,7 +524,9 @@ def _pitch_beat(
     ):
         doc.key_value("Composite today", f"{story.composite:.2f}")
         doc.key_value("Points the listed changes recover", f"{story.recoverable_points:.1f}")
-        doc.key_value("Composite if they all land", f"{story.potential_composite:.2f}")
+        doc.key_value(
+            "Composite if every gap they address closes", f"{story.potential_composite:.2f}"
+        )
         doc.space(4)
         doc.text(
             "That is arithmetic over the figures already in this report — the points the "
@@ -561,15 +563,29 @@ def _pitch_beat(
 
 
 def _pitch_heading(story: narrative.Narrative, subject_name: str) -> str:
+    """The pitch beat's heading, built from the two PRINTED figures.
+
+    `gain` is the difference of the two printed (rounded) numbers, never a
+    separately rounded figure, so "63 + 30" always sums to the 93 beside it.
+    The parenthetical is joined by no-break spaces so it never breaks across
+    two lines. When the two printed numbers are equal there is nothing to add
+    and only "63 today." is printed.
+    Mirrored by `pitchHeading` in `ReportView.tsx`.
+    """
     if (
         story.status == "scored"
         and story.composite is not None
         and story.potential_composite is not None
-        and story.recoverable_points > 0
     ):
-        today = narrative._round(story.composite, 0)  # noqa: SLF001
-        after = narrative._round(story.potential_composite, 0)  # noqa: SLF001
-        return f"{today:.0f} today. {after:.0f} with the fixes above."
+        today = int(narrative._round(story.composite, 0))  # noqa: SLF001
+        after = int(narrative._round(story.potential_composite, 0))  # noqa: SLF001
+        gain = after - today
+        if gain > 0:
+            return (
+                f"{today} today. Up to {after} if these fixes close every gap "
+                f"they address ({today}\u00a0+\u00a0{gain})."
+            )
+        return f"{today} today."
     return f"What a complete scan would tell you about {subject_name}."
 
 
@@ -579,9 +595,10 @@ def _pitch_heading(story: narrative.Narrative, subject_name: str) -> str:
 
 
 def _colophon(doc: PdfDocument, data: dict[str, Any]) -> None:
-    doc.rule(space_above=16, space_below=8)
     audit = data.get("audit")
     if audit is None:
+        doc.keep_together(16 + 3 * 12)
+        doc.space(16)
         doc.text(
             "The site was not technically audited for this scan, so Technical Foundation "
             "is excluded from the score rather than counted as zero.",
@@ -589,20 +606,14 @@ def _colophon(doc: PdfDocument, data: dict[str, Any]) -> None:
             leading=12,
             grey=True,
         )
-    doc.text(
-        f"Scan {data['scanId']} · beats {' · '.join(_BEATS)} · generated "
-        f"{_date(data['generatedAt'])}",
-        size=8,
-        leading=11,
-        grey=True,
-    )
+    # Drawn, with its own hairline, in the last page's bottom margin, outside the
+    # flow, so it can never start a page of its own.
+    doc.footer(f"Scan {data['scanId']} · generated {_date(data['generatedAt'])}")
 
 
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
-
-_BEATS = ("score", "gap", "proof", "fix", "pitch")
 
 _PRIORITY = {"high": "High priority", "medium": "Medium priority", "low": "Low priority"}
 _EFFORT = {"S": "Small effort", "M": "Medium effort", "L": "Large effort"}
@@ -636,6 +647,8 @@ def _beat(doc: PdfDocument, step: int, eyebrow: str, heading: str) -> None:
     screen. The eyebrow supplies the structural label so the heading is free to
     argue.
     """
+    # The rule, the label and the heading's first line travel together.
+    doc.keep_together(14 + 10 + 1 + 11 + 15 * 1.4 + 26)
     doc.rule(space_above=14, space_below=10)
     doc.eyebrow(f"{step:02d}   {eyebrow}")
     doc.heading(heading)
