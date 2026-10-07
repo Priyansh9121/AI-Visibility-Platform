@@ -989,6 +989,65 @@ def test_a_plain_space_still_breaks_a_line() -> None:
     assert len(lines) > 1
 
 
+def _pitch_text(composite: float, potential: float, recoverable: float) -> str:
+    """The pitch beat alone, drawn onto an empty document and read back."""
+    from types import SimpleNamespace
+
+    from avp_api.services.report_pdf import _pitch_beat
+
+    doc = pdf_writer.PdfDocument()
+    story = SimpleNamespace(
+        status="scored",
+        composite=composite,
+        potential_composite=potential,
+        recoverable_points=recoverable,
+        ahead_on_dimensions=[],
+    )
+    _pitch_beat(doc, {}, story, "Acme")  # type: ignore[arg-type]
+    return _visible_text(doc.render())
+
+
+def test_the_pitch_says_so_when_the_recovered_points_do_not_move_the_score() -> None:
+    """99.6 already prints as 100 and the uplift is capped there, so both
+    printed figures are 100. The rows still show 99.60 and 100.00; the sentence
+    stops the two 100s being read as a gain."""
+    text = _pitch_text(99.6, 100.0, 2.0)
+    assert "100 today." in text
+    assert "recovers 2.0 points, which does not change the rounded score of 100." in text
+    # The rows are still printed: the exact figures do differ.
+    assert "Composite today" in text
+    assert "Composite if every gap they address closes" in text
+
+
+def test_the_pitch_does_not_say_it_when_the_score_does_move() -> None:
+    text = _pitch_text(58.24, 98.84, 40.6)
+    assert "does not change the rounded score" not in text
+    assert "58 today. Up to 99" in text
+
+
+def test_the_heading_and_the_figures_read_the_same_two_printed_numbers() -> None:
+    """One helper decides both, so a heading claiming no uplift can never sit
+    above a paragraph claiming one."""
+    from types import SimpleNamespace
+
+    from avp_api.services.report_pdf import _printed_figures
+
+    assert _printed_figures(
+        SimpleNamespace(status="scored", composite=99.6, potential_composite=100.0)  # type: ignore[arg-type]
+    ) == (100, 100, 0)
+    assert _printed_figures(
+        SimpleNamespace(status="scored", composite=58.24, potential_composite=98.84)  # type: ignore[arg-type]
+    ) == (58, 99, 41)
+    assert (
+        _printed_figures(
+            SimpleNamespace(  # type: ignore[arg-type]
+                status="insufficient_data", composite=None, potential_composite=None
+            )
+        )
+        is None
+    )
+
+
 def test_the_pdf_names_the_figure_the_fixes_would_reach() -> None:
     text = _visible_text(_render("scored-no-generated-fixes"))
     assert "Composite if every gap they address closes" in text

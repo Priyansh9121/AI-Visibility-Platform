@@ -26877,3 +26877,51 @@ Five cosmetic defects, all seen in the RMIT University report of 2026-10-05:
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - **Every page was looked at.** The RMIT/Swinburne fixture renders to four pages: the cover with beats 01 and 02; "03 THE EVIDENCE" opening page 2 with its tables; page 3 repeating the sources header, then beat 04 and the pitch heading and figure rows; page 4 the closing paragraph and the footer. No stranded heading, no lone body line, no cut rival name, and the sum whole on one line.
 - Exit codes were read from files.
+
+# When the points a fix recovers do not move the printed score, the report says so rather than printing the same number twice
+
+**2026-10-08; branch `pilot-fixes-7`, checklist 3.99, the founder's decision of 2026-10-08.** The PDF document and the web report, with its own bar.
+
+**Render: nothing to set.** Wording and a gate; no stored report is rewritten.
+
+Drift check (north-star §8): Layer 5, Presentation (the report a client reads, on screen and as a PDF); lifecycle phase: Activation (Epic 9).
+
+## 1. What was wrong
+
+The pitch heading and the paragraph under it asked different questions, found by the UI review of item 3 (`7f63842`).
+
+- **The heading** asks whether the two **printed** figures differ: when they do not, it prints only "100 today." and claims no uplift.
+- **The paragraph under it, and the PDF's figure rows,** still asked whether the **raw** recoverable points were above zero.
+
+They disagree whenever points worth recovering do not move the rounded score. The reachable case is the cap: a composite of 99.6 already prints as 100, and `potentialComposite` is `min(100, …)`, so 2.0 points recovered still print as 100. The heading then read "100 today." while the paragraph under it read "scores 100 today … recovers 2.0 points, which is a composite of 100" — the same number either side of a gain, which is the confusion the heading change in `7f63842` was made to remove.
+
+Moving the gate alone would have been wrong: the paragraph's other branch says "There is no projection to make from this scan … this scan does not have one yet", which is false for a scan that has a score.
+
+## 2. What changed
+
+- **One source for the two printed figures.** `_printed_figures(story)` in `report_pdf.py` and `printedFigures(narrative)` in `ReportView.tsx` return the two rounded numbers and their difference, or nothing when there is no score. The heading and the paragraph both read it, so they can no longer disagree about whether there is an uplift to state.
+- **A third branch, for points that do not move the printed score.** The report says: "Closing the gaps listed above recovers 2.0 points, which does not change the rounded score of 100." The same sentence on the web and on the PDF, by the founder's decision of 2026-10-08.
+- **The figures are still printed.** The PDF keeps its three rows: the exact composites do differ (99.60 and 100.00), and it is only the rounded pair that does not. The sentence sits above the existing arithmetic note, so what the rows mean is still stated.
+- **The no-score branch is untouched** and still reached only when there is no score or nothing to recover.
+
+## Found, not fixed
+
+- **The cap is the only case that reaches this in practice.** Below 100 a dimension fix needs a gap of at least 2 points (`MIN_GAP_POINTS`), and 2 points always move the rounded score; so the branch is exercised by a near-perfect score whose uplift is capped at 100. It is written for the general case rather than the cap.
+
+## Verified
+
+**API pytest 5656 → 5659 (+3); web vitest 2581 → 2584 (+3). Both floors are raised to match.**
+
+- **New:** `test_report_pdf.py` 106 → 109 — the pitch beat drawn on its own and read back: the sentence appears when the printed score does not move, with the rows still printed; it does not appear when the score does move; and `_printed_figures` returns the same pair for the heading and the figures, or nothing when unscored. `ReportView.test.tsx` +3 — a report whose uplift is capped at 100 prints "100 today." and "does not change the rounded score of 100" and neither "which is a composite of" nor the no-score fallback; a report whose score does move still names the composite; a scan with no score still gets the fallback.
+- **On this tree,** each file restored and its bytes checked after:
+  - the equal-score sentence removed: 1 of the 109 tests in `test_report_pdf.py` fails.
+  - the PDF figures gated on the raw points again: 1.
+  - the web paragraph gated on the raw points again: 1 of the 448 report-component tests fails.
+- **The rest of the bar** (this tree, one run, 09:15 to 09:22):
+  - Counts: API 5659, workers 27, shared-types 53 (0 fail), design-system 967, web 2584, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

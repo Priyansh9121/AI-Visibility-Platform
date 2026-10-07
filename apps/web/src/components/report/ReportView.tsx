@@ -1363,22 +1363,27 @@ function PitchBeat({
   subjectName: string;
   publicView?: boolean;
 }) {
-  const canProject =
-    narrative.status === 'scored' &&
-    narrative.composite !== null &&
-    narrative.potentialComposite !== null &&
-    narrative.recoverablePoints > 0;
+  // The same figures the heading is built from, so the two can never disagree
+  // about whether there is an uplift to state.
+  const printed = printedFigures(narrative);
+  const canProject = printed !== null && narrative.recoverablePoints > 0;
 
   return (
     <Beat id="pitch" heading={pitchHeading(narrative, subjectName)}>
       <Prose>
-        {canProject ? (
+        {canProject && printed.gain > 0 ? (
           <p>
-            {subjectName} scores {Math.round(narrative.composite!)} today. Closing the gaps listed
+            {subjectName} scores {printed.today} today. Closing the gaps listed
             above recovers {narrative.recoverablePoints.toFixed(1)} points, which is a composite of{' '}
-            {Math.round(narrative.potentialComposite!)}. That figure is the same weighted sum as
+            {printed.after}. That figure is the same weighted sum as
             the score itself — it is what the score becomes if those dimensions reach 100, not a
             forecast.
+          </p>
+        ) : canProject ? (
+          <p>
+            {subjectName} scores {printed.today} today. Closing the gaps listed above recovers{' '}
+            {narrative.recoverablePoints.toFixed(1)} points, which does not change the rounded
+            score of {printed.today}.
           </p>
         ) : (
           <p>
@@ -1420,22 +1425,38 @@ function PitchBeat({
 }
 
 /**
- * The pitch beat's heading, built from the two PRINTED figures. `gain` is the
- * difference of the two rounded numbers, never a separately rounded figure, so
- * "63 + 30" always sums to the 93 beside it. The parenthetical is joined by
- * no-break spaces so it never breaks across two lines. When the two printed
- * numbers are equal there is nothing to add and only "63 today." is printed.
+ * The two figures the pitch beat PRINTS, and the difference between them.
+ * `gain` is the difference of the two rounded numbers, never a separately
+ * rounded figure, so "63 + 30" always sums to the 93 beside it. The single
+ * source for both the heading and the paragraph under it, so the two can never
+ * disagree about whether there is an uplift to state. Null when there is no
+ * score to print. Mirrored by `_printed_figures` in `report_pdf.py`.
+ */
+export function printedFigures(
+  narrative: Narrative,
+): { today: number; after: number; gain: number } | null {
+  if (
+    narrative.status !== 'scored' ||
+    narrative.composite === null ||
+    narrative.potentialComposite === null
+  ) {
+    return null;
+  }
+  const today = Math.round(narrative.composite);
+  const after = Math.round(narrative.potentialComposite);
+  return { today, after, gain: after - today };
+}
+
+/**
+ * The pitch beat's heading. The parenthetical is joined by no-break spaces so
+ * it never breaks across two lines. When the two printed numbers are equal
+ * there is nothing to add and only "63 today." is printed.
  * Mirrored by `_pitch_heading` in `report_pdf.py`.
  */
 export function pitchHeading(narrative: Narrative, subjectName: string): string {
-  if (
-    narrative.status === 'scored' &&
-    narrative.composite !== null &&
-    narrative.potentialComposite !== null
-  ) {
-    const today = Math.round(narrative.composite);
-    const after = Math.round(narrative.potentialComposite);
-    const gain = after - today;
+  const printed = printedFigures(narrative);
+  if (printed !== null) {
+    const { today, after, gain } = printed;
     if (gain > 0) {
       return `${today} today. Up to ${after} if these fixes close every gap they address (${today}\u00a0+\u00a0${gain}).`;
     }
