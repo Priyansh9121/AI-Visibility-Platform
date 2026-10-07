@@ -516,18 +516,30 @@ def _pitch_beat(
 ) -> None:
     _beat(doc, 5, "The opportunity", _pitch_heading(story, subject_name))
 
+    printed = _printed_figures(story)
     if (
-        story.status == "scored"
+        printed is not None
         and story.composite is not None
         and story.potential_composite is not None
         and story.recoverable_points > 0
     ):
+        today, _after, gain = printed
         doc.key_value("Composite today", f"{story.composite:.2f}")
         doc.key_value("Points the listed changes recover", f"{story.recoverable_points:.1f}")
         doc.key_value(
             "Composite if every gap they address closes", f"{story.potential_composite:.2f}"
         )
         doc.space(4)
+        if gain == 0:
+            # Points worth recovering, but not enough to move the printed score.
+            # Said plainly, so the two equal numbers above are not read as a gain.
+            doc.text(
+                f"Closing the gaps listed above recovers {story.recoverable_points:.1f} "
+                f"points, which does not change the rounded score of {today}.",
+                size=9.5,
+                leading=13,
+                grey=True,
+            )
         doc.text(
             "That is arithmetic over the figures already in this report — the points the "
             "listed fixes recover, added to the score as it stands. There is no revenue "
@@ -562,24 +574,37 @@ def _pitch_beat(
         )
 
 
-def _pitch_heading(story: narrative.Narrative, subject_name: str) -> str:
-    """The pitch beat's heading, built from the two PRINTED figures.
+def _printed_figures(story: narrative.Narrative) -> tuple[int, int, int] | None:
+    """The two figures the pitch beat PRINTS, and the difference between them.
 
-    `gain` is the difference of the two printed (rounded) numbers, never a
-    separately rounded figure, so "63 + 30" always sums to the 93 beside it.
+    The difference is of the two printed (rounded) numbers, never a separately
+    rounded figure, so "63 + 30" always sums to the 93 beside it. The single
+    source for both the heading and the figures under it, so the two can never
+    disagree about whether there is an uplift to state. `None` when there is no
+    score to print. Mirrored by `printedFigures` in `ReportView.tsx`.
+    """
+    if (
+        story.status != "scored"
+        or story.composite is None
+        or story.potential_composite is None
+    ):
+        return None
+    today = int(narrative._round(story.composite, 0))  # noqa: SLF001
+    after = int(narrative._round(story.potential_composite, 0))  # noqa: SLF001
+    return today, after, after - today
+
+
+def _pitch_heading(story: narrative.Narrative, subject_name: str) -> str:
+    """The pitch beat's heading.
+
     The parenthetical is joined by no-break spaces so it never breaks across
     two lines. When the two printed numbers are equal there is nothing to add
     and only "63 today." is printed.
     Mirrored by `pitchHeading` in `ReportView.tsx`.
     """
-    if (
-        story.status == "scored"
-        and story.composite is not None
-        and story.potential_composite is not None
-    ):
-        today = int(narrative._round(story.composite, 0))  # noqa: SLF001
-        after = int(narrative._round(story.potential_composite, 0))  # noqa: SLF001
-        gain = after - today
+    printed = _printed_figures(story)
+    if printed is not None:
+        today, after, gain = printed
         if gain > 0:
             return (
                 f"{today} today. Up to {after} if these fixes close every gap "

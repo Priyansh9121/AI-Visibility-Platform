@@ -408,6 +408,45 @@ describe('the pitch is arithmetic, not sales language', () => {
     );
   });
 
+  /**
+   * Points worth recovering that do not move the PRINTED score: 99.6 already
+   * prints as 100, and the 2.0 points the one open dimension would recover are
+   * capped at 100 by `potentialComposite`, so both figures print as 100.
+   */
+  const roundsToTheSameScore = {
+    ...helpscoutReport,
+    score: { ...helpscoutReport.score!, composite: '99.60' },
+    dimensions: helpscoutReport.dimensions!.map((d) =>
+      d.key === 'technical_foundation'
+        ? { ...d, subscore: '80.00' }
+        : { ...d, subscore: '100.00' },
+    ),
+  };
+
+  it('says the recovered points do not move the printed score, when they do not', () => {
+    const narrative = deriveNarrative(roundsToTheSameScore);
+    expect(narrative.recoverablePoints).toBeGreaterThan(0);
+    expect(Math.round(narrative.potentialComposite!)).toBe(Math.round(narrative.composite!));
+
+    const html = render(roundsToTheSameScore);
+    expect(html).toContain('100 today.');
+    expect(html).toContain('does not change the rounded score of 100');
+    // The claim the heading dropped must not come back one paragraph down.
+    expect(html).not.toContain('which is a composite of');
+    // And it is not the no-score fallback, which would be false here.
+    expect(html).not.toContain('There is no projection to make from this scan');
+  });
+
+  it('still names the composite the fixes reach when the printed score does move', () => {
+    const html = render(helpscoutReport);
+    expect(html).toContain('which is a composite of');
+    expect(html).not.toContain('does not change the rounded score');
+  });
+
+  it('keeps the no-score fallback for a scan with no score at all', () => {
+    expect(render(unscoredReport)).toContain('There is no projection to make from this scan');
+  });
+
   it('joins the sum with no-break spaces, so it never wraps mid-figure', () => {
     const heading = pitchHeading(story(58.24, 98.84), 'Acme');
     expect(heading).toContain('(58\u00a0+\u00a041).');
