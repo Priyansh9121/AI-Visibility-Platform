@@ -27212,3 +27212,29 @@ Every API access line began with the visitor's address: `INFO: 120.21.136.90:0 -
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# Launch checklist 1.1j says how to merge `pilot-fixes-8`, closes the rows it finished, and opens the two it leaves to the founder
+
+**2026-10-08; branch `pilot-fixes-8`.** Documentation only: `docs/launch-checklist.md`.
+
+**Render: nothing to set by this commit.** It describes what the founder checks after the branch is merged.
+
+Drift check (north-star §8): no layer — the founder's operating document for the deploy, serving the Activation phase the branch's items sit in.
+
+## 1. What changed
+
+- **1.1i is marked merged** (PR #11, `main` at `c319f1d`), and **1.1j is new**: the one migration (`5863629b56ab`) and why to deploy while no scan is in flight, what each item changes, and the access line to expect after the deploy (no address in front).
+- **Closed:** 3.97 (the re-score refusal, built), 3.101 (the pitch's figures re-add), 3.102 (no visitor's address in the API's log), 3.103 (every fix-generator line names its scan; the sixth fix is the deterministic citation fix), 3.104 (CI on Ubuntu 24.04 with Node 24 actions).
+- **Opened for the founder:** 3.100 (the pitch's rounding rule, and how the page words the cap at 100); 3.105 (market scope: the plan on branch `market-scope-plan`, and the finding that a brand's own site in another country counts as an independent, top-tier source today).
+- **Opened for Claude:** 3.106 (small findings: a rounding tie on the gap beat, Perplexity's `search_context_size`, and two load-sensitive timing tests).
+- **3.99 corrected:** its equal-score branch is not reachable "through the cap"; no self-consistent report reaches it.
+- **The status line** names this branch.
+
+## Verified
+
+**No code changed, so no count moves.**
+
+- `docs/launch-checklist.md` is the only file this commit touches besides this entry.
+- Every commit hash in the closed rows was read from `git log` on this branch.
+- The edits were made by a script that asserts each replacement matches exactly once, run first against a copy and read before it ran for real.
+- The branch's final bar runs after this commit; its counts are in the summary to the founder.
