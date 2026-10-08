@@ -1927,8 +1927,21 @@ export interface paths {
          *     while this runs either fails first (`409`) or is scored first and fails
          *     after. Every other status is scored as before.
          *
+         *     **A scan matched under an earlier rule is not re-scored** (3.97): `409`
+         *     `/problems/conflict`, and no Score row is written or refreshed. Formula `v7`
+         *     changed how a brand is matched, not only the arithmetic, and answer text is
+         *     never stored, so a scan whose matches were made before v7 cannot be matched
+         *     again. Scoring it here would read those stored matches and write a row labelled
+         *     `v7` from matches v7 did not make. What matched a scan is recorded on it,
+         *     stamped when its run starts and read as `pre-v7` where nothing recorded it, and
+         *     any scan not matched by the current rule is refused with a detail that says to
+         *     run a new scan. The agency check and the failed-scan check come first, so
+         *     another agency's scan is the same `404` as an unknown one and a failed scan
+         *     keeps its own `409`. The rows the scan already has are neither changed nor
+         *     deleted. A scan's own run still scores it at the end.
+         *
          *     **Errors:** `401`, `404` (unknown scan, or another agency's), `409` (failed
-         *     scan).
+         *     scan, or a scan matched under an earlier rule).
          */
         post: operations["compute_scan_score_api_v1_scans__scanId__score_post"];
         delete?: never;

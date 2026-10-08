@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
+from sqlalchemy import update as sa_update
 
 from avp_api.deps import scan_executor
+from avp_api.models import Scan
 from avp_api.models.engine_result import Engine, EngineResultStatus, Sentiment
 from avp_api.models.prompt import PromptIntent
 from avp_api.schemas.scan import RunScanRequest
-from avp_api.services import scan_runner
+from avp_api.services import extraction, scan_runner
 from avp_api.services.engines import (
     DEFAULT_ENGINES,
     ENGINE_REGISTRY,
@@ -22,6 +25,7 @@ from avp_api.services.engines import (
     EngineAnswer,
 )
 from avp_api.services.prompts import GeneratedPrompt
+from avp_api.services.scan_executor import execute_scan
 
 # Derived, never hardcoded. These tests asserted "x 2" until Epic 9.13 added a
 # third engine and broke six of them at once. The count is a property of the
@@ -410,6 +414,33 @@ class TestRunScan:
         stub_engines(n_prompts=1)
         body = await _run_scan(client, cid)
         assert set(body["engineVersions"]) == ENGINE_NAMES
+
+    async def test_a_run_stamps_the_matcher_that_made_its_matches(
+        self, client: AsyncClient, session, settings, stub_engines
+    ) -> None:  # noqa: ANN001
+        """Provenance for a re-score (checklist 3.97): which matching rule made a scan's mentions.
+
+        A scan queued by an older instance reads 'pre-v7', the database's default for a row written
+        without the column. The process that RUNS a scan is the one that matches it, so the run says
+        what it matched by, whatever the row said when it was queued.
+        """
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_engines(n_prompts=1)
+        jobs = TestScanIsQueued._defer(client)
+        sid = (await client.post(f"{BASE}/clients/{cid}/scans", json=SCAN_PAYLOAD)).json()["id"]
+        await session.execute(
+            sa_update(Scan).where(Scan.id == sid).values(matcher_version="pre-v7")
+        )
+        await session.commit()
+        stored = select(Scan.matcher_version).where(Scan.id == sid)
+        assert (await session.execute(stored)).scalar_one() == "pre-v7"
+
+        await execute_scan(jobs[0], settings=settings)
+
+        detail = (await client.get(f"{BASE}/scans/{sid}")).json()
+        assert detail["engineResultCount"] > 0, "the scan did not run, so this proves nothing"
+        assert (await session.execute(stored)).scalar_one() == extraction.MATCHER_VERSION
 
     async def test_requires_authentication(self, client: AsyncClient) -> None:
         from avp_api import ids

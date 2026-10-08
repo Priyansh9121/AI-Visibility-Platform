@@ -14,7 +14,7 @@ from ..deps import DbDep, PrincipalDep
 from ..errors import Conflict, NotFound
 from ..models import Scan, Score
 from ..schemas.score import CompetitorScoreOut, ScoreDetailOut, ScoreOut
-from ..services import scoring_runner
+from ..services import extraction, scoring_runner
 from ..services.failed_scan import score_is_withheld
 from ..services.scoring import ReadComparison, ScoreResult
 
@@ -27,6 +27,16 @@ router = APIRouter(tags=["scores"])
 # read here, and nothing is computed for the scan.
 FAILED_NO_SCORE = "This scan failed, so it has no score."
 FAILED_NOT_SCORABLE = "This scan failed, so it cannot be scored."
+
+# A scan whose brand matches were made under an earlier rule than the current one is not
+# re-scored (checklist 3.97, the founder's decision). FORMULA_VERSION v7 changed how a brand is
+# MATCHED, not only the arithmetic, and the answer text a re-match would need is never stored, so
+# a score computed here from the stored matches would be labelled v7 and made of matches v7
+# never made. The reason is short and plain, and it says what to do instead.
+MATCHED_UNDER_AN_EARLIER_RULE = (
+    "This scan's brand matches were made under an earlier rule, and answer text is not kept, "
+    "so it cannot be re-scored under the current one. Run a new scan instead."
+)
 
 
 async def _load_scan(db: Any, scan_id: str, agency_id: str) -> Scan:
@@ -97,8 +107,21 @@ async def compute_scan_score(
     while this runs either fails first (`409`) or is scored first and fails
     after. Every other status is scored as before.
 
+    **A scan matched under an earlier rule is not re-scored** (3.97): `409`
+    `/problems/conflict`, and no Score row is written or refreshed. Formula `v7`
+    changed how a brand is matched, not only the arithmetic, and answer text is
+    never stored, so a scan whose matches were made before v7 cannot be matched
+    again. Scoring it here would read those stored matches and write a row labelled
+    `v7` from matches v7 did not make. What matched a scan is recorded on it,
+    stamped when its run starts and read as `pre-v7` where nothing recorded it, and
+    any scan not matched by the current rule is refused with a detail that says to
+    run a new scan. The agency check and the failed-scan check come first, so
+    another agency's scan is the same `404` as an unknown one and a failed scan
+    keeps its own `409`. The rows the scan already has are neither changed nor
+    deleted. A scan's own run still scores it at the end.
+
     **Errors:** `401`, `404` (unknown scan, or another agency's), `409` (failed
-    scan).
+    scan, or a scan matched under an earlier rule).
     """
     scan = await _load_scan(db, scan_id, principal.agency_id)
     # The status the check below reads is the one now, not the one `_load_scan` saw: a
@@ -120,6 +143,10 @@ async def compute_scan_score(
         # Before score_scan, which would compute and write, even if only to refresh
         # the row the scan already has.
         raise Conflict(detail=FAILED_NOT_SCORABLE)
+    if scan.matcher_version != extraction.MATCHER_VERSION:
+        # Also before score_scan, for the same reason, and after the failed-scan check: a failed
+        # scan has no score whatever matched it. The value is the one read under the lock above.
+        raise Conflict(detail=MATCHED_UNDER_AN_EARLIER_RULE)
     row, computed, _competitors = await scoring_runner.score_scan(db, scan)
     await db.commit()
     await db.refresh(row)

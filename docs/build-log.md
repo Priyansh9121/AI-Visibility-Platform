@@ -27111,3 +27111,58 @@ Drift check (north-star §8): Layer 1, Delivery (operating the pipeline: what it
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# An explicit re-score of a scan matched before v7 is refused, and every scan now records which matching rule made its matches
+
+**2026-10-08; branch `pilot-fixes-8`, item A6 of the founder's brief of 2026-10-08 (launch checklist 3.97, decided 2026-10-08).** The scan model, one migration, the scan runner, the re-score route, and the contracts.
+
+**Render: nothing to set.** Migration `5863629b56ab` runs before the API serves (launch checklist 1.1j); deploy while no scan is in flight.
+
+Drift check (north-star §8): Layer 2, Measurement (the provenance of what a scan stored); lifecycle phase: Retention (Epic 11), whose before/after reporting depends on a score meaning what its version says.
+
+## 1. What was wrong
+
+`FORMULA_VERSION` v7 (2026-10-07) changed **how a brand is matched** (`extraction.find_brand`: a 2-4 character short form in capitals), not only the arithmetic. Answer text is never stored, so a scan matched before v7 can never be matched again. `POST /scans/{scanId}/score` re-scores from the stored matches and wrote a row labelled `v7` from matches v7 never made, and nothing on the report said so. Nothing recorded which rule matched a scan: `Scan.formula_version` is never written anywhere in `src` (every row holds its `v1` default), and `BrandMention` has no version column.
+
+## 2. What changed
+
+- **`extraction.MATCHER_VERSION = "v7"`**: the rule `find_brand` applies, named by the formula version at which it arrived. It moves **only** when what matching finds changes, never on a weights or formula-only change, which leaves stored matches as good as they were; a test pins it beside `FORMULA_VERSION` and says the two move separately.
+- **`scans.matcher_version`** (NOT NULL), stamped by `scan_runner.run_scan` at the RUNNING transition beside `engine_versions`: the process that runs a scan is the one that matches it, so a scan an older instance queued and this one runs is stamped by this one. Its two defaults differ on purpose. In Python it is the current matcher, since every scan the ORM creates is matched by this code. In the database it is `'pre-v7'`, meaning "not recorded": that is what a row written without the column reads, and refusing a re-score of such a row is the safe direction.
+- **Migration `5863629b56ab`** adds the column under `lock_timeout = '5s'` and runs one statement, `BACKFILL_V7_MATCHED`. A scan is `'v7'` when it has at least one score and every score it has is `v7`, meaning its own run scored it under v7; every other scan stays `'pre-v7'`.
+  - **Why not "every existing row is pre-v7":** production can hold scans run after v7 deployed (the founder's brief describes RMIT University's re-run, made after it), and marking those pre-v7 would refuse a re-score that is fine.
+  - **A pre-v7 scan explicitly re-scored after the deploy** keeps its older row (v5), so it correctly stays pre-v7.
+  - The statement only touches rows still `'pre-v7'`, so it can be run again safely.
+- **The refusal.** After the agency check and the failed-scan check, on the row read under the same `FOR UPDATE` lock, a scan whose `matcher_version` is not the current matcher's gets `409 /problems/conflict` with "This scan's brand matches were made under an earlier rule, and answer text is not kept, so it cannot be re-scored under the current one. Run a new scan instead." No Score row is written or refreshed. Another agency's scan is still the same `404` as an unknown one, and a failed scan keeps its own `409`. A scan's own run still scores it at the end.
+- **Contracts:** `docs/api-contracts.md` and the route's docstring list the new 409; `openapi.json` (one description) and `api.gen.ts` (its JSDoc) are regenerated. `docs/scoring-spec.md`'s v7 row no longer says such a re-score "uses its stored matches".
+
+## Found, not fixed
+
+- **One generic 409.** The refusal uses `/problems/conflict`, as 3.30's failed-scan refusal does, so a client tells the two apart by `detail`. No web code calls this route. A dedicated problem type is a small subclass if it is ever wanted.
+- **The pin guards the constant, not the behaviour.** Nothing ties `find_brand`'s results to `MATCHER_VERSION`, so a change to matching without a bump would go unnoticed; a golden-case fingerprint test would close it.
+- **The backfill runs in the same revision as the column**, holding the table's lock for the update. Measured on a scratch database: 20,004 scans and 20,004 scores upgraded in 0.63 s. Production's count was not measured, and is far smaller.
+- **A scan an older instance runs during the deploy** reads `'pre-v7'` although v7 code matched it, so its explicit re-score is refused; a new scan answers it.
+- `Scan.formula_version` is still never written, as before.
+- **A load-sensitive API test failed once while this was built:** `test_browser_slot.py::TestNeverTwoBrowsersOpen::test_the_second_waits_for_the_browser_and_only_for_the_browser` asserts a wait of at least 100 ms and measured 91 under load; the file passed three runs on its own (checklist 3.106).
+
+## Verified
+
+**API pytest 5666 → 5681 (+15); the floor is raised to match. Web vitest unchanged at 2586.**
+
+- **New (15), each confirmed failing before the change:**
+  - `test_score_endpoints.py`, `TestAScanMatchedUnderAnEarlierRuleIsNotReScored` (5): refused with its score rows untouched; no row written under the current formula; another agency's scan is the same 404 as an unknown one; a failed scan keeps the failed refusal; a scan this code matched is re-scored as before.
+  - `test_scan_endpoints.py` (1): a run stamps the matcher even over a row reading `'pre-v7'`.
+  - `test_scoring.py` (1): `MATCHER_VERSION` pinned beside `FORMULA_VERSION`.
+  - `test_scan_matcher_version.py` (8): where the column's value comes from (the ORM default, the database default, the column's shape); the backfill's four cases (only v7 → `v7`; v5 and v7 → `pre-v7`; only v5 → `pre-v7`; none → `pre-v7`), that a second run changes nothing and that it touches no other column; and **the real `alembic upgrade`** over scans seeded at the previous revision, so the test fails if `upgrade()` ever stops running the backfill.
+- **Alembic on a scratch database:** `upgrade head` (`c4a9e17d2b58` → `5863629b56ab`), `check` ("No new upgrade operations detected"), `downgrade -1` (the column gone), and a re-upgrade over 20,004 seeded scans, all exit 0.
+- **On this tree,** each file restored and its bytes checked after:
+  - the re-score guard removed: 2 of the 63 tests in `test_score_endpoints.py`, `test_scan_endpoints.py` and `test_scan_matcher_version.py` fail (the refusal, and no row under the current formula).
+  - the run stamping no matcher: 1 fails.
+  - the backfill inverted (`NOT EXISTS` to `EXISTS`): 4 fail, the real `alembic upgrade` test among them.
+- **The rest of the bar** (this tree, one run, 23:13 to 23:20):
+  - Counts: API 5681, workers 27, shared-types 53 (0 fail), design-system 967, web 2586, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate to exactly the committed files (they changed with this item: one description, and its JSDoc).
+- Exit codes were read from files.
