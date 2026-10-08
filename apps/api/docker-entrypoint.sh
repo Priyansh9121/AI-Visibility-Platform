@@ -40,4 +40,12 @@ echo "entrypoint: serving on :${PORT:-8000}"
 #
 # NO `Server: uvicorn` header on any response (launch checklist 3.1): it tells a
 # stranger what runs here. The web app turns off X-Powered-By for the same reason.
-exec uvicorn avp_api.main:app --host 0.0.0.0 --port "${PORT:-8000}" --workers 1 --proxy-headers --forwarded-allow-ips='*' --no-server-header
+#
+# NO visitor's address in the log (2026-10-08, launch checklist 3.102). `logs.py` blanks it on
+# the access line. Two more ways it could be printed are closed here:
+# - uvicorn logs a WebSocket handshake on its error logger, address first, where that filter
+#   never looks. The API has no websocket route, so `--ws none` serves an upgrade as plain
+#   HTTP, through the filtered access line.
+# - `UVICORN_LOG_LEVEL=debug` or `trace` would print request headers and scopes, address and
+#   token paths included. The flag beats the variable.
+exec uvicorn avp_api.main:app --host 0.0.0.0 --port "${PORT:-8000}" --workers 1 --proxy-headers --forwarded-allow-ips='*' --no-server-header --ws none --log-level info

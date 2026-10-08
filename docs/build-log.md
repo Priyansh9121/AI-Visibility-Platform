@@ -27166,3 +27166,49 @@ Drift check (north-star §8): Layer 2, Measurement (the provenance of what a sca
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate to exactly the committed files (they changed with this item: one description, and its JSDoc).
 - Exit codes were read from files.
+
+# The API's access log keeps the method, the path and the status, and no longer the visitor's IP address
+
+**2026-10-08; branch `pilot-fixes-8`, item A3 of the founder's brief of 2026-10-08.** `apps/api/src/avp_api/logs.py`, two flags on the `exec uvicorn` line of `apps/api/docker-entrypoint.sh`, and their tests. Rate limiting, `CLIENT_IP_HEADER` and the entrypoint's `--proxy-headers` flags are untouched.
+
+**Render: nothing to set.** The next deploy's access lines read ` - "GET /api/v1/dashboard HTTP/1.1" 200 OK`.
+
+Drift check (north-star §8): Layer 0, Trust substrate (what the product keeps about the people who use it); lifecycle phase: Activation (Epic 9), before pilots' visitors reach the API.
+
+## 1. What was wrong
+
+Every API access line began with the visitor's address: `INFO: 120.21.136.90:0 - "GET /api/v1/dashboard HTTP/1.1" 200 OK`. uvicorn runs with `--proxy-headers --forwarded-allow-ips='*'` (`apps/api/docker-entrypoint.sh`), so that is the visitor's own IP, from the proxy's `X-Forwarded-For`, and Render keeps stdout. Nothing reads it from the log: rate limiting reads the address from the request itself (`services/rate_limit.py`, `CLIENT_IP_HEADER`).
+
+## 2. What changed
+
+- **`DropClientAddress`** (`logs.py`), a filter on uvicorn's access logger beside the existing `RedactSecretPaths`, blanks the address before the line is formatted. uvicorn's own access formatter unpacks exactly five arguments (client, method, path, HTTP version, status), so the address is replaced with `""` rather than removed: the line then reads as uvicorn's own line does for a request that has no client. A record of any other shape passes through untouched.
+- **Installed where `RedactSecretPaths` is,** in `configure_logging`, which `create_app` calls, so it applies to whatever command imports the app; uvicorn configures its loggers before importing it, so the filter is not overwritten. Idempotent.
+- **Two more ways uvicorn could print the address are closed on the entrypoint's line** (found by the security review):
+  - **`--ws none`.** uvicorn logs a WebSocket handshake on its *error* logger, address first, where the access filter never looks, and with the path unredacted. The API has no websocket route (a test already pins that), so no product page opens one, but a scanner can: on the real server, with the flag removed, a handshake logged `INFO: 203.0.113.9:0 - "WebSocket /api/v1/reports/Tk-abc_123XYZ" 403`, which is the visitor's address and a token. With `--ws none`, an upgrade is served as plain HTTP, through the filtered access line.
+  - **`--log-level info`.** uvicorn reads `UVICORN_*` variables, so `UVICORN_LOG_LEVEL=debug` or `trace` on Render would print request headers and whole scopes, address and token paths included. A flag on the line beats the variable.
+- The method, the path (still redacted of secrets, as before) and the status are kept, as the brief asks. The module's docstring says why the address went, and the entrypoint says why each flag is there.
+
+## Found, not fixed
+
+- **No other API log line carries an IP address** (every `logger.*` call checked for an `ip`, `client_ip`, `client_host` or `remote_addr` field).
+- **`/privacy` was not edited,** as the brief says. A note for the lawyer under 2.4: `PrivacyPolicy.tsx:204` ("The API's server log records each request: the IP address it came from…") now says more is kept than is. `:113-114` ("IP addresses do appear in the server logs") also covers Render's own record of each request, whose fields were not checked, so that sentence stays until they are.
+
+## Verified
+
+**API pytest 5681 → 5688 (+7); the floor is raised to match. Web vitest unchanged at 2586.**
+
+- **New:** in `test_logging_config.py`, `TestTheClientAddress`: the address is blanked and the rest of the line kept; a secret path is still redacted alongside; a record of another shape is untouched; through the filters `create_app` installs and **uvicorn's real `AccessFormatter`**, with the format uvicorn's default config gives it, the printed line carries no address; and `create_app` installs the filter once. In `test_dockerfile.py`, the line's `--ws none` and `--log-level info` asked of uvicorn's own parser, with `UVICORN_LOG_LEVEL=trace` set to show that the flag is what beats it. In `test_secrets_stay_out_of_logs.py`, **the real server**: uvicorn started with the words of the entrypoint's own `exec uvicorn` line, requests sent through `X-Forwarded-For` (an IPv4 and an IPv6 visitor) plus a WebSocket handshake to a token path, and every line the process wrote read back. The access line for `GET /api/v1/health` is there; neither address nor the token appears anywhere; no access line carries any address.
+- **On this tree,** each file restored and its bytes checked after:
+  - the address filter not installed: 3 of the 166 tests in `test_logging_config.py`, `test_secrets_stay_out_of_logs.py` and `test_dockerfile.py` fail, the real server's among them.
+  - `--ws none` removed from the entrypoint: 2 fail (the real server's handshake line, and the parser's).
+  - `--log-level info` removed: 2 fail (the parser's, which shows the variable then decides, and the real server's flag check).
+- **security-reviewer: no blocker.** Taken: the WebSocket line and the `/privacy` note's reach (both above); the `UVICORN_LOG_LEVEL` pin; and the test's robustness (its flags now come from the entrypoint's own line, it adds an IPv6 visitor and a handshake, uses a Redis db of its own, and kills the server if it does not stop). Checked clean by the review: both of uvicorn's HTTP code paths log the same five arguments; the filter replaces a record's arguments and never touches the request, so rate limiting is untouched; no structlog event of ours carries an address.
+- **Negative controls on the real server:** with the filter not installed, the test fails and the line reads `203.0.113.9:0 - "GET /api/v1/health HTTP/1.1" 200`; with `--ws none` removed, it fails on the handshake line quoted above.
+- **The rest of the bar** (this tree, one run, 23:21 to 23:28):
+  - Counts: API 5688, workers 27, shared-types 53 (0 fail), design-system 967, web 2586, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

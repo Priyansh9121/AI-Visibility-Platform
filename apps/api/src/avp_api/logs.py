@@ -23,10 +23,23 @@ three kinds of request carry a secret there:
 
 `RedactSecretPaths` rewrites those before the line is formatted — the token
 segment becomes `…`, and those two query strings are dropped. The access log
-itself stays: the client, the method, the status and the rest of the path are
-how a request is traced. Invitation, reset and (now) share tokens travel in POST bodies,
-which the access log never prints; the links carry them in the URL fragment,
-which a browser never sends.
+itself stays: the method, the status and the rest of the path are how a request
+is traced. Invitation, reset and (now) share tokens travel in POST bodies, which
+the access log never prints; the links carry them in the URL fragment, which a
+browser never sends.
+
+THE CLIENT'S ADDRESS — 2026-10-08
+---------------------------------
+uvicorn also prints the client's address first on each line, and with
+`--proxy-headers` that is the visitor's own IP: `120.21.136.90:0 - "GET …" 200`.
+Nothing reads it from the log. `DropClientAddress` blanks it before the line is
+formatted, so the line reads as uvicorn's own does for a request with no client.
+Rate limiting reads the address from the request itself (`services/rate_limit.py`,
+`CLIENT_IP_HEADER`), which this does not touch, and neither are the entrypoint's
+`--proxy-headers` flags. The entrypoint closes the two other ways uvicorn could print it:
+`--ws none` (a WebSocket handshake is logged on `uvicorn.error`, address first, where this
+filter never looks; the API has no websocket route) and `--log-level info` (so
+`UVICORN_LOG_LEVEL=debug` or `trace` cannot print headers and scopes).
 
 INSTALLED BY `create_app` (`main.py`), so it applies to whatever command
 imports `avp_api.main:app` — the uvicorn in `docker-entrypoint.sh`, which is
@@ -133,8 +146,25 @@ class RedactSecretPaths(logging.Filter):
         return True
 
 
+class DropClientAddress(logging.Filter):
+    """Blank the client's address in a uvicorn access-log record before it is formatted.
+
+    uvicorn's access formatter unpacks exactly five arguments (client, method,
+    path-with-query, http version, status), so the address is replaced with "" rather
+    than removed. Any other record passes through untouched, as `RedactSecretPaths`
+    leaves them.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) == 5 and isinstance(args[0], str):
+            record.args = ("", *args[1:])
+        return True
+
+
 def configure_logging(settings: Settings) -> None:
-    """Apply the level to structlog, put the redaction on the access log, and keep what
+    """Apply the level to structlog, put the redaction and the address drop on the access
+    log, and keep what
     httpx, httpcore and the Anthropic and Stripe SDKs would write about their requests out of
     the log. Idempotent."""
     structlog.configure(
@@ -143,6 +173,8 @@ def configure_logging(settings: Settings) -> None:
     access = logging.getLogger(ACCESS_LOGGER)
     if not any(isinstance(existing, RedactSecretPaths) for existing in access.filters):
         access.addFilter(RedactSecretPaths())
+    if not any(isinstance(existing, DropClientAddress) for existing in access.filters):
+        access.addFilter(DropClientAddress())
     # Explicitly, on the loggers themselves: a logger with no level of its own follows the
     # root, so leaving them unset would let a later root-level INFO write the SerpApi key,
     # and DEBUG the prompts. The Anthropic SDK sets its own level and httpx's when
