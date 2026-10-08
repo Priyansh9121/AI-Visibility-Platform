@@ -409,6 +409,45 @@ describe('the pitch is arithmetic, not sales language', () => {
   });
 
   /**
+   * RMIT University's re-run (2026-10-08), carried on the Help Scout payload:
+   * sub-scores that reproduce its composite, Mention Rate and three fix gaps exactly.
+   * The PDF printed 72.48 + 25.9 as 98.40; every total is now the sum of the figures
+   * printed above it.
+   */
+  const rmitSubscores: Record<string, string> = {
+    mention_rate: '97.22',
+    share_of_voice: '30.43',
+    citation_strength: '96.01',
+    sentiment: '65.58',
+    technical_foundation: '66.67',
+  };
+  const rmitReport = {
+    ...helpscoutReport,
+    score: { ...helpscoutReport.score!, composite: '72.48' },
+    dimensions: helpscoutReport.dimensions!.map((d) => ({
+      ...d,
+      subscore: rmitSubscores[d.key]!,
+      included: true,
+      exclusionReason: null,
+    })),
+  };
+
+  it('re-adds the pitch figures exactly as printed, on RMIT University figures', () => {
+    const narrative = deriveNarrative(rmitReport);
+    expect(narrative.recoverablePoints).toBe(25.9);
+    expect(narrative.potentialComposite).toBe(98.38);
+
+    const html = render(rmitReport);
+    expect(html).toContain(
+      'scores 72.48 today. Closing the gaps listed above recovers 25.9 points, which is a composite of 98.38.',
+    );
+    // The fix beat's heading names the same points.
+    expect(html).toContain('6 changes, worth 25.9 points.');
+    // The heading's integers still come from the one shared helper.
+    expect(html).toContain('(72\u00a0+\u00a026).');
+  });
+
+  /**
    * Points worth recovering that do not move the PRINTED score: 99.6 already
    * prints as 100, and the 2.0 points the one open dimension would recover are
    * capped at 100 by `potentialComposite`, so both figures print as 100.

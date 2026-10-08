@@ -575,13 +575,13 @@ def _pitch_beat(
 
 
 def _printed_figures(story: narrative.Narrative) -> tuple[int, int, int] | None:
-    """The two figures the pitch beat PRINTS, and the difference between them.
+    """The pitch heading's two whole-number figures, and the difference between them.
 
     The difference is of the two printed (rounded) numbers, never a separately
-    rounded figure, so "63 + 30" always sums to the 93 beside it. The single
-    source for both the heading and the figures under it, so the two can never
-    disagree about whether there is an uplift to state. `None` when there is no
-    score to print. Mirrored by `printedFigures` in `ReportView.tsx`.
+    rounded figure, so "63 + 30" always sums to the 93 beside it. The heading is
+    built from them, and the figure rows under it ask them whether there is an
+    uplift to state, so the two can never disagree about that. `None` when there
+    is no score. Mirrored by `printedFigures` in `ReportView.tsx`.
     """
     if (
         story.status != "scored"

@@ -160,6 +160,10 @@ function round1(value: number): number {
   return Math.round(value * 10) / 10;
 }
 
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
 /**
  * Included dimensions, in the order the API supplied (heaviest first).
  *
@@ -227,8 +231,14 @@ export function deriveNarrative(report: Report): DerivedNarrative {
   const recoverablePoints = round1(
     fixes.reduce((sum, f) => sum + (f.pointsUpside ?? 0), 0),
   );
+  // Every total is the sum of the figures printed above it, so a reader can re-add
+  // each one: the ceiling is the printed composite plus the fixes' printed points,
+  // rounded to 2dp only to clear float noise. Mirrors `derive_narrative`.
+  // THE ONE EXCEPTION is the cap: when the listed fixes cover every gap left, their 1dp
+  // points can overshoot 100 minus the composite by rounding (70.53 + 29.6 = 100.13),
+  // and the ceiling is held at 100. Its wording is the founder's (launch checklist 3.100).
   const potentialComposite =
-    composite === null ? null : Math.min(100, round1(composite + recoverablePoints));
+    composite === null ? null : Math.min(100, round2(composite + recoverablePoints));
 
   return {
     composite,

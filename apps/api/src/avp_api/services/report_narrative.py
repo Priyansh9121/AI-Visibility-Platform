@@ -857,9 +857,20 @@ def derive_narrative(report: dict[str, Any]) -> Narrative:
         proof.get("subjectCitations") or 0,
     )
 
+    # Every total is the sum of the figures printed above it, so a reader can re-add
+    # each one. The points are the fixes' own printed (1dp) figures summed; the ceiling
+    # is the printed composite plus those points, rounded to 2dp only to clear float
+    # noise (a 2dp figure plus a 1dp one is exact at 2dp). Rounding the ceiling again,
+    # to 1dp, printed 72.48 + 25.9 as 98.40 (RMIT University, 2026-10-08).
+    #
+    # THE ONE EXCEPTION is the cap. When the listed fixes cover every gap that is left,
+    # their 1dp points can add up to slightly more than 100 minus the composite (each
+    # rounds by up to 0.05), and the ceiling is held at 100: 70.53 + 29.6 prints as
+    # 100.00. The 100 is true; it is the rounded points that overshoot. How the page
+    # words that case is the founder's (launch checklist 3.100).
     recoverable_points = round1(sum(f.points_upside or 0.0 for f in fixes))
     potential_composite = (
-        None if composite is None else min(100.0, round1(composite + recoverable_points))
+        None if composite is None else min(100.0, _round(composite + recoverable_points, 2))
     )
 
     return Narrative(

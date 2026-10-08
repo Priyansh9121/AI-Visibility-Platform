@@ -1363,8 +1363,9 @@ function PitchBeat({
   subjectName: string;
   publicView?: boolean;
 }) {
-  // The same figures the heading is built from, so the two can never disagree
-  // about whether there is an uplift to state.
+  // The heading's figures decide WHETHER there is an uplift to state, so the heading
+  // and the paragraph can never disagree about that; the paragraph itself prints the
+  // composite, the points and the ceiling to two places (`derive.ts`).
   const printed = printedFigures(narrative);
   const canProject = printed !== null && narrative.recoverablePoints > 0;
 
@@ -1373,11 +1374,11 @@ function PitchBeat({
       <Prose>
         {canProject && printed.gain > 0 ? (
           <p>
-            {subjectName} scores {printed.today} today. Closing the gaps listed
+            {subjectName} scores {narrative.composite!.toFixed(2)} today. Closing the gaps listed
             above recovers {narrative.recoverablePoints.toFixed(1)} points, which is a composite of{' '}
-            {printed.after}. That figure is the same weighted sum as
-            the score itself — it is what the score becomes if those dimensions reach 100, not a
-            forecast.
+            {narrative.potentialComposite!.toFixed(2)}. That is arithmetic over the figures already
+            in this report — the points the listed fixes recover, added to the score as it stands.
+            It is not a forecast.
           </p>
         ) : canProject ? (
           <p>
@@ -1425,12 +1426,12 @@ function PitchBeat({
 }
 
 /**
- * The two figures the pitch beat PRINTS, and the difference between them.
+ * The pitch heading's two whole-number figures, and the difference between them.
  * `gain` is the difference of the two rounded numbers, never a separately
- * rounded figure, so "63 + 30" always sums to the 93 beside it. The single
- * source for both the heading and the paragraph under it, so the two can never
- * disagree about whether there is an uplift to state. Null when there is no
- * score to print. Mirrored by `_printed_figures` in `report_pdf.py`.
+ * rounded figure, so "63 + 30" always sums to the 93 beside it. The heading is
+ * built from them, and the paragraph under it asks them whether there is an
+ * uplift to state, so the two can never disagree about that. Null when there is
+ * no score. Mirrored by `_printed_figures` in `report_pdf.py`.
  */
 export function printedFigures(
   narrative: Narrative,

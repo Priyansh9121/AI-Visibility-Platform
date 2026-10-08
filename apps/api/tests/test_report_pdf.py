@@ -18,9 +18,11 @@ disagree about what a case is.
 
 from __future__ import annotations
 
+import copy
 import json
 import re
 import zlib
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -987,6 +989,65 @@ def test_a_plain_space_still_breaks_a_line() -> None:
     """The change narrows what breaks; it must not stop breaking altogether."""
     lines = pdf_writer.wrap("alpha beta gamma delta", pdf_writer.REGULAR, 10, 40)
     assert len(lines) > 1
+
+
+# RMIT University's re-run (scan_01M4CCKWT0AB2K17CAWPVP0P83, 2026-10-08), carried on the
+# Help Scout payload: sub-scores that reproduce its composite (72.48), Mention Rate (97.22)
+# and three fix gaps (17.3925, 5.163, 3.333) exactly. Share of Voice and Citation Strength
+# are pinned by those; Sentiment and Technical Foundation could also be 77.78 and 48.37,
+# which gives the same three gaps and so the same arithmetic.
+RMIT_SUBSCORES = {
+    "mention_rate": "97.22",
+    "share_of_voice": "30.43",
+    "citation_strength": "96.01",
+    "sentiment": "65.58",
+    "technical_foundation": "66.67",
+}
+
+
+def _rmit_report() -> ReportOut:
+    case = copy.deepcopy(CASES["scored-no-generated-fixes"])
+    case["score"]["composite"] = "72.48"
+    for key, field in (
+        ("mention_rate", "mentionRate"),
+        ("share_of_voice", "shareOfVoice"),
+        ("citation_strength", "citationStrength"),
+        ("sentiment", "sentiment"),
+        ("technical_foundation", "technicalFoundation"),
+    ):
+        case["score"][field] = RMIT_SUBSCORES[key]
+    for dimension in case["dimensions"]:
+        dimension["subscore"] = RMIT_SUBSCORES[dimension["key"]]
+        dimension["included"] = True
+        dimension["exclusionReason"] = None
+    return ReportOut.model_validate(case)
+
+
+def _printed_row(text: str, label: str) -> Decimal:
+    match = re.search(re.escape(label) + r" (\d+\.\d+)", text)
+    assert match is not None, label
+    return Decimal(match.group(1))
+
+
+def test_the_pitch_rows_re_add_exactly_as_printed_on_rmit_figures() -> None:
+    """The PDF printed 72.48, 25.9 and 98.40, and 72.48 + 25.9 is 98.38: the ceiling
+    was rounded a second time, to 1dp. Every total is now the sum of the figures
+    printed above it, at every level of the beat."""
+    text = _visible_text(render_report_pdf(_rmit_report()))
+    today = _printed_row(text, "Composite today")
+    points = _printed_row(text, "Points the listed changes recover")
+    ceiling = _printed_row(text, "Composite if every gap they address closes")
+    assert (today, points, ceiling) == (Decimal("72.48"), Decimal("25.9"), Decimal("98.38"))
+    assert today + points == ceiling
+    # The fix beat's heading names the middle row's points ...
+    assert "6 changes, worth 25.9 points." in text
+    # ... and the fixes' own printed points add up to it.
+    worths = [Decimal(w) for w in re.findall(r"Worth (\d+\.\d) points", text)]
+    assert worths == [Decimal("17.4"), Decimal("5.2"), Decimal("3.3")]
+    assert sum(worths) == points
+    # The heading's integers still come from the one shared helper.
+    heading = "72 today. Up to 98 if these fixes close every gap they address (72\u00a0+\u00a026)."
+    assert heading in text
 
 
 def _pitch_text(composite: float, potential: float, recoverable: float) -> str:
