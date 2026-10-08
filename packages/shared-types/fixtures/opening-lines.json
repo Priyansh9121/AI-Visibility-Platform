@@ -1,0 +1,222 @@
+{
+  "_why": "A2 (2026-10-09): the report's opening line, chosen by the biggest-gap dimension, read by test_report_narrative.py and derive.test.ts alike so the PDF and the web say the same sentence. Each case is built on scored-no-generated-fixes (Help Scout) with these fields replaced. competitorCitationStrength is per rival, in list order (Zendesk, Freshdesk, Front, Kustomer, Thecxlead).",
+  "cases": [
+    {
+      "case": "Share of Voice (RMIT University's re-run)",
+      "subject": "RMIT University",
+      "formulaVersion": "v7",
+      "composite": "72.48",
+      "subscores": {
+        "mention_rate": "97.22",
+        "share_of_voice": "30.43",
+        "citation_strength": "96.01",
+        "sentiment": "65.58",
+        "technical_foundation": "66.67"
+      },
+      "expected": "RMIT University is named in 97% of unprompted answers, but rivals take 70% of the mentions."
+    },
+    {
+      "case": "Mention Rate",
+      "subject": "Acme",
+      "formulaVersion": "v7",
+      "composite": "80.80",
+      "subscores": {
+        "mention_rate": "36.00",
+        "share_of_voice": "100.00",
+        "citation_strength": "100.00",
+        "sentiment": "100.00",
+        "technical_foundation": "100.00"
+      },
+      "expected": "Acme is missing from 64% of unprompted answers."
+    },
+    {
+      "case": "Citation Strength, a rival ahead (the first of two tied)",
+      "subject": "Acme",
+      "formulaVersion": "v7",
+      "composite": "88.00",
+      "subscores": {
+        "mention_rate": "100.00",
+        "share_of_voice": "100.00",
+        "citation_strength": "40.00",
+        "sentiment": "100.00",
+        "technical_foundation": "100.00"
+      },
+      "competitorCitationStrength": [
+        "100.00",
+        "100.00",
+        "50.00",
+        "0.00",
+        "0.00"
+      ],
+      "expected": "When unprompted answers name Acme, they cite weaker sources than when they name Zendesk."
+    },
+    {
+      "case": "Citation Strength, no rival ahead: the band line",
+      "subject": "Acme",
+      "formulaVersion": "v7",
+      "composite": "65.00",
+      "subscores": {
+        "mention_rate": "100.00",
+        "share_of_voice": "100.00",
+        "citation_strength": "40.00",
+        "sentiment": "100.00",
+        "technical_foundation": "100.00"
+      },
+      "competitorCitationStrength": [
+        "40.00",
+        "10.00",
+        "0.00",
+        "0.00",
+        "0.00"
+      ],
+      "expected": "Acme shows up, but not reliably enough to be the default."
+    },
+    {
+      "case": "Citation Strength before v5: the band line",
+      "subject": "Acme",
+      "formulaVersion": "v4",
+      "composite": "65.00",
+      "subscores": {
+        "mention_rate": "100.00",
+        "share_of_voice": "100.00",
+        "citation_strength": "40.00",
+        "sentiment": "100.00",
+        "technical_foundation": "100.00"
+      },
+      "competitorCitationStrength": [
+        "100.00",
+        "0.00",
+        "0.00",
+        "0.00",
+        "0.00"
+      ],
+      "expected": "Acme shows up, but not reliably enough to be the default."
+    },
+    {
+      "case": "Sentiment",
+      "subject": "Acme",
+      "formulaVersion": "v7",
+      "composite": "88.00",
+      "subscores": {
+        "mention_rate": "100.00",
+        "share_of_voice": "100.00",
+        "citation_strength": "100.00",
+        "sentiment": "20.00",
+        "technical_foundation": "100.00"
+      },
+      "expected": "Acme is named, but not consistently described favourably."
+    },
+    {
+      "case": "Technical Foundation",
+      "subject": "Acme",
+      "formulaVersion": "v7",
+      "composite": "92.00",
+      "subscores": {
+        "mention_rate": "100.00",
+        "share_of_voice": "100.00",
+        "citation_strength": "100.00",
+        "sentiment": "100.00",
+        "technical_foundation": "20.00"
+      },
+      "expected": "Acme’s biggest gap is its own site, which scores 20 out of 100 on the technical checks."
+    },
+    {
+      "case": "Nothing left to recover",
+      "subject": "Acme",
+      "formulaVersion": "v7",
+      "composite": "100.00",
+      "subscores": {
+        "mention_rate": "100.00",
+        "share_of_voice": "100.00",
+        "citation_strength": "100.00",
+        "sentiment": "100.00",
+        "technical_foundation": "100.00"
+      },
+      "expected": "Acme is one of the names these answers reach for."
+    },
+    {
+      "case": "A score from before v2: the band line",
+      "subject": "Acme",
+      "formulaVersion": "v1.1",
+      "composite": "50.00",
+      "subscores": {
+        "mention_rate": "36.00",
+        "share_of_voice": "100.00",
+        "citation_strength": "100.00",
+        "sentiment": "100.00",
+        "technical_foundation": "100.00"
+      },
+      "expected": "Acme is present in some answers and absent from many."
+    },
+    {
+      "case": "A composite that rounds to 0",
+      "subject": "Acme",
+      "formulaVersion": "v7",
+      "composite": "0.40",
+      "subscores": {
+        "mention_rate": "0.00",
+        "share_of_voice": "0.00",
+        "citation_strength": "0.00",
+        "sentiment": "0.00",
+        "technical_foundation": "0.00"
+      },
+      "expected": "Acme did not appear in any answer we measured."
+    },
+    {
+      "case": "Share of Voice 99.6 would print a false 'rivals take 0%': the band line",
+      "subject": "Acme",
+      "formulaVersion": "v7",
+      "composite": "99.90",
+      "subscores": {
+        "mention_rate": "100.00",
+        "share_of_voice": "99.60",
+        "citation_strength": "100.00",
+        "sentiment": "100.00",
+        "technical_foundation": "100.00"
+      },
+      "expected": "Acme is one of the names these answers reach for."
+    },
+    {
+      "case": "Mention Rate 0.4 would print a false 'missing from 100%': the band line",
+      "subject": "Acme",
+      "formulaVersion": "v7",
+      "composite": "70.12",
+      "subscores": {
+        "mention_rate": "0.40",
+        "share_of_voice": "100.00",
+        "citation_strength": "100.00",
+        "sentiment": "100.00",
+        "technical_foundation": "100.00"
+      },
+      "expected": "Acme shows up, but not reliably enough to be the default."
+    },
+    {
+      "case": "Mention Rate exactly 0 is 'missing from 100%'",
+      "subject": "Acme",
+      "formulaVersion": "v7",
+      "composite": "70.00",
+      "subscores": {
+        "mention_rate": "0.00",
+        "share_of_voice": "100.00",
+        "citation_strength": "100.00",
+        "sentiment": "100.00",
+        "technical_foundation": "100.00"
+      },
+      "expected": "Acme is missing from 100% of unprompted answers."
+    },
+    {
+      "case": "Technical Foundation 0.4 would print a false 'scores 0': the band line",
+      "subject": "Acme",
+      "formulaVersion": "v7",
+      "composite": "90.04",
+      "subscores": {
+        "mention_rate": "100.00",
+        "share_of_voice": "100.00",
+        "citation_strength": "100.00",
+        "sentiment": "100.00",
+        "technical_foundation": "0.40"
+      },
+      "expected": "Acme is one of the names these answers reach for."
+    }
+  ]
+}

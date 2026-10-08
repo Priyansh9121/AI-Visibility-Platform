@@ -137,6 +137,29 @@ export interface DerivedNarrative {
   aheadOnDimensions: { competitorName: string; dimensionKey: string; delta: number }[];
   /** Geometry warnings from the ledger — a scoring-config defect, not a UI one. */
   warnings: readonly string[];
+  /** The stored score's formula version (A2: which opening lines can be made true). */
+  formulaVersion: string | null;
+  /** The rival the Citation Strength opening line names: strictly ahead, first on a tie. */
+  topCitationRival: string | null;
+}
+
+/**
+ * The rival with the highest Citation Strength, the first in the list on a tie, and only
+ * when it is strictly above the subject's: the opening line that names it says the
+ * subject's answers "cite weaker sources", which needs one. Mirrors `top_citation_rival`.
+ */
+export function topCitationRival(report: Report): string | null {
+  let best = num(report.score?.citationStrength ?? null);
+  if (best === null) return null;
+  let name: string | null = null;
+  for (const competitor of report.score?.competitors ?? []) {
+    const theirs = num(competitor.citationStrength ?? null);
+    if (theirs !== null && theirs > best) {
+      best = theirs;
+      name = competitor.name;
+    }
+  }
+  return name;
 }
 
 /**
@@ -272,6 +295,8 @@ export function deriveNarrative(report: Report): DerivedNarrative {
     potentialComposite,
     aheadOnDimensions: aheadOnDimensions(report),
     warnings: layout.warnings,
+    formulaVersion: report.score?.formulaVersion ?? null,
+    topCitationRival: topCitationRival(report),
   };
 }
 
@@ -477,8 +502,11 @@ export function aheadOnDimensions(report: Report): DerivedNarrative['aheadOnDime
  * The score beat's heading — a claim, never a category label.
  *
  * design-system.md §7: "You appear in fewer than half the answers buyers see"
- * does the work; "Mention Rate" does not. Which claim gets made is chosen by
- * the number, so the heading cannot contradict the chart under it.
+ * does the work; "Mention Rate" does not. Since 2026-10-09 (A2) the claim is chosen
+ * by the biggest-gap dimension and stated with its own figure (`gapLine`), the band
+ * deciding only where that sentence could not be true; either way the heading is
+ * chosen by the numbers, so it cannot contradict the chart under it. Mirrors
+ * `score_heading` in `report_narrative.py`.
  */
 export function scoreHeading(narrative: DerivedNarrative, subjectName: string): string {
   if (narrative.status === 'failed') {
@@ -491,11 +519,79 @@ export function scoreHeading(narrative: DerivedNarrative, subjectName: string): 
     return `There is not enough data yet to score ${subjectName}.`;
   }
   const score = Math.round(narrative.composite);
+  if (score <= 0) return `${subjectName} did not appear in any answer we measured.`;
+  return gapLine(narrative, subjectName) ?? bandLine(score, subjectName);
+}
+
+/** `v7` → 7, `v2.1` → 2, `v1.1` → 1; anything else → null. */
+function formulaMajor(version: string | null): number | null {
+  const head = (version ?? '').replace(/^v/, '').split('.')[0] ?? '';
+  return /^\d+$/.test(head) ? Number(head) : null;
+}
+
+/**
+ * The line chosen by the score band alone: what every score said before A2, and still
+ * says where a gap line cannot be made true.
+ */
+function wholePercent(value: number): number | null {
+  // `value` as a whole number, or null where rounding would make it a false 0 or 100:
+  // a Share of Voice of 99.6 is not "rivals take 0%". Mirrors `_whole_percent`.
+  const rounded = Math.round(value);
+  return (rounded === 0 || rounded === 100) && value !== rounded ? null : rounded;
+}
+
+function bandLine(score: number, subjectName: string): string {
   if (score >= 80) return `${subjectName} is one of the names these answers reach for.`;
   if (score >= 60) return `${subjectName} shows up, but not reliably enough to be the default.`;
   if (score >= 35) return `${subjectName} is present in some answers and absent from many.`;
-  if (score > 0) return `${subjectName} is close to invisible when buyers ask.`;
-  return `${subjectName} did not appear in any answer we measured.`;
+  return `${subjectName} is close to invisible when buyers ask.`;
+}
+
+/**
+ * The opening line from the biggest-gap dimension (the founder's sentences, 2026-10-09).
+ * Null where the sentence could not be made true, and the band line is used instead: a
+ * score from before v2, when Mention Rate and Share of Voice were not yet measured on
+ * unprompted answers; a Citation Strength line before v5 (when it came to mean the
+ * authority of the sources cited per answer that names a brand) or with no rival ahead;
+ * and any figure that would round to a false 0 or 100 (`wholePercent`). Every figure is a
+ * whole number from the sub-scores the ledger draws. Mirrors
+ * `_gap_line` in `report_narrative.py`.
+ */
+function gapLine(narrative: DerivedNarrative, subjectName: string): string | null {
+  const major = formulaMajor(narrative.formulaVersion);
+  if (major === null || major < 2) return null;
+  const reach = `${subjectName} is one of the names these answers reach for.`;
+  const gap = narrative.biggestGap;
+  if (!gap || round1(gap.gap) <= 0) return reach;
+  const subscore = (key: string) => narrative.segments.find((s) => s.key === key)?.subscore;
+  switch (gap.key) {
+    case 'mention_rate': {
+      const named = wholePercent(gap.subscore);
+      return named === null ? null : `${subjectName} is missing from ${100 - named}% of unprompted answers.`;
+    }
+    case 'share_of_voice': {
+      const namedRaw = subscore('mention_rate');
+      const named = namedRaw === undefined ? null : wholePercent(namedRaw);
+      const share = wholePercent(gap.subscore);
+      if (named === null || share === null) return null;
+      return `${subjectName} is named in ${named}% of unprompted answers, but rivals take ${100 - share}% of the mentions.`;
+    }
+    case 'citation_strength': {
+      const rival = narrative.topCitationRival;
+      if (major < 5 || rival === null) return null;
+      return `When unprompted answers name ${subjectName}, they cite weaker sources than when they name ${rival}.`;
+    }
+    case 'sentiment':
+      return `${subjectName} is named, but not consistently described favourably.`;
+    case 'technical_foundation': {
+      const site = wholePercent(gap.subscore);
+      return site === null
+        ? null
+        : `${subjectName}’s biggest gap is its own site, which scores ${site} out of 100 on the technical checks.`;
+    }
+    default:
+      return null;
+  }
 }
 
 /** The gap beat's heading. Names the dimension the arithmetic picked. */

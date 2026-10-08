@@ -11,6 +11,8 @@
  * is the case the gap formula exists to get right.
  */
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 import { layoutLedger } from '@avp/design-system';
 import {
@@ -527,3 +529,51 @@ describe('Epic 8 enriches the fix list without re-deciding it', () => {
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
   });
 });
+
+// ---------------------------------------------------------------------------
+// the opening line — A2, 2026-10-09
+// ---------------------------------------------------------------------------
+
+describe('the opening line comes from the biggest gap', () => {
+  // The same table `test_report_narrative.py` reads, so the web and the PDF say the same.
+  const table = JSON.parse(
+    readFileSync(
+      fileURLToPath(new URL('../../../../../packages/shared-types/fixtures/opening-lines.json', import.meta.url)),
+      'utf8',
+    ),
+  ) as {
+    cases: {
+      case: string;
+      subject: string;
+      formulaVersion: string;
+      composite: string;
+      subscores: Record<string, string>;
+      competitorCitationStrength?: string[];
+      expected: string;
+    }[];
+  };
+
+  it.each(table.cases.map((c) => [c.case, c] as const))('%s', (_name, spec) => {
+    const report = {
+      ...helpscoutReport,
+      score: {
+        ...helpscoutReport.score!,
+        formulaVersion: spec.formulaVersion,
+        composite: spec.composite,
+        citationStrength: spec.subscores['citation_strength']!,
+        competitors: helpscoutReport.score!.competitors!.map((c, i) => ({
+          ...c,
+          citationStrength: spec.competitorCitationStrength?.[i] ?? c.citationStrength ?? null,
+        })),
+      },
+      dimensions: helpscoutReport.dimensions!.map((d) => ({
+        ...d,
+        subscore: spec.subscores[d.key]!,
+        included: true,
+        exclusionReason: null,
+      })),
+    };
+    expect(scoreHeading(deriveNarrative(report), spec.subject)).toBe(spec.expected);
+  });
+});
+

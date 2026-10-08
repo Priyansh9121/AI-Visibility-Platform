@@ -257,3 +257,45 @@ def test_a_gap_on_a_tie_is_printed_as_the_fix_list_prints_it() -> None:
     story = SimpleNamespace(status="scored", biggest_gap=gap)
     assert narrative.gap_heading(story) == "Sentiment is costing the most — 8.5 points."  # type: ignore[arg-type]
 
+
+# ---------------------------------------------------------------------------
+# the opening line — A2, 2026-10-09
+# ---------------------------------------------------------------------------
+
+OPENING_LINES: list[dict[str, Any]] = json.loads(
+    (FIXTURES / "opening-lines.json").read_text(encoding="utf-8")
+)["cases"]
+
+
+def _opening_case(spec: dict[str, Any]) -> dict[str, Any]:
+    """Help Scout's payload with the case's version, composite, sub-scores and rivals' CS."""
+    case = copy.deepcopy(CASES["scored-no-generated-fixes"])
+    case["score"]["formulaVersion"] = spec["formulaVersion"]
+    case["score"]["composite"] = spec["composite"]
+    case["score"]["citationStrength"] = spec["subscores"]["citation_strength"]
+    for competitor, strength in zip(
+        case["score"]["competitors"], spec.get("competitorCitationStrength") or [], strict=False
+    ):
+        competitor["citationStrength"] = strength
+    for dimension in case["dimensions"]:
+        dimension["subscore"] = spec["subscores"][dimension["key"]]
+        dimension["included"] = True
+        dimension["exclusionReason"] = None
+    return case
+
+
+@pytest.mark.parametrize("spec", OPENING_LINES, ids=[c["case"] for c in OPENING_LINES])
+def test_the_opening_line_comes_from_the_biggest_gap(spec: dict[str, Any]) -> None:
+    """The same table `derive.test.ts` reads, so the PDF and the web say the same sentence."""
+    story = narrative.derive_narrative(_opening_case(spec))
+    assert narrative.score_heading(story, spec["subject"]) == spec["expected"]
+
+
+def test_the_opening_line_table_covers_every_sentence() -> None:
+    expected = " ".join(c["expected"] for c in OPENING_LINES)
+    for phrase in (
+        "is missing from", "but rivals take", "cite weaker sources", "not consistently described",
+        "its own site", "reach for", "not reliably enough", "did not appear",
+    ):
+        assert phrase in expected, phrase
+
