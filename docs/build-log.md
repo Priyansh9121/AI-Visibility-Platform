@@ -27361,3 +27361,23 @@ Every production score is v5 or later, so production reports always get the foun
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# Launch checklist: the founder's decisions of 2026-10-09 are recorded, A2 is closed, and two wording calls are opened
+
+**2026-10-09; branch `pilot-fixes-8`.** Documentation only: `docs/launch-checklist.md`.
+
+**Render: nothing to set by this commit.**
+
+Drift check (north-star §8): no layer — the founder's operating document for the deploy.
+
+## 1. What changed
+
+- **3.100 is closed** (`02ad7f1`): the rule A1 built is kept, the paragraph ends with the founder's sentence, the cap drops the equation in the founder's words, and every printed gap is rounded once.
+- **3.107 is new and closed** (`34ae3c9`): the opening line names the biggest gap.
+- **3.105:** market scope's eleven decisions are accepted, and the plan is committed on branch `market-scope-plan` (`794c343`, not pushed). Its next step is Claude's, item 1 first.
+- **3.108 is new and open, for the founder:** two wording calls from this branch's UI reviews — a floor on the opening line's gap, and "It is not a forecast." after the web's cap sentence.
+- **1.1j** lists what the two new commits change, and no longer says A2 waits on the founder.
+
+## Verified
+
+**No code changed, so no count moves.** The edits were made by a script that asserts each replacement matches exactly once, run first against a copy. The branch's final bar runs after this commit.
